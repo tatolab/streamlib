@@ -417,6 +417,10 @@ fn handle_register(
         .get("format")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
+    let resource_type = request
+        .get("resource_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("pixel_buffer");
 
     // Duplicate the fd so we own a copy (the received fd belongs to the message)
     let dup_fd = unsafe { libc::dup(dma_buf_fd) };
@@ -427,7 +431,7 @@ fn handle_register(
         );
     }
 
-    let success = state.register_surface(surface_id, runtime_id, dup_fd, width, height, format);
+    let success = state.register_surface(surface_id, runtime_id, dup_fd, width, height, format, resource_type);
 
     if success {
         tracing::debug!(
@@ -473,7 +477,23 @@ fn handle_lookup(
                 dup_fd,
                 surface_id
             );
-            (serde_json::json!({"surface_id": surface_id}), Some(dup_fd))
+            // Include surface metadata so the client can import the fd correctly
+            let surfaces = state.get_surfaces();
+            let metadata = surfaces.iter().find(|s| s.surface_id == surface_id);
+            let (width, height, format, resource_type) = match metadata {
+                Some(m) => (m.width, m.height, m.format.as_str(), m.resource_type.as_str()),
+                None => (0, 0, "unknown", "pixel_buffer"),
+            };
+            (
+                serde_json::json!({
+                    "surface_id": surface_id,
+                    "width": width,
+                    "height": height,
+                    "format": format,
+                    "resource_type": resource_type,
+                }),
+                Some(dup_fd),
+            )
         }
         None => {
             tracing::warn!(
@@ -541,6 +561,10 @@ fn handle_check_in(
         .get("format")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
+    let resource_type = request
+        .get("resource_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("pixel_buffer");
 
     // Generate UUID on broker side (legacy behavior)
     let surface_id = uuid::Uuid::new_v4().to_string();
@@ -554,7 +578,7 @@ fn handle_check_in(
         );
     }
 
-    let success = state.register_surface(&surface_id, runtime_id, dup_fd, width, height, format);
+    let success = state.register_surface(&surface_id, runtime_id, dup_fd, width, height, format, resource_type);
 
     if !success {
         unsafe { libc::close(dup_fd) };

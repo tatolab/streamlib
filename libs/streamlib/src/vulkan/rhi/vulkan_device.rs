@@ -346,15 +346,14 @@ impl VulkanDevice {
                 tracing::info!("VK_KHR_swapchain enabled");
             }
 
-            // VK_KHR_dynamic_rendering — renderpass-free graphics pipelines
-            let dynamic_rendering_ext = c"VK_KHR_dynamic_rendering";
-            if available_device_ext_names.contains(&dynamic_rendering_ext) {
-                device_extensions.push(dynamic_rendering_ext.as_ptr());
-                tracing::info!("VK_KHR_dynamic_rendering enabled");
-            }
+            // VK_KHR_dynamic_rendering is core since Vulkan 1.3 — no extension string needed.
+            // Feature struct (PhysicalDeviceDynamicRenderingFeatures) is still enabled below.
         }
 
         // On Linux, check for Vulkan Video encode extensions
+        // VK_KHR_synchronization2 is core since Vulkan 1.3 — no extension string needed.
+        // Feature struct (PhysicalDeviceSynchronization2Features) is still enabled below.
+
         #[cfg(target_os = "linux")]
         let has_video_encode = {
             let has_video_queue =
@@ -366,18 +365,12 @@ impl VulkanDevice {
             let has_video_encode_h265 =
                 available_device_ext_names.contains(&c"VK_KHR_video_encode_h265");
 
-            // VK_KHR_synchronization2 is a mandatory dependency of VK_KHR_video_encode_queue
-            let has_synchronization2 =
-                available_device_ext_names.contains(&c"VK_KHR_synchronization2");
-
             let all_present = has_video_queue
                 && has_video_encode_queue
                 && has_video_encode_h264
-                && has_synchronization2
                 && video_encode_queue_family_index.is_some();
 
             if all_present {
-                device_extensions.push(c"VK_KHR_synchronization2".as_ptr());
                 device_extensions.push(c"VK_KHR_video_queue".as_ptr());
                 device_extensions.push(c"VK_KHR_video_encode_queue".as_ptr());
                 device_extensions.push(c"VK_KHR_video_encode_h264".as_ptr());
@@ -389,12 +382,11 @@ impl VulkanDevice {
                 }
             } else {
                 tracing::info!(
-                    "Vulkan Video encode not available (queue={}, encode_queue={}, h264={}, h265={}, sync2={}, queue_family={})",
+                    "Vulkan Video encode not available (queue={}, encode_queue={}, h264={}, h265={}, queue_family={})",
                     has_video_queue,
                     has_video_encode_queue,
                     has_video_encode_h264,
                     has_video_encode_h265,
-                    has_synchronization2,
                     video_encode_queue_family_index.is_some()
                 );
             }

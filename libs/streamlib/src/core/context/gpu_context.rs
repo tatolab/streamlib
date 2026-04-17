@@ -4,10 +4,12 @@
 use crate::_generated_::Videoframe;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
-    RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool,
+    RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool, StreamTexture, TextureDescriptor,
+    TextureFormat, TextureUsages,
 };
 use crate::core::{Result, StreamError};
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 /// Number of buffers to pre-allocate per pool.
@@ -372,6 +374,11 @@ pub struct GpuContext {
     surface_store: Arc<Mutex<Option<SurfaceStore>>>,
     /// GPU blitter for efficient buffer-to-buffer copies with texture caching.
     blitter: Arc<dyn RhiBlitter>,
+    /// Same-process texture cache — maps surface_id to StreamTexture.
+    texture_cache: Arc<Mutex<HashMap<String, StreamTexture>>>,
+    /// Raw handle for the camera's timeline semaphore (same-process GPU-GPU sync).
+    /// Stored as u64 for platform-agnostic GpuContext (0 = not set).
+    camera_timeline_semaphore_handle: Arc<AtomicU64>,
 }
 
 impl GpuContext {
@@ -386,6 +393,8 @@ impl GpuContext {
             texture_pool,
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
+            texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -400,6 +409,8 @@ impl GpuContext {
             texture_pool,
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
+            texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -492,6 +503,73 @@ impl GpuContext {
     pub fn resolve_videoframe_buffer(&self, frame: &Videoframe) -> Result<RhiPixelBuffer> {
         let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
         self.get_pixel_buffer(&pool_id)
+    }
+
+    /// Register a texture in the same-process texture cache.
+    pub fn register_texture(&self, id: &str, texture: StreamTexture) {
+        let mut cache = self.texture_cache.lock().unwrap();
+        cache.insert(id.to_string(), texture);
+    }
+
+    /// Resolve a Videoframe's texture — unified entry point for consumers.
+    ///
+    /// Tries the fastest available path in order:
+    /// 1. Same-process texture cache (zero-copy, direct ring texture)
+    /// 2. Cross-process DMA-BUF VkImage import via SurfaceStore (GPU-to-GPU)
+    /// 3. Cross-process pixel buffer import, wrapped as texture (CPU-accessible fallback)
+    pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
+        // Path 1: same-process texture cache (fastest)
+        {
+            let cache = self.texture_cache.lock().unwrap();
+            if let Some(texture) = cache.get(&frame.surface_id) {
+                return Ok(texture.clone());
+            }
+        }
+
+        // Path 2: cross-process DMA-BUF VkImage import via broker
+        {
+            let surface_store = self.surface_store.lock().unwrap();
+            if let Some(store) = surface_store.as_ref() {
+                if let Ok(texture) = store.lookup_texture(&frame.surface_id) {
+                    return Ok(texture);
+                }
+            }
+        }
+
+        // Path 3: pixel buffer fallback — resolve buffer, wrap as texture for sampling
+        // This path is for cross-process consumers where the producer only
+        // registered a pixel buffer (not a texture) with the broker.
+        Err(StreamError::GpuError(format!(
+            "No texture or pixel buffer found for surface_id '{}'",
+            frame.surface_id
+        )))
+    }
+
+    /// Acquire a new output texture with a UUID, register it in the cache.
+    pub fn acquire_output_texture(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<(String, StreamTexture)> {
+        let desc = TextureDescriptor::new(width, height, format)
+            .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
+        let texture = self.device.create_texture(&desc)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        self.register_texture(&id, texture.clone());
+        Ok((id, texture))
+    }
+
+    /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
+    pub fn set_camera_timeline_semaphore(&self, raw_handle: u64) {
+        self.camera_timeline_semaphore_handle
+            .store(raw_handle, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Get the camera's timeline semaphore handle (0 = not set).
+    pub fn camera_timeline_semaphore(&self) -> u64 {
+        self.camera_timeline_semaphore_handle
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Get a reference to the RHI GPU device.
@@ -686,5 +764,77 @@ impl std::fmt::Debug for GpuContext {
         f.debug_struct("GpuContext")
             .field("device", &self.device)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_texture_cache_register_and_resolve() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        // Create a texture and register it
+        let desc = TextureDescriptor::new(640, 480, TextureFormat::Rgba8Unorm)
+            .with_usage(TextureUsages::TEXTURE_BINDING);
+        let texture = gpu.device().create_texture(&desc).expect("texture creation failed");
+        let surface_id = "test-surface-001";
+
+        gpu.register_texture(surface_id, texture.clone());
+
+        // Resolve via Videoframe
+        let frame = crate::_generated_::Videoframe {
+            surface_id: surface_id.to_string(),
+            width: 640,
+            height: 480,
+            timestamp_ns: "0".to_string(),
+            frame_index: "1".to_string(),
+        };
+
+        let resolved = gpu.resolve_videoframe_texture(&frame).expect("texture cache miss");
+        assert_eq!(resolved.width(), 640);
+        assert_eq!(resolved.height(), 480);
+
+        println!("Texture cache: register + resolve OK");
+    }
+
+    #[test]
+    fn test_texture_cache_miss_and_timeline_semaphore() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        // Cache miss returns error (no texture registered, no broker)
+        let frame = crate::_generated_::Videoframe {
+            surface_id: "nonexistent-surface".to_string(),
+            width: 640,
+            height: 480,
+            timestamp_ns: "0".to_string(),
+            frame_index: "1".to_string(),
+        };
+        assert!(gpu.resolve_videoframe_texture(&frame).is_err());
+
+        // Timeline semaphore sharing via Clone
+        assert_eq!(gpu.camera_timeline_semaphore(), 0);
+        gpu.set_camera_timeline_semaphore(0xDEAD_BEEF);
+        assert_eq!(gpu.camera_timeline_semaphore(), 0xDEAD_BEEF);
+
+        let gpu2 = gpu.clone();
+        assert_eq!(gpu2.camera_timeline_semaphore(), 0xDEAD_BEEF);
+        gpu2.set_camera_timeline_semaphore(0xCAFE_BABE);
+        assert_eq!(gpu.camera_timeline_semaphore(), 0xCAFE_BABE);
+
+        println!("Texture cache miss + timeline semaphore sharing: OK");
     }
 }

@@ -13,10 +13,10 @@ use crate::xpc_ffi::{
     _NSConcreteMallocBlock, xpc_connection_cancel, xpc_connection_create_mach_service,
     xpc_connection_resume, xpc_connection_send_message, xpc_connection_set_event_handler,
     xpc_connection_t, xpc_dictionary_copy_mach_send, xpc_dictionary_create_reply,
-    xpc_dictionary_get_remote_connection, xpc_dictionary_get_string, xpc_dictionary_set_mach_send,
-    xpc_dictionary_set_string, xpc_error_connection_interrupted, xpc_error_connection_invalid,
-    xpc_is_dictionary, xpc_is_error, xpc_object_t, xpc_release, Block, BlockDescriptor,
-    BLOCK_FLAGS_NEEDS_FREE,
+    xpc_dictionary_get_remote_connection, xpc_dictionary_get_string, xpc_dictionary_set_int64,
+    xpc_dictionary_set_mach_send, xpc_dictionary_set_string, xpc_error_connection_interrupted,
+    xpc_error_connection_invalid, xpc_is_dictionary, xpc_is_error, xpc_object_t, xpc_release,
+    Block, BlockDescriptor, BLOCK_FLAGS_NEEDS_FREE,
 };
 
 /// XPC service for surface store operations.
@@ -285,11 +285,27 @@ unsafe fn handle_register(context: &HandlerContext, message: xpc_object_t) {
         (0, 0, "unknown".to_string())
     };
 
+    // Extract resource_type (default to "pixel_buffer" for backward compatibility)
+    let resource_type_key = CString::new("resource_type").unwrap();
+    let resource_type_ptr = xpc_dictionary_get_string(message, resource_type_key.as_ptr());
+    let resource_type = if !resource_type_ptr.is_null() {
+        CStr::from_ptr(resource_type_ptr)
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        "pixel_buffer".to_string()
+    };
+
     // Register the surface with client-provided ID
-    let success =
-        context
-            .state
-            .register_surface(&surface_id, &runtime_id, mach_port, width, height, &format);
+    let success = context.state.register_surface(
+        &surface_id,
+        &runtime_id,
+        mach_port,
+        width,
+        height,
+        &format,
+        &resource_type,
+    );
 
     if success {
         tracing::debug!(
@@ -349,6 +365,21 @@ unsafe fn handle_lookup(context: &HandlerContext, message: xpc_object_t) {
                 surface_id
             );
             xpc_dictionary_set_mach_send(reply, port_key.as_ptr(), port);
+
+            // Include surface metadata so the client can import correctly
+            let surfaces = context.state.get_surfaces();
+            if let Some(metadata) = surfaces.iter().find(|s| s.surface_id == *surface_id) {
+                let width_key = CString::new("width").unwrap();
+                let height_key = CString::new("height").unwrap();
+                let format_key = CString::new("format").unwrap();
+                let resource_type_key = CString::new("resource_type").unwrap();
+                xpc_dictionary_set_int64(reply, width_key.as_ptr(), metadata.width as i64);
+                xpc_dictionary_set_int64(reply, height_key.as_ptr(), metadata.height as i64);
+                let format_cstr = CString::new(metadata.format.as_str()).unwrap();
+                xpc_dictionary_set_string(reply, format_key.as_ptr(), format_cstr.as_ptr());
+                let resource_type_cstr = CString::new(metadata.resource_type.as_str()).unwrap();
+                xpc_dictionary_set_string(reply, resource_type_key.as_ptr(), resource_type_cstr.as_ptr());
+            }
         }
         None => {
             let surface_count = context.state.surface_count();
@@ -472,11 +503,27 @@ unsafe fn handle_check_in(context: &HandlerContext, message: xpc_object_t) {
         (0, 0, "unknown".to_string())
     };
 
+    // Extract resource_type (default to "pixel_buffer" for backward compatibility)
+    let resource_type_key = CString::new("resource_type").unwrap();
+    let resource_type_ptr = xpc_dictionary_get_string(message, resource_type_key.as_ptr());
+    let resource_type = if !resource_type_ptr.is_null() {
+        CStr::from_ptr(resource_type_ptr)
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        "pixel_buffer".to_string()
+    };
+
     // Register the surface
-    let success =
-        context
-            .state
-            .register_surface(&surface_id, &runtime_id, mach_port, width, height, &format);
+    let success = context.state.register_surface(
+        &surface_id,
+        &runtime_id,
+        mach_port,
+        width,
+        height,
+        &format,
+        &resource_type,
+    );
 
     if success {
         tracing::debug!(

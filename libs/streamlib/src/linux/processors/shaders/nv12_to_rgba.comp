@@ -1,0 +1,59 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) readonly buffer NV12Input {
+    uint data[];
+} nv12_input;
+
+layout(rgba8, set = 0, binding = 1) writeonly uniform image2D rgba_output;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+    uint flags; // bit 0: full_range (1 = full 0-255, 0 = limited 16-235)
+} pc;
+
+/// Read a single byte from the uint32 array at the given byte offset.
+uint read_byte(uint byte_offset) {
+    return (nv12_input.data[byte_offset >> 2u] >> (8u * (byte_offset & 3u))) & 0xFFu;
+}
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    // Y plane: width * height bytes starting at offset 0
+    float Y = float(read_byte(pos.y * pc.width + pos.x));
+
+    // UV plane: interleaved U,V at half resolution, starts at width * height
+    uint uv_offset = pc.width * pc.height + (pos.y >> 1u) * pc.width + (pos.x & ~1u);
+    float U = float(read_byte(uv_offset));
+    float V = float(read_byte(uv_offset + 1u));
+
+    bool full_range = (pc.flags & 1u) != 0u;
+
+    float R, G, B;
+    if (full_range) {
+        // BT.601 full-range (0-255)
+        float Cb = U - 128.0;
+        float Cr = V - 128.0;
+        R = clamp(Y + 1.402 * Cr, 0.0, 255.0);
+        G = clamp(Y - 0.344136 * Cb - 0.714136 * Cr, 0.0, 255.0);
+        B = clamp(Y + 1.772 * Cb, 0.0, 255.0);
+    } else {
+        // BT.601 limited-range (Y: 16-235, UV: 16-240)
+        float C = Y - 16.0;
+        float D = U - 128.0;
+        float E = V - 128.0;
+        R = clamp(1.164 * C + 1.596 * E, 0.0, 255.0);
+        G = clamp(1.164 * C - 0.392 * D - 0.813 * E, 0.0, 255.0);
+        B = clamp(1.164 * C + 2.017 * D, 0.0, 255.0);
+    }
+
+    // Write RGBA: R8G8B8A8_UNORM layout maps R→byte0, G→byte1, B→byte2, A→byte3
+    imageStore(rgba_output, ivec2(pos), vec4(R / 255.0, G / 255.0, B / 255.0, 1.0));
+}

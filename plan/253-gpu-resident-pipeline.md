@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: GPU-Resident VkImage Pipeline
-status: pending
+status: in_review
 description: Rebuild camera texture ring, display direct sampling, and texture cache with vulkanalia types. Branch feat/gpu-resident-pipeline from main.
 github_issue: 253
 dependencies:

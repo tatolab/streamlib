@@ -236,6 +236,9 @@ pub struct SurfaceInfo {
     /// Number of times looked up by other processes
     #[prost(uint64, tag = "7")]
     pub checkout_count: u64,
+    /// Resource type (e.g., "pixel_buffer", "texture")
+    #[prost(string, tag = "8")]
+    pub resource_type: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSurfacesResponse {

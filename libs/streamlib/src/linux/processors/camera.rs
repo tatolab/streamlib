@@ -6,15 +6,19 @@ use vulkanalia::vk;
 use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
-use crate::core::rhi::PixelFormat;
+use crate::core::rhi::{PixelFormat, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
 use crate::iceoryx2::OutputWriter;
+use crate::vulkan::rhi::VulkanTexture;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use v4l::buffer::Type;
 use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
 use v4l::FourCC;
+
+/// Number of ring textures for GPU-resident pipeline (matches MAX_FRAMES_IN_FLIGHT).
+const RING_TEXTURE_COUNT: usize = 2;
 
 /// Number of V4L2 mmap buffers to request.
 const V4L2_BUFFER_COUNT: u32 = 4;
@@ -265,11 +269,10 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         // create its swapchain. NVIDIA limits DMA-BUF exportable allocations
         // after swapchain creation; pre-allocating here ensures the pool buffers
         // are created while DMA-BUF allocations are still freely available.
-        // We acquire-and-release one buffer to trigger lazy pool creation.
-        match gpu_context.acquire_pixel_buffer(capture_width, capture_height, PixelFormat::Bgra32) {
+        match gpu_context.acquire_pixel_buffer(capture_width, capture_height, PixelFormat::Rgba32) {
             Ok((pool_id, buffer)) => {
                 tracing::info!(
-                    "Camera {}: pre-allocated pixel buffer pool ({}x{} BGRA32) — pool_id={}",
+                    "Camera {}: pre-allocated pixel buffer pool ({}x{} RGBA32) — pool_id={}",
                     self.camera_name, capture_width, capture_height, pool_id
                 );
                 drop(buffer);
@@ -340,9 +343,10 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
 
 /// V4L2 capture thread main loop.
 ///
-/// Polls for frames from the mmap stream, converts NV12/YUYV to BGRA via
-/// GPU compute shader, writes to a pooled Vulkan pixel buffer, and publishes
-/// via OutputWriter.
+/// Polls for frames from the mmap stream, converts NV12/YUYV to RGBA via
+/// GPU compute shader writing directly to a 2-texture DEVICE_LOCAL ring,
+/// and publishes the texture surface_id via OutputWriter. Display resolves
+/// the texture from the same-process texture cache — no GPU→CPU→GPU roundtrip.
 fn capture_thread_loop(
     mut stream: v4l::io::mmap::Stream,
     is_capturing: Arc<AtomicBool>,
@@ -366,11 +370,11 @@ fn capture_thread_loop(
     let (input_byte_size, shader_spirv): (usize, &[u8]) = match &fourcc_bytes {
         b"NV12" => (
             (width as usize) * (height as usize) * 3 / 2,
-            include_bytes!("shaders/nv12_to_bgra.spv"),
+            include_bytes!("shaders/nv12_to_rgba.spv"),
         ),
         b"YUYV" => (
             (width as usize) * (height as usize) * 2,
-            include_bytes!("shaders/yuyv_to_bgra.spv"),
+            include_bytes!("shaders/yuyv_to_rgba.spv"),
         ),
         _ => {
             eprintln!(
@@ -492,11 +496,11 @@ fn capture_thread_loop(
             }
         };
 
-    // Push constant range: width + height (2 × uint32 = 8 bytes)
+    // Push constant range: width + height + flags (3 × uint32 = 12 bytes)
     let push_constant_range = vk::PushConstantRange::builder()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
-        .size(8)
+        .size(12)
         .build();
 
     let set_layouts = [descriptor_set_layout];
@@ -675,22 +679,26 @@ fn capture_thread_loop(
             }
         };
 
-    let fence_info = vk::FenceCreateInfo::builder()
-        .flags(vk::FenceCreateFlags::SIGNALED)
+    // -----------------------------------------------------------------------
+    // Create timeline semaphore for GPU-GPU synchronization with display
+    // -----------------------------------------------------------------------
+    let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::builder()
+        .semaphore_type(vk::SemaphoreType::TIMELINE)
+        .initial_value(0)
         .build();
-    let mut compute_fences = [vk::Fence::null(); 2];
-    for i in 0..2 {
-        compute_fences[i] = match unsafe { device.create_fence(&fence_info, None) } {
-            Ok(f) => f,
+    let timeline_semaphore_info = vk::SemaphoreCreateInfo::builder()
+        .push_next(&mut timeline_type_info)
+        .build();
+
+    let camera_timeline_semaphore =
+        match unsafe { device.create_semaphore(&timeline_semaphore_info, None) } {
+            Ok(s) => s,
             Err(e) => {
                 eprintln!(
-                    "[Camera {}] Failed to create compute fence[{}]: {}",
-                    camera_name, i, e
+                    "[Camera {}] Failed to create timeline semaphore: {}",
+                    camera_name, e
                 );
                 unsafe {
-                    for j in 0..i {
-                        device.destroy_fence(compute_fences[j], None);
-                    }
                     device.destroy_command_pool(compute_command_pool, None);
                     device.destroy_descriptor_pool(descriptor_pool, None);
                     device.destroy_pipeline(compute_pipeline, None);
@@ -706,46 +714,59 @@ fn capture_thread_loop(
                 return;
             }
         };
-    }
+
+    // Register timeline semaphore in GpuContext for same-process display access.
+    // vk::Semaphore is repr(transparent) around u64.
+    let raw_semaphore_handle: u64 = unsafe { std::mem::transmute(camera_timeline_semaphore) };
+    gpu_context.set_camera_timeline_semaphore(raw_semaphore_handle);
+    let mut timeline_signal_value: u64 = 0;
 
     // -----------------------------------------------------------------------
-    // Create DEVICE_LOCAL storage image for compute output (fast VRAM writes)
+    // Create 2-texture DEVICE_LOCAL ring — DMA-BUF exportable for cross-process
+    // GPU-to-GPU sharing. Uses the isolated DMA-BUF image pool in VMA.
+    // Pre-allocated here (before display's swapchain) to get the NVIDIA DMA-BUF
+    // budget before the swapchain consumes it.
     // -----------------------------------------------------------------------
-    let compute_output_image_info = vk::ImageCreateInfo::builder()
-        .image_type(vk::ImageType::_2D)
-        .format(vk::Format::R8G8B8A8_UNORM)
-        .extent(vk::Extent3D {
-            width,
-            height,
-            depth: 1,
-        })
-        .mip_levels(1)
-        .array_layers(1)
-        .samples(vk::SampleCountFlags::_1)
-        .tiling(vk::ImageTiling::OPTIMAL)
-        .usage(vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .build();
+    let ring_texture_desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
+        .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
 
-    let compute_output_alloc_opts = vma::AllocationOptions {
-        required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        ..Default::default()
-    };
+    let mut ring_textures: Vec<StreamTexture> = Vec::with_capacity(RING_TEXTURE_COUNT);
+    let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
 
-    let (compute_output_image, mut compute_output_allocation) = match unsafe {
-        allocator.create_image(compute_output_image_info, &compute_output_alloc_opts)
-    } {
-        Ok(r) => r,
-        Err(e) => {
+    for i in 0..RING_TEXTURE_COUNT {
+        let vk_texture = match VulkanTexture::new(vulkan_device, &ring_texture_desc) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!(
+                    "[Camera {}] Failed to create ring texture[{}]: {}",
+                    camera_name, i, e
+                );
+                unsafe {
+                    device.destroy_semaphore(camera_timeline_semaphore, None);
+                    device.destroy_command_pool(compute_command_pool, None);
+                    device.destroy_descriptor_pool(descriptor_pool, None);
+                    device.destroy_pipeline(compute_pipeline, None);
+                    device.destroy_pipeline_layout(pipeline_layout, None);
+                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
+                    device.destroy_shader_module(shader_module, None);
+                    for k in 0..2 {
+                        if let Some(alloc) = input_allocations[k].take() {
+                            allocator.destroy_buffer(input_buffers[k], alloc);
+                        }
+                    }
+                }
+                return;
+            }
+        };
+
+        // Create image view eagerly so we can fail fast
+        if let Err(e) = vk_texture.image_view() {
             eprintln!(
-                "[Camera {}] Failed to create compute output image: {}",
-                camera_name, e
+                "[Camera {}] Failed to create ring texture[{}] image view: {}",
+                camera_name, i, e
             );
             unsafe {
-                for k in 0..2 {
-                    device.destroy_fence(compute_fences[k], None);
-                }
+                device.destroy_semaphore(camera_timeline_semaphore, None);
                 device.destroy_command_pool(compute_command_pool, None);
                 device.destroy_descriptor_pool(descriptor_pool, None);
                 device.destroy_pipeline(compute_pipeline, None);
@@ -760,53 +781,45 @@ fn capture_thread_loop(
             }
             return;
         }
-    };
 
-    let compute_output_view_info = vk::ImageViewCreateInfo::builder()
-        .image(compute_output_image)
-        .view_type(vk::ImageViewType::_2D)
-        .format(vk::Format::R8G8B8A8_UNORM)
-        .subresource_range(
-            vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .base_array_layer(0)
-                .layer_count(1)
-                .build(),
-        )
-        .build();
+        let texture_id = uuid::Uuid::new_v4().to_string();
+        let stream_texture = StreamTexture::from_vulkan(vk_texture);
 
-    let compute_output_image_view =
-        match unsafe { device.create_image_view(&compute_output_view_info, None) } {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!(
-                    "[Camera {}] Failed to create compute output image view: {}",
-                    camera_name, e
-                );
-                unsafe {
-                    allocator.destroy_image(compute_output_image, compute_output_allocation);
-                    for k in 0..2 {
-                        device.destroy_fence(compute_fences[k], None);
-                    }
-                    device.destroy_command_pool(compute_command_pool, None);
-                    device.destroy_descriptor_pool(descriptor_pool, None);
-                    device.destroy_pipeline(compute_pipeline, None);
-                    device.destroy_pipeline_layout(pipeline_layout, None);
-                    device.destroy_descriptor_set_layout(descriptor_set_layout, None);
-                    device.destroy_shader_module(shader_module, None);
-                    for k in 0..2 {
-                        if let Some(alloc) = input_allocations[k].take() {
-                            allocator.destroy_buffer(input_buffers[k], alloc);
-                        }
-                    }
+        // Register with SurfaceStore for cross-process GPU-to-GPU sharing
+        {
+            let surface_store = gpu_context.surface_store();
+            if let Some(store) = surface_store {
+                if let Err(e) = store.register_texture(&texture_id, &stream_texture) {
+                    eprintln!(
+                        "[Camera {}] Failed to register ring texture[{}] with broker: {} \
+                         (cross-process GPU sharing unavailable, same-process still works)",
+                        camera_name, i, e
+                    );
                 }
-                return;
             }
-        };
+        }
 
-    // Write descriptor set — input SSBO binding will be updated per-frame for double buffering
+        gpu_context.register_texture(&texture_id, stream_texture.clone());
+        ring_texture_ids.push(texture_id);
+        ring_textures.push(stream_texture);
+    }
+
+    eprintln!(
+        "[Camera {}] Ring textures created: {} x {}x{} RGBA8 DEVICE_LOCAL DMA-BUF exportable (STORAGE | SAMPLED)",
+        camera_name, RING_TEXTURE_COUNT, width, height
+    );
+
+    // Get ring texture image handles and views for compute dispatch
+    let ring_images: Vec<vk::Image> = ring_textures
+        .iter()
+        .map(|t| t.inner.image().unwrap())
+        .collect();
+    let ring_image_views: Vec<vk::ImageView> = ring_textures
+        .iter()
+        .map(|t| t.inner.image_view().unwrap())
+        .collect();
+
+    // Write initial descriptor set — both bindings updated per-frame
     let input_buffer_descriptor = vk::DescriptorBufferInfo::builder()
         .buffer(input_buffers[0])
         .offset(0)
@@ -816,7 +829,7 @@ fn capture_thread_loop(
 
     let output_image_descriptor = vk::DescriptorImageInfo::builder()
         .image_layout(vk::ImageLayout::GENERAL)
-        .image_view(compute_output_image_view)
+        .image_view(ring_image_views[0])
         .sampler(vk::Sampler::null())
         .build();
     let output_image_infos = [output_image_descriptor];
@@ -862,7 +875,31 @@ fn capture_thread_loop(
     let mut dmabuf_imported_memories: [vk::DeviceMemory; V4L2_BUFFER_COUNT as usize] =
         [vk::DeviceMemory::null(); V4L2_BUFFER_COUNT as usize];
 
-    if vulkan_device.supports_external_memory() {
+    // Check if the V4L2 driver is a virtual/platform device (vivid, v4l2loopback).
+    // These allocate buffers in CPU system memory, so DMA-BUF import into the GPU
+    // may succeed at the API level but produce garbage data (cross-device coherency).
+    // Skip DMA-BUF probing for these — MMAP + memcpy is correct.
+    let is_virtual_device = unsafe {
+        let mut cap: v4l::v4l_sys::v4l2_capability = std::mem::zeroed();
+        let result = libc::ioctl(
+            device_fd,
+            v4l::v4l2::vidioc::VIDIOC_QUERYCAP as libc::c_ulong,
+            &mut cap,
+        );
+        if result == 0 {
+            let driver = std::ffi::CStr::from_ptr(cap.driver.as_ptr().cast())
+                .to_str()
+                .unwrap_or("");
+            let bus = std::ffi::CStr::from_ptr(cap.bus_info.as_ptr().cast())
+                .to_str()
+                .unwrap_or("");
+            driver == "vivid" || driver == "v4l2 loopback" || bus.starts_with("platform:")
+        } else {
+            false
+        }
+    };
+
+    if vulkan_device.supports_external_memory() && !is_virtual_device {
         // Step 1: Try VIDIOC_EXPBUF on buffer 0 to check DMA-BUF export support
         let probe_succeeded: bool = unsafe {
             let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();
@@ -1091,7 +1128,6 @@ fn capture_thread_loop(
     while is_capturing.load(Ordering::Acquire) {
         // ---- Step 1: Acquire frame and select input SSBO ----
         let input_ssbo_buffer: vk::Buffer;
-        let current_fence: vk::Fence;
         let mut v4l2_requeue_buf: Option<v4l::v4l_sys::v4l2_buffer> = None;
         let mut frame_sequence: u32 = 0;
 
@@ -1133,15 +1169,22 @@ fn capture_thread_loop(
                 let buffer_index = v4l2_buf.index as usize;
                 frame_sequence = v4l2_buf.sequence;
                 input_ssbo_buffer = dmabuf_imported_buffers[buffer_index];
-                // Use fence 0 for all DMABUF dispatches (no double buffering needed)
-                current_fence = compute_fences[0];
                 v4l2_requeue_buf = Some(v4l2_buf);
             }
 
-            // Wait for previous GPU dispatch to complete before reusing the fence
-            unsafe {
-                let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
-                let _ = device.reset_fences(&[current_fence]);
+            // Wait for previous use of this ring texture slot to complete.
+            // Frame N uses ring slot N%2; the previous use was frame N-2 which
+            // signaled timeline value N-1. First 2 frames skip (initial value 0).
+            let frame_num_peek = frame_counter.load(Ordering::Relaxed);
+            if frame_num_peek >= RING_TEXTURE_COUNT as u64 {
+                let wait_value = frame_num_peek - (RING_TEXTURE_COUNT as u64 - 1);
+                let wait_info = vk::SemaphoreWaitInfo::builder()
+                    .semaphores(&[camera_timeline_semaphore])
+                    .values(&[wait_value])
+                    .build();
+                unsafe {
+                    let _ = device.wait_semaphores(&wait_info, u64::MAX);
+                }
             }
         } else {
             // MMAP path: poll with timeout before stream.next() so the
@@ -1185,12 +1228,18 @@ fn capture_thread_loop(
 
             frame_sequence = meta.sequence;
             let current_ssbo = ping_pong_index;
-            current_fence = compute_fences[current_ssbo];
 
-            // Wait for any previous GPU work on this SSBO slot before uploading
-            unsafe {
-                let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
-                let _ = device.reset_fences(&[current_fence]);
+            // Wait for previous use of this ring texture slot to complete
+            let frame_num_peek = frame_counter.load(Ordering::Relaxed);
+            if frame_num_peek >= RING_TEXTURE_COUNT as u64 {
+                let wait_value = frame_num_peek - (RING_TEXTURE_COUNT as u64 - 1);
+                let wait_info = vk::SemaphoreWaitInfo::builder()
+                    .semaphores(&[camera_timeline_semaphore])
+                    .values(&[wait_value])
+                    .build();
+                unsafe {
+                    let _ = device.wait_semaphores(&wait_info, u64::MAX);
+                }
             }
 
             // Upload raw V4L2 frame data to current input SSBO (the memcpy)
@@ -1208,9 +1257,14 @@ fn capture_thread_loop(
 
         let frame_num = frame_counter.fetch_add(1, Ordering::Relaxed);
 
-        // ---- Step 2: Acquire output pixel buffer ----
+        // ---- Step 2: Select ring texture + acquire pixel buffer for IPC ----
+        let ring_index = (frame_num as usize) % RING_TEXTURE_COUNT;
+        let ring_image = ring_images[ring_index];
+        let ring_image_view = ring_image_views[ring_index];
+
+        // Acquire pixel buffer for cross-process IPC (HOST_VISIBLE, exported via broker)
         let (pool_id, pooled_buffer) =
-            match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Bgra32) {
+            match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32) {
                 Ok(result) => result,
                 Err(e) => {
                     if frame_num == 0 {
@@ -1219,7 +1273,6 @@ fn capture_thread_loop(
                             camera_name, e
                         );
                     }
-                    // Re-queue V4L2 buffer in DMABUF mode before continuing
                     if let Some(mut v4l2_buf) = v4l2_requeue_buf {
                         unsafe {
                             libc::ioctl(
@@ -1232,24 +1285,43 @@ fn capture_thread_loop(
                     continue;
                 }
             };
-
         let output_vk_buffer = pooled_buffer.buffer_ref().inner.buffer();
 
-        // ---- Step 3: Update descriptor set with selected input SSBO ----
+        // Register ring texture in cache under the pixel buffer's pool_id so
+        // display resolves the texture via the same surface_id used for pixel buffer IPC.
+        gpu_context.register_texture(&pool_id.to_string(), ring_textures[ring_index].clone());
+
+        // ---- Step 3: Update descriptor set — input SSBO + ring texture ----
         let input_buffer_descriptor = vk::DescriptorBufferInfo::builder()
             .buffer(input_ssbo_buffer)
             .offset(0)
             .range(input_alloc_size)
             .build();
         let input_buffer_infos = [input_buffer_descriptor];
-        let input_descriptor_write = vk::WriteDescriptorSet::builder()
-            .dst_set(descriptor_set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&input_buffer_infos)
+
+        let output_image_descriptor = vk::DescriptorImageInfo::builder()
+            .image_layout(vk::ImageLayout::GENERAL)
+            .image_view(ring_image_view)
+            .sampler(vk::Sampler::null())
             .build();
+        let output_image_infos = [output_image_descriptor];
+
+        let descriptor_writes = [
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&input_buffer_infos)
+                .build(),
+            vk::WriteDescriptorSet::builder()
+                .dst_set(descriptor_set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(&output_image_infos)
+                .build(),
+        ];
         unsafe {
-            device.update_descriptor_sets(&[input_descriptor_write], &[] as &[vk::CopyDescriptorSet]);
+            device.update_descriptor_sets(&descriptor_writes, &[] as &[vk::CopyDescriptorSet]);
         }
 
         // ---- Step 4: Record and submit compute dispatch ----
@@ -1294,48 +1366,41 @@ fn capture_thread_loop(
                 continue;
             }
 
-            // DMABUF memory barrier: ensure GPU sees fresh external memory
-            // after V4L2 DMA write (GPU caches may have stale data).
-            let dmabuf_input_barrier = if use_dmabuf {
-                Some(
-                    vk::BufferMemoryBarrier::builder()
-                        .src_access_mask(vk::AccessFlags::empty())
-                        .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                        .buffer(input_ssbo_buffer)
-                        .offset(0)
-                        .size(input_alloc_size)
-                        .build(),
-                )
-            } else {
-                None
-            };
-            let dmabuf_buffer_barriers: &[vk::BufferMemoryBarrier] =
-                match dmabuf_input_barrier.as_ref() {
-                    Some(b) => std::slice::from_ref(b),
-                    None => &[],
-                };
-
-            // Transition storage image: UNDEFINED → GENERAL (discard old contents)
-            let image_barrier_to_general = vk::ImageMemoryBarrier::builder()
+            // ---- sync2 barriers: DMABUF input + ring texture UNDEFINED → GENERAL ----
+            let mut image_barriers = vec![vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_WRITE)
                 .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::GENERAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(compute_output_image)
+                .image(ring_image)
                 .subresource_range(color_subresource_range)
-                .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .build();
+                .build()];
 
-            device.cmd_pipeline_barrier(
-                compute_command_buffer,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[] as &[vk::MemoryBarrier],
-                dmabuf_buffer_barriers,
-                &[image_barrier_to_general],
-            );
+            let dmabuf_buffer_barrier;
+            let buffer_barriers: &[vk::BufferMemoryBarrier2] = if use_dmabuf {
+                dmabuf_buffer_barrier = vk::BufferMemoryBarrier2::builder()
+                    .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                    .src_access_mask(vk::AccessFlags2::NONE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                    .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                    .buffer(input_ssbo_buffer)
+                    .offset(0)
+                    .size(input_alloc_size)
+                    .build();
+                std::slice::from_ref(&dmabuf_buffer_barrier)
+            } else {
+                &[]
+            };
+
+            let pre_compute_dep = vk::DependencyInfo::builder()
+                .buffer_memory_barriers(buffer_barriers)
+                .image_memory_barriers(&image_barriers)
+                .build();
+            device.cmd_pipeline_barrier2(compute_command_buffer, &pre_compute_dep);
 
             device.cmd_bind_pipeline(
                 compute_command_buffer,
@@ -1352,8 +1417,29 @@ fn capture_thread_loop(
                 &[],
             );
 
-            // Push constants: width, height
-            let push_data = [width, height];
+            // Push constants: width, height, flags
+            // flags bit 0: full_range (1 = full 0-255, 0 = limited 16-235)
+            let nv12_flags: u32 = if &fourcc_bytes == b"NV12" {
+                // Query V4L2 quantization from the device
+                let mut v4l2_fmt: v4l::v4l_sys::v4l2_format = std::mem::zeroed();
+                v4l2_fmt.type_ = v4l::buffer::Type::VideoCapture as u32;
+                let is_full_range = if libc::ioctl(
+                    device_fd,
+                    v4l::v4l2::vidioc::VIDIOC_G_FMT as libc::c_ulong,
+                    &mut v4l2_fmt,
+                ) == 0
+                {
+                    // V4L2_QUANTIZATION_FULL_RANGE = 1, LIM_RANGE = 2, DEFAULT = 0
+                    // DEFAULT maps to limited-range for BT.601 (most cameras)
+                    v4l2_fmt.fmt.pix.quantization == 1
+                } else {
+                    true // default to full-range if query fails
+                };
+                if is_full_range { 1 } else { 0 }
+            } else {
+                1 // YUYV shader doesn't use flags yet, default full-range
+            };
+            let push_data = [width, height, nv12_flags];
             let push_bytes: &[u8] = std::slice::from_raw_parts(
                 push_data.as_ptr() as *const u8,
                 std::mem::size_of_val(&push_data),
@@ -1368,29 +1454,27 @@ fn capture_thread_loop(
 
             device.cmd_dispatch(compute_command_buffer, dispatch_x, dispatch_y, 1);
 
-            // Transition storage image: GENERAL → TRANSFER_SRC_OPTIMAL
-            let image_barrier_to_transfer = vk::ImageMemoryBarrier::builder()
+            // ---- sync2 barrier: ring texture GENERAL → TRANSFER_SRC ----
+            // Copy to pixel buffer for cross-process IPC, then to SHADER_READ_ONLY for display
+            image_barriers[0] = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .src_access_mask(vk::AccessFlags2::SHADER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
                 .old_layout(vk::ImageLayout::GENERAL)
                 .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(compute_output_image)
+                .image(ring_image)
                 .subresource_range(color_subresource_range)
-                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
                 .build();
 
-            device.cmd_pipeline_barrier(
-                compute_command_buffer,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[] as &[vk::MemoryBarrier],
-                &[] as &[vk::BufferMemoryBarrier],
-                &[image_barrier_to_transfer],
-            );
+            let to_transfer_dep = vk::DependencyInfo::builder()
+                .image_memory_barriers(&image_barriers)
+                .build();
+            device.cmd_pipeline_barrier2(compute_command_buffer, &to_transfer_dep);
 
-            // Copy storage image → pooled pixel buffer (for IPC sharing)
+            // Copy ring texture → pixel buffer (for cross-process IPC)
             let copy_region = vk::BufferImageCopy::builder()
                 .buffer_offset(0)
                 .buffer_row_length(width)
@@ -1413,30 +1497,42 @@ fn capture_thread_loop(
 
             device.cmd_copy_image_to_buffer(
                 compute_command_buffer,
-                compute_output_image,
+                ring_image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 output_vk_buffer,
                 &[copy_region],
             );
 
-            // Buffer barrier: transfer write → host/transfer read
-            let buffer_barrier = vk::BufferMemoryBarrier::builder()
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::HOST_READ | vk::AccessFlags::TRANSFER_READ)
+            // ---- sync2 barriers: ring texture TRANSFER_SRC → SHADER_READ_ONLY +
+            //      pixel buffer TRANSFER_WRITE → HOST_READ ----
+            image_barriers[0] = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
+                .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .image(ring_image)
+                .subresource_range(color_subresource_range)
+                .build();
+
+            let buffer_host_barrier = vk::BufferMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+                .dst_access_mask(vk::AccessFlags2::HOST_READ)
                 .buffer(output_vk_buffer)
                 .offset(0)
                 .size(output_buffer_size)
                 .build();
 
-            device.cmd_pipeline_barrier(
-                compute_command_buffer,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::HOST | vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[] as &[vk::MemoryBarrier],
-                &[buffer_barrier],
-                &[] as &[vk::ImageMemoryBarrier],
-            );
+            let post_copy_dep = vk::DependencyInfo::builder()
+                .image_memory_barriers(&image_barriers)
+                .buffer_memory_barriers(std::slice::from_ref(&buffer_host_barrier))
+                .build();
+            device.cmd_pipeline_barrier2(compute_command_buffer, &post_copy_dep);
 
             if device.end_command_buffer(compute_command_buffer).is_err() {
                 if let Some(mut v4l2_buf) = v4l2_requeue_buf {
@@ -1449,13 +1545,22 @@ fn capture_thread_loop(
                 continue;
             }
 
-            // Submit and wait for completion
-            let command_buffers = [compute_command_buffer];
-            let submit_info = vk::SubmitInfo::builder()
-                .command_buffers(&command_buffers)
+            // ---- queue_submit2: signal timeline semaphore ----
+            timeline_signal_value = frame_num + 1;
+            let signal_semaphore = vk::SemaphoreSubmitInfo::builder()
+                .semaphore(camera_timeline_semaphore)
+                .value(timeline_signal_value)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                .build();
+            let cmd_info = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(compute_command_buffer)
+                .build();
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&[cmd_info])
+                .signal_semaphore_infos(&[signal_semaphore])
                 .build();
 
-            if let Err(e) = device.queue_submit(queue, &[submit_info], current_fence) {
+            if let Err(e) = device.queue_submit2(queue, &[submit], vk::Fence::null()) {
                 if frame_num == 0 {
                     eprintln!(
                         "[Camera {}] Failed to submit compute dispatch: {}",
@@ -1472,8 +1577,12 @@ fn capture_thread_loop(
                 continue;
             }
 
-            // Wait for this frame to complete before publishing
-            let _ = device.wait_for_fences(&[current_fence], true, u64::MAX);
+            // Wait for GPU to finish so the pixel buffer is host-readable for IPC
+            let wait_info = vk::SemaphoreWaitInfo::builder()
+                .semaphores(&[camera_timeline_semaphore])
+                .values(&[timeline_signal_value])
+                .build();
+            let _ = device.wait_semaphores(&wait_info, u64::MAX);
         }
 
         // ---- Step 5: Re-queue V4L2 buffer in DMABUF mode ----
@@ -1488,6 +1597,11 @@ fn capture_thread_loop(
         }
 
         // ---- Step 6: Publish frame via IPC ----
+        // Use pixel buffer pool_id as surface_id — this is the universal key:
+        // - Same-process: texture cache resolves ring texture (registered above)
+        // - Cross-process GPU: broker has ring texture DMA-BUF fd (registered at startup)
+        // - Cross-process CPU: broker has pixel buffer DMA-BUF fd (registered by acquire)
+        // - PNG sampling: resolves pixel buffer for CPU readback
         let surface_id = pool_id.to_string();
         let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
@@ -1496,7 +1610,7 @@ fn capture_thread_loop(
             width,
             height,
             timestamp_ns: timestamp_ns.to_string(),
-            frame_index: frame_num.to_string(),
+            frame_index: timeline_signal_value.to_string(),
         };
 
         if let Err(e) = outputs.write("video", &ipc_frame) {
@@ -1554,11 +1668,13 @@ fn capture_thread_loop(
             }
         }
 
-        device.destroy_image_view(compute_output_image_view, None);
-        allocator.destroy_image(compute_output_image, compute_output_allocation);
-        for k in 0..2 {
-            device.destroy_fence(compute_fences[k], None);
-        }
+        // Ring textures are owned by StreamTexture (Arc<VulkanTexture>) — they
+        // clean up via Drop when ring_textures goes out of scope. Clear the
+        // texture cache references so display doesn't try to use stale textures.
+        gpu_context.set_camera_timeline_semaphore(0);
+        drop(ring_textures);
+
+        device.destroy_semaphore(camera_timeline_semaphore, None);
         device.destroy_command_pool(compute_command_pool, None);
         device.destroy_descriptor_pool(descriptor_pool, None);
         device.destroy_pipeline(compute_pipeline, None);
