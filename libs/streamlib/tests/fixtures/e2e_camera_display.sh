@@ -57,10 +57,8 @@ fi
 
 # Find the vivid capture device
 VIRTUAL_DEVICE=""
-for dev in /dev/video*; do
-    DRIVER=$(v4l2-ctl -d "$dev" --info 2>/dev/null | grep "Driver name" | awk '{print $NF}')
-    CAPS=$(v4l2-ctl -d "$dev" --info 2>/dev/null | grep "Video Capture" || true)
-    if [ "$DRIVER" = "vivid" ] && [ -n "$CAPS" ]; then
+for dev in $(v4l2-ctl --list-devices 2>/dev/null | awk '/vivid/{getline; print $1}'); do
+    if v4l2-ctl -d "$dev" --info 2>/dev/null | grep -q "Video Capture"; then
         VIRTUAL_DEVICE="$dev"
         break
     fi
