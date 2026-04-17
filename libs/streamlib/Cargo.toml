@@ -202,6 +202,7 @@ schemas = [
     "schemas/com.streamlib.h264_decoder.config@1.0.0.yaml",
     "schemas/com.streamlib.h265_encoder.config@1.0.0.yaml",
     "schemas/com.streamlib.h265_decoder.config@1.0.0.yaml",
+    "schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml",
     "schemas/com.streamlib.opus_encoder.config@1.0.0.yaml",
     "schemas/com.streamlib.opus_decoder.config@1.0.0.yaml",
     "schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml",

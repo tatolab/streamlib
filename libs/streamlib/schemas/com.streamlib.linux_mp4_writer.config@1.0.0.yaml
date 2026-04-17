@@ -1,0 +1,29 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for Linux MP4 Writer config
+
+metadata:
+  name: com.streamlib.linux_mp4_writer.config
+  version: 1.0.0
+  description: "Configuration for Linux MP4 video writing via ffmpeg mux."
+
+properties:
+  output_path:
+    metadata:
+      description: "Path to write the output MP4 file."
+    type: string
+  fps:
+    metadata:
+      description: "Video frame rate for the output container."
+    type: uint32
+
+optionalProperties:
+  codec:
+    metadata:
+      description: "Codec name for ffmpeg (h264 or hevc). Default: h264."
+    type: string
+  duration_secs:
+    metadata:
+      description: "Expected duration in seconds (for silent audio track length)."
+    type: uint32
