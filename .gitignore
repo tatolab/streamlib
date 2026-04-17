@@ -66,6 +66,7 @@ examples/camera-python-display/assets/
 # Claude Code project files (except versioned items)
 .claude/*
 !.claude/commands/
+!.claude/skills/
 !.claude/streamlib/
 *.log
 .rustup/
