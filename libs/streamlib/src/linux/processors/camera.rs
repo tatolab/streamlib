@@ -496,11 +496,11 @@ fn capture_thread_loop(
             }
         };
 
-    // Push constant range: width + height + flags (3 × uint32 = 12 bytes)
+    // Push constant range: width + height (2 × uint32 = 8 bytes)
     let push_constant_range = vk::PushConstantRange::builder()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
-        .size(12)
+        .size(8)
         .build();
 
     let set_layouts = [descriptor_set_layout];
@@ -875,31 +875,7 @@ fn capture_thread_loop(
     let mut dmabuf_imported_memories: [vk::DeviceMemory; V4L2_BUFFER_COUNT as usize] =
         [vk::DeviceMemory::null(); V4L2_BUFFER_COUNT as usize];
 
-    // Check if the V4L2 driver is a virtual/platform device (vivid, v4l2loopback).
-    // These allocate buffers in CPU system memory, so DMA-BUF import into the GPU
-    // may succeed at the API level but produce garbage data (cross-device coherency).
-    // Skip DMA-BUF probing for these — MMAP + memcpy is correct.
-    let is_virtual_device = unsafe {
-        let mut cap: v4l::v4l_sys::v4l2_capability = std::mem::zeroed();
-        let result = libc::ioctl(
-            device_fd,
-            v4l::v4l2::vidioc::VIDIOC_QUERYCAP as libc::c_ulong,
-            &mut cap,
-        );
-        if result == 0 {
-            let driver = std::ffi::CStr::from_ptr(cap.driver.as_ptr().cast())
-                .to_str()
-                .unwrap_or("");
-            let bus = std::ffi::CStr::from_ptr(cap.bus_info.as_ptr().cast())
-                .to_str()
-                .unwrap_or("");
-            driver == "vivid" || driver == "v4l2 loopback" || bus.starts_with("platform:")
-        } else {
-            false
-        }
-    };
-
-    if vulkan_device.supports_external_memory() && !is_virtual_device {
+    if vulkan_device.supports_external_memory() {
         // Step 1: Try VIDIOC_EXPBUF on buffer 0 to check DMA-BUF export support
         let probe_succeeded: bool = unsafe {
             let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();
@@ -1417,29 +1393,8 @@ fn capture_thread_loop(
                 &[],
             );
 
-            // Push constants: width, height, flags
-            // flags bit 0: full_range (1 = full 0-255, 0 = limited 16-235)
-            let nv12_flags: u32 = if &fourcc_bytes == b"NV12" {
-                // Query V4L2 quantization from the device
-                let mut v4l2_fmt: v4l::v4l_sys::v4l2_format = std::mem::zeroed();
-                v4l2_fmt.type_ = v4l::buffer::Type::VideoCapture as u32;
-                let is_full_range = if libc::ioctl(
-                    device_fd,
-                    v4l::v4l2::vidioc::VIDIOC_G_FMT as libc::c_ulong,
-                    &mut v4l2_fmt,
-                ) == 0
-                {
-                    // V4L2_QUANTIZATION_FULL_RANGE = 1, LIM_RANGE = 2, DEFAULT = 0
-                    // DEFAULT maps to limited-range for BT.601 (most cameras)
-                    v4l2_fmt.fmt.pix.quantization == 1
-                } else {
-                    true // default to full-range if query fails
-                };
-                if is_full_range { 1 } else { 0 }
-            } else {
-                1 // YUYV shader doesn't use flags yet, default full-range
-            };
-            let push_data = [width, height, nv12_flags];
+            // Push constants: width, height
+            let push_data = [width, height];
             let push_bytes: &[u8] = std::slice::from_raw_parts(
                 push_data.as_ptr() as *const u8,
                 std::mem::size_of_val(&push_data),
