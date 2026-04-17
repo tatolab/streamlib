@@ -1,95 +1,81 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Vulkan Video Encode Roundtrip Pipeline
+//! Vulkan Video Live Encode Pipeline
 //!
-//! Streams a raw BGRA fixture file through the streamlib processor graph:
-//!   BgraFileSource → H264/H265 Encoder → LinuxMp4Writer
+//! Captures from a V4L2 camera (vivid virtual device or real camera),
+//! encodes via Vulkan Video hardware, and writes to MP4.
 //!
-//! Produces a Telegram-compatible MP4 with silent audio track.
+//!   CameraProcessor → H264/H265 Encoder → LinuxMp4Writer
 //!
 //! Usage:
-//!   cargo run -p vulkan-video-roundtrip --release -- h264
-//!   cargo run -p vulkan-video-roundtrip --release -- h265
+//!   cargo run -p vulkan-video-roundtrip --release -- h265 [device] [seconds]
+//!   cargo run -p vulkan-video-roundtrip --release -- h264 /dev/video2 10
 
 use streamlib::{
     input, output,
-    BgraFileSourceProcessor, H264EncoderProcessor, H265EncoderProcessor,
+    CameraProcessor, H264EncoderProcessor, H265EncoderProcessor,
     LinuxMp4WriterProcessor, Result, StreamRuntime,
 };
 
-const WIDTH: u32 = 1920;
-const HEIGHT: u32 = 1080;
-const FPS: u32 = 60;
-const DURATION_SECS: u32 = 10;
-const FRAME_COUNT: u32 = FPS * DURATION_SECS;
-
 fn main() -> Result<()> {
-    let codec = std::env::args().nth(1).unwrap_or_else(|| "h265".into());
+    let args: Vec<String> = std::env::args().collect();
+    let codec = args.get(1).map(|s| s.as_str()).unwrap_or("h265");
+    let device = args.get(2).map(|s| s.as_str()).unwrap_or("/dev/video2");
+    let duration_secs: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10);
     let is_h265 = codec == "h265";
 
-    let fixture_path = format!(
-        "{}/libs/vulkan-video/examples/{}-codec/fixtures/smpte_1080p60.bgra",
-        env!("CARGO_MANIFEST_DIR").replace("/examples/vulkan-video-roundtrip", ""),
-        if is_h265 { "h265" } else { "h264" }
-    );
+    let output_path = format!("/tmp/streamlib_live_{codec}.mp4");
 
-    let output_path = format!("/tmp/streamlib_{codec}_roundtrip.mp4");
-
-    println!("=== Vulkan Video {} Encode Pipeline ===", codec.to_uppercase());
-    println!("Source:  {fixture_path}");
-    println!("Output:  {output_path}");
-    println!("Format:  {WIDTH}x{HEIGHT}@{FPS}fps, {DURATION_SECS}s ({FRAME_COUNT} frames)\n");
+    println!("=== Vulkan Video Live {} Encode ===", codec.to_uppercase());
+    println!("Camera:   {device}");
+    println!("Output:   {output_path}");
+    println!("Duration: {duration_secs}s\n");
 
     let runtime = StreamRuntime::new()?;
 
-    // --- Source: reads BGRA file frame-by-frame ---
-    let source = runtime.add_processor(BgraFileSourceProcessor::node(
-        BgraFileSourceProcessor::Config {
-            file_path: fixture_path,
-            width: WIDTH,
-            height: HEIGHT,
-            fps: FPS,
-            frame_count: FRAME_COUNT,
-        },
-    ))?;
-    println!("+ BgraFileSource: {source}");
+    // --- Camera: captures from V4L2 device ---
+    let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
+        device_id: Some(device.to_string()),
+        ..Default::default()
+    }))?;
+    println!("+ Camera: {camera}");
 
     // --- Encoder: Vulkan Video hardware encode ---
     let encoder = if is_h265 {
         runtime.add_processor(H265EncoderProcessor::node(
             H265EncoderProcessor::Config {
-                width: Some(WIDTH),
-                height: Some(HEIGHT),
+                width: Some(1920),
+                height: Some(1080),
                 ..Default::default()
             },
         ))?
     } else {
         runtime.add_processor(H264EncoderProcessor::node(
             H264EncoderProcessor::Config {
-                width: Some(WIDTH),
-                height: Some(HEIGHT),
+                width: Some(1920),
+                height: Some(1080),
                 ..Default::default()
             },
         ))?
     };
     println!("+ {}Encoder: {encoder}", codec.to_uppercase());
 
-    // --- MP4 Writer: mux encoded stream to MP4 ---
+    // --- MP4 Writer ---
     let mp4_writer = runtime.add_processor(LinuxMp4WriterProcessor::node(
         LinuxMp4WriterProcessor::Config {
             output_path: output_path.clone(),
-            fps: FPS,
+            fps: 30,
             codec: Some(if is_h265 { "hevc".into() } else { "h264".into() }),
-            duration_secs: Some(DURATION_SECS),
+            duration_secs: Some(duration_secs),
         },
     ))?;
     println!("+ LinuxMp4Writer: {mp4_writer}");
 
-    // --- Wire the pipeline ---
+    // --- Wire ---
     if is_h265 {
         runtime.connect(
-            output::<BgraFileSourceProcessor::OutputLink::video>(&source),
+            output::<CameraProcessor::OutputLink::video>(&camera),
             input::<H265EncoderProcessor::InputLink::video_in>(&encoder),
         )?;
         runtime.connect(
@@ -98,7 +84,7 @@ fn main() -> Result<()> {
         )?;
     } else {
         runtime.connect(
-            output::<BgraFileSourceProcessor::OutputLink::video>(&source),
+            output::<CameraProcessor::OutputLink::video>(&camera),
             input::<H264EncoderProcessor::InputLink::video_in>(&encoder),
         )?;
         runtime.connect(
@@ -106,21 +92,17 @@ fn main() -> Result<()> {
             input::<LinuxMp4WriterProcessor::InputLink::encoded_video_in>(&mp4_writer),
         )?;
     }
-    println!("\nPipeline: source -> encoder -> mp4_writer");
+    println!("\nPipeline: camera -> encoder -> mp4_writer");
 
-    // --- Run ---
-    println!("Starting pipeline...\n");
+    // --- Run for duration then stop ---
+    println!("Starting pipeline for {duration_secs}s...\n");
     runtime.start()?;
 
-    // Wait for the source to finish streaming all frames, plus a buffer
-    // for the encoder to flush. The source runs at real-time FPS, so
-    // total wall time ≈ DURATION_SECS + encoder flush time.
-    let total_wait = std::time::Duration::from_secs(DURATION_SECS as u64 + 5);
-    std::thread::sleep(total_wait);
+    std::thread::sleep(std::time::Duration::from_secs(duration_secs as u64 + 2));
 
-    println!("Source finished, stopping pipeline...");
+    println!("\nStopping pipeline...");
     runtime.stop()?;
 
-    println!("\nOutput: {output_path}");
+    println!("Output: {output_path}");
     Ok(())
 }
