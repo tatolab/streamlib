@@ -411,6 +411,237 @@ impl SimpleEncoder {
         Ok(this)
     }
 
+    /// Create the encoder from an externally-owned Vulkan device (skips device creation).
+    pub(crate) unsafe fn create_from_external(
+        config: SimpleEncoderConfig,
+        instance: vulkanalia::Instance,
+        device: vulkanalia::Device,
+        physical_device: vk::PhysicalDevice,
+        allocator: Arc<vma::Allocator>,
+        encode_queue: vk::Queue,
+        encode_queue_family: u32,
+        transfer_queue: vk::Queue,
+        transfer_queue_family: u32,
+        compute_queue: vk::Queue,
+        compute_queue_family: u32,
+    ) -> Result<SimpleEncoder, VideoError> {
+        let codec_flag = match config.codec {
+            Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
+            Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
+        };
+
+        // Use the external device's allocator — no new VMA allocator created.
+        let ctx = Arc::new(VideoContext::from_external(
+            instance.clone(),
+            device.clone(),
+            physical_device,
+            allocator,
+        )?);
+
+        let enc_config = config.to_encode_config();
+        let gop = config.to_gop_structure();
+        let prepend_header = config.effective_prepend_header();
+
+        // Create a dummy Entry — not used for anything when device is external,
+        // but the struct requires it. Load the Vulkan library to satisfy the field.
+        let entry = vulkanalia::Entry::new(
+            vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY)
+                .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan loader: {}", e)))?,
+        ).map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan: {}", e)))?;
+
+        let mut this = SimpleEncoder {
+            _entry: entry,
+            _instance: instance.clone(),
+            device: device.clone(),
+            ctx: ctx.clone(),
+            codec_flag,
+            encode_config: None,
+            video_session: vk::VideoSessionKHR::null(),
+            session_memory: Vec::new(),
+            session_params: vk::VideoSessionParametersKHR::null(),
+            dpb_image: vk::Image::null(),
+            dpb_allocation: unsafe { std::mem::zeroed() },
+            dpb_separate_images: Vec::new(),
+            dpb_separate_allocations: Vec::new(),
+            dpb_slots: Vec::new(),
+            bitstream_buffer: vk::Buffer::null(),
+            bitstream_allocation: unsafe { std::mem::zeroed() },
+            bitstream_buffer_size: 0,
+            bitstream_mapped_ptr: ptr::null_mut(),
+            command_pool: vk::CommandPool::null(),
+            command_buffer: vk::CommandBuffer::null(),
+            query_pool: vk::QueryPool::null(),
+            fence: vk::Fence::null(),
+            frame_count: 0,
+            encode_order_count: 0,
+            poc_counter: 0,
+            rate_control_sent: false,
+            aligned_width: 0,
+            aligned_height: 0,
+            configured: false,
+            effective_quality_level: 0,
+            h265_encoder: None,
+            h265_config: None,
+            h264_encoder: None,
+            h264_config: None,
+            source_image: vk::Image::null(),
+            source_view: vk::ImageView::null(),
+            source_allocation: unsafe { std::mem::zeroed() },
+            staging_buffer: vk::Buffer::null(),
+            staging_allocation: unsafe { std::mem::zeroed() },
+            staging_mapped_ptr: ptr::null_mut(),
+            staging_size: 0,
+            transfer_pool: vk::CommandPool::null(),
+            transfer_cb: vk::CommandBuffer::null(),
+            transfer_fence: vk::Fence::null(),
+            transfer_queue,
+            transfer_queue_family,
+            encode_queue,
+            encode_queue_family,
+            compute_queue,
+            compute_queue_family,
+            rgb_to_nv12: None,
+            gop,
+            gop_state: Default::default(),
+            frame_counter: 0,
+            force_idr_flag: false,
+            reorder_buffer: Vec::new(),
+            cached_header: Vec::new(),
+            config,
+            prepend_header,
+        };
+
+        // Configure encoder (creates video session, DPB, etc.) — same as create_internal
+        this.configure(&enc_config)?;
+
+        let raw_header = this.extract_header().unwrap_or_default();
+        this.cached_header = super::vui_patch::patch_header_timing(
+            &raw_header,
+            this.codec_flag,
+            this.config.fps,
+            1,
+        );
+        let (aligned_w, aligned_h) = this.aligned_extent();
+
+        // Source NV12 image — same setup as create_internal
+        let mut h264_profile = vk::VideoEncodeH264ProfileInfoKHR::builder().std_profile_idc(
+            this.h264_profile_idc(),
+        );
+        let mut h265_profile = vk::VideoEncodeH265ProfileInfoKHR::builder().std_profile_idc(
+            vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN,
+        );
+        let mut src_encode_usage = vk::VideoEncodeUsageInfoKHR::builder()
+            .tuning_mode(vk::VideoEncodeTuningModeKHR::LOW_LATENCY);
+
+        let mut profile_info = vk::VideoProfileInfoKHR::builder()
+            .video_codec_operation(codec_flag)
+            .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::_420)
+            .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8)
+            .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8)
+            .push_next(&mut src_encode_usage);
+
+        if codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
+            profile_info = profile_info.push_next(&mut h264_profile);
+        } else {
+            profile_info = profile_info.push_next(&mut h265_profile);
+        }
+
+        let profile_list =
+            vk::VideoProfileListInfoKHR::builder().profiles(std::slice::from_ref(&profile_info));
+
+        let src_queue_families = [transfer_queue_family, encode_queue_family];
+        let mut src_image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+            .extent(vk::Extent3D { width: aligned_w, height: aligned_h, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR | vk::ImageUsageFlags::TRANSFER_DST)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+
+        if transfer_queue_family != encode_queue_family {
+            src_image_info = src_image_info
+                .sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(&src_queue_families);
+        } else {
+            src_image_info = src_image_info.sharing_mode(vk::SharingMode::EXCLUSIVE);
+        }
+
+        src_image_info.next =
+            &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
+
+        let allocator = ctx.allocator();
+        let src_alloc_options = vma::AllocationOptions {
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+        let (source_image, source_allocation) =
+            allocator.create_image(src_image_info, &src_alloc_options)?;
+
+        let source_view = device.create_image_view(
+            &vk::ImageViewCreateInfo::builder()
+                .image(source_image)
+                .view_type(vk::ImageViewType::_2D)
+                .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0, level_count: 1,
+                    base_array_layer: 0, layer_count: 1,
+                }),
+            None,
+        )?;
+
+        let staging_size = (aligned_w * aligned_h * 3 / 2) as usize;
+        let stg_create_info = vk::BufferCreateInfo::builder()
+            .size(staging_size as u64)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let stg_alloc_options = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ..Default::default()
+        };
+        let (staging_buffer, staging_allocation) =
+            allocator.create_buffer(stg_create_info, &stg_alloc_options)?;
+        let stg_info = allocator.get_allocation_info(staging_allocation);
+        let staging_mapped_ptr = stg_info.pMappedData as *mut u8;
+        if staging_mapped_ptr.is_null() {
+            allocator.destroy_buffer(staging_buffer, staging_allocation);
+            return Err(VideoError::Vulkan(vk::Result::ERROR_MEMORY_MAP_FAILED));
+        }
+
+        let transfer_pool = device.create_command_pool(
+            &vk::CommandPoolCreateInfo::builder()
+                .queue_family_index(transfer_queue_family)
+                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+            None,
+        )?;
+        let transfer_cb = device.allocate_command_buffers(
+            &vk::CommandBufferAllocateInfo::builder()
+                .command_pool(transfer_pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1),
+        )?[0];
+        let transfer_fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
+
+        this.source_image = source_image;
+        this.source_view = source_view;
+        this.source_allocation = source_allocation;
+        this.staging_buffer = staging_buffer;
+        this.staging_allocation = staging_allocation;
+        this.staging_mapped_ptr = staging_mapped_ptr;
+        this.staging_size = staging_size;
+        this.transfer_pool = transfer_pool;
+        this.transfer_cb = transfer_cb;
+        this.transfer_fence = transfer_fence;
+
+        Ok(this)
+    }
+
     /// Upload NV12 data, encode one frame, return the packet.
     pub(crate) unsafe fn upload_and_encode(
         &mut self,

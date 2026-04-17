@@ -226,6 +226,40 @@ impl SimpleEncoder {
         unsafe { Self::create_internal(config) }
     }
 
+    /// Create an encoder using an externally-owned Vulkan device and allocator.
+    ///
+    /// Use this when integrating with a host application (e.g., streamlib RHI)
+    /// that already owns the Vulkan device. No new instance/device is created —
+    /// all GPU resources are allocated through the caller's VMA allocator.
+    ///
+    /// The caller must provide queue handles for encode, transfer, and compute
+    /// operations. The device must have been created with the required video
+    /// encode extensions enabled.
+    pub fn from_device(
+        config: SimpleEncoderConfig,
+        instance: vulkanalia::Instance,
+        device: vulkanalia::Device,
+        physical_device: vk::PhysicalDevice,
+        allocator: Arc<vma::Allocator>,
+        encode_queue: vk::Queue,
+        encode_queue_family: u32,
+        transfer_queue: vk::Queue,
+        transfer_queue_family: u32,
+        compute_queue: vk::Queue,
+        compute_queue_family: u32,
+    ) -> Result<Self, VideoError> {
+        config.validate().map_err(|e| VideoError::BitstreamError(e))?;
+
+        unsafe {
+            Self::create_from_external(
+                config, instance, device, physical_device, allocator,
+                encode_queue, encode_queue_family,
+                transfer_queue, transfer_queue_family,
+                compute_queue, compute_queue_family,
+            )
+        }
+    }
+
     /// Returns the cached SPS/PPS (H.264) or VPS/SPS/PPS (H.265) header
     /// bytes.  These should be written at the start of a file or sent before
     /// the first IDR in a live stream.

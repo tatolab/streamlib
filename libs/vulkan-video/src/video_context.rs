@@ -173,6 +173,32 @@ impl VideoContext {
         })
     }
 
+    /// Create a video context from an externally-owned device and allocator.
+    ///
+    /// Use this when integrating with a host application (e.g., streamlib)
+    /// that already owns the Vulkan device and VMA allocator. No new device
+    /// or allocator is created — the caller's handles are shared.
+    ///
+    /// The caller must ensure the device was created with the required video
+    /// encode/decode extensions enabled.
+    pub fn from_external(
+        instance: vulkanalia::Instance,
+        device: vulkanalia::Device,
+        physical_device: vk::PhysicalDevice,
+        allocator: Arc<vma::Allocator>,
+    ) -> VideoResult<Self> {
+        let memory_properties =
+            unsafe { instance.get_physical_device_memory_properties(physical_device) };
+
+        Ok(Self {
+            instance,
+            device,
+            physical_device,
+            memory_properties,
+            allocator,
+        })
+    }
+
     pub fn device(&self) -> &vulkanalia::Device {
         &self.device
     }

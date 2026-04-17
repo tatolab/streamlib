@@ -158,6 +158,97 @@ impl SimpleDecoder {
         unsafe { Self::create_internal(config) }
     }
 
+    /// Create a decoder using an externally-owned Vulkan device and allocator.
+    ///
+    /// Use this when integrating with a host application (e.g., streamlib RHI)
+    /// that already owns the Vulkan device. No new instance/device is created.
+    pub fn from_device(
+        config: SimpleDecoderConfig,
+        instance: vulkanalia::Instance,
+        device: vulkanalia::Device,
+        physical_device: vk::PhysicalDevice,
+        allocator: Arc<vma::Allocator>,
+        decode_queue: vk::Queue,
+        decode_queue_family: u32,
+        transfer_queue: vk::Queue,
+        transfer_queue_family: u32,
+    ) -> Result<Self, VideoError> {
+        let ctx = Arc::new(VideoContext::from_external(
+            instance.clone(),
+            device.clone(),
+            physical_device,
+            allocator,
+        )?);
+
+        // Load Vulkan for the Entry field (required by struct, not used for external path).
+        let entry = unsafe {
+            vulkanalia::Entry::new(
+                vulkanalia::loader::LibloadingLoader::new(vulkanalia::loader::LIBRARY)
+                    .map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan loader: {}", e)))?,
+            ).map_err(|e| VideoError::BitstreamError(format!("Failed to load Vulkan: {}", e)))?
+        };
+
+        let transfer_pool = unsafe {
+            device.create_command_pool(
+                &vk::CommandPoolCreateInfo::builder()
+                    .queue_family_index(transfer_queue_family)
+                    .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER),
+                None,
+            ).map_err(VideoError::from)?
+        };
+
+        let transfer_cb = unsafe {
+            device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::builder()
+                    .command_pool(transfer_pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            ).map_err(VideoError::from)?[0]
+        };
+
+        let transfer_fence = unsafe {
+            device.create_fence(&vk::FenceCreateInfo::default(), None)
+                .map_err(VideoError::from)?
+        };
+
+        info!(codec = ?config.codec, "SimpleDecoder created (external device)");
+
+        Ok(Self {
+            _entry: entry,
+            _instance: instance,
+            device,
+            vk_decoder: None,
+            decode_queue,
+            decode_queue_family,
+            _transfer_queue: transfer_queue,
+            transfer_queue_family,
+            transfer_pool,
+            _transfer_cb: transfer_cb,
+            transfer_fence,
+            nal_buffer: Vec::new(),
+            cached_vps_nalu: None,
+            cached_sps_nalu: None,
+            cached_pps_nalu: None,
+            sps_width: 0,
+            sps_height: 0,
+            session_configured: false,
+            frame_counter: 0,
+            frame_num: 0,
+            idr_pic_id: 0,
+            dpb_slot_in_use: Vec::new(),
+            dpb_slot_frame_num: Vec::new(),
+            dpb_slot_poc: Vec::new(),
+            config,
+            ctx,
+            h264_parser: None,
+            h264_dpb_to_slot: [-1i32; H264_MAX_DPB_SIZE + 1],
+            h265_parser: None,
+            h265_dpb_to_slot: [-1i32; HEVC_DPB_SIZE],
+            readback_staging: None,
+            pending_frame: None,
+        })
+    }
+
     /// Create the decoder (all Vulkan setup, unsafe due to raw Vulkan calls).
     unsafe fn create_internal(config: SimpleDecoderConfig) -> Result<Self, VideoError> {
         // 1. Load Vulkan

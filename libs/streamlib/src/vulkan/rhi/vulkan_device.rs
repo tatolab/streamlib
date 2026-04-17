@@ -36,8 +36,11 @@ pub struct VulkanDevice {
     device_name: String,
     supports_external_memory: bool,
     supports_video_encode: bool,
+    supports_video_decode: bool,
     video_encode_queue_family_index: Option<u32>,
     video_encode_queue: Option<vk::Queue>,
+    video_decode_queue_family_index: Option<u32>,
+    video_decode_queue: Option<vk::Queue>,
     /// VMA allocator for all GPU memory allocation. Option for controlled drop order.
     allocator: Option<Arc<vma::Allocator>>,
     /// VMA pool for DMA-BUF exportable HOST_VISIBLE buffers (pixel buffers for IPC).
@@ -264,6 +267,23 @@ impl VulkanDevice {
             tracing::info!("No video encode queue family available");
         }
 
+        // 6d. Find video decode queue family (VIDEO_DECODE_BIT_KHR).
+        let video_decode_queue_family_index = queue_families
+            .iter()
+            .enumerate()
+            .find(|(_, props)| {
+                props
+                    .queue_flags
+                    .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
+            })
+            .map(|(idx, _)| idx as u32);
+
+        if let Some(vd_family) = video_decode_queue_family_index {
+            tracing::info!("Video decode queue family found: {}", vd_family);
+        } else {
+            tracing::info!("No video decode queue family available");
+        }
+
         // 7. Create logical device with required extensions
         let queue_priorities = [1.0f32];
         let mut queue_create_infos = vec![vk::DeviceQueueCreateInfo::builder()
@@ -271,12 +291,25 @@ impl VulkanDevice {
             .queue_priorities(&queue_priorities)
             .build()];
 
-        // Request a separate video encode queue if it's a different family
+        // Request separate video encode/decode queues if they're different families
+        let mut requested_families = vec![queue_family_index];
         if let Some(ve_family) = video_encode_queue_family_index {
-            if ve_family != queue_family_index {
+            if !requested_families.contains(&ve_family) {
+                requested_families.push(ve_family);
                 queue_create_infos.push(
                     vk::DeviceQueueCreateInfo::builder()
                         .queue_family_index(ve_family)
+                        .queue_priorities(&queue_priorities)
+                        .build(),
+                );
+            }
+        }
+        if let Some(vd_family) = video_decode_queue_family_index {
+            if !requested_families.contains(&vd_family) {
+                requested_families.push(vd_family);
+                queue_create_infos.push(
+                    vk::DeviceQueueCreateInfo::builder()
+                        .queue_family_index(vd_family)
                         .queue_priorities(&queue_priorities)
                         .build(),
                 );
@@ -391,6 +424,56 @@ impl VulkanDevice {
                 );
             }
 
+            // Enable video_maintenance1 and push_descriptor if video encode is available
+            // (required by vulkan-video crate's encoder/decoder).
+            if all_present {
+                let video_maint1_ext = c"VK_KHR_video_maintenance1";
+                if available_device_ext_names.contains(&video_maint1_ext) {
+                    device_extensions.push(video_maint1_ext.as_ptr());
+                }
+                let push_desc_ext = c"VK_KHR_push_descriptor";
+                if available_device_ext_names.contains(&push_desc_ext) {
+                    device_extensions.push(push_desc_ext.as_ptr());
+                }
+            }
+
+            all_present
+        };
+
+        // Check for Vulkan Video decode extensions
+        #[cfg(target_os = "linux")]
+        let has_video_decode = {
+            let has_video_queue =
+                available_device_ext_names.contains(&c"VK_KHR_video_queue");
+            let has_video_decode_queue =
+                available_device_ext_names.contains(&c"VK_KHR_video_decode_queue");
+            let has_video_decode_h264 =
+                available_device_ext_names.contains(&c"VK_KHR_video_decode_h264");
+            let has_video_decode_h265 =
+                available_device_ext_names.contains(&c"VK_KHR_video_decode_h265");
+
+            let all_present = has_video_queue
+                && has_video_decode_queue
+                && has_video_decode_h264
+                && video_decode_queue_family_index.is_some();
+
+            if all_present {
+                // VK_KHR_video_queue already enabled by encode block above (if present)
+                if !has_video_encode {
+                    device_extensions.push(c"VK_KHR_video_queue".as_ptr());
+                }
+                device_extensions.push(c"VK_KHR_video_decode_queue".as_ptr());
+                device_extensions.push(c"VK_KHR_video_decode_h264".as_ptr());
+                if has_video_decode_h265 {
+                    device_extensions.push(c"VK_KHR_video_decode_h265".as_ptr());
+                    tracing::info!("Vulkan Video decode extensions enabled (H.264 + H.265)");
+                } else {
+                    tracing::info!("Vulkan Video decode extensions enabled (H.264 only)");
+                }
+            } else {
+                tracing::info!("Vulkan Video decode not available");
+            }
+
             all_present
         };
 
@@ -403,6 +486,11 @@ impl VulkanDevice {
         let supports_video_encode = has_video_encode;
         #[cfg(not(target_os = "linux"))]
         let supports_video_encode = false;
+
+        #[cfg(target_os = "linux")]
+        let supports_video_decode = has_video_decode;
+        #[cfg(not(target_os = "linux"))]
+        let supports_video_decode = false;
 
         // Enable dynamic rendering, timeline semaphore, and synchronization2 features on Linux.
         // Synchronization2 is a mandatory dependency of VK_KHR_video_encode_queue.
@@ -419,13 +507,22 @@ impl VulkanDevice {
             vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true).build();
 
         #[cfg(target_os = "linux")]
-        let device_create_info = vk::DeviceCreateInfo::builder()
-            .queue_create_infos(&queue_create_infos)
-            .enabled_extension_names(&device_extensions)
-            .push_next(&mut dynamic_rendering_features)
-            .push_next(&mut timeline_semaphore_features)
-            .push_next(&mut synchronization2_features)
-            .build();
+        let mut video_maintenance1_features =
+            vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::builder().video_maintenance1(true).build();
+
+        #[cfg(target_os = "linux")]
+        let device_create_info = {
+            let mut builder = vk::DeviceCreateInfo::builder()
+                .queue_create_infos(&queue_create_infos)
+                .enabled_extension_names(&device_extensions)
+                .push_next(&mut dynamic_rendering_features)
+                .push_next(&mut timeline_semaphore_features)
+                .push_next(&mut synchronization2_features);
+            if supports_video_encode || supports_video_decode {
+                builder = builder.push_next(&mut video_maintenance1_features);
+            }
+            builder.build()
+        };
 
         #[cfg(not(target_os = "linux"))]
         let device_create_info = vk::DeviceCreateInfo::builder()
@@ -443,6 +540,15 @@ impl VulkanDevice {
         let video_encode_queue = if supports_video_encode {
             video_encode_queue_family_index.map(|ve_family| unsafe {
                 device.get_device_queue(ve_family, 0)
+            })
+        } else {
+            None
+        };
+
+        // 8c. Get the video decode queue (if available)
+        let video_decode_queue = if supports_video_decode {
+            video_decode_queue_family_index.map(|vd_family| unsafe {
+                device.get_device_queue(vd_family, 0)
             })
         } else {
             None
@@ -519,8 +625,11 @@ impl VulkanDevice {
             device_name: device_name.into_owned(),
             supports_external_memory,
             supports_video_encode,
+            supports_video_decode,
             video_encode_queue_family_index,
             video_encode_queue,
+            video_decode_queue_family_index,
+            video_decode_queue,
             allocator: Some(allocator),
             #[cfg(target_os = "linux")]
             dma_buf_buffer_pool,
@@ -778,6 +887,24 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn video_encode_queue(&self) -> Option<vk::Queue> {
         self.video_encode_queue
+    }
+
+    /// Whether this device supports Vulkan Video decode.
+    #[allow(dead_code)]
+    pub fn supports_video_decode(&self) -> bool {
+        self.supports_video_decode
+    }
+
+    /// Get the video decode queue family index (if available).
+    #[allow(dead_code)]
+    pub fn video_decode_queue_family_index(&self) -> Option<u32> {
+        self.video_decode_queue_family_index
+    }
+
+    /// Get the video decode queue (if available).
+    #[allow(dead_code)]
+    pub fn video_decode_queue(&self) -> Option<vk::Queue> {
+        self.video_decode_queue
     }
 
     /// Get the VMA allocator for GPU memory management.
