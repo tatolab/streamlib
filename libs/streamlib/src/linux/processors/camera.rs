@@ -1264,7 +1264,7 @@ fn capture_thread_loop(
         let output_vk_buffer = pooled_buffer.buffer_ref().inner.buffer();
 
         // Register ring texture in cache under the pixel buffer's pool_id so
-        // same-process display can resolve it directly (skipping buffer upload).
+        // display resolves the texture via the same surface_id used for pixel buffer IPC.
         gpu_context.register_texture(&pool_id.to_string(), ring_textures[ring_index].clone());
 
         // ---- Step 3: Update descriptor set — input SSBO + ring texture ----
@@ -1552,11 +1552,12 @@ fn capture_thread_loop(
         }
 
         // ---- Step 6: Publish frame via IPC ----
-        // Use ring texture UUID as surface_id. This is pre-registered with the
-        // broker (DMA-BUF fd) for cross-process GPU-to-GPU, and in the texture
-        // cache for same-process. The pixel buffer is registered separately
-        // under its own pool_id for CPU consumers.
-        let surface_id = ring_texture_ids[ring_index].clone();
+        // Use pixel buffer pool_id as surface_id — this is the universal key:
+        // - Same-process: texture cache resolves ring texture (registered above)
+        // - Cross-process GPU: broker has ring texture DMA-BUF fd (registered at startup)
+        // - Cross-process CPU: broker has pixel buffer DMA-BUF fd (registered by acquire)
+        // - PNG sampling: resolves pixel buffer for CPU readback
+        let surface_id = pool_id.to_string();
         let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
         let ipc_frame = crate::_generated_::Videoframe {
