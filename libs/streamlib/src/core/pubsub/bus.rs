@@ -72,7 +72,38 @@ impl PubSub {
     }
 
     /// Subscribe a listener to a topic.
+    ///
+    /// The subscriber thread holds only a Weak reference to the listener.
+    /// The caller MUST keep the Arc alive for the lifetime of the subscription.
+    /// When the Arc is dropped, the subscriber thread exits automatically.
+    ///
+    /// ```ignore
+    /// // WRONG — Arc dropped immediately, listener never receives events:
+    /// PUBSUB.subscribe(topic, Arc::new(Mutex::new(listener)));
+    ///
+    /// // RIGHT — Arc stored, subscription lives until variable is dropped:
+    /// let sub = Arc::new(Mutex::new(listener));
+    /// PUBSUB.subscribe(topic, Arc::clone(&sub));
+    /// ```
     pub fn subscribe(&self, topic: &str, listener: Arc<Mutex<dyn EventListener>>) {
+        // Caller must keep a strong Arc — we only store a Weak in the
+        // subscriber thread.  strong_count == 1 means this parameter is the
+        // only reference and will be dropped when this call returns.
+        debug_assert!(
+            Arc::strong_count(&listener) > 1,
+            "PUBSUB.subscribe() called with a temporary Arc for topic '{}' — \
+             the listener will be dropped immediately and never receive events. \
+             Store the Arc in a variable that outlives the subscription.",
+            topic,
+        );
+        if Arc::strong_count(&listener) <= 1 {
+            tracing::error!(
+                "PUBSUB.subscribe() called with a temporary Arc for topic '{}' — \
+                 the listener will be dropped immediately and never receive events",
+                topic,
+            );
+        }
+
         if self.runtime_id.get().is_none() {
             // Not yet initialized — buffer for replay
             tracing::debug!(
