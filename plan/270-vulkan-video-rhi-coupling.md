@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Couple vulkan-video to streamlib RHI
-status: in_review
+status: completed
 description: Refactor libs/vulkan-video to use streamlib's VulkanDevice and shared VMA allocator instead of managing its own Vulkan resources. Full RHI boundary compliance.
 github_issue: 270
 dependencies:

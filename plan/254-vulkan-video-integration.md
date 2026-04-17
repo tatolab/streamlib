@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Integrate nvpro-vulkan-video as libs/vulkan-video
-status: in_review
+status: completed
 description: Copy nvpro-vulkan-video crate into libs/vulkan-video, create thin processor wrappers for H.264/H.265 encode/decode. Branch feat/vulkan-video-integration from main.
 github_issue: 254
 dependencies:
