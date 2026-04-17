@@ -14,6 +14,7 @@ use crate::_generated_::{Encodedvideoframe, Videoframe};
 use crate::core::context::GpuContext;
 use crate::core::{Result, RuntimeContext, StreamError};
 
+use vulkanalia::prelude::v1_4::*;
 use vulkan_video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
 
 // ============================================================================
@@ -69,12 +70,20 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
             vulkan_device.allocator().clone(),
             encode_queue,
             encode_queue_family,
-            vulkan_device.queue(),
-            vulkan_device.queue_family_index(),
-            vulkan_device.queue(),
-            vulkan_device.queue_family_index(),
+            vulkan_device.transfer_queue(),
+            vulkan_device.transfer_queue_family_index(),
+            vulkan_device.compute_queue().unwrap_or_else(|| vulkan_device.queue()),
+            vulkan_device.compute_queue_family_index().unwrap_or_else(|| vulkan_device.queue_family_index()),
         ).map_err(|e| {
             StreamError::Runtime(format!("Failed to create H.265 encoder: {e}"))
+        })?;
+
+        // Wait for all device operations to complete before other processors
+        // start submitting work. The encoder's configure() creates video session,
+        // DPB images, and command pools — concurrent Vulkan operations from other
+        // threads during this window crash the NVIDIA driver.
+        unsafe { vulkan_device.device().device_wait_idle() }.map_err(|e| {
+            StreamError::GpuError(format!("device_wait_idle failed: {e}"))
         })?;
 
         tracing::info!(

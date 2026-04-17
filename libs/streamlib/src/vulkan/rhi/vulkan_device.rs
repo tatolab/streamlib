@@ -32,6 +32,7 @@ pub struct VulkanDevice {
     queue: vk::Queue,
     queue_family_index: u32,
     transfer_queue_family_index: u32,
+    transfer_queue: vk::Queue,
     #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
@@ -41,6 +42,8 @@ pub struct VulkanDevice {
     video_encode_queue: Option<vk::Queue>,
     video_decode_queue_family_index: Option<u32>,
     video_decode_queue: Option<vk::Queue>,
+    compute_queue_family_index: Option<u32>,
+    compute_queue: Option<vk::Queue>,
     /// VMA allocator for all GPU memory allocation. Option for controlled drop order.
     allocator: Option<Arc<vma::Allocator>>,
     /// VMA pool for DMA-BUF exportable HOST_VISIBLE buffers (pixel buffers for IPC).
@@ -284,6 +287,22 @@ impl VulkanDevice {
             tracing::info!("No video decode queue family available");
         }
 
+        // 6e. Find dedicated compute queue family (COMPUTE but not GRAPHICS).
+        let compute_queue_family_index = queue_families
+            .iter()
+            .enumerate()
+            .find(|(_, props)| {
+                props.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    && !props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            })
+            .map(|(idx, _)| idx as u32);
+
+        if let Some(cq_family) = compute_queue_family_index {
+            tracing::info!("Dedicated compute queue family found: {}", cq_family);
+        } else {
+            tracing::info!("No dedicated compute queue family — using graphics queue for compute");
+        }
+
         // 7. Create logical device with required extensions
         let queue_priorities = [1.0f32];
         let mut queue_create_infos = vec![vk::DeviceQueueCreateInfo::builder()
@@ -310,6 +329,17 @@ impl VulkanDevice {
                 queue_create_infos.push(
                     vk::DeviceQueueCreateInfo::builder()
                         .queue_family_index(vd_family)
+                        .queue_priorities(&queue_priorities)
+                        .build(),
+                );
+            }
+        }
+        if let Some(cq_family) = compute_queue_family_index {
+            if !requested_families.contains(&cq_family) {
+                requested_families.push(cq_family);
+                queue_create_infos.push(
+                    vk::DeviceQueueCreateInfo::builder()
+                        .queue_family_index(cq_family)
                         .queue_priorities(&queue_priorities)
                         .build(),
                 );
@@ -536,6 +566,9 @@ impl VulkanDevice {
         // 8. Get the graphics queue
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
 
+        // 8a2. Get the transfer queue (may be same as graphics if no dedicated transfer family)
+        let transfer_queue = unsafe { device.get_device_queue(transfer_queue_family_index, 0) };
+
         // 8b. Get the video encode queue (if available)
         let video_encode_queue = if supports_video_encode {
             video_encode_queue_family_index.map(|ve_family| unsafe {
@@ -553,6 +586,11 @@ impl VulkanDevice {
         } else {
             None
         };
+
+        // 8d. Get the dedicated compute queue (if available)
+        let compute_queue = compute_queue_family_index.map(|cq_family| unsafe {
+            device.get_device_queue(cq_family, 0)
+        });
 
         // 9. Query memory properties (kept for DMA-BUF import path)
         let memory_properties =
@@ -622,6 +660,7 @@ impl VulkanDevice {
             queue,
             queue_family_index,
             transfer_queue_family_index,
+            transfer_queue,
             device_name: device_name.into_owned(),
             supports_external_memory,
             supports_video_encode,
@@ -630,6 +669,8 @@ impl VulkanDevice {
             video_encode_queue,
             video_decode_queue_family_index,
             video_decode_queue,
+            compute_queue_family_index,
+            compute_queue,
             allocator: Some(allocator),
             #[cfg(target_os = "linux")]
             dma_buf_buffer_pool,
@@ -866,6 +907,11 @@ impl VulkanDevice {
         self.transfer_queue_family_index
     }
 
+    /// Get the transfer queue handle.
+    pub fn transfer_queue(&self) -> vk::Queue {
+        self.transfer_queue
+    }
+
     /// Whether DMA-BUF external memory extensions are available.
     pub fn supports_external_memory(&self) -> bool {
         self.supports_external_memory
@@ -905,6 +951,18 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn video_decode_queue(&self) -> Option<vk::Queue> {
         self.video_decode_queue
+    }
+
+    /// Get the dedicated compute queue family index (if available).
+    #[allow(dead_code)]
+    pub fn compute_queue_family_index(&self) -> Option<u32> {
+        self.compute_queue_family_index
+    }
+
+    /// Get the dedicated compute queue (if available).
+    #[allow(dead_code)]
+    pub fn compute_queue(&self) -> Option<vk::Queue> {
+        self.compute_queue
     }
 
     /// Get the VMA allocator for GPU memory management.
