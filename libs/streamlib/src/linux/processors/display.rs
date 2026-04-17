@@ -954,28 +954,7 @@ impl DisplayEventLoopHandler {
     }
 }
 
-/// Save BGRA pixel data as a PNG file. Used for AI-readable frame sampling.
-/// Currently unused — GPU-resident pipeline needs GPU readback for sampling (follow-up).
-#[allow(dead_code)]
-fn save_bgra_as_png(
-    path: &std::path::Path,
-    width: u32,
-    height: u32,
-    bgra: &[u8],
-) -> std::io::Result<()> {
-    use std::io::Write;
-    // Convert BGRA → RGBA in-place buffer
-    let mut rgba = Vec::with_capacity(bgra.len());
-    for chunk in bgra.chunks_exact(4) {
-        rgba.push(chunk[2]); // R = BGRA[2]
-        rgba.push(chunk[1]); // G = BGRA[1]
-        rgba.push(chunk[0]); // B = BGRA[0]
-        rgba.push(chunk[3]); // A
-    }
-    write_png_rgba(path, width, height, &rgba)
-}
-
-#[allow(dead_code)]
+/// Minimal PNG writer for 8-bit RGBA images. No dependencies, deflate via uncompressed blocks.
 fn write_png_rgba(
     path: &std::path::Path,
     width: u32,
@@ -1017,7 +996,6 @@ fn write_png_rgba(
     Ok(())
 }
 
-#[allow(dead_code)]
 fn write_chunk<W: std::io::Write>(w: &mut W, kind: &[u8; 4], data: &[u8]) -> std::io::Result<()> {
     w.write_all(&(data.len() as u32).to_be_bytes())?;
     w.write_all(kind)?;
@@ -1027,7 +1005,6 @@ fn write_chunk<W: std::io::Write>(w: &mut W, kind: &[u8; 4], data: &[u8]) -> std
     Ok(())
 }
 
-#[allow(dead_code)]
 fn build_zlib_uncompressed(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + 64);
     // zlib header: deflate, 32K window, no preset dict, fastest
@@ -1052,7 +1029,6 @@ fn build_zlib_uncompressed(data: &[u8]) -> Vec<u8> {
     out
 }
 
-#[allow(dead_code)]
 fn adler32(data: &[u8]) -> u32 {
     let mut a: u32 = 1;
     let mut b: u32 = 0;
