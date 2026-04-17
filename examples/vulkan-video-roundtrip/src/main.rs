@@ -111,7 +111,15 @@ fn main() -> Result<()> {
     // --- Run ---
     println!("Starting pipeline...\n");
     runtime.start()?;
-    runtime.wait_for_signal()?;
+
+    // Wait for the source to finish streaming all frames, plus a buffer
+    // for the encoder to flush. The source runs at real-time FPS, so
+    // total wall time ≈ DURATION_SECS + encoder flush time.
+    let total_wait = std::time::Duration::from_secs(DURATION_SECS as u64 + 5);
+    std::thread::sleep(total_wait);
+
+    println!("Source finished, stopping pipeline...");
+    runtime.stop()?;
 
     println!("\nOutput: {output_path}");
     Ok(())

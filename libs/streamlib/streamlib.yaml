@@ -325,8 +325,8 @@ processors:
       - name: video_in
         schema: com.tatolab.videoframe@1.0.0
         description: Raw video frames to encode
-        read_mode: skip_to_latest
-        buffer_size: 4
+        read_mode: read_next_in_order
+        buffer_size: 8
     outputs:
       - name: encoded_video_out
         schema: com.tatolab.encodedvideoframe@1.0.0
@@ -365,8 +365,8 @@ processors:
       - name: video_in
         schema: com.tatolab.videoframe@1.0.0
         description: Raw video frames to encode
-        read_mode: skip_to_latest
-        buffer_size: 4
+        read_mode: read_next_in_order
+        buffer_size: 8
     outputs:
       - name: encoded_video_out
         schema: com.tatolab.encodedvideoframe@1.0.0

@@ -174,6 +174,16 @@ fn source_thread_loop(
 
         frame_counter.store(frame_idx as u64 + 1, Ordering::Relaxed);
 
+        // Throttle to real-time FPS to avoid overflowing downstream mailboxes.
+        // The encoder processes frames reactively — if we blast faster than it
+        // can encode, the mailbox fills and frames are lost.
+        let target_elapsed =
+            std::time::Duration::from_nanos((frame_idx as u64 + 1) * frame_interval_ns as u64);
+        let actual_elapsed = clock_start.elapsed();
+        if actual_elapsed < target_elapsed {
+            std::thread::sleep(target_elapsed - actual_elapsed);
+        }
+
         if frame_idx == 0 {
             tracing::info!("[BgraFileSource] First frame published");
         } else if (frame_idx + 1) % (fps * 1) == 0 {
