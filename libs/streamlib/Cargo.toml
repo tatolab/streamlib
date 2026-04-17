@@ -141,6 +141,7 @@ streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified tel
 [target.'cfg(target_os = "linux")'.dependencies]
 vulkanalia = { workspace = true }
 vulkanalia-vma = { workspace = true }
+vulkan-video = { path = "../vulkan-video" }
 libc.workspace = true
 v4l = "0.14"  # V4L2 camera capture (Video for Linux 2)
 opus = "0.3"  # Opus audio codec encoder/decoder
@@ -199,6 +200,8 @@ schemas = [
     "schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml",
     "schemas/com.streamlib.h264_encoder.config@1.0.0.yaml",
     "schemas/com.streamlib.h264_decoder.config@1.0.0.yaml",
+    "schemas/com.streamlib.h265_encoder.config@1.0.0.yaml",
+    "schemas/com.streamlib.h265_decoder.config@1.0.0.yaml",
     "schemas/com.streamlib.opus_encoder.config@1.0.0.yaml",
     "schemas/com.streamlib.opus_decoder.config@1.0.0.yaml",
     "schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml",

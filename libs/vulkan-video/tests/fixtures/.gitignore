@@ -1,0 +1,6 @@
+# Generated fixture files (run ./tests/generate_fixtures.sh to create)
+*.yuv
+*.h264
+*.h265
+*.ivf
+*.mp4

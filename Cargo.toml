@@ -34,6 +34,9 @@ members = [
     "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline
     "examples/camera-rust-plugin/plugin", # Grayscale plugin cdylib for camera-rust-plugin example
     "tests/iceoryx2-cross-language",      # Test: Cross-language iceoryx2 validation (Rust ↔ Python)
+    "libs/vulkan-video",                  # Vulkan Video encoder/decoder (H.264/H.265 via Vulkan Video extensions)
+    "libs/vulkan-video/examples/h264-codec", # Example: H.264 encode/decode roundtrip
+    "libs/vulkan-video/examples/h265-codec", # Example: H.265 encode/decode roundtrip
 ]
 
 [workspace.package]

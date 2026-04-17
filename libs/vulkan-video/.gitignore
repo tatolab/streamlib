@@ -1,0 +1,5 @@
+/target
+.claude/worktrees
+examples/*/fixtures/
+examples/*/output/
+examples/*/target/
