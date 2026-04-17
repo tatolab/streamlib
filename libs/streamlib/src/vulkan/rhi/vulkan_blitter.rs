@@ -74,14 +74,18 @@ impl RhiBlitter for VulkanBlitter {
                 .map(|_| ())
                 .map_err(|e| StreamError::GpuError(format!("Failed to begin blit command buffer: {e}")))?;
 
-            let region = vk::BufferCopy::builder()
+            let region = vk::BufferCopy2::builder()
                 .src_offset(0)
                 .dst_offset(0)
                 .size(copy_size)
                 .build();
 
-            self.device
-                .cmd_copy_buffer(command_buffer, src_buffer, dest_buffer, &[region]);
+            let copy_info = vk::CopyBufferInfo2::builder()
+                .src_buffer(src_buffer)
+                .dst_buffer(dest_buffer)
+                .regions(&[region])
+                .build();
+            self.device.cmd_copy_buffer2(command_buffer, &copy_info);
 
             self.device
                 .end_command_buffer(command_buffer)
@@ -102,20 +106,21 @@ impl RhiBlitter for VulkanBlitter {
                 .create_semaphore(&timeline_semaphore_info, None)
                 .map_err(|e| StreamError::GpuError(format!("Failed to create blit timeline semaphore: {e}")))?;
 
-            let signal_semaphores = [timeline_semaphore];
-            let signal_values = [1u64];
-            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::builder()
-                .signal_semaphore_values(&signal_values)
+            let signal_semaphore = vk::SemaphoreSubmitInfo::builder()
+                .semaphore(timeline_semaphore)
+                .value(1)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
                 .build();
-
-            let submit_info = vk::SubmitInfo::builder()
-                .command_buffers(std::slice::from_ref(&command_buffer))
-                .signal_semaphores(&signal_semaphores)
-                .push_next(&mut timeline_submit_info)
+            let cmd_info = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(command_buffer)
+                .build();
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&[cmd_info])
+                .signal_semaphore_infos(&[signal_semaphore])
                 .build();
 
             self.device
-                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
+                .queue_submit2(self.queue, &[submit], vk::Fence::null())
                 .map_err(|e| {
                     self.device.destroy_semaphore(timeline_semaphore, None);
                     StreamError::GpuError(format!("Failed to submit blit command: {e}"))

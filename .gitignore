@@ -48,9 +48,6 @@ docs/research/SESSION_RESTORE.md
 target/
 Cargo.lock
 
-# Claude Code personal commands
-.claude/commands/mentor.md
-
 # Node/Nx
 node_modules/
 .nx/
@@ -64,9 +61,8 @@ examples/camera-display/no_window_camera.log
 examples/camera-python-display/assets/
 
 # Claude Code project files (except versioned items)
-.claude/*
-!.claude/commands/
-!.claude/streamlib/
+# Claude Code — ephemeral only
+.claude/worktrees/
 *.log
 .rustup/
 

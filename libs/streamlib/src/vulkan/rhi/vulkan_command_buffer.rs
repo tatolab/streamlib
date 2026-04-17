@@ -43,7 +43,11 @@ impl VulkanCommandBuffer {
         };
 
         // Transition source to TRANSFER_SRC_OPTIMAL
-        let src_barrier = vk::ImageMemoryBarrier::builder()
+        let src_barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::NONE)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -58,12 +62,14 @@ impl VulkanCommandBuffer {
                     .layer_count(1)
                     .build(),
             )
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
             .build();
 
         // Transition destination to TRANSFER_DST_OPTIMAL
-        let dst_barrier = vk::ImageMemoryBarrier::builder()
+        let dst_barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::NONE)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -78,29 +84,22 @@ impl VulkanCommandBuffer {
                     .layer_count(1)
                     .build(),
             )
-            .src_access_mask(vk::AccessFlags::empty())
-            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
             .build();
 
         let barriers = [src_barrier, dst_barrier];
 
         unsafe {
-            self.device.cmd_pipeline_barrier(
-                self.command_buffer,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[] as &[vk::MemoryBarrier],
-                &[] as &[vk::BufferMemoryBarrier],
-                &barriers,
-            );
+            let dep = vk::DependencyInfo::builder()
+                .image_memory_barriers(&barriers)
+                .build();
+            self.device.cmd_pipeline_barrier2(self.command_buffer, &dep);
         }
 
         // Copy the image
         let copy_width = src.width().min(dst.width());
         let copy_height = src.height().min(dst.height());
 
-        let region = vk::ImageCopy::builder()
+        let region = vk::ImageCopy2::builder()
             .src_subresource(
                 vk::ImageSubresourceLayers::builder()
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -127,14 +126,14 @@ impl VulkanCommandBuffer {
             .build();
 
         unsafe {
-            self.device.cmd_copy_image(
-                self.command_buffer,
-                src_image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                dst_image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[region],
-            );
+            let copy_info = vk::CopyImageInfo2::builder()
+                .src_image(src_image)
+                .src_image_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .dst_image(dst_image)
+                .dst_image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .regions(&[region])
+                .build();
+            self.device.cmd_copy_image2(self.command_buffer, &copy_info);
         }
     }
 
@@ -152,8 +151,6 @@ impl VulkanCommandBuffer {
         }
 
         // Submit to queue with a timeline semaphore to track GPU completion
-        let command_buffers = [self.command_buffer];
-
         unsafe {
             let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::builder()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -167,20 +164,21 @@ impl VulkanCommandBuffer {
                 .create_semaphore(&timeline_semaphore_info, None)
                 .expect("Failed to create command buffer timeline semaphore");
 
-            let signal_semaphores = [timeline_semaphore];
-            let signal_values = [1u64];
-            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::builder()
-                .signal_semaphore_values(&signal_values)
+            let signal_semaphore = vk::SemaphoreSubmitInfo::builder()
+                .semaphore(timeline_semaphore)
+                .value(1)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
                 .build();
-
-            let submit_info = vk::SubmitInfo::builder()
-                .command_buffers(&command_buffers)
-                .signal_semaphores(&signal_semaphores)
-                .push_next(&mut timeline_submit_info)
+            let cmd_info = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(self.command_buffer)
+                .build();
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&[cmd_info])
+                .signal_semaphore_infos(&[signal_semaphore])
                 .build();
 
             self.device
-                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
+                .queue_submit2(self.queue, &[submit], vk::Fence::null())
                 .expect("Failed to submit command buffer");
 
             // Wait for GPU completion via timeline semaphore before freeing
@@ -198,7 +196,7 @@ impl VulkanCommandBuffer {
 
             // Now safe to free — GPU has finished with the command buffer
             self.device
-                .free_command_buffers(self.command_pool, &command_buffers);
+                .free_command_buffers(self.command_pool, &[self.command_buffer]);
         }
     }
 
@@ -215,8 +213,6 @@ impl VulkanCommandBuffer {
         }
 
         // Submit to queue with a timeline semaphore for targeted synchronization
-        let command_buffers = [self.command_buffer];
-
         unsafe {
             let mut timeline_type_info = vk::SemaphoreTypeCreateInfo::builder()
                 .semaphore_type(vk::SemaphoreType::TIMELINE)
@@ -230,20 +226,21 @@ impl VulkanCommandBuffer {
                 .create_semaphore(&timeline_semaphore_info, None)
                 .expect("Failed to create command buffer timeline semaphore");
 
-            let signal_semaphores = [timeline_semaphore];
-            let signal_values = [1u64];
-            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::builder()
-                .signal_semaphore_values(&signal_values)
+            let signal_semaphore = vk::SemaphoreSubmitInfo::builder()
+                .semaphore(timeline_semaphore)
+                .value(1)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
                 .build();
-
-            let submit_info = vk::SubmitInfo::builder()
-                .command_buffers(&command_buffers)
-                .signal_semaphores(&signal_semaphores)
-                .push_next(&mut timeline_submit_info)
+            let cmd_info = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(self.command_buffer)
+                .build();
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&[cmd_info])
+                .signal_semaphore_infos(&[signal_semaphore])
                 .build();
 
             self.device
-                .queue_submit(self.queue, &[submit_info], vk::Fence::null())
+                .queue_submit2(self.queue, &[submit], vk::Fence::null())
                 .expect("Failed to submit command buffer");
 
             // Wait for this specific command buffer via timeline semaphore
@@ -261,7 +258,7 @@ impl VulkanCommandBuffer {
 
             // Free the command buffer
             self.device
-                .free_command_buffers(self.command_pool, &command_buffers);
+                .free_command_buffers(self.command_pool, &[self.command_buffer]);
         }
     }
 }

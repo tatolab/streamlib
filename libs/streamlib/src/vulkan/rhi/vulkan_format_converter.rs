@@ -403,13 +403,15 @@ impl VulkanFormatConverter {
                 })?;
 
             // Submit and wait for completion
-            let command_buffers = [self.compute_command_buffer];
-            let submit_info = vk::SubmitInfo::builder()
-                .command_buffers(&command_buffers)
+            let cmd_info = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(self.compute_command_buffer)
+                .build();
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&[cmd_info])
                 .build();
 
             self.device
-                .queue_submit(self.queue, &[submit_info], self.compute_fence)
+                .queue_submit2(self.queue, &[submit], self.compute_fence)
                 .map(|_| ())
                 .map_err(|e| {
                     StreamError::GpuError(format!("Failed to submit compute dispatch: {e}"))
