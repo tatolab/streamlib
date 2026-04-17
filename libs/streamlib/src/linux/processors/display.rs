@@ -7,8 +7,7 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrSurfaceExtensionInstanceCommands as _;
 use vulkanalia::vk::KhrSwapchainExtensionDeviceCommands as _;
-use vulkanalia_vma as vma;
-use vma::Alloc as _;
+// vma no longer used by display — camera textures are resolved from texture cache
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
@@ -191,7 +190,6 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     scaling_mode,
                     swapchain_state: None,
                     pipeline_state: None,
-                    camera_texture_ring: Vec::new(),
                     frame_limit,
                     png_sample_dir,
                     png_sample_every,
@@ -217,17 +215,8 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
                 }
 
-                // Clean up camera texture ring resources
-                if !app.camera_texture_ring.is_empty() {
-                    let device = app.vulkan_device.device();
-                    let allocator = app.vulkan_device.allocator();
-                    for tex in app.camera_texture_ring.drain(..) {
-                        unsafe {
-                            device.destroy_image_view(tex.image_view, None);
-                            allocator.destroy_image(tex.image, tex.allocation);
-                        }
-                    }
-                }
+                // Camera textures are owned by the texture_cache (Arc<VulkanTexture>)
+                // and clean up via Drop when the camera processor stops.
 
                 // Clean up swapchain resources before exiting
                 if let Some(state) = app.swapchain_state.take() {
@@ -343,18 +332,11 @@ struct PersistentPipelineState {
 }
 
 /// Device-local VkImage used as the camera texture for fragment shader sampling.
-struct CameraTextureState {
-    image: vk::Image,
-    image_view: vk::ImageView,
-    allocation: vma::Allocation,
-    width: u32,
-    height: u32,
-}
-
 // ---------------------------------------------------------------------------
 // Event loop handler — owns the window and drives frame rendering
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)]
 struct DisplayEventLoopHandler {
     window: Option<Window>,
     vulkan_device: Arc<crate::vulkan::rhi::VulkanDevice>,
@@ -370,7 +352,6 @@ struct DisplayEventLoopHandler {
     scaling_mode: ScalingMode,
     swapchain_state: Option<SwapchainState>,
     pipeline_state: Option<PersistentPipelineState>,
-    camera_texture_ring: Vec<CameraTextureState>,
     /// Debug feature: auto-exit after N frames rendered (env: STREAMLIB_DISPLAY_FRAME_LIMIT).
     frame_limit: Option<u64>,
     /// Debug feature: directory to save sampled PNGs (env: STREAMLIB_DISPLAY_PNG_SAMPLE_DIR).
@@ -577,12 +558,12 @@ impl DisplayEventLoopHandler {
             }
         };
 
-        // Resolve pixel buffer from surface_id
-        let buffer = match self.gpu_context.resolve_videoframe_buffer(&ipc_frame) {
-            Ok(buf) => buf,
+        // Resolve camera texture directly from same-process texture cache
+        let camera_texture = match self.gpu_context.resolve_videoframe_texture(&ipc_frame) {
+            Ok(tex) => tex,
             Err(e) => {
                 tracing::warn!(
-                    "Display {}: Failed to resolve buffer for '{}': {}",
+                    "Display {}: Failed to resolve texture for '{}': {}",
                     self.window_id,
                     ipc_frame.surface_id,
                     e
@@ -596,151 +577,41 @@ impl DisplayEventLoopHandler {
 
         let frame_index = state.current_frame;
 
-        let vulkan_pixel_buffer = &buffer.buffer_ref().inner;
-        let src_buffer = vulkan_pixel_buffer.buffer();
-        let src_width = vulkan_pixel_buffer.width();
-        let src_height = vulkan_pixel_buffer.height();
-
-        // Create or recreate camera texture ring if dimensions changed.
-        // Each in-flight frame gets its own device-local texture, avoiding
-        // write-after-read hazards between buffer copy and fragment shader.
-        // Sized to MAX_FRAMES_IN_FLIGHT (not swapchain image_count) — see
-        // canonical Vulkan pipelining pattern.
-        let need_camera_texture_ring = if self.camera_texture_ring.is_empty() {
-            true
-        } else {
-            let existing = &self.camera_texture_ring[0];
-            existing.width != src_width || existing.height != src_height
-        };
-
-        if need_camera_texture_ring {
-            // Destroy all existing camera textures
-            if !self.camera_texture_ring.is_empty() {
-                unsafe {
-                    let _ = device.device_wait_idle();
-                }
-                let allocator = self.vulkan_device.allocator();
-                for old_tex in self.camera_texture_ring.drain(..) {
-                    unsafe {
-                        device.destroy_image_view(old_tex.image_view, None);
-                        allocator.destroy_image(old_tex.image, old_tex.allocation);
-                    }
-                }
-            }
-
-            // Allocate one camera texture per in-flight frame (NOT per swapchain image).
-            // These are purely internal device-local textures for fragment shader
-            // sampling. Uses the default VMA pool which has NO export flags.
-            let allocator = self.vulkan_device.allocator();
-            for ring_idx in 0..MAX_FRAMES_IN_FLIGHT {
-                let image_info = vk::ImageCreateInfo::builder()
-                    .image_type(vk::ImageType::_2D)
-                    .format(vk::Format::B8G8R8A8_UNORM)
-                    .extent(vk::Extent3D {
-                        width: src_width,
-                        height: src_height,
-                        depth: 1,
-                    })
-                    .mip_levels(1)
-                    .array_layers(1)
-                    .samples(vk::SampleCountFlags::_1)
-                    .tiling(vk::ImageTiling::OPTIMAL)
-                    .usage(vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED)
-                    .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                    .initial_layout(vk::ImageLayout::UNDEFINED);
-
-                let alloc_opts = vma::AllocationOptions {
-                    required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                    ..Default::default()
-                };
-
-                let (image, allocation) =
-                    match unsafe { allocator.create_image(image_info, &alloc_opts) } {
-                        Ok(pair) => pair,
-                        Err(e) => {
-                            tracing::warn!(
-                                "Display {}: camera texture [{}] alloc failed: {} \
-                                 (will use partial ring with {} textures)",
-                                self.window_id,
-                                ring_idx,
-                                e,
-                                self.camera_texture_ring.len()
-                            );
-                            // Stop trying — use whatever we got. The ring will
-                            // wrap with sync stalls but the pipeline keeps working.
-                            break;
-                        }
-                    };
-
-                let view_info = vk::ImageViewCreateInfo::builder()
-                    .image(image)
-                    .view_type(vk::ImageViewType::_2D)
-                    .format(vk::Format::B8G8R8A8_UNORM)
-                    .subresource_range(
-                        vk::ImageSubresourceRange::builder()
-                            .aspect_mask(vk::ImageAspectFlags::COLOR)
-                            .base_mip_level(0)
-                            .level_count(1)
-                            .base_array_layer(0)
-                            .layer_count(1)
-                            .build(),
-                    )
-                    .build();
-
-                let image_view = match unsafe { device.create_image_view(&view_info, None) } {
-                    Ok(view) => view,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Display {}: camera texture view [{}] failed: {}",
-                            self.window_id,
-                            ring_idx,
-                            e
-                        );
-                        unsafe { allocator.destroy_image(image, allocation) };
-                        break;
-                    }
-                };
-
-                self.camera_texture_ring.push(CameraTextureState {
-                    image,
-                    image_view,
-                    allocation,
-                    width: src_width,
-                    height: src_height,
-                });
-            }
-
-            if self.camera_texture_ring.is_empty() {
-                tracing::error!(
-                    "Display {}: failed to allocate ANY camera textures — cannot render",
-                    self.window_id
-                );
+        let _camera_image = match camera_texture.inner.image() {
+            Some(img) => img,
+            None => {
+                tracing::warn!("Display {}: camera texture has no image", self.window_id);
                 return;
             }
+        };
+        let camera_image_view = match camera_texture.inner.image_view() {
+            Ok(view) => view,
+            Err(e) => {
+                tracing::warn!("Display {}: camera texture image view error: {}", self.window_id, e);
+                return;
+            }
+        };
+        let src_width = camera_texture.width();
+        let src_height = camera_texture.height();
 
-            tracing::info!(
-                "Display {}: camera texture ring created ({}/{} textures, {}x{})",
-                self.window_id,
-                self.camera_texture_ring.len(),
-                MAX_FRAMES_IN_FLIGHT,
-                src_width,
-                src_height
-            );
-        }
+        // Parse camera timeline semaphore value from frame_index
+        let camera_timeline_wait_value: u64 = ipc_frame
+            .frame_index
+            .parse()
+            .unwrap_or(0);
 
-        // Wrap frame_index by actual ring size — supports partial ring allocation
-        let ring_len = self.camera_texture_ring.len();
-        let camera_tex = &self.camera_texture_ring[frame_index % ring_len];
+        // Get camera timeline semaphore handle for GPU-GPU sync
+        let camera_timeline_raw = self.gpu_context.camera_timeline_semaphore();
+        let camera_timeline_sem: Option<vk::Semaphore> = if camera_timeline_raw != 0 {
+            Some(unsafe { std::mem::transmute(camera_timeline_raw) })
+        } else {
+            None
+        };
 
-        // Update descriptor set with camera texture every frame.
-        // This is a single descriptor write — negligible CPU cost — and ensures
-        // correctness after swapchain recreation (which creates a new descriptor set).
-        // Update this frame's descriptor set with the camera texture.
-        // Each swapchain image has its own descriptor set to avoid updating
-        // a set that's still in use by a pending command buffer.
+        // Update descriptor set with camera texture from the texture cache.
         let desc_image_info = vk::DescriptorImageInfo::builder()
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(camera_tex.image_view)
+            .image_view(camera_image_view)
             .sampler(ps.sampler)
             .build();
         let desc_image_infos = [desc_image_info];
@@ -830,94 +701,26 @@ impl DisplayEventLoopHandler {
                 return;
             }
 
-            // Transition camera texture: UNDEFINED → TRANSFER_DST_OPTIMAL
-            let barrier_camera_to_transfer = vk::ImageMemoryBarrier::builder()
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(camera_tex.image)
-                .subresource_range(color_subresource_range)
-                .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .build();
-
-            device.cmd_pipeline_barrier(
-                command_buffer,
-                vk::PipelineStageFlags::TOP_OF_PIPE,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[] as &[vk::MemoryBarrier],
-                &[] as &[vk::BufferMemoryBarrier],
-                &[barrier_camera_to_transfer],
-            );
-
-            // Copy source pixel buffer into device-local camera texture
-            let region = vk::BufferImageCopy::builder()
-                .buffer_offset(0)
-                .buffer_row_length(src_width)
-                .buffer_image_height(src_height)
-                .image_subresource(
-                    vk::ImageSubresourceLayers::builder()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .mip_level(0)
-                        .base_array_layer(0)
-                        .layer_count(1)
-                        .build(),
-                )
-                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-                .image_extent(vk::Extent3D {
-                    width: src_width,
-                    height: src_height,
-                    depth: 1,
-                })
-                .build();
-
-            device.cmd_copy_buffer_to_image(
-                command_buffer,
-                src_buffer,
-                camera_tex.image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[region],
-            );
-
-            // Transition camera texture: TRANSFER_DST → SHADER_READ_ONLY
-            // Transition swapchain image: UNDEFINED → COLOR_ATTACHMENT_OPTIMAL
-            let barrier_camera_to_shader_read = vk::ImageMemoryBarrier::builder()
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(camera_tex.image)
-                .subresource_range(color_subresource_range)
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .build();
-
-            // Swapchain images are in PRESENT_SRC_KHR after being presented.
-            // On the very first frame they may be UNDEFINED, but PRESENT_SRC_KHR
-            // is the correct old_layout for all subsequent frames.
-            let barrier_swapchain_to_color_attachment = vk::ImageMemoryBarrier::builder()
+            // sync2: Swapchain PRESENT_SRC → COLOR_ATTACHMENT_OPTIMAL
+            // Camera texture is already in SHADER_READ_ONLY_OPTIMAL from camera's compute dispatch.
+            // Camera timeline semaphore wait in queue_submit2 ensures the texture is ready.
+            let swapchain_barrier = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                .src_access_mask(vk::AccessFlags2::NONE)
+                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
                 .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
                 .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(swapchain_image)
                 .subresource_range(color_subresource_range)
-                .src_access_mask(vk::AccessFlags::empty())
-                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
                 .build();
 
-            device.cmd_pipeline_barrier(
-                command_buffer,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::FRAGMENT_SHADER
-                    | vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::DependencyFlags::empty(),
-                &[] as &[vk::MemoryBarrier],
-                &[] as &[vk::BufferMemoryBarrier],
-                &[barrier_camera_to_shader_read, barrier_swapchain_to_color_attachment],
-            );
+            let pre_render_dep = vk::DependencyInfo::builder()
+                .image_memory_barriers(&[swapchain_barrier])
+                .build();
+            device.cmd_pipeline_barrier2(command_buffer, &pre_render_dep);
 
             // Begin dynamic rendering on swapchain image
             let color_attachment = vk::RenderingAttachmentInfo::builder()
@@ -1015,57 +818,74 @@ impl DisplayEventLoopHandler {
 
             device.cmd_end_rendering(command_buffer);
 
-            // Transition swapchain image: COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR
-            let barrier_to_present = vk::ImageMemoryBarrier::builder()
+            // sync2: Swapchain COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR
+            let present_barrier = vk::ImageMemoryBarrier2::builder()
+                .src_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .src_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+                .dst_access_mask(vk::AccessFlags2::NONE)
                 .old_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .new_layout(vk::ImageLayout::PRESENT_SRC_KHR)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .image(swapchain_image)
                 .subresource_range(color_subresource_range)
-                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::empty())
                 .build();
 
-            device.cmd_pipeline_barrier(
-                command_buffer,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                vk::DependencyFlags::empty(),
-                &[] as &[vk::MemoryBarrier],
-                &[] as &[vk::BufferMemoryBarrier],
-                &[barrier_to_present],
-            );
+            let post_render_dep = vk::DependencyInfo::builder()
+                .image_memory_barriers(&[present_barrier])
+                .build();
+            device.cmd_pipeline_barrier2(command_buffer, &post_render_dep);
 
             if device.end_command_buffer(command_buffer).is_err() {
                 return;
             }
 
-            // Submit — signal both binary semaphore (for present) and timeline (for sync)
-            let wait_semaphores = [image_available_semaphore];
-            let wait_stages = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
-            let signal_semaphores =
-                [render_finished_semaphore, state.frame_timeline_semaphore];
-            let command_buffers = [command_buffer];
+            // queue_submit2: wait on image_available + camera timeline, signal render_finished + display timeline
+            let mut wait_semaphore_infos = vec![
+                vk::SemaphoreSubmitInfo::builder()
+                    .semaphore(image_available_semaphore)
+                    .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                    .build(),
+            ];
 
-            // TimelineSemaphoreSubmitInfo: value 0 is ignored for binary semaphores
-            let signal_values = [0u64, state.frame_timeline_value];
-            let wait_values = [0u64];
-            let mut timeline_submit_info = vk::TimelineSemaphoreSubmitInfo::builder()
-                .wait_semaphore_values(&wait_values)
-                .signal_semaphore_values(&signal_values)
+            // GPU-wait on camera's timeline semaphore at FRAGMENT_SHADER stage
+            if let Some(cam_sem) = camera_timeline_sem {
+                if camera_timeline_wait_value > 0 {
+                    wait_semaphore_infos.push(
+                        vk::SemaphoreSubmitInfo::builder()
+                            .semaphore(cam_sem)
+                            .value(camera_timeline_wait_value)
+                            .stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                            .build(),
+                    );
+                }
+            }
+
+            let signal_semaphore_infos = [
+                vk::SemaphoreSubmitInfo::builder()
+                    .semaphore(render_finished_semaphore)
+                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                    .build(),
+                vk::SemaphoreSubmitInfo::builder()
+                    .semaphore(state.frame_timeline_semaphore)
+                    .value(state.frame_timeline_value)
+                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                    .build(),
+            ];
+
+            let cmd_info = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(command_buffer)
                 .build();
 
-            let submit_info = vk::SubmitInfo::builder()
-                .wait_semaphores(&wait_semaphores)
-                .wait_dst_stage_mask(&wait_stages)
-                .command_buffers(&command_buffers)
-                .signal_semaphores(&signal_semaphores)
-                .push_next(&mut timeline_submit_info)
+            let submit = vk::SubmitInfo2::builder()
+                .wait_semaphore_infos(&wait_semaphore_infos)
+                .signal_semaphore_infos(&signal_semaphore_infos)
+                .command_buffer_infos(&[cmd_info])
                 .build();
 
             if let Err(e) =
-                device.queue_submit(queue, &[submit_info], vk::Fence::null())
+                device.queue_submit2(queue, &[submit], vk::Fence::null())
             {
                 tracing::warn!(
                     "Display {}: Failed to submit render command: {}",
@@ -1109,37 +929,21 @@ impl DisplayEventLoopHandler {
         state.current_frame = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
         let frame_idx = self.frame_counter.fetch_add(1, Ordering::Relaxed);
 
-        // Debug feature: sample frame to PNG.
-        // Reads from the HOST_VISIBLE source pixel buffer (BGRA), no GPU readback needed.
-        if let Some(ref dir) = self.png_sample_dir {
-            if frame_idx % self.png_sample_every == 0 {
-                let path = dir.join(format!(
-                    "display_{:03}_frame_{:06}.png",
-                    self.window_id, frame_idx
-                ));
-                let mapped_ptr = vulkan_pixel_buffer.mapped_ptr();
-                if !mapped_ptr.is_null() {
-                    let len = (src_width as usize) * (src_height as usize) * 4;
-                    let bgra = unsafe { std::slice::from_raw_parts(mapped_ptr, len) };
-                    if let Err(e) = save_bgra_as_png(&path, src_width, src_height, bgra) {
-                        tracing::warn!(
-                            "Display {}: PNG sample save failed for frame {}: {}",
-                            self.window_id, frame_idx, e
-                        );
-                    } else {
-                        self.png_samples_saved += 1;
-                        tracing::info!(
-                            "Display {}: saved PNG sample {:?} (frame {}, total saved {})",
-                            self.window_id, path, frame_idx, self.png_samples_saved
-                        );
-                    }
-                }
-            }
+        // PNG debug sampling: GPU-resident pipeline has no HOST_VISIBLE pixel buffer.
+        // One-off GPU readback to staging buffer would be needed here. For now,
+        // PNG sampling is disabled in GPU-resident mode (follow-up task).
+        if self.png_sample_dir.is_some() && frame_idx == 0 {
+            tracing::info!(
+                "Display {}: PNG sampling not yet supported with GPU-resident pipeline",
+                self.window_id
+            );
         }
     }
 }
 
 /// Save BGRA pixel data as a PNG file. Used for AI-readable frame sampling.
+/// Currently unused — GPU-resident pipeline needs GPU readback for sampling (follow-up).
+#[allow(dead_code)]
 fn save_bgra_as_png(
     path: &std::path::Path,
     width: u32,
@@ -1158,7 +962,7 @@ fn save_bgra_as_png(
     write_png_rgba(path, width, height, &rgba)
 }
 
-/// Minimal PNG writer for 8-bit RGBA images. No dependencies, deflate via uncompressed blocks.
+#[allow(dead_code)]
 fn write_png_rgba(
     path: &std::path::Path,
     width: u32,
@@ -1200,6 +1004,7 @@ fn write_png_rgba(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_chunk<W: std::io::Write>(w: &mut W, kind: &[u8; 4], data: &[u8]) -> std::io::Result<()> {
     w.write_all(&(data.len() as u32).to_be_bytes())?;
     w.write_all(kind)?;
@@ -1209,6 +1014,7 @@ fn write_chunk<W: std::io::Write>(w: &mut W, kind: &[u8; 4], data: &[u8]) -> std
     Ok(())
 }
 
+#[allow(dead_code)]
 fn build_zlib_uncompressed(data: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(data.len() + 64);
     // zlib header: deflate, 32K window, no preset dict, fastest
@@ -1233,6 +1039,7 @@ fn build_zlib_uncompressed(data: &[u8]) -> Vec<u8> {
     out
 }
 
+#[allow(dead_code)]
 fn adler32(data: &[u8]) -> u32 {
     let mut a: u32 = 1;
     let mut b: u32 = 0;

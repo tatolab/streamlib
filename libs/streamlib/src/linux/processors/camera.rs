@@ -1068,7 +1068,6 @@ fn capture_thread_loop(
     while is_capturing.load(Ordering::Acquire) {
         // ---- Step 1: Acquire frame and select input SSBO ----
         let input_ssbo_buffer: vk::Buffer;
-        let current_fence: vk::Fence;
         let mut v4l2_requeue_buf: Option<v4l::v4l_sys::v4l2_buffer> = None;
         let mut frame_sequence: u32 = 0;
 
