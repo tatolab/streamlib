@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Clean Exit for Processor-Based Examples
-status: pending
+status: in_review
 description: Fix display window hang on exit — Ctrl+C, SIGTERM, and StreamRuntime shutdown must cleanly close the winit event loop and terminate the process. Branch fix/clean-exit from main.
 github_issue: 236
 dependencies:
