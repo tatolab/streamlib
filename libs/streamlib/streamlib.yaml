@@ -276,6 +276,22 @@ processors:
         read_mode: skip_to_latest
         buffer_size: 8
 
+  # === Linux File Source ===
+
+  - name: com.streamlib.bgra_file_source
+    version: 1.0.0
+    description: "Streams raw BGRA frames from a file as Videoframes"
+    execution: manual
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: com.streamlib.bgra_file_source.config@1.0.0
+    outputs:
+      - name: video
+        schema: com.tatolab.videoframe@1.0.0
+        description: Video frames read from the BGRA file
+
   # === Linux MP4 Writer ===
 
   - name: com.streamlib.linux_mp4_writer
