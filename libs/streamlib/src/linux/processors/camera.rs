@@ -875,7 +875,31 @@ fn capture_thread_loop(
     let mut dmabuf_imported_memories: [vk::DeviceMemory; V4L2_BUFFER_COUNT as usize] =
         [vk::DeviceMemory::null(); V4L2_BUFFER_COUNT as usize];
 
-    if vulkan_device.supports_external_memory() {
+    // Check if the V4L2 driver is a virtual/platform device (vivid, v4l2loopback).
+    // These allocate buffers in CPU system memory, so DMA-BUF import into the GPU
+    // may succeed at the API level but produce garbage data (cross-device coherency).
+    // Skip DMA-BUF probing for these — MMAP + memcpy is correct.
+    let is_virtual_device = unsafe {
+        let mut cap: v4l::v4l_sys::v4l2_capability = std::mem::zeroed();
+        let result = libc::ioctl(
+            device_fd,
+            v4l::v4l2::vidioc::VIDIOC_QUERYCAP as libc::c_ulong,
+            &mut cap,
+        );
+        if result == 0 {
+            let driver = std::ffi::CStr::from_ptr(cap.driver.as_ptr().cast())
+                .to_str()
+                .unwrap_or("");
+            let bus = std::ffi::CStr::from_ptr(cap.bus_info.as_ptr().cast())
+                .to_str()
+                .unwrap_or("");
+            driver == "vivid" || driver == "v4l2 loopback" || bus.starts_with("platform:")
+        } else {
+            false
+        }
+    };
+
+    if vulkan_device.supports_external_memory() && !is_virtual_device {
         // Step 1: Try VIDIOC_EXPBUF on buffer 0 to check DMA-BUF export support
         let probe_succeeded: bool = unsafe {
             let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();
