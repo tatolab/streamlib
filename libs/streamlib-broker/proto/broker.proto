@@ -176,6 +176,7 @@ message SurfaceInfo {
   string format = 5;                // Pixel format (e.g., "BGRA", "NV12")
   int64 registered_at_unix_ms = 6;  // When the surface was registered
   uint64 checkout_count = 7;        // Number of times looked up by other processes
+  string resource_type = 8;         // Resource type (e.g., "pixel_buffer", "texture")
 }
 
 message ListSurfacesResponse {

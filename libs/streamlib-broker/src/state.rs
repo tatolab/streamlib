@@ -59,6 +59,8 @@ pub struct SurfaceMetadata {
     pub height: u32,
     /// Pixel format (e.g., "BGRA", "NV12").
     pub format: String,
+    /// Resource type (e.g., "pixel_buffer", "texture").
+    pub resource_type: String,
     /// When the surface was registered.
     pub registered_at: Instant,
     /// Number of times this surface has been checked out.
@@ -390,6 +392,7 @@ impl BrokerState {
         width: u32,
         height: u32,
         format: &str,
+        resource_type: &str,
     ) -> bool {
         use std::sync::atomic::Ordering;
 
@@ -408,6 +411,7 @@ impl BrokerState {
             width,
             height,
             format: format.to_string(),
+            resource_type: resource_type.to_string(),
             registered_at: Instant::now(),
             checkout_count: 0,
         };
@@ -426,6 +430,7 @@ impl BrokerState {
         width: u32,
         height: u32,
         format: &str,
+        resource_type: &str,
     ) -> bool {
         use std::sync::atomic::Ordering;
 
@@ -444,6 +449,7 @@ impl BrokerState {
             width,
             height,
             format: format.to_string(),
+            resource_type: resource_type.to_string(),
             registered_at: Instant::now(),
             checkout_count: 0,
         };
@@ -547,5 +553,103 @@ fn is_process_alive(pid: i32) -> bool {
 impl Default for BrokerState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_register_surface_with_resource_type() {
+        let state = BrokerState::new();
+
+        // Register a pixel buffer surface
+        let success = state.register_surface(
+            "buf-001", "runtime-1", -1, // fd=-1 for test (not a real fd)
+            1920, 1080, "Rgba8Unorm", "pixel_buffer",
+        );
+        assert!(success);
+
+        // Register a texture surface
+        let success = state.register_surface(
+            "tex-001", "runtime-1", -1,
+            1920, 1080, "Rgba8Unorm", "texture",
+        );
+        assert!(success);
+
+        // Both should be retrievable
+        let surfaces = state.get_surfaces();
+        assert_eq!(surfaces.len(), 2);
+
+        let buf = surfaces.iter().find(|s| s.surface_id == "buf-001").unwrap();
+        assert_eq!(buf.resource_type, "pixel_buffer");
+        assert_eq!(buf.width, 1920);
+        assert_eq!(buf.height, 1080);
+
+        let tex = surfaces.iter().find(|s| s.surface_id == "tex-001").unwrap();
+        assert_eq!(tex.resource_type, "texture");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_duplicate_surface_id_rejected() {
+        let state = BrokerState::new();
+
+        let first = state.register_surface(
+            "dup-001", "runtime-1", -1, 640, 480, "Rgba8Unorm", "texture",
+        );
+        assert!(first);
+
+        let second = state.register_surface(
+            "dup-001", "runtime-1", -1, 640, 480, "Rgba8Unorm", "texture",
+        );
+        assert!(!second, "duplicate surface_id should be rejected");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_release_surfaces_for_runtime() {
+        let state = BrokerState::new();
+
+        state.register_surface("a", "rt-1", -1, 100, 100, "Rgba8Unorm", "texture");
+        state.register_surface("b", "rt-1", -1, 100, 100, "Rgba8Unorm", "pixel_buffer");
+        state.register_surface("c", "rt-2", -1, 100, 100, "Rgba8Unorm", "texture");
+
+        assert_eq!(state.surface_count(), 3);
+
+        let released = state.release_surfaces_for_runtime("rt-1");
+        assert_eq!(released, 2);
+        assert_eq!(state.surface_count(), 1);
+
+        let remaining = state.get_surfaces();
+        assert_eq!(remaining[0].surface_id, "c");
+        assert_eq!(remaining[0].resource_type, "texture");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_resource_type_defaults_preserved() {
+        let state = BrokerState::new();
+
+        // Verify resource_type is stored correctly
+        state.register_surface("t1", "rt", -1, 1920, 1080, "Rgba8Unorm", "texture");
+        state.register_surface("t2", "rt", -1, 1920, 1080, "Bgra8Unorm", "pixel_buffer");
+
+        let surfaces = state.get_surfaces();
+        for s in &surfaces {
+            match s.surface_id.as_str() {
+                "t1" => {
+                    assert_eq!(s.resource_type, "texture");
+                    assert_eq!(s.format, "Rgba8Unorm");
+                }
+                "t2" => {
+                    assert_eq!(s.resource_type, "pixel_buffer");
+                    assert_eq!(s.format, "Bgra8Unorm");
+                }
+                _ => panic!("unexpected surface_id"),
+            }
+        }
     }
 }

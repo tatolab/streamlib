@@ -853,4 +853,88 @@ mod tests {
             println!("Format {:?}: OK", format);
         }
     }
+
+    #[test]
+    fn test_device_local_texture_creation() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Rgba8Unorm)
+            .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
+        let texture = VulkanTexture::new_device_local(&device, &desc)
+            .expect("device-local texture creation failed");
+
+        assert!(texture.image().is_some());
+        assert_eq!(texture.width(), 1920);
+        assert_eq!(texture.height(), 1080);
+        assert_eq!(texture.format(), TextureFormat::Rgba8Unorm);
+
+        println!("Device-local texture created: {}x{}", texture.width(), texture.height());
+    }
+
+    #[test]
+    fn test_lazy_image_view() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let desc = TextureDescriptor::new(640, 480, TextureFormat::Rgba8Unorm);
+        let texture = VulkanTexture::new(&device, &desc)
+            .expect("texture creation failed");
+
+        // First call creates the image view
+        let view1 = texture.image_view().expect("image_view() failed");
+        // Second call returns the cached view
+        let view2 = texture.image_view().expect("cached image_view() failed");
+        assert_eq!(view1, view2, "image_view() should return the same cached view");
+
+        println!("Lazy image view: created and cached successfully");
+    }
+
+    #[test]
+    fn test_ring_texture_lifecycle() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Rgba8Unorm)
+            .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
+
+        // Create 2 ring textures (matches RING_TEXTURE_COUNT)
+        let t0 = VulkanTexture::new(&device, &desc).expect("ring texture 0 failed");
+        let t1 = VulkanTexture::new(&device, &desc).expect("ring texture 1 failed");
+
+        // Both should have valid images and image views
+        assert!(t0.image().is_some());
+        assert!(t1.image().is_some());
+        let v0 = t0.image_view().expect("ring texture 0 image_view failed");
+        let v1 = t1.image_view().expect("ring texture 1 image_view failed");
+        assert_ne!(v0, v1, "ring textures should have different image views");
+
+        // Both should be DMA-BUF exportable (created via new(), not new_device_local())
+        let fd0 = t0.export_dma_buf_fd().expect("ring texture 0 DMA-BUF export failed");
+        let fd1 = t1.export_dma_buf_fd().expect("ring texture 1 DMA-BUF export failed");
+        assert!(fd0 >= 0);
+        assert!(fd1 >= 0);
+        assert_ne!(fd0, fd1);
+
+        println!("Ring texture lifecycle: 2 textures created, image views cached, DMA-BUF exported");
+
+        drop(t0);
+        drop(t1);
+        println!("Ring textures dropped cleanly");
+    }
 }

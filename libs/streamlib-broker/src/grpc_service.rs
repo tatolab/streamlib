@@ -290,6 +290,7 @@ impl BrokerService for BrokerGrpcService {
                     width: s.width,
                     height: s.height,
                     format: s.format,
+                    resource_type: s.resource_type,
                     registered_at_unix_ms: s
                         .registered_at
                         .elapsed()

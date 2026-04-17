@@ -967,6 +967,7 @@ impl SurfaceStore {
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
             "format": format!("{:?}", pixel_buffer.format()),
+            "resource_type": "pixel_buffer",
         });
 
         let connection = self.inner.connection.lock();
@@ -991,6 +992,51 @@ impl SurfaceStore {
         }
 
         tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
+        Ok(())
+    }
+
+    /// Register a texture with the broker via Unix socket.
+    #[cfg(target_os = "linux")]
+    pub fn register_texture(
+        &self,
+        surface_id: &str,
+        texture: &crate::core::rhi::StreamTexture,
+    ) -> Result<()> {
+        // Export the DMA-BUF fd from the texture
+        let fd = texture.inner.export_dma_buf_fd()?;
+
+        let request = serde_json::json!({
+            "op": "register",
+            "surface_id": surface_id,
+            "runtime_id": self.inner.runtime_id,
+            "width": texture.width(),
+            "height": texture.height(),
+            "format": format!("{:?}", texture.format()),
+            "resource_type": "texture",
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            StreamError::Configuration("SurfaceStore not connected to broker".into())
+        })?;
+
+        let (response, _): (serde_json::Value, _) =
+            streamlib_broker::unix_socket_service::send_request(stream, &request, Some(fd))
+                .map_err(|e| {
+                    StreamError::Configuration(format!("Unix socket register_texture failed: {}", e))
+                })?;
+
+        // Close the exported fd (broker has its own dup)
+        unsafe { libc::close(fd) };
+
+        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            return Err(StreamError::Configuration(format!(
+                "register_texture: {}",
+                error
+            )));
+        }
+
+        tracing::debug!("SurfaceStore: Registered texture '{}'", surface_id);
         Ok(())
     }
 
@@ -1030,6 +1076,98 @@ impl SurfaceStore {
             size: 0,
         };
         RhiPixelBuffer::from_external_handle(handle, 0, 0, PixelFormat::default())
+    }
+
+    /// Lookup a texture from the broker via Unix socket.
+    #[cfg(target_os = "linux")]
+    pub fn lookup_texture(&self, surface_id: &str) -> Result<crate::core::rhi::StreamTexture> {
+        let request = serde_json::json!({
+            "op": "lookup",
+            "surface_id": surface_id,
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            StreamError::Configuration("SurfaceStore not connected to broker".into())
+        })?;
+
+        let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
+            streamlib_broker::unix_socket_service::send_request(stream, &request, None).map_err(
+                |e| StreamError::Configuration(format!("Unix socket lookup_texture failed: {}", e)),
+            )?;
+
+        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            return Err(StreamError::Configuration(format!(
+                "lookup_texture: {}",
+                error
+            )));
+        }
+
+        let dma_buf_fd = received_fd.ok_or_else(|| {
+            StreamError::Configuration("lookup_texture: no DMA-BUF fd in response".into())
+        })?;
+
+        // Extract width, height, format from the response
+        let width = response
+            .get("width")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                StreamError::Configuration("lookup_texture: missing width in response".into())
+            })? as u32;
+
+        let height = response
+            .get("height")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                StreamError::Configuration("lookup_texture: missing height in response".into())
+            })? as u32;
+
+        let format_str = response
+            .get("format")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                StreamError::Configuration("lookup_texture: missing format in response".into())
+            })?;
+
+        use crate::core::rhi::TextureFormat;
+
+        let format = match format_str {
+            "Rgba8Unorm" => TextureFormat::Rgba8Unorm,
+            "Rgba8UnormSrgb" => TextureFormat::Rgba8UnormSrgb,
+            "Bgra8Unorm" => TextureFormat::Bgra8Unorm,
+            "Bgra8UnormSrgb" => TextureFormat::Bgra8UnormSrgb,
+            "Rgba16Float" => TextureFormat::Rgba16Float,
+            "Rgba32Float" => TextureFormat::Rgba32Float,
+            "Nv12" => TextureFormat::Nv12,
+            _ => {
+                return Err(StreamError::Configuration(format!(
+                    "lookup_texture: unknown format '{}'",
+                    format_str
+                )));
+            }
+        };
+
+        let allocation_size = (width as u64) * (height as u64) * (format.bytes_per_pixel() as u64);
+
+        let vulkan_device =
+            crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
+                .get()
+                .ok_or_else(|| {
+                    StreamError::NotSupported(
+                        "lookup_texture: VulkanDevice not initialized for import".into(),
+                    )
+                })?;
+
+        let vulkan_texture = crate::vulkan::rhi::VulkanTexture::from_dma_buf_fd(
+            vulkan_device,
+            dma_buf_fd,
+            width,
+            height,
+            format,
+            allocation_size,
+        )?;
+
+        Ok(crate::core::rhi::StreamTexture::from_vulkan(vulkan_texture))
     }
 
     /// Send release request to broker via Unix socket.
@@ -1092,6 +1230,27 @@ impl SurfaceStore {
     pub fn lookup_buffer(&self, _pool_id: &str) -> Result<RhiPixelBuffer> {
         Err(StreamError::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
+        ))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn register_texture(
+        &self,
+        _surface_id: &str,
+        _texture: &crate::core::rhi::StreamTexture,
+    ) -> Result<()> {
+        Err(StreamError::NotSupported(
+            "Texture registration not supported on this platform".into(),
+        ))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn lookup_texture(
+        &self,
+        _surface_id: &str,
+    ) -> Result<crate::core::rhi::StreamTexture> {
+        Err(StreamError::NotSupported(
+            "Texture lookup not supported on this platform".into(),
         ))
     }
 }

@@ -722,7 +722,10 @@ fn capture_thread_loop(
     let mut timeline_signal_value: u64 = 0;
 
     // -----------------------------------------------------------------------
-    // Create 2-texture DEVICE_LOCAL ring — compute shader writes directly here
+    // Create 2-texture DEVICE_LOCAL ring — DMA-BUF exportable for cross-process
+    // GPU-to-GPU sharing. Uses the isolated DMA-BUF image pool in VMA.
+    // Pre-allocated here (before display's swapchain) to get the NVIDIA DMA-BUF
+    // budget before the swapchain consumes it.
     // -----------------------------------------------------------------------
     let ring_texture_desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
         .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
@@ -731,7 +734,7 @@ fn capture_thread_loop(
     let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
 
     for i in 0..RING_TEXTURE_COUNT {
-        let vk_texture = match VulkanTexture::new_device_local(vulkan_device, &ring_texture_desc) {
+        let vk_texture = match VulkanTexture::new(vulkan_device, &ring_texture_desc) {
             Ok(t) => t,
             Err(e) => {
                 eprintln!(
@@ -781,13 +784,28 @@ fn capture_thread_loop(
 
         let texture_id = uuid::Uuid::new_v4().to_string();
         let stream_texture = StreamTexture::from_vulkan(vk_texture);
+
+        // Register with SurfaceStore for cross-process GPU-to-GPU sharing
+        {
+            let surface_store = gpu_context.surface_store();
+            if let Some(store) = surface_store {
+                if let Err(e) = store.register_texture(&texture_id, &stream_texture) {
+                    eprintln!(
+                        "[Camera {}] Failed to register ring texture[{}] with broker: {} \
+                         (cross-process GPU sharing unavailable, same-process still works)",
+                        camera_name, i, e
+                    );
+                }
+            }
+        }
+
         gpu_context.register_texture(&texture_id, stream_texture.clone());
         ring_texture_ids.push(texture_id);
         ring_textures.push(stream_texture);
     }
 
     eprintln!(
-        "[Camera {}] Ring textures created: {} x {}x{} RGBA8 DEVICE_LOCAL (STORAGE | SAMPLED)",
+        "[Camera {}] Ring textures created: {} x {}x{} RGBA8 DEVICE_LOCAL DMA-BUF exportable (STORAGE | SAMPLED)",
         camera_name, RING_TEXTURE_COUNT, width, height
     );
 
@@ -1534,9 +1552,11 @@ fn capture_thread_loop(
         }
 
         // ---- Step 6: Publish frame via IPC ----
-        // Use pixel buffer pool_id as surface_id (cross-process compatible).
-        // Same-process display also resolves via texture_cache using this ID.
-        let surface_id = pool_id.to_string();
+        // Use ring texture UUID as surface_id. This is pre-registered with the
+        // broker (DMA-BUF fd) for cross-process GPU-to-GPU, and in the texture
+        // cache for same-process. The pixel buffer is registered separately
+        // under its own pool_id for CPU consumers.
+        let surface_id = ring_texture_ids[ring_index].clone();
         let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
         let ipc_frame = crate::_generated_::Videoframe {
