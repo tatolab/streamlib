@@ -61,8 +61,7 @@ examples/camera-display/no_window_camera.log
 examples/camera-python-display/assets/
 
 # Claude Code project files (except versioned items)
-# Claude Code — ignore personal/ephemeral, commit everything else
-.claude/commands/mentor.md
+# Claude Code — ephemeral only
 .claude/worktrees/
 *.log
 .rustup/
