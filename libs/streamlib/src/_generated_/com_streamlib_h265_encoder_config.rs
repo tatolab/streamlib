@@ -21,6 +21,10 @@ pub struct H265EncoderConfig {
     #[serde(rename = "bitrate_bps")]
     pub bitrate_bps: Option<u32>,
 
+    /// Frames per second for encoder timing (default: 60).
+    #[serde(rename = "fps")]
+    pub fps: Option<u32>,
+
     /// Frames between keyframes (overrides keyframe_interval_seconds if set).
     #[serde(rename = "keyframe_interval")]
     pub keyframe_interval: Option<u32>,

@@ -29,6 +29,10 @@ optionalProperties:
     metadata:
       description: "Seconds between keyframes (default: 2.0). Converted to frames using the encoder's fps. Ignored if keyframe_interval (frames) is set."
     type: float32
+  fps:
+    metadata:
+      description: "Frames per second for encoder timing (default: 60)."
+    type: uint32
   profile:
     metadata:
       description: "H.264 profile: baseline, main, or high (default: main)."

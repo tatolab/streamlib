@@ -25,6 +25,10 @@ optionalProperties:
     metadata:
       description: "Frames between keyframes (overrides keyframe_interval_seconds if set)."
     type: uint32
+  fps:
+    metadata:
+      description: "Frames per second for encoder timing (default: 60)."
+    type: uint32
   keyframe_interval_seconds:
     metadata:
       description: "Seconds between keyframes (default: 2.0). Converted to frames using the encoder's fps. Ignored if keyframe_interval (frames) is set."
