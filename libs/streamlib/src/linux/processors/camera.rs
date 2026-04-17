@@ -496,11 +496,11 @@ fn capture_thread_loop(
             }
         };
 
-    // Push constant range: width + height (2 × uint32 = 8 bytes)
+    // Push constant range: width + height + flags (3 × uint32 = 12 bytes)
     let push_constant_range = vk::PushConstantRange::builder()
         .stage_flags(vk::ShaderStageFlags::COMPUTE)
         .offset(0)
-        .size(8)
+        .size(12)
         .build();
 
     let set_layouts = [descriptor_set_layout];
@@ -1417,8 +1417,29 @@ fn capture_thread_loop(
                 &[],
             );
 
-            // Push constants: width, height
-            let push_data = [width, height];
+            // Push constants: width, height, flags
+            // flags bit 0: full_range (1 = full 0-255, 0 = limited 16-235)
+            let nv12_flags: u32 = if &fourcc_bytes == b"NV12" {
+                // Query V4L2 quantization from the device
+                let mut v4l2_fmt: v4l::v4l_sys::v4l2_format = std::mem::zeroed();
+                v4l2_fmt.type_ = v4l::buffer::Type::VideoCapture as u32;
+                let is_full_range = if libc::ioctl(
+                    device_fd,
+                    v4l::v4l2::vidioc::VIDIOC_G_FMT as libc::c_ulong,
+                    &mut v4l2_fmt,
+                ) == 0
+                {
+                    // V4L2_QUANTIZATION_FULL_RANGE = 1, LIM_RANGE = 2, DEFAULT = 0
+                    // DEFAULT maps to limited-range for BT.601 (most cameras)
+                    v4l2_fmt.fmt.pix.quantization == 1
+                } else {
+                    true // default to full-range if query fails
+                };
+                if is_full_range { 1 } else { 0 }
+            } else {
+                1 // YUYV shader doesn't use flags yet, default full-range
+            };
+            let push_data = [width, height, nv12_flags];
             let push_bytes: &[u8] = std::slice::from_raw_parts(
                 push_data.as_ptr() as *const u8,
                 std::mem::size_of_val(&push_data),
