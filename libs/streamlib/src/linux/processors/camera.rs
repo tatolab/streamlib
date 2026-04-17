@@ -366,11 +366,11 @@ fn capture_thread_loop(
     let (input_byte_size, shader_spirv): (usize, &[u8]) = match &fourcc_bytes {
         b"NV12" => (
             (width as usize) * (height as usize) * 3 / 2,
-            include_bytes!("shaders/nv12_to_bgra.spv"),
+            include_bytes!("shaders/nv12_to_rgba.spv"),
         ),
         b"YUYV" => (
             (width as usize) * (height as usize) * 2,
-            include_bytes!("shaders/yuyv_to_bgra.spv"),
+            include_bytes!("shaders/yuyv_to_rgba.spv"),
         ),
         _ => {
             eprintln!(

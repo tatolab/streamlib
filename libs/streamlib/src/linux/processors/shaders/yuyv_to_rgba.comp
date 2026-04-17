@@ -9,7 +9,7 @@ layout(set = 0, binding = 0) readonly buffer YUYVInput {
     uint data[];
 } yuyv_input;
 
-layout(rgba8, set = 0, binding = 1) writeonly uniform image2D bgra_output;
+layout(rgba8, set = 0, binding = 1) writeonly uniform image2D rgba_output;
 
 layout(push_constant) uniform PushConstants {
     uint width;
@@ -41,7 +41,6 @@ void main() {
     float G = clamp(Y - 0.344136 * Cb - 0.714136 * Cr, 0.0, 255.0);
     float B = clamp(Y + 1.772 * Cb, 0.0, 255.0);
 
-    // Write BGRA via storage image: R8G8B8A8_UNORM layout maps R→byte0, G→byte1, B→byte2, A→byte3
-    // Write B into R channel, G into G channel, R into B channel to produce BGRA memory layout
-    imageStore(bgra_output, ivec2(pos), vec4(B / 255.0, G / 255.0, R / 255.0, 1.0));
+    // Write RGBA: R8G8B8A8_UNORM layout maps R→byte0, G→byte1, B→byte2, A→byte3
+    imageStore(rgba_output, ivec2(pos), vec4(R / 255.0, G / 255.0, B / 255.0, 1.0));
 }

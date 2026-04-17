@@ -3,7 +3,7 @@
 
 //! Vulkan texture implementation for RHI.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -71,7 +71,9 @@ pub struct VulkanTexture {
     imported_memory: Option<vk::DeviceMemory>,
     /// Cached DMA-BUF fd to avoid leaking a new fd on each export call.
     #[cfg(target_os = "linux")]
-    cached_dma_buf_fd: std::sync::OnceLock<std::os::unix::io::RawFd>,
+    cached_dma_buf_fd: OnceLock<std::os::unix::io::RawFd>,
+    /// Lazy-cached image view for this texture.
+    cached_image_view: OnceLock<vk::ImageView>,
     /// Whether this texture was imported from IOSurface (no memory to free).
     imported_from_iosurface: bool,
     /// Whether this texture was imported from a DMA-BUF fd (uses imported_memory path).
@@ -152,7 +154,65 @@ impl VulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory: None,
             #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: std::sync::OnceLock::new(),
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
+            imported_from_iosurface: false,
+            #[cfg(target_os = "linux")]
+            imported_from_dma_buf: false,
+            width: desc.width,
+            height: desc.height,
+            format: desc.format,
+        })
+    }
+
+    /// Create a non-exportable DEVICE_LOCAL texture via the default VMA allocator.
+    ///
+    /// Unlike [`new`] which uses the DMA-BUF export pool, this uses the default
+    /// VMA allocator with no external memory info. For same-process textures that
+    /// don't need cross-process sharing.
+    pub fn new_device_local(
+        vulkan_device: &Arc<VulkanDevice>,
+        desc: &TextureDescriptor,
+    ) -> Result<Self> {
+        let vk_format = texture_format_to_vk(desc.format);
+        let usage_flags = texture_usages_to_vk(desc.usage);
+
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk_format)
+            .extent(vk::Extent3D {
+                width: desc.width,
+                height: desc.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage_flags)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+
+        let alloc_opts = vma::AllocationOptions {
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+
+        let allocator = vulkan_device.allocator();
+        let (image, allocation) =
+            unsafe { allocator.create_image(image_info, &alloc_opts) }.map_err(|e| {
+                StreamError::GpuError(format!("Failed to create device-local image: {e}"))
+            })?;
+
+        Ok(Self {
+            vulkan_device: Some(Arc::clone(vulkan_device)),
+            image: Some(image),
+            allocation: Some(allocation),
+            #[cfg(target_os = "linux")]
+            imported_memory: None,
+            #[cfg(target_os = "linux")]
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
@@ -251,7 +311,8 @@ impl VulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory: None,
             #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: std::sync::OnceLock::new(),
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
@@ -279,6 +340,46 @@ impl VulkanTexture {
     /// Texture format.
     pub fn format(&self) -> TextureFormat {
         self.format
+    }
+
+    /// Lazy-cached image view for this texture.
+    ///
+    /// Creates the image view on first call, returns the cached handle on
+    /// subsequent calls. The view uses the texture's own format and full
+    /// subresource range.
+    pub fn image_view(&self) -> Result<vk::ImageView> {
+        if let Some(&view) = self.cached_image_view.get() {
+            return Ok(view);
+        }
+
+        let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
+            StreamError::GpuError("Cannot create image view: no VulkanDevice stored".into())
+        })?;
+        let image = self.image.ok_or_else(|| {
+            StreamError::GpuError("Cannot create image view: no image".into())
+        })?;
+
+        let vk_format = texture_format_to_vk(self.format);
+        let view_info = vk::ImageViewCreateInfo::builder()
+            .image(image)
+            .view_type(vk::ImageViewType::_2D)
+            .format(vk_format)
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_mip_level(0)
+                    .level_count(1)
+                    .base_array_layer(0)
+                    .layer_count(1)
+                    .build(),
+            )
+            .build();
+
+        let view = unsafe { vk_dev.device().create_image_view(&view_info, None) }
+            .map_err(|e| StreamError::GpuError(format!("Failed to create image view: {e}")))?;
+
+        let _ = self.cached_image_view.set(view);
+        Ok(*self.cached_image_view.get().unwrap())
     }
 }
 
@@ -388,7 +489,8 @@ impl VulkanTexture {
             image: Some(image),
             allocation: None,
             imported_memory: Some(memory),
-            cached_dma_buf_fd: std::sync::OnceLock::new(),
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: true,
             width,
@@ -407,7 +509,8 @@ impl Clone for VulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory: None,
             #[cfg(target_os = "linux")]
-            cached_dma_buf_fd: std::sync::OnceLock::new(),
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
@@ -420,6 +523,13 @@ impl Clone for VulkanTexture {
 
 impl Drop for VulkanTexture {
     fn drop(&mut self) {
+        // Destroy cached image view before the image it references
+        if let Some(&view) = self.cached_image_view.get() {
+            if let Some(vk_dev) = &self.vulkan_device {
+                unsafe { vk_dev.device().destroy_image_view(view, None) };
+            }
+        }
+
         #[cfg(target_os = "linux")]
         if let Some(&fd) = self.cached_dma_buf_fd.get() {
             unsafe { libc::close(fd) };
