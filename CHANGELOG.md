@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.16](https://github.com/tatolab/streamlib/compare/v0.4.15...v0.4.16) (2026-04-17)
+
+
+### Bug Fixes
+
+* **camera:** add poll() guard to MMAP capture path for clean shutdown ([ba1cbab](https://github.com/tatolab/streamlib/commit/ba1cbabb9817333b137b332e4dc55b0887c8e183))
+* **display:** clean exit via EventLoopProxy wake-up on shutdown ([c55e3b2](https://github.com/tatolab/streamlib/commit/c55e3b2551bb9fbf8bb2ec8c284f64d180d90f24))
+* **display:** clean exit via EventLoopProxy wake-up on shutdown ([f702948](https://github.com/tatolab/streamlib/commit/f70294835d3a73ef2b785f9d45708a11fb98526b)), closes [#236](https://github.com/tatolab/streamlib/issues/236)
+* **pubsub:** debug_assert on temporary Arc passed to subscribe() ([f201a31](https://github.com/tatolab/streamlib/commit/f201a311bbba6c9bfca3ec65d9a31d2e0c48dfd9))
+* **runtime:** keep ShutdownListener alive + display publishes RuntimeShutdown on internal exit ([d1bfb1e](https://github.com/tatolab/streamlib/commit/d1bfb1e06c5ade73505b4aa86da8f0bca86ca85c))
+
 ## [0.4.15](https://github.com/tatolab/streamlib/compare/v0.4.14...v0.4.15) (2026-04-16)
 
 
