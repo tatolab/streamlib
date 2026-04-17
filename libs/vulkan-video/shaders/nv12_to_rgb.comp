@@ -1,0 +1,43 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+//
+// NV12 to RGB(A) compute shader.
+//
+// Input:  Combined image sampler with VkSamplerYcbcrConversion — the hardware
+//         handles plane separation, chroma upsampling (4:2:0 → 4:4:4), and
+//         YCbCr → RGB conversion automatically.
+// Output: RGBA storage image (R8G8B8A8_UNORM).
+//
+// Each thread converts one pixel. The YCbCr sampler does all the heavy
+// lifting — the shader just reads and writes.
+
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Combined image sampler with YCbCr conversion (immutable sampler in
+// descriptor set layout). texture() through the sampler returns linear RGB.
+layout(set = 0, binding = 0) uniform sampler2D nv12Input;
+
+// RGBA output — regular storage image write.
+layout(set = 0, binding = 1, rgba8) writeonly uniform image2D rgbOutput;
+
+layout(push_constant) uniform Registers
+{
+    ivec2 resolution;
+} registers;
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (coord.x >= registers.resolution.x || coord.y >= registers.resolution.y)
+        return;
+
+    // Normalized coordinates with half-pixel offset for texel centers.
+    vec2 uv = (vec2(coord) + 0.5) / vec2(registers.resolution);
+
+    // The YCbCr sampler converts NV12 → RGB automatically.
+    vec4 color = texture(nv12Input, uv);
+
+    imageStore(rgbOutput, coord, vec4(color.rgb, 1.0));
+}

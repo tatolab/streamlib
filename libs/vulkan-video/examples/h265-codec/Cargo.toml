@@ -1,0 +1,12 @@
+[package]
+name = "h265-codec-example"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+vulkan-video = { path = "../.." }
+vulkanalia = { workspace = true }
+vulkanalia-vma = { workspace = true }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

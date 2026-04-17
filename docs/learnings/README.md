@@ -29,3 +29,5 @@ directory is for the surprises.
   Cryptic `Cast` trait error when passing `&[]` to vulkanalia Vulkan methods
 - [@docs/learnings/pubsub-lazy-init-silent-noop.md](pubsub-lazy-init-silent-noop.md) —
   Test hangs indefinitely because PUBSUB silently no-ops without `init()`
+- [@docs/learnings/nvidia-dual-vulkan-device-crash.md](nvidia-dual-vulkan-device-crash.md) —
+  SIGSEGV when two Vulkan devices have concurrent GPU work on NVIDIA Linux

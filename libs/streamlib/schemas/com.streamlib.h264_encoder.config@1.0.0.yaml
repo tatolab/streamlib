@@ -1,0 +1,39 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for H.264 Encoder config
+
+metadata:
+  name: com.streamlib.h264_encoder.config
+  version: 1.0.0
+  description: "Configuration for H.264 video encoding."
+
+optionalProperties:
+  width:
+    metadata:
+      description: "Video width in pixels (default: 1280)."
+    type: uint32
+  height:
+    metadata:
+      description: "Video height in pixels (default: 720)."
+    type: uint32
+  bitrate_bps:
+    metadata:
+      description: "Target bitrate in bits per second (default: 2000000)."
+    type: uint32
+  keyframe_interval:
+    metadata:
+      description: "Frames between keyframes (overrides keyframe_interval_seconds if set)."
+    type: uint32
+  keyframe_interval_seconds:
+    metadata:
+      description: "Seconds between keyframes (default: 2.0). Converted to frames using the encoder's fps. Ignored if keyframe_interval (frames) is set."
+    type: float32
+  fps:
+    metadata:
+      description: "Frames per second for encoder timing (default: 60)."
+    type: uint32
+  profile:
+    metadata:
+      description: "H.264 profile: baseline, main, or high (default: main)."
+    type: string

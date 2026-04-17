@@ -1,0 +1,40 @@
+[package]
+name = "vulkan-video"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Rust port of NVIDIA nvpro-samples Vulkan Video encoder/decoder libraries"
+
+[features]
+clear_bitstream_buffers_on_create = []
+
+[dependencies]
+vulkanalia = { workspace = true }
+vulkanalia-vma = { workspace = true }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[[bin]]
+name = "encode-test"
+path = "src/bin/encode_test.rs"
+
+[[bin]]
+name = "decode-test"
+path = "src/bin/decode_test.rs"
+
+[[bin]]
+name = "pipeline-test"
+path = "src/bin/pipeline_test.rs"
+
+[[bin]]
+name = "video-demo"
+path = "src/bin/video_demo.rs"
+
+[[bin]]
+name = "h265-caps"
+path = "src/bin/h265_caps.rs"

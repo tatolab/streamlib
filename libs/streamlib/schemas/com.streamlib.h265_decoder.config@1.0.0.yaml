@@ -1,0 +1,9 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for H.265 Decoder config
+
+metadata:
+  name: com.streamlib.h265_decoder.config
+  version: 1.0.0
+  description: "Configuration for H.265 video decoding."

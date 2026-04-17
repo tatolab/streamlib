@@ -1,0 +1,31 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for BGRA File Source config
+
+metadata:
+  name: com.streamlib.bgra_file_source.config
+  version: 1.0.0
+  description: "Configuration for streaming raw BGRA frames from a file."
+
+properties:
+  file_path:
+    metadata:
+      description: "Path to raw BGRA file (width * height * 4 bytes per frame)."
+    type: string
+  width:
+    metadata:
+      description: "Frame width in pixels."
+    type: uint32
+  height:
+    metadata:
+      description: "Frame height in pixels."
+    type: uint32
+  fps:
+    metadata:
+      description: "Playback frame rate."
+    type: uint32
+  frame_count:
+    metadata:
+      description: "Number of frames in the file."
+    type: uint32

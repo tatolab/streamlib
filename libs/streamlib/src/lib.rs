@@ -169,6 +169,26 @@ pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 pub use core::processors::{OpusEncoderProcessor, OpusDecoderProcessor};
 pub use _generated_::{OpusEncoderConfig, OpusDecoderConfig};
 
+// Vulkan Video codec processors (Linux)
+#[cfg(target_os = "linux")]
+pub use linux::processors::h264_encoder::H264EncoderProcessor;
+#[cfg(target_os = "linux")]
+pub use linux::processors::h265_encoder::H265EncoderProcessor;
+#[cfg(target_os = "linux")]
+pub use linux::processors::h264_decoder::H264DecoderProcessor;
+#[cfg(target_os = "linux")]
+pub use linux::processors::h265_decoder::H265DecoderProcessor;
+#[cfg(target_os = "linux")]
+pub use linux::processors::mp4_writer::LinuxMp4WriterProcessor;
+#[cfg(target_os = "linux")]
+pub use linux::processors::bgra_file_source::BgraFileSourceProcessor;
+#[cfg(target_os = "linux")]
+pub use _generated_::{
+    H264EncoderConfig, H264DecoderConfig,
+    H265EncoderConfig, H265DecoderConfig,
+    LinuxMp4WriterConfig, BgraFileSourceConfig,
+};
+
 // MoQ streaming (cross-platform)
 #[cfg(feature = "moq")]
 pub use core::processors::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};

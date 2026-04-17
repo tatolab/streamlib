@@ -30,6 +30,10 @@ pub struct H264EncoderConfig {
     #[serde(rename = "keyframe_interval_seconds")]
     pub keyframe_interval_seconds: Option<f32>,
 
+    /// Frames per second for encoder timing (default: 60).
+    #[serde(rename = "fps")]
+    pub fps: Option<u32>,
+
     /// H.264 profile: baseline, main, or high (default: main).
     #[serde(rename = "profile")]
     pub profile: Option<String>,

@@ -1,0 +1,80 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+//
+// RGB(A) to NV12 compute shader.
+// Based on pyroenc rgb_to_yuv.comp by Arntzen Software AS (MIT license).
+//
+// Input:  sampled texture2D (RGBA or BGRA — texelFetch handles any format)
+// Output: per-plane storage images — R8 for luma, RG8 for chroma
+//
+// Each thread converts a 2x2 luma block + 1 chroma sample.
+// 6-tap left-sited chroma filter for MPEG-2/4 chroma siting.
+// BT.709 color matrix with TV range (16-235 luma, 16-240 chroma).
+
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform mediump texture2D uImage;
+layout(set = 0, binding = 1, r8) writeonly uniform mediump image2D uLuma;
+layout(set = 0, binding = 2, rg8) writeonly uniform mediump image2D uChroma;
+
+layout(push_constant) uniform Registers
+{
+    ivec2 resolution;
+} registers;
+
+// BT.709 RGB-to-YCbCr matrix (row-major).
+const mediump mat3 rgb_to_yuv = mat3(
+    vec3(0.2126, 0.7152, 0.0722),
+    vec3(-0.114572, -0.385428, 0.5),
+    vec3(0.5, -0.454153, -0.0458471));
+
+void main()
+{
+    // Each thread works on a 2x2 luma region and 1x1 chroma region.
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy) * 2;
+
+    // Left-sited chroma filtering: 6 taps (3x2 texels).
+    int x0 = clamp(coord.x - 1, 0, registers.resolution.x - 1);
+    int x1 = min(coord.x, registers.resolution.x - 1);
+    int x2 = min(coord.x + 1, registers.resolution.x - 1);
+
+    int y0 = min(coord.y, registers.resolution.y - 1);
+    int y1 = min(coord.y + 1, registers.resolution.y - 1);
+
+    mediump vec3 rgb00 = texelFetch(uImage, ivec2(x0, y0), 0).rgb;
+    mediump vec3 rgb10 = texelFetch(uImage, ivec2(x1, y0), 0).rgb;
+    mediump vec3 rgb20 = texelFetch(uImage, ivec2(x2, y0), 0).rgb;
+    mediump vec3 rgb01 = texelFetch(uImage, ivec2(x0, y1), 0).rgb;
+    mediump vec3 rgb11 = texelFetch(uImage, ivec2(x1, y1), 0).rgb;
+    mediump vec3 rgb21 = texelFetch(uImage, ivec2(x2, y1), 0).rgb;
+
+    // Compute luma for each pixel in the 2x2 block.
+    mediump vec4 luma = vec4(
+        dot(rgb10, rgb_to_yuv[0]),
+        dot(rgb20, rgb_to_yuv[0]),
+        dot(rgb11, rgb_to_yuv[0]),
+        dot(rgb21, rgb_to_yuv[0]));
+
+    // Scale to TV range (16-235).
+    luma = luma * (219.0 / 255.0) + (16.0 / 255.0);
+
+    imageStore(uLuma, coord, luma.xxxx);
+    imageStore(uLuma, coord + ivec2(1, 0), luma.yyyy);
+    imageStore(uLuma, coord + ivec2(0, 1), luma.zzzz);
+    imageStore(uLuma, coord + ivec2(1, 1), luma.wwww);
+
+    // Chroma: filter in RGB domain (linear transform is commutative with
+    // linear filtering), then convert to CbCr.
+    // 6-tap weights: center pair 0.25 each, neighbours 0.125 each.
+    mediump vec3 rgb = rgb10 * 0.25 + rgb11 * 0.25 +
+        rgb00 * 0.125 + rgb01 * 0.125 +
+        rgb20 * 0.125 + rgb21 * 0.125;
+
+    mediump vec2 cbcr = rgb * mat2x3(rgb_to_yuv[1], rgb_to_yuv[2]);
+    // Scale to TV range (16-240).
+    cbcr = cbcr * (224.0 / 255.0) + (128.0 / 255.0);
+
+    imageStore(uChroma, ivec2(gl_GlobalInvocationID.xy), cbcr.xyxy);
+}
