@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.17](https://github.com/tatolab/streamlib/compare/v0.4.16...v0.4.17) (2026-04-17)
+
+
+### Features
+
+* **#270:** add fps to encoder config, create [#272](https://github.com/tatolab/streamlib/issues/272) for pipeline FPS propagation ([440b586](https://github.com/tatolab/streamlib/commit/440b5865c1ef9120fa1f285b8162637cac9c4405))
+* **#270:** encoder/decoder processors use shared RHI VulkanDevice ([e74a69e](https://github.com/tatolab/streamlib/commit/e74a69e954c76258bab3733fbc17b95116cdb1c8))
+* **#270:** shared device API — VideoContext::from_external + from_device constructors ([02461f5](https://github.com/tatolab/streamlib/commit/02461f5fbfa405540dec323002330afbf1cd25c9))
+* add BgraFileSource processor + vulkan-video-roundtrip pipeline example ([0ae2158](https://github.com/tatolab/streamlib/commit/0ae215865f8d06cd74fe4436a5f5030a3a0b4939))
+* **example:** live camera encode pipeline via vivid virtual device ([4afc96a](https://github.com/tatolab/streamlib/commit/4afc96a1078fa834f96ec804b96c5a33fc261bce))
+* GPU-resident VkImage pipeline ([#253](https://github.com/tatolab/streamlib/issues/253)) ([901358f](https://github.com/tatolab/streamlib/commit/901358f65204a82d1b3b697ee7b7d57b9972ab1e))
+* integrate nvpro-vulkan-video crate as libs/vulkan-video ([9da4ded](https://github.com/tatolab/streamlib/commit/9da4ded1d3fac0172f635063a49dab1fab27c84c))
+* **processors:** add H.264/H.265 encoder/decoder processors via vulkan-video ([e46bde6](https://github.com/tatolab/streamlib/commit/e46bde6e6d121e659a428ebf524a08ad22513c87)), closes [#254](https://github.com/tatolab/streamlib/issues/254)
+* **processors:** add LinuxMp4WriterProcessor for encoded video → MP4 ([b99c90c](https://github.com/tatolab/streamlib/commit/b99c90ca97e297171164e5ff9bf3e45f0d635448))
+* **vulkan-video:** integrate nvpro-vulkan-video as libs/vulkan-video ([51b4d32](https://github.com/tatolab/streamlib/commit/51b4d325bc82e9f137819f1efe86b57ba3de3ea9))
+
+
+### Bug Fixes
+
+* **#270:** correct FPS — encoder now uses 60fps, MP4 writer adds -r flag ([3a08365](https://github.com/tatolab/streamlib/commit/3a0836563f29af0b79621352d9665b04ae3d1d1e))
+* **#270:** use dedicated transfer + compute queues for encoder ([1e25a6e](https://github.com/tatolab/streamlib/commit/1e25a6e05b4dc6be73bc40edee5286868e8b87a4))
+* restructure verify-video as proper skill folder with SKILL.md ([a87d3e6](https://github.com/tatolab/streamlib/commit/a87d3e6edddd7e9b2fd5661e37d2914304a5f3b5))
+* share a single device ([#270](https://github.com/tatolab/streamlib/issues/270)). ([71891a0](https://github.com/tatolab/streamlib/commit/71891a047691d52f512c504bc96182c8b204b385))
+* throttle file source to real-time FPS + use read_next_in_order for encoders ([17bea2d](https://github.com/tatolab/streamlib/commit/17bea2d5c4fce977df026a2403d333bf9bbf4a13))
+
 ## [0.4.16](https://github.com/tatolab/streamlib/compare/v0.4.15...v0.4.16) (2026-04-17)
 
 
