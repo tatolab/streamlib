@@ -3,9 +3,8 @@
 
 // H.265 Decoder Processor
 //
-// Thin wrapper around vulkan_video::SimpleDecoder (Vulkan Video hardware decoding).
-// Decoded NV12 frames are converted to RGBA and written to a pixel buffer for
-// output as Videoframe. Future: #270 will couple to the RHI for GPU-resident output.
+// Thin wrapper around vulkan_video::SimpleDecoder using the shared RHI
+// VulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
 
 use crate::_generated_::{Encodedvideoframe, Videoframe};
 use crate::core::context::GpuContext;
@@ -20,7 +19,7 @@ use vulkan_video::{Codec, SimpleDecoder, SimpleDecoderConfig};
 
 #[crate::processor("com.streamlib.h265_decoder")]
 pub struct H265DecoderProcessor {
-    /// Vulkan Video hardware decoder.
+    /// Vulkan Video hardware decoder (shares RHI device).
     decoder: Option<SimpleDecoder>,
 
     /// GPU context for creating pixel buffers for decoded frames.
@@ -39,11 +38,30 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             ..Default::default()
         };
 
-        let decoder = SimpleDecoder::new(decoder_config).map_err(|e| {
+        let vulkan_device = &ctx.gpu.device().inner;
+
+        let decode_queue = vulkan_device.video_decode_queue().ok_or_else(|| {
+            StreamError::Runtime("GPU does not support Vulkan Video decode".into())
+        })?;
+        let decode_queue_family = vulkan_device.video_decode_queue_family_index().ok_or_else(|| {
+            StreamError::Runtime("No video decode queue family".into())
+        })?;
+
+        let decoder = SimpleDecoder::from_device(
+            decoder_config,
+            vulkan_device.instance().clone(),
+            vulkan_device.device().clone(),
+            vulkan_device.physical_device(),
+            vulkan_device.allocator().clone(),
+            decode_queue,
+            decode_queue_family,
+            vulkan_device.queue(),
+            vulkan_device.queue_family_index(),
+        ).map_err(|e| {
             StreamError::Runtime(format!("Failed to create H.265 decoder: {e}"))
         })?;
 
-        tracing::info!("[H265Decoder] Initialized (Vulkan Video hardware)");
+        tracing::info!("[H265Decoder] Initialized (shared RHI device, Vulkan Video hardware)");
 
         self.decoder = Some(decoder);
         Ok(())
@@ -83,7 +101,6 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             let width = decoded.width;
             let height = decoded.height;
 
-            // Acquire pixel buffer for output
             let (pool_id, pixel_buffer) =
                 gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
 
@@ -91,8 +108,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             let rgba_size = (width * height * 4) as usize;
             let rgba_data = unsafe { std::slice::from_raw_parts_mut(rgba_ptr, rgba_size) };
 
-            // NV12 → RGBA conversion (BT.601). This CPU path will be replaced by
-            // GPU compute in #270 (RHI coupling with shared Vulkan device).
+            // NV12 → RGBA conversion (BT.601)
             let y_plane = &decoded.data[..(width * height) as usize];
             let uv_plane = &decoded.data[(width * height) as usize..];
             for row in 0..height {
@@ -100,8 +116,8 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
                     let y_idx = (row * width + col) as usize;
                     let uv_idx = ((row / 2) * (width / 2) + (col / 2)) as usize * 2;
                     let y = y_plane[y_idx] as f32;
-                    let u = uv_plane[uv_idx] as f32 - 128.0;
-                    let v = uv_plane[uv_idx + 1] as f32 - 128.0;
+                    let u = uv_plane.get(uv_idx).copied().unwrap_or(128) as f32 - 128.0;
+                    let v = uv_plane.get(uv_idx + 1).copied().unwrap_or(128) as f32 - 128.0;
                     let r = (y + 1.402 * v).clamp(0.0, 255.0) as u8;
                     let g = (y - 0.344 * u - 0.714 * v).clamp(0.0, 255.0) as u8;
                     let b = (y + 1.772 * u).clamp(0.0, 255.0) as u8;
