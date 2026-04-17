@@ -81,6 +81,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
                 "-t", &duration_secs.to_string(),
                 "-i", &format!("anullsrc=r=48000:cl=stereo:d={duration_secs}"),
                 "-c:v", "copy",
+                "-r", &self.config.fps.to_string(),
                 "-c:a", "aac",
                 "-shortest",
                 "-movflags", "+faststart",

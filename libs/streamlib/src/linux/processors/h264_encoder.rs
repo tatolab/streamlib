@@ -42,7 +42,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
         let encoder_config = SimpleEncoderConfig {
             width,
             height,
-            fps: 30,
+            fps: 60,
             codec: Codec::H264,
             preset: Preset::Medium,
             streaming: true,

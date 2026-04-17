@@ -25,11 +25,13 @@ fn main() -> Result<()> {
     let duration_secs: u32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10);
     let is_h265 = codec == "h265";
 
+    let fps: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(60);
     let output_path = format!("/tmp/streamlib_live_{codec}.mp4");
 
     println!("=== Vulkan Video Live {} Encode ===", codec.to_uppercase());
     println!("Camera:   {device}");
     println!("Output:   {output_path}");
+    println!("FPS:      {fps}");
     println!("Duration: {duration_secs}s\n");
 
     let runtime = StreamRuntime::new()?;
@@ -65,7 +67,7 @@ fn main() -> Result<()> {
     let mp4_writer = runtime.add_processor(LinuxMp4WriterProcessor::node(
         LinuxMp4WriterProcessor::Config {
             output_path: output_path.clone(),
-            fps: 30,
+            fps,
             codec: Some(if is_h265 { "hevc".into() } else { "h264".into() }),
             duration_secs: Some(duration_secs),
         },
