@@ -64,6 +64,10 @@ timeout --kill-after=3 25 \
   (MMAP fallback, DMA-BUF, UVC), also run against a real UVC device such as
   `/dev/video0` (Cam Link 4K on this workstation) — several past bugs
   (#288/#289/#292) only reproduced on real hardware.
+- For **motion-sensitive** changes (frame ordering, frame drops, timestamp
+  drift, skipped DPB frames) use the [v4l2loopback motion
+  scenario](#v4l2loopback-motion-scenario) — vivid's built-in animation is
+  slow enough that many motion bugs hide behind it.
 - `STREAMLIB_DISPLAY_FRAME_LIMIT` makes the run self-terminate so no stranded
   winit window survives the test.
 - `STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY=30` writes one PNG per 30 displayed
@@ -130,6 +134,88 @@ When there is no reference PNG readily available (the common case on
 - Reproduced and fixed this way: #288, #289, #292.
 - Driver-specific notes: [`docs/learnings/nvidia-dma-buf-after-swapchain.md`](learnings/nvidia-dma-buf-after-swapchain.md),
   [`docs/learnings/camera-display-e2e-validation.md`](learnings/camera-display-e2e-validation.md).
+
+---
+
+## v4l2loopback motion scenario
+
+vivid's test pattern animates slowly — motion-related bugs (duplicated
+frames, skipped frames, timestamp drift, reordered output) can hide
+behind a source that barely changes frame-to-frame. `ffmpeg`'s
+`testsrc2` pattern has both a scrolling timecode and a per-frame
+counter embedded in the image, so a dropped or repeated frame is
+visible by eye in a PNG sample.
+
+### Host setup (one-time)
+
+```bash
+sudo apt-get install v4l2loopback-dkms ffmpeg
+sudo modprobe v4l2loopback video_nr=10 card_label=Virtual_Camera exclusive_caps=0
+# exclusive_caps=0 (NOT 1) — caps=1 breaks ffmpeg→v4l2loopback writes.
+```
+
+Verify: `v4l2-ctl -d /dev/video10 --get-fmt-video` should report
+`1920x1080 NV12` (or whatever ffmpeg last pushed). The device survives
+until reboot.
+
+### Run it
+
+Start the writer in one terminal (leave it running for the whole test
+session):
+
+```bash
+ffmpeg -re -f lavfi -i 'testsrc2=size=1920x1080:rate=30,format=nv12' \
+       -f v4l2 /dev/video10
+```
+
+Then run the example against `/dev/video10` exactly like any other
+camera device:
+
+```bash
+# camera-only
+OUT=/tmp/camdisp-v4l2loop-$(date +%s)
+mkdir -p "$OUT/png_samples"
+STREAMLIB_CAMERA_DEVICE=/dev/video10 \
+STREAMLIB_DISPLAY_PNG_SAMPLE_DIR="$OUT/png_samples" \
+STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY=30 \
+STREAMLIB_DISPLAY_FRAME_LIMIT=150 \
+timeout --kill-after=3 15 cargo run -q -p camera-display \
+    2>&1 | tee "$OUT/pipeline.log"
+
+# encoder/decoder roundtrip
+cargo run -q -p vulkan-video-roundtrip -- h264 /dev/video10 15
+cargo run -q -p vulkan-video-roundtrip -- h265 /dev/video10 15
+```
+
+### Verify
+
+1. Same log gates as the other scenarios — zero `OUT_OF_DEVICE_MEMORY`,
+   `DEVICE_LOST`, `process() failed`.
+2. Read at least one PNG with the Read tool. testsrc2 produces vertical
+   color bars (red, green, yellow, blue, magenta, cyan), a diagonal
+   rainbow line, a moving numeric timecode in the upper-left corner
+   (`HH:MM:SS.mmm`), and a per-frame counter just below the timecode.
+   All of those should be visible and crisp; a blank or solid-color
+   frame is a regression.
+3. Between two consecutive PNG samples (N and N+30), the timecode and
+   frame counter should advance by roughly 30 frames' worth of time at
+   30fps (~1s). A gap substantially larger than that flags a
+   frame-drop bug in the pipeline.
+
+### When to use
+
+- Any change that touches frame ordering, timestamping, FPS
+  propagation, dropped-frame handling, or decoder reordering.
+- Any camera MMAP / DMA-BUF path change that should be re-verified
+  against a strict-conformance V4L2 driver (v4l2loopback does **not**
+  tolerate `poll()` before `VIDIOC_STREAMON`, which exposed #303).
+- Any encoder rate-control / VBV change where the source frame
+  complexity needs to be steady and reproducible across runs.
+
+### Reference
+
+- Added in #303, which fixed the camera MMAP path so it actually
+  streams frames from v4l2loopback.
 
 ---
 
