@@ -609,6 +609,7 @@ impl VkVideoDecoder {
             self.ctx.instance(),
             self.ctx.physical_device(),
             self.ctx.allocator(),
+            &self.submitter,
             &session_params,
         ) } {
             Ok(s) => s,
@@ -663,7 +664,18 @@ impl VkVideoDecoder {
             ..Default::default()
         };
 
-        match unsafe { self.ctx.allocator().create_image(image_create, &alloc_options) } {
+        // DPB image allocation runs under the host's device-level resource
+        // lock (fixes #278).
+        let mut dpb_result: vulkanalia::VkResult<(vk::Image, vma::Allocation)> =
+            Err(vk::ErrorCode::INITIALIZATION_FAILED);
+        let dpb_result_ref = &mut dpb_result;
+        let dpb_allocator = self.ctx.allocator();
+        self.submitter.with_device_resource_lock(&mut || {
+            *dpb_result_ref = unsafe {
+                dpb_allocator.create_image(image_create, &alloc_options)
+            };
+        });
+        match dpb_result {
             Ok((image, allocation)) => {
                 self.dpb_image = image;
                 self.dpb_allocation = allocation;
@@ -721,7 +733,18 @@ impl VkVideoDecoder {
             ..Default::default()
         };
 
-        match unsafe { self.ctx.allocator().create_buffer(bs_create, &bs_alloc_options) } {
+        // Bitstream buffer allocation runs under the host's device-level
+        // resource lock (fixes #278).
+        let mut bs_result: vulkanalia::VkResult<(vk::Buffer, vma::Allocation)> =
+            Err(vk::ErrorCode::INITIALIZATION_FAILED);
+        let bs_result_ref = &mut bs_result;
+        let bs_allocator = self.ctx.allocator();
+        self.submitter.with_device_resource_lock(&mut || {
+            *bs_result_ref = unsafe {
+                bs_allocator.create_buffer(bs_create, &bs_alloc_options)
+            };
+        });
+        match bs_result {
             Ok((buffer, allocation)) => {
                 let info = self.ctx.allocator().get_allocation_info(allocation);
                 self.bitstream_buffer = buffer;
@@ -866,8 +889,18 @@ impl VkVideoDecoder {
                     | vk::MemoryPropertyFlags::HOST_COHERENT,
                 ..Default::default()
             };
-            let (buf, alloc) = self.ctx.allocator().create_buffer(bs_create, &bs_alloc)
-                .map_err(VideoError::from)?;
+            // Bitstream resize runs under the host's device-level resource
+            // lock (fixes #278).
+            let mut resize_result: vulkanalia::VkResult<(vk::Buffer, vma::Allocation)> =
+                Err(vk::ErrorCode::INITIALIZATION_FAILED);
+            let resize_result_ref = &mut resize_result;
+            let resize_allocator = self.ctx.allocator();
+            self.submitter.with_device_resource_lock(&mut || {
+                *resize_result_ref = unsafe {
+                    resize_allocator.create_buffer(bs_create, &bs_alloc)
+                };
+            });
+            let (buf, alloc) = resize_result.map_err(VideoError::from)?;
             let info = self.ctx.allocator().get_allocation_info(alloc);
             self.bitstream_buffer = buf;
             self.bitstream_allocation = alloc;

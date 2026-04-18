@@ -228,38 +228,59 @@ impl SimpleEncoder {
             )
             .std_header_version(&caps.std_header_version);
 
-        let video_session = device.create_video_session_khr(&session_create_info, None)?;
-
-        // --- Bind session memory ---
-        let mem_requirements = device.get_video_session_memory_requirements_khr(video_session)?;
-
-        let mut session_memory = Vec::with_capacity(mem_requirements.len());
-        let mut bind_infos = Vec::with_capacity(mem_requirements.len());
-
+        // Video session creation, memory allocation, and binding run under the
+        // host's device-level resource lock (fixes #278 — prevents NVIDIA
+        // driver crashes when concurrent processors submit during setup).
         let allocator = self.ctx.allocator();
-        for req in &mem_requirements {
-            let alloc_options = vma::AllocationOptions {
-                usage: vma::MemoryUsage::Unknown,
-                memory_type_bits: req.memory_requirements.memory_type_bits,
-                ..Default::default()
-            };
+        let mut session_result: VideoResult<(
+            vk::VideoSessionKHR,
+            Vec<vma::Allocation>,
+        )> = Err(VideoError::Vulkan(vk::Result::ERROR_INITIALIZATION_FAILED));
+        let session_result_ref = &mut session_result;
+        self.submitter.with_device_resource_lock(&mut || {
+            *session_result_ref = (|| {
+                let video_session = device
+                    .create_video_session_khr(&session_create_info, None)
+                    .map_err(VideoError::from)?;
 
-            let allocation = allocator
-                .allocate_memory(req.memory_requirements, &alloc_options)?;
+                let mem_requirements = device
+                    .get_video_session_memory_requirements_khr(video_session)
+                    .map_err(VideoError::from)?;
 
-            let alloc_info = allocator.get_allocation_info(allocation);
-            session_memory.push(allocation);
+                let mut session_memory = Vec::with_capacity(mem_requirements.len());
+                let mut bind_infos = Vec::with_capacity(mem_requirements.len());
 
-            bind_infos.push(
-                vk::BindVideoSessionMemoryInfoKHR::builder()
-                    .memory_bind_index(req.memory_bind_index)
-                    .memory(alloc_info.deviceMemory)
-                    .memory_offset(alloc_info.offset)
-                    .memory_size(req.memory_requirements.size),
-            );
-        }
+                for req in &mem_requirements {
+                    let alloc_options = vma::AllocationOptions {
+                        usage: vma::MemoryUsage::Unknown,
+                        memory_type_bits: req.memory_requirements.memory_type_bits,
+                        ..Default::default()
+                    };
 
-        device.bind_video_session_memory_khr(video_session, &bind_infos)?;
+                    let allocation = allocator
+                        .allocate_memory(req.memory_requirements, &alloc_options)
+                        .map_err(VideoError::from)?;
+
+                    let alloc_info = allocator.get_allocation_info(allocation);
+                    session_memory.push(allocation);
+
+                    bind_infos.push(
+                        vk::BindVideoSessionMemoryInfoKHR::builder()
+                            .memory_bind_index(req.memory_bind_index)
+                            .memory(alloc_info.deviceMemory)
+                            .memory_offset(alloc_info.offset)
+                            .memory_size(req.memory_requirements.size),
+                    );
+                }
+
+                device
+                    .bind_video_session_memory_khr(video_session, &bind_infos)
+                    .map_err(VideoError::from)?;
+
+                Ok((video_session, session_memory))
+            })();
+        });
+        let (video_session, session_memory) = session_result?;
 
         // --- Determine H.265 CTB size from capabilities ---
         // The driver reports supported CTB sizes; we pick the largest supported
@@ -820,7 +841,17 @@ impl SimpleEncoder {
                 image_create_info.next =
                     &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
 
-                let (image, allocation) = allocator.create_image(image_create_info, &alloc_options)?;
+                // DPB image allocation runs under the host's device-level
+                // resource lock (fixes #278).
+                let mut alloc_result: VideoResult<(vk::Image, vma::Allocation)> =
+                    Err(VideoError::Vulkan(vk::Result::ERROR_INITIALIZATION_FAILED));
+                let alloc_result_ref = &mut alloc_result;
+                self.submitter.with_device_resource_lock(&mut || {
+                    *alloc_result_ref = allocator
+                        .create_image(image_create_info, &alloc_options)
+                        .map_err(VideoError::from);
+                });
+                let (image, allocation) = alloc_result?;
 
                 let view_info = vk::ImageViewCreateInfo::builder()
                     .image(image)
@@ -868,7 +899,17 @@ impl SimpleEncoder {
             image_create_info.next =
                 &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
 
-            let (image, allocation) = allocator.create_image(image_create_info, &alloc_options)?;
+            // DPB image allocation runs under the host's device-level
+            // resource lock (fixes #278).
+            let mut alloc_result: VideoResult<(vk::Image, vma::Allocation)> =
+                Err(VideoError::Vulkan(vk::Result::ERROR_INITIALIZATION_FAILED));
+            let alloc_result_ref = &mut alloc_result;
+            self.submitter.with_device_resource_lock(&mut || {
+                *alloc_result_ref = allocator
+                    .create_image(image_create_info, &alloc_options)
+                    .map_err(VideoError::from);
+            });
+            let (image, allocation) = alloc_result?;
 
             for i in 0..count {
                 let view_info = vk::ImageViewCreateInfo::builder()
@@ -931,7 +972,17 @@ impl SimpleEncoder {
             ..Default::default()
         };
 
-        let (buffer, allocation) = allocator.create_buffer(buffer_create_info, &alloc_options)?;
+        // Bitstream buffer allocation runs under the host's device-level
+        // resource lock (fixes #278).
+        let mut alloc_result: VideoResult<(vk::Buffer, vma::Allocation)> =
+            Err(VideoError::Vulkan(vk::Result::ERROR_INITIALIZATION_FAILED));
+        let alloc_result_ref = &mut alloc_result;
+        self.submitter.with_device_resource_lock(&mut || {
+            *alloc_result_ref = allocator
+                .create_buffer(buffer_create_info, &alloc_options)
+                .map_err(VideoError::from);
+        });
+        let (buffer, allocation) = alloc_result?;
 
         let info = allocator.get_allocation_info(allocation);
         let mapped = info.pMappedData as *mut u8;

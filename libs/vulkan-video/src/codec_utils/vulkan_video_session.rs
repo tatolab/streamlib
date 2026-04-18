@@ -95,6 +95,7 @@ impl VulkanVideoSession {
         _instance: &vulkanalia::Instance,
         _physical_device: vk::PhysicalDevice,
         allocator: &Arc<vma::Allocator>,
+        submitter: &Arc<dyn crate::rhi::RhiQueueSubmitter>,
         params: &VideoSessionCreateParams,
     ) -> Result<Arc<Self>, vk::Result> {
         // --- Build the std header version based on codec type ---------
@@ -113,9 +114,28 @@ impl VulkanVideoSession {
             .reference_picture_format(params.reference_pictures_format)
             .std_header_version(&std_header_version);
 
+        // Session creation, memory allocation, and binding all run under the
+        // host's device-level resource lock so concurrent queue submissions on
+        // NVIDIA Linux cannot race with them (fixes #278).
+        let mut result: Result<Arc<Self>, vk::Result> =
+            Err(vk::Result::ERROR_INITIALIZATION_FAILED);
+        let result_ref = &mut result;
+        submitter.with_device_resource_lock(&mut || {
+            *result_ref = Self::create_locked(device, allocator, params, &create_info);
+        });
+        result
+    }
+
+    /// Must be called while holding the host's device-level resource lock.
+    unsafe fn create_locked(
+        device: &vulkanalia::Device,
+        allocator: &Arc<vma::Allocator>,
+        params: &VideoSessionCreateParams,
+        create_info: &vk::VideoSessionCreateInfoKHRBuilder,
+    ) -> Result<Arc<Self>, vk::Result> {
         // --- Create the VkVideoSessionKHR ----------------------------
         let video_session = device
-            .create_video_session_khr(&create_info, None)
+            .create_video_session_khr(create_info, None)
             .map_err(|e| e)?;
 
         let mut allocations: Vec<vma::Allocation> = Vec::new();

@@ -251,7 +251,7 @@ impl SimpleEncoder {
             cached_header: Vec::new(),
             config,
             prepend_header,
-            submitter,
+            submitter: submitter.clone(),
         };
 
         // Configure encoder (creates video session, DPB, etc.)
@@ -338,8 +338,15 @@ impl SimpleEncoder {
             required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
             ..Default::default()
         };
-        let (source_image, source_allocation) =
-            allocator.create_image(src_image_info, &src_alloc_options)?;
+        // Staging source image allocation runs under the host's device-level
+        // resource lock (fixes #278 — same race window as session setup).
+        let mut img_result: vulkanalia::VkResult<(vk::Image, vma::Allocation)> =
+            Err(vk::ErrorCode::INITIALIZATION_FAILED);
+        let img_result_ref = &mut img_result;
+        submitter.with_device_resource_lock(&mut || {
+            *img_result_ref = allocator.create_image(src_image_info, &src_alloc_options);
+        });
+        let (source_image, source_allocation) = img_result.map_err(VideoError::from)?;
 
         let source_view = device.create_image_view(
             &vk::ImageViewCreateInfo::builder()
@@ -372,8 +379,15 @@ impl SimpleEncoder {
             ..Default::default()
         };
 
-        let (staging_buffer, staging_allocation) =
-            allocator.create_buffer(stg_create_info, &stg_alloc_options)?;
+        // Staging buffer allocation runs under the host's device-level
+        // resource lock (fixes #278).
+        let mut buf_result: vulkanalia::VkResult<(vk::Buffer, vma::Allocation)> =
+            Err(vk::ErrorCode::INITIALIZATION_FAILED);
+        let buf_result_ref = &mut buf_result;
+        submitter.with_device_resource_lock(&mut || {
+            *buf_result_ref = allocator.create_buffer(stg_create_info, &stg_alloc_options);
+        });
+        let (staging_buffer, staging_allocation) = buf_result.map_err(VideoError::from)?;
 
         let stg_info = allocator.get_allocation_info(staging_allocation);
         let staging_mapped_ptr = stg_info.pMappedData as *mut u8;
@@ -513,7 +527,7 @@ impl SimpleEncoder {
             cached_header: Vec::new(),
             config,
             prepend_header,
-            submitter,
+            submitter: submitter.clone(),
         };
 
         // Configure encoder (creates video session, DPB, etc.) — same as create_internal
@@ -582,8 +596,15 @@ impl SimpleEncoder {
             required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
             ..Default::default()
         };
-        let (source_image, source_allocation) =
-            allocator.create_image(src_image_info, &src_alloc_options)?;
+        // Staging source image allocation runs under the host's device-level
+        // resource lock (fixes #278).
+        let mut img_result: vulkanalia::VkResult<(vk::Image, vma::Allocation)> =
+            Err(vk::ErrorCode::INITIALIZATION_FAILED);
+        let img_result_ref = &mut img_result;
+        submitter.with_device_resource_lock(&mut || {
+            *img_result_ref = allocator.create_image(src_image_info, &src_alloc_options);
+        });
+        let (source_image, source_allocation) = img_result.map_err(VideoError::from)?;
 
         let source_view = device.create_image_view(
             &vk::ImageViewCreateInfo::builder()
@@ -610,8 +631,15 @@ impl SimpleEncoder {
                 | vk::MemoryPropertyFlags::HOST_COHERENT,
             ..Default::default()
         };
-        let (staging_buffer, staging_allocation) =
-            allocator.create_buffer(stg_create_info, &stg_alloc_options)?;
+        // Staging buffer allocation runs under the host's device-level
+        // resource lock (fixes #278).
+        let mut buf_result: vulkanalia::VkResult<(vk::Buffer, vma::Allocation)> =
+            Err(vk::ErrorCode::INITIALIZATION_FAILED);
+        let buf_result_ref = &mut buf_result;
+        submitter.with_device_resource_lock(&mut || {
+            *buf_result_ref = allocator.create_buffer(stg_create_info, &stg_alloc_options);
+        });
+        let (staging_buffer, staging_allocation) = buf_result.map_err(VideoError::from)?;
         let stg_info = allocator.get_allocation_info(staging_allocation);
         let staging_mapped_ptr = stg_info.pMappedData as *mut u8;
         if staging_mapped_ptr.is_null() {
