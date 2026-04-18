@@ -796,6 +796,7 @@ mod tests {
             height: 480,
             timestamp_ns: "0".to_string(),
             frame_index: "1".to_string(),
+            fps: None,
         };
 
         let resolved = gpu.resolve_videoframe_texture(&frame).expect("texture cache miss");
@@ -822,6 +823,7 @@ mod tests {
             height: 480,
             timestamp_ns: "0".to_string(),
             frame_index: "1".to_string(),
+            fps: None,
         };
         assert!(gpu.resolve_videoframe_texture(&frame).is_err());
 

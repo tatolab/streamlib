@@ -168,6 +168,8 @@ struct CameraCallbackContext {
     output_writer: *const OutputWriter,
     gpu_context: crate::core::GpuContext,
     frame_count: std::sync::atomic::AtomicU64,
+    /// Negotiated capture frame rate (set during AVFoundation init, read by callback).
+    capture_fps: std::sync::atomic::AtomicU32,
     /// Holds the Arc to keep the OutputWriter alive while the pointer is in use.
     _outputs_arc: Arc<OutputWriter>,
 }
@@ -267,12 +269,14 @@ define_class!(
 
             // Create IPC frame with surface_id as string
             // The receiving process will use check_out_surface() or IOSurfaceLookup(id) to access the surface
+            let capture_fps = ctx.capture_fps.load(Ordering::Acquire);
             let ipc_frame = crate::_generated_::Videoframe {
                 surface_id: surface_id_str,
                 width,
                 height,
                 timestamp_ns: timestamp_ns.to_string(),
                 frame_index: frame_num.to_string(),
+                fps: if capture_fps > 0 { Some(capture_fps) } else { None },
             };
 
             // Write IPC frame to output via iceoryx2
@@ -397,6 +401,7 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
             output_writer: output_writer_ptr,
             gpu_context,
             frame_count: std::sync::atomic::AtomicU64::new(0),
+            capture_fps: std::sync::atomic::AtomicU32::new(0),
             // Keep the Arc alive to ensure the pointer remains valid
             _outputs_arc: outputs_arc,
         });
@@ -574,6 +579,11 @@ impl AppleCameraProcessor::Processor {
             let _: () = msg_send![&device, setActiveVideoMinFrameDuration: min_duration];
             if (max_fps - min_fps).abs() > 0.01 {
                 let _: () = msg_send![&device, setActiveVideoMaxFrameDuration: max_duration];
+            }
+
+            // Store negotiated fps in callback context for Videoframe metadata.
+            if let Some(ctx) = CAMERA_CALLBACK_CONTEXT.get() {
+                ctx.capture_fps.store(max_fps as u32, Ordering::Release);
             }
 
             device.unlockForConfiguration();

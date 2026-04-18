@@ -13,6 +13,11 @@ pub struct Encodedvideoframe {
     #[serde(rename = "data")]
     pub data: Vec<u8>,
 
+    /// Source frame rate in frames per second (pass-through from capture device)
+    #[serde(rename = "fps")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
+
     /// Sequential frame number (uint64 as string)
     #[serde(rename = "frame_number")]
     pub frame_number: String,

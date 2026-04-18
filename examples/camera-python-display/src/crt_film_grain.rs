@@ -264,6 +264,7 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
             height,
             timestamp_ns: frame.timestamp_ns.clone(),
             frame_index: frame.frame_index.clone(),
+            fps: frame.fps,
         };
         self.outputs.write("video_out", &output_frame)?;
 

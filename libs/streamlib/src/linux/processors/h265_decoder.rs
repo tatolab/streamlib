@@ -137,6 +137,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
                 height,
                 timestamp_ns,
                 frame_index: self.frames_decoded.to_string(),
+                fps: encoded.fps,
             };
 
             self.outputs.write("video_out", &video_frame)?;

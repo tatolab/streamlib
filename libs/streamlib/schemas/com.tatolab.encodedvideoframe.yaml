@@ -29,3 +29,9 @@ properties:
     metadata:
       description: "Sequential frame number (uint64 as string)"
     type: string
+
+optionalProperties:
+  fps:
+    metadata:
+      description: "Source frame rate in frames per second (pass-through from capture device)"
+    type: uint32

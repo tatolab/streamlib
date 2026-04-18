@@ -127,6 +127,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         })?;
 
         let timestamp_ns: Option<i64> = frame.timestamp_ns.parse().ok();
+        let frame_fps = frame.fps;
 
         let packets = encoder.encode_image(image_view, timestamp_ns).map_err(|e| {
             StreamError::Runtime(format!("H.265 encode failed: {e}"))
@@ -135,6 +136,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         for packet in packets {
             let encoded = Encodedvideoframe {
                 data: packet.data,
+                fps: frame_fps,
                 is_keyframe: packet.is_keyframe,
                 timestamp_ns: packet.timestamp_ns.unwrap_or(0).to_string(),
                 frame_number: self.frames_encoded.to_string(),

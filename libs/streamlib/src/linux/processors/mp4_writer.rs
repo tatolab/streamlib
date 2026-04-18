@@ -24,6 +24,9 @@ pub struct LinuxMp4WriterProcessor {
 
     /// Frames received counter.
     frames_received: u64,
+
+    /// FPS from first encoded frame (overrides config if present).
+    frame_derived_fps: Option<u32>,
 }
 
 impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
@@ -55,6 +58,16 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             _ => "h264",
         };
 
+        // Use frame-derived fps if available (from camera via encoder pass-through),
+        // otherwise fall back to config fps.
+        let fps = self.frame_derived_fps.unwrap_or(self.config.fps);
+        if self.frame_derived_fps.is_some() && self.frame_derived_fps != Some(self.config.fps) {
+            tracing::info!(
+                "[LinuxMp4Writer] Using frame-derived fps ({}) instead of config fps ({})",
+                fps, self.config.fps
+            );
+        }
+
         // Write raw bitstream to temp file.
         let raw_path = std::env::temp_dir().join(format!("streamlib_mp4writer.{extension}"));
         {
@@ -67,7 +80,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         }
 
         let duration_secs = self.config.duration_secs.unwrap_or(
-            (self.frames_received as u32).checked_div(self.config.fps).unwrap_or(10)
+            (self.frames_received as u32).checked_div(fps).unwrap_or(10)
         );
 
         // Mux to MP4 with silent audio track via ffmpeg.
@@ -75,13 +88,13 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             .args([
                 "-y",
                 "-fflags", "+genpts",
-                "-framerate", &self.config.fps.to_string(),
+                "-framerate", &fps.to_string(),
                 "-i", raw_path.to_str().unwrap(),
                 "-f", "lavfi",
                 "-t", &duration_secs.to_string(),
                 "-i", &format!("anullsrc=r=48000:cl=stereo:d={duration_secs}"),
                 "-c:v", "copy",
-                "-r", &self.config.fps.to_string(),
+                "-r", &fps.to_string(),
                 "-c:a", "aac",
                 "-shortest",
                 "-movflags", "+faststart",
@@ -112,6 +125,14 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             return Ok(());
         }
         let frame: Encodedvideoframe = self.inputs.read("encoded_video_in")?;
+
+        // Capture fps from the first encoded frame (set by camera via encoder pass-through).
+        if self.frame_derived_fps.is_none() {
+            if let Some(fps) = frame.fps {
+                tracing::info!("[LinuxMp4Writer] Using fps from encoded frame: {}", fps);
+                self.frame_derived_fps = Some(fps);
+            }
+        }
 
         self.bitstream.extend_from_slice(&frame.data);
         self.frames_received += 1;

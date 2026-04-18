@@ -265,6 +265,36 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         // Set a poll timeout so the capture thread can check is_capturing periodically.
         stream.set_timeout(std::time::Duration::from_secs(1));
 
+        // Query V4L2 capture parameters for frame rate.
+        // interval is time-per-frame as a fraction (e.g. 1/30 for 30fps).
+        let capture_fps: Option<u32> = match dev.params() {
+            Ok(params) if params.interval.numerator > 0 => {
+                let fps = params.interval.denominator / params.interval.numerator;
+                tracing::info!(
+                    "Camera {}: V4L2 frame interval {}/{} → {}fps",
+                    self.camera_name,
+                    params.interval.numerator,
+                    params.interval.denominator,
+                    fps
+                );
+                Some(fps)
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    "Camera {}: V4L2 frame interval numerator is 0, fps unknown",
+                    self.camera_name
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Camera {}: failed to query V4L2 capture params: {}, fps unknown",
+                    self.camera_name, e
+                );
+                None
+            }
+        };
+
         // Pre-allocate the pixel buffer pool BEFORE the display has a chance to
         // create its swapchain. NVIDIA limits DMA-BUF exportable allocations
         // after swapchain creation; pre-allocating here ensures the pool buffers
@@ -306,6 +336,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
                     capture_width,
                     capture_height,
                     capture_fourcc,
+                    capture_fps,
                 );
             })
             .map_err(|e| {
@@ -357,6 +388,7 @@ fn capture_thread_loop(
     width: u32,
     height: u32,
     fourcc: FourCC,
+    capture_fps: Option<u32>,
 ) {
     let vulkan_device = &gpu_context.device().inner;
     let device = vulkan_device.device();
@@ -1611,6 +1643,7 @@ fn capture_thread_loop(
             height,
             timestamp_ns: timestamp_ns.to_string(),
             frame_index: timeline_signal_value.to_string(),
+            fps: capture_fps,
         };
 
         if let Err(e) = outputs.write("video", &ipc_frame) {
