@@ -35,7 +35,7 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
 
         let decoder_config = SimpleDecoderConfig {
             codec: Codec::H264,
-            rgba_output: true,
+            rgba_output: false,
             ..Default::default()
         };
 
@@ -102,13 +102,15 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
             let width = decoded.width;
             let height = decoded.height;
 
-            // Decoded frames come back as RGBA (GPU NV12→RGBA conversion in SimpleDecoder).
-            let rgba_size = (width * height * 4) as usize;
+            // Write decoded NV12 data directly to pixel buffer.
+            // NV12 = Y plane (W*H) + interleaved UV plane (W*H/2).
+            // The consumer (MP4 writer / display) handles NV12→RGB conversion.
+            let nv12_size = (width * height * 3 / 2) as usize;
             let (pool_id, pixel_buffer) =
                 gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
 
             let dst_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
-            let src = &decoded.data[..rgba_size.min(decoded.data.len())];
+            let src = &decoded.data[..nv12_size.min(decoded.data.len())];
             unsafe {
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }

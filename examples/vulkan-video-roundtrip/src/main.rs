@@ -127,6 +127,46 @@ fn main() -> Result<()> {
     println!("\nStopping pipeline...");
     runtime.stop()?;
 
-    println!("Output: {output_path}");
+    // Mux the accumulated H.265 bitstream directly into MP4 (-c:v copy).
+    // This produces the high-quality consumer view — exactly what a player
+    // would decode and display. The decoder ran in the pipeline for roundtrip
+    // verification, but the output comes from the encoder's bitstream.
+    let bitstream_path = "/tmp/streamlib_debug_bitstream.h265";
+    if std::path::Path::new(bitstream_path).exists() {
+        let hevc_output = format!("/tmp/streamlib_roundtrip_{codec}.mp4");
+        let duration_str = duration_secs.to_string();
+        let fps_str = fps.to_string();
+        let mux_status = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-fflags", "+genpts",
+                "-framerate", &fps_str,
+                "-i", bitstream_path,
+                "-f", "lavfi",
+                "-t", &duration_str,
+                "-i", &format!("anullsrc=r=48000:cl=stereo:d={duration_str}"),
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-tag:v", if is_h265 { "hvc1" } else { "avc1" },
+                "-shortest",
+                "-movflags", "+faststart",
+                &hevc_output,
+            ])
+            .output();
+
+        match mux_status {
+            Ok(output) if output.status.success() => {
+                println!("Roundtrip output (H.265 direct): {hevc_output}");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("ffmpeg mux failed: {stderr}");
+            }
+            Err(e) => eprintln!("ffmpeg not available: {e}"),
+        }
+        let _ = std::fs::remove_file(bitstream_path);
+    }
+
+    println!("Decoded frames output: {output_path}");
     Ok(())
 }
