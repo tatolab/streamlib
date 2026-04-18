@@ -177,6 +177,47 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let decoded_frames = decoder.feed(&bitstream)?;
     println!("  Decoded {} frames", decoded_frames.len());
 
+    // --- PSNR: compare decoded NV12 Y-channel against original BGRA luma ---
+    {
+        let mut fixture_file = fs::File::open(&fixture_path)?;
+        let n = decoded_frames.len().min(FRAME_COUNT as usize);
+        let mut total_mse = 0.0f64;
+        let y_size = (WIDTH * HEIGHT) as usize;
+        // Decoder outputs 1088-high frames (H.264 16-pixel alignment)
+        let aligned_h = ((HEIGHT + 15) / 16) * 16;
+        for i in 0..n {
+            let mut bgra = vec![0u8; BGRA_FRAME_SIZE];
+            fixture_file.read_exact(&mut bgra)?;
+            let decoded = &decoded_frames[i];
+            // Compare Y channel: decoded NV12 Y plane (stride = aligned width)
+            // vs expected Y from BGRA using BT.709 narrow range
+            let mut frame_mse = 0.0f64;
+            for row in 0..HEIGHT as usize {
+                for col in 0..WIDTH as usize {
+                    let px = row * WIDTH as usize + col;
+                    let b = bgra[px * 4] as f64;
+                    let g = bgra[px * 4 + 1] as f64;
+                    let r = bgra[px * 4 + 2] as f64;
+                    // BT.709 narrow: Y = (0.2126*R + 0.7152*G + 0.0722*B) * 219/255 + 16
+                    let expected_y = (0.2126 * r + 0.7152 * g + 0.0722 * b) * (219.0 / 255.0) + 16.0;
+                    let decoded_y_idx = row * decoded.width as usize + col;
+                    let actual_y = *decoded.data.get(decoded_y_idx).unwrap_or(&0) as f64;
+                    let diff = expected_y - actual_y;
+                    frame_mse += diff * diff;
+                }
+            }
+            frame_mse /= y_size as f64;
+            let psnr = if frame_mse > 0.0 { 10.0 * (255.0f64 * 255.0 / frame_mse).log10() } else { f64::INFINITY };
+            if i < 5 || i == n - 1 {
+                println!("  PSNR frame {:3}: {:.2} dB (MSE={:.2})", i, psnr, frame_mse);
+            }
+            total_mse += frame_mse;
+        }
+        let avg_mse = total_mse / n as f64;
+        let avg_psnr = if avg_mse > 0.0 { 10.0 * (255.0f64 * 255.0 / avg_mse).log10() } else { f64::INFINITY };
+        println!("\n  === H.264 Roundtrip Y-PSNR: {:.2} dB (avg MSE={:.2}, {} frames) ===\n", avg_psnr, avg_mse, n);
+    }
+
     // --- 4. Mux encoded bitstream into Telegram-compliant MP4 ---
     // Write raw H.264 bitstream to a temp file, then mux directly into MP4
     // with a silent audio track.  No re-encode — preserves exact encoder output.
@@ -294,7 +335,8 @@ unsafe fn create_bgra_upload_resources(
     let staging_opts = vma::AllocationOptions {
         required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
-        flags: vma::AllocationCreateFlags::MAPPED,
+        flags: vma::AllocationCreateFlags::MAPPED
+            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
         ..Default::default()
     };
     let (staging_buf, staging_alloc) = allocator.create_buffer(staging_info, &staging_opts)?;

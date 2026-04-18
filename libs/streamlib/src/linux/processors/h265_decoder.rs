@@ -115,14 +115,15 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }
 
-            // Accumulate encoded bitstream for direct-mux MP4 output.
-            // The roundtrip example muxes this with -c:v copy after pipeline stops.
+            // Dump raw decoded NV12 + encoded bitstream for PSNR verification.
             {
                 use std::io::Write;
-                let path = "/tmp/streamlib_debug_bitstream.h265";
-                let mut f = std::fs::OpenOptions::new()
-                    .create(true).append(true).open(path).ok();
-                if let Some(ref mut f) = f {
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                    .open("/tmp/streamlib_decoded_nv12.raw") {
+                    let _ = f.write_all(src);
+                }
+                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
+                    .open("/tmp/streamlib_encoded.h265") {
                     let _ = f.write_all(&encoded.data);
                 }
             }

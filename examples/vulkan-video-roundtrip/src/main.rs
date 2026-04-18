@@ -127,46 +127,56 @@ fn main() -> Result<()> {
     println!("\nStopping pipeline...");
     runtime.stop()?;
 
-    // Mux the accumulated H.265 bitstream directly into MP4 (-c:v copy).
-    // This produces the high-quality consumer view — exactly what a player
-    // would decode and display. The decoder ran in the pipeline for roundtrip
-    // verification, but the output comes from the encoder's bitstream.
-    let bitstream_path = "/tmp/streamlib_debug_bitstream.h265";
-    if std::path::Path::new(bitstream_path).exists() {
-        let hevc_output = format!("/tmp/streamlib_roundtrip_{codec}.mp4");
+    // Convert the raw decoded NV12 dump into MP4 using ffmpeg.
+    // This is exactly what nvpro did: decoder NV12 output → ffmpeg → MP4.
+    let nv12_path = "/tmp/streamlib_decoded_nv12.raw";
+    let decoded_output = format!("/tmp/streamlib_decoded_{codec}.mp4");
+    if std::path::Path::new(nv12_path).exists() {
+        // Compute actual fps from decoded frame count and pipeline duration.
+        let nv12_file_size = std::fs::metadata(nv12_path).map(|m| m.len()).unwrap_or(0);
+        let frame_size = 1920u64 * 1088 * 3 / 2; // NV12 frame size
+        let decoded_frame_count = if frame_size > 0 { nv12_file_size / frame_size } else { 0 };
+        let actual_fps = if decoded_frame_count > 0 && duration_secs > 0 {
+            (decoded_frame_count as u32) / duration_secs
+        } else {
+            fps
+        };
+        let fps_str = actual_fps.max(1).to_string();
+        // Decoder outputs 1088 height (H.265 16-pixel alignment of 1080)
+        let size_str = "1920x1088".to_string();
         let duration_str = duration_secs.to_string();
-        let fps_str = fps.to_string();
         let mux_status = std::process::Command::new("ffmpeg")
             .args([
                 "-y",
-                "-fflags", "+genpts",
-                "-framerate", &fps_str,
-                "-i", bitstream_path,
+                "-f", "rawvideo",
+                "-pix_fmt", "nv12",
+                "-s", &size_str,
+                "-r", &fps_str,
+                "-i", nv12_path,
                 "-f", "lavfi",
                 "-t", &duration_str,
                 "-i", &format!("anullsrc=r=48000:cl=stereo:d={duration_str}"),
-                "-c:v", "copy",
+                "-c:v", "mpeg4",
+                "-q:v", "1",
                 "-c:a", "aac",
-                "-tag:v", if is_h265 { "hvc1" } else { "avc1" },
                 "-shortest",
                 "-movflags", "+faststart",
-                &hevc_output,
+                &decoded_output,
             ])
             .output();
 
         match mux_status {
             Ok(output) if output.status.success() => {
-                println!("Roundtrip output (H.265 direct): {hevc_output}");
+                println!("Decoded output: {decoded_output}");
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!("ffmpeg mux failed: {stderr}");
+                eprintln!("ffmpeg decoded mux failed: {stderr}");
             }
             Err(e) => eprintln!("ffmpeg not available: {e}"),
         }
-        let _ = std::fs::remove_file(bitstream_path);
+        // let _ = std::fs::remove_file(nv12_path);
     }
 
-    println!("Decoded frames output: {output_path}");
     Ok(())
 }
