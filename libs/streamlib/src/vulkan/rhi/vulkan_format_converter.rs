@@ -413,8 +413,9 @@ impl VulkanFormatConverter {
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
                 .command_buffer(self.compute_command_buffer)
                 .build();
+            let cmd_infos = [cmd_info];
             let submit = vk::SubmitInfo2::builder()
-                .command_buffer_infos(&[cmd_info])
+                .command_buffer_infos(&cmd_infos)
                 .build();
 
             self.vulkan_device
