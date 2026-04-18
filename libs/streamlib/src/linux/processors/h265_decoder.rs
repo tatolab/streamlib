@@ -36,6 +36,8 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         let decoder_config = SimpleDecoderConfig {
             codec: Codec::H265,
             rgba_output: true,
+            max_width: 1920,
+            max_height: 1080,
             ..Default::default()
         };
 
@@ -48,7 +50,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             StreamError::Runtime("No video decode queue family".into())
         })?;
 
-        let decoder = SimpleDecoder::from_device(
+        let mut decoder = SimpleDecoder::from_device(
             decoder_config,
             vulkan_device.instance().clone(),
             vulkan_device.device().clone(),
@@ -60,6 +62,12 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             vulkan_device.queue_family_index(),
         ).map_err(|e| {
             StreamError::Runtime(format!("Failed to create H.265 decoder: {e}"))
+        })?;
+
+        // Pre-create the video session BEFORE the display swapchain.
+        // NVIDIA limits video session creation after swapchain exists.
+        decoder.pre_initialize_session().map_err(|e| {
+            StreamError::Runtime(format!("Failed to pre-initialize H.265 decoder session: {e}"))
         })?;
 
         tracing::info!("[H265Decoder] Initialized (shared RHI device, Vulkan Video hardware)");
