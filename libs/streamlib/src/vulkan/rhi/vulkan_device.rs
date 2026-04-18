@@ -1066,6 +1066,11 @@ impl vulkan_video::RhiQueueSubmitter for VulkanDevice {
             .unwrap_or_else(|e| e.into_inner());
         self.device.queue_submit(queue, submits, fence).map(|_| ())
     }
+
+    fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {
+        let _guard = self.lock_device();
+        f();
+    }
 }
 
 impl VulkanDevice {

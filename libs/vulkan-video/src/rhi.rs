@@ -30,6 +30,12 @@ pub trait RhiQueueSubmitter: Send + Sync {
         submits: &[vk::SubmitInfo],
         fence: vk::Fence,
     ) -> VkResult<()>;
+
+    /// Run `f` while holding the host's device-level resource-creation lock.
+    /// Wraps `vkCreateVideoSessionKHR`, DPB image allocation, bitstream buffer
+    /// allocation, and `vkBindVideoSessionMemoryKHR` so they cannot race with
+    /// concurrent submissions from other processors on NVIDIA Linux.
+    fn with_device_resource_lock(&self, f: &mut dyn FnMut());
 }
 
 /// Unsynchronized submitter used when vulkan-video owns its own Vulkan device
@@ -54,5 +60,11 @@ impl RhiQueueSubmitter for RawQueueSubmitter {
         fence: vk::Fence,
     ) -> VkResult<()> {
         self.device.queue_submit(queue, submits, fence).map(|_| ())
+    }
+
+    fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {
+        // Standalone mode owns the Vulkan device exclusively; no concurrent
+        // submissions exist, so no locking is required.
+        f();
     }
 }

@@ -22,61 +22,44 @@ See [LICENSE](LICENSE) and [docs/license/](docs/license/) for full terms.
 
 ---
 
-## 🚨 ABSOLUTE RESTRICTIONS - READ FIRST 🚨
+## 🚨 CORE OPERATING PRINCIPLES — READ FIRST 🚨
 
-**Claude Code operates as a CODE HELPER ONLY. The user is the principal architect and implementor.**
+**Claude Code operates as a collaborator with the user, who is the principal architect. Think before you add; reuse before you create.**
 
-### BANNED Actions (Applies to ALL files in the codebase):
+### The StreamLib Engine Model
 
-1. **NO NEW ABSTRACTIONS**: You are BANNED from creating:
-   - New helper methods
-   - New utility functions
-   - New structs
-   - New traits
-   - New modules
-   - Any abstraction "for convenience"
+StreamLib is built like a game engine: a small set of **core systems** are reused across the entire codebase. The RHI is the canonical example — all GPU work in every platform, codec, and processor flows through `VulkanDevice` and `GpuContext`. There are NOT multiple ways to allocate GPU memory, submit to a queue, or create a texture. There is ONE way, and everything uses it.
 
-2. **NO DRY REFACTORING**: Do NOT follow the DRY principle. Duplicate code is acceptable. Do NOT extract common code into helpers.
+Past models repeatedly created parallel abstractions without reading existing code, producing module and crate sprawl where the same concern was solved N different ways. **Do not do this.** Before introducing any new abstraction, you must prove no existing core system already covers the concern — and if one does, extend it rather than build a parallel.
 
-3. **NO AUTO-FIXING**: After running `cargo check`, `cargo test`, `cargo clippy`, etc.:
-   - Report errors/warnings to the user
-   - Do NOT automatically fix them
-   - Wait for explicit instructions on what to fix
+### Before Creating Any New Abstraction
 
-4. **SCOPE RESTRICTIONS**:
-   - You may ONLY modify code within the exact scope of your current task
-   - Before editing ANY file outside the immediate scope: **STOP and ask permission**
-   - Before making changes that affect other files: **STOP and ask permission**
+"Abstraction" here means: a new trait, struct, helper method, utility function, or module intended to be reused across more than one call site.
 
-5. **MODIFICATION LIMITS**:
-   - Simple in-method fixes: Allowed
-   - Rewriting a file or large sections: **STOP and summarize your plan first**
-   - Adding new public API: **STOP and get approval**
-   - Changing existing signatures: **STOP and get approval**
+1. **Search first.** Use Grep / Glob / Agent(Explore) to find existing types, traits, or modules that already solve the concern. Typical core systems to check: `vulkan/rhi/`, `core/context/`, `core/processors/`, `core/pubsub.rs`, `rhi.rs` in sub-crates.
+2. **Prefer extending a core system** (adding a method to an existing trait or struct) over creating a new one. The RHI, GpuContext, and pubsub are deliberately central — grow them, don't route around them.
+3. **Evaluate benefits vs drawbacks explicitly.** Write down: what problem does this solve that existing abstractions don't, what is the coupling cost, is there a simpler solution (inline the logic, duplicate at two call sites, pass a closure).
+4. **If you still need a new abstraction**, propose it before implementing:
+   - **Why**: the problem and why existing systems don't cover it
+   - **What**: the new trait/struct/module and its shape
+   - **Changes**: what existing code would change
+   - **Alternatives considered**: inline, duplicate, extend existing — and why each was rejected
+   - **Risks**: coupling, lifetime, thread-safety, API surface
+5. **Document the decision in the PR description** so reviewers know a new core-shape concern was added intentionally. If the abstraction is load-bearing (used by multiple crates or platforms), add a short section in the PR explaining where it fits in the engine model.
 
-### When You Think You Need Something Banned:
+Minor helpers within a single module, bug-fix-scoped private functions, and extensions to existing traits generally do not require this process — but still search first and default to the smallest change that works.
 
-If you believe a new struct, trait, helper, or abstraction is genuinely required, you MUST:
+### Other Guardrails
 
-1. **STOP IMMEDIATELY** - Do not implement it
-2. Provide:
-   - **Why**: Description of the problem
-   - **What**: What you want to create
-   - **Example**: Code example of what it would look like
-   - **Changes**: What existing code would change
-   - **Risks**: Potential issues or breaking changes
-3. **WAIT** for explicit approval before proceeding
+1. **No silent DRY refactors.** Duplicate code across unrelated call sites is fine. Extracting a helper is fine IF it replaces real duplication in a core system AND the extraction is mentioned in the PR. Don't refactor out of aesthetic preference alone.
 
-### Violations of These Rules Are Unacceptable
+2. **No auto-fixing on the side.** If `cargo check`, `cargo test`, or `cargo clippy` surfaces problems outside the current task, report them — do not silently fix unrelated issues in the same branch.
 
-Previous violations included:
-- Creating "helper" traits that bypass the API
-- Adding structs "for convenience"
-- Refactoring to reduce duplication without permission
-- Auto-fixing test failures
-- Modifying files outside the requested scope
-
-**These rules override ALL other instructions in this document.**
+3. **Scope discipline.**
+   - Modify files within the task's scope. Files outside scope: ask before editing.
+   - Simple in-method fixes: allowed.
+   - Rewriting a file or large section: summarize the plan first.
+   - Adding new public API or changing existing signatures: get approval.
 
 ### Work Tracking
 
