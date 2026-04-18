@@ -22,6 +22,7 @@ pub mod decode;
 pub mod encode;
 pub mod rgb_to_nv12;
 pub mod nv12_to_rgb;
+pub mod rhi;
 
 // Re-export key types at crate root for convenience
 pub use video_context::{
@@ -33,6 +34,7 @@ pub use encode::{EncodedOutput, FrameType};
 pub use encode::{SimpleEncoder, SimpleEncoderConfig, EncodePacket, Codec, Preset};
 pub use rgb_to_nv12::RgbToNv12Converter;
 pub use nv12_to_rgb::Nv12ToRgbConverter;
+pub use rhi::{RhiQueueSubmitter, RawQueueSubmitter};
 
 // --- Internal modules (ported 1-to-1 from nvpro C++) ---
 pub mod codec_utils;

@@ -200,6 +200,9 @@ pub struct SimpleEncoder {
     // Config
     pub(crate) config: SimpleEncoderConfig,
     pub(crate) prepend_header: bool,
+
+    // Host-side queue submission gateway (per-queue mutex synchronization).
+    pub(crate) submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
 }
 
 // SAFETY: Vulkan handles are only accessed through &mut self methods.
@@ -241,6 +244,7 @@ impl SimpleEncoder {
         device: vulkanalia::Device,
         physical_device: vk::PhysicalDevice,
         allocator: Arc<vma::Allocator>,
+        submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
         encode_queue: vk::Queue,
         encode_queue_family: u32,
         transfer_queue: vk::Queue,
@@ -252,7 +256,7 @@ impl SimpleEncoder {
 
         unsafe {
             Self::create_from_external(
-                config, instance, device, physical_device, allocator,
+                config, instance, device, physical_device, allocator, submitter,
                 encode_queue, encode_queue_family,
                 transfer_queue, transfer_queue_family,
                 compute_queue, compute_queue_family,

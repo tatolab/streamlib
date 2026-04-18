@@ -187,6 +187,8 @@ impl SimpleEncoder {
         let gop = config.to_gop_structure();
         let prepend_header = config.effective_prepend_header();
 
+        let submitter = crate::rhi::RawQueueSubmitter::new(device.clone());
+
         let mut this = SimpleEncoder {
             _entry: entry,
             _instance: instance.clone(),
@@ -249,6 +251,7 @@ impl SimpleEncoder {
             cached_header: Vec::new(),
             config,
             prepend_header,
+            submitter,
         };
 
         // Configure encoder (creates video session, DPB, etc.)
@@ -418,6 +421,7 @@ impl SimpleEncoder {
         device: vulkanalia::Device,
         physical_device: vk::PhysicalDevice,
         allocator: Arc<vma::Allocator>,
+        submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
         encode_queue: vk::Queue,
         encode_queue_family: u32,
         transfer_queue: vk::Queue,
@@ -509,6 +513,7 @@ impl SimpleEncoder {
             cached_header: Vec::new(),
             config,
             prepend_header,
+            submitter,
         };
 
         // Configure encoder (creates video session, DPB, etc.) — same as create_internal
@@ -773,11 +778,12 @@ impl SimpleEncoder {
 
         // Submit transfer
         let submit = vk::SubmitInfo::builder()
-            .command_buffers(std::slice::from_ref(&self.transfer_cb));
+            .command_buffers(std::slice::from_ref(&self.transfer_cb))
+            .build();
 
         self.device.reset_fences(&[self.transfer_fence])?;
-        self.device
-            .queue_submit(self.transfer_queue, &[submit], self.transfer_fence)?;
+        self.submitter
+            .submit_to_queue_legacy(self.transfer_queue, &[submit], self.transfer_fence)?;
         self.device
             .wait_for_fences(&[self.transfer_fence], true, u64::MAX)?;
 
@@ -829,6 +835,7 @@ impl SimpleEncoder {
                 self.compute_queue,
                 self.encode_queue_family,
                 codec_flag,
+                self.submitter.clone(),
             )?;
             self.rgb_to_nv12 = Some(converter);
         }

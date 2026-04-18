@@ -1148,10 +1148,13 @@ impl SimpleEncoder {
 
         // --- Submit to queue ---
         let command_buffers = [self.command_buffer];
-        let submit_info = vk::SubmitInfo::builder().command_buffers(&command_buffers);
+        let submit_info = vk::SubmitInfo::builder()
+            .command_buffers(&command_buffers)
+            .build();
 
         device.reset_fences(&[self.fence])?;
-        device.queue_submit(self.encode_queue, &[submit_info], self.fence)?;
+        self.submitter
+            .submit_to_queue_legacy(self.encode_queue, &[submit_info], self.fence)?;
         device.wait_for_fences(&[self.fence], true, u64::MAX)?;
 
         // --- Query encode feedback ---

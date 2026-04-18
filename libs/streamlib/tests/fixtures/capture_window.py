@@ -1,4 +1,5 @@
-#!/usr/bin/env python3
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
 """Capture a specific X11 window by ID to a PNG file.
 
 Usage: capture_window.py <window_id> <output.png>

@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: vulkan-video synchronized queue submission via VulkanDevice
-status: pending
+status: in_review
 description: Route SimpleEncoder/SimpleDecoder queue_submit() calls through VulkanDevice's mutex-protected submit_to_queue() methods. Fixes release build SIGSEGV.
 github_issue: 277
 dependencies:
