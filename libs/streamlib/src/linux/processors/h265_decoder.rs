@@ -113,19 +113,6 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }
 
-            // Dump raw decoded NV12 + encoded bitstream for PSNR verification.
-            {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
-                    .open("/tmp/streamlib_decoded_nv12.raw") {
-                    let _ = f.write_all(src);
-                }
-                if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true)
-                    .open("/tmp/streamlib_encoded.h265") {
-                    let _ = f.write_all(&encoded.data);
-                }
-            }
-
             let timestamp_ns = encoded.timestamp_ns.clone();
 
             let video_frame = Videoframe {

@@ -106,6 +106,10 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
                 StreamError::Runtime(format!("Failed to create H.264 encoder: {e}"))
             })?;
 
+            // Wait for all device operations to complete before other processors
+            // start submitting work. The encoder's configure() creates video session,
+            // DPB images, and command pools — concurrent Vulkan operations from other
+            // threads during this window crash the NVIDIA driver.
             unsafe { vulkan_device.device().device_wait_idle() }.map_err(|e| {
                 StreamError::GpuError(format!("device_wait_idle failed: {e}"))
             })?;
@@ -124,7 +128,6 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             .as_mut()
             .ok_or_else(|| StreamError::Runtime("H.264 encoder not initialized".into()))?;
 
-        // Resolve Videoframe to GPU texture — same device, zero-copy path.
         let texture = gpu_ctx.resolve_videoframe_texture(&frame)?;
         let image_view = texture.inner.image_view().map_err(|e| {
             StreamError::GpuError(format!("Failed to get image view: {e}"))
