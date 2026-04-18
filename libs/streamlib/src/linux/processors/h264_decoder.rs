@@ -104,19 +104,25 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
 
             // Decoded frames come back as RGBA (GPU NV12→RGBA via Nv12ToRgbConverter).
             let rgba_size = (width * height * 4) as usize;
+            let src = &decoded.data[..rgba_size.min(decoded.data.len())];
+
+            // Write RGBA to a pixel buffer. The texture cache resolves pixel
+            // buffers as textures on demand (buffer→image upload in GpuContext).
             let (pool_id, pixel_buffer) =
                 gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
-
             let dst_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
-            let src = &decoded.data[..rgba_size.min(decoded.data.len())];
             unsafe {
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }
 
+            // Register as texture by uploading pixel buffer to GPU texture.
+            let surface_id = pool_id.to_string();
+            gpu_ctx.upload_pixel_buffer_as_texture(&surface_id, &pixel_buffer, width, height)?;
+
             let timestamp_ns = encoded.timestamp_ns.clone();
 
             let video_frame = Videoframe {
-                surface_id: pool_id.to_string(),
+                surface_id,
                 width,
                 height,
                 timestamp_ns,

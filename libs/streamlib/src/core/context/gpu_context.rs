@@ -553,11 +553,46 @@ impl GpuContext {
         format: TextureFormat,
     ) -> Result<(String, StreamTexture)> {
         let desc = TextureDescriptor::new(width, height, format)
-            .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
+            .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST);
         let texture = self.device.create_texture(&desc)?;
         let id = uuid::Uuid::new_v4().to_string();
         self.register_texture(&id, texture.clone());
         Ok((id, texture))
+    }
+
+    /// Upload a pixel buffer's contents to a GPU texture and register it in the texture cache.
+    ///
+    /// Copies the host-visible pixel buffer data to a device-local texture via
+    /// vkCmdCopyBufferToImage, then registers the texture so display/encoder
+    /// consumers can resolve it by surface_id.
+    #[cfg(target_os = "linux")]
+    pub fn upload_pixel_buffer_as_texture(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &crate::core::rhi::RhiPixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+
+        let desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
+            .with_usage(TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING);
+        let texture = self.device.create_texture(&desc)?;
+
+        unsafe {
+            let image = texture.inner.image().ok_or_else(|| {
+                crate::core::StreamError::GpuError("Texture has no VkImage".into())
+            })?;
+            self.device.inner.upload_buffer_to_image(
+                pixel_buffer.buffer_ref().inner.buffer(),
+                image,
+                width,
+                height,
+            )?;
+        }
+
+        self.register_texture(surface_id, texture);
+        Ok(())
     }
 
     /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
