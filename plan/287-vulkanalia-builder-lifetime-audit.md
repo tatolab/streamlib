@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Vulkanalia builder lifetime audit across RHI and processors
-status: pending
+status: completed
 description: Audit every `.build()` + inline slice pattern in camera/display/vulkan-video/RHI and bind temporaries to locals so the driver sees valid memory.
 github_issue: 287
 adapters:

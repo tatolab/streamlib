@@ -2,7 +2,7 @@
 whoami: amos
 name: Retest camera + encoder + display roundtrip after Vulkan cleanup
 status: pending
-description: Rollup retest that supersedes #279. Run the full matrix after #287-#292 land and confirm release SIGSEGV and Cam Link OOM are both gone.
+description: Rollup retest that supersedes #279. Run the full matrix after #287-#292 and #296 land and confirm release SIGSEGV and Cam Link OOM are both gone.
 github_issue: 294
 dependencies:
   - "down:Vulkanalia builder lifetime audit across RHI and processors"
@@ -11,6 +11,7 @@ dependencies:
   - "down:VMA bind-buffer-memory type mismatch"
   - "down:vkGetDeviceQueue called with unexposed family"
   - "down:Cam Link encoder ERROR_OUT_OF_DEVICE_MEMORY in debug"
+  - "down:Display render_finished semaphore must be per-swapchain-image"
 adapters:
   github: builtin
 ---
