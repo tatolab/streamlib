@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Camera ring textures missing TRANSFER_SRC_BIT
-status: pending
+status: completed
 description: Add `TextureUsages::COPY_SRC` to the camera ring texture descriptor so the cmd_copy_image_to_buffer path is spec-valid.
 github_issue: 288
 adapters:
