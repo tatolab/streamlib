@@ -3,15 +3,16 @@
 
 // Linux MP4 Writer Processor
 //
-// Accumulates encoded H.264/H.265 NAL units during processing, then on
-// teardown writes a raw bitstream file and muxes it into an MP4 container
-// with a silent audio track via ffmpeg. The silent audio track makes the
-// MP4 compatible with platforms that require audio (e.g., Telegram).
+// Accepts decoded Videoframe (raw RGBA pixels), pipes them to ffmpeg for
+// encoding + muxing into an MP4 container with a silent audio track.
+// The writer knows nothing about codecs — ffmpeg handles encoding.
 
-use crate::_generated_::Encodedvideoframe;
+use crate::_generated_::Videoframe;
+use crate::core::context::GpuContext;
 use crate::core::{Result, RuntimeContext, StreamError};
 
 use std::io::Write;
+use std::process::{Child, Command, Stdio};
 
 // ============================================================================
 // PROCESSOR
@@ -19,130 +20,147 @@ use std::io::Write;
 
 #[crate::processor("com.streamlib.linux_mp4_writer")]
 pub struct LinuxMp4WriterProcessor {
-    /// Accumulated raw bitstream (NAL units in Annex B format).
-    bitstream: Vec<u8>,
+    /// GPU context for resolving Videoframe pixel buffers.
+    gpu_context: Option<GpuContext>,
+
+    /// ffmpeg child process (spawned on first frame).
+    ffmpeg_process: Option<Child>,
 
     /// Frames received counter.
     frames_received: u64,
-
-    /// FPS from first encoded frame (overrides config if present).
-    frame_derived_fps: Option<u32>,
 }
 
 impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
-    async fn setup(&mut self, _ctx: RuntimeContext) -> Result<()> {
+    async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
+        self.gpu_context = Some(ctx.gpu.clone());
         tracing::info!(
-            "[LinuxMp4Writer] Initialized (output: {}, fps: {}, codec: {})",
+            "[LinuxMp4Writer] Initialized (output: {}, config fps: {})",
             self.config.output_path,
             self.config.fps,
-            self.config.codec.as_deref().unwrap_or("h264")
         );
         Ok(())
     }
 
     async fn teardown(&mut self) -> Result<()> {
-        tracing::info!(
-            frames = self.frames_received,
-            bitstream_bytes = self.bitstream.len(),
-            "[LinuxMp4Writer] Muxing to MP4..."
-        );
+        if let Some(mut child) = self.ffmpeg_process.take() {
+            // Close stdin to signal ffmpeg that input is done.
+            drop(child.stdin.take());
 
-        if self.bitstream.is_empty() {
-            tracing::warn!("[LinuxMp4Writer] No frames received, skipping MP4 creation");
-            return Ok(());
-        }
+            let output = child.wait_with_output().map_err(|e| {
+                StreamError::Runtime(format!("Failed to wait for ffmpeg: {e}"))
+            })?;
 
-        let codec = self.config.codec.as_deref().unwrap_or("h264");
-        let extension = match codec {
-            "hevc" | "h265" => "h265",
-            _ => "h264",
-        };
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(StreamError::Runtime(format!(
+                    "ffmpeg exited with status {}: {stderr}", output.status
+                )));
+            }
 
-        // Use frame-derived fps if available (from camera via encoder pass-through),
-        // otherwise fall back to config fps.
-        let fps = self.frame_derived_fps.unwrap_or(self.config.fps);
-        if self.frame_derived_fps.is_some() && self.frame_derived_fps != Some(self.config.fps) {
             tracing::info!(
-                "[LinuxMp4Writer] Using frame-derived fps ({}) instead of config fps ({})",
-                fps, self.config.fps
+                frames = self.frames_received,
+                "[LinuxMp4Writer] MP4 written to {}",
+                self.config.output_path
             );
+        } else {
+            tracing::warn!("[LinuxMp4Writer] No frames received, skipping MP4 creation");
         }
 
-        // Write raw bitstream to temp file.
-        let raw_path = std::env::temp_dir().join(format!("streamlib_mp4writer.{extension}"));
-        {
-            let mut raw_file = std::fs::File::create(&raw_path).map_err(|e| {
-                StreamError::Runtime(format!("Failed to create temp bitstream file: {e}"))
-            })?;
-            raw_file.write_all(&self.bitstream).map_err(|e| {
-                StreamError::Runtime(format!("Failed to write bitstream: {e}"))
-            })?;
-        }
-
-        let duration_secs = self.config.duration_secs.unwrap_or(
-            (self.frames_received as u32).checked_div(fps).unwrap_or(10)
-        );
-
-        // Mux to MP4 with silent audio track via ffmpeg.
-        let status = std::process::Command::new("ffmpeg")
-            .args([
-                "-y",
-                "-fflags", "+genpts",
-                "-framerate", &fps.to_string(),
-                "-i", raw_path.to_str().unwrap(),
-                "-f", "lavfi",
-                "-t", &duration_secs.to_string(),
-                "-i", &format!("anullsrc=r=48000:cl=stereo:d={duration_secs}"),
-                "-c:v", "copy",
-                "-r", &fps.to_string(),
-                "-c:a", "aac",
-                "-shortest",
-                "-movflags", "+faststart",
-                &self.config.output_path,
-            ])
-            .output()
-            .map_err(|e| StreamError::Runtime(format!("Failed to run ffmpeg: {e}")))?;
-
-        let _ = std::fs::remove_file(&raw_path);
-
-        if !status.status.success() {
-            let stderr = String::from_utf8_lossy(&status.stderr);
-            return Err(StreamError::Runtime(format!(
-                "ffmpeg MP4 mux failed: {stderr}"
-            )));
-        }
-
-        tracing::info!(
-            "[LinuxMp4Writer] MP4 written to {}",
-            self.config.output_path
-        );
-
+        self.gpu_context.take();
         Ok(())
     }
 
     fn process(&mut self) -> Result<()> {
-        if !self.inputs.has_data("encoded_video_in") {
+        if !self.inputs.has_data("video_in") {
             return Ok(());
         }
-        let frame: Encodedvideoframe = self.inputs.read("encoded_video_in")?;
+        let frame: Videoframe = self.inputs.read("video_in")?;
 
-        // Capture fps from the first encoded frame (set by camera via encoder pass-through).
-        if self.frame_derived_fps.is_none() {
-            if let Some(fps) = frame.fps {
-                tracing::info!("[LinuxMp4Writer] Using fps from encoded frame: {}", fps);
-                self.frame_derived_fps = Some(fps);
+        let gpu_ctx = self
+            .gpu_context
+            .as_ref()
+            .ok_or_else(|| StreamError::Runtime("GPU context not initialized".into()))?;
+
+        // Resolve Videoframe to pixel buffer for raw RGBA data.
+        let pixel_buffer = gpu_ctx.resolve_videoframe_buffer(&frame)?;
+        let raw_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
+        // Use exact frame dimensions for rawvideo (VMA may over-allocate for alignment).
+        let frame_byte_size = (frame.width * frame.height * 4) as usize;
+        let raw_data = unsafe { std::slice::from_raw_parts(raw_ptr, frame_byte_size) };
+
+        // Lazy init: spawn ffmpeg on first frame so we know width/height/fps.
+        if self.ffmpeg_process.is_none() {
+            let fps = frame.fps.unwrap_or(self.config.fps);
+            let width = frame.width;
+            let height = frame.height;
+
+            tracing::info!(
+                "[LinuxMp4Writer] First frame: {}x{}, {}fps{} — spawning ffmpeg",
+                width, height, fps,
+                if frame.fps.is_some() { " from camera" } else { " from config" }
+            );
+
+            let duration_secs = self.config.duration_secs.map(|d| d.to_string());
+            let fps_str = fps.to_string();
+            let size_str = format!("{width}x{height}");
+
+            let mut args: Vec<&str> = vec![
+                "-y",
+                "-f", "rawvideo",
+                "-pix_fmt", "rgba",
+                "-s", &size_str,
+                "-r", &fps_str,
+                "-i", "pipe:0",
+            ];
+
+            // Silent audio track — use fixed duration if configured, otherwise
+            // -shortest will trim to video length when stdin closes.
+            if let Some(ref dur) = duration_secs {
+                args.extend_from_slice(&["-f", "lavfi", "-t", dur,
+                    "-i", "anullsrc=r=48000:cl=stereo"]);
+            } else {
+                args.extend_from_slice(&["-f", "lavfi",
+                    "-i", "anullsrc=r=48000:cl=stereo"]);
             }
+
+            args.extend_from_slice(&[
+                "-c:v", "mpeg4",
+                "-q:v", "5",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-shortest",
+                "-movflags", "+faststart",
+                &self.config.output_path,
+            ]);
+
+            let child = Command::new("ffmpeg")
+                .args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| StreamError::Runtime(format!("Failed to spawn ffmpeg: {e}")))?;
+
+            self.ffmpeg_process = Some(child);
         }
 
-        self.bitstream.extend_from_slice(&frame.data);
+        // Write raw RGBA frame to ffmpeg's stdin.
+        let child = self.ffmpeg_process.as_mut().unwrap();
+        let stdin = child.stdin.as_mut().ok_or_else(|| {
+            StreamError::Runtime("ffmpeg stdin not available".into())
+        })?;
+
+        stdin.write_all(raw_data).map_err(|e| {
+            StreamError::Runtime(format!("Failed to write frame to ffmpeg: {e}"))
+        })?;
+
         self.frames_received += 1;
 
         if self.frames_received == 1 {
-            tracing::info!("[LinuxMp4Writer] First encoded frame received");
+            tracing::info!("[LinuxMp4Writer] First frame written to ffmpeg");
         } else if self.frames_received % 300 == 0 {
             tracing::info!(
                 frames = self.frames_received,
-                bytes = self.bitstream.len(),
                 "[LinuxMp4Writer] Progress"
             );
         }

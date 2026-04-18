@@ -296,7 +296,7 @@ processors:
 
   - name: com.streamlib.linux_mp4_writer
     version: 1.0.0
-    description: "Writes encoded video to MP4 via ffmpeg mux with silent audio track"
+    description: "Writes video frames to MP4 via ffmpeg encode + mux with silent audio track"
     execution: reactive
     runtime:
       language: rust
@@ -304,11 +304,11 @@ processors:
       name: config
       schema: com.streamlib.linux_mp4_writer.config@1.0.0
     inputs:
-      - name: encoded_video_in
-        schema: com.tatolab.encodedvideoframe@1.0.0
-        description: Encoded video frames (H.264/H.265 NAL units) to write
-        read_mode: read_next_in_order
-        buffer_size: 16
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0
+        description: Decoded video frames (raw pixels) to encode and write
+        read_mode: skip_to_latest
+        buffer_size: 4
 
   # === Codecs ===
 

@@ -1,12 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Vulkan Video Live Encode Pipeline
+//! Vulkan Video Encode/Decode Roundtrip Pipeline
 //!
 //! Captures from a V4L2 camera (vivid virtual device or real camera),
-//! encodes via Vulkan Video hardware, and writes to MP4.
+//! encodes via Vulkan Video hardware, decodes back, and writes the
+//! decoded frames to MP4 via ffmpeg.
 //!
-//!   CameraProcessor → H264/H265 Encoder → LinuxMp4Writer
+//!   CameraProcessor → Encoder → Decoder → MP4Writer
 //!
 //! Usage:
 //!   cargo run -p vulkan-video-roundtrip --release -- h265 [device] [seconds]
@@ -14,7 +15,9 @@
 
 use streamlib::{
     input, output,
-    CameraProcessor, H264EncoderProcessor, H265EncoderProcessor,
+    CameraProcessor,
+    H264EncoderProcessor, H265EncoderProcessor,
+    H264DecoderProcessor, H265DecoderProcessor,
     LinuxMp4WriterProcessor, Result, StreamRuntime,
 };
 
@@ -28,7 +31,7 @@ fn main() -> Result<()> {
     let fps: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(60);
     let output_path = format!("/tmp/streamlib_live_{codec}.mp4");
 
-    println!("=== Vulkan Video Live {} Encode ===", codec.to_uppercase());
+    println!("=== Vulkan Video {} Roundtrip ===", codec.to_uppercase());
     println!("Camera:   {device}");
     println!("Output:   {output_path}");
     println!("FPS:      {fps}");
@@ -63,18 +66,29 @@ fn main() -> Result<()> {
     };
     println!("+ {}Encoder: {encoder}", codec.to_uppercase());
 
-    // --- MP4 Writer ---
+    // --- Decoder: Vulkan Video hardware decode (roundtrip verification) ---
+    let decoder = if is_h265 {
+        runtime.add_processor(H265DecoderProcessor::node(
+            H265DecoderProcessor::Config::default(),
+        ))?
+    } else {
+        runtime.add_processor(H264DecoderProcessor::node(
+            H264DecoderProcessor::Config::default(),
+        ))?
+    };
+    println!("+ {}Decoder: {decoder}", codec.to_uppercase());
+
+    // --- MP4 Writer: takes decoded Videoframe, ffmpeg encodes + muxes ---
     let mp4_writer = runtime.add_processor(LinuxMp4WriterProcessor::node(
         LinuxMp4WriterProcessor::Config {
             output_path: output_path.clone(),
             fps,
-            codec: Some(if is_h265 { "hevc".into() } else { "h264".into() }),
             duration_secs: Some(duration_secs),
         },
     ))?;
     println!("+ LinuxMp4Writer: {mp4_writer}");
 
-    // --- Wire ---
+    // --- Wire: Camera → Encoder → Decoder → MP4Writer ---
     if is_h265 {
         runtime.connect(
             output::<CameraProcessor::OutputLink::video>(&camera),
@@ -82,7 +96,11 @@ fn main() -> Result<()> {
         )?;
         runtime.connect(
             output::<H265EncoderProcessor::OutputLink::encoded_video_out>(&encoder),
-            input::<LinuxMp4WriterProcessor::InputLink::encoded_video_in>(&mp4_writer),
+            input::<H265DecoderProcessor::InputLink::encoded_video_in>(&decoder),
+        )?;
+        runtime.connect(
+            output::<H265DecoderProcessor::OutputLink::video_out>(&decoder),
+            input::<LinuxMp4WriterProcessor::InputLink::video_in>(&mp4_writer),
         )?;
     } else {
         runtime.connect(
@@ -91,10 +109,14 @@ fn main() -> Result<()> {
         )?;
         runtime.connect(
             output::<H264EncoderProcessor::OutputLink::encoded_video_out>(&encoder),
-            input::<LinuxMp4WriterProcessor::InputLink::encoded_video_in>(&mp4_writer),
+            input::<H264DecoderProcessor::InputLink::encoded_video_in>(&decoder),
+        )?;
+        runtime.connect(
+            output::<H264DecoderProcessor::OutputLink::video_out>(&decoder),
+            input::<LinuxMp4WriterProcessor::InputLink::video_in>(&mp4_writer),
         )?;
     }
-    println!("\nPipeline: camera -> encoder -> mp4_writer");
+    println!("\nPipeline: camera -> encoder -> decoder -> mp4_writer");
 
     // --- Run for duration then stop ---
     println!("Starting pipeline for {duration_secs}s...\n");
