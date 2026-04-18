@@ -36,61 +36,7 @@ pub struct H264EncoderProcessor {
 impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
     async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
         self.gpu_context = Some(ctx.gpu.clone());
-
-        let width = self.config.width.unwrap_or(1920);
-        let height = self.config.height.unwrap_or(1080);
-
-        let encoder_config = SimpleEncoderConfig {
-            width,
-            height,
-            fps: self.config.fps.unwrap_or(60),
-            codec: Codec::H264,
-            preset: Preset::Medium,
-            streaming: true,
-            idr_interval_secs: self.config.keyframe_interval_seconds.unwrap_or(2.0) as u32,
-            bitrate_bps: self.config.bitrate_bps,
-            prepend_header_to_idr: Some(true),
-            ..Default::default()
-        };
-
-        // Use the RHI's shared Vulkan device — no second device creation.
-        let vulkan_device = &ctx.gpu.device().inner;
-
-        let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
-            StreamError::Runtime("GPU does not support Vulkan Video encode".into())
-        })?;
-        let encode_queue_family = vulkan_device.video_encode_queue_family_index().ok_or_else(|| {
-            StreamError::Runtime("No video encode queue family".into())
-        })?;
-
-        let encoder = SimpleEncoder::from_device(
-            encoder_config,
-            vulkan_device.instance().clone(),
-            vulkan_device.device().clone(),
-            vulkan_device.physical_device(),
-            vulkan_device.allocator().clone(),
-            encode_queue,
-            encode_queue_family,
-            // Use dedicated transfer queue to avoid contention with camera's graphics queue
-            vulkan_device.transfer_queue(),
-            vulkan_device.transfer_queue_family_index(),
-            // Use dedicated compute queue to avoid contention with camera's graphics queue
-            vulkan_device.compute_queue().unwrap_or_else(|| vulkan_device.queue()),
-            vulkan_device.compute_queue_family_index().unwrap_or_else(|| vulkan_device.queue_family_index()),
-        ).map_err(|e| {
-            StreamError::Runtime(format!("Failed to create H.264 encoder: {e}"))
-        })?;
-
-        unsafe { vulkan_device.device().device_wait_idle() }.map_err(|e| {
-            StreamError::GpuError(format!("device_wait_idle failed: {e}"))
-        })?;
-
-        tracing::info!(
-            "[H264Encoder] Initialized ({}x{}, shared RHI device, Vulkan Video hardware)",
-            width, height
-        );
-
-        self.encoder = Some(encoder);
+        tracing::info!("[H264Encoder] Setup complete (encoder deferred to first frame)");
         Ok(())
     }
 
@@ -114,6 +60,64 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             .gpu_context
             .as_ref()
             .ok_or_else(|| StreamError::Runtime("GPU context not initialized".into()))?;
+
+        // Lazy init: create encoder on first frame so we can use the camera's
+        // actual fps for VUI timing and rate control. Falls back to config fps.
+        if self.encoder.is_none() {
+            let width = self.config.width.unwrap_or(1920);
+            let height = self.config.height.unwrap_or(1080);
+            let fps = frame.fps.unwrap_or(self.config.fps.unwrap_or(60));
+
+            let encoder_config = SimpleEncoderConfig {
+                width,
+                height,
+                fps,
+                codec: Codec::H264,
+                preset: Preset::Medium,
+                streaming: true,
+                idr_interval_secs: self.config.keyframe_interval_seconds.unwrap_or(2.0) as u32,
+                bitrate_bps: self.config.bitrate_bps,
+                prepend_header_to_idr: Some(true),
+                ..Default::default()
+            };
+
+            let vulkan_device = &gpu_ctx.device().inner;
+
+            let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
+                StreamError::Runtime("GPU does not support Vulkan Video encode".into())
+            })?;
+            let encode_queue_family = vulkan_device.video_encode_queue_family_index().ok_or_else(|| {
+                StreamError::Runtime("No video encode queue family".into())
+            })?;
+
+            let encoder = SimpleEncoder::from_device(
+                encoder_config,
+                vulkan_device.instance().clone(),
+                vulkan_device.device().clone(),
+                vulkan_device.physical_device(),
+                vulkan_device.allocator().clone(),
+                encode_queue,
+                encode_queue_family,
+                vulkan_device.transfer_queue(),
+                vulkan_device.transfer_queue_family_index(),
+                vulkan_device.compute_queue().unwrap_or_else(|| vulkan_device.queue()),
+                vulkan_device.compute_queue_family_index().unwrap_or_else(|| vulkan_device.queue_family_index()),
+            ).map_err(|e| {
+                StreamError::Runtime(format!("Failed to create H.264 encoder: {e}"))
+            })?;
+
+            unsafe { vulkan_device.device().device_wait_idle() }.map_err(|e| {
+                StreamError::GpuError(format!("device_wait_idle failed: {e}"))
+            })?;
+
+            tracing::info!(
+                "[H264Encoder] Initialized on first frame ({}x{}, {}fps{}, shared RHI device, Vulkan Video hardware)",
+                width, height, fps,
+                if frame.fps.is_some() { " from camera" } else { " from config" }
+            );
+
+            self.encoder = Some(encoder);
+        }
 
         let encoder = self
             .encoder
