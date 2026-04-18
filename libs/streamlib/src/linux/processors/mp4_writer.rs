@@ -86,7 +86,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         // internally — same as any consumer video player.
         let pixel_buffer = gpu_ctx.resolve_videoframe_buffer(&frame)?;
         let raw_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
-        let frame_byte_size = (frame.width * frame.height * 3 / 2) as usize;
+        let frame_byte_size = (frame.width * frame.height * 4) as usize;
         let raw_data = unsafe { std::slice::from_raw_parts(raw_ptr, frame_byte_size) };
 
         // Lazy init: spawn ffmpeg on first frame so we know width/height/fps.
@@ -108,7 +108,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             let mut args: Vec<&str> = vec![
                 "-y",
                 "-f", "rawvideo",
-                "-pix_fmt", "nv12",
+                "-pix_fmt", "rgba",
                 "-s", &size_str,
                 "-r", &fps_str,
                 "-i", "pipe:0",

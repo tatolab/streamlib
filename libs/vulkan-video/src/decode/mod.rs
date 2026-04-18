@@ -315,46 +315,43 @@ impl SimpleDecoder {
             crate::encode::Codec::H265 => vk::VideoCodecOperationFlagsKHR::DECODE_H265,
         };
 
-        // Find a device with a decode queue family
+        // Find a device with a decode queue family + compute-capable queue
         let mut selected_device = None;
         let mut decode_qf = 0u32;
         let mut transfer_qf = 0u32;
+        let mut compute_qf = 0u32;
 
         for &pd in &physical_devices {
             let qf_props = instance.get_physical_device_queue_family_properties(pd);
             let mut found_decode = false;
             let mut found_transfer = false;
+            let mut found_compute = false;
 
-            // First pass: find decode queue family
             for (i, p) in qf_props.iter().enumerate() {
                 if p.queue_flags.contains(vk::QueueFlags::VIDEO_DECODE_KHR) && !found_decode {
                     decode_qf = i as u32;
                     found_decode = true;
-                    // Prefer using the decode queue for transfers too (if it
-                    // supports TRANSFER) to avoid cross-queue synchronization
-                    // complexity. The video decode queue on NVIDIA GPUs
-                    // typically includes TRANSFER capability.
                     if p.queue_flags.contains(vk::QueueFlags::TRANSFER) {
                         transfer_qf = i as u32;
                         found_transfer = true;
                     }
                 }
-            }
-            // Fallback: find a separate transfer queue if decode queue
-            // doesn't support TRANSFER.
-            if !found_transfer {
-                for (i, p) in qf_props.iter().enumerate() {
-                    if p.queue_flags.contains(vk::QueueFlags::TRANSFER)
-                        || p.queue_flags.contains(vk::QueueFlags::GRAPHICS)
-                    {
+                // Find a compute-capable queue (GRAPHICS queues always support COMPUTE)
+                if (p.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    || p.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+                    && !found_compute
+                {
+                    compute_qf = i as u32;
+                    found_compute = true;
+                    // Also use as transfer fallback if needed
+                    if !found_transfer {
                         transfer_qf = i as u32;
                         found_transfer = true;
-                        break;
                     }
                 }
             }
 
-            if found_decode && found_transfer {
+            if found_decode && found_transfer && found_compute {
                 selected_device = Some(pd);
                 break;
             }
@@ -385,18 +382,14 @@ impl SimpleDecoder {
         device_extensions.dedup();
 
         let queue_priorities = [1.0f32];
-        let mut queue_create_infos = vec![
+        let mut queue_family_set = vec![decode_qf];
+        if transfer_qf != decode_qf { queue_family_set.push(transfer_qf); }
+        if !queue_family_set.contains(&compute_qf) { queue_family_set.push(compute_qf); }
+        let queue_create_infos: Vec<_> = queue_family_set.iter().map(|&qf| {
             vk::DeviceQueueCreateInfo::builder()
-                .queue_family_index(decode_qf)
-                .queue_priorities(&queue_priorities),
-        ];
-        if transfer_qf != decode_qf {
-            queue_create_infos.push(
-                vk::DeviceQueueCreateInfo::builder()
-                    .queue_family_index(transfer_qf)
-                    .queue_priorities(&queue_priorities),
-            );
-        }
+                .queue_family_index(qf)
+                .queue_priorities(&queue_priorities)
+        }).collect();
 
         let mut sync2 =
             vk::PhysicalDeviceSynchronization2Features::builder().synchronization2(true);
@@ -412,6 +405,7 @@ impl SimpleDecoder {
 
         let decode_queue = device.get_device_queue(decode_qf, 0);
         let transfer_queue = device.get_device_queue(transfer_qf, 0);
+        let compute_queue_obj = device.get_device_queue(compute_qf, 0);
 
         // 5. Create VideoContext
         let ctx = Arc::new(VideoContext::new(
@@ -476,8 +470,8 @@ impl SimpleDecoder {
             pending_frame: None,
             nv12_converter: None,
             rgba_staging: None,
-            compute_queue: transfer_queue,
-            compute_queue_family: transfer_qf,
+            compute_queue: compute_queue_obj,
+            compute_queue_family: compute_qf,
         })
     }
 
