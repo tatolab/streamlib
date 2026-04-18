@@ -153,6 +153,8 @@ Use the `/refine-name` command to get suggestions that follow this pattern. The 
 
 Tests are the **first gate in automated development**. They must give high confidence the code works before a single example is run. High-quality tests remove the need for manual validation via examples. Examples showcase features; tests prove the system works.
 
+**When end-to-end validation is needed**, follow @docs/testing.md — it specifies which example/fixture and PNG-sampling workflow to use for each scenario (encoder/decoder vs. camera+display-only), and requires reading sample PNGs with the Read tool to confirm frame content.
+
 **Creating, updating, and deleting tests never requires approval. Tests are standard scope for every task, AMOS node, and GitHub issue.**
 
 When creating a task or issue, include testing goals — the types of tests needed and what conditions they cover (positive, negative, error). Not the exact code, just the intent.
@@ -293,6 +295,49 @@ let texture = ctx.gpu.acquire_texture(&desc)?;
 These docs capture surprising, non-obvious behavior — driver bugs,
 library quirks, allocation patterns. Look them up when the trigger
 condition matches what you're seeing.
+
+### How to treat them
+
+Learnings are **notes from past-me to current-me** — a conversation
+across sessions, not a spec. Treat them the way any engineer treats
+their own older notes: useful prior context, **not authority**.
+
+- **Be skeptical.** A learning is a snapshot of what was true when it
+  was written. Drivers update, code refactors, assumptions shift. If
+  reality disagrees with a learning, trust what you observe now.
+- **Always be learning.** You can discover new things a learning
+  missed, realize the problem was framed wrong, or find a simpler /
+  better fix. Prefer the current understanding over the recorded one
+  when they conflict.
+- **Edit freely.** A learning can be updated, rewritten, split, merged,
+  or deleted whenever you have evidence it's out of date, wrong,
+  incomplete, too narrow, too broad, or simply no longer relevant.
+  These edits don't need approval beyond the normal PR review — treat
+  them like any other doc change.
+- **Don't follow them blindly.** A learning telling you "do X" is a
+  hypothesis for your current situation, not a command. Verify the
+  trigger still matches, verify the prescribed fix still applies,
+  and re-derive the conclusion from first principles when the stakes
+  are non-trivial.
+
+### What makes a good learning
+
+- **Specific enough to be useful** — name the symptom precisely (exact
+  error string, exact VUID, exact failure pattern) so a search-match
+  fires when it should.
+- **Not so specific that it rots** — tie the lesson to a concept,
+  constraint, or invariant, not to a single line number or a single
+  file path. If the fix is "chain `VkExportMemoryAllocateInfo` through
+  VMA pools instead of the global allocator config," that's portable;
+  if it's "edit line 137 of `vulkan_device.rs`," it will be wrong
+  within a month. Link to the relevant files for orientation, but
+  make the lesson hold even after the surrounding code moves.
+- **Say *why*, not just *what*** — the underlying driver/library/spec
+  constraint is what survives refactors; the code that happened to
+  trip over it is not.
+
+If you're writing a new learning, aim for something that would still
+make sense if the surrounding files were renamed or restructured.
 
 - @docs/learnings/nvidia-dma-buf-after-swapchain.md — `VK_ERROR_OUT_OF_DEVICE_MEMORY`
   from `vmaCreateImage`/`vkAllocateMemory` on NVIDIA Linux when a swapchain

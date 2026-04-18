@@ -854,24 +854,10 @@ impl SimpleEncoder {
         rgba_image_view: vk::ImageView,
         timestamp_ns: Option<i64>,
     ) -> Result<Vec<EncodePacket>, VideoError> {
-        // Lazily create the RGB→NV12 converter on first call.
+        // Lazily create the RGB→NV12 converter on first call, unless the caller
+        // pre-allocated it via `prepare_gpu_encode_resources()`.
         if self.rgb_to_nv12.is_none() {
-            let (aligned_w, aligned_h) = self.aligned_extent();
-            let codec_flag = match self.config.codec {
-                Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
-                Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
-            };
-            let converter = crate::rgb_to_nv12::RgbToNv12Converter::new(
-                &self.ctx,
-                aligned_w,
-                aligned_h,
-                self.compute_queue_family,
-                self.compute_queue,
-                self.encode_queue_family,
-                codec_flag,
-                self.submitter.clone(),
-            )?;
-            self.rgb_to_nv12 = Some(converter);
+            self.prepare_gpu_encode_resources_impl()?;
         }
 
         // Run RGB→NV12 conversion on the GPU.

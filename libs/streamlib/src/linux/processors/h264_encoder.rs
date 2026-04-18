@@ -69,7 +69,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
         let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
             ctx.gpu.device().inner.clone();
 
-        let encoder = SimpleEncoder::from_device(
+        let mut encoder = SimpleEncoder::from_device(
             encoder_config,
             vulkan_device.instance().clone(),
             vulkan_device.device().clone(),
@@ -84,6 +84,15 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             vulkan_device.compute_queue_family_index().unwrap_or_else(|| vulkan_device.queue_family_index()),
         ).map_err(|e| {
             StreamError::Runtime(format!("Failed to create H.264 encoder: {e}"))
+        })?;
+
+        // Pre-allocate the RGB→NV12 converter (NV12 DEVICE_LOCAL VkImage + per-plane
+        // views + compute pipeline) now, before the display's swapchain is created.
+        // On NVIDIA Linux, new DEVICE_LOCAL allocations can fail with
+        // ERROR_OUT_OF_DEVICE_MEMORY once a swapchain has been created and the
+        // DMA-BUF budget is consumed (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
+        encoder.prepare_gpu_encode_resources().map_err(|e| {
+            StreamError::Runtime(format!("Failed to pre-allocate H.264 encode resources: {e}"))
         })?;
 
         // Wait for all device operations to complete before other processors

@@ -874,6 +874,20 @@ impl VulkanDevice {
         VulkanTexture::new(self, desc)
     }
 
+    /// Create a non-exportable device-local texture for same-process consumers.
+    ///
+    /// Unlike [`create_texture`], this skips the DMA-BUF export pool and
+    /// allocates from the default VMA pool. Use this for textures that never
+    /// cross process boundaries — NVIDIA Linux caps DMA-BUF exportable
+    /// allocations after swapchain creation, so minimizing exportable
+    /// allocations is important (see `docs/learnings/nvidia-dma-buf-after-swapchain.md`).
+    pub fn create_texture_local(
+        self: &Arc<Self>,
+        desc: &TextureDescriptor,
+    ) -> Result<VulkanTexture> {
+        VulkanTexture::new_device_local(self, desc)
+    }
+
     /// Create a VulkanCommandQueue wrapper for the shared command queue.
     pub fn create_command_queue_wrapper(self: &Arc<Self>) -> VulkanCommandQueue {
         VulkanCommandQueue::new(Arc::clone(self), self.queue, self.queue_family_index)
