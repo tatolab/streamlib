@@ -74,6 +74,14 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
             StreamError::Runtime(format!("Failed to pre-initialize H.264 decoder session: {e}"))
         })?;
 
+        // Pre-allocate the output pixel buffer pool at the codec-aligned height
+        // (multiple of 16) before the display swapchain is created. On NVIDIA
+        // Linux, DMA-BUF exportable buffer allocations can fail with
+        // ERROR_OUT_OF_DEVICE_MEMORY once the swapchain has consumed the
+        // DMA-BUF budget (docs/learnings/nvidia-dma-buf-after-swapchain.md).
+        let (_probe_id, _probe_buffer) =
+            ctx.gpu.acquire_pixel_buffer(1920, 1088, crate::core::rhi::PixelFormat::Rgba32)?;
+
         tracing::info!("[H264Decoder] Initialized (shared RHI device, Vulkan Video hardware)");
 
         self.decoder = Some(decoder);

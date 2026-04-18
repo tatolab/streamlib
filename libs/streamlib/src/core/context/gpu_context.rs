@@ -577,7 +577,11 @@ impl GpuContext {
 
         let desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
             .with_usage(TextureUsages::COPY_DST | TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING);
-        let texture = self.device.create_texture(&desc)?;
+        // Same-process texture cache path — skip the DMA-BUF export pool so
+        // repeated decode-output allocations don't exhaust NVIDIA's DMA-BUF
+        // budget after the display swapchain is created
+        // (docs/learnings/nvidia-dma-buf-after-swapchain.md).
+        let texture = self.device.create_texture_local(&desc)?;
 
         unsafe {
             let image = texture.inner.image().ok_or_else(|| {

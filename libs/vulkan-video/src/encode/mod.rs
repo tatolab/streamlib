@@ -369,6 +369,43 @@ impl SimpleEncoder {
     ) -> Result<Vec<EncodePacket>, VideoError> {
         unsafe { self.encode_image_internal(rgba_image_view, timestamp_ns) }
     }
+
+    /// Eagerly allocate the GPU resources used by [`encode_image`](Self::encode_image).
+    ///
+    /// Creates the RGB→NV12 converter (an NV12 VkImage, per-plane views, compute
+    /// pipeline, command pool/buffer) now instead of on the first `encode_image`
+    /// call. Callers that will feed GPU-resident frames should invoke this
+    /// during setup — before a display swapchain is created — so the NV12 image
+    /// allocation isn't subject to NVIDIA's post-swapchain DMA-BUF budget cap
+    /// (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
+    pub fn prepare_gpu_encode_resources(&mut self) -> Result<(), VideoError> {
+        self.prepare_gpu_encode_resources_impl()
+    }
+
+    pub(crate) fn prepare_gpu_encode_resources_impl(&mut self) -> Result<(), VideoError> {
+        if self.rgb_to_nv12.is_some() {
+            return Ok(());
+        }
+        let (aligned_w, aligned_h) = self.aligned_extent();
+        let codec_flag = match self.config.codec {
+            Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
+            Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
+        };
+        let converter = unsafe {
+            crate::rgb_to_nv12::RgbToNv12Converter::new(
+                &self.ctx,
+                aligned_w,
+                aligned_h,
+                self.compute_queue_family,
+                self.compute_queue,
+                self.encode_queue_family,
+                codec_flag,
+                self.submitter.clone(),
+            )?
+        };
+        self.rgb_to_nv12 = Some(converter);
+        Ok(())
+    }
 }
 
 impl Drop for SimpleEncoder {

@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Cam Link encoder ERROR_OUT_OF_DEVICE_MEMORY in debug
-status: pending
+status: in_review
 description: Debug why the H.264/H.265 encoders fail every process() with OOM when capturing from Cam Link 4K (MMAP+memcpy path) while vivid works.
 github_issue: 292
 adapters:

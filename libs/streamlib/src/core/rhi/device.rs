@@ -162,6 +162,17 @@ impl GpuDevice {
         }
     }
 
+    /// Create a non-exportable, device-local texture for same-process consumers.
+    ///
+    /// Skips the DMA-BUF export pool where applicable. Use for textures that
+    /// never cross process boundaries; reduces pressure on NVIDIA Linux's
+    /// DMA-BUF allocation cap.
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_local(&self, desc: &TextureDescriptor) -> Result<StreamTexture> {
+        let vulkan_texture = self.inner.create_texture_local(desc)?;
+        Ok(StreamTexture::from_vulkan(vulkan_texture))
+    }
+
     /// Get the shared command queue.
     ///
     /// All processors should use this shared queue rather than creating their own.
