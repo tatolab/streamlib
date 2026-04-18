@@ -1225,28 +1225,12 @@ fn capture_thread_loop(
                 }
             }
         } else {
-            // MMAP path: poll with timeout before stream.next() so the
-            // thread can check is_capturing during shutdown. Without this,
-            // stream.next() blocks on V4L2 DQBUF indefinitely and
-            // SA_RESTART prevents SIGTERM from interrupting it.
-            unsafe {
-                let mut pollfd = libc::pollfd {
-                    fd: device_fd,
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                let poll_result = libc::poll(&mut pollfd, 1, 1000);
-                if poll_result == 0 {
-                    continue; // Timeout — check is_capturing and retry
-                }
-                if poll_result < 0 {
-                    if is_capturing.load(Ordering::Acquire) {
-                        eprintln!("[Camera {}] V4L2 poll error (MMAP path)", camera_name);
-                    }
-                    break;
-                }
-            }
-
+            // MMAP path: stream.next() issues VIDIOC_QBUF + VIDIOC_STREAMON on
+            // its first call, then blocks on VIDIOC_DQBUF. set_timeout()
+            // (applied in start()) caps that wait so the thread can observe
+            // is_capturing during shutdown. Do NOT poll the fd before
+            // stream.next() — strict-conformance drivers (v4l2loopback) only
+            // signal POLLIN after STREAMON, so an earlier poll hangs the loop.
             let (buf, meta) = match stream.next() {
                 Ok(frame) => frame,
                 Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
