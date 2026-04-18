@@ -760,7 +760,11 @@ fn capture_thread_loop(
     // budget before the swapchain consumes it.
     // -----------------------------------------------------------------------
     let ring_texture_desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
-        .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
+        .with_usage(
+            TextureUsages::STORAGE_BINDING
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+        );
 
     let mut ring_textures: Vec<StreamTexture> = Vec::with_capacity(RING_TEXTURE_COUNT);
     let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
