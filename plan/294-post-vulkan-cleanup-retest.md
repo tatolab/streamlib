@@ -2,7 +2,7 @@
 whoami: amos
 name: Retest camera + encoder + display roundtrip after Vulkan cleanup
 status: pending
-description: Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, and #303 land and confirm release SIGSEGV and Cam Link OOM are both gone.
+description: Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, #303, #304, #305, and #306 land and confirm release SIGSEGV and Cam Link OOM are both gone.
 github_issue: 294
 dependencies:
   - "down:Vulkanalia builder lifetime audit across RHI and processors"
@@ -15,6 +15,9 @@ dependencies:
   - "down:Encoder src picture profile mismatch"
   - "down:Decoder pool probe uses hard-coded resolution"
   - "down:Camera MMAP path sees 0 frames on v4l2loopback"
+  - "down:Flaky H.265 decoder DEVICE_LOST during setup"
+  - "down:Fixture-based PSNR rig for encoder/decoder roundtrips"
+  - "down:Expose encoder quality_level with real-time default"
 adapters:
   github: builtin
 ---
