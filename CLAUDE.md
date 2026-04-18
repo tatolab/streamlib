@@ -153,6 +153,8 @@ Use the `/refine-name` command to get suggestions that follow this pattern. The 
 
 Tests are the **first gate in automated development**. They must give high confidence the code works before a single example is run. High-quality tests remove the need for manual validation via examples. Examples showcase features; tests prove the system works.
 
+**When end-to-end validation is needed**, follow @docs/testing.md — it specifies which example/fixture and PNG-sampling workflow to use for each scenario (encoder/decoder vs. camera+display-only), and requires reading sample PNGs with the Read tool to confirm frame content.
+
 **Creating, updating, and deleting tests never requires approval. Tests are standard scope for every task, AMOS node, and GitHub issue.**
 
 When creating a task or issue, include testing goals — the types of tests needed and what conditions they cover (positive, negative, error). Not the exact code, just the intent.
