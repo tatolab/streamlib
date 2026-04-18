@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Camera MMAP path sees 0 frames on v4l2loopback
-status: in_review
+status: completed
 description: LinuxCameraProcessor opens /dev/video10 (v4l2loopback) cleanly, logs V4L2 capture started, then its poll loop receives zero frames — while v4l2-ctl and ffmpeg on the same device get frames immediately. Blocks using v4l2loopback + ffmpeg testsrc2 as a deterministic motion fixture.
 github_issue: 303
 adapters:
