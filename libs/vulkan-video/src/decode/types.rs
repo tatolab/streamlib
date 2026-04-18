@@ -241,6 +241,9 @@ pub struct SimpleDecoderConfig {
     pub max_height: u32,
     /// DPB/output mode.
     pub output_mode: DpbOutputMode,
+    /// When true, decoded frames are converted from NV12 to RGBA via GPU
+    /// compute shader before readback. Default false (raw NV12 output).
+    pub rgba_output: bool,
 }
 
 impl Default for SimpleDecoderConfig {
@@ -250,14 +253,15 @@ impl Default for SimpleDecoderConfig {
             max_width: 0,
             max_height: 0,
             output_mode: DpbOutputMode::Coincide,
+            rgba_output: false,
         }
     }
 }
 
-/// A fully decoded video frame with raw NV12 pixel data read back from the GPU.
+/// A fully decoded video frame with raw pixel data read back from the GPU.
 #[derive(Debug, Clone)]
 pub struct SimpleDecodedFrame {
-    /// Raw NV12 data (Y plane followed by interleaved UV plane).
+    /// Raw pixel data (NV12 or RGBA depending on `is_rgba`).
     pub data: Vec<u8>,
     /// Frame width in pixels.
     pub width: u32,
@@ -267,6 +271,9 @@ pub struct SimpleDecodedFrame {
     pub decode_order: u64,
     /// Picture Order Count.
     pub picture_order_count: i32,
+    /// True when `data` contains RGBA pixels (W*H*4 bytes).
+    /// False when `data` contains NV12 pixels (W*H*3/2 bytes).
+    pub is_rgba: bool,
 }
 
 // ---------------------------------------------------------------------------

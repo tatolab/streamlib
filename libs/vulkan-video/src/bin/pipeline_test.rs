@@ -784,6 +784,7 @@ fn main() {
                 max_width: 0,
                 max_height: 0,
                 output_mode: DpbOutputMode::Coincide,
+                rgba_output: false,
             };
 
             match SimpleDecoder::new(dec_config) {

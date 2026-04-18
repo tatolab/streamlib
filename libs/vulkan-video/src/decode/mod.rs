@@ -73,12 +73,12 @@ pub struct SimpleDecoder {
     // Queues
     decode_queue: vk::Queue,
     decode_queue_family: u32,
-    _transfer_queue: vk::Queue,
+    transfer_queue: vk::Queue,
     transfer_queue_family: u32,
 
     // Transfer command pool/buffer/fence (for readback)
     transfer_pool: vk::CommandPool,
-    _transfer_cb: vk::CommandBuffer,
+    transfer_cb: vk::CommandBuffer,
     transfer_fence: vk::Fence,
 
     // NAL parser state
@@ -127,6 +127,14 @@ pub struct SimpleDecoder {
     // Deferred readback: metadata for the frame whose GPU decode is in flight.
     // Drained at the start of the next handle_h265_slice call (or flush).
     pending_frame: Option<PendingFrame>,
+
+    // NV12→RGBA GPU compute converter (created when config.rgba_output is true)
+    nv12_converter: Option<crate::nv12_to_rgb::Nv12ToRgbConverter>,
+    // RGBA staging buffer for readback after GPU conversion
+    rgba_staging: Option<(vk::Buffer, vma::Allocation, u64, *mut u8)>,
+    // Compute/transfer queue info for converter (graphics queue supports compute)
+    compute_queue: vk::Queue,
+    compute_queue_family: u32,
 }
 
 /// Metadata for a frame whose GPU decode has been submitted but not yet read back.
@@ -135,7 +143,7 @@ struct PendingFrame {
     height: u32,
     decode_order: u64,
     poc: i32,
-    _setup_slot: usize,
+    setup_slot: usize,
     _setup_image: vk::Image,
 }
 
@@ -220,10 +228,10 @@ impl SimpleDecoder {
             vk_decoder: None,
             decode_queue,
             decode_queue_family,
-            _transfer_queue: transfer_queue,
+            transfer_queue,
             transfer_queue_family,
             transfer_pool,
-            _transfer_cb: transfer_cb,
+            transfer_cb,
             transfer_fence,
             nal_buffer: Vec::new(),
             cached_vps_nalu: None,
@@ -246,6 +254,10 @@ impl SimpleDecoder {
             h265_dpb_to_slot: [-1i32; HEVC_DPB_SIZE],
             readback_staging: None,
             pending_frame: None,
+            nv12_converter: None,
+            rgba_staging: None,
+            compute_queue: transfer_queue,
+            compute_queue_family: transfer_queue_family,
         })
     }
 
@@ -367,6 +379,7 @@ impl SimpleDecoder {
             vk::KHR_VIDEO_DECODE_QUEUE_EXTENSION.name.as_ptr(),
             codec_ext,
             vk::KHR_SYNCHRONIZATION2_EXTENSION.name.as_ptr(),
+            vk::KHR_PUSH_DESCRIPTOR_EXTENSION.name.as_ptr(),
         ];
         device_extensions.sort();
         device_extensions.dedup();
@@ -435,10 +448,10 @@ impl SimpleDecoder {
             vk_decoder: None,
             decode_queue,
             decode_queue_family: decode_qf,
-            _transfer_queue: transfer_queue,
+            transfer_queue,
             transfer_queue_family: transfer_qf,
             transfer_pool,
-            _transfer_cb: transfer_cb,
+            transfer_cb,
             transfer_fence,
             nal_buffer: Vec::new(),
             cached_vps_nalu: None,
@@ -461,6 +474,10 @@ impl SimpleDecoder {
             h265_dpb_to_slot: [-1i32; HEVC_DPB_SIZE],
             readback_staging: None,
             pending_frame: None,
+            nv12_converter: None,
+            rgba_staging: None,
+            compute_queue: transfer_queue,
+            compute_queue_family: transfer_qf,
         })
     }
 
@@ -796,6 +813,37 @@ impl SimpleDecoder {
         Ok(())
     }
 
+    /// Ensure the RGBA staging buffer is large enough for W*H*4 readback.
+    fn ensure_rgba_staging(&mut self, width: u32, height: u32) -> Result<(), VideoError> {
+        let total = (width as u64) * (height as u64) * 4;
+
+        if self.rgba_staging.as_ref().map_or(true, |s| s.2 < total) {
+            if let Some((buf, alloc, _, _)) = self.rgba_staging.take() {
+                unsafe { self.ctx.allocator().destroy_buffer(buf, alloc); }
+            }
+            let buf_info = vk::BufferCreateInfo::builder()
+                .size(total)
+                .usage(vk::BufferUsageFlags::TRANSFER_DST)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let alloc_opts = vma::AllocationOptions {
+                flags: vma::AllocationCreateFlags::MAPPED
+                    | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+                required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                    | vk::MemoryPropertyFlags::HOST_COHERENT,
+                ..Default::default()
+            };
+            let (buf, alloc) = unsafe {
+                self.ctx.allocator()
+                    .create_buffer(buf_info, &alloc_opts)
+                    .map_err(VideoError::from)?
+            };
+            let info = self.ctx.allocator().get_allocation_info(alloc);
+            self.rgba_staging = Some((buf, alloc, total, info.pMappedData as *mut u8));
+        }
+
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Private: Pending frame drain
     // ------------------------------------------------------------------
@@ -812,7 +860,109 @@ impl SimpleDecoder {
             unsafe { vk_dec.wait_for_decode()?; }
         }
 
-        // Read decoded NV12 data from the persistent staging buffer
+        // RGBA path: run NV12→RGBA GPU compute conversion, then readback RGBA
+        if self.nv12_converter.is_some() {
+            let vk_dec = self.vk_decoder.as_ref().ok_or_else(|| {
+                VideoError::BitstreamError("VkVideoDecoder not initialized".into())
+            })?;
+            let dpb_image = vk_dec.dpb_image();
+
+            // Run GPU NV12→RGBA conversion
+            let converter = self.nv12_converter.as_mut().unwrap();
+            let (rgba_img, _) = unsafe {
+                converter.convert(
+                    dpb_image,
+                    pending.setup_slot as u32,
+                    vk::ImageLayout::VIDEO_DECODE_DPB_KHR,
+                )?
+            };
+
+            // Ensure RGBA staging buffer exists
+            self.ensure_rgba_staging(pending.width, pending.height)?;
+            let &(stg_buf, _, stg_size, stg_ptr) = self.rgba_staging.as_ref().unwrap();
+
+            // Copy RGBA image → staging buffer via transfer command buffer
+            unsafe {
+                self.device.reset_command_buffer(
+                    self.transfer_cb,
+                    vk::CommandBufferResetFlags::empty(),
+                ).map_err(VideoError::from)?;
+                self.device.begin_command_buffer(
+                    self.transfer_cb,
+                    &vk::CommandBufferBeginInfo::builder()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+                ).map_err(VideoError::from)?;
+
+                let copy_region = vk::BufferImageCopy {
+                    buffer_offset: 0,
+                    buffer_row_length: 0,
+                    buffer_image_height: 0,
+                    image_subresource: vk::ImageSubresourceLayers {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        mip_level: 0,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    },
+                    image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+                    image_extent: vk::Extent3D {
+                        width: pending.width,
+                        height: pending.height,
+                        depth: 1,
+                    },
+                };
+
+                self.device.cmd_copy_image_to_buffer(
+                    self.transfer_cb,
+                    rgba_img,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    stg_buf,
+                    &[copy_region],
+                );
+
+                self.device.end_command_buffer(self.transfer_cb).map_err(VideoError::from)?;
+                self.device.reset_fences(&[self.transfer_fence]).map_err(VideoError::from)?;
+                let cbs = [self.transfer_cb];
+                let submit_info = vk::SubmitInfo::builder().command_buffers(&cbs);
+                self.device.queue_submit(
+                    self.transfer_queue,
+                    &[submit_info],
+                    self.transfer_fence,
+                ).map_err(VideoError::from)?;
+                self.device.wait_for_fences(
+                    &[self.transfer_fence],
+                    true,
+                    u64::MAX,
+                ).map_err(VideoError::from)?;
+            }
+
+            // Read RGBA data from staging buffer
+            let rgba_size = (pending.width * pending.height * 4) as usize;
+            let read_size = rgba_size.min(stg_size as usize);
+            let mut rgba_data = vec![0u8; read_size];
+            unsafe {
+                ptr::copy_nonoverlapping(stg_ptr, rgba_data.as_mut_ptr(), read_size);
+            }
+
+            // Update DPB slot layout (converter transitions to SHADER_READ_ONLY_OPTIMAL)
+            let vk_dec = self.vk_decoder.as_mut().ok_or_else(|| {
+                VideoError::BitstreamError("VkVideoDecoder not initialized".into())
+            })?;
+            vk_dec.set_dpb_slot_layout(
+                pending.setup_slot,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            );
+
+            return Ok(Some(SimpleDecodedFrame {
+                data: rgba_data,
+                width: pending.width,
+                height: pending.height,
+                decode_order: pending.decode_order,
+                picture_order_count: pending.poc,
+                is_rgba: true,
+            }));
+        }
+
+        // NV12 path: read decoded NV12 data from the persistent staging buffer
         let &(_, _, size, ptr) = self.readback_staging.as_ref().ok_or_else(|| {
             VideoError::BitstreamError("No readback staging buffer available".into())
         })?;
@@ -827,6 +977,7 @@ impl SimpleDecoder {
             height: pending.height,
             decode_order: pending.decode_order,
             picture_order_count: pending.poc,
+            is_rgba: false,
         }))
     }
 
@@ -852,7 +1003,15 @@ impl Drop for SimpleDecoder {
         unsafe {
             let _ = self.device.device_wait_idle();
 
-            // Destroy persistent staging buffer
+            // Destroy NV12→RGBA converter (owns its own Vulkan resources)
+            self.nv12_converter.take();
+
+            // Destroy RGBA staging buffer
+            if let Some((buf, alloc, _, _)) = self.rgba_staging.take() {
+                self.ctx.allocator().destroy_buffer(buf, alloc);
+            }
+
+            // Destroy persistent NV12 staging buffer
             if let Some((buf, alloc, _, _)) = self.readback_staging.take() {
                 self.ctx.allocator().destroy_buffer(buf, alloc);
             }

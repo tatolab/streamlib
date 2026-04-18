@@ -82,9 +82,9 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             .ok_or_else(|| StreamError::Runtime("GPU context not initialized".into()))?;
 
         // Resolve Videoframe to pixel buffer for raw RGBA data.
+        // Decoder produces RGBA via GPU NV12→RGBA conversion (W*H*4 bytes).
         let pixel_buffer = gpu_ctx.resolve_videoframe_buffer(&frame)?;
         let raw_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
-        // Use exact frame dimensions for rawvideo (VMA may over-allocate for alignment).
         let frame_byte_size = (frame.width * frame.height * 4) as usize;
         let raw_data = unsafe { std::slice::from_raw_parts(raw_ptr, frame_byte_size) };
 
@@ -126,7 +126,6 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             args.extend_from_slice(&[
                 "-c:v", "mpeg4",
                 "-q:v", "5",
-                "-pix_fmt", "yuv420p",
                 "-c:a", "aac",
                 "-shortest",
                 "-movflags", "+faststart",

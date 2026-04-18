@@ -620,7 +620,8 @@ impl VkVideoDecoder {
         let dpb_count = max_dpb_slots as usize;
         let image_usage = vk::ImageUsageFlags::VIDEO_DECODE_DPB_KHR
             | vk::ImageUsageFlags::VIDEO_DECODE_DST_KHR
-            | vk::ImageUsageFlags::TRANSFER_SRC;
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::SAMPLED;
 
         let mut profile_list = vk::VideoProfileListInfoKHR::builder()
             .profiles(std::slice::from_ref(&self.video_profile));
@@ -1387,6 +1388,17 @@ impl VkVideoDecoder {
     /// Get the DPB slot count.
     pub fn dpb_slot_count(&self) -> usize {
         self.dpb_image_views.len()
+    }
+
+    /// Override the tracked layout for a specific DPB slot.
+    ///
+    /// Used after external operations (e.g. NV12→RGB compute conversion)
+    /// that transition a DPB layer to a different layout. The decoder's
+    /// next barrier will use this as the old layout.
+    pub fn set_dpb_slot_layout(&mut self, slot: usize, layout: vk::ImageLayout) {
+        if slot < self.dpb_slot_layouts.len() {
+            self.dpb_slot_layouts[slot] = layout;
+        }
     }
 
     /// Get the video session handle.

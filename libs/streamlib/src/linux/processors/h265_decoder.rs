@@ -35,6 +35,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
 
         let decoder_config = SimpleDecoderConfig {
             codec: Codec::H265,
+            rgba_output: true,
             ..Default::default()
         };
 
@@ -101,32 +102,15 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             let width = decoded.width;
             let height = decoded.height;
 
+            // Decoded frames come back as RGBA (GPU NV12→RGBA conversion in SimpleDecoder).
+            let rgba_size = (width * height * 4) as usize;
             let (pool_id, pixel_buffer) =
                 gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
 
-            let rgba_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
-            let rgba_size = (width * height * 4) as usize;
-            let rgba_data = unsafe { std::slice::from_raw_parts_mut(rgba_ptr, rgba_size) };
-
-            // NV12 → RGBA conversion (BT.601)
-            let y_plane = &decoded.data[..(width * height) as usize];
-            let uv_plane = &decoded.data[(width * height) as usize..];
-            for row in 0..height {
-                for col in 0..width {
-                    let y_idx = (row * width + col) as usize;
-                    let uv_idx = ((row / 2) * (width / 2) + (col / 2)) as usize * 2;
-                    let y = y_plane[y_idx] as f32;
-                    let u = uv_plane.get(uv_idx).copied().unwrap_or(128) as f32 - 128.0;
-                    let v = uv_plane.get(uv_idx + 1).copied().unwrap_or(128) as f32 - 128.0;
-                    let r = (y + 1.402 * v).clamp(0.0, 255.0) as u8;
-                    let g = (y - 0.344 * u - 0.714 * v).clamp(0.0, 255.0) as u8;
-                    let b = (y + 1.772 * u).clamp(0.0, 255.0) as u8;
-                    let dst = y_idx * 4;
-                    rgba_data[dst] = r;
-                    rgba_data[dst + 1] = g;
-                    rgba_data[dst + 2] = b;
-                    rgba_data[dst + 3] = 255;
-                }
+            let dst_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
+            let src = &decoded.data[..rgba_size.min(decoded.data.len())];
+            unsafe {
+                std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }
 
             let timestamp_ns = encoded.timestamp_ns.clone();

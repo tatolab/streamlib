@@ -568,6 +568,7 @@ fn h265_shared_device_encode_decode_roundtrip() {
         max_width: 0,
         max_height: 0,
         output_mode: DpbOutputMode::Coincide,
+        rgba_output: false,
     };
 
     let mut decoder = SimpleDecoder::from_device(

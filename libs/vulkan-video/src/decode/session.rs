@@ -64,11 +64,24 @@ impl SimpleDecoder {
                 codec_flag,
             )?;
 
-            // Propagate sharing queue families for CONCURRENT DPB access
-            if self.decode_queue_family != self.transfer_queue_family {
-                vk_dec.set_sharing_queue_families(
-                    vec![self.decode_queue_family, self.transfer_queue_family],
-                );
+            // Propagate sharing queue families for CONCURRENT DPB access.
+            // When rgba_output is enabled, include the compute queue family
+            // so the NV12→RGBA converter can sample the DPB image directly.
+            {
+                let mut families = Vec::new();
+                families.push(self.decode_queue_family);
+                if self.transfer_queue_family != self.decode_queue_family {
+                    families.push(self.transfer_queue_family);
+                }
+                if self.config.rgba_output
+                    && self.compute_queue_family != self.decode_queue_family
+                    && !families.contains(&self.compute_queue_family)
+                {
+                    families.push(self.compute_queue_family);
+                }
+                if families.len() > 1 {
+                    vk_dec.set_sharing_queue_families(families);
+                }
             }
 
             let video_fmt = VkParserDetectedVideoFormat {
@@ -96,7 +109,24 @@ impl SimpleDecoder {
         }
 
         self.session_configured = true;
-        info!(width, height, dpb_size, "Session configured");
+
+        // Create NV12→RGBA GPU converter if rgba_output is enabled
+        if self.config.rgba_output {
+            let converter = unsafe {
+                crate::nv12_to_rgb::Nv12ToRgbConverter::new(
+                    &self.ctx,
+                    self.sps_width,
+                    self.sps_height,
+                    self.compute_queue_family,
+                    self.compute_queue,
+                    self.decode_queue_family,
+                )?
+            };
+            self.nv12_converter = Some(converter);
+            info!(width, height, dpb_size, rgba_output = true, "Session configured");
+        } else {
+            info!(width, height, dpb_size, "Session configured");
+        }
 
         Ok(())
     }
