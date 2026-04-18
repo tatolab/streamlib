@@ -709,8 +709,9 @@ impl DisplayEventLoopHandler {
                 .image(swapchain_image)
                 .subresource_range(color_subresource_range)
                 .build();
+            let swapchain_barriers = [swapchain_barrier];
             let dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&[swapchain_barrier])
+                .image_memory_barriers(&swapchain_barriers)
                 .build();
             device.cmd_pipeline_barrier2(command_buffer, &dep);
 
@@ -824,8 +825,9 @@ impl DisplayEventLoopHandler {
                 .subresource_range(color_subresource_range)
                 .build();
 
+            let present_barriers = [present_barrier];
             let post_render_dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&[present_barrier])
+                .image_memory_barriers(&present_barriers)
                 .build();
             device.cmd_pipeline_barrier2(command_buffer, &post_render_dep);
 
@@ -869,11 +871,12 @@ impl DisplayEventLoopHandler {
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
                 .command_buffer(command_buffer)
                 .build();
+            let cmd_infos = [cmd_info];
 
             let submit = vk::SubmitInfo2::builder()
                 .wait_semaphore_infos(&wait_semaphore_infos)
                 .signal_semaphore_infos(&signal_semaphore_infos)
-                .command_buffer_infos(&[cmd_info])
+                .command_buffer_infos(&cmd_infos)
                 .build();
 
             if let Err(e) =

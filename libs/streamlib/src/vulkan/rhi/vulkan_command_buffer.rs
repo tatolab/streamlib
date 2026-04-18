@@ -177,9 +177,11 @@ impl VulkanCommandBuffer {
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
                 .command_buffer(self.command_buffer)
                 .build();
+            let cmd_infos = [cmd_info];
+            let signal_semaphore_infos = [signal_semaphore];
             let submit = vk::SubmitInfo2::builder()
-                .command_buffer_infos(&[cmd_info])
-                .signal_semaphore_infos(&[signal_semaphore])
+                .command_buffer_infos(&cmd_infos)
+                .signal_semaphore_infos(&signal_semaphore_infos)
                 .build();
 
             self.vulkan_device
@@ -239,9 +241,11 @@ impl VulkanCommandBuffer {
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
                 .command_buffer(self.command_buffer)
                 .build();
+            let cmd_infos = [cmd_info];
+            let signal_semaphore_infos = [signal_semaphore];
             let submit = vk::SubmitInfo2::builder()
-                .command_buffer_infos(&[cmd_info])
-                .signal_semaphore_infos(&[signal_semaphore])
+                .command_buffer_infos(&cmd_infos)
+                .signal_semaphore_infos(&signal_semaphore_infos)
                 .build();
 
             self.vulkan_device

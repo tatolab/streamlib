@@ -1210,9 +1210,11 @@ fn capture_thread_loop(
             let frame_num_peek = frame_counter.load(Ordering::Relaxed);
             if frame_num_peek >= RING_TEXTURE_COUNT as u64 {
                 let wait_value = frame_num_peek - (RING_TEXTURE_COUNT as u64 - 1);
+                let wait_semaphores = [camera_timeline_semaphore];
+                let wait_values = [wait_value];
                 let wait_info = vk::SemaphoreWaitInfo::builder()
-                    .semaphores(&[camera_timeline_semaphore])
-                    .values(&[wait_value])
+                    .semaphores(&wait_semaphores)
+                    .values(&wait_values)
                     .build();
                 unsafe {
                     let _ = device.wait_semaphores(&wait_info, u64::MAX);
@@ -1265,9 +1267,11 @@ fn capture_thread_loop(
             let frame_num_peek = frame_counter.load(Ordering::Relaxed);
             if frame_num_peek >= RING_TEXTURE_COUNT as u64 {
                 let wait_value = frame_num_peek - (RING_TEXTURE_COUNT as u64 - 1);
+                let wait_semaphores = [camera_timeline_semaphore];
+                let wait_values = [wait_value];
                 let wait_info = vk::SemaphoreWaitInfo::builder()
-                    .semaphores(&[camera_timeline_semaphore])
-                    .values(&[wait_value])
+                    .semaphores(&wait_semaphores)
+                    .values(&wait_values)
                     .build();
                 unsafe {
                     let _ = device.wait_semaphores(&wait_info, u64::MAX);
@@ -1587,9 +1591,11 @@ fn capture_thread_loop(
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
                 .command_buffer(compute_command_buffer)
                 .build();
+            let cmd_infos = [cmd_info];
+            let signal_semaphore_infos = [signal_semaphore];
             let submit = vk::SubmitInfo2::builder()
-                .command_buffer_infos(&[cmd_info])
-                .signal_semaphore_infos(&[signal_semaphore])
+                .command_buffer_infos(&cmd_infos)
+                .signal_semaphore_infos(&signal_semaphore_infos)
                 .build();
 
             if let Err(e) = vulkan_device.submit_to_queue(queue, &[submit], vk::Fence::null()) {
@@ -1610,9 +1616,11 @@ fn capture_thread_loop(
             }
 
             // Wait for GPU to finish so the pixel buffer is host-readable for IPC
+            let wait_semaphores = [camera_timeline_semaphore];
+            let wait_values = [timeline_signal_value];
             let wait_info = vk::SemaphoreWaitInfo::builder()
-                .semaphores(&[camera_timeline_semaphore])
-                .values(&[timeline_signal_value])
+                .semaphores(&wait_semaphores)
+                .values(&wait_values)
                 .build();
             let _ = device.wait_semaphores(&wait_info, u64::MAX);
         }
