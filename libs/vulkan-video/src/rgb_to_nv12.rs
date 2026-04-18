@@ -241,6 +241,8 @@ impl RgbToNv12Converter {
         // --- 6. Image views ---
 
         // COLOR view for vkCmdEncodeVideoKHR (combined planes).
+        let mut color_view_ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
+            .conversion(ctx.nv12_ycbcr_conversion());
         let nv12_color_view = device.create_image_view(
             &vk::ImageViewCreateInfo::builder()
                 .image(nv12_image)
@@ -252,7 +254,8 @@ impl RgbToNv12Converter {
                     level_count: 1,
                     base_array_layer: 0,
                     layer_count: 1,
-                }),
+                })
+                .push_next(&mut color_view_ycbcr_info),
             None,
         )?;
 

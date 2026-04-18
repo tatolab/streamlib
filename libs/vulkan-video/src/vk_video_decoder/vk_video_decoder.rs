@@ -692,6 +692,9 @@ impl VkVideoDecoder {
         self.dpb_slot_layouts = vec![vk::ImageLayout::UNDEFINED; dpb_count];
         self.dpb_slot_active = vec![false; dpb_count];
 
+        let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
+            .conversion(self.ctx.nv12_ycbcr_conversion());
+
         for i in 0..dpb_count {
             let view_info = vk::ImageViewCreateInfo::builder()
                 .image(self.dpb_image)
@@ -703,7 +706,8 @@ impl VkVideoDecoder {
                     level_count: 1,
                     base_array_layer: i as u32,
                     layer_count: 1,
-                });
+                })
+                .push_next(&mut ycbcr_info);
 
             match unsafe { device.create_image_view(&view_info, None) } {
                 Ok(view) => self.dpb_image_views.push(view),
