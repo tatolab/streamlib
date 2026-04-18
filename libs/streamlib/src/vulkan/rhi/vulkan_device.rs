@@ -4,12 +4,12 @@
 //! Vulkan device implementation for RHI.
 
 use std::ffi::{c_char, CStr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use vulkanalia::prelude::v1_4::*;
-use vulkanalia::vk;
+use vulkanalia::vk::{self, KhrSwapchainExtensionDeviceCommands};
 use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
@@ -66,6 +66,18 @@ pub struct VulkanDevice {
     _dma_buf_image_export_info: Option<Box<vk::ExportMemoryAllocateInfo>>,
     /// Tracks DMA-BUF import-path allocations (raw vkAllocateMemory for import only).
     live_allocation_count: AtomicUsize,
+    /// Per-queue mutex for thread-safe queue submission (Vulkan spec requirement).
+    graphics_queue_mutex: Mutex<()>,
+    /// Per-queue mutex for the dedicated transfer queue.
+    transfer_queue_mutex: Mutex<()>,
+    /// Per-queue mutex for the video encode queue (if available).
+    video_encode_queue_mutex: Mutex<()>,
+    /// Per-queue mutex for the video decode queue (if available).
+    video_decode_queue_mutex: Mutex<()>,
+    /// Per-queue mutex for the dedicated compute queue (if available).
+    compute_queue_mutex: Mutex<()>,
+    /// Device-level mutex for resource creation (video sessions, VMA allocations).
+    device_mutex: Mutex<()>,
 }
 
 impl VulkanDevice {
@@ -681,6 +693,12 @@ impl VulkanDevice {
             #[cfg(target_os = "linux")]
             _dma_buf_image_export_info: dma_buf_image_export_info,
             live_allocation_count: AtomicUsize::new(0),
+            graphics_queue_mutex: Mutex::new(()),
+            transfer_queue_mutex: Mutex::new(()),
+            video_encode_queue_mutex: Mutex::new(()),
+            video_decode_queue_mutex: Mutex::new(()),
+            compute_queue_mutex: Mutex::new(()),
+            device_mutex: Mutex::new(()),
         })
     }
 
@@ -857,8 +875,8 @@ impl VulkanDevice {
     }
 
     /// Create a VulkanCommandQueue wrapper for the shared command queue.
-    pub fn create_command_queue_wrapper(&self) -> VulkanCommandQueue {
-        VulkanCommandQueue::new(self.device.clone(), self.queue, self.queue_family_index)
+    pub fn create_command_queue_wrapper(self: &Arc<Self>) -> VulkanCommandQueue {
+        VulkanCommandQueue::new(Arc::clone(self), self.queue, self.queue_family_index)
     }
 
     /// Get the device name.
@@ -963,6 +981,77 @@ impl VulkanDevice {
     #[allow(dead_code)]
     pub fn compute_queue(&self) -> Option<vk::Queue> {
         self.compute_queue
+    }
+
+    // ---- Thread-safe queue submission ----
+    //
+    // Vulkan requires external synchronization for vkQueueSubmit on the same
+    // VkQueue from multiple threads. NVIDIA's driver also has internal
+    // thread-safety issues during concurrent device-level operations.
+    // These methods acquire per-queue mutexes before submitting.
+
+    /// Look up the mutex that guards a given queue handle.
+    fn mutex_for_queue(&self, queue: vk::Queue) -> &Mutex<()> {
+        if queue == self.queue {
+            &self.graphics_queue_mutex
+        } else if queue == self.transfer_queue {
+            &self.transfer_queue_mutex
+        } else if self.video_encode_queue == Some(queue) {
+            &self.video_encode_queue_mutex
+        } else if self.video_decode_queue == Some(queue) {
+            &self.video_decode_queue_mutex
+        } else if self.compute_queue == Some(queue) {
+            &self.compute_queue_mutex
+        } else {
+            // Unknown queue — fall back to graphics mutex as safety net
+            &self.graphics_queue_mutex
+        }
+    }
+
+    /// Submit command buffers to a queue with per-queue mutex synchronization.
+    pub unsafe fn submit_to_queue(
+        &self,
+        queue: vk::Queue,
+        submits: &[vk::SubmitInfo2],
+        fence: vk::Fence,
+    ) -> Result<()> {
+        let _lock = self.mutex_for_queue(queue).lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.device
+            .queue_submit2(queue, submits, fence)
+            .map(|_| ())
+            .map_err(|e| StreamError::GpuError(format!("queue_submit2 failed: {e}")))
+    }
+
+    /// Submit command buffers using legacy Vulkan 1.0 API with synchronization.
+    pub unsafe fn submit_to_queue_legacy(
+        &self,
+        queue: vk::Queue,
+        submits: &[vk::SubmitInfo],
+        fence: vk::Fence,
+    ) -> Result<()> {
+        let _lock = self.mutex_for_queue(queue).lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.device
+            .queue_submit(queue, submits, fence)
+            .map(|_| ())
+            .map_err(|e| StreamError::GpuError(format!("queue_submit failed: {e}")))
+    }
+
+    /// Present to a queue with per-queue mutex synchronization.
+    pub unsafe fn present_to_queue(
+        &self,
+        queue: vk::Queue,
+        present_info: &vk::PresentInfoKHR,
+    ) -> std::result::Result<vk::SuccessCode, vk::ErrorCode> {
+        let _lock = self.mutex_for_queue(queue).lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.device.queue_present_khr(queue, present_info)
+    }
+
+    /// Acquire the device-level mutex for resource creation operations.
+    pub fn lock_device(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.device_mutex.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Copy a host-visible VkBuffer to a device-local VkImage (RGBA upload).
@@ -1077,9 +1166,8 @@ impl VulkanDevice {
         device.end_command_buffer(cb).map_err(|e| StreamError::GpuError(format!("end cb: {e}")))?;
 
         let cbs = [cb];
-        let submit = vk::SubmitInfo::builder().command_buffers(&cbs);
-        device.queue_submit(queue, &[submit], fence)
-            .map_err(|e| StreamError::GpuError(format!("submit: {e}")))?;
+        let submit = vk::SubmitInfo::builder().command_buffers(&cbs).build();
+        self.submit_to_queue_legacy(queue, &[submit], fence)?;
         device.wait_for_fences(&[fence], true, u64::MAX)
             .map_err(|e| StreamError::GpuError(format!("wait: {e}")))?;
 

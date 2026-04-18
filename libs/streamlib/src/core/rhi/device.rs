@@ -79,8 +79,8 @@ impl GpuDevice {
             all(target_os = "linux", not(feature = "backend-metal"))
         ))]
         {
-            let vulkan_device = crate::vulkan::rhi::VulkanDevice::new()?;
-            let vulkan_queue = vulkan_device.create_command_queue_wrapper();
+            let device_arc = std::sync::Arc::new(crate::vulkan::rhi::VulkanDevice::new()?);
+            let vulkan_queue = device_arc.create_command_queue_wrapper();
 
             // On macOS/iOS with Vulkan backend, also create Metal device/queue for Apple services
             #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -95,8 +95,6 @@ impl GpuDevice {
                 #[cfg(any(target_os = "macos", target_os = "ios"))]
                 metal_queue,
             };
-
-            let device_arc = std::sync::Arc::new(vulkan_device);
 
             // Store a global reference for DMA-BUF import (Linux only).
             // The import trait (RhiPixelBufferImport::from_external_handle) is a

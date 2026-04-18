@@ -3,16 +3,19 @@
 
 //! Vulkan command buffer implementation for RHI.
 
+use std::sync::Arc;
+
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use super::VulkanTexture;
+use super::{VulkanDevice, VulkanTexture};
 
 /// Vulkan command buffer wrapper.
 ///
 /// Command buffers are single-use: create, record, commit.
 /// The buffer is automatically begun when created.
 pub struct VulkanCommandBuffer {
+    vulkan_device: Arc<VulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
     command_pool: vk::CommandPool,
@@ -22,12 +25,14 @@ pub struct VulkanCommandBuffer {
 impl VulkanCommandBuffer {
     /// Create a new command buffer wrapper.
     pub fn new(
-        device: vulkanalia::Device,
+        vulkan_device: Arc<VulkanDevice>,
         queue: vk::Queue,
         command_pool: vk::CommandPool,
         command_buffer: vk::CommandBuffer,
     ) -> Self {
+        let device = vulkan_device.device().clone();
         Self {
+            vulkan_device,
             device,
             queue,
             command_pool,
@@ -177,8 +182,8 @@ impl VulkanCommandBuffer {
                 .signal_semaphore_infos(&[signal_semaphore])
                 .build();
 
-            self.device
-                .queue_submit2(self.queue, &[submit], vk::Fence::null())
+            self.vulkan_device
+                .submit_to_queue(self.queue, &[submit], vk::Fence::null())
                 .expect("Failed to submit command buffer");
 
             // Wait for GPU completion via timeline semaphore before freeing
@@ -239,8 +244,8 @@ impl VulkanCommandBuffer {
                 .signal_semaphore_infos(&[signal_semaphore])
                 .build();
 
-            self.device
-                .queue_submit2(self.queue, &[submit], vk::Fence::null())
+            self.vulkan_device
+                .submit_to_queue(self.queue, &[submit], vk::Fence::null())
                 .expect("Failed to submit command buffer");
 
             // Wait for this specific command buffer via timeline semaphore
