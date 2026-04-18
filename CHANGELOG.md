@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.4.18](https://github.com/tatolab/streamlib/compare/v0.4.17...v0.4.18) (2026-04-18)
+
+
+### Features
+
+* **#272:** lazy encoder init — use camera fps for VUI timing ([abeae17](https://github.com/tatolab/streamlib/commit/abeae173b4705295e4ce430d59c6f8bbd5e7cc2e))
+* **#272:** propagate FPS through pipeline via Videoframe schema ([3b5bf33](https://github.com/tatolab/streamlib/commit/3b5bf33f0d346f9cff2b4df8ecef77994a16936d))
+* **#272:** propagate FPS through pipeline via Videoframe schema ([3b5bf33](https://github.com/tatolab/streamlib/commit/3b5bf33f0d346f9cff2b4df8ecef77994a16936d))
+* **#272:** propagate FPS through pipeline via Videoframe schema ([c8085cc](https://github.com/tatolab/streamlib/commit/c8085cc500f7721916357888cca09bea034eff46))
+
+
+### Bug Fixes
+
+* **#272:** compute queue for Nv12ToRgbConverter + RGBA decoder output ([3bdc8da](https://github.com/tatolab/streamlib/commit/3bdc8da5d8fa5ecb0863481e4d28ffb680d53a4a))
+* **#272:** integrate GPU NV12→RGBA shader into SimpleDecoder ([d511afd](https://github.com/tatolab/streamlib/commit/d511afdad55a73758a3363fc7481eb3e6f55c8e7))
+* **#272:** NV12 passthrough + direct H.265 mux for roundtrip output ([630ff60](https://github.com/tatolab/streamlib/commit/630ff604e6a9e5ebf382807e7dbd353084e6acb0))
+* **#272:** pre-initialize decoder video session before swapchain ([166a95a](https://github.com/tatolab/streamlib/commit/166a95a8c95ff656c86518a8a8a327a31b00a0e2))
+* **#272:** revert encoder to eager init (DMA-BUF allocation ordering) ([3772400](https://github.com/tatolab/streamlib/commit/3772400945f01c9dc4d43a5907b7c727c1bb1a3a))
+* **#272:** VMA fix for codec examples + PSNR verification ([4efc0c3](https://github.com/tatolab/streamlib/commit/4efc0c3964c4fda6777a94a25c7d71cd91adca24))
+* **#273:** add per-queue mutex synchronization to VulkanDevice ([d359749](https://github.com/tatolab/streamlib/commit/d35974909ae97422db376a54aa88594dfaf3c101))
+* **#273:** add per-queue mutex synchronization to VulkanDevice ([b76bc0e](https://github.com/tatolab/streamlib/commit/b76bc0e5cf1f4438013523cdc356834155c80605))
+* **#277:** route vulkan-video queue submits through VulkanDevice mutexes ([#283](https://github.com/tatolab/streamlib/issues/283)) ([f230a4a](https://github.com/tatolab/streamlib/commit/f230a4aa5b018ebb47203a350967d62b626b0d8d))
+
 ## [0.4.17](https://github.com/tatolab/streamlib/compare/v0.4.16...v0.4.17) (2026-04-17)
 
 
