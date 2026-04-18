@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Retest camera + encoder + display roundtrip in release build
-status: in_review
+status: completed
 description: Validate full GPU pipeline (camera + encoder + decoder + display) in release build after synchronization fixes land. Confirms no SIGSEGV or OOM.
 github_issue: 279
 dependencies:
