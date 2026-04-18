@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.19](https://github.com/tatolab/streamlib/compare/v0.4.18...v0.4.19) (2026-04-18)
+
+
+### Bug Fixes
+
+* **#278:** hold device-level resource lock during video session and DPB/bitstream setup ([#284](https://github.com/tatolab/streamlib/issues/284)) ([f847e90](https://github.com/tatolab/streamlib/commit/f847e903aa1a8d2fbd02c082175cadc0eb5cbd2f))
+
 ## [0.4.18](https://github.com/tatolab/streamlib/compare/v0.4.17...v0.4.18) (2026-04-18)
 
 
