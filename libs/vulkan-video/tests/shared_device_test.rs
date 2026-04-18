@@ -25,6 +25,7 @@ use vulkanalia_vma as vma;
 use vulkan_video::{
     SimpleEncoder, SimpleEncoderConfig, Codec, Preset,
     SimpleDecoder, SimpleDecoderConfig,
+    RawQueueSubmitter,
     decode::DpbOutputMode,
 };
 
@@ -462,12 +463,15 @@ fn h265_shared_device_encode_decode_roundtrip() {
         ..Default::default()
     };
 
+    let submitter = RawQueueSubmitter::new(device.clone());
+
     let mut encoder = SimpleEncoder::from_device(
         encoder_config,
         instance.clone(),
         device.clone(),
         physical_device,
         allocator.clone(),
+        submitter.clone(),
         encode_queue,
         encode_qf,
         transfer_queue,
@@ -577,6 +581,7 @@ fn h265_shared_device_encode_decode_roundtrip() {
         device.clone(),
         physical_device,
         allocator.clone(),
+        submitter.clone(),
         decode_queue,
         decode_qf,
         transfer_queue,

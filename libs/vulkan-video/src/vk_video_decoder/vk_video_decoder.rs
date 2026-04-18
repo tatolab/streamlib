@@ -304,6 +304,9 @@ pub struct VkVideoDecoder {
     queue: vk::Queue,
     queue_family_index: u32,
 
+    // Host-side queue submission gateway (per-queue mutex synchronization).
+    submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
+
     current_video_queue_indx: i32,
     coded_extent: vk::Extent2D,
     video_format: VkParserDetectedVideoFormat,
@@ -372,6 +375,7 @@ impl VkVideoDecoder {
         queue_family_index: u32,
         queue: vk::Queue,
         codec_operation: vk::VideoCodecOperationFlagsKHR,
+        submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
     ) -> VideoResult<Self> {
         let device = ctx.device();
 
@@ -438,6 +442,7 @@ impl VkVideoDecoder {
             ctx,
             queue,
             queue_family_index,
+            submitter,
             current_video_queue_indx: 0,
             coded_extent: vk::Extent2D::default(),
             video_format: VkParserDetectedVideoFormat::default(),
@@ -1330,8 +1335,8 @@ impl VkVideoDecoder {
         device.end_command_buffer(self.command_buffer).map_err(VideoError::from)?;
         device.reset_fences(&[self.fence]).map_err(VideoError::from)?;
         let cbs = [self.command_buffer];
-        let submit_info = vk::SubmitInfo::builder().command_buffers(&cbs);
-        device.queue_submit(self.queue, &[submit_info], self.fence)
+        let submit_info = vk::SubmitInfo::builder().command_buffers(&cbs).build();
+        self.submitter.submit_to_queue_legacy(self.queue, &[submit_info], self.fence)
             .map_err(VideoError::from)?;
         self.decode_in_flight = true;
 

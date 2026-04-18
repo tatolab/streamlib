@@ -1053,7 +1053,22 @@ impl VulkanDevice {
     pub fn lock_device(&self) -> std::sync::MutexGuard<'_, ()> {
         self.device_mutex.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
 
+impl vulkan_video::RhiQueueSubmitter for VulkanDevice {
+    unsafe fn submit_to_queue_legacy(
+        &self,
+        queue: vk::Queue,
+        submits: &[vk::SubmitInfo],
+        fence: vk::Fence,
+    ) -> vulkanalia::VkResult<()> {
+        let _lock = self.mutex_for_queue(queue).lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.device.queue_submit(queue, submits, fence).map(|_| ())
+    }
+}
+
+impl VulkanDevice {
     /// Copy a host-visible VkBuffer to a device-local VkImage (RGBA upload).
     ///
     /// Transitions the image UNDEFINED → TRANSFER_DST → SHADER_READ_ONLY.

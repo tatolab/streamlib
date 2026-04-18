@@ -1382,11 +1382,12 @@ fn main() {
     //   - PSNR against CPU reference conversion
     // =====================================================================
     if decode_qf.is_some() && compute_qf.is_some() {
-        use vulkan_video::Nv12ToRgbConverter;
+        use vulkan_video::{Nv12ToRgbConverter, RawQueueSubmitter};
 
         let compute_qf_val = compute_qf.unwrap();
         let decode_qf_val = decode_qf.unwrap();
         let compute_q = compute_queue.unwrap();
+        let submitter = RawQueueSubmitter::new(device.clone());
 
         let test_name = "NV12→RGB post-process filter".to_string();
         println!("[TEST] {}", test_name);
@@ -1563,6 +1564,7 @@ fn main() {
                     &ctx, width, height,
                     compute_qf_val, compute_q,
                     decode_qf_val,
+                    submitter.clone(),
                 ).map_err(|e| format!("Nv12ToRgbConverter::new: {e}"))?;
 
                 let (rgba_image, _rgba_view) = converter.convert(

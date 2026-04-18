@@ -67,6 +67,9 @@ pub struct Nv12ToRgbConverter {
     compute_queue: vk::Queue,
     _compute_queue_family: u32,
 
+    // Host-side queue submission gateway.
+    submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
+
     // Dimensions
     width: u32,
     height: u32,
@@ -90,6 +93,7 @@ impl Nv12ToRgbConverter {
         compute_queue_family: u32,
         compute_queue: vk::Queue,
         decode_queue_family: u32,
+        submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
     ) -> Result<Self, VideoError> {
         let device = ctx.device().clone();
         let allocator = ctx.allocator().clone();
@@ -285,6 +289,7 @@ impl Nv12ToRgbConverter {
             fence,
             compute_queue,
             _compute_queue_family: compute_queue_family,
+            submitter,
             width,
             height,
         })
@@ -468,11 +473,12 @@ impl Nv12ToRgbConverter {
 
         // --- Submit and wait ---
         let submit = vk::SubmitInfo::builder()
-            .command_buffers(std::slice::from_ref(&cb));
+            .command_buffers(std::slice::from_ref(&cb))
+            .build();
 
         self.device.reset_fences(&[self.fence])?;
-        self.device
-            .queue_submit(self.compute_queue, &[submit], self.fence)?;
+        self.submitter
+            .submit_to_queue_legacy(self.compute_queue, &[submit], self.fence)?;
         self.device
             .wait_for_fences(&[self.fence], true, u64::MAX)?;
 

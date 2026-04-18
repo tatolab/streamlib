@@ -50,12 +50,16 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             StreamError::Runtime("No video decode queue family".into())
         })?;
 
+        let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
+            ctx.gpu.device().inner.clone();
+
         let mut decoder = SimpleDecoder::from_device(
             decoder_config,
             vulkan_device.instance().clone(),
             vulkan_device.device().clone(),
             vulkan_device.physical_device(),
             vulkan_device.allocator().clone(),
+            submitter,
             decode_queue,
             decode_queue_family,
             vulkan_device.queue(),

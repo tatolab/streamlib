@@ -66,12 +66,16 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             StreamError::Runtime("No video encode queue family".into())
         })?;
 
+        let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
+            ctx.gpu.device().inner.clone();
+
         let encoder = SimpleEncoder::from_device(
             encoder_config,
             vulkan_device.instance().clone(),
             vulkan_device.device().clone(),
             vulkan_device.physical_device(),
             vulkan_device.allocator().clone(),
+            submitter,
             encode_queue,
             encode_queue_family,
             vulkan_device.transfer_queue(),

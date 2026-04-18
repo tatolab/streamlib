@@ -135,6 +135,9 @@ pub struct SimpleDecoder {
     // Compute/transfer queue info for converter (graphics queue supports compute)
     compute_queue: vk::Queue,
     compute_queue_family: u32,
+
+    // Host-side queue submission gateway (per-queue mutex synchronization).
+    submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
 }
 
 /// Metadata for a frame whose GPU decode has been submitted but not yet read back.
@@ -176,6 +179,7 @@ impl SimpleDecoder {
         device: vulkanalia::Device,
         physical_device: vk::PhysicalDevice,
         allocator: Arc<vma::Allocator>,
+        submitter: Arc<dyn crate::rhi::RhiQueueSubmitter>,
         decode_queue: vk::Queue,
         decode_queue_family: u32,
         transfer_queue: vk::Queue,
@@ -258,6 +262,7 @@ impl SimpleDecoder {
             rgba_staging: None,
             compute_queue: transfer_queue,
             compute_queue_family: transfer_queue_family,
+            submitter,
         })
     }
 
@@ -435,6 +440,8 @@ impl SimpleDecoder {
 
         info!(codec = ?config.codec, "SimpleDecoder created");
 
+        let submitter = crate::rhi::RawQueueSubmitter::new(device.clone());
+
         Ok(Self {
             _entry: entry,
             _instance: instance,
@@ -472,6 +479,7 @@ impl SimpleDecoder {
             rgba_staging: None,
             compute_queue: compute_queue_obj,
             compute_queue_family: compute_qf,
+            submitter,
         })
     }
 
@@ -916,8 +924,8 @@ impl SimpleDecoder {
                 self.device.end_command_buffer(self.transfer_cb).map_err(VideoError::from)?;
                 self.device.reset_fences(&[self.transfer_fence]).map_err(VideoError::from)?;
                 let cbs = [self.transfer_cb];
-                let submit_info = vk::SubmitInfo::builder().command_buffers(&cbs);
-                self.device.queue_submit(
+                let submit_info = vk::SubmitInfo::builder().command_buffers(&cbs).build();
+                self.submitter.submit_to_queue_legacy(
                     self.transfer_queue,
                     &[submit_info],
                     self.transfer_fence,
