@@ -4,15 +4,43 @@ This directory captures **specific, non-obvious** discoveries made while
 working on streamlib — things you would NOT have known from reading the
 code, the Vulkan spec, or generic Rust patterns.
 
-Each file documents:
-- The exact symptom that triggers the lookup
-- Specific root cause
-- Concrete fix pattern (with code)
-- Reference to the commit / file where it lives
+## These notes are not authoritative
 
-If you're about to add a generic note like "be careful with X" or "the
-codebase uses Y" — DON'T. Those go in CLAUDE.md or the code itself. This
-directory is for the surprises.
+Learnings are a conversation between past-me and current-me, not a spec.
+Drivers update, code refactors, assumptions shift. Be skeptical:
+
+- **Trust what you observe now over what's written here.** If reality
+  disagrees with a learning, the learning is probably out of date.
+- **Edit, rewrite, or delete freely.** A learning may be wrong, too
+  narrow, too broad, or simply no longer relevant. Changing it is part
+  of normal PR scope — no special approval needed.
+- **Verify before applying.** A learning that says "do X" is a
+  hypothesis for your current situation, not a command. Confirm the
+  trigger still matches and re-derive the conclusion when the stakes
+  are non-trivial.
+
+See CLAUDE.md's "Hard-won learnings" section for the full framing.
+
+## What makes a good learning
+
+Each file should document:
+- The **exact symptom** that triggers the lookup (specific error
+  strings, VUIDs, failure patterns — specific enough that a search
+  matches when it should)
+- The **underlying driver/library/spec constraint** — the invariant
+  that survives refactors, not the line number that tripped over it
+- A **concrete fix pattern** (with code, in terms of the constraint)
+- **Orientation links** to the files where the pattern currently lives
+  (for navigation, not as the load-bearing truth — those files will
+  move)
+
+Avoid the two failure modes:
+
+- **Too generic** (`be careful with X`, `the codebase uses Y`) — those
+  go in CLAUDE.md or the code itself. This directory is for surprises.
+- **Too specific to one spot** (`edit line 137 of file X`) — the fix
+  will be wrong within a month. Write lessons that hold even after the
+  surrounding code is renamed or restructured.
 
 ## Index
 
