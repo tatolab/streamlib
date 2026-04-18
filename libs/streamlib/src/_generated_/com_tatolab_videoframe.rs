@@ -13,6 +13,11 @@ pub struct Videoframe {
     #[serde(rename = "frame_index")]
     pub frame_index: String,
 
+    /// Source frame rate in frames per second (set by capture device)
+    #[serde(rename = "fps")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
+
     /// Frame height in pixels
     #[serde(rename = "height")]
     pub height: u32,

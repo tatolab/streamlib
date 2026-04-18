@@ -439,20 +439,28 @@ impl SimpleDecoder {
             h265_info: None,
         };
 
-        // Use inline staging buffer for readback (same command buffer as decode)
+        // Build output: skip inline NV12 staging copy when RGBA converter is active
+        // (the DPB slot stays in VIDEO_DECODE_DPB_KHR for the converter to sample)
         let width = self.sps_width;
         let height = self.sps_height;
-        self.ensure_readback_staging(width, height)?;
 
-        let &(stg_buf, stg_alloc, stg_size, stg_ptr) = self.readback_staging.as_ref().unwrap();
-        let mut output = DecodedFrame {
-            staging_buffer: Some(StagingBuffer {
-                buffer: stg_buf,
-                allocation: stg_alloc,
-                size: stg_size,
-                mapped_ptr: stg_ptr,
-            }),
-            ..DecodedFrame::default()
+        let mut output = if self.nv12_converter.is_some() {
+            DecodedFrame {
+                staging_buffer: None,
+                ..DecodedFrame::default()
+            }
+        } else {
+            self.ensure_readback_staging(width, height)?;
+            let &(stg_buf, stg_alloc, stg_size, stg_ptr) = self.readback_staging.as_ref().unwrap();
+            DecodedFrame {
+                staging_buffer: Some(StagingBuffer {
+                    buffer: stg_buf,
+                    allocation: stg_alloc,
+                    size: stg_size,
+                    mapped_ptr: stg_ptr,
+                }),
+                ..DecodedFrame::default()
+            }
         };
 
         // Use VkVideoDecoder (ported code) for H.264 decode
@@ -501,7 +509,7 @@ impl SimpleDecoder {
             height,
             decode_order: self.frame_counter,
             poc: poc[0],
-            _setup_slot: setup_slot,
+            setup_slot,
             _setup_image: setup_image,
         });
 

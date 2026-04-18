@@ -965,6 +965,130 @@ impl VulkanDevice {
         self.compute_queue
     }
 
+    /// Copy a host-visible VkBuffer to a device-local VkImage (RGBA upload).
+    ///
+    /// Transitions the image UNDEFINED → TRANSFER_DST → SHADER_READ_ONLY.
+    pub unsafe fn upload_buffer_to_image(
+        &self,
+        src_buffer: vk::Buffer,
+        dst_image: vk::Image,
+        width: u32,
+        height: u32,
+    ) -> crate::core::Result<()> {
+        use crate::core::StreamError;
+
+        let device = self.device();
+        let queue = self.queue;
+        let qf = self.queue_family_index;
+
+        let pool = device.create_command_pool(
+            &vk::CommandPoolCreateInfo::builder()
+                .queue_family_index(qf)
+                .flags(vk::CommandPoolCreateFlags::TRANSIENT),
+            None,
+        ).map_err(|e| StreamError::GpuError(format!("upload cmd pool: {e}")))?;
+
+        let cb = device.allocate_command_buffers(
+            &vk::CommandBufferAllocateInfo::builder()
+                .command_pool(pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1),
+        ).map_err(|e| StreamError::GpuError(format!("upload cmd buf: {e}")))?[0];
+
+        let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)
+            .map_err(|e| StreamError::GpuError(format!("upload fence: {e}")))?;
+
+        device.begin_command_buffer(
+            cb,
+            &vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        ).map_err(|e| StreamError::GpuError(format!("begin cb: {e}")))?;
+
+        // Barrier: UNDEFINED → TRANSFER_DST
+        let barrier_to_dst = vk::ImageMemoryBarrier::builder()
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(dst_image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+        device.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[] as &[vk::MemoryBarrier],
+            &[] as &[vk::BufferMemoryBarrier],
+            &[barrier_to_dst],
+        );
+
+        // Copy buffer → image
+        let region = vk::BufferImageCopy {
+            buffer_offset: 0,
+            buffer_row_length: 0,
+            buffer_image_height: 0,
+            image_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image_offset: vk::Offset3D::default(),
+            image_extent: vk::Extent3D { width, height, depth: 1 },
+        };
+        device.cmd_copy_buffer_to_image(
+            cb, src_buffer, dst_image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region],
+        );
+
+        // Barrier: TRANSFER_DST → SHADER_READ_ONLY
+        let barrier_to_read = vk::ImageMemoryBarrier::builder()
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(dst_image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+        device.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::DependencyFlags::empty(),
+            &[] as &[vk::MemoryBarrier],
+            &[] as &[vk::BufferMemoryBarrier],
+            &[barrier_to_read],
+        );
+
+        device.end_command_buffer(cb).map_err(|e| StreamError::GpuError(format!("end cb: {e}")))?;
+
+        let cbs = [cb];
+        let submit = vk::SubmitInfo::builder().command_buffers(&cbs);
+        device.queue_submit(queue, &[submit], fence)
+            .map_err(|e| StreamError::GpuError(format!("submit: {e}")))?;
+        device.wait_for_fences(&[fence], true, u64::MAX)
+            .map_err(|e| StreamError::GpuError(format!("wait: {e}")))?;
+
+        device.destroy_fence(fence, None);
+        device.destroy_command_pool(pool, None);
+
+        Ok(())
+    }
+
     /// Get the VMA allocator for GPU memory management.
     pub fn allocator(&self) -> &Arc<vma::Allocator> {
         self.allocator.as_ref().expect("VMA allocator not initialized")

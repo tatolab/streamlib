@@ -170,12 +170,50 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         codec: Codec::H264,
         max_width: WIDTH,
         max_height: HEIGHT,
+        rgba_output: true,
         ..Default::default()
     };
 
     let mut decoder = SimpleDecoder::new(decoder_config)?;
     let decoded_frames = decoder.feed(&bitstream)?;
     println!("  Decoded {} frames", decoded_frames.len());
+
+    // --- PSNR: compare decoded RGBA against original BGRA ---
+    {
+        let mut fixture_file = fs::File::open(&fixture_path)?;
+        let n = decoded_frames.len().min(FRAME_COUNT as usize);
+        let mut total_mse = 0.0f64;
+        let pixel_count = (WIDTH * HEIGHT) as usize;
+        for i in 0..n {
+            let mut bgra = vec![0u8; BGRA_FRAME_SIZE];
+            fixture_file.read_exact(&mut bgra)?;
+            let decoded = &decoded_frames[i];
+            let rgba = &decoded.data;
+            // Compare RGB channels (ignore alpha). BGRA layout: B,G,R,A. RGBA layout: R,G,B,A.
+            let mut frame_mse = 0.0f64;
+            for px in 0..pixel_count.min(rgba.len() / 4) {
+                let orig_b = bgra[px * 4] as f64;
+                let orig_g = bgra[px * 4 + 1] as f64;
+                let orig_r = bgra[px * 4 + 2] as f64;
+                let dec_r = rgba[px * 4] as f64;
+                let dec_g = rgba[px * 4 + 1] as f64;
+                let dec_b = rgba[px * 4 + 2] as f64;
+                let dr = orig_r - dec_r;
+                let dg = orig_g - dec_g;
+                let db = orig_b - dec_b;
+                frame_mse += (dr * dr + dg * dg + db * db) / 3.0;
+            }
+            frame_mse /= pixel_count as f64;
+            let psnr = if frame_mse > 0.0 { 10.0 * (255.0f64 * 255.0 / frame_mse).log10() } else { f64::INFINITY };
+            if i < 5 || i == n - 1 {
+                println!("  PSNR frame {:3}: {:.2} dB (MSE={:.2})", i, psnr, frame_mse);
+            }
+            total_mse += frame_mse;
+        }
+        let avg_mse = total_mse / n as f64;
+        let avg_psnr = if avg_mse > 0.0 { 10.0 * (255.0f64 * 255.0 / avg_mse).log10() } else { f64::INFINITY };
+        println!("\n  === H.264 Roundtrip RGB-PSNR: {:.2} dB (avg MSE={:.2}, {} frames) ===\n", avg_psnr, avg_mse, n);
+    }
 
     // --- 4. Mux encoded bitstream into Telegram-compliant MP4 ---
     // Write raw H.264 bitstream to a temp file, then mux directly into MP4
@@ -294,7 +332,8 @@ unsafe fn create_bgra_upload_resources(
     let staging_opts = vma::AllocationOptions {
         required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
-        flags: vma::AllocationCreateFlags::MAPPED,
+        flags: vma::AllocationCreateFlags::MAPPED
+            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
         ..Default::default()
     };
     let (staging_buf, staging_alloc) = allocator.create_buffer(staging_info, &staging_opts)?;

@@ -187,6 +187,7 @@ async fn run_whep_receive_loop(
 
                         let encoded = Encodedvideoframe {
                             data: annex_b_data,
+                            fps: None,
                             timestamp_ns: timestamp_ns.to_string(),
                             is_keyframe,
                             frame_number: video_frame_count.to_string(),

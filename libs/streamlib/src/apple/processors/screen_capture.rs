@@ -200,6 +200,7 @@ define_class!(
                 height,
                 timestamp_ns: timestamp_ns.to_string(),
                 frame_index: frame_num.to_string(),
+                fps: None,
             };
 
             let outputs = &*ctx.output_writer;

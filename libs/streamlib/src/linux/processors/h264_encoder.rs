@@ -39,11 +39,12 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
 
         let width = self.config.width.unwrap_or(1920);
         let height = self.config.height.unwrap_or(1080);
+        let fps = self.config.fps.unwrap_or(60);
 
         let encoder_config = SimpleEncoderConfig {
             width,
             height,
-            fps: self.config.fps.unwrap_or(60),
+            fps,
             codec: Codec::H264,
             preset: Preset::Medium,
             streaming: true,
@@ -53,7 +54,9 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             ..Default::default()
         };
 
-        // Use the RHI's shared Vulkan device — no second device creation.
+        // Create encoder in setup() — MUST happen before the display swapchain.
+        // NVIDIA limits DMA-BUF exportable allocations after swapchain creation
+        // (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
         let vulkan_device = &ctx.gpu.device().inner;
 
         let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
@@ -71,23 +74,25 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             vulkan_device.allocator().clone(),
             encode_queue,
             encode_queue_family,
-            // Use dedicated transfer queue to avoid contention with camera's graphics queue
             vulkan_device.transfer_queue(),
             vulkan_device.transfer_queue_family_index(),
-            // Use dedicated compute queue to avoid contention with camera's graphics queue
             vulkan_device.compute_queue().unwrap_or_else(|| vulkan_device.queue()),
             vulkan_device.compute_queue_family_index().unwrap_or_else(|| vulkan_device.queue_family_index()),
         ).map_err(|e| {
             StreamError::Runtime(format!("Failed to create H.264 encoder: {e}"))
         })?;
 
+        // Wait for all device operations to complete before other processors
+        // start submitting work. The encoder's configure() creates video session,
+        // DPB images, and command pools — concurrent Vulkan operations from other
+        // threads during this window crash the NVIDIA driver.
         unsafe { vulkan_device.device().device_wait_idle() }.map_err(|e| {
             StreamError::GpuError(format!("device_wait_idle failed: {e}"))
         })?;
 
         tracing::info!(
-            "[H264Encoder] Initialized ({}x{}, shared RHI device, Vulkan Video hardware)",
-            width, height
+            "[H264Encoder] Initialized ({}x{}, {}fps, shared RHI device, Vulkan Video hardware)",
+            width, height, fps
         );
 
         self.encoder = Some(encoder);
@@ -120,13 +125,13 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             .as_mut()
             .ok_or_else(|| StreamError::Runtime("H.264 encoder not initialized".into()))?;
 
-        // Resolve Videoframe to GPU texture — same device, zero-copy path.
         let texture = gpu_ctx.resolve_videoframe_texture(&frame)?;
         let image_view = texture.inner.image_view().map_err(|e| {
             StreamError::GpuError(format!("Failed to get image view: {e}"))
         })?;
 
         let timestamp_ns: Option<i64> = frame.timestamp_ns.parse().ok();
+        let frame_fps = frame.fps;
 
         let packets = encoder.encode_image(image_view, timestamp_ns).map_err(|e| {
             StreamError::Runtime(format!("H.264 encode failed: {e}"))
@@ -135,6 +140,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
         for packet in packets {
             let encoded = Encodedvideoframe {
                 data: packet.data,
+                fps: frame_fps,
                 is_keyframe: packet.is_keyframe,
                 timestamp_ns: packet.timestamp_ns.unwrap_or(0).to_string(),
                 frame_number: self.frames_encoded.to_string(),

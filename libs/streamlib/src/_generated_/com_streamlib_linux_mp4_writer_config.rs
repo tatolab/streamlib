@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for Linux MP4 video writing via ffmpeg mux.
+/// Configuration for Linux MP4 video writing via ffmpeg encode + mux.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LinuxMp4WriterConfig {
@@ -13,13 +13,9 @@ pub struct LinuxMp4WriterConfig {
     #[serde(rename = "output_path")]
     pub output_path: String,
 
-    /// Video frame rate for the output container.
+    /// Fallback frame rate if not provided by upstream Videoframe.
     #[serde(rename = "fps")]
     pub fps: u32,
-
-    /// Codec name for ffmpeg (h264 or hevc). Default: h264.
-    #[serde(rename = "codec")]
-    pub codec: Option<String>,
 
     /// Expected duration in seconds (for silent audio track length).
     #[serde(rename = "duration_secs")]

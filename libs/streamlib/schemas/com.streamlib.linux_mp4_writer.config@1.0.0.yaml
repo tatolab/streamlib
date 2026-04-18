@@ -6,7 +6,7 @@
 metadata:
   name: com.streamlib.linux_mp4_writer.config
   version: 1.0.0
-  description: "Configuration for Linux MP4 video writing via ffmpeg mux."
+  description: "Configuration for Linux MP4 video writing via ffmpeg encode + mux."
 
 properties:
   output_path:
@@ -15,14 +15,10 @@ properties:
     type: string
   fps:
     metadata:
-      description: "Video frame rate for the output container."
+      description: "Fallback frame rate if not provided by upstream Videoframe."
     type: uint32
 
 optionalProperties:
-  codec:
-    metadata:
-      description: "Codec name for ffmpeg (h264 or hevc). Default: h264."
-    type: string
   duration_secs:
     metadata:
       description: "Expected duration in seconds (for silent audio track length)."

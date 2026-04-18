@@ -165,6 +165,7 @@ fn source_thread_loop(
             height,
             timestamp_ns: timestamp_ns.to_string(),
             frame_index: frame_idx.to_string(),
+            fps: Some(fps),
         };
 
         if let Err(e) = outputs.write("video", &video_frame) {

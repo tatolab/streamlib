@@ -39,11 +39,12 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
 
         let width = self.config.width.unwrap_or(1920);
         let height = self.config.height.unwrap_or(1080);
+        let fps = self.config.fps.unwrap_or(60);
 
         let encoder_config = SimpleEncoderConfig {
             width,
             height,
-            fps: self.config.fps.unwrap_or(60),
+            fps,
             codec: Codec::H265,
             preset: Preset::Medium,
             streaming: true,
@@ -53,6 +54,9 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
             ..Default::default()
         };
 
+        // Create encoder in setup() — MUST happen before the display swapchain.
+        // NVIDIA limits DMA-BUF exportable allocations after swapchain creation
+        // (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
         let vulkan_device = &ctx.gpu.device().inner;
 
         let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
@@ -87,8 +91,8 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         })?;
 
         tracing::info!(
-            "[H265Encoder] Initialized ({}x{}, shared RHI device, Vulkan Video hardware)",
-            width, height
+            "[H265Encoder] Initialized ({}x{}, {}fps, shared RHI device, Vulkan Video hardware)",
+            width, height, fps
         );
 
         self.encoder = Some(encoder);
@@ -127,6 +131,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         })?;
 
         let timestamp_ns: Option<i64> = frame.timestamp_ns.parse().ok();
+        let frame_fps = frame.fps;
 
         let packets = encoder.encode_image(image_view, timestamp_ns).map_err(|e| {
             StreamError::Runtime(format!("H.265 encode failed: {e}"))
@@ -135,6 +140,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         for packet in packets {
             let encoded = Encodedvideoframe {
                 data: packet.data,
+                fps: frame_fps,
                 is_keyframe: packet.is_keyframe,
                 timestamp_ns: packet.timestamp_ns.unwrap_or(0).to_string(),
                 frame_number: self.frames_encoded.to_string(),

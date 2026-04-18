@@ -372,6 +372,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
             height,
             timestamp_ns: timestamp_ns.to_string(),
             frame_index: frame_count.to_string(),
+            fps: None,
         };
         self.outputs.write("video_out", &output_frame)?;
 

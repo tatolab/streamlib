@@ -294,7 +294,8 @@ unsafe fn create_bgra_upload_resources(
     let staging_opts = vma::AllocationOptions {
         required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
             | vk::MemoryPropertyFlags::HOST_COHERENT,
-        flags: vma::AllocationCreateFlags::MAPPED,
+        flags: vma::AllocationCreateFlags::MAPPED
+            | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
         ..Default::default()
     };
     let (staging_buf, staging_alloc) = allocator.create_buffer(staging_info, &staging_opts)?;

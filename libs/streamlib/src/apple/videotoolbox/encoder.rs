@@ -580,6 +580,7 @@ extern "C" fn compression_output_callback(
 
         let encoded_frame = Encodedvideoframe {
             data: final_data,
+            fps: None, // Set by caller from Videoframe metadata
             timestamp_ns: String::new(), // Will be set by caller
             is_keyframe,
             frame_number: String::new(), // Will be set by caller

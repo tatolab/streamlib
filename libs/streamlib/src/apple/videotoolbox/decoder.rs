@@ -419,6 +419,7 @@ impl VideoToolboxDecoder {
             height: source_buffer.height,
             timestamp_ns: decoded_frame.timestamp_ns.to_string(),
             frame_index: self.frame_count.to_string(),
+            fps: None,
         })
     }
 }

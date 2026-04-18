@@ -21,7 +21,85 @@ use super::SimpleDecoder;
 
 impl SimpleDecoder {
     // ------------------------------------------------------------------
-    // Session configuration
+    // Session pre-initialization (eager, before swapchain)
+    // ------------------------------------------------------------------
+
+    /// Pre-create the Vulkan Video session and DPB using max dimensions from
+    /// config. Called during setup() to ensure the session exists BEFORE the
+    /// display swapchain — NVIDIA limits video session creation after swapchain.
+    ///
+    /// Session parameters (SPS/PPS) are created later when the first SPS arrives.
+    pub fn pre_initialize_session(&mut self) -> Result<(), VideoError> {
+        if self.vk_decoder.is_some() {
+            return Ok(()); // already initialized
+        }
+        let width = self.config.max_width;
+        let height = self.config.max_height;
+        if width == 0 || height == 0 {
+            return Ok(()); // can't pre-init without dimensions
+        }
+
+        let dpb_size = 16u32;
+        self.dpb_slot_in_use = vec![false; dpb_size as usize];
+        self.dpb_slot_frame_num = vec![0u16; dpb_size as usize];
+        self.dpb_slot_poc = vec![[0i32; 2]; dpb_size as usize];
+
+        let codec_flag = if self.config.codec == crate::encode::Codec::H265 {
+            vk::VideoCodecOperationFlagsKHR::DECODE_H265
+        } else {
+            vk::VideoCodecOperationFlagsKHR::DECODE_H264
+        };
+
+        let mut vk_dec = VkVideoDecoder::new(
+            self.ctx.clone(),
+            self.decode_queue_family,
+            self.decode_queue,
+            codec_flag,
+        )?;
+
+        // Propagate sharing queue families for CONCURRENT DPB access.
+        {
+            let mut families = Vec::new();
+            families.push(self.decode_queue_family);
+            if self.transfer_queue_family != self.decode_queue_family {
+                families.push(self.transfer_queue_family);
+            }
+            if self.config.rgba_output
+                && self.compute_queue_family != self.decode_queue_family
+                && !families.contains(&self.compute_queue_family)
+            {
+                families.push(self.compute_queue_family);
+            }
+            if families.len() > 1 {
+                vk_dec.set_sharing_queue_families(families);
+            }
+        }
+
+        let video_fmt = VkParserDetectedVideoFormat {
+            codec: codec_flag,
+            coded_width: width,
+            coded_height: height,
+            max_num_dpb_slots: dpb_size,
+            ..Default::default()
+        };
+
+        let result = vk_dec.start_video_sequence(&video_fmt);
+        if result < 0 {
+            return Err(VideoError::BitstreamError(
+                "VkVideoDecoder::start_video_sequence failed (pre-init)".into(),
+            ));
+        }
+
+        self.sps_width = width;
+        self.sps_height = height;
+        self.vk_decoder = Some(vk_dec);
+
+        info!(width, height, dpb_size, "Decoder session pre-initialized");
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Session configuration (full, with SPS/PPS)
     // ------------------------------------------------------------------
 
     pub(crate) fn configure_session(&mut self) -> Result<(), VideoError> {
@@ -42,15 +120,13 @@ impl SimpleDecoder {
             ));
         }
 
-        let dpb_size = 16u32;
+        // Skip VkVideoDecoder/DPB creation if pre-initialized via pre_initialize_session().
+        if self.vk_decoder.is_none() {
+            let dpb_size = 16u32;
+            self.dpb_slot_in_use = vec![false; dpb_size as usize];
+            self.dpb_slot_frame_num = vec![0u16; dpb_size as usize];
+            self.dpb_slot_poc = vec![[0i32; 2]; dpb_size as usize];
 
-        // Initialize DPB tracking
-        self.dpb_slot_in_use = vec![false; dpb_size as usize];
-        self.dpb_slot_frame_num = vec![0u16; dpb_size as usize];
-        self.dpb_slot_poc = vec![[0i32; 2]; dpb_size as usize];
-
-        // Create VkVideoDecoder (ported C++ decode pipeline) for both codecs
-        {
             let codec_flag = if self.config.codec == crate::encode::Codec::H265 {
                 vk::VideoCodecOperationFlagsKHR::DECODE_H265
             } else {
@@ -64,18 +140,28 @@ impl SimpleDecoder {
                 codec_flag,
             )?;
 
-            // Propagate sharing queue families for CONCURRENT DPB access
-            if self.decode_queue_family != self.transfer_queue_family {
-                vk_dec.set_sharing_queue_families(
-                    vec![self.decode_queue_family, self.transfer_queue_family],
-                );
+            {
+                let mut families = Vec::new();
+                families.push(self.decode_queue_family);
+                if self.transfer_queue_family != self.decode_queue_family {
+                    families.push(self.transfer_queue_family);
+                }
+                if self.config.rgba_output
+                    && self.compute_queue_family != self.decode_queue_family
+                    && !families.contains(&self.compute_queue_family)
+                {
+                    families.push(self.compute_queue_family);
+                }
+                if families.len() > 1 {
+                    vk_dec.set_sharing_queue_families(families);
+                }
             }
 
             let video_fmt = VkParserDetectedVideoFormat {
                 codec: codec_flag,
                 coded_width: width,
                 coded_height: height,
-                max_num_dpb_slots: dpb_size,
+                max_num_dpb_slots: 16,
                 ..Default::default()
             };
 
@@ -96,7 +182,24 @@ impl SimpleDecoder {
         }
 
         self.session_configured = true;
-        info!(width, height, dpb_size, "Session configured");
+
+        // Create NV12→RGBA GPU converter if rgba_output is enabled
+        if self.config.rgba_output {
+            let converter = unsafe {
+                crate::nv12_to_rgb::Nv12ToRgbConverter::new(
+                    &self.ctx,
+                    self.sps_width,
+                    self.sps_height,
+                    self.compute_queue_family,
+                    self.compute_queue,
+                    self.decode_queue_family,
+                )?
+            };
+            self.nv12_converter = Some(converter);
+            info!(width, height, rgba_output = true, "Session configured");
+        } else {
+            info!(width, height, "Session configured");
+        }
 
         Ok(())
     }
