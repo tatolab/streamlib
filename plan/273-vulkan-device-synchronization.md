@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: VulkanDevice thread-safe queue submission synchronization
-status: pending
+status: completed
 description: Add per-queue mutexes to VulkanDevice so concurrent processor threads can safely submit Vulkan commands. Fixes release build SIGSEGV.
 github_issue: 273
 dependencies:

@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Propagate FPS through pipeline via Videoframe schema
-status: in_review
+status: completed
 description: Add optional fps field to Videoframe so frame rate flows from camera through encoder to MP4 writer, eliminating hardcoded fps values.
 github_issue: 272
 dependencies:
