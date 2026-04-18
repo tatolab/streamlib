@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::sync::Arc;
+
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -8,8 +10,11 @@ use crate::core::rhi::blitter::RhiBlitter;
 use crate::core::rhi::RhiPixelBuffer;
 use crate::core::{Result, StreamError};
 
+use super::VulkanDevice;
+
 /// Vulkan implementation of [`RhiBlitter`] for GPU copy operations on Linux.
 pub struct VulkanBlitter {
+    vulkan_device: Arc<VulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
     #[allow(dead_code)]
@@ -19,7 +24,8 @@ pub struct VulkanBlitter {
 
 impl VulkanBlitter {
     /// Create a new Vulkan blitter with a dedicated command pool.
-    pub fn new(device: &vulkanalia::Device, queue: vk::Queue, queue_family_index: u32) -> Result<Self> {
+    pub fn new(vulkan_device: &Arc<VulkanDevice>, queue: vk::Queue, queue_family_index: u32) -> Result<Self> {
+        let device = vulkan_device.device();
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
             .queue_family_index(queue_family_index)
@@ -31,6 +37,7 @@ impl VulkanBlitter {
             })?;
 
         Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
             device: device.clone(),
             queue,
             queue_family_index,
@@ -119,13 +126,12 @@ impl RhiBlitter for VulkanBlitter {
                 .signal_semaphore_infos(&[signal_semaphore])
                 .build();
 
-            self.device
-                .queue_submit2(self.queue, &[submit], vk::Fence::null())
+            self.vulkan_device
+                .submit_to_queue(self.queue, &[submit], vk::Fence::null())
                 .map_err(|e| {
                     self.device.destroy_semaphore(timeline_semaphore, None);
-                    StreamError::GpuError(format!("Failed to submit blit command: {e}"))
-                })
-                .map(|_| ())?;
+                    e
+                })?;
 
             let wait_semaphores = [timeline_semaphore];
             let wait_values = [1u64];
@@ -205,7 +211,7 @@ mod tests {
         };
 
         let blitter = VulkanBlitter::new(
-            device.device(),
+            &device,
             device.queue(),
             device.queue_family_index(),
         )
@@ -243,7 +249,7 @@ mod tests {
         };
 
         let blitter = VulkanBlitter::new(
-            device.device(),
+            &device,
             device.queue(),
             device.queue_family_index(),
         )

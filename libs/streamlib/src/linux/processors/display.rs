@@ -877,7 +877,7 @@ impl DisplayEventLoopHandler {
                 .build();
 
             if let Err(e) =
-                device.queue_submit2(queue, &[submit], vk::Fence::null())
+                self.vulkan_device.submit_to_queue(queue, &[submit], vk::Fence::null())
             {
                 tracing::warn!(
                     "Display {}: Failed to submit render command: {}",
@@ -897,7 +897,7 @@ impl DisplayEventLoopHandler {
                 .image_indices(&image_indices)
                 .build();
 
-            match device.queue_present_khr(queue, &present_info) {
+            match self.vulkan_device.present_to_queue(queue, &present_info) {
                 Ok(_) => {}
                 Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
                     tracing::debug!(

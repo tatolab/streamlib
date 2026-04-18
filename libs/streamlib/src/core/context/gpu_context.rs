@@ -425,7 +425,7 @@ impl GpuContext {
     fn create_blitter(device: &Arc<GpuDevice>) -> Arc<dyn RhiBlitter> {
         let vulkan_device = &device.inner;
         match crate::vulkan::rhi::VulkanBlitter::new(
-            vulkan_device.device(),
+            vulkan_device,
             vulkan_device.queue(),
             vulkan_device.queue_family_index(),
         ) {

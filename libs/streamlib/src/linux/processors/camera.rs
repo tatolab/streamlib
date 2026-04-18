@@ -1592,7 +1592,7 @@ fn capture_thread_loop(
                 .signal_semaphore_infos(&[signal_semaphore])
                 .build();
 
-            if let Err(e) = device.queue_submit2(queue, &[submit], vk::Fence::null()) {
+            if let Err(e) = vulkan_device.submit_to_queue(queue, &[submit], vk::Fence::null()) {
                 if frame_num == 0 {
                     eprintln!(
                         "[Camera {}] Failed to submit compute dispatch: {}",

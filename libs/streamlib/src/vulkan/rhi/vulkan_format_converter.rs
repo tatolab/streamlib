@@ -1,14 +1,19 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::sync::Arc;
+
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer};
 use crate::core::{Result, StreamError};
 
+use super::VulkanDevice;
+
 /// Vulkan format converter for pixel buffer format conversion via GPU compute.
 pub struct VulkanFormatConverter {
+    vulkan_device: Arc<VulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
     queue_family_index: u32,
@@ -28,12 +33,13 @@ pub struct VulkanFormatConverter {
 impl VulkanFormatConverter {
     /// Create a new format converter with GPU compute pipelines.
     pub fn new(
-        device: &vulkanalia::Device,
+        vulkan_device: &Arc<VulkanDevice>,
         queue: vk::Queue,
         queue_family_index: u32,
         source_bytes_per_pixel: u32,
         dest_bytes_per_pixel: u32,
     ) -> Result<Self> {
+        let device = vulkan_device.device();
         // Command pool
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .queue_family_index(queue_family_index)
@@ -226,6 +232,7 @@ impl VulkanFormatConverter {
         })?;
 
         Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
             device: device.clone(),
             queue,
             queue_family_index,
@@ -410,12 +417,8 @@ impl VulkanFormatConverter {
                 .command_buffer_infos(&[cmd_info])
                 .build();
 
-            self.device
-                .queue_submit2(self.queue, &[submit], self.compute_fence)
-                .map(|_| ())
-                .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to submit compute dispatch: {e}"))
-                })?;
+            self.vulkan_device
+                .submit_to_queue(self.queue, &[submit], self.compute_fence)?;
 
             // Wait for the compute dispatch to complete, ensuring the output
             // buffer data is visible before the caller submits dependent work.
@@ -473,7 +476,7 @@ mod tests {
     #[test]
     fn test_new_creates_compute_pipeline_successfully() {
         let device = match VulkanDevice::new() {
-            Ok(d) => d,
+            Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -485,7 +488,7 @@ mod tests {
         // descriptor set layout, pipeline layout, compute pipeline, and command pool —
         // validating the ash → vulkanalia migration of the most complex RHI file.
         let result = VulkanFormatConverter::new(
-            device.device(),
+            &device,
             device.queue(),
             device.queue_family_index(),
             2, // source: NV12 packed as 2 bytes/pixel for dispatch sizing

@@ -3,17 +3,20 @@
 
 //! Vulkan command queue wrapper for RHI.
 
+use std::sync::Arc;
+
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 use crate::core::{Result, StreamError};
 
-use super::VulkanCommandBuffer;
+use super::{VulkanCommandBuffer, VulkanDevice};
 
 /// Vulkan command queue wrapper.
 ///
 /// Manages the Vulkan queue and command pool for allocating command buffers.
 pub struct VulkanCommandQueue {
+    vulkan_device: Arc<VulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
     command_pool: vk::CommandPool,
@@ -21,7 +24,9 @@ pub struct VulkanCommandQueue {
 
 impl VulkanCommandQueue {
     /// Create a new command queue wrapper.
-    pub fn new(device: vulkanalia::Device, queue: vk::Queue, queue_family_index: u32) -> Self {
+    pub fn new(vulkan_device: Arc<VulkanDevice>, queue: vk::Queue, queue_family_index: u32) -> Self {
+        let device = vulkan_device.device().clone();
+
         // Create command pool for this queue family
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .queue_family_index(queue_family_index)
@@ -32,6 +37,7 @@ impl VulkanCommandQueue {
             .expect("Failed to create command pool");
 
         Self {
+            vulkan_device,
             device,
             queue,
             command_pool,
@@ -65,7 +71,7 @@ impl VulkanCommandQueue {
         .map_err(|e| StreamError::GpuError(format!("Failed to begin command buffer: {e}")))?;
 
         Ok(VulkanCommandBuffer::new(
-            self.device.clone(),
+            Arc::clone(&self.vulkan_device),
             self.queue,
             self.command_pool,
             command_buffer,
@@ -99,7 +105,7 @@ mod tests {
     #[test]
     fn test_creates_command_buffer() {
         let device = match VulkanDevice::new() {
-            Ok(d) => d,
+            Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -114,7 +120,7 @@ mod tests {
     #[test]
     fn test_empty_command_buffer_commit_and_wait_completes() {
         let device = match VulkanDevice::new() {
-            Ok(d) => d,
+            Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
