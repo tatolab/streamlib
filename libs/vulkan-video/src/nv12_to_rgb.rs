@@ -333,8 +333,6 @@ impl Nv12ToRgbConverter {
         )?;
 
         let cb = self.command_buffer;
-        let no_mem_barriers: &[vk::MemoryBarrier] = &[];
-        let no_buf_barriers: &[vk::BufferMemoryBarrier] = &[];
 
         self.device
             .reset_command_buffer(cb, vk::CommandBufferResetFlags::empty())?;
@@ -345,7 +343,11 @@ impl Nv12ToRgbConverter {
         )?;
 
         // --- Barrier: NV12 source → SHADER_READ_ONLY_OPTIMAL ---
-        let barrier_nv12 = vk::ImageMemoryBarrier::builder()
+        let barrier_nv12 = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
             .old_layout(src_layout)
             .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -357,12 +359,14 @@ impl Nv12ToRgbConverter {
                 level_count: 1,
                 base_array_layer: array_layer,
                 layer_count: 1,
-            })
-            .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ);
+            });
 
         // --- Barrier: RGBA output UNDEFINED → GENERAL (for compute writes) ---
-        let barrier_rgba = vk::ImageMemoryBarrier::builder()
+        let barrier_rgba = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::empty())
+            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::GENERAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -374,18 +378,12 @@ impl Nv12ToRgbConverter {
                 level_count: 1,
                 base_array_layer: 0,
                 layer_count: 1,
-            })
-            .dst_access_mask(vk::AccessFlags::SHADER_WRITE);
+            });
 
-        self.device.cmd_pipeline_barrier(
-            cb,
-            vk::PipelineStageFlags::ALL_COMMANDS,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::DependencyFlags::empty(),
-            no_mem_barriers,
-            no_buf_barriers,
-            &[barrier_nv12, barrier_rgba],
-        );
+        let pre_barriers = [barrier_nv12, barrier_rgba];
+        let pre_dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&pre_barriers);
+        self.device.cmd_pipeline_barrier2(cb, &pre_dep);
 
         // --- Bind compute pipeline ---
         self.device
@@ -444,8 +442,11 @@ impl Nv12ToRgbConverter {
         self.device.cmd_dispatch(cb, group_x, group_y, 1);
 
         // --- Barrier: RGBA GENERAL → TRANSFER_SRC_OPTIMAL (for readback) ---
-        let barrier_to_transfer = vk::ImageMemoryBarrier::builder()
-            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+        let barrier_to_transfer = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
             .old_layout(vk::ImageLayout::GENERAL)
             .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -459,26 +460,25 @@ impl Nv12ToRgbConverter {
                 layer_count: 1,
             });
 
-        self.device.cmd_pipeline_barrier(
-            cb,
-            vk::PipelineStageFlags::COMPUTE_SHADER,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            no_mem_barriers,
-            no_buf_barriers,
-            &[barrier_to_transfer],
-        );
+        let post_barriers = [barrier_to_transfer];
+        let post_dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&post_barriers);
+        self.device.cmd_pipeline_barrier2(cb, &post_dep);
 
         self.device.end_command_buffer(cb)?;
 
         // --- Submit and wait ---
-        let submit = vk::SubmitInfo::builder()
-            .command_buffers(std::slice::from_ref(&cb))
+        let cb_submit = vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(cb)
+            .build();
+        let cb_submits = [cb_submit];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cb_submits)
             .build();
 
         self.device.reset_fences(&[self.fence])?;
         self.submitter
-            .submit_to_queue_legacy(self.compute_queue, &[submit], self.fence)?;
+            .submit_to_queue(self.compute_queue, &[submit], self.fence)?;
         self.device
             .wait_for_fences(&[self.fence], true, u64::MAX)?;
 
