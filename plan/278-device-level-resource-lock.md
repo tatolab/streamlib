@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Device-level lock for GPU resource creation during concurrent operations
-status: in_review
+status: completed
 description: Wrap vulkan-video session creation and DPB allocation with VulkanDevice::lock_device() to prevent races with concurrent GPU submissions.
 github_issue: 278
 dependencies:
