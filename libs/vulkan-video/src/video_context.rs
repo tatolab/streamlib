@@ -60,6 +60,27 @@ pub fn reject_software_renderer(
     )
 }
 
+fn create_nv12_ycbcr_conversion(
+    device: &vulkanalia::Device,
+) -> VideoResult<vk::SamplerYcbcrConversion> {
+    let info = vk::SamplerYcbcrConversionCreateInfo::builder()
+        .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+        .ycbcr_model(vk::SamplerYcbcrModelConversion::YCBCR_709)
+        .ycbcr_range(vk::SamplerYcbcrRange::ITU_NARROW)
+        .components(vk::ComponentMapping {
+            r: vk::ComponentSwizzle::IDENTITY,
+            g: vk::ComponentSwizzle::IDENTITY,
+            b: vk::ComponentSwizzle::IDENTITY,
+            a: vk::ComponentSwizzle::IDENTITY,
+        })
+        .x_chroma_offset(vk::ChromaLocation::MIDPOINT)
+        .y_chroma_offset(vk::ChromaLocation::MIDPOINT)
+        .chroma_filter(vk::Filter::LINEAR)
+        .force_explicit_reconstruction(false);
+
+    Ok(unsafe { device.create_sampler_ycbcr_conversion(&info, None)? })
+}
+
 /// Shared Vulkan device context for video operations.
 ///
 /// Wraps the caller's [`vulkanalia::Device`] and [`vulkanalia::Instance`] along
@@ -82,6 +103,7 @@ pub struct VideoContext {
     physical_device: vk::PhysicalDevice,
     memory_properties: vk::PhysicalDeviceMemoryProperties,
     allocator: Arc<vma::Allocator>,
+    nv12_ycbcr_conversion: vk::SamplerYcbcrConversion,
 }
 
 /// Errors that can occur during video context or session creation.
@@ -164,12 +186,15 @@ impl VideoContext {
                 .map_err(|e| VideoError::Vulkan(vk::Result::from(e)))?
         });
 
+        let nv12_ycbcr_conversion = create_nv12_ycbcr_conversion(&device)?;
+
         Ok(Self {
             instance,
             device,
             physical_device,
             memory_properties,
             allocator,
+            nv12_ycbcr_conversion,
         })
     }
 
@@ -190,12 +215,15 @@ impl VideoContext {
         let memory_properties =
             unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
+        let nv12_ycbcr_conversion = create_nv12_ycbcr_conversion(&device)?;
+
         Ok(Self {
             instance,
             device,
             physical_device,
             memory_properties,
             allocator,
+            nv12_ycbcr_conversion,
         })
     }
 
@@ -218,6 +246,13 @@ impl VideoContext {
     /// Get a shared reference to the VMA allocator.
     pub fn allocator(&self) -> &Arc<vma::Allocator> {
         &self.allocator
+    }
+
+    /// Shared NV12 sampler Y′CBCR conversion handle for attachment to
+    /// multi-planar image views whose parent image includes `SAMPLED` usage
+    /// (required by `VUID-VkImageViewCreateInfo-format-06415`).
+    pub fn nv12_ycbcr_conversion(&self) -> vk::SamplerYcbcrConversion {
+        self.nv12_ycbcr_conversion
     }
 
     /// Find a queue family that supports the given video codec operation.
@@ -277,6 +312,15 @@ impl VideoContext {
         Err(VideoError::NoVideoQueueFamily)
     }
 
+}
+
+impl Drop for VideoContext {
+    fn drop(&mut self) {
+        unsafe {
+            self.device
+                .destroy_sampler_ycbcr_conversion(self.nv12_ycbcr_conversion, None);
+        }
+    }
 }
 
 #[cfg(test)]

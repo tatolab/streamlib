@@ -853,6 +853,8 @@ impl SimpleEncoder {
                 });
                 let (image, allocation) = alloc_result?;
 
+                let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
+                    .conversion(self.ctx.nv12_ycbcr_conversion());
                 let view_info = vk::ImageViewCreateInfo::builder()
                     .image(image)
                     .view_type(vk::ImageViewType::_2D)
@@ -863,7 +865,8 @@ impl SimpleEncoder {
                         level_count: 1,
                         base_array_layer: 0,
                         layer_count: 1,
-                    });
+                    })
+                    .push_next(&mut ycbcr_info);
 
                 let view = device.create_image_view(&view_info, None)?;
 
@@ -911,6 +914,9 @@ impl SimpleEncoder {
             });
             let (image, allocation) = alloc_result?;
 
+            let mut ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
+                .conversion(self.ctx.nv12_ycbcr_conversion());
+
             for i in 0..count {
                 let view_info = vk::ImageViewCreateInfo::builder()
                     .image(image)
@@ -922,7 +928,8 @@ impl SimpleEncoder {
                         level_count: 1,
                         base_array_layer: i,
                         layer_count: 1,
-                    });
+                    })
+                    .push_next(&mut ycbcr_info);
 
                 let view = device.create_image_view(&view_info, None)?;
 

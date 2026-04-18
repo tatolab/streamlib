@@ -348,6 +348,8 @@ impl SimpleEncoder {
         });
         let (source_image, source_allocation) = img_result.map_err(VideoError::from)?;
 
+        let mut source_ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
+            .conversion(ctx.nv12_ycbcr_conversion());
         let source_view = device.create_image_view(
             &vk::ImageViewCreateInfo::builder()
                 .image(source_image)
@@ -359,7 +361,8 @@ impl SimpleEncoder {
                     level_count: 1,
                     base_array_layer: 0,
                     layer_count: 1,
-                }),
+                })
+                .push_next(&mut source_ycbcr_info),
             None,
         )?;
 
@@ -606,6 +609,8 @@ impl SimpleEncoder {
         });
         let (source_image, source_allocation) = img_result.map_err(VideoError::from)?;
 
+        let mut source_ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
+            .conversion(ctx.nv12_ycbcr_conversion());
         let source_view = device.create_image_view(
             &vk::ImageViewCreateInfo::builder()
                 .image(source_image)
@@ -615,7 +620,8 @@ impl SimpleEncoder {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
                     base_mip_level: 0, level_count: 1,
                     base_array_layer: 0, layer_count: 1,
-                }),
+                })
+                .push_next(&mut source_ycbcr_info),
             None,
         )?;
 
