@@ -7,10 +7,12 @@
 //! Uses BT.709 color matrix with TV range (16-235 luma, 16-240 chroma),
 //! 6-tap left-sited chroma filter, and push descriptors for zero allocation.
 //!
-//! The converter creates an NV12 output image with flags suitable for both
-//! compute shader writes (STORAGE_BIT) and video encode source
-//! (VIDEO_ENCODE_SRC_BIT), using CONCURRENT sharing between compute and
-//! encode queue families.
+//! Two NV12 images are owned: a STORAGE compute-output image (no video
+//! profile chained) and a VIDEO_ENCODE_SRC_KHR image (profile chained). A
+//! per-plane vkCmdCopyImage moves data from the first to the second every
+//! frame. The split is required because no NVIDIA encode profile reports
+//! `STORAGE` as a supported usage via vkGetPhysicalDeviceVideoFormatPropertiesKHR
+//! (VUID-VkImageCreateInfo-pNext-06811).
 
 use std::sync::Arc;
 
@@ -33,8 +35,8 @@ struct PushConstants {
 
 /// GPU RGB(A) → NV12 converter.
 ///
-/// Owns a compute pipeline, NV12 output image with per-plane views, and a
-/// command buffer for recording conversion dispatches. The output image uses
+/// Owns a compute pipeline plus two NV12 images (compute-output + encode-src)
+/// joined by a per-plane vkCmdCopyImage. The encode-src image uses
 /// `CONCURRENT` sharing between the compute and encode queue families so it
 /// can be used as `VIDEO_ENCODE_SRC` without queue family ownership transfers.
 pub struct RgbToNv12Converter {
@@ -47,12 +49,17 @@ pub struct RgbToNv12Converter {
     pipeline: vk::Pipeline,
     shader_module: vk::ShaderModule,
 
-    // NV12 output image
-    nv12_image: vk::Image,
-    nv12_allocation: vma::Allocation,
-    nv12_color_view: vk::ImageView,
+    // Compute-output NV12 image — STORAGE + TRANSFER_SRC, no video profile.
+    compute_nv12_image: vk::Image,
+    compute_nv12_allocation: vma::Allocation,
     luma_view: vk::ImageView,
     chroma_view: vk::ImageView,
+
+    // Encode-src NV12 image — VIDEO_ENCODE_SRC_KHR + TRANSFER_DST + SAMPLED,
+    // with the encode video profile list chained at create time.
+    encode_nv12_image: vk::Image,
+    encode_nv12_allocation: vma::Allocation,
+    encode_nv12_color_view: vk::ImageView,
 
     // Command recording
     command_pool: vk::CommandPool,
@@ -167,18 +174,47 @@ impl RgbToNv12Converter {
             .map_err(|e| VideoError::Vulkan(vk::Result::from(e)))?;
         let pipeline = pipelines[0];
 
-        // --- 5. NV12 output image ---
-        // Build the video profile for the profile list (required for
-        // VIDEO_ENCODE_SRC usage).
+        // --- 5a. Compute-output NV12 image (STORAGE | TRANSFER_SRC) ---
+        // No video profile chained here — STORAGE on a VIDEO_ENCODE_SRC image is
+        // not reported as a supported video format by NVIDIA encode profiles
+        // (VUID-VkImageCreateInfo-pNext-06811). Compute writes go here, then a
+        // per-plane vkCmdCopyImage moves the result to the encode-src image.
+        let queue_families = [compute_queue_family, encode_queue_family];
+        let concurrent = compute_queue_family != encode_queue_family;
+
+        let compute_nv12_image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
+            .extent(vk::Extent3D { width, height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .flags(
+                vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE,
+            )
+            .usage(
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+
+        let alloc_options = vma::AllocationOptions {
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+        let (compute_nv12_image, compute_nv12_allocation) =
+            allocator.create_image(compute_nv12_image_info, &alloc_options)?;
+
+        // --- 5b. Encode-src NV12 image (VIDEO_ENCODE_SRC | TRANSFER_DST | SAMPLED) ---
+        // Profile list MUST match the video session profile exactly, including
+        // the encode_usage pNext chain. Without this, the validation layer
+        // reports VUID-vkCmdEncodeVideoKHR-pEncodeInfo-08206. Keep every field
+        // here in sync with `encode/session.rs` and `encode/staging.rs`.
         let mut h264_profile = vk::VideoEncodeH264ProfileInfoKHR::builder()
             .std_profile_idc(vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH);
         let mut h265_profile = vk::VideoEncodeH265ProfileInfoKHR::builder()
             .std_profile_idc(vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN);
-
-        // Source image profile MUST match the video session profile exactly,
-        // including the encode_usage pNext chain. Without this, the validation
-        // layer reports VUID-vkCmdEncodeVideoKHR-pEncodeInfo-08206. Keep every
-        // field here in sync with `encode/session.rs` and `encode/staging.rs`.
         let mut encode_usage = vk::VideoEncodeUsageInfoKHR::builder()
             .tuning_mode(vk::VideoEncodeTuningModeKHR::LOW_LATENCY);
 
@@ -198,60 +234,42 @@ impl RgbToNv12Converter {
         let profile_list =
             vk::VideoProfileListInfoKHR::builder().profiles(std::slice::from_ref(&profile_info));
 
-        let queue_families = [compute_queue_family, encode_queue_family];
-        let concurrent = compute_queue_family != encode_queue_family;
-
-        let mut nv12_image_info = vk::ImageCreateInfo::builder()
+        let mut encode_nv12_image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
             .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
-            .extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
+            .extent(vk::Extent3D { width, height, depth: 1 })
             .mip_levels(1)
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
             .tiling(vk::ImageTiling::OPTIMAL)
-            .flags(
-                vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE,
-            )
             .usage(
-                vk::ImageUsageFlags::STORAGE
-                    | vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR
-                    | vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST,
+                vk::ImageUsageFlags::VIDEO_ENCODE_SRC_KHR
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::SAMPLED,
             )
             .initial_layout(vk::ImageLayout::UNDEFINED);
 
         if concurrent {
-            nv12_image_info = nv12_image_info
+            encode_nv12_image_info = encode_nv12_image_info
                 .sharing_mode(vk::SharingMode::CONCURRENT)
                 .queue_family_indices(&queue_families);
         } else {
-            nv12_image_info = nv12_image_info.sharing_mode(vk::SharingMode::EXCLUSIVE);
+            encode_nv12_image_info = encode_nv12_image_info.sharing_mode(vk::SharingMode::EXCLUSIVE);
         }
-
-        // Chain video profile list for VIDEO_ENCODE_SRC compatibility.
-        nv12_image_info.next =
+        encode_nv12_image_info.next =
             &*profile_list as *const vk::VideoProfileListInfoKHR as *const std::ffi::c_void;
 
-        let alloc_options = vma::AllocationOptions {
-            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-            ..Default::default()
-        };
-        let (nv12_image, nv12_allocation) =
-            allocator.create_image(nv12_image_info, &alloc_options)?;
+        let (encode_nv12_image, encode_nv12_allocation) =
+            allocator.create_image(encode_nv12_image_info, &alloc_options)?;
 
         // --- 6. Image views ---
 
-        // COLOR view for vkCmdEncodeVideoKHR (combined planes).
+        // COLOR view of the encode-src image for vkCmdEncodeVideoKHR.
         let mut color_view_ycbcr_info = vk::SamplerYcbcrConversionInfo::builder()
             .conversion(ctx.nv12_ycbcr_conversion());
-        let nv12_color_view = device.create_image_view(
+        let encode_nv12_color_view = device.create_image_view(
             &vk::ImageViewCreateInfo::builder()
-                .image(nv12_image)
+                .image(encode_nv12_image)
                 .view_type(vk::ImageViewType::_2D)
                 .format(vk::Format::G8_B8R8_2PLANE_420_UNORM)
                 .subresource_range(vk::ImageSubresourceRange {
@@ -265,12 +283,12 @@ impl RgbToNv12Converter {
             None,
         )?;
 
-        // Per-plane views restricted to STORAGE usage for compute shader writes.
+        // Per-plane STORAGE views of the compute-output image for the shader.
         let mut luma_usage = vk::ImageViewUsageCreateInfo::builder()
             .usage(vk::ImageUsageFlags::STORAGE);
         let luma_view = device.create_image_view(
             &vk::ImageViewCreateInfo::builder()
-                .image(nv12_image)
+                .image(compute_nv12_image)
                 .view_type(vk::ImageViewType::_2D)
                 .format(vk::Format::R8_UNORM)
                 .subresource_range(vk::ImageSubresourceRange {
@@ -288,7 +306,7 @@ impl RgbToNv12Converter {
             .usage(vk::ImageUsageFlags::STORAGE);
         let chroma_view = device.create_image_view(
             &vk::ImageViewCreateInfo::builder()
-                .image(nv12_image)
+                .image(compute_nv12_image)
                 .view_type(vk::ImageViewType::_2D)
                 .format(vk::Format::R8G8_UNORM)
                 .subresource_range(vk::ImageSubresourceRange {
@@ -326,11 +344,13 @@ impl RgbToNv12Converter {
             pipeline_layout,
             pipeline,
             shader_module,
-            nv12_image,
-            nv12_allocation,
-            nv12_color_view,
+            compute_nv12_image,
+            compute_nv12_allocation,
             luma_view,
             chroma_view,
+            encode_nv12_image,
+            encode_nv12_allocation,
+            encode_nv12_color_view,
             command_pool,
             command_buffer,
             fence,
@@ -345,11 +365,11 @@ impl RgbToNv12Converter {
     /// Convert an RGBA VkImage to NV12.
     ///
     /// The input image must be in `SHADER_READ_ONLY_OPTIMAL` layout.
-    /// After this call, the NV12 output image is in `VIDEO_ENCODE_SRC_KHR`
+    /// After this call, the encode-src NV12 image is in `VIDEO_ENCODE_SRC_KHR`
     /// layout and ready for the encoder.
     ///
-    /// Returns `(nv12_image, nv12_color_view)` for the caller to pass to
-    /// `Encoder::encode_frame()`.
+    /// Returns `(encode_nv12_image, encode_nv12_color_view)` for the caller to
+    /// pass to `Encoder::encode_frame()`.
     pub unsafe fn convert(
         &mut self,
         rgba_image_view: vk::ImageView,
@@ -364,8 +384,8 @@ impl RgbToNv12Converter {
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
         )?;
 
-        // --- Barrier: NV12 UNDEFINED → GENERAL (for compute writes) ---
-        let barrier_to_general = vk::ImageMemoryBarrier2::builder()
+        // --- Barrier: compute_nv12 UNDEFINED → GENERAL (for compute writes) ---
+        let barrier_compute_to_general = vk::ImageMemoryBarrier2::builder()
             .src_stage_mask(vk::PipelineStageFlags2::NONE)
             .src_access_mask(vk::AccessFlags2::empty())
             .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
@@ -374,7 +394,7 @@ impl RgbToNv12Converter {
             .new_layout(vk::ImageLayout::GENERAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.nv12_image)
+            .image(self.compute_nv12_image)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
@@ -383,7 +403,7 @@ impl RgbToNv12Converter {
                 layer_count: 1,
             });
 
-        let pre_barriers = [barrier_to_general];
+        let pre_barriers = [barrier_compute_to_general];
         let pre_dep = vk::DependencyInfo::builder()
             .image_memory_barriers(&pre_barriers);
         self.device.cmd_pipeline_barrier2(cb, &pre_dep);
@@ -453,17 +473,105 @@ impl RgbToNv12Converter {
         let group_y = (self.height / 2 + 7) / 8;
         self.device.cmd_dispatch(cb, group_x, group_y, 1);
 
-        // --- Barrier: NV12 GENERAL → VIDEO_ENCODE_SRC ---
-        let barrier_to_encode = vk::ImageMemoryBarrier2::builder()
+        // --- Barriers: compute_nv12 → TRANSFER_SRC, encode_nv12 → TRANSFER_DST ---
+        let barrier_compute_to_transfer = vk::ImageMemoryBarrier2::builder()
             .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
             .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(self.compute_nv12_image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+        let barrier_encode_to_transfer = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::empty())
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(self.encode_nv12_image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+        let copy_barriers = [barrier_compute_to_transfer, barrier_encode_to_transfer];
+        let copy_dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&copy_barriers);
+        self.device.cmd_pipeline_barrier2(cb, &copy_dep);
+
+        // --- Per-plane vkCmdCopyImage ---
+        // Multi-planar copies must specify each plane separately
+        // (VUID-vkCmdCopyImage-srcImage-01558). PLANE_0 is full-res luma,
+        // PLANE_1 is half-res interleaved chroma.
+        let plane_0_region = vk::ImageCopy::builder()
+            .src_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::PLANE_0,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .src_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .dst_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::PLANE_0,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .dst_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .extent(vk::Extent3D { width: self.width, height: self.height, depth: 1 })
+            .build();
+        let plane_1_region = vk::ImageCopy::builder()
+            .src_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::PLANE_1,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .src_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .dst_subresource(vk::ImageSubresourceLayers {
+                aspect_mask: vk::ImageAspectFlags::PLANE_1,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .dst_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .extent(vk::Extent3D { width: self.width / 2, height: self.height / 2, depth: 1 })
+            .build();
+        let regions = [plane_0_region, plane_1_region];
+        self.device.cmd_copy_image(
+            cb,
+            self.compute_nv12_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            self.encode_nv12_image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &regions,
+        );
+
+        // --- Barrier: encode_nv12 TRANSFER_DST → VIDEO_ENCODE_SRC ---
+        let barrier_encode_to_src = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
             .dst_stage_mask(vk::PipelineStageFlags2::NONE)
             .dst_access_mask(vk::AccessFlags2::empty())
-            .old_layout(vk::ImageLayout::GENERAL)
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .new_layout(vk::ImageLayout::VIDEO_ENCODE_SRC_KHR)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(self.nv12_image)
+            .image(self.encode_nv12_image)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
                 base_mip_level: 0,
@@ -472,7 +580,7 @@ impl RgbToNv12Converter {
                 layer_count: 1,
             });
 
-        let post_barriers = [barrier_to_encode];
+        let post_barriers = [barrier_encode_to_src];
         let post_dep = vk::DependencyInfo::builder()
             .image_memory_barriers(&post_barriers);
         self.device.cmd_pipeline_barrier2(cb, &post_dep);
@@ -494,17 +602,17 @@ impl RgbToNv12Converter {
         self.device
             .wait_for_fences(&[self.fence], true, u64::MAX)?;
 
-        Ok((self.nv12_image, self.nv12_color_view))
+        Ok((self.encode_nv12_image, self.encode_nv12_color_view))
     }
 
-    /// Returns the NV12 output image handle.
+    /// Returns the encode-src NV12 image handle (the one bound to the encoder).
     pub fn nv12_image(&self) -> vk::Image {
-        self.nv12_image
+        self.encode_nv12_image
     }
 
-    /// Returns the NV12 COLOR image view (combined planes, for encoder).
+    /// Returns the encode-src NV12 COLOR image view (combined planes, for encoder).
     pub fn nv12_color_view(&self) -> vk::ImageView {
-        self.nv12_color_view
+        self.encode_nv12_color_view
     }
 
     /// Convert SPIR-V byte slice to u32 word slice.
@@ -535,12 +643,16 @@ impl Drop for RgbToNv12Converter {
             if self.luma_view != vk::ImageView::null() {
                 self.device.destroy_image_view(self.luma_view, None);
             }
-            if self.nv12_color_view != vk::ImageView::null() {
-                self.device.destroy_image_view(self.nv12_color_view, None);
+            if self.encode_nv12_color_view != vk::ImageView::null() {
+                self.device.destroy_image_view(self.encode_nv12_color_view, None);
             }
-            if self.nv12_image != vk::Image::null() {
+            if self.encode_nv12_image != vk::Image::null() {
                 self.allocator
-                    .destroy_image(self.nv12_image, self.nv12_allocation);
+                    .destroy_image(self.encode_nv12_image, self.encode_nv12_allocation);
+            }
+            if self.compute_nv12_image != vk::Image::null() {
+                self.allocator
+                    .destroy_image(self.compute_nv12_image, self.compute_nv12_allocation);
             }
 
             if self.pipeline != vk::Pipeline::null() {
