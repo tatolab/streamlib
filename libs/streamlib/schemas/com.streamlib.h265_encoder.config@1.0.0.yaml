@@ -33,3 +33,7 @@ optionalProperties:
     metadata:
       description: "Seconds between keyframes (default: 2.0). Converted to frames using the encoder's fps. Ignored if keyframe_interval (frames) is set."
     type: float32
+  quality_level:
+    metadata:
+      description: "Driver encode quality level (VkVideoEncodeQualityLevelInfoKHR). Higher = better quality, more GPU compute per frame; does not add frame delay. Unset = codec-specific real-time default; clamped against VkVideoEncodeCapabilitiesKHR::maxQualityLevels. Note: NVIDIA RTX 3090 exposes only level 0 for H.265."
+    type: uint32

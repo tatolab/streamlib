@@ -361,6 +361,32 @@ pub struct SimpleEncoderConfig {
     /// When `true`, SPS/PPS bytes are prepended to every IDR packet.
     /// Defaults to `true` in streaming mode, `false` otherwise.
     pub prepend_header_to_idr: Option<bool>,
+    /// Driver quality level knob (maps to `VkVideoEncodeQualityLevelInfoKHR`).
+    /// `None` = codec-specific real-time default from [`default_quality_level`].
+    /// Clamped to `max_quality_levels - 1` as a safety floor in the session.
+    pub quality_level: Option<u32>,
+}
+
+/// Real-time encoder quality level default, per codec.
+///
+/// Measured via the #305 PSNR rig against the checked-in fixtures. Higher
+/// levels burn more GPU per frame for (potentially) better quality without
+/// adding frame delay. The `session` clamps against
+/// `VkVideoEncodeCapabilitiesKHR::max_quality_levels` as a safety floor.
+pub fn default_quality_level(codec: Codec) -> u32 {
+    match codec {
+        // NVIDIA RTX 3090 exposes maxQualityLevels = 4 for H.264 (levels 0..=3).
+        // All four levels produce equivalent Y PSNR on the #305 fixtures
+        // (~29.5 dB on complex_pattern, ≥45 dB on gradients/solids), so the
+        // quality_level knob is not the PSNR bottleneck — CQP/preset is.
+        // Default to 0 for the lowest GPU cost per frame; callers who want to
+        // burn more GPU can set `quality_level = Some(max)` explicitly.
+        Codec::H264 => 0,
+        // NVIDIA RTX 3090 exposes maxQualityLevels = 1 for H.265 (only level 0).
+        // Documented explicitly instead of relying on the driver's clamp to
+        // silently land at zero.
+        Codec::H265 => 0,
+    }
 }
 
 impl Default for SimpleEncoderConfig {
@@ -376,6 +402,7 @@ impl Default for SimpleEncoderConfig {
             streaming: false,
             idr_interval_secs: 2,
             prepend_header_to_idr: None,
+            quality_level: None,
         }
     }
 }
@@ -452,15 +479,11 @@ impl SimpleEncoderConfig {
             }
         };
 
-        // Encode quality level (maps to NVIDIA NVENC P1-P7 presets).
-        // Higher = better quality, slightly more GPU compute per frame.
-        // Zero-latency: does NOT add frame delay, only uses more GPU
-        // time within the same frame's encode pass.
-        let quality = match self.preset {
-            Preset::Fast   => 3,  // ~P4: fast, moderate quality
-            Preset::Medium => 5,  // ~P6: OBS recommended for streaming
-            Preset::Quality => 7, // ~P7: max quality
-        };
+        // Quality level is an independent knob from the preset (which controls
+        // GOP / QP / B-frames). An explicit value wins; otherwise use the
+        // codec-specific real-time default. The session clamps against
+        // VkVideoEncodeCapabilitiesKHR::max_quality_levels as a safety floor.
+        let quality = self.quality_level.unwrap_or_else(|| default_quality_level(self.codec));
 
         EncodeConfig {
             width: self.width,
