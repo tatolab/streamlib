@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: vkGetDeviceQueue called with unexposed family
-status: pending
+status: completed
 description: Ensure every queue family whose queue we later fetch is requested at VkDeviceQueueCreateInfo time.
 github_issue: 291
 adapters:
