@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: "Design doc: GpuContextSandbox + GpuContextFullAccess API surface"
-status: in_review
+status: completed
 description: Write the design doc gating all downstream work in #319. Output is a reviewable document, not code.
 github_issue: 320
 adapters:
