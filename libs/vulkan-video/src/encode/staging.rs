@@ -718,7 +718,11 @@ impl SimpleEncoder {
         )?;
 
         // Barrier: UNDEFINED -> TRANSFER_DST
-        let barrier_to_transfer = vk::ImageMemoryBarrier::builder()
+        let barrier_to_transfer = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::empty())
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -730,20 +734,13 @@ impl SimpleEncoder {
                 level_count: 1,
                 base_array_layer: 0,
                 layer_count: 1,
-            })
-            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
+            });
 
-        let no_mem_barriers: &[vk::MemoryBarrier] = &[];
-        let no_buf_barriers: &[vk::BufferMemoryBarrier] = &[];
-        self.device.cmd_pipeline_barrier(
-            self.transfer_cb,
-            vk::PipelineStageFlags::TOP_OF_PIPE,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            no_mem_barriers,
-            no_buf_barriers,
-            &[barrier_to_transfer],
-        );
+        let image_barriers_to_transfer = [barrier_to_transfer];
+        let dep_to_transfer = vk::DependencyInfo::builder()
+            .image_memory_barriers(&image_barriers_to_transfer);
+        self.device
+            .cmd_pipeline_barrier2(self.transfer_cb, &dep_to_transfer);
 
         // Copy Y plane
         let y_region = vk::BufferImageCopy::builder()
@@ -783,8 +780,11 @@ impl SimpleEncoder {
         );
 
         // Barrier: TRANSFER_DST -> VIDEO_ENCODE_SRC
-        let barrier_to_encode = vk::ImageMemoryBarrier::builder()
-            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        let barrier_to_encode = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::empty())
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .new_layout(vk::ImageLayout::VIDEO_ENCODE_SRC_KHR)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -798,26 +798,26 @@ impl SimpleEncoder {
                 layer_count: 1,
             });
 
-        self.device.cmd_pipeline_barrier(
-            self.transfer_cb,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-            vk::DependencyFlags::empty(),
-            no_mem_barriers,
-            no_buf_barriers,
-            &[barrier_to_encode],
-        );
+        let image_barriers_to_encode = [barrier_to_encode];
+        let dep_to_encode = vk::DependencyInfo::builder()
+            .image_memory_barriers(&image_barriers_to_encode);
+        self.device
+            .cmd_pipeline_barrier2(self.transfer_cb, &dep_to_encode);
 
         self.device.end_command_buffer(self.transfer_cb)?;
 
         // Submit transfer
-        let submit = vk::SubmitInfo::builder()
-            .command_buffers(std::slice::from_ref(&self.transfer_cb))
+        let cb_submit = vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(self.transfer_cb)
+            .build();
+        let cb_submits = [cb_submit];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cb_submits)
             .build();
 
         self.device.reset_fences(&[self.transfer_fence])?;
         self.submitter
-            .submit_to_queue_legacy(self.transfer_queue, &[submit], self.transfer_fence)?;
+            .submit_to_queue(self.transfer_queue, &[submit], self.transfer_fence)?;
         self.device
             .wait_for_fences(&[self.transfer_fence], true, u64::MAX)?;
 

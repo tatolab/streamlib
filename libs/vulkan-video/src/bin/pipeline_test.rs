@@ -1233,21 +1233,25 @@ fn main() {
                                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
                         ).map_err(|e| format!("begin cb: {e}"))?;
 
-                        let barrier_undef = vk::ImageMemoryBarrier::builder()
+                        let barrier_undef = vk::ImageMemoryBarrier2::builder()
+                            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                            .src_access_mask(vk::AccessFlags2::empty())
+                            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+                            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
                             .old_layout(vk::ImageLayout::UNDEFINED)
                             .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                             .image(rgba_image)
                             .subresource_range(vk::ImageSubresourceRange {
                                 aspect_mask: vk::ImageAspectFlags::COLOR,
                                 base_mip_level: 0, level_count: 1,
                                 base_array_layer: 0, layer_count: 1,
-                            })
-                            .src_access_mask(vk::AccessFlags::empty())
-                            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-                        device.cmd_pipeline_barrier(tf_cb,
-                            vk::PipelineStageFlags::TOP_OF_PIPE,
-                            vk::PipelineStageFlags::TRANSFER,
-                            vk::DependencyFlags::empty(), &[] as &[vk::MemoryBarrier], &[] as &[vk::BufferMemoryBarrier], &[barrier_undef]);
+                            });
+                        let img_barriers_undef = [barrier_undef];
+                        let dep_undef = vk::DependencyInfo::builder()
+                            .image_memory_barriers(&img_barriers_undef);
+                        device.cmd_pipeline_barrier2(tf_cb, &dep_undef);
 
                         let region = vk::BufferImageCopy {
                             buffer_offset: 0, buffer_row_length: 0, buffer_image_height: 0,
@@ -1263,27 +1267,36 @@ fn main() {
                             vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region],
                         );
 
-                        let barrier_general = vk::ImageMemoryBarrier::builder()
+                        let barrier_general = vk::ImageMemoryBarrier2::builder()
+                            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+                            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                            .dst_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+                            .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
                             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                             .new_layout(vk::ImageLayout::GENERAL)
+                            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                             .image(rgba_image)
                             .subresource_range(vk::ImageSubresourceRange {
                                 aspect_mask: vk::ImageAspectFlags::COLOR,
                                 base_mip_level: 0, level_count: 1,
                                 base_array_layer: 0, layer_count: 1,
-                            })
-                            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                            .dst_access_mask(vk::AccessFlags::SHADER_READ);
-                        device.cmd_pipeline_barrier(tf_cb,
-                            vk::PipelineStageFlags::TRANSFER,
-                            vk::PipelineStageFlags::COMPUTE_SHADER,
-                            vk::DependencyFlags::empty(), &[] as &[vk::MemoryBarrier], &[] as &[vk::BufferMemoryBarrier], &[barrier_general]);
+                            });
+                        let img_barriers_general = [barrier_general];
+                        let dep_general = vk::DependencyInfo::builder()
+                            .image_memory_barriers(&img_barriers_general);
+                        device.cmd_pipeline_barrier2(tf_cb, &dep_general);
 
                         device.end_command_buffer(tf_cb).map_err(|e| format!("end cb: {e}"))?;
                         device.reset_fences(&[tf_fence]).map_err(|e| format!("reset fence: {e}"))?;
-                        let cbs = [tf_cb];
-                        let submit_info = vk::SubmitInfo::builder().command_buffers(&cbs);
-                        device.queue_submit(transfer_queue, &[submit_info], tf_fence)
+                        let cb_submit = vk::CommandBufferSubmitInfo::builder()
+                            .command_buffer(tf_cb)
+                            .build();
+                        let cb_submits = [cb_submit];
+                        let submit_info = vk::SubmitInfo2::builder()
+                            .command_buffer_infos(&cb_submits)
+                            .build();
+                        device.queue_submit2(transfer_queue, &[submit_info], tf_fence)
                             .map_err(|e| format!("queue submit: {e}"))?;
                         device.wait_for_fences(&[tf_fence], true, 1_000_000_000)
                             .map_err(|e| format!("wait fence: {e}"))?;
@@ -1491,7 +1504,11 @@ fn main() {
                     .map_err(|e| format!("begin cb: {e}"))?;
 
                 // Transition NV12 UNDEFINED → TRANSFER_DST
-                let barrier_dst = vk::ImageMemoryBarrier::builder()
+                let barrier_dst = vk::ImageMemoryBarrier2::builder()
+                    .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                    .src_access_mask(vk::AccessFlags2::empty())
+                    .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+                    .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
                     .old_layout(vk::ImageLayout::UNDEFINED)
                     .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                     .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1503,17 +1520,11 @@ fn main() {
                         level_count: 1,
                         base_array_layer: 0,
                         layer_count: 1,
-                    })
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-                let no_mem: &[vk::MemoryBarrier] = &[];
-                let no_buf: &[vk::BufferMemoryBarrier] = &[];
-                device.cmd_pipeline_barrier(
-                    tf_cb,
-                    vk::PipelineStageFlags::TOP_OF_PIPE,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    no_mem, no_buf, &[barrier_dst],
-                );
+                    });
+                let img_barriers_dst = [barrier_dst];
+                let dep_dst = vk::DependencyInfo::builder()
+                    .image_memory_barriers(&img_barriers_dst);
+                device.cmd_pipeline_barrier2(tf_cb, &dep_dst);
 
                 // Copy Y and UV planes
                 let y_region = vk::BufferImageCopy {
@@ -1553,8 +1564,14 @@ fn main() {
 
                 device.end_command_buffer(tf_cb).map_err(|e| format!("end cb: {e}"))?;
 
-                let submit = vk::SubmitInfo::builder().command_buffers(std::slice::from_ref(&tf_cb));
-                device.queue_submit(tf_q, &[submit], tf_fence).map_err(|e| format!("submit: {e}"))?;
+                let cb_submit = vk::CommandBufferSubmitInfo::builder()
+                    .command_buffer(tf_cb)
+                    .build();
+                let cb_submits = [cb_submit];
+                let submit = vk::SubmitInfo2::builder()
+                    .command_buffer_infos(&cb_submits)
+                    .build();
+                device.queue_submit2(tf_q, &[submit], tf_fence).map_err(|e| format!("submit: {e}"))?;
                 device.wait_for_fences(&[tf_fence], true, u64::MAX).map_err(|e| format!("wait: {e}"))?;
 
                 allocator.destroy_buffer(stg_buf, stg_alloc);
@@ -1619,8 +1636,14 @@ fn main() {
                 );
 
                 device.end_command_buffer(tf_cb).map_err(|e| format!("end cb: {e}"))?;
-                let submit = vk::SubmitInfo::builder().command_buffers(std::slice::from_ref(&tf_cb));
-                device.queue_submit(tf_q, &[submit], tf_fence).map_err(|e| format!("submit: {e}"))?;
+                let cb_submit = vk::CommandBufferSubmitInfo::builder()
+                    .command_buffer(tf_cb)
+                    .build();
+                let cb_submits = [cb_submit];
+                let submit = vk::SubmitInfo2::builder()
+                    .command_buffer_infos(&cb_submits)
+                    .build();
+                device.queue_submit2(tf_q, &[submit], tf_fence).map_err(|e| format!("submit: {e}"))?;
                 device.wait_for_fences(&[tf_fence], true, u64::MAX).map_err(|e| format!("wait: {e}"))?;
 
                 let rb_ai = allocator.get_allocation_info(rb_alloc);

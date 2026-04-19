@@ -15,19 +15,19 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::VkResult;
 
-/// Host-side gateway for `vkQueueSubmit` calls.
+/// Host-side gateway for `vkQueueSubmit2` calls.
 pub trait RhiQueueSubmitter: Send + Sync {
-    /// Submit command buffers using the Vulkan 1.0 submit API under host
-    /// synchronization.
+    /// Submit command buffers using the Vulkan 1.4 sync2 submit API under
+    /// host synchronization.
     ///
     /// # Safety
     ///
     /// Caller must ensure the command buffers, submit info chains, and fence
     /// are valid Vulkan handles and that `queue` belongs to the host device.
-    unsafe fn submit_to_queue_legacy(
+    unsafe fn submit_to_queue(
         &self,
         queue: vk::Queue,
-        submits: &[vk::SubmitInfo],
+        submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> VkResult<()>;
 
@@ -53,13 +53,13 @@ impl RawQueueSubmitter {
 }
 
 impl RhiQueueSubmitter for RawQueueSubmitter {
-    unsafe fn submit_to_queue_legacy(
+    unsafe fn submit_to_queue(
         &self,
         queue: vk::Queue,
-        submits: &[vk::SubmitInfo],
+        submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> VkResult<()> {
-        self.device.queue_submit(queue, submits, fence).map(|_| ())
+        self.device.queue_submit2(queue, submits, fence).map(|_| ())
     }
 
     fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {

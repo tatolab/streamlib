@@ -1037,21 +1037,6 @@ impl VulkanDevice {
             .map_err(|e| StreamError::GpuError(format!("queue_submit2 failed: {e}")))
     }
 
-    /// Submit command buffers using legacy Vulkan 1.0 API with synchronization.
-    pub unsafe fn submit_to_queue_legacy(
-        &self,
-        queue: vk::Queue,
-        submits: &[vk::SubmitInfo],
-        fence: vk::Fence,
-    ) -> Result<()> {
-        let _lock = self.mutex_for_queue(queue).lock()
-            .unwrap_or_else(|e| e.into_inner());
-        self.device
-            .queue_submit(queue, submits, fence)
-            .map(|_| ())
-            .map_err(|e| StreamError::GpuError(format!("queue_submit failed: {e}")))
-    }
-
     /// Present to a queue with per-queue mutex synchronization.
     pub unsafe fn present_to_queue(
         &self,
@@ -1070,15 +1055,15 @@ impl VulkanDevice {
 }
 
 impl vulkan_video::RhiQueueSubmitter for VulkanDevice {
-    unsafe fn submit_to_queue_legacy(
+    unsafe fn submit_to_queue(
         &self,
         queue: vk::Queue,
-        submits: &[vk::SubmitInfo],
+        submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> vulkanalia::VkResult<()> {
         let _lock = self.mutex_for_queue(queue).lock()
             .unwrap_or_else(|e| e.into_inner());
-        self.device.queue_submit(queue, submits, fence).map(|_| ())
+        self.device.queue_submit2(queue, submits, fence).map(|_| ())
     }
 
     fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {
@@ -1128,7 +1113,11 @@ impl VulkanDevice {
         ).map_err(|e| StreamError::GpuError(format!("begin cb: {e}")))?;
 
         // Barrier: UNDEFINED → TRANSFER_DST
-        let barrier_to_dst = vk::ImageMemoryBarrier::builder()
+        let barrier_to_dst = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::empty())
+            .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+            .dst_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
             .old_layout(vk::ImageLayout::UNDEFINED)
             .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1140,17 +1129,11 @@ impl VulkanDevice {
                 level_count: 1,
                 base_array_layer: 0,
                 layer_count: 1,
-            })
-            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
-        device.cmd_pipeline_barrier(
-            cb,
-            vk::PipelineStageFlags::TOP_OF_PIPE,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[] as &[vk::MemoryBarrier],
-            &[] as &[vk::BufferMemoryBarrier],
-            &[barrier_to_dst],
-        );
+            });
+        let barriers_to_dst = [barrier_to_dst];
+        let dep_to_dst = vk::DependencyInfo::builder()
+            .image_memory_barriers(&barriers_to_dst);
+        device.cmd_pipeline_barrier2(cb, &dep_to_dst);
 
         // Copy buffer → image
         let region = vk::BufferImageCopy {
@@ -1172,7 +1155,11 @@ impl VulkanDevice {
         );
 
         // Barrier: TRANSFER_DST → SHADER_READ_ONLY
-        let barrier_to_read = vk::ImageMemoryBarrier::builder()
+        let barrier_to_read = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::COPY)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+            .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
             .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
             .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1184,24 +1171,22 @@ impl VulkanDevice {
                 level_count: 1,
                 base_array_layer: 0,
                 layer_count: 1,
-            })
-            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-            .dst_access_mask(vk::AccessFlags::SHADER_READ);
-        device.cmd_pipeline_barrier(
-            cb,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::FRAGMENT_SHADER,
-            vk::DependencyFlags::empty(),
-            &[] as &[vk::MemoryBarrier],
-            &[] as &[vk::BufferMemoryBarrier],
-            &[barrier_to_read],
-        );
+            });
+        let barriers_to_read = [barrier_to_read];
+        let dep_to_read = vk::DependencyInfo::builder()
+            .image_memory_barriers(&barriers_to_read);
+        device.cmd_pipeline_barrier2(cb, &dep_to_read);
 
         device.end_command_buffer(cb).map_err(|e| StreamError::GpuError(format!("end cb: {e}")))?;
 
-        let cbs = [cb];
-        let submit = vk::SubmitInfo::builder().command_buffers(&cbs).build();
-        self.submit_to_queue_legacy(queue, &[submit], fence)?;
+        let cb_submit = vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(cb)
+            .build();
+        let cb_submits = [cb_submit];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cb_submits)
+            .build();
+        self.submit_to_queue(queue, &[submit], fence)?;
         device.wait_for_fences(&[fence], true, u64::MAX)
             .map_err(|e| StreamError::GpuError(format!("wait: {e}")))?;
 

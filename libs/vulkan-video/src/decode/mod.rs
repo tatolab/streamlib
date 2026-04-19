@@ -923,9 +923,14 @@ impl SimpleDecoder {
 
                 self.device.end_command_buffer(self.transfer_cb).map_err(VideoError::from)?;
                 self.device.reset_fences(&[self.transfer_fence]).map_err(VideoError::from)?;
-                let cbs = [self.transfer_cb];
-                let submit_info = vk::SubmitInfo::builder().command_buffers(&cbs).build();
-                self.submitter.submit_to_queue_legacy(
+                let cb_submit = vk::CommandBufferSubmitInfo::builder()
+                    .command_buffer(self.transfer_cb)
+                    .build();
+                let cb_submits = [cb_submit];
+                let submit_info = vk::SubmitInfo2::builder()
+                    .command_buffer_infos(&cb_submits)
+                    .build();
+                self.submitter.submit_to_queue(
                     self.transfer_queue,
                     &[submit_info],
                     self.transfer_fence,
