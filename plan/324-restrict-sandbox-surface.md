@@ -6,6 +6,7 @@ description: The enforcement task. Remove every heavy-allocation method from `Gp
 github_issue: 324
 dependencies:
   - "down:Implement sandbox.escalate() reusing the setup mutex"
+  - "down:Research: classify blit_copy cache-growth path (Sandbox vs Split)"
 adapters:
   github: builtin
 ---
