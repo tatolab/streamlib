@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.4.20](https://github.com/tatolab/streamlib/compare/v0.4.19...v0.4.20) (2026-04-19)
+
+
+### Bug Fixes
+
+* **#287:** bind vulkanalia builder slice temporaries to locals ([#295](https://github.com/tatolab/streamlib/issues/295)) ([469f3a1](https://github.com/tatolab/streamlib/commit/469f3a193677367ce832aa4d78ea157a138d7569))
+* **#288:** add COPY_SRC usage to camera ring textures ([#298](https://github.com/tatolab/streamlib/issues/298)) ([c39a917](https://github.com/tatolab/streamlib/commit/c39a91740e872024e11d3c94e2c176d328b9a834))
+* **#289:** chain VkSamplerYcbcrConversionInfo on NV12 image views ([#299](https://github.com/tatolab/streamlib/issues/299)) ([d790f28](https://github.com/tatolab/streamlib/commit/d790f28b17fdbb20cd54f460c9797c16edfe619b))
+* **#290:** chain external memory info on DMA-BUF VMA pool probes ([#311](https://github.com/tatolab/streamlib/issues/311)) ([ff898ca](https://github.com/tatolab/streamlib/commit/ff898cace5ce59f897ff6a1770a9d8035dd21271))
+* **#292:** pre-allocate encode/decode DMA-BUF resources before swapchain ([#301](https://github.com/tatolab/streamlib/issues/301)) ([d63027b](https://github.com/tatolab/streamlib/commit/d63027b53ab13492447a18427be14e920dc04bb8))
+* **#302:** derive decoder probe extent from decoder config ([#309](https://github.com/tatolab/streamlib/issues/309)) ([48206b2](https://github.com/tatolab/streamlib/commit/48206b223ff05c71f0ee1f0246fe2817e9638438))
+* **#303:** remove pre-poll in camera MMAP path so stream starts on strict V4L2 drivers ([#307](https://github.com/tatolab/streamlib/issues/307)) ([a5f778d](https://github.com/tatolab/streamlib/commit/a5f778d333a01b8fc7a7943c6a86f071902678de))
+
 ## [0.4.19](https://github.com/tatolab/streamlib/compare/v0.4.18...v0.4.19) (2026-04-18)
 
 
