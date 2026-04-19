@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Swapchain-descriptor image in UNDEFINED layout at sample time
-status: pending
+status: in_review
 description: Fix the display render submit path so every sampled/storage image bound via descriptor is in the layout the descriptor was written for, silencing VUID-vkCmdDraw-None-09600 (sees UNDEFINED, expects PRESENT_SRC_KHR).
 github_issue: 316
 adapters:
