@@ -324,6 +324,17 @@ impl VulkanDevice {
 
         // Request separate video encode/decode queues if they're different families
         let mut requested_families = vec![queue_family_index];
+        if transfer_queue_family_index != queue_family_index
+            && !requested_families.contains(&transfer_queue_family_index)
+        {
+            requested_families.push(transfer_queue_family_index);
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::builder()
+                    .queue_family_index(transfer_queue_family_index)
+                    .queue_priorities(&queue_priorities)
+                    .build(),
+            );
+        }
         if let Some(ve_family) = video_encode_queue_family_index {
             if !requested_families.contains(&ve_family) {
                 requested_families.push(ve_family);
