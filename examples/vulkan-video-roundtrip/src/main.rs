@@ -44,11 +44,18 @@ fn main() -> Result<()> {
     println!("+ Camera: {camera}");
 
     // --- Encoder ---
+    // Optional quality_level override (used by the #306 verification harness).
+    // Unset → library default for the codec.
+    let quality_level: Option<u32> = std::env::var("STREAMLIB_ENCODER_QUALITY_LEVEL")
+        .ok()
+        .and_then(|s| s.parse().ok());
+
     let encoder = if is_h265 {
         runtime.add_processor(H265EncoderProcessor::node(
             H265EncoderProcessor::Config {
                 width: Some(1920),
                 height: Some(1080),
+                quality_level,
                 ..Default::default()
             },
         ))?
@@ -57,6 +64,7 @@ fn main() -> Result<()> {
             H264EncoderProcessor::Config {
                 width: Some(1920),
                 height: Some(1080),
+                quality_level,
                 ..Default::default()
             },
         ))?

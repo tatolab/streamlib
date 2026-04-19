@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Expose encoder quality_level with real-time default
-status: pending
+status: completed
 description: SimpleEncoderConfig doesn't expose quality_level. Default picks "requested_quality=5" clamped to driver max (H.264→3, H.265→0 on NVIDIA RTX 3090), so H.265 silently runs at the driver's worst quality. Add a configurable knob with a real-time-tuned default.
 github_issue: 306
 adapters:

@@ -37,3 +37,7 @@ optionalProperties:
     metadata:
       description: "H.264 profile: baseline, main, or high (default: main)."
     type: string
+  quality_level:
+    metadata:
+      description: "Vulkan API encoder-effort index (VkVideoEncodeQualityLevelInfoKHR::quality_level). NOT the H.264 profile, NOT QP, NOT rate-control — those are configured elsewhere. Valid values are 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the session clamps as a safety floor. Unset = codec default."
+    type: uint32

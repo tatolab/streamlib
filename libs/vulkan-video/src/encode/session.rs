@@ -161,12 +161,16 @@ impl SimpleEncoder {
             0
         };
 
-        tracing::debug!(
-            max_dpb = caps.max_dpb_slots,
-            max_active_refs = caps.max_active_reference_pictures,
+        tracing::info!(
+            codec = ?self.codec_flag,
             max_quality_levels = encode_caps.max_quality_levels,
             requested_quality = config.quality_level,
             effective_quality = effective_quality_level,
+            "Encoder quality level"
+        );
+        tracing::debug!(
+            max_dpb = caps.max_dpb_slots,
+            max_active_refs = caps.max_active_reference_pictures,
             picture_access_w = caps.picture_access_granularity.width,
             picture_access_h = caps.picture_access_granularity.height,
             "Video encode capabilities"

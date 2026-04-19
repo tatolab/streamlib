@@ -50,6 +50,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
             idr_interval_secs: self.config.keyframe_interval_seconds.unwrap_or(2.0) as u32,
             bitrate_bps: self.config.bitrate_bps,
             prepend_header_to_idr: Some(true),
+            quality_level: self.config.quality_level,
             ..Default::default()
         };
 

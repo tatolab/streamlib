@@ -2,7 +2,7 @@
 whoami: amos
 name: Retest camera + encoder + display roundtrip after Vulkan cleanup
 status: pending
-description: Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, #303, #304, #305, #306, #315, and #316 land and confirm release SIGSEGV and Cam Link OOM are both gone.
+description: Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, #303, #304, #305, #306, #315, #316, and #330 land and confirm release SIGSEGV and Cam Link OOM are both gone.
 github_issue: 294
 dependencies:
   - "down:Vulkanalia builder lifetime audit across RHI and processors"
@@ -20,6 +20,7 @@ dependencies:
   - "down:Expose encoder quality_level with real-time default"
   - "down:Enable samplerYcbcrConversion feature and audit NV12 image-create flags"
   - "down:Swapchain-descriptor image in UNDEFINED layout at sample time"
+  - "down:Research: H.265 encoder quality configuration on Vulkan Video / NVIDIA"
 adapters:
   github: builtin
 ---
