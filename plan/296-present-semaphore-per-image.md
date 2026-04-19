@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Display render_finished semaphore must be per-swapchain-image
-status: in_review
+status: completed
 description: Size render_finished_semaphores to swapchain image_count and index by image_index, not MAX_FRAMES_IN_FLIGHT / frame_index, so the present engine's hold on the binary semaphore doesn't collide with the next signal.
 github_issue: 296
 adapters:
