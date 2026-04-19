@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: VMA bind-buffer-memory type mismatch
-status: pending
+status: in_review
 description: Fix the VMA pool memory-type selection so bound memory is in the buffer's allowed memoryTypeBits.
 github_issue: 290
 adapters:
