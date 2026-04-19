@@ -13,7 +13,9 @@ pub use audio_clock::{
     SoftwareAudioClock,
 };
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
-pub use runtime_context::RuntimeContext;
+pub use runtime_context::{
+    RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
 pub use time_context::TimeContext;

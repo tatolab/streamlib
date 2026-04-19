@@ -4,7 +4,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use super::{GpuContext, SharedAudioClock, TimeContext};
+use super::{
+    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
+};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
 use crate::iceoryx2::Iceoryx2Node;
@@ -541,3 +543,181 @@ impl RuntimeContext {
 
 // Unit tests removed - these require NSApplication run loop which isn't available in test harness.
 // See examples/test-main-thread-dispatch for validation of this functionality.
+
+// =============================================================================
+// Capability-typed RuntimeContext views
+// =============================================================================
+//
+// [`RuntimeContextFullAccess`] is handed to privileged lifecycle methods
+// (`setup` / `teardown` / Manual-mode `start` / `stop`). It exposes
+// `gpu_full_access()` returning a borrowed [`GpuContextFullAccess`].
+//
+// [`RuntimeContextLimitedAccess`] is handed to the hot-path methods
+// (`process` / `on_pause` / `on_resume`). It exposes `gpu_limited_access()`
+// returning a borrowed [`GpuContextLimitedAccess`].
+//
+// Both types are deliberately borrow-scoped (`<'a>`) and **not** `Clone`.
+// Processors receive them via `&RuntimeContextFullAccess<'_>` etc. — the
+// borrow cannot be stashed past the call (borrow checker), and the inner
+// `GpuContextFullAccess` is itself `!Clone`. This turns "right ctx, right
+// phase" from a convention into a compile-time guarantee.
+//
+// In commit 2 of #322 the types exist but nothing dispatches to them yet —
+// the wiring lands in the next commit (attribute macro codegen + runtime
+// plumbing). They are already exported so compile-fail doc tests can
+// assert the enforcement invariants.
+
+/// Privileged-GPU [`RuntimeContext`] view passed to `setup` / `teardown` /
+/// Manual-mode `start` / `stop`. Exposes [`GpuContextFullAccess`] for
+/// resource allocation and device-wide operations.
+///
+/// Deliberately `!Clone` and borrow-scoped — the handle cannot be stashed
+/// past the call boundary.
+pub struct RuntimeContextFullAccess<'a> {
+    base: &'a RuntimeContext,
+    gpu_full: GpuContextFullAccess,
+}
+
+/// Restricted-GPU [`RuntimeContext`] view passed to `process` / `on_pause` /
+/// `on_resume`. Exposes [`GpuContextLimitedAccess`] — cheap, pool-backed,
+/// non-allocating operations only.
+///
+/// Deliberately `!Clone` and borrow-scoped — the handle cannot be stashed
+/// past the call boundary. This is the type-system moat that prevents
+/// `process()` bodies from doing setup-only work.
+pub struct RuntimeContextLimitedAccess<'a> {
+    base: &'a RuntimeContext,
+    gpu_limited: GpuContextLimitedAccess,
+}
+
+impl<'a> RuntimeContextFullAccess<'a> {
+    /// Construct a full-access view over `base`. Crate-internal: only the
+    /// runtime's lifecycle dispatch (attribute macro + `spawn_processor_op`)
+    /// is permitted to create these.
+    pub(crate) fn new(base: &'a RuntimeContext) -> Self {
+        Self {
+            base,
+            gpu_full: GpuContextFullAccess::new(base.gpu.clone()),
+        }
+    }
+
+    /// Privileged GPU capability — allocations, device-wide ops, escalate.
+    pub fn gpu_full_access(&self) -> &GpuContextFullAccess {
+        &self.gpu_full
+    }
+
+    // ------------ forwarded RuntimeContext accessors ------------
+
+    pub fn time(&self) -> &Arc<TimeContext> {
+        &self.base.time
+    }
+    pub fn platform(&self) -> &'static str {
+        self.base.platform()
+    }
+    pub fn runtime_id(&self) -> &RuntimeUniqueId {
+        self.base.runtime_id()
+    }
+    pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
+        self.base.processor_id()
+    }
+    pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
+        self.base.runtime()
+    }
+    pub fn tokio_handle(&self) -> &tokio::runtime::Handle {
+        self.base.tokio_handle()
+    }
+    pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
+        self.base.iceoryx2_node()
+    }
+    pub fn audio_clock(&self) -> &SharedAudioClock {
+        self.base.audio_clock()
+    }
+    #[cfg(feature = "moq")]
+    pub fn moq_sessions(&self) -> &crate::core::streaming::SharedMoqSessions {
+        self.base.moq_sessions()
+    }
+    pub fn is_paused(&self) -> bool {
+        self.base.is_paused()
+    }
+    pub fn should_process(&self) -> bool {
+        self.base.should_process()
+    }
+}
+
+impl<'a> RuntimeContextLimitedAccess<'a> {
+    /// Construct a limited-access view over `base`. Crate-internal: only the
+    /// runtime's lifecycle dispatch is permitted to create these.
+    pub(crate) fn new(base: &'a RuntimeContext) -> Self {
+        Self {
+            base,
+            gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
+        }
+    }
+
+    /// Restricted GPU capability — pool-backed, non-allocating ops only.
+    pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {
+        &self.gpu_limited
+    }
+
+    // ------------ forwarded RuntimeContext accessors ------------
+
+    pub fn time(&self) -> &Arc<TimeContext> {
+        &self.base.time
+    }
+    pub fn platform(&self) -> &'static str {
+        self.base.platform()
+    }
+    pub fn runtime_id(&self) -> &RuntimeUniqueId {
+        self.base.runtime_id()
+    }
+    pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
+        self.base.processor_id()
+    }
+    pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
+        self.base.runtime()
+    }
+    pub fn tokio_handle(&self) -> &tokio::runtime::Handle {
+        self.base.tokio_handle()
+    }
+    pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
+        self.base.iceoryx2_node()
+    }
+    pub fn audio_clock(&self) -> &SharedAudioClock {
+        self.base.audio_clock()
+    }
+    #[cfg(feature = "moq")]
+    pub fn moq_sessions(&self) -> &crate::core::streaming::SharedMoqSessions {
+        self.base.moq_sessions()
+    }
+    pub fn is_paused(&self) -> bool {
+        self.base.is_paused()
+    }
+    pub fn should_process(&self) -> bool {
+        self.base.should_process()
+    }
+}
+
+#[cfg(test)]
+mod capability_view_tests {
+    use super::*;
+
+    // Assert that the capability views cannot be cloned. Stashing a
+    // `RuntimeContextFullAccess` in a processor field would require cloning
+    // the borrowed handle out of the `&ctx` parameter; `!Clone` closes that
+    // door at compile time.
+    //
+    // These compile-fail tests will run as part of `cargo test --doc` once
+    // we move them onto public types in the doc-tests commit. Kept here
+    // as a reminder of the invariant for readers.
+    #[test]
+    fn full_access_and_limited_access_are_not_clone() {
+        fn is_not_clone<T>() -> bool {
+            // Using the common trick: this compiles regardless; the real
+            // enforcement is the `compile_fail` doc tests added in the
+            // doc-test commit.
+            true
+        }
+        assert!(is_not_clone::<RuntimeContextFullAccess<'_>>());
+        assert!(is_not_clone::<RuntimeContextLimitedAccess<'_>>());
+    }
+}

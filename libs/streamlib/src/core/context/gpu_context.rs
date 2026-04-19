@@ -870,7 +870,18 @@ pub struct GpuContextLimitedAccess {
 /// Exposes the full GPU API, including resource creation and device-wide
 /// operations. In #321 this is the same surface as [`GpuContextLimitedAccess`];
 /// the split lands in #324.
-#[derive(Clone)]
+///
+/// Deliberately **not** `Clone`. Processors only ever see a `&GpuContextFullAccess`
+/// borrowed from a `RuntimeContextFullAccess` wrapper for the duration of a
+/// single lifecycle call (setup / teardown / start / stop / escalate closure).
+/// Removing `Clone` makes "stash a FullAccess in a field" a compile error:
+/// nothing can produce an owned value outside the runtime's construction
+/// path, so the capability can never escape its call.
+///
+/// ```compile_fail
+/// fn assert_not_clone<T: Clone>() {}
+/// assert_not_clone::<streamlib::core::GpuContextFullAccess>();
+/// ```
 pub struct GpuContextFullAccess {
     inner: GpuContext,
 }
