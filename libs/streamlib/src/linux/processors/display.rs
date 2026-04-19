@@ -637,7 +637,6 @@ impl DisplayEventLoopHandler {
         }
 
         let image_available_semaphore = state.image_available_semaphores[frame_index];
-        let render_finished_semaphore = state.render_finished_semaphores[frame_index];
         let command_buffer = state.command_buffers[frame_index];
 
         // Acquire next swapchain image
@@ -665,6 +664,10 @@ impl DisplayEventLoopHandler {
         };
 
         let swapchain_image = state.swapchain_images[image_index as usize];
+        // render_finished is per-swapchain-image: the present engine holds the
+        // binary semaphore until the image is released, so signal/wait must be
+        // keyed by image_index rather than frame_index.
+        let render_finished_semaphore = state.render_finished_semaphores[image_index as usize];
 
         // Reset and re-record the pre-allocated command buffer
         let begin_info = vk::CommandBufferBeginInfo::builder()
@@ -1187,20 +1190,25 @@ fn create_swapchain_state(
     let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {}", e)))?;
 
-    // Per-FRAME synchronization primitives sized to MAX_FRAMES_IN_FLIGHT.
+    // image_available: per-frame-in-flight (CPU↔GPU pipelining).
+    // render_finished: per-swapchain-image — the present engine keeps a hold
+    // on the binary semaphore until it releases the image for reuse, so the
+    // signal must match the acquired image_index (not the CPU frame_index)
+    // to avoid VUID-vkQueueSubmit2-semaphore-03868.
     let image_count = swapchain_images.len();
     let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
 
     let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
-    let mut render_finished_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
-
     for _ in 0..MAX_FRAMES_IN_FLIGHT {
         let image_available = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
+        image_available_semaphores.push(image_available);
+    }
+
+    let mut render_finished_semaphores = Vec::with_capacity(image_count);
+    for _ in 0..image_count {
         let render_finished = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
-
-        image_available_semaphores.push(image_available);
         render_finished_semaphores.push(render_finished);
     }
 
@@ -1587,20 +1595,22 @@ fn recreate_swapchain(
     let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
         .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {}", e)))?;
 
-    // Per-FRAME synchronization primitives sized to MAX_FRAMES_IN_FLIGHT.
+    // image_available: per-frame-in-flight. render_finished: per-swapchain-image
+    // (see create path for rationale).
     let new_image_count = swapchain_images.len();
     let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
 
     let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
-    let mut render_finished_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
-
     for _ in 0..MAX_FRAMES_IN_FLIGHT {
         let image_available = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
+        image_available_semaphores.push(image_available);
+    }
+
+    let mut render_finished_semaphores = Vec::with_capacity(new_image_count);
+    for _ in 0..new_image_count {
         let render_finished = unsafe { device.create_semaphore(&semaphore_info, None) }
             .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
-
-        image_available_semaphores.push(image_available);
         render_finished_semaphores.push(render_finished);
     }
 

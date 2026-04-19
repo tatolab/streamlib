@@ -28,7 +28,7 @@ const MAX_FRAMES_IN_FLIGHT: usize = 2;
 | Resource | Size to | Rationale |
 |---|---|---|
 | Acquire-image semaphore | `MAX_FRAMES_IN_FLIGHT` | Per-frame sync |
-| Render-finished semaphore | `MAX_FRAMES_IN_FLIGHT` | Per-frame sync |
+| Render-finished / present-wait semaphore | `image_count` | **Per-swapchain-image** — see below |
 | Command buffer | `MAX_FRAMES_IN_FLIGHT` | Per-frame recording |
 | Descriptor set | `MAX_FRAMES_IN_FLIGHT` | Per-frame texture binding |
 | Render-target ring texture | `MAX_FRAMES_IN_FLIGHT` | Per-frame WAR avoidance |
@@ -36,7 +36,34 @@ const MAX_FRAMES_IN_FLIGHT: usize = 2;
 | Swapchain image views | `image_count` | Per-image, attaches to swapchain image |
 
 Index per-frame resources with `current_frame ∈ [0, MAX_FRAMES_IN_FLIGHT)`.
-Index per-image resources with `image_index` from `acquire_next_image_khr`.
+Index per-image resources (including the render-finished semaphore) with
+`image_index` from `acquire_next_image_khr`.
+
+## Exception: render-finished / present-wait semaphore is per-image
+
+The "render-finished" semaphore is the one passed to `vkQueuePresentKHR`
+via `VkPresentInfoKHR::pWaitSemaphores`. It looks per-frame at first
+glance — one render submission signals it, one present waits on it —
+but it must be sized to `image_count` and indexed by `image_index`.
+
+**Why:** After `vkQueuePresentKHR` consumes the wait, the present engine
+still holds the binary semaphore in an unsignaled-but-not-yet-released
+state until the image is actually released for reuse (compositor has
+finished with it, next acquire can return it). If the next submission
+for the same per-frame slot tries to *signal* that same semaphore before
+the present engine has let go, the driver reports
+`VUID-vkQueueSubmit2-semaphore-03868` ("semaphore must not have another
+signal operation pending") and validation trips.
+
+Sizing to `image_count` and keying by `image_index` gives every
+swapchain image its own binary semaphore, and the present engine's hold
+on image N's semaphore can't collide with the next signal for image
+M ≠ N. This is the standard Vulkan pattern — the frame-count sizing in
+tutorials is a common, driver-tolerated bug.
+
+Acquire-image semaphores do NOT have this issue: they are signaled by
+`vkAcquireNextImageKHR` and waited by the next render submit — there's
+no external holder. They stay sized to `MAX_FRAMES_IN_FLIGHT`.
 
 ## Why 2
 
@@ -53,4 +80,5 @@ Index per-image resources with `image_index` from `acquire_next_image_khr`.
 
 ## Reference
 - Refactor commit: `6816f54` `refactor(display): decouple frames-in-flight from swapchain image count`
-- Implementation: `libs/streamlib/src/linux/processors/display.rs` (search `MAX_FRAMES_IN_FLIGHT`)
+- Per-image render-finished semaphore fix: issue #296
+- Implementation: `libs/streamlib/src/linux/processors/display.rs` (search `MAX_FRAMES_IN_FLIGHT` and `render_finished_semaphores`)
