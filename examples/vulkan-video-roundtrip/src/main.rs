@@ -44,9 +44,9 @@ fn main() -> Result<()> {
     println!("+ Camera: {camera}");
 
     // --- Encoder ---
-    // Optional quality_level override (used by the #306 verification harness).
-    // Unset → library default for the codec.
-    let quality_level: Option<u32> = std::env::var("STREAMLIB_ENCODER_QUALITY_LEVEL")
+    // Optional effort_level override (Vulkan encoder-effort index, not a codec
+    // quality setting). Unset → library default for the codec.
+    let effort_level: Option<u32> = std::env::var("STREAMLIB_ENCODER_EFFORT_LEVEL")
         .ok()
         .and_then(|s| s.parse().ok());
 
@@ -55,7 +55,7 @@ fn main() -> Result<()> {
             H265EncoderProcessor::Config {
                 width: Some(1920),
                 height: Some(1080),
-                quality_level,
+                effort_level,
                 ..Default::default()
             },
         ))?
@@ -64,7 +64,7 @@ fn main() -> Result<()> {
             H264EncoderProcessor::Config {
                 width: Some(1920),
                 height: Some(1080),
-                quality_level,
+                effort_level,
                 ..Default::default()
             },
         ))?

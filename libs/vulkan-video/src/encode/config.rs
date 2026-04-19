@@ -361,33 +361,30 @@ pub struct SimpleEncoderConfig {
     /// When `true`, SPS/PPS bytes are prepended to every IDR packet.
     /// Defaults to `true` in streaming mode, `false` otherwise.
     pub prepend_header_to_idr: Option<bool>,
-    /// Vulkan API encoder-effort index passed via `VkVideoEncodeQualityLevelInfoKHR`.
-    /// This is NOT the H.265 stream `level_idc` (e.g. 4.1, 5.0), NOT the
-    /// profile/tier, and NOT QP / rate-control — those live elsewhere in the
-    /// encoder config. Valid values are `0..VkVideoEncodeCapabilitiesKHR::max_quality_levels`;
-    /// the session clamps to that range as a safety floor. `None` uses the
-    /// per-codec default from [`default_quality_level`]. The correct framing
-    /// of this knob on NVIDIA's driver for H.265 is under research in #330.
-    pub quality_level: Option<u32>,
+    /// Vulkan API encoder-effort index passed via `VkVideoEncodeQualityLevelInfoKHR::quality_level`.
+    /// Higher index = more analysis per frame (mode decision, RD-opt, motion search)
+    /// at higher GPU cost. **NOT** an H.264/H.265 quality knob — profile, tier,
+    /// `level_idc`, QP, and rate-control are configured elsewhere. Valid values
+    /// are `0..VkVideoEncodeCapabilitiesKHR::max_quality_levels`; the session
+    /// clamps as a safety floor. `None` uses [`default_effort_level`].
+    /// See `docs/research/h265-encoder-quality-knobs.md` for why this knob
+    /// does not move PSNR at fixed CQP.
+    pub effort_level: Option<u32>,
 }
 
 /// Default Vulkan encoder-effort index per codec.
 ///
-/// This is the `VkVideoEncodeQualityLevelInfoKHR::quality_level` index, not
-/// anything from the H.265 or H.264 codec specs. On NVIDIA's Vulkan Video
-/// driver (RTX 3090 reference):
-/// - H.264 reports `max_quality_levels = 4`; indices 0..=3 are accepted, and
-///   the #305 PSNR rig shows identical Y PSNR across all four on natural
-///   content at CQP 18 (the PSNR floor is set by QP/rate-control, not this
-///   index). 0 is picked for the lowest GPU cost per frame; callers can
-///   override with `quality_level = Some(n)` to burn more GPU per frame.
-/// - H.265 currently reports `max_quality_levels = 1` via this specific
-///   Vulkan API. The H.265 codec spec itself has plenty of quality-relevant
-///   knobs (profile, tier, `level_idc`, QP, rate-control) — those are
-///   configured elsewhere in the encoder config. The Vulkan-side framing of
-///   H.265 quality on this driver is still being audited in #330; this
-///   default may move once that research lands.
-pub fn default_quality_level(codec: Codec) -> u32 {
+/// This is the `VkVideoEncodeQualityLevelInfoKHR::quality_level` index — a
+/// per-driver CPU/GPU effort knob, not a codec quality setting. On NVIDIA's
+/// Vulkan Video driver (RTX 3090 reference):
+/// - H.264 reports `max_quality_levels = 4`; #305's PSNR rig shows identical
+///   Y PSNR across 0..=3 at CQP 18, so 0 is picked for lowest GPU cost.
+/// - H.265 reports `max_quality_levels = 1`, so 0 is the only option.
+///
+/// The real H.265 quality knobs (SPS/PPS syntax switches, rate-control shape,
+/// `tuning_mode`) are tracked separately — see
+/// `docs/research/h265-encoder-quality-knobs.md` and the follow-up backlog.
+pub fn default_effort_level(codec: Codec) -> u32 {
     match codec {
         Codec::H264 => 0,
         Codec::H265 => 0,
@@ -407,7 +404,7 @@ impl Default for SimpleEncoderConfig {
             streaming: false,
             idr_interval_secs: 2,
             prepend_header_to_idr: None,
-            quality_level: None,
+            effort_level: None,
         }
     }
 }
@@ -484,11 +481,11 @@ impl SimpleEncoderConfig {
             }
         };
 
-        // Quality level is an independent knob from the preset (which controls
+        // Effort level is an independent knob from the preset (which controls
         // GOP / QP / B-frames). An explicit value wins; otherwise use the
         // codec-specific real-time default. The session clamps against
         // VkVideoEncodeCapabilitiesKHR::max_quality_levels as a safety floor.
-        let quality = self.quality_level.unwrap_or_else(|| default_quality_level(self.codec));
+        let effort = self.effort_level.unwrap_or_else(|| default_effort_level(self.codec));
 
         EncodeConfig {
             width: self.width,
@@ -502,7 +499,7 @@ impl SimpleEncoderConfig {
             const_qp_intra: qp_i,
             const_qp_inter_p: qp_p,
             const_qp_inter_b: qp_b,
-            quality_level: quality,
+            quality_level: effort,
             gop_size,
             idr_period,
             num_b_frames: num_b,
