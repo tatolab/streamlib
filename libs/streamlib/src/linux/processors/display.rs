@@ -929,28 +929,37 @@ impl DisplayEventLoopHandler {
 
         // Debug feature: sample frame to PNG from HOST_VISIBLE pixel buffer.
         // Resolve pixel buffer on-demand for sampling (not in hot path).
+        //
+        // Filename carries BOTH the displayed-frame counter (`frame_idx`)
+        // and the INPUT frame index (from `ipc_frame.frame_index`). The
+        // input-frame index lets downstream tooling (PSNR rig, #305)
+        // pair each decoded PNG with its reference input; the
+        // displayed-frame counter guarantees filenames are unique even
+        // when the display's `skip_to_latest` input mailbox re-reads
+        // the same decoded frame while the decoder is stalled.
         if let Some(ref dir) = self.png_sample_dir {
             if frame_idx % self.png_sample_every == 0 {
                 if let Ok(buf) = self.gpu_context.resolve_videoframe_buffer(&ipc_frame) {
                     let vk_buf = &buf.buffer_ref().inner;
                     let mapped_ptr = vk_buf.mapped_ptr();
                     if !mapped_ptr.is_null() {
+                        let input_frame_index: u64 = ipc_frame.frame_index.parse().unwrap_or(frame_idx);
                         let path = dir.join(format!(
-                            "display_{:03}_frame_{:06}.png",
-                            self.window_id, frame_idx
+                            "display_{:03}_frame_{:06}_input_{:06}.png",
+                            self.window_id, frame_idx, input_frame_index
                         ));
                         let len = (src_width as usize) * (src_height as usize) * 4;
                         let rgba = unsafe { std::slice::from_raw_parts(mapped_ptr, len) };
                         if let Err(e) = write_png_rgba(&path, src_width, src_height, rgba) {
                             tracing::warn!(
-                                "Display {}: PNG sample save failed for frame {}: {}",
-                                self.window_id, frame_idx, e
+                                "Display {}: PNG sample save failed for input frame {}: {}",
+                                self.window_id, input_frame_index, e
                             );
                         } else {
                             self.png_samples_saved += 1;
                             tracing::info!(
-                                "Display {}: saved PNG sample {:?} (frame {}, total saved {})",
-                                self.window_id, path, frame_idx, self.png_samples_saved
+                                "Display {}: saved PNG sample {:?} (input {}, displayed {}, total saved {})",
+                                self.window_id, path, input_frame_index, frame_idx, self.png_samples_saved
                             );
                         }
                     }

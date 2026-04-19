@@ -104,30 +104,55 @@ Read("/tmp/e2e-.../png_samples/display_001_frame_000060.png")
 
 #### PSNR — how to compute
 
-Easiest path is ffmpeg against a same-resolution reference PNG (captured
-pre-encode from the `camera-display` run at the same frame number, or a
-fixture PNG):
+**Primary path: the fixture PSNR rig** (`e2e_fixture_psnr.sh`,
+[`libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh`](../libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh)).
+Feeds checked-in reference PNGs (solid colors, gradients, a complex
+ffmpeg testsrc2 pattern) through `BgraFileSource → encoder → decoder →
+display` at a step-locked FPS, pairs each decoded PNG with its reference
+by input-frame index threaded through the pipeline, then computes Y/U/V
+PSNR via ffmpeg and classifies against the pass bar below:
 
 ```bash
-ffmpeg -hide_banner -i "$OUT/png_samples/display_001_frame_000060.png" \
-       -i reference_frame_000060.png \
-       -lavfi "psnr=stats_file=$OUT/psnr.log" -f null - 2>&1 \
-    | grep -E "PSNR|average:"
-# Pass bar (rule of thumb for 1080p H.264 / H.265 at default quality):
+# encoder/decoder roundtrip vs. checked-in fixtures
+libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h264 h264
+libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h265 h265
+
+# Sanity check that the rig flags real regressions (swaps R↔B on every
+# decoded sample → Y PSNR drops below FAIL threshold on chroma-bearing
+# references):
+PSNR_INJECT_BUG=color-matrix \
+    libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug h264
+```
+
+Exit codes: `0` — all references at or above the WARN threshold, `1` —
+any reference FAILed or NO-SAMPLE, `77` — prerequisites missing. The
+harness prints a TSV report to `<output>/psnr_report.tsv`. Pass bar:
+
+```
 #   Y PSNR ≥ 35 dB  — good quality
 #   Y PSNR 30–35 dB — acceptable, flag it
 #   Y PSNR < 30 dB  — regression, investigate color-matrix / range / plane layout
 ```
 
-When there is no reference PNG readily available (the common case on
-`vulkan-video-roundtrip`), instead:
+Useful env overrides (see the script header for the full list): `FPS`,
+`FIXTURE_REPS`, `PNG_SAMPLE_EVERY`, `PSNR_INJECT_BUG`.
 
-- Capture a PNG from `camera-display` at the same source device, crop to
-  the nearest IDR boundary, and use that as the reference. Document the
-  pairing in the [test-report template](#standardized-test-output-template)
-  under **PSNR**.
-- If PSNR isn't feasible for a run, state that explicitly in the report
-  under **PSNR** rather than skipping the line.
+**Fallback path: ad-hoc comparison.** When you need a one-off PSNR for a
+non-fixture scenario, run ffmpeg directly against a same-resolution
+reference PNG:
+
+```bash
+ffmpeg -hide_banner -i "$OUT/png_samples/display_001_frame_000060_input_000060.png" \
+       -i reference_frame_000060.png \
+       -lavfi "[0:v]format=rgba,setparams=range=pc,format=yuv420p[a];[1:v]format=rgba,setparams=range=pc,format=yuv420p[b];[a][b]psnr" \
+       -f null - 2>&1 \
+    | grep -E "PSNR|average:"
+```
+
+For real-camera runs (`vulkan-video-roundtrip /dev/video0`) there is no
+ground-truth reference, so PSNR isn't practical — treat the Read-tool
+visual check as the sole gate and write `n/a — real-camera source` under
+PSNR in the [test-report template](#standardized-test-output-template).
 
 ### Reference
 

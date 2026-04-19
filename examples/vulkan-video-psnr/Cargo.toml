@@ -1,0 +1,8 @@
+[package]
+name = "vulkan-video-psnr"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib" }
+anyhow = "1.0.100"

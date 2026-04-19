@@ -151,12 +151,15 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
 
             let timestamp_ns = encoded.timestamp_ns.clone();
 
+            // Carry the encoder's input-frame index (`frame_number`) through to the
+            // decoded output so downstream consumers (PSNR rig, display PNG sampler)
+            // can pair each decoded frame with the reference input.
             let video_frame = Videoframe {
                 surface_id,
                 width,
                 height,
                 timestamp_ns,
-                frame_index: self.frames_decoded.to_string(),
+                frame_index: encoded.frame_number.clone(),
                 fps: encoded.fps,
             };
 
