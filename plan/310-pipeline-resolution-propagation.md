@@ -6,6 +6,7 @@ description: Design and implement a mechanism so camera → encoder → decoder 
 github_issue: 310
 dependencies:
   - "down:Retest camera + encoder + display roundtrip after Vulkan cleanup"
+  - "down:GPU capability-based access (sandbox + escalate)"
 adapters:
   github: builtin
 ---

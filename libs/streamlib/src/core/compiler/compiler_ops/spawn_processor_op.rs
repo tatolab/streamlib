@@ -370,7 +370,7 @@ fn spawn_dedicated_thread(
                 (state, shutdown_rx, pause_gate_inner, exec_config)
             }; // Lock released here
 
-            // === PHASE 4: Setup (NO LOCK HELD - safe to call runtime ops) ===
+            // === PHASE 4: Setup (serialized across processors) ===
             // Create processor-specific context with both processor ID and pause gate
             let processor_context = runtime_ctx_clone
                 .with_processor_id(proc_id_clone.clone())
@@ -378,8 +378,17 @@ fn spawn_dedicated_thread(
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
 
+                // Hold the GPU setup mutex for the duration of setup() and the
+                // subsequent device-idle wait. This serializes processor setup
+                // across threads so concurrent video session / DPB / swapchain
+                // creation can't race on the device (fixes flaky NVIDIA
+                // DEVICE_LOST during H.265 decoder + display startup, #304).
+                // Already-running processors continue to execute in parallel —
+                // only the brief setup window is serialized.
+                let _setup_guard = runtime_ctx_clone.gpu.lock_processor_setup();
+
                 tracing::info!(
-                    "[{}] Calling setup on thread '{}' (id={:?}) - no locks held",
+                    "[{}] Calling setup on thread '{}' (id={:?}) - setup mutex held",
                     proc_id_clone,
                     thread_name,
                     thread_id
@@ -392,6 +401,18 @@ fn spawn_dedicated_thread(
                     *state_arc.lock() = ProcessorState::Error;
                     return;
                 }
+                drop(guard);
+
+                if let Err(e) = runtime_ctx_clone.gpu.wait_device_idle() {
+                    tracing::error!(
+                        "[{}] wait_device_idle after setup failed: {}",
+                        proc_id_clone,
+                        e
+                    );
+                    *state_arc.lock() = ProcessorState::Error;
+                    return;
+                }
+
                 tracing::info!("[{}] Setup completed successfully", proc_id_clone);
             }
 

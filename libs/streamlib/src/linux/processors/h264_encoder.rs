@@ -14,7 +14,6 @@ use crate::_generated_::{Encodedvideoframe, Videoframe};
 use crate::core::context::GpuContext;
 use crate::core::{Result, RuntimeContext, StreamError};
 
-use vulkanalia::prelude::v1_4::*;
 use vulkan_video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
 
 // ============================================================================
@@ -93,14 +92,6 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
         // DMA-BUF budget is consumed (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
         encoder.prepare_gpu_encode_resources().map_err(|e| {
             StreamError::Runtime(format!("Failed to pre-allocate H.264 encode resources: {e}"))
-        })?;
-
-        // Wait for all device operations to complete before other processors
-        // start submitting work. The encoder's configure() creates video session,
-        // DPB images, and command pools — concurrent Vulkan operations from other
-        // threads during this window crash the NVIDIA driver.
-        unsafe { vulkan_device.device().device_wait_idle() }.map_err(|e| {
-            StreamError::GpuError(format!("device_wait_idle failed: {e}"))
         })?;
 
         tracing::info!(
