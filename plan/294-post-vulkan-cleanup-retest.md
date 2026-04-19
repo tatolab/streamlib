@@ -2,7 +2,7 @@
 whoami: amos
 name: Retest camera + encoder + display roundtrip after Vulkan cleanup
 status: pending
-description: Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, #303, #304, #305, and #306 land and confirm release SIGSEGV and Cam Link OOM are both gone.
+description: Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, #303, #304, #305, #306, #315, and #316 land and confirm release SIGSEGV and Cam Link OOM are both gone.
 github_issue: 294
 dependencies:
   - "down:Vulkanalia builder lifetime audit across RHI and processors"
@@ -18,6 +18,8 @@ dependencies:
   - "down:Flaky H.265 decoder DEVICE_LOST during setup"
   - "down:Fixture-based PSNR rig for encoder/decoder roundtrips"
   - "down:Expose encoder quality_level with real-time default"
+  - "down:Enable samplerYcbcrConversion feature and audit NV12 image-create flags"
+  - "down:Swapchain-descriptor image in UNDEFINED layout at sample time"
 adapters:
   github: builtin
 ---
@@ -35,7 +37,7 @@ Create `test/post-vulkan-cleanup-retest` from `main` after all dependencies merg
 3. `cargo run --release -p vulkan-video-roundtrip -- h264 /dev/video2 30` (vivid)
 4. Repeat 1-3 in debug.
 5. Dynamic processor add/remove: start camera-only, then add encoder + display live.
-6. Optional: run each scenario under `VK_LOADER_LAYERS_ENABLE="*validation*"` and confirm silence on the VUIDs targeted by #287-#291.
+6. Optional: run each scenario under `VK_LOADER_LAYERS_ENABLE="*validation*"` and confirm silence on the VUIDs targeted by #287-#291, #296, #300, #315, #316.
 
 ## Exit criteria
 
