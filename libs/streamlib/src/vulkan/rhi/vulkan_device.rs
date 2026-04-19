@@ -563,6 +563,14 @@ impl VulkanDevice {
         let mut video_maintenance1_features =
             vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::builder().video_maintenance1(true).build();
 
+        // samplerYcbcrConversion is required to create NV12 image views / samplers
+        // with VK_KHR_sampler_ycbcr_conversion (core in 1.1) on the vulkan-video path.
+        // Without it, VUID-vkCreateSamplerYcbcrConversion-None-01648 fires every frame.
+        #[cfg(target_os = "linux")]
+        let mut vulkan_1_1_features = vk::PhysicalDeviceVulkan11Features::builder()
+            .sampler_ycbcr_conversion(true)
+            .build();
+
         #[cfg(target_os = "linux")]
         let device_create_info = {
             let mut builder = vk::DeviceCreateInfo::builder()
@@ -570,7 +578,8 @@ impl VulkanDevice {
                 .enabled_extension_names(&device_extensions)
                 .push_next(&mut dynamic_rendering_features)
                 .push_next(&mut timeline_semaphore_features)
-                .push_next(&mut synchronization2_features);
+                .push_next(&mut synchronization2_features)
+                .push_next(&mut vulkan_1_1_features);
             if supports_video_encode || supports_video_decode {
                 builder = builder.push_next(&mut video_maintenance1_features);
             }
