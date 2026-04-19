@@ -18,7 +18,7 @@ adapters:
 
 ## Steps
 
-1. Update `ReactiveProcessor` trait signatures in `libs/streamlib/src/core/processors/` — `setup(&mut self, ctx: RuntimeContext)` remains but `RuntimeContext` now carries a `FullAccess` handle internally; `process()` sees sandbox-only.
+1. Update `ReactiveProcessor` trait signatures in `libs/streamlib/src/core/processors/` — `setup(&mut self, ctx: RuntimeContext)` remains but `RuntimeContext` now carries a `FullAccess` handle internally; `process()` sees sandbox-only. **Option A per #320 §8.Q1**: `process()` keeps its current `&mut self` signature with no ctx parameter; processors stash a `GpuContextSandbox` field during setup and use it from process. Do NOT add a ctx parameter to `process()`.
 2. Expose `sandbox()` / `full_access()` accessors on `RuntimeContext` (or equivalent split); wire up in `libs/streamlib/src/core/context/runtime_context.rs`.
 3. Update `libs/streamlib/src/core/compiler/compiler_ops/spawn_processor_op.rs` to hand the right handle into each phase.
 4. Update every in-tree processor (camera, display, h264/h265 encoder+decoder, audio, MP4 writer, WebRTC, MoQ, CLAP host, subprocess hosts) to the new signatures. Identical API on both types at this point, so the changes are cosmetic.

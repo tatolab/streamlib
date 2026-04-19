@@ -701,49 +701,94 @@ earliest possible point.
 
 ---
 
-## 8. Open questions
+## 8. Open questions — resolved
 
-1. **Option A vs Option B for `process()` signature (§4).** Option A
-   keeps processors stashing a sandbox field, Option B threads a
-   `ProcessCtx` through every `process()` call. A says "smaller diff
-   now"; B says "cleaner threading if we ever hot-swap context." The
-   design recommends A unless the user has a reason to prefer B.
-2. **`blit_copy` classification (§1).** If the blitter's texture
-   cache can grow on a cold key, `blit_copy` is Split, not Sandbox.
-   Research §11 (blitter internals) wasn't exhaustive enough to
-   resolve this. Needs a short read-through of the Metal + Vulkan
-   blitter implementations before #324 ships. Either answer is
-   workable: if Split, callers pre-warm the cache in `setup()`.
-3. **Transparent escalation helpers (§2).** The
-   `acquire_pixel_buffer_or_escalate` form is convenient for
-   reconfigure but easy to misuse. The design punts on shipping this
-   in #324; the primary API is explicit escalate or pre-reserve.
-   User may want this as a debug-only crutch for Option B (per-call
-   `ProcessCtx`) or may want it cut entirely. Not a blocker.
-4. **Polyglot response shape for DMA-BUF FDs (§5).** The Linux
-   cross-process path will eventually need to ship DMA-BUF file
-   descriptors across the stdin/stdout channel, which doesn't
-   natively pass FDs. Options: Unix domain socket side-channel,
-   SurfaceStore-style broker. Out of scope for #325's initial shape
-   (pool IDs are enough for the first pass) but needs a followup.
-5. **`command_queue()` classification (§1).** Left on Sandbox for
-   now; may need to move if we decide command submissions must go
-   through a telemetry/tracing boundary. Not urgent.
-6. **Escalate-rate budget.** Proposed debug-only counter that warns
-   if a single processor calls `escalate` more than N times per
-   second. N = ? (10/sec feels right but no data. Possibly unneeded
-   if the `FnOnce` signature already signals "rare use".)
+All six resolved interactively (2026-04-19). Decisions below are
+binding for #321–#326.
+
+### Q1. `process()` signature — **Option A**
+
+Confirmed: Option A. `process()` does not receive a ctx parameter
+today (see research §1 — `ReactiveProcessor::process(&mut self) -> Result<()>`),
+so "same ergonomics, just limited" maps directly to Option A —
+processors keep stashing context the way they do today; the stashed
+type changes from `GpuContext` to `GpuContextSandbox`. Developers
+shouldn't have to think about which context they're holding; the
+compiler enforces it.
+
+Option B rejected: would require threading a `ProcessCtx` through
+every `process()` call site with no offsetting benefit today.
+
+### Q2. `blit_copy` classification — **research ticket #346**
+
+Not resolved in-doc; filed as blocker for #324. #324's plan file now
+depends on #346.
+
+### Q3. Transparent escalation helpers — **cut**
+
+No `acquire_pixel_buffer_or_escalate`-style helpers. The only way
+into `FullAccess` is an explicit `sandbox.escalate(|full| …)` call.
+
+Reason: the whole point is that escalation is visible at the call
+site. A helper that transparently escalates on a pool miss erases
+that signal — a reader (human or agent) looking at `process()` body
+can no longer tell by inspection whether a given line can or can't
+trigger resource creation. The explicit closure makes "was this
+escalated" trivially answerable: the closure boundary is the answer.
+
+Downstream effect: #324 ships with explicit-escalate-or-pre-reserve
+only. Pool-miss paths in Sandbox return an error; callers either
+handle it (rare — indicates pool sizing bug) or escalate
+explicitly.
+
+### Q4. Polyglot DMA-BUF FDs — **research ticket #347**
+
+Not resolved in-doc; filed as follow-up to #325.
+
+### Q5. `command_queue()` classification — **Sandbox** (confirmed)
+
+Stays on Sandbox. The broader invariant is: Sandbox-reachable types
+must not compose into hostile payloads. The queue is harmless
+because the images/buffers a Sandbox caller can construct are all
+pool-backed, pre-reserved, and already accounted for by the setup
+phase — submitting them to the queue doesn't violate any driver
+constraint.
+
+This makes the least-privilege argument explicit: `command_queue()`
+being Sandbox is safe **precisely because** the other Sandbox
+methods don't let you build anything dangerous to submit. If a
+future change introduces a Sandbox method that lets callers
+construct new GPU resources, that change must also move
+`command_queue()` to FullAccess — they rise and fall together.
+
+### Q6. Escalate-rate debug instrumentation — **aggressive**
+
+Every escalation gets traced in debug builds. Specifically:
+
+- `tracing::trace!` on every `sandbox.escalate(…)` entry, with
+  processor ID, duration, and (if the `tracing` backtrace feature
+  is enabled) the call-site stack.
+- `tracing::warn!` if a single processor exceeds **1 escalation
+  per second** sustained. The threshold is aggressive because
+  steady-state `process()` should fire **zero** escalations — any
+  nonzero rate indicates the processor needs to pre-reserve more
+  in `setup()`.
+- The #304 mutex wait time (lock acquisition latency) is recorded
+  and surfaced in the same trace event. Contention is a signal
+  that escalate is being used in a hot path.
+
+This instrumentation is debug-build only; release builds pay no
+runtime cost. High scrutiny of "why are you escalating" is the
+explicit goal — escalations at the frame boundary are the
+high-breakage pattern we're trying to eliminate.
 
 ---
 
 ## 9. Verification (gating #321)
 
 - Every current `GpuContext` method appears in §1's table.
-- User signs off on classifications, especially the three flagged
-  ambiguous cases.
-- User picks Option A vs Option B for §4's `process()` signature.
-- User decides whether §8's open questions block further work or
-  are followup-able.
+- §8 decisions locked in (done — 2026-04-19).
+- #346 unblocked or completed before #324 starts.
 
-Once those four are resolved, #321 (the newtype introduction) can
-start on its own branch.
+Once §8 decisions are reflected in the downstream plan files,
+#321 (the newtype introduction) can start on its own branch.
