@@ -16,10 +16,66 @@ use crate::nv_video_parser::vulkan_h264_decoder::{
 use crate::nv_video_parser::vulkan_h265_decoder as h265dec;
 use crate::video_context::VideoError;
 use crate::vk_video_decoder::vk_video_decoder::{VkVideoDecoder, VkParserDetectedVideoFormat};
+use crate::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
 
 use super::SimpleDecoder;
 
 impl SimpleDecoder {
+    /// Returns the codec-aligned output extent (width, height) derived from
+    /// [`SimpleDecoderConfig::max_width`] / [`SimpleDecoderConfig::max_height`]
+    /// rounded up to the macroblock alignment (16 pixels).
+    ///
+    /// Returns `(0, 0)` if the config has no max dimensions set.
+    pub fn aligned_extent(&self) -> (u32, u32) {
+        let w = if self.config.max_width > 0 {
+            align_size(self.config.max_width, H264_MB_SIZE_ALIGNMENT)
+        } else {
+            0
+        };
+        let h = if self.config.max_height > 0 {
+            align_size(self.config.max_height, H264_MB_SIZE_ALIGNMENT)
+        } else {
+            0
+        };
+        (w, h)
+    }
+
+    /// Eagerly allocate the GPU resources used during decode.
+    ///
+    /// Creates the NV12→RGBA compute converter now (when `rgba_output` is
+    /// enabled) instead of on the first `feed()` call. Callers should invoke
+    /// this during setup — before a display swapchain is created — so the
+    /// converter's DEVICE_LOCAL image isn't subject to NVIDIA's post-swapchain
+    /// allocation cap (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
+    ///
+    /// Requires [`pre_initialize_session`](Self::pre_initialize_session) to
+    /// have been called first (so `max_width`/`max_height` are known).
+    pub fn prepare_gpu_decode_resources(&mut self) -> Result<(), VideoError> {
+        if self.nv12_converter.is_some() {
+            return Ok(());
+        }
+        if !self.config.rgba_output {
+            return Ok(());
+        }
+        let (aligned_w, aligned_h) = self.aligned_extent();
+        if aligned_w == 0 || aligned_h == 0 {
+            return Ok(());
+        }
+        let converter = unsafe {
+            crate::nv12_to_rgb::Nv12ToRgbConverter::new(
+                &self.ctx,
+                aligned_w,
+                aligned_h,
+                self.compute_queue_family,
+                self.compute_queue,
+                self.decode_queue_family,
+                self.submitter.clone(),
+            )?
+        };
+        self.nv12_converter = Some(converter);
+        Ok(())
+    }
+
     // ------------------------------------------------------------------
     // Session pre-initialization (eager, before swapchain)
     // ------------------------------------------------------------------
@@ -185,8 +241,11 @@ impl SimpleDecoder {
 
         self.session_configured = true;
 
-        // Create NV12→RGBA GPU converter if rgba_output is enabled
-        if self.config.rgba_output {
+        // Create NV12→RGBA GPU converter if rgba_output is enabled.
+        // If prepare_gpu_decode_resources() already created one (eager path),
+        // reuse it rather than reallocating — that path sized the converter to
+        // the codec-aligned max extent so it handles any SPS up to that cap.
+        if self.config.rgba_output && self.nv12_converter.is_none() {
             let converter = unsafe {
                 crate::nv12_to_rgb::Nv12ToRgbConverter::new(
                     &self.ctx,

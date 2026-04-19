@@ -221,6 +221,44 @@ fn test_simple_decoder_config_defaults() {
 }
 
 // ------------------------------------------------------------------
+// aligned_extent math
+//
+// `SimpleDecoder::aligned_extent()` rounds `config.max_width` /
+// `config.max_height` up to the codec macroblock alignment (16 pixels).
+// The full method requires a live Vulkan device; here we exercise the
+// underlying alignment math so non-1080p callers can't regress.
+// ------------------------------------------------------------------
+
+#[test]
+fn test_aligned_extent_math_1080p() {
+    use crate::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+    assert_eq!(align_size(1920u32, H264_MB_SIZE_ALIGNMENT), 1920);
+    assert_eq!(align_size(1080u32, H264_MB_SIZE_ALIGNMENT), 1088);
+}
+
+#[test]
+fn test_aligned_extent_math_720p() {
+    use crate::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+    assert_eq!(align_size(1280u32, H264_MB_SIZE_ALIGNMENT), 1280);
+    assert_eq!(align_size(720u32, H264_MB_SIZE_ALIGNMENT), 720);
+}
+
+#[test]
+fn test_aligned_extent_math_4k() {
+    use crate::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+    assert_eq!(align_size(3840u32, H264_MB_SIZE_ALIGNMENT), 3840);
+    assert_eq!(align_size(2160u32, H264_MB_SIZE_ALIGNMENT), 2160);
+}
+
+#[test]
+fn test_aligned_extent_math_odd_extent() {
+    use crate::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
+    // Arbitrary non-aligned dims must round up to a multiple of 16.
+    assert_eq!(align_size(641u32, H264_MB_SIZE_ALIGNMENT), 656);
+    assert_eq!(align_size(481u32, H264_MB_SIZE_ALIGNMENT), 496);
+}
+
+// ------------------------------------------------------------------
 // SimpleDecoder NAL splitting (pure logic, no GPU)
 // ------------------------------------------------------------------
 
