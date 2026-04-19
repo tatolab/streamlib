@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Decoder pool probe uses hard-coded resolution
-status: in_review
+status: completed
 description: Replace the hard-coded 1920x1088 probe in H264/H265 decoder setup() with a probe derived from decoder config / session capabilities so non-1080p streams don't regress #292.
 github_issue: 302
 adapters:
