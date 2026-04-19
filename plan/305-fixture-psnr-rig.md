@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Fixture-based PSNR rig for encoder/decoder roundtrips
-status: pending
+status: in_review
 description: Build a frame-aligned PSNR rig (checked-in reference PNGs fed through BgraFileSource → encoder → decoder) so encoder/decoder PSNR actually measures encode loss instead of timecode drift. Today every scenario ends up as "n/a" per docs/testing.md.
 github_issue: 305
 adapters:

@@ -156,11 +156,23 @@ fn source_thread_loop(
             std::ptr::copy_nonoverlapping(frame_buf.as_ptr(), dst_ptr, frame_size);
         }
 
+        // Upload the pixel buffer as a GPU texture so downstream encoder
+        // processors (which read via `resolve_videoframe_texture`) can
+        // consume the frame. Without this, the encoder fails with
+        // "No texture or pixel buffer found for surface_id ...".
+        let surface_id = pool_id.to_string();
+        if let Err(e) =
+            gpu_context.upload_pixel_buffer_as_texture(&surface_id, &pixel_buffer, width, height)
+        {
+            tracing::error!("[BgraFileSource] Failed to upload frame texture: {e}");
+            break;
+        }
+
         let timestamp_ns =
             clock_start.elapsed().as_nanos() as i64 + frame_idx as i64 * frame_interval_ns;
 
         let video_frame = Videoframe {
-            surface_id: pool_id.to_string(),
+            surface_id,
             width,
             height,
             timestamp_ns: timestamp_ns.to_string(),
