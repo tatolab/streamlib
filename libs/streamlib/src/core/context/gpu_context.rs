@@ -838,6 +838,415 @@ impl std::fmt::Debug for GpuContext {
     }
 }
 
+// =============================================================================
+// Capability-typed wrappers — see docs/design/gpu-capability-sandbox.md
+// =============================================================================
+//
+// `GpuContextSandbox` is the capability handed to `process()` — at runtime it
+// is meant to expose only cheap, pool-backed, non-allocating operations.
+// `GpuContextFullAccess` is handed to `setup()` and inside
+// `sandbox.escalate(|full| …)` closures — it exposes the full API, including
+// GPU memory allocation.
+//
+// In this task (#321) both types are thin newtype wrappers around `GpuContext`
+// and expose the **same** full API. This is a pure compile-time addition with
+// no behavior change. The API surface split and the `escalate()` primitive
+// land in #323/#324.
+
+/// Restricted GPU capability handed to `process()`.
+///
+/// In the final design this type exposes only cheap, pool-backed, non-allocating
+/// operations; heavier work must go through [`GpuContextSandbox::escalate`].
+/// In #321 it delegates every method to the inner [`GpuContext`] — no surface
+/// is hidden yet.
+#[derive(Clone)]
+pub struct GpuContextSandbox {
+    inner: GpuContext,
+}
+
+/// Privileged GPU capability handed to `setup()` and inside
+/// [`GpuContextSandbox::escalate`] closures.
+///
+/// Exposes the full GPU API, including resource creation and device-wide
+/// operations. In #321 this is the same surface as [`GpuContextSandbox`];
+/// the split lands in #324.
+#[derive(Clone)]
+pub struct GpuContextFullAccess {
+    inner: GpuContext,
+}
+
+impl GpuContextSandbox {
+    /// Wrap a [`GpuContext`] as a sandbox capability.
+    pub(crate) fn new(inner: GpuContext) -> Self {
+        Self { inner }
+    }
+
+    /// Borrow the inner [`GpuContext`]. Crate-internal — call sites migrate
+    /// to capability-typed methods as #322 lands.
+    pub(crate) fn inner(&self) -> &GpuContext {
+        &self.inner
+    }
+
+    /// Produce a [`GpuContextFullAccess`] view of the same underlying context.
+    ///
+    /// In #323 this becomes private and only reachable through
+    /// `escalate(|full| …)`; today it is `pub(crate)` so the runtime and
+    /// processor setup paths can still reach the full surface without a
+    /// compile-time barrier.
+    pub(crate) fn to_full_access(&self) -> GpuContextFullAccess {
+        GpuContextFullAccess {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl GpuContextFullAccess {
+    /// Wrap a [`GpuContext`] as a full-access capability.
+    pub(crate) fn new(inner: GpuContext) -> Self {
+        Self { inner }
+    }
+
+    /// Borrow the inner [`GpuContext`]. Crate-internal — call sites migrate
+    /// to capability-typed methods as #322 lands.
+    pub(crate) fn inner(&self) -> &GpuContext {
+        &self.inner
+    }
+
+    /// Produce a [`GpuContextSandbox`] view of the same underlying context.
+    pub(crate) fn to_sandbox(&self) -> GpuContextSandbox {
+        GpuContextSandbox {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// GpuContext-mirroring API — both capability types expose the full surface in
+// #321. Restrictions land in #324; until then the methods delegate 1:1.
+// -----------------------------------------------------------------------------
+
+impl GpuContextSandbox {
+    /// Acquire the processor-setup mutex.
+    pub fn lock_processor_setup(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.inner.lock_processor_setup()
+    }
+
+    /// Wait for the GPU device to become idle.
+    pub fn wait_device_idle(&self) -> Result<()> {
+        self.inner.wait_device_idle()
+    }
+
+    /// Acquire a pixel buffer from the shared pool.
+    pub fn acquire_pixel_buffer(
+        &self,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+        self.inner.acquire_pixel_buffer(width, height, format)
+    }
+
+    /// Get a pixel buffer by its pool id.
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
+        self.inner.get_pixel_buffer(pool_id)
+    }
+
+    /// Resolve a [`Videoframe`]'s buffer from its surface_id.
+    pub fn resolve_videoframe_buffer(&self, frame: &Videoframe) -> Result<RhiPixelBuffer> {
+        self.inner.resolve_videoframe_buffer(frame)
+    }
+
+    /// Register a texture in the same-process texture cache.
+    pub fn register_texture(&self, id: &str, texture: StreamTexture) {
+        self.inner.register_texture(id, texture);
+    }
+
+    /// Resolve a [`Videoframe`]'s texture.
+    pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
+        self.inner.resolve_videoframe_texture(frame)
+    }
+
+    /// Acquire a new output texture with a UUID and register it in the cache.
+    pub fn acquire_output_texture(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<(String, StreamTexture)> {
+        self.inner.acquire_output_texture(width, height, format)
+    }
+
+    /// Upload a pixel buffer's contents to a GPU texture and register it.
+    #[cfg(target_os = "linux")]
+    pub fn upload_pixel_buffer_as_texture(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &RhiPixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        self.inner
+            .upload_pixel_buffer_as_texture(surface_id, pixel_buffer, width, height)
+    }
+
+    /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
+    pub fn set_camera_timeline_semaphore(&self, raw_handle: u64) {
+        self.inner.set_camera_timeline_semaphore(raw_handle);
+    }
+
+    /// Get the camera's timeline semaphore handle (0 = not set).
+    pub fn camera_timeline_semaphore(&self) -> u64 {
+        self.inner.camera_timeline_semaphore()
+    }
+
+    /// Get a reference to the RHI GPU device.
+    pub fn device(&self) -> &Arc<GpuDevice> {
+        self.inner.device()
+    }
+
+    /// Get the texture pool for acquiring pooled textures.
+    pub fn texture_pool(&self) -> &TexturePool {
+        self.inner.texture_pool()
+    }
+
+    /// Acquire a texture from the pool.
+    pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
+        self.inner.acquire_texture(desc)
+    }
+
+    /// Get the shared command queue.
+    pub fn command_queue(&self) -> &RhiCommandQueue {
+        self.inner.command_queue()
+    }
+
+    /// Create a command buffer from the shared queue.
+    pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
+        self.inner.create_command_buffer()
+    }
+
+    /// Get the underlying Metal device (macOS only).
+    #[cfg(target_os = "macos")]
+    pub fn metal_device(&self) -> &crate::metal::rhi::MetalDevice {
+        self.inner.metal_device()
+    }
+
+    /// Create a texture cache for converting pixel buffers to texture views.
+    #[cfg(target_os = "macos")]
+    pub fn create_texture_cache(&self) -> Result<crate::core::rhi::RhiTextureCache> {
+        self.inner.create_texture_cache()
+    }
+
+    /// Copy pixels between same-format, same-size buffers.
+    pub fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+        self.inner.blit_copy(src, dest)
+    }
+
+    /// Copy from raw IOSurface to a pixel buffer.
+    ///
+    /// # Safety
+    /// - `src` must be a valid IOSurfaceRef pointer
+    /// - The IOSurface must remain valid for the duration of the blit
+    #[cfg(target_os = "macos")]
+    pub unsafe fn blit_copy_iosurface(
+        &self,
+        src: crate::apple::corevideo_ffi::IOSurfaceRef,
+        dest: &RhiPixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        unsafe { self.inner.blit_copy_iosurface(src, dest, width, height) }
+    }
+
+    /// Clear the blitter's texture cache to free GPU memory.
+    pub fn clear_blitter_cache(&self) {
+        self.inner.clear_blitter_cache();
+    }
+
+    /// Get the surface store, if initialized.
+    pub fn surface_store(&self) -> Option<SurfaceStore> {
+        self.inner.surface_store()
+    }
+
+    /// Check in a pixel buffer to the broker.
+    pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+        self.inner.check_in_surface(pixel_buffer)
+    }
+
+    /// Check out a surface by ID.
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+        self.inner.check_out_surface(surface_id)
+    }
+}
+
+impl GpuContextFullAccess {
+    /// Acquire the processor-setup mutex.
+    pub fn lock_processor_setup(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.inner.lock_processor_setup()
+    }
+
+    /// Wait for the GPU device to become idle.
+    pub fn wait_device_idle(&self) -> Result<()> {
+        self.inner.wait_device_idle()
+    }
+
+    /// Acquire a pixel buffer from the shared pool.
+    pub fn acquire_pixel_buffer(
+        &self,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+    ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+        self.inner.acquire_pixel_buffer(width, height, format)
+    }
+
+    /// Get a pixel buffer by its pool id.
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
+        self.inner.get_pixel_buffer(pool_id)
+    }
+
+    /// Resolve a [`Videoframe`]'s buffer from its surface_id.
+    pub fn resolve_videoframe_buffer(&self, frame: &Videoframe) -> Result<RhiPixelBuffer> {
+        self.inner.resolve_videoframe_buffer(frame)
+    }
+
+    /// Register a texture in the same-process texture cache.
+    pub fn register_texture(&self, id: &str, texture: StreamTexture) {
+        self.inner.register_texture(id, texture);
+    }
+
+    /// Resolve a [`Videoframe`]'s texture.
+    pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
+        self.inner.resolve_videoframe_texture(frame)
+    }
+
+    /// Acquire a new output texture with a UUID and register it in the cache.
+    pub fn acquire_output_texture(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<(String, StreamTexture)> {
+        self.inner.acquire_output_texture(width, height, format)
+    }
+
+    /// Upload a pixel buffer's contents to a GPU texture and register it.
+    #[cfg(target_os = "linux")]
+    pub fn upload_pixel_buffer_as_texture(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &RhiPixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        self.inner
+            .upload_pixel_buffer_as_texture(surface_id, pixel_buffer, width, height)
+    }
+
+    /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
+    pub fn set_camera_timeline_semaphore(&self, raw_handle: u64) {
+        self.inner.set_camera_timeline_semaphore(raw_handle);
+    }
+
+    /// Get the camera's timeline semaphore handle (0 = not set).
+    pub fn camera_timeline_semaphore(&self) -> u64 {
+        self.inner.camera_timeline_semaphore()
+    }
+
+    /// Get a reference to the RHI GPU device.
+    pub fn device(&self) -> &Arc<GpuDevice> {
+        self.inner.device()
+    }
+
+    /// Get the texture pool for acquiring pooled textures.
+    pub fn texture_pool(&self) -> &TexturePool {
+        self.inner.texture_pool()
+    }
+
+    /// Acquire a texture from the pool.
+    pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
+        self.inner.acquire_texture(desc)
+    }
+
+    /// Get the shared command queue.
+    pub fn command_queue(&self) -> &RhiCommandQueue {
+        self.inner.command_queue()
+    }
+
+    /// Create a command buffer from the shared queue.
+    pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
+        self.inner.create_command_buffer()
+    }
+
+    /// Get the underlying Metal device (macOS only).
+    #[cfg(target_os = "macos")]
+    pub fn metal_device(&self) -> &crate::metal::rhi::MetalDevice {
+        self.inner.metal_device()
+    }
+
+    /// Create a texture cache for converting pixel buffers to texture views.
+    #[cfg(target_os = "macos")]
+    pub fn create_texture_cache(&self) -> Result<crate::core::rhi::RhiTextureCache> {
+        self.inner.create_texture_cache()
+    }
+
+    /// Copy pixels between same-format, same-size buffers.
+    pub fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+        self.inner.blit_copy(src, dest)
+    }
+
+    /// Copy from raw IOSurface to a pixel buffer.
+    ///
+    /// # Safety
+    /// - `src` must be a valid IOSurfaceRef pointer
+    /// - The IOSurface must remain valid for the duration of the blit
+    #[cfg(target_os = "macos")]
+    pub unsafe fn blit_copy_iosurface(
+        &self,
+        src: crate::apple::corevideo_ffi::IOSurfaceRef,
+        dest: &RhiPixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        unsafe { self.inner.blit_copy_iosurface(src, dest, width, height) }
+    }
+
+    /// Clear the blitter's texture cache to free GPU memory.
+    pub fn clear_blitter_cache(&self) {
+        self.inner.clear_blitter_cache();
+    }
+
+    /// Get the surface store, if initialized.
+    pub fn surface_store(&self) -> Option<SurfaceStore> {
+        self.inner.surface_store()
+    }
+
+    /// Check in a pixel buffer to the broker.
+    pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+        self.inner.check_in_surface(pixel_buffer)
+    }
+
+    /// Check out a surface by ID.
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+        self.inner.check_out_surface(surface_id)
+    }
+}
+
+impl std::fmt::Debug for GpuContextSandbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuContextSandbox")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for GpuContextFullAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GpuContextFullAccess")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -909,5 +1318,41 @@ mod tests {
         assert_eq!(gpu.camera_timeline_semaphore(), 0xCAFE_BABE);
 
         println!("Texture cache miss + timeline semaphore sharing: OK");
+    }
+
+    #[test]
+    fn test_capability_newtypes_delegate_and_convert() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        // Sandbox delegates to the same underlying context (shared semaphore state).
+        let sandbox = GpuContextSandbox::new(gpu.clone());
+        sandbox.set_camera_timeline_semaphore(0xA11CE);
+        assert_eq!(gpu.camera_timeline_semaphore(), 0xA11CE);
+        assert_eq!(sandbox.camera_timeline_semaphore(), 0xA11CE);
+
+        // Conversion sandbox -> full shares the same context.
+        let full = sandbox.to_full_access();
+        assert_eq!(full.camera_timeline_semaphore(), 0xA11CE);
+        full.set_camera_timeline_semaphore(0xB0B);
+        assert_eq!(sandbox.camera_timeline_semaphore(), 0xB0B);
+
+        // Conversion full -> sandbox round-trips.
+        let sandbox2 = full.to_sandbox();
+        assert_eq!(sandbox2.camera_timeline_semaphore(), 0xB0B);
+
+        // Delegated accessor reaches the same RHI device.
+        let device_ptr_gpu = Arc::as_ptr(gpu.device());
+        let device_ptr_sandbox = Arc::as_ptr(sandbox.device());
+        let device_ptr_full = Arc::as_ptr(full.device());
+        assert_eq!(device_ptr_gpu, device_ptr_sandbox);
+        assert_eq!(device_ptr_gpu, device_ptr_full);
+
+        println!("GpuContextSandbox + GpuContextFullAccess delegation: OK");
     }
 }
