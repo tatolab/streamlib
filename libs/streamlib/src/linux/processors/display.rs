@@ -700,12 +700,17 @@ impl DisplayEventLoopHandler {
             // Camera texture is already in SHADER_READ_ONLY_OPTIMAL (set by camera
             // after compute dispatch). Only need swapchain barrier.
             // Camera timeline semaphore wait in queue_submit2 ensures the texture is ready.
+            // UNDEFINED old_layout: on first use each swapchain image is in UNDEFINED,
+            // and on subsequent uses the previous contents are unconditionally discarded
+            // by the CLEAR load_op below — so declaring UNDEFINED (which permits any
+            // current layout) is valid for every frame and avoids a VUID-vkCmdDraw-None-09600
+            // mismatch on the first submit for each image.
             let swapchain_barrier = vk::ImageMemoryBarrier2::builder()
                 .src_stage_mask(vk::PipelineStageFlags2::NONE)
                 .src_access_mask(vk::AccessFlags2::NONE)
                 .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                 .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .old_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
                 .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
                 .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
