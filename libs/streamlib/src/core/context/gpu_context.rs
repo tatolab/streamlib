@@ -842,10 +842,10 @@ impl std::fmt::Debug for GpuContext {
 // Capability-typed wrappers — see docs/design/gpu-capability-sandbox.md
 // =============================================================================
 //
-// `GpuContextSandbox` is the capability handed to `process()` — at runtime it
-// is meant to expose only cheap, pool-backed, non-allocating operations.
+// `GpuContextLimitedAccess` is the capability handed to `process()` — at runtime
+// it is meant to expose only cheap, pool-backed, non-allocating operations.
 // `GpuContextFullAccess` is handed to `setup()` and inside
-// `sandbox.escalate(|full| …)` closures — it exposes the full API, including
+// `limited.escalate(|full| …)` closures — it exposes the full API, including
 // GPU memory allocation.
 //
 // In this task (#321) both types are thin newtype wrappers around `GpuContext`
@@ -856,27 +856,27 @@ impl std::fmt::Debug for GpuContext {
 /// Restricted GPU capability handed to `process()`.
 ///
 /// In the final design this type exposes only cheap, pool-backed, non-allocating
-/// operations; heavier work must go through [`GpuContextSandbox::escalate`].
+/// operations; heavier work must go through [`GpuContextLimitedAccess::escalate`].
 /// In #321 it delegates every method to the inner [`GpuContext`] — no surface
 /// is hidden yet.
 #[derive(Clone)]
-pub struct GpuContextSandbox {
+pub struct GpuContextLimitedAccess {
     inner: GpuContext,
 }
 
 /// Privileged GPU capability handed to `setup()` and inside
-/// [`GpuContextSandbox::escalate`] closures.
+/// [`GpuContextLimitedAccess::escalate`] closures.
 ///
 /// Exposes the full GPU API, including resource creation and device-wide
-/// operations. In #321 this is the same surface as [`GpuContextSandbox`];
+/// operations. In #321 this is the same surface as [`GpuContextLimitedAccess`];
 /// the split lands in #324.
 #[derive(Clone)]
 pub struct GpuContextFullAccess {
     inner: GpuContext,
 }
 
-impl GpuContextSandbox {
-    /// Wrap a [`GpuContext`] as a sandbox capability.
+impl GpuContextLimitedAccess {
+    /// Wrap a [`GpuContext`] as a limited-access capability.
     pub(crate) fn new(inner: GpuContext) -> Self {
         Self { inner }
     }
@@ -912,9 +912,9 @@ impl GpuContextFullAccess {
         &self.inner
     }
 
-    /// Produce a [`GpuContextSandbox`] view of the same underlying context.
-    pub(crate) fn to_sandbox(&self) -> GpuContextSandbox {
-        GpuContextSandbox {
+    /// Produce a [`GpuContextLimitedAccess`] view of the same underlying context.
+    pub(crate) fn to_limited_access(&self) -> GpuContextLimitedAccess {
+        GpuContextLimitedAccess {
             inner: self.inner.clone(),
         }
     }
@@ -925,7 +925,7 @@ impl GpuContextFullAccess {
 // #321. Restrictions land in #324; until then the methods delegate 1:1.
 // -----------------------------------------------------------------------------
 
-impl GpuContextSandbox {
+impl GpuContextLimitedAccess {
     /// Acquire the processor-setup mutex.
     pub fn lock_processor_setup(&self) -> std::sync::MutexGuard<'_, ()> {
         self.inner.lock_processor_setup()
@@ -1231,9 +1231,9 @@ impl GpuContextFullAccess {
     }
 }
 
-impl std::fmt::Debug for GpuContextSandbox {
+impl std::fmt::Debug for GpuContextLimitedAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GpuContextSandbox")
+        f.debug_struct("GpuContextLimitedAccess")
             .field("inner", &self.inner)
             .finish()
     }
@@ -1330,29 +1330,29 @@ mod tests {
             }
         };
 
-        // Sandbox delegates to the same underlying context (shared semaphore state).
-        let sandbox = GpuContextSandbox::new(gpu.clone());
-        sandbox.set_camera_timeline_semaphore(0xA11CE);
+        // Limited-access delegates to the same underlying context (shared semaphore state).
+        let limited = GpuContextLimitedAccess::new(gpu.clone());
+        limited.set_camera_timeline_semaphore(0xA11CE);
         assert_eq!(gpu.camera_timeline_semaphore(), 0xA11CE);
-        assert_eq!(sandbox.camera_timeline_semaphore(), 0xA11CE);
+        assert_eq!(limited.camera_timeline_semaphore(), 0xA11CE);
 
-        // Conversion sandbox -> full shares the same context.
-        let full = sandbox.to_full_access();
+        // Conversion limited -> full shares the same context.
+        let full = limited.to_full_access();
         assert_eq!(full.camera_timeline_semaphore(), 0xA11CE);
         full.set_camera_timeline_semaphore(0xB0B);
-        assert_eq!(sandbox.camera_timeline_semaphore(), 0xB0B);
+        assert_eq!(limited.camera_timeline_semaphore(), 0xB0B);
 
-        // Conversion full -> sandbox round-trips.
-        let sandbox2 = full.to_sandbox();
-        assert_eq!(sandbox2.camera_timeline_semaphore(), 0xB0B);
+        // Conversion full -> limited round-trips.
+        let limited2 = full.to_limited_access();
+        assert_eq!(limited2.camera_timeline_semaphore(), 0xB0B);
 
         // Delegated accessor reaches the same RHI device.
         let device_ptr_gpu = Arc::as_ptr(gpu.device());
-        let device_ptr_sandbox = Arc::as_ptr(sandbox.device());
+        let device_ptr_limited = Arc::as_ptr(limited.device());
         let device_ptr_full = Arc::as_ptr(full.device());
-        assert_eq!(device_ptr_gpu, device_ptr_sandbox);
+        assert_eq!(device_ptr_gpu, device_ptr_limited);
         assert_eq!(device_ptr_gpu, device_ptr_full);
 
-        println!("GpuContextSandbox + GpuContextFullAccess delegation: OK");
+        println!("GpuContextLimitedAccess + GpuContextFullAccess delegation: OK");
     }
 }

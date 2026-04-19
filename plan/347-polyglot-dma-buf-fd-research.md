@@ -5,7 +5,7 @@ status: pending
 description: Gated by #320 §8.Q4. #325 ships with pool-IDs-only over JSON-RPC, which can't carry file descriptors. Before the next Linux polyglot iteration (Python/Deno processors rendering to host-allocated DMA-BUF textures), we need a story for FD passing. Compares Unix-domain-socket side-channel, iceoryx2 FD transfer (if available), and generalizing the macOS SurfaceStore broker pattern to Linux.
 github_issue: 347
 dependencies:
-  - "down:Design doc: GpuContextSandbox + GpuContextFullAccess API surface"
+  - "down:Design doc: GpuContextLimitedAccess + GpuContextFullAccess API surface"
 adapters:
   github: builtin
 ---
