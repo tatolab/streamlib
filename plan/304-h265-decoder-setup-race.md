@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Flaky H.265 decoder DEVICE_LOST during setup
-status: in_review
+status: completed
 description: One-in-N runs of vulkan-video-roundtrip h265 /dev/video2 hit a DEVICE_LOST on the H.265 decoder between first-frame-encoded and display swapchain creation. Retry passes clean. Suspected concurrent-Vulkan-ops race during decoder/display setup, same window h264_encoder.rs already guards via device_wait_idle.
 github_issue: 304
 adapters:
