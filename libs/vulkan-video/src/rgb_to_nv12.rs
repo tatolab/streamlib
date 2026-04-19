@@ -175,11 +175,19 @@ impl RgbToNv12Converter {
         let mut h265_profile = vk::VideoEncodeH265ProfileInfoKHR::builder()
             .std_profile_idc(vk::video::STD_VIDEO_H265_PROFILE_IDC_MAIN);
 
+        // Source image profile MUST match the video session profile exactly,
+        // including the encode_usage pNext chain. Without this, the validation
+        // layer reports VUID-vkCmdEncodeVideoKHR-pEncodeInfo-08206. Keep every
+        // field here in sync with `encode/session.rs` and `encode/staging.rs`.
+        let mut encode_usage = vk::VideoEncodeUsageInfoKHR::builder()
+            .tuning_mode(vk::VideoEncodeTuningModeKHR::LOW_LATENCY);
+
         let mut profile_info = vk::VideoProfileInfoKHR::builder()
             .video_codec_operation(codec_flag)
             .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::_420)
             .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8)
-            .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8);
+            .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::_8)
+            .push_next(&mut encode_usage);
 
         if codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
             profile_info = profile_info.push_next(&mut h264_profile);
@@ -206,9 +214,7 @@ impl RgbToNv12Converter {
             .samples(vk::SampleCountFlags::_1)
             .tiling(vk::ImageTiling::OPTIMAL)
             .flags(
-                vk::ImageCreateFlags::MUTABLE_FORMAT
-                    | vk::ImageCreateFlags::EXTENDED_USAGE
-                    | vk::ImageCreateFlags::VIDEO_PROFILE_INDEPENDENT_KHR,
+                vk::ImageCreateFlags::MUTABLE_FORMAT | vk::ImageCreateFlags::EXTENDED_USAGE,
             )
             .usage(
                 vk::ImageUsageFlags::STORAGE
