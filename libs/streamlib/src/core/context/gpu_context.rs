@@ -379,6 +379,11 @@ pub struct GpuContext {
     /// Raw handle for the camera's timeline semaphore (same-process GPU-GPU sync).
     /// Stored as u64 for platform-agnostic GpuContext (0 = not set).
     camera_timeline_semaphore_handle: Arc<AtomicU64>,
+    /// Serializes processor setup() across threads so concurrent GPU resource
+    /// creation (video sessions, DPB images, swapchain) can't race on the
+    /// device. The compiler acquires this during Phase 4 of spawn_processor
+    /// and releases it after waiting for the device to go idle.
+    processor_setup_lock: Arc<Mutex<()>>,
 }
 
 impl GpuContext {
@@ -395,6 +400,7 @@ impl GpuContext {
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
+            processor_setup_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -411,7 +417,33 @@ impl GpuContext {
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
+            processor_setup_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Acquire the processor-setup mutex. The compiler wraps each processor's
+    /// `setup()` call with this lock and a subsequent wait-for-idle so
+    /// concurrent setups can't race on GPU resource creation.
+    pub fn lock_processor_setup(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.processor_setup_lock
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Wait for the GPU device to become idle. On Vulkan backends this calls
+    /// `vkDeviceWaitIdle`; on other backends this is a no-op.
+    pub fn wait_device_idle(&self) -> Result<()> {
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
+        {
+            use vulkanalia::vk::DeviceV1_0;
+            unsafe { self.device.inner.device().device_wait_idle() }.map_err(|e| {
+                StreamError::GpuError(format!("device_wait_idle failed: {e}"))
+            })?;
+        }
+        Ok(())
     }
 
     /// Create platform-specific blitter.
