@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Retest camera + encoder + display roundtrip after Vulkan cleanup
-status: in_review
+status: completed
 description: Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, #303, #304, #305, #306, #315, #316, and #330 land and confirm release SIGSEGV and Cam Link OOM are both gone.
 github_issue: 294
 dependencies:
