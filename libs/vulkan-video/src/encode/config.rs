@@ -361,30 +361,35 @@ pub struct SimpleEncoderConfig {
     /// When `true`, SPS/PPS bytes are prepended to every IDR packet.
     /// Defaults to `true` in streaming mode, `false` otherwise.
     pub prepend_header_to_idr: Option<bool>,
-    /// Driver quality level knob (maps to `VkVideoEncodeQualityLevelInfoKHR`).
-    /// `None` = codec-specific real-time default from [`default_quality_level`].
-    /// Clamped to `max_quality_levels - 1` as a safety floor in the session.
+    /// Vulkan API encoder-effort index passed via `VkVideoEncodeQualityLevelInfoKHR`.
+    /// This is NOT the H.265 stream `level_idc` (e.g. 4.1, 5.0), NOT the
+    /// profile/tier, and NOT QP / rate-control — those live elsewhere in the
+    /// encoder config. Valid values are `0..VkVideoEncodeCapabilitiesKHR::max_quality_levels`;
+    /// the session clamps to that range as a safety floor. `None` uses the
+    /// per-codec default from [`default_quality_level`]. The correct framing
+    /// of this knob on NVIDIA's driver for H.265 is under research in #330.
     pub quality_level: Option<u32>,
 }
 
-/// Real-time encoder quality level default, per codec.
+/// Default Vulkan encoder-effort index per codec.
 ///
-/// Measured via the #305 PSNR rig against the checked-in fixtures. Higher
-/// levels burn more GPU per frame for (potentially) better quality without
-/// adding frame delay. The `session` clamps against
-/// `VkVideoEncodeCapabilitiesKHR::max_quality_levels` as a safety floor.
+/// This is the `VkVideoEncodeQualityLevelInfoKHR::quality_level` index, not
+/// anything from the H.265 or H.264 codec specs. On NVIDIA's Vulkan Video
+/// driver (RTX 3090 reference):
+/// - H.264 reports `max_quality_levels = 4`; indices 0..=3 are accepted, and
+///   the #305 PSNR rig shows identical Y PSNR across all four on natural
+///   content at CQP 18 (the PSNR floor is set by QP/rate-control, not this
+///   index). 0 is picked for the lowest GPU cost per frame; callers can
+///   override with `quality_level = Some(n)` to burn more GPU per frame.
+/// - H.265 currently reports `max_quality_levels = 1` via this specific
+///   Vulkan API. The H.265 codec spec itself has plenty of quality-relevant
+///   knobs (profile, tier, `level_idc`, QP, rate-control) — those are
+///   configured elsewhere in the encoder config. The Vulkan-side framing of
+///   H.265 quality on this driver is still being audited in #330; this
+///   default may move once that research lands.
 pub fn default_quality_level(codec: Codec) -> u32 {
     match codec {
-        // NVIDIA RTX 3090 exposes maxQualityLevels = 4 for H.264 (levels 0..=3).
-        // All four levels produce equivalent Y PSNR on the #305 fixtures
-        // (~29.5 dB on complex_pattern, ≥45 dB on gradients/solids), so the
-        // quality_level knob is not the PSNR bottleneck — CQP/preset is.
-        // Default to 0 for the lowest GPU cost per frame; callers who want to
-        // burn more GPU can set `quality_level = Some(max)` explicitly.
         Codec::H264 => 0,
-        // NVIDIA RTX 3090 exposes maxQualityLevels = 1 for H.265 (only level 0).
-        // Documented explicitly instead of relying on the driver's clamp to
-        // silently land at zero.
         Codec::H265 => 0,
     }
 }

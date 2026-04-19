@@ -35,10 +35,11 @@ pub struct H264EncoderConfig {
     #[serde(rename = "profile")]
     pub profile: Option<String>,
 
-    /// Driver encode quality level (VkVideoEncodeQualityLevelInfoKHR). Higher
-    /// = better quality, more GPU compute per frame; does not add frame
-    /// delay. Unset = codec-specific real-time default; clamped against
-    /// VkVideoEncodeCapabilitiesKHR::maxQualityLevels.
+    /// Vulkan API encoder-effort index
+    /// (VkVideoEncodeQualityLevelInfoKHR::quality_level). NOT the H.264
+    /// profile, NOT QP, NOT rate-control — those are configured elsewhere.
+    /// Valid values are 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the
+    /// session clamps as a safety floor. Unset = codec default.
     #[serde(rename = "quality_level")]
     pub quality_level: Option<u32>,
 

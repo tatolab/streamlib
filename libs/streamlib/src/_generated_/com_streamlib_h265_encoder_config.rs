@@ -31,11 +31,13 @@ pub struct H265EncoderConfig {
     #[serde(rename = "keyframe_interval_seconds")]
     pub keyframe_interval_seconds: Option<f32>,
 
-    /// Driver encode quality level (VkVideoEncodeQualityLevelInfoKHR). Higher
-    /// = better quality, more GPU compute per frame; does not add frame
-    /// delay. Unset = codec-specific real-time default; clamped against
-    /// VkVideoEncodeCapabilitiesKHR::maxQualityLevels. Note: NVIDIA RTX 3090
-    /// exposes only level 0 for H.265.
+    /// Vulkan API encoder-effort index
+    /// (VkVideoEncodeQualityLevelInfoKHR::quality_level). NOT the H.265
+    /// level_idc (e.g. 4.1, 5.0), NOT the profile/tier, NOT QP/rate-
+    /// control — those are configured elsewhere. Valid values are
+    /// 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the session clamps as
+    /// a safety floor. Unset = codec default. The correct framing of this knob
+    /// on NVIDIA's Vulkan driver for H.265 is under research in #330.
     #[serde(rename = "quality_level")]
     pub quality_level: Option<u32>,
 
