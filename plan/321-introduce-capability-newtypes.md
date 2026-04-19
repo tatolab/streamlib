@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Introduce GpuContextSandbox + GpuContextFullAccess newtype wrappers
-status: pending
+status: in_review
 description: Add the two capability types as thin newtype wrappers around `GpuContext`. Both expose the same full API initially — pure compile-time change with no behavioral impact.
 github_issue: 321
 dependencies:

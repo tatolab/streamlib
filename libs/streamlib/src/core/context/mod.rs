@@ -12,7 +12,7 @@ pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
     SoftwareAudioClock,
 };
-pub use gpu_context::GpuContext;
+pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextSandbox};
 pub use runtime_context::RuntimeContext;
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
