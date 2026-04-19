@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: "Research: H.265 encoder quality configuration on Vulkan Video / NVIDIA"
-status: in_review
+status: completed
 description: Audit the distinct quality-affecting knobs on our H.265 encode path (Vulkan API effort index vs. H.265 SPS profile/tier/level vs. QP/rate-control vs. tuning_mode) before #294 retest. #306's framing conflated several concepts; reviewer recalls a specific proper H.265 configuration fix. Research-only deliverable with a question list for interactive review.
 github_issue: 330
 adapters:
