@@ -33,7 +33,7 @@ optionalProperties:
     metadata:
       description: "Seconds between keyframes (default: 2.0). Converted to frames using the encoder's fps. Ignored if keyframe_interval (frames) is set."
     type: float32
-  quality_level:
+  effort_level:
     metadata:
-      description: "Vulkan API encoder-effort index (VkVideoEncodeQualityLevelInfoKHR::quality_level). NOT the H.265 level_idc (e.g. 4.1, 5.0), NOT the profile/tier, NOT QP/rate-control — those are configured elsewhere. Valid values are 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the session clamps as a safety floor. Unset = codec default. The correct framing of this knob on NVIDIA's Vulkan driver for H.265 is under research in #330."
+      description: "Vulkan API encoder-effort index (VkVideoEncodeQualityLevelInfoKHR::quality_level). Higher = more GPU work per frame (mode decision, RD-opt, motion search). NOT an H.265 quality knob — profile, tier, level_idc, QP, and rate-control are configured elsewhere. Valid values are 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the session clamps as a safety floor. Unset = codec default. See docs/research/h265-encoder-quality-knobs.md."
     type: uint32

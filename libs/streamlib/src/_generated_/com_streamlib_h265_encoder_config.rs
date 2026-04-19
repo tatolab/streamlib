@@ -14,6 +14,17 @@ pub struct H265EncoderConfig {
     #[serde(rename = "bitrate_bps")]
     pub bitrate_bps: Option<u32>,
 
+    /// Vulkan API encoder-effort index
+    /// (VkVideoEncodeQualityLevelInfoKHR::quality_level). Higher =
+    /// more GPU work per frame (mode decision, RD-opt, motion search).
+    /// NOT an H.265 quality knob — profile, tier, level_idc, QP,
+    /// and rate-control are configured elsewhere. Valid values are
+    /// 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the session clamps as
+    /// a safety floor. Unset = codec default. See docs/research/h265-encoder-
+    /// quality-knobs.md.
+    #[serde(rename = "effort_level")]
+    pub effort_level: Option<u32>,
+
     /// Frames per second for encoder timing (default: 60).
     #[serde(rename = "fps")]
     pub fps: Option<u32>,
@@ -30,16 +41,6 @@ pub struct H265EncoderConfig {
     /// encoder's fps. Ignored if keyframe_interval (frames) is set.
     #[serde(rename = "keyframe_interval_seconds")]
     pub keyframe_interval_seconds: Option<f32>,
-
-    /// Vulkan API encoder-effort index
-    /// (VkVideoEncodeQualityLevelInfoKHR::quality_level). NOT the H.265
-    /// level_idc (e.g. 4.1, 5.0), NOT the profile/tier, NOT QP/rate-
-    /// control — those are configured elsewhere. Valid values are
-    /// 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the session clamps as
-    /// a safety floor. Unset = codec default. The correct framing of this knob
-    /// on NVIDIA's Vulkan driver for H.265 is under research in #330.
-    #[serde(rename = "quality_level")]
-    pub quality_level: Option<u32>,
 
     /// Video width in pixels (default: 1280).
     #[serde(rename = "width")]

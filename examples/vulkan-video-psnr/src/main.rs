@@ -46,10 +46,9 @@ fn main() -> Result<()> {
     ))?;
     println!("+ BgraFileSource: {source}");
 
-    // Optional quality_level override (used by the #306 PSNR-sweep harness to
-    // pick the real-time default). `STREAMLIB_ENCODER_QUALITY_LEVEL` unset →
-    // library default for the codec.
-    let quality_level: Option<u32> = std::env::var("STREAMLIB_ENCODER_QUALITY_LEVEL")
+    // Optional effort_level override (Vulkan encoder-effort index — not a codec
+    // quality setting). Used by the #306 sweep harness; unset → library default.
+    let effort_level: Option<u32> = std::env::var("STREAMLIB_ENCODER_EFFORT_LEVEL")
         .ok()
         .and_then(|s| s.parse().ok());
 
@@ -57,14 +56,14 @@ fn main() -> Result<()> {
         runtime.add_processor(H265EncoderProcessor::node(H265EncoderProcessor::Config {
             width: Some(width),
             height: Some(height),
-            quality_level,
+            effort_level,
             ..Default::default()
         }))?
     } else {
         runtime.add_processor(H264EncoderProcessor::node(H264EncoderProcessor::Config {
             width: Some(width),
             height: Some(height),
-            quality_level,
+            effort_level,
             ..Default::default()
         }))?
     };

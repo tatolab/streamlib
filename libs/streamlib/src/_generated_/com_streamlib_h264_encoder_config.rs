@@ -14,6 +14,15 @@ pub struct H264EncoderConfig {
     #[serde(rename = "bitrate_bps")]
     pub bitrate_bps: Option<u32>,
 
+    /// Vulkan API encoder-effort index
+    /// (VkVideoEncodeQualityLevelInfoKHR::quality_level). Higher = more GPU
+    /// work per frame (mode decision, RD-opt, motion search). NOT an H.264
+    /// quality knob — profile, QP, and rate-control are configured elsewhere.
+    /// Valid values are 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the
+    /// session clamps as a safety floor. Unset = codec default.
+    #[serde(rename = "effort_level")]
+    pub effort_level: Option<u32>,
+
     /// Frames per second for encoder timing (default: 60).
     #[serde(rename = "fps")]
     pub fps: Option<u32>,
@@ -34,14 +43,6 @@ pub struct H264EncoderConfig {
     /// H.264 profile: baseline, main, or high (default: main).
     #[serde(rename = "profile")]
     pub profile: Option<String>,
-
-    /// Vulkan API encoder-effort index
-    /// (VkVideoEncodeQualityLevelInfoKHR::quality_level). NOT the H.264
-    /// profile, NOT QP, NOT rate-control — those are configured elsewhere.
-    /// Valid values are 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the
-    /// session clamps as a safety floor. Unset = codec default.
-    #[serde(rename = "quality_level")]
-    pub quality_level: Option<u32>,
 
     /// Video width in pixels (default: 1280).
     #[serde(rename = "width")]
