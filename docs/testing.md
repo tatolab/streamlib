@@ -4,6 +4,11 @@ When to use which testing technique in streamlib. Unit tests are always the firs
 line of defense — this doc focuses on the cases where unit tests are not enough
 and you need to exercise the real pipeline.
 
+> For the **canonical `cargo test` command, the exclusion list, and per-crate
+> expected test counts**, see [`docs/testing-baseline.md`](testing-baseline.md).
+> Run the workspace baseline before reaching for an E2E scenario — most bugs
+> surface there first.
+
 ---
 
 ## Decision tree
