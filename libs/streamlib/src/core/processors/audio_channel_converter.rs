@@ -3,7 +3,7 @@
 
 use crate::_generated_::com_tatolab_audio_channel_converter_config::Mode;
 use crate::_generated_::Audioframe;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
 #[crate::processor("com.tatolab.audio_channel_converter")]
 pub struct AudioChannelConverterProcessor {
@@ -11,10 +11,7 @@ pub struct AudioChannelConverterProcessor {
 }
 
 impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         tracing::info!(
             "[AudioChannelConverter] setup() - mode: {:?}",
             self.config.mode
@@ -22,7 +19,7 @@ impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processo
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         tracing::info!(
             "[AudioChannelConverter] Stopped (processed {} frames)",
             self.frame_counter
@@ -30,7 +27,7 @@ impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processo
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         // Check if data available before trying to read
         if !self.inputs.has_data("audio_in") {
             return Ok(());

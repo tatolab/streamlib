@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use streamlib::core::rhi::{PixelFormat, RhiTextureCache, RhiTextureView};
-use streamlib::core::{GpuContext, Result, RuntimeContext, StreamError};
+use streamlib::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 use streamlib::Videoframe;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,17 +88,14 @@ pub struct BlendingCompositorProcessor {
 }
 
 impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         let result = (|| {
             tracing::info!("BlendingCompositor: Setting up (reactive mode)...");
 
-            self.gpu_context = Some(ctx.gpu.clone());
+            self.gpu_context = Some(ctx.gpu_limited_access().clone());
             self.texture_cache = None;
 
-            let metal_device_ref = ctx.gpu.device().metal_device_ref();
+            let metal_device_ref = ctx.gpu_full_access().device().metal_device_ref();
 
             // Compile shaders
             let shader_source = include_str!("shaders/blending_compositor.metal");
@@ -196,7 +193,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         tracing::info!(
             "BlendingCompositor: Shutdown ({} frames)",
             self.frame_count.load(Ordering::Relaxed)
@@ -204,7 +201,7 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         let process_start = Instant::now();
         let frame_count = self.frame_count.load(Ordering::Relaxed);
 

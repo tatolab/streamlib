@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::com_tatolab_display_config::ScalingMode;
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
+use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrSurfaceExtensionInstanceCommands as _;
@@ -36,7 +36,7 @@ static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
 #[crate::processor("com.tatolab.display")]
 pub struct LinuxDisplayProcessor {
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
     window_id: LinuxWindowId,
     window_title: String,
     width: u32,
@@ -49,13 +49,10 @@ pub struct LinuxDisplayProcessor {
 }
 
 impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         let result = (|| {
             tracing::trace!("Display: setup() called");
-            self.gpu_context = Some(ctx.gpu.clone());
+            self.gpu_context = Some(ctx.gpu_limited_access().clone());
             self.window_id = LinuxWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
             self.width = self.config.width;
             self.height = self.config.height;
@@ -81,12 +78,12 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         tracing::info!("Display {}: Teardown", self.window_title);
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!(
             "Display {}: start() called — spawning Vulkan + winit render thread",
             self.window_id.0
@@ -247,7 +244,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!("Display {}: stop() called", self.window_id.0);
 
         self.running.store(false, Ordering::Release);
@@ -338,7 +335,7 @@ struct PersistentPipelineState {
 struct DisplayEventLoopHandler {
     window: Option<Window>,
     vulkan_device: Arc<crate::vulkan::rhi::VulkanDevice>,
-    gpu_context: GpuContext,
+    gpu_context: GpuContextLimitedAccess,
     inputs: crate::iceoryx2::InputMailboxes,
     running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,

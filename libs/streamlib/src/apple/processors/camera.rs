@@ -5,7 +5,7 @@ use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
+use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -166,7 +166,7 @@ impl CaptureSessionInitState {
 /// This is guaranteed by holding `_outputs_arc` which keeps the Arc alive.
 struct CameraCallbackContext {
     output_writer: *const OutputWriter,
-    gpu_context: crate::core::GpuContext,
+    gpu_context: crate::core::GpuContextLimitedAccess,
     frame_count: std::sync::atomic::AtomicU64,
     /// Negotiated capture frame rate (set during AVFoundation init, read by callback).
     capture_fps: std::sync::atomic::AtomicU32,
@@ -360,17 +360,14 @@ pub struct AppleCameraProcessor {
 }
 
 impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         // Store GPU context for surface store access in start()
-        self.gpu_context = Some(ctx.gpu.clone());
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("Camera: setup() complete");
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         let frame_count = CAMERA_CALLBACK_CONTEXT
             .get()
             .map(|ctx| ctx.frame_count.load(Ordering::Relaxed))
@@ -384,7 +381,7 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
     }
 
     // Callback-driven start - initializes AVFoundation, returns immediately
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!("Camera: start() called - setting up callback-driven capture");
 
         // Get GPU context (set during setup)
@@ -426,7 +423,7 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!("Camera: stop() called");
 
         // TODO: Stop AVCaptureSession - requires keeping a reference to it

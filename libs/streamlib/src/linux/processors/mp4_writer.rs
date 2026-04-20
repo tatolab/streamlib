@@ -8,8 +8,8 @@
 // The writer knows nothing about codecs — ffmpeg handles encoding.
 
 use crate::_generated_::Videoframe;
-use crate::core::context::GpuContext;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::context::GpuContextLimitedAccess;
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
@@ -21,7 +21,7 @@ use std::process::{Child, Command, Stdio};
 #[crate::processor("com.streamlib.linux_mp4_writer")]
 pub struct LinuxMp4WriterProcessor {
     /// GPU context for resolving Videoframe pixel buffers.
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
 
     /// ffmpeg child process (spawned on first frame).
     ffmpeg_process: Option<Child>,
@@ -31,8 +31,8 @@ pub struct LinuxMp4WriterProcessor {
 }
 
 impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
-    async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
-        self.gpu_context = Some(ctx.gpu.clone());
+    async fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
             "[LinuxMp4Writer] Initialized (output: {}, config fps: {})",
             self.config.output_path,
@@ -41,7 +41,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<()> {
+    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         if let Some(mut child) = self.ffmpeg_process.take() {
             // Close stdin to signal ffmpeg that input is done.
             drop(child.stdin.take());
@@ -70,7 +70,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }

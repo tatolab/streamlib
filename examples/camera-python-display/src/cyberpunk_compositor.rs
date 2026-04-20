@@ -27,7 +27,7 @@ use streamlib::core::rhi::{
     PixelBufferDescriptor, PixelFormat, RhiPixelBufferPool, RhiTextureCache,
 };
 use streamlib::core::{
-    GpuContext, LinkInput, LinkOutput, Result, RuntimeContext, StreamError, VideoFrame,
+    GpuContext, LinkInput, LinkOutput, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError, VideoFrame,
 };
 
 /// Set real-time thread priority using Mach time-constraint policy.
@@ -246,19 +246,16 @@ fn run_vision_segmentation(
 }
 
 impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         let result = (|| {
             tracing::info!("CyberpunkCompositor: Setting up (reactive mode)...");
 
-            self.gpu_context = Some(ctx.gpu.clone());
+            self.gpu_context = Some(ctx.gpu_limited_access().clone());
             self.start_time = Some(Instant::now());
             self.texture_cache = None; // Deferred to avoid race with camera init
 
             // Get Metal device ref for shader/resource creation
-            let metal_device_ref = ctx.gpu.device().metal_device_ref();
+            let metal_device_ref = ctx.gpu_full_access().device().metal_device_ref();
 
             // Compile shaders
             let shader_source = include_str!("shaders/cyberpunk_compositor.metal");
@@ -435,7 +432,7 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
         std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         self.segmentation_running.store(false, Ordering::Release);
         self.segmentation_sender.take();
 
@@ -450,7 +447,7 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         let Some(frame) = self.video_in.read() else {
             return Ok(());
         };

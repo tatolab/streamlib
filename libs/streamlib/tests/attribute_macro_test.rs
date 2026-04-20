@@ -7,7 +7,7 @@
 //! with YAML schema definitions.
 
 use streamlib::core::GeneratedProcessor;
-use streamlib::core::{EmptyConfig, Result, RuntimeContext};
+use streamlib::core::{EmptyConfig, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 // Define a simple processor using YAML schema
 #[streamlib::processor("com.streamlib.test.processor")]
@@ -15,18 +15,15 @@ pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
 impl streamlib::ManualProcessor for TestProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // With iceoryx2 IPC, data is read via self.inputs.read("port_name")
         // and written via self.outputs.write("port_name", &data)
         // For this test, we just verify the structure exists
@@ -104,18 +101,15 @@ mod _generated_ {
 pub struct ConfiguredProcessor;
 
 impl streamlib::ContinuousProcessor for ConfiguredProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         // Access config
         let _threshold = self.config.threshold;
         Ok(())

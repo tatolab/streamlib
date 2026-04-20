@@ -3,7 +3,7 @@
 
 use crate::_generated_::com_tatolab_audio_mixer_config::Strategy;
 use crate::_generated_::Audioframe;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
 #[crate::processor("com.tatolab.audio_mixer")]
 pub struct AudioMixerProcessor {
@@ -13,10 +13,7 @@ pub struct AudioMixerProcessor {
 }
 
 impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         self.sample_rate = 0;
         self.buffer_size = 0;
         self.frame_counter = 0;
@@ -28,12 +25,12 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         tracing::info!("AudioMixer: Stopped");
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         tracing::debug!("[AudioMixer] process() called");
 
         // Check both inputs have data

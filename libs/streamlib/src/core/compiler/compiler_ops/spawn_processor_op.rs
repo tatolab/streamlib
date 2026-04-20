@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::scheduling::{scheduling_strategy_for_processor, SchedulingStrategy};
-use crate::core::context::RuntimeContext;
+use crate::core::context::{RuntimeContext, RuntimeContextFullAccess};
 use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
@@ -393,15 +393,18 @@ fn spawn_dedicated_thread(
                     thread_name,
                     thread_id
                 );
+                // Build the privileged ctx view for setup. The borrow is
+                // scoped to this block, so `process()` inside the loop
+                // below can never observe a full-access handle.
+                let full_ctx = RuntimeContextFullAccess::new(&processor_context);
                 let mut guard = processor_arc_clone.lock();
-                if let Err(e) =
-                    tokio_handle.block_on(guard.__generated_setup(processor_context.clone()))
-                {
+                if let Err(e) = tokio_handle.block_on(guard.__generated_setup(&full_ctx)) {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
                     *state_arc.lock() = ProcessorState::Error;
                     return;
                 }
                 drop(guard);
+                drop(full_ctx);
 
                 if let Err(e) = runtime_ctx_clone.gpu.wait_device_idle() {
                     tracing::error!(

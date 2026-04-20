@@ -7,9 +7,9 @@
 // VulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
 
 use crate::_generated_::{Encodedvideoframe, Videoframe};
-use crate::core::context::GpuContext;
+use crate::core::context::GpuContextLimitedAccess;
 use crate::core::rhi::PixelFormat;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
 use vulkan_video::{Codec, SimpleDecoder, SimpleDecoderConfig};
 
@@ -23,15 +23,15 @@ pub struct H265DecoderProcessor {
     decoder: Option<SimpleDecoder>,
 
     /// GPU context for creating pixel buffers for decoded frames.
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
 
     /// Frames decoded counter.
     frames_decoded: u64,
 }
 
 impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
-    async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
-        self.gpu_context = Some(ctx.gpu.clone());
+    async fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
         let decoder_config = SimpleDecoderConfig {
             codec: Codec::H265,
@@ -41,7 +41,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             ..Default::default()
         };
 
-        let vulkan_device = &ctx.gpu.device().inner;
+        let vulkan_device = &ctx.gpu_full_access().device().inner;
 
         let decode_queue = vulkan_device.video_decode_queue().ok_or_else(|| {
             StreamError::Runtime("GPU does not support Vulkan Video decode".into())
@@ -51,7 +51,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         })?;
 
         let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
-            ctx.gpu.device().inner.clone();
+            ctx.gpu_full_access().device().inner.clone();
 
         let mut decoder = SimpleDecoder::from_device(
             decoder_config,
@@ -86,7 +86,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         // is DMA-BUF exportable; sizing it to the decoder's max extent ensures
         // the underlying VMA block is large enough for any SPS up to that cap.
         let (aligned_w, aligned_h) = decoder.aligned_extent();
-        let (_probe_id, _probe_buffer) = ctx.gpu.acquire_pixel_buffer(
+        let (_probe_id, _probe_buffer) = ctx.gpu_full_access().acquire_pixel_buffer(
             aligned_w,
             aligned_h,
             crate::core::rhi::PixelFormat::Rgba32,
@@ -98,7 +98,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<()> {
+    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
             "[H265Decoder] Shutting down"
@@ -108,7 +108,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         Ok(())
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("encoded_video_in") {
             return Ok(());
         }

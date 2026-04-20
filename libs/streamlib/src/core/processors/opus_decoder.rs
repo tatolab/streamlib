@@ -7,7 +7,7 @@
 
 use crate::_generated_::{Audioframe, Encodedaudioframe};
 use crate::core::streaming::OpusDecoder;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
 // ============================================================================
 // PROCESSOR
@@ -23,7 +23,7 @@ pub struct OpusDecoderProcessor {
 }
 
 impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
-    async fn setup(&mut self, _ctx: RuntimeContext) -> Result<()> {
+    async fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         let sample_rate = self.config.sample_rate.unwrap_or(48000);
         let channels = self.config.channels.unwrap_or(2) as usize;
 
@@ -39,7 +39,7 @@ impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<()> {
+    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
             "[OpusDecoder] Shutting down"
@@ -48,7 +48,7 @@ impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
         Ok(())
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("encoded_audio_in") {
             return Ok(());
         }

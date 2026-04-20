@@ -296,7 +296,7 @@ fn generate_processor_impl_from_schema(
             "Reactive",
             quote! { ::streamlib::core::ReactiveProcessor },
             quote! {
-                <Self as ::streamlib::core::ReactiveProcessor>::process(self)
+                <Self as ::streamlib::core::ReactiveProcessor>::process(self, ctx)
             },
             quote! {
                 Err(::streamlib::core::StreamError::Runtime(
@@ -314,15 +314,16 @@ fn generate_processor_impl_from_schema(
             "Manual",
             quote! { ::streamlib::core::ManualProcessor },
             quote! {
+                let _ = ctx;
                 Err(::streamlib::core::StreamError::Runtime(
                     "process() is only valid for Reactive/Continuous execution modes.".into()
                 ))
             },
             quote! {
-                <Self as ::streamlib::core::ManualProcessor>::start(self)
+                <Self as ::streamlib::core::ManualProcessor>::start(self, ctx)
             },
             quote! {
-                <Self as ::streamlib::core::ManualProcessor>::stop(self)
+                <Self as ::streamlib::core::ManualProcessor>::stop(self, ctx)
             },
         ),
         ProcessorSchemaExecution::Continuous { interval_ms } => {
@@ -332,7 +333,7 @@ fn generate_processor_impl_from_schema(
                 "Continuous",
                 quote! { ::streamlib::core::ContinuousProcessor },
                 quote! {
-                    <Self as ::streamlib::core::ContinuousProcessor>::process(self)
+                    <Self as ::streamlib::core::ContinuousProcessor>::process(self, ctx)
                 },
                 quote! {
                     Err(::streamlib::core::StreamError::Runtime(
@@ -397,15 +398,17 @@ fn generate_processor_impl_from_schema(
 
             #from_config_body
 
-            fn process(&mut self) -> ::streamlib::core::Result<()> {
+            fn process(&mut self, ctx: &::streamlib::core::RuntimeContextLimitedAccess<'_>) -> ::streamlib::core::Result<()> {
                 #process_impl
             }
 
-            fn start(&mut self) -> ::streamlib::core::Result<()> {
+            fn start(&mut self, ctx: &::streamlib::core::RuntimeContextFullAccess<'_>) -> ::streamlib::core::Result<()> {
+                let _ = ctx;
                 #start_impl
             }
 
-            fn stop(&mut self) -> ::streamlib::core::Result<()> {
+            fn stop(&mut self, ctx: &::streamlib::core::RuntimeContextFullAccess<'_>) -> ::streamlib::core::Result<()> {
+                let _ = ctx;
                 #stop_impl
             }
 
@@ -427,20 +430,32 @@ fn generate_processor_impl_from_schema(
                 Some(self.audio.status_arc())
             }
 
-            fn __generated_setup(&mut self, ctx: ::streamlib::core::RuntimeContext) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
+            fn __generated_setup<'a>(
+                &'a mut self,
+                ctx: &'a ::streamlib::core::RuntimeContextFullAccess<'a>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send + 'a {
                 <Self as #processor_trait>::setup(self, ctx)
             }
 
-            fn __generated_teardown(&mut self) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
-                <Self as #processor_trait>::teardown(self)
+            fn __generated_teardown<'a>(
+                &'a mut self,
+                ctx: &'a ::streamlib::core::RuntimeContextFullAccess<'a>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send + 'a {
+                <Self as #processor_trait>::teardown(self, ctx)
             }
 
-            fn __generated_on_pause(&mut self) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
-                <Self as #processor_trait>::on_pause(self)
+            fn __generated_on_pause<'a>(
+                &'a mut self,
+                ctx: &'a ::streamlib::core::RuntimeContextLimitedAccess<'a>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send + 'a {
+                <Self as #processor_trait>::on_pause(self, ctx)
             }
 
-            fn __generated_on_resume(&mut self) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
-                <Self as #processor_trait>::on_resume(self)
+            fn __generated_on_resume<'a>(
+                &'a mut self,
+                ctx: &'a ::streamlib::core::RuntimeContextLimitedAccess<'a>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send + 'a {
+                <Self as #processor_trait>::on_resume(self, ctx)
             }
         }
     }

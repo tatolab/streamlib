@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use streamlib::core::rhi::{PixelFormat, RhiTextureCache};
-use streamlib::core::{GpuContext, Result, RuntimeContext, StreamError};
+use streamlib::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 use streamlib::Videoframe;
 
 /// Uniform buffer for CRT + Film Grain shader.
@@ -82,18 +82,15 @@ pub struct CrtFilmGrainProcessor {
 }
 
 impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         let result = (|| {
             tracing::info!("CrtFilmGrain: Setting up...");
 
-            self.gpu_context = Some(ctx.gpu.clone());
+            self.gpu_context = Some(ctx.gpu_limited_access().clone());
             self.start_time = Some(Instant::now());
             self.texture_cache = None; // Deferred to first process()
 
-            let metal_device_ref = ctx.gpu.device().metal_device_ref();
+            let metal_device_ref = ctx.gpu_full_access().device().metal_device_ref();
 
             // Compile shaders
             let shader_source = include_str!("shaders/crt_film_grain.metal");
@@ -172,7 +169,7 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
         std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         tracing::info!(
             "CrtFilmGrain: Shutdown ({} frames)",
             self.frame_count.load(Ordering::Relaxed)
@@ -180,7 +177,7 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }

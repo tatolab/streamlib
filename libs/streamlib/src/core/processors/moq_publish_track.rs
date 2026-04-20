@@ -8,7 +8,7 @@
 // and publishes the bytes as-is to the shared MoQ relay session.
 
 use crate::core::streaming::MoqPublishSession;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ pub struct MoqPublishTrackProcessor {
 }
 
 impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
-    async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
+    async fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         // Track name: use config value or auto-generate from processor ID
         self.track_name = self.config.track_name.clone().unwrap_or_else(|| {
             ctx.processor_id()
@@ -53,7 +53,7 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<()> {
+    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         tracing::info!(
             frames_published = self.frames_published,
             "[MoqPublishTrack] Shutting down"
@@ -62,7 +62,7 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
         Ok(())
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("data_in") {
             return Ok(());
         }

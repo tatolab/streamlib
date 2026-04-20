@@ -8,9 +8,9 @@
 // pipelines with pre-generated fixture files.
 
 use crate::_generated_::Videoframe;
-use crate::core::context::GpuContext;
+use crate::core::context::GpuContextLimitedAccess;
 use crate::core::rhi::PixelFormat;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 
 use std::io::Read;
@@ -23,18 +23,15 @@ use std::sync::Arc;
 
 #[crate::processor("com.streamlib.bgra_file_source")]
 pub struct BgraFileSourceProcessor {
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
     is_running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
     source_thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl crate::core::ManualProcessor for BgraFileSourceProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        self.gpu_context = Some(ctx.gpu.clone());
+    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
             "[BgraFileSource] Setup (file: {}, {}x{}@{}fps, {} frames)",
             self.config.file_path,
@@ -46,7 +43,7 @@ impl crate::core::ManualProcessor for BgraFileSourceProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         let frames = self.frame_counter.load(Ordering::Relaxed);
         tracing::info!("[BgraFileSource] Teardown ({frames} frames streamed)");
         self.is_running.store(false, Ordering::Release);
@@ -56,7 +53,7 @@ impl crate::core::ManualProcessor for BgraFileSourceProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
             StreamError::Configuration("GPU context not initialized".into())
         })?;
@@ -96,7 +93,7 @@ impl crate::core::ManualProcessor for BgraFileSourceProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.is_running.store(false, Ordering::Release);
         if let Some(handle) = self.source_thread_handle.take() {
             let _ = handle.join();
@@ -115,7 +112,7 @@ fn source_thread_loop(
     is_running: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
     outputs: Arc<OutputWriter>,
-    gpu_context: GpuContext,
+    gpu_context: GpuContextLimitedAccess,
 ) {
     let frame_size = (width * height * 4) as usize;
 

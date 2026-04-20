@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::Videoframe;
-use crate::core::Result;
+use crate::core::{Result, RuntimeContextFullAccess};
 
 #[crate::processor("com.tatolab.simple_passthrough")]
 pub struct SimplePassthroughProcessor;
@@ -10,7 +10,7 @@ pub struct SimplePassthroughProcessor;
 impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
     // Uses default setup() and teardown() implementations from Processor trait
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Read from iceoryx2 input mailbox and write to output
         if self.inputs.has_data("input") {
             let frame: Videoframe = self.inputs.read("input")?;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use streamlib::_generated_::Videoframe;
 use streamlib::core::rhi::PixelFormat;
-use streamlib::core::{GpuContext, ManualProcessor, Result, RuntimeContext, StreamError};
+use streamlib::core::{GpuContextLimitedAccess, ManualProcessor, Result, RuntimeContextFullAccess, StreamError};
 use streamlib_plugin_abi::export_plugin;
 
 #[link(name = "CoreVideo", kind = "framework")]
@@ -26,17 +26,14 @@ pub struct GrayscaleProcessor {
 }
 
 impl ManualProcessor for GrayscaleProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        self.gpu_context = Some(ctx.gpu.clone());
+    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
         self.running = Arc::new(AtomicBool::new(false));
         tracing::info!("GrayscaleProcessor: setup complete");
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let inputs = std::mem::take(&mut self.inputs);
         let outputs = std::mem::take(&mut self.outputs);
         let gpu = self
@@ -168,7 +165,7 @@ impl ManualProcessor for GrayscaleProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.running.store(false, Ordering::Release);
 
         if let Some(handle) = self.processing_thread.take() {

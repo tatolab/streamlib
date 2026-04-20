@@ -5,7 +5,9 @@ use crate::core::pubsub::{topics, Event, EventListener, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use crate::PROCESSOR_REGISTRY;
 use crate::{
-    core::{Result, RuntimeContext},
+    core::{
+        Result, RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+    },
     ProcessorSpec,
 };
 use axum::{
@@ -209,24 +211,40 @@ pub struct ApiServerProcessor {
 }
 
 impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
-    fn setup(&mut self, ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {
-        self.runtime_ctx = Some(ctx);
+    fn setup<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
+        // Stash a cloned RuntimeContext so the long-lived HTTP server task
+        // spawned in start() can reach tokio_handle + runtime_id. The crate-
+        // internal accessor makes the extraction explicit; external crates
+        // can't reach this escape hatch.
+        self.runtime_ctx = Some(ctx.clone_runtime_context());
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl Future<Output = Result<()>> + Send {
+    fn teardown<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    fn on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
+    fn on_pause<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    fn on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+    fn on_resume<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         use axum::routing::get;
 
         let ctx = self
@@ -393,7 +411,7 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Unregister from broker before stopping
         if let Some(runtime_id) = self.runtime_id.take() {
             let endpoint = broker_endpoint();

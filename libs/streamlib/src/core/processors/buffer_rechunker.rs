@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::Audioframe;
-use crate::core::{Result, RuntimeContext};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 #[crate::processor("com.tatolab.buffer_rechunker")]
 pub struct BufferRechunkerProcessor {
@@ -13,10 +13,7 @@ pub struct BufferRechunkerProcessor {
 }
 
 impl crate::core::ReactiveProcessor for BufferRechunkerProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         let target_size = self.config.target_buffer_size as usize;
         // Pre-allocate buffer with extra capacity for any channel count
         self.buffer = Vec::with_capacity(target_size * 16);
@@ -27,12 +24,12 @@ impl crate::core::ReactiveProcessor for BufferRechunkerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         tracing::info!("[BufferRechunker] Stopped");
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("audio_in") {
             return Ok(());
         }

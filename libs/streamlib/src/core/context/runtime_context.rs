@@ -576,6 +576,11 @@ impl RuntimeContext {
 pub struct RuntimeContextFullAccess<'a> {
     base: &'a RuntimeContext,
     gpu_full: GpuContextFullAccess,
+    /// Limited-access handle held alongside the full-access one so privileged
+    /// lifecycle methods (e.g. Manual-mode `start()` spawning a worker thread)
+    /// can hand a stashable `GpuContextLimitedAccess` to downstream code
+    /// without having to re-wrap the base `GpuContext`.
+    gpu_limited: GpuContextLimitedAccess,
 }
 
 /// Restricted-GPU [`RuntimeContext`] view passed to `process` / `on_pause` /
@@ -598,12 +603,32 @@ impl<'a> RuntimeContextFullAccess<'a> {
         Self {
             base,
             gpu_full: GpuContextFullAccess::new(base.gpu.clone()),
+            gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
         }
     }
 
     /// Privileged GPU capability — allocations, device-wide ops, escalate.
     pub fn gpu_full_access(&self) -> &GpuContextFullAccess {
         &self.gpu_full
+    }
+
+    /// Restricted GPU capability. Cloneable — hand to a Manual-mode worker
+    /// thread during `start()` so it can participate in the hot path with
+    /// limited-access operations only.
+    pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {
+        &self.gpu_limited
+    }
+
+    /// Crate-internal escape hatch for processors that need to spawn a
+    /// tokio task that outlives the call (e.g. `api_server` HTTP server).
+    /// The clone returned is a plain `RuntimeContext`, not a capability
+    /// view — but the same rule still applies: it doesn't give the caller
+    /// any GPU handle they didn't already have access to through
+    /// `gpu_full_access()` / `gpu_limited_access()`. Commit 5 of #322
+    /// narrows the base type's API so even this clone can't hand out GPU
+    /// ops directly.
+    pub(crate) fn clone_runtime_context(&self) -> RuntimeContext {
+        self.base.clone()
     }
 
     // ------------ forwarded RuntimeContext accessors ------------

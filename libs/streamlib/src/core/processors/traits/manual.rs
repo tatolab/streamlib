@@ -3,44 +3,64 @@
 
 //! Manual processor trait.
 
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::Result;
-use crate::core::RuntimeContext;
 use std::future::Future;
 
 /// Processor with manual timing control.
 ///
-/// Runtime calls `process()` once, then you control all timing via callbacks,
+/// Runtime calls `start()` once, then you control all timing via callbacks,
 /// hardware interrupts, or external schedulers.
 /// Use for: audio output (hardware callbacks), display (vsync), cameras.
+///
+/// # Capability-typed lifecycle
+///
+/// `setup`, `teardown`, `start`, and `stop` are all resource-lifecycle
+/// methods and receive [`RuntimeContextFullAccess`] — privileged, allows
+/// resource allocation. `on_pause` and `on_resume` receive
+/// [`RuntimeContextLimitedAccess`] — hot-path-safe.
 pub trait ManualProcessor {
-    /// Called once when the processor starts.
-    fn setup(&mut self, _ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {
+    /// Called once when the processor starts. Privileged ctx.
+    fn setup<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    /// Called once when the processor stops.
-    fn teardown(&mut self) -> impl Future<Output = Result<()>> + Send {
+    /// Called once when the processor stops. Privileged ctx.
+    fn teardown<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    /// Called when the processor is paused.
-    fn on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
+    /// Called when the processor is paused. Restricted ctx.
+    fn on_pause<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    /// Called when the processor is resumed after being paused.
-    fn on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+    /// Called when the processor is resumed after being paused. Restricted ctx.
+    fn on_resume<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> impl Future<Output = Result<()>> + Send + 'a {
         std::future::ready(Ok(()))
     }
 
-    /// Called once to start the processor.
-    fn start(&mut self) -> Result<()>;
+    /// Called once to start the processor. Privileged ctx.
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
 
-    /// Called when the processor should stop.
+    /// Called when the processor should stop. Privileged ctx.
     ///
-    /// This is called before teardown when the runtime shuts down or the processor is removed.
-    /// Use this to stop internal threads, callbacks, or processing loops started by `start()`.
-    fn stop(&mut self) -> Result<()> {
+    /// This is called before teardown when the runtime shuts down or the
+    /// processor is removed. Use this to stop internal threads, callbacks,
+    /// or processing loops started by `start()`.
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
 }

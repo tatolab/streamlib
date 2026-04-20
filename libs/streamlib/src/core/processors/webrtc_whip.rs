@@ -10,7 +10,7 @@
 use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
 use crate::core::streaming::{convert_audio_to_sample, convert_video_to_samples};
 use crate::core::streaming::{WhipClient, WhipConfig};
-use crate::core::{media_clock::MediaClock, Result, RuntimeContext, StreamError};
+use crate::core::{media_clock::MediaClock, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 use std::sync::Arc;
 use tokio::sync::mpsc as tokio_mpsc;
 
@@ -30,9 +30,6 @@ enum WhipClientMessage {
 
 #[crate::processor("com.streamlib.webrtc_whip")]
 pub struct WebRtcWhipProcessor {
-    // RuntimeContext for tokio handle
-    ctx: Option<RuntimeContext>,
-
     // Session state
     session_started: bool,
 
@@ -50,9 +47,7 @@ pub struct WebRtcWhipProcessor {
 }
 
 impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
-    async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
-        self.ctx = Some(ctx);
-
+    async fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         // Convert generated config to WhipConfig
         let whip_config = WhipConfig {
             endpoint_url: self.config.whip.endpoint_url.clone(),
@@ -66,7 +61,7 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<()> {
+    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         tracing::info!("[WebRtcWhip] Shutting down");
 
         // Drop the channel sender to signal the async task to terminate.
@@ -84,7 +79,7 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
         Ok(())
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         // Read pre-encoded video and audio
         let encoded_video: Option<Encodedvideoframe> = if self.inputs.has_data("encoded_video_in") {
             self.inputs.read("encoded_video_in").ok()
@@ -101,7 +96,7 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
         // Start session on first frame
         if !self.session_started && (encoded_video.is_some() || encoded_audio.is_some()) {
             tracing::info!("[WebRtcWhip] Starting session — received first encoded frame");
-            self.start_session()?;
+            self.start_session(ctx)?;
             self.session_started = true;
         }
 
@@ -121,7 +116,7 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
             let elapsed = current_time_ns - self.last_stats_time_ns;
 
             if elapsed >= 2_000_000_000 {
-                self.log_stats();
+                self.log_stats(ctx);
                 self.last_stats_time_ns = current_time_ns;
             }
         }
@@ -132,8 +127,8 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
 
 impl WebRtcWhipProcessor::Processor {
     /// Starts the WebRTC WHIP session.
-    fn start_session(&mut self) -> Result<()> {
-        let tokio_handle = self.ctx.as_ref().unwrap().tokio_handle().clone();
+    fn start_session(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        let tokio_handle = ctx.tokio_handle().clone();
         let client = self
             .whip_client
             .as_mut()
@@ -236,8 +231,8 @@ impl WebRtcWhipProcessor::Processor {
         Ok(())
     }
 
-    fn log_stats(&self) {
-        if let (Some(pc), Some(ctx)) = (&self.peer_connection_for_stats, &self.ctx) {
+    fn log_stats(&self, ctx: &RuntimeContextLimitedAccess<'_>) {
+        if let Some(pc) = &self.peer_connection_for_stats {
             let tokio_handle = ctx.tokio_handle();
             let stats = tokio_handle.block_on(pc.get_stats());
             let mut video_bytes_sent = 0u64;

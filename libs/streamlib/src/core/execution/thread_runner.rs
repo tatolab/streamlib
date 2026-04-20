@@ -10,11 +10,11 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::processors::{ProcessorInstance, ProcessorState};
 use crate::core::RuntimeContext;
-
 /// Duration to sleep when paused (avoids busy-waiting).
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
@@ -55,13 +55,14 @@ pub fn run_processor_loop(
         }
     }
 
-    // Teardown
+    // Teardown — privileged ctx.
     tracing::info!("[{}] Invoking teardown()...", id);
     {
+        let full_ctx = RuntimeContextFullAccess::new(&runtime_ctx);
         let mut guard = processor.lock();
         match runtime_ctx
             .tokio_handle()
-            .block_on(guard.__generated_teardown())
+            .block_on(guard.__generated_teardown(&full_ctx))
         {
             Ok(()) => tracing::info!("[{}] teardown() completed successfully", id),
             Err(e) => tracing::warn!("[{}] teardown() failed: {}", id, e),
@@ -97,26 +98,10 @@ fn run_continuous_mode(
         let is_paused = pause_gate.load(Ordering::Acquire);
 
         if is_paused && !was_paused {
-            tracing::info!("[{}] Invoking on_pause()...", id);
-            let mut guard = processor.lock();
-            match runtime_ctx
-                .tokio_handle()
-                .block_on(guard.__generated_on_pause())
-            {
-                Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
-                Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
-            }
+            dispatch_on_pause(id, processor, runtime_ctx);
             was_paused = true;
         } else if !is_paused && was_paused {
-            tracing::info!("[{}] Invoking on_resume()...", id);
-            let mut guard = processor.lock();
-            match runtime_ctx
-                .tokio_handle()
-                .block_on(guard.__generated_on_resume())
-            {
-                Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
-                Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
-            }
+            dispatch_on_resume(id, processor, runtime_ctx);
             was_paused = false;
         }
 
@@ -126,8 +111,9 @@ fn run_continuous_mode(
         }
 
         {
+            let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
             let mut guard = processor.lock();
-            if let Err(e) = guard.process() {
+            if let Err(e) = guard.process(&limited_ctx) {
                 tracing::warn!("[{}] process() failed: {}", id, e);
             }
         }
@@ -158,26 +144,10 @@ fn run_reactive_mode(
         let is_paused = pause_gate.load(Ordering::Acquire);
 
         if is_paused && !was_paused {
-            tracing::info!("[{}] Invoking on_pause()...", id);
-            let mut guard = processor.lock();
-            match runtime_ctx
-                .tokio_handle()
-                .block_on(guard.__generated_on_pause())
-            {
-                Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
-                Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
-            }
+            dispatch_on_pause(id, processor, runtime_ctx);
             was_paused = true;
         } else if !is_paused && was_paused {
-            tracing::info!("[{}] Invoking on_resume()...", id);
-            let mut guard = processor.lock();
-            match runtime_ctx
-                .tokio_handle()
-                .block_on(guard.__generated_on_resume())
-            {
-                Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
-                Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
-            }
+            dispatch_on_resume(id, processor, runtime_ctx);
             was_paused = false;
         }
 
@@ -187,8 +157,9 @@ fn run_reactive_mode(
         }
 
         {
+            let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
             let mut guard = processor.lock();
-            if let Err(e) = guard.process() {
+            if let Err(e) = guard.process(&limited_ctx) {
                 tracing::warn!("[{}] process() failed: {}", id, e);
             }
         }
@@ -205,11 +176,13 @@ fn run_manual_mode(
     runtime_ctx: &RuntimeContext,
 ) {
     // Call start() - for callback-driven processors this returns immediately
-    // after registering callbacks with OS (AVFoundation, CoreAudio, CVDisplayLink)
+    // after registering callbacks with OS (AVFoundation, CoreAudio, CVDisplayLink).
+    // start() is resource-lifecycle, so it receives full-access ctx.
     tracing::info!("[{}] Invoking start()...", id);
     {
+        let full_ctx = RuntimeContextFullAccess::new(runtime_ctx);
         let mut guard = processor.lock();
-        match guard.start() {
+        match guard.start(&full_ctx) {
             Ok(()) => tracing::info!("[{}] start() completed successfully", id),
             Err(e) => {
                 tracing::warn!("[{}] start() failed: {}", id, e);
@@ -233,39 +206,62 @@ fn run_manual_mode(
         let is_paused = pause_gate.load(Ordering::Acquire);
 
         if is_paused && !was_paused {
-            tracing::info!("[{}] Invoking on_pause()...", id);
-            let mut guard = processor.lock();
-            match runtime_ctx
-                .tokio_handle()
-                .block_on(guard.__generated_on_pause())
-            {
-                Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
-                Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
-            }
+            dispatch_on_pause(id, processor, runtime_ctx);
             was_paused = true;
         } else if !is_paused && was_paused {
-            tracing::info!("[{}] Invoking on_resume()...", id);
-            let mut guard = processor.lock();
-            match runtime_ctx
-                .tokio_handle()
-                .block_on(guard.__generated_on_resume())
-            {
-                Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
-                Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
-            }
+            dispatch_on_resume(id, processor, runtime_ctx);
             was_paused = false;
         }
 
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    // Call stop() - stops callbacks and waits for in-flight work
+    // Call stop() - stops callbacks and waits for in-flight work. Privileged ctx.
     tracing::info!("[{}] Invoking stop()...", id);
     {
+        let full_ctx = RuntimeContextFullAccess::new(runtime_ctx);
         let mut guard = processor.lock();
-        match guard.stop() {
+        match guard.stop(&full_ctx) {
             Ok(()) => tracing::info!("[{}] stop() completed successfully", id),
             Err(e) => tracing::warn!("[{}] stop() failed: {}", id, e),
         }
+    }
+}
+
+// Helper dispatchers for on_pause / on_resume — shared across Continuous,
+// Reactive, and Manual modes. Each builds a fresh RuntimeContextLimitedAccess
+// for the call. Keeping these tiny avoids duplicating the tokio-block-on +
+// logging boilerplate in every branch above.
+fn dispatch_on_pause(
+    id: &ProcessorUniqueId,
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    runtime_ctx: &RuntimeContext,
+) {
+    tracing::info!("[{}] Invoking on_pause()...", id);
+    let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
+    let mut guard = processor.lock();
+    match runtime_ctx
+        .tokio_handle()
+        .block_on(guard.__generated_on_pause(&limited_ctx))
+    {
+        Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
+        Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
+    }
+}
+
+fn dispatch_on_resume(
+    id: &ProcessorUniqueId,
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    runtime_ctx: &RuntimeContext,
+) {
+    tracing::info!("[{}] Invoking on_resume()...", id);
+    let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
+    let mut guard = processor.lock();
+    match runtime_ctx
+        .tokio_handle()
+        .block_on(guard.__generated_on_resume(&limited_ctx))
+    {
+        Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
+        Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
     }
 }

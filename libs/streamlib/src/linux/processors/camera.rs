@@ -7,7 +7,7 @@ use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
 use crate::core::rhi::{PixelFormat, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
+use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 use crate::vulkan::rhi::VulkanTexture;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -35,23 +35,20 @@ pub struct LinuxCameraDevice {
 #[crate::processor("com.tatolab.camera")]
 pub struct LinuxCameraProcessor {
     camera_name: String,
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
     is_capturing: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
     capture_thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: RuntimeContext,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        self.gpu_context = Some(ctx.gpu.clone());
+    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("Camera: setup() complete");
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
         let frame_count = self.frame_counter.load(Ordering::Relaxed);
         tracing::info!(
             "Camera {}: Teardown (generated {} frames)",
@@ -65,7 +62,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
             StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
         })?;
@@ -356,7 +353,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.is_capturing.store(false, Ordering::Release);
 
         if let Some(handle) = self.capture_thread_handle.take() {
@@ -383,7 +380,7 @@ fn capture_thread_loop(
     is_capturing: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
     outputs: Arc<OutputWriter>,
-    gpu_context: GpuContext,
+    gpu_context: GpuContextLimitedAccess,
     camera_name: String,
     width: u32,
     height: u32,

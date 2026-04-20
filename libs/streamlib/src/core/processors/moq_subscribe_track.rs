@@ -11,7 +11,7 @@
 
 use crate::core::media_clock::MediaClock;
 use crate::core::streaming::{MoqSubscribeSession, MoqTrackReader};
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 use std::future::Future;
 use std::sync::Arc;
@@ -53,7 +53,7 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
         }
     }
 
-    async fn teardown(&mut self) -> Result<()> {
+    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
         tracing::info!("[MoqSubscribeTrack] Shutting down");
 
         if let Some(tx) = self.shutdown_signal_sender.take() {
@@ -73,7 +73,7 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let ctx = self
             .runtime_context
             .as_ref()
@@ -101,7 +101,7 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if let Some(tx) = self.shutdown_signal_sender.take() {
             let _ = tx.send(());
         }
