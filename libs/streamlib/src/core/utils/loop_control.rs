@@ -79,6 +79,7 @@ where
 mod tests {
     use super::*;
     use crate::core::pubsub::PUBSUB;
+    use serial_test::serial;
 
     #[test]
     fn test_loop_control_break() {
@@ -97,6 +98,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_shutdown_event_exits_loop() {
         use crate::iceoryx2::Iceoryx2Node;
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -104,10 +106,15 @@ mod tests {
         use std::sync::Arc;
         use std::time::Duration;
 
-        // Ensure PUBSUB has an iceoryx2 backend. If already initialized by a
-        // parallel test this is a no-op (OnceLock ignores the second set).
+        // Ensure PUBSUB has an iceoryx2 backend. Use a process-unique runtime_id
+        // so iceoryx2's persistent service state under /tmp/iceoryx2/ doesn't
+        // collide with stale state left by crashed prior cargo-test invocations
+        // (which surfaced as PublishSubscribeOpenError(ServiceInCorruptedState)).
+        // If PUBSUB was already initialized by another test in this process,
+        // init() is a no-op (OnceLock), and the existing runtime_id is used.
         if let Ok(node) = Iceoryx2Node::new() {
-            PUBSUB.init("test-loop-control", node);
+            let runtime_id = format!("test-loop-control-{}", uuid::Uuid::new_v4());
+            PUBSUB.init(&runtime_id, node);
         }
 
         let counter = Arc::new(AtomicUsize::new(0));
