@@ -1,14 +1,27 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn main() {
+    eprintln!(
+        "camera-audio-recorder currently requires macOS — the Linux MP4 writer \
+         does not yet accept an audio input. Tracked as a follow-up to issue #358."
+    );
+    std::process::exit(2);
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::_generated_::com_tatolab_audio_channel_converter_config::Mode;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::_generated_::com_tatolab_audio_resampler_config::Quality;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::{
     input, output, request_audio_permission, request_camera_permission, AudioCaptureProcessor,
     AudioChannelConverterProcessor, AudioResamplerProcessor, CameraProcessor, Mp4WriterProcessor,
     Result, StreamRuntime,
 };
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn main() -> Result<()> {
 
     println!("=== Camera + Audio → MP4 Recorder Pipeline ===\n");

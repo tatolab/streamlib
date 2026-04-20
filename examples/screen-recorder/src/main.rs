@@ -1,12 +1,24 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn main() {
+    eprintln!(
+        "screen-recorder currently requires macOS — no Linux screen capture \
+         processor is available yet. Tracked as a follow-up to issue #358."
+    );
+    std::process::exit(2);
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::_generated_::com_tatolab_screen_capture_config::TargetType;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::{
     input, output, request_display_permission, Mp4WriterProcessor, Result, ScreenCaptureProcessor,
     StreamRuntime,
 };
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn main() -> Result<()> {
 
     println!("=== Screen Recorder Pipeline ===\n");

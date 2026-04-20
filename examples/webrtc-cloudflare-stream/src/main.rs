@@ -1,16 +1,36 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// Import nested config types from generated modules
+// The WebRTC WHIP processor accepts pre-encoded frames (H.264 video + Opus
+// audio). On Linux the Vulkan-video H264EncoderProcessor plus the
+// cross-platform OpusEncoderProcessor complete the pipeline. macOS does not
+// yet expose a VideoToolbox-backed H264EncoderProcessor; that port is tracked
+// as a follow-up to issue #358.
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!(
+        "webrtc-cloudflare-stream currently requires Linux — no \
+         H264EncoderProcessor is exposed on macOS yet. Tracked as a follow-up \
+         to issue #358."
+    );
+    std::process::exit(2);
+}
+
+#[cfg(target_os = "linux")]
 use streamlib::_generated_::com_streamlib_webrtc_whip_config::{Audio, Video, Whip};
+#[cfg(target_os = "linux")]
 use streamlib::_generated_::com_tatolab_audio_channel_converter_config::Mode;
+#[cfg(target_os = "linux")]
 use streamlib::_generated_::com_tatolab_audio_resampler_config::Quality;
+#[cfg(target_os = "linux")]
 use streamlib::{
     input, output, request_audio_permission, request_camera_permission, AudioCaptureProcessor,
     AudioChannelConverterProcessor, AudioResamplerProcessor, BufferRechunkerProcessor,
-    CameraProcessor, Result, StreamRuntime, WebRtcWhipProcessor,
+    CameraProcessor, H264EncoderConfig, H264EncoderProcessor, OpusEncoderConfig,
+    OpusEncoderProcessor, Result, StreamRuntime, WebRtcWhipProcessor,
 };
 
+#[cfg(target_os = "linux")]
 fn main() -> Result<()> {
     // Initialize rustls crypto provider (required by webrtc crate)
     // MUST be called before any TLS/DTLS operations
@@ -25,7 +45,6 @@ fn main() -> Result<()> {
     println!("🔒 Requesting camera permission...");
     if !request_camera_permission()? {
         eprintln!("❌ Camera permission denied!");
-        eprintln!("Please grant permission in System Settings → Privacy & Security → Camera");
         return Ok(());
     }
     println!("✅ Camera permission granted\n");
@@ -33,7 +52,6 @@ fn main() -> Result<()> {
     println!("🔒 Requesting microphone permission...");
     if !request_audio_permission()? {
         eprintln!("❌ Microphone permission denied!");
-        eprintln!("Please grant permission in System Settings → Privacy & Security → Microphone");
         return Ok(());
     }
     println!("✅ Microphone permission granted\n");
@@ -41,18 +59,39 @@ fn main() -> Result<()> {
     // Cloudflare Stream WHIP endpoint
     let whip_url = "https://customer-5xiy6nkciicmt85v.cloudflarestream.com/4e48912c1e10e84c9bab3777695145dbk0072e99f6ddb152545830a794d165fce/webRTC/publish";
 
+    // Shared video params (camera + encoder must match).
+    let video_width: u32 = 1280;
+    let video_height: u32 = 720;
+    let video_fps: u32 = 30;
+    let video_bitrate: u32 = 2_500_000;
+    let audio_bitrate: u32 = 128_000;
+
     println!("📹 Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id: None, // Use default camera
+        device_id: None,
         ..Default::default()
     }))?;
-    println!("✓ Camera added (capturing video @ 1280x720)\n");
+    println!(
+        "✓ Camera added (capturing video @ {}x{})\n",
+        video_width, video_height
+    );
+
+    println!("🎬 Adding H.264 encoder...");
+    let h264_encoder = runtime.add_processor(H264EncoderProcessor::node(H264EncoderConfig {
+        width: Some(video_width),
+        height: Some(video_height),
+        fps: Some(video_fps),
+        bitrate_bps: Some(video_bitrate),
+        profile: Some("baseline".to_string()),
+        ..Default::default()
+    }))?;
+    println!("✓ H.264 encoder added (Vulkan Video, baseline @ {} bps)\n", video_bitrate);
 
     // Audio pipeline is optional — skip if no audio device is available
     println!("🎤 Adding audio capture processor...");
     let audio_pipeline = match runtime.add_processor(AudioCaptureProcessor::node(
         AudioCaptureProcessor::Config {
-            device_id: None, // Use default microphone
+            device_id: None,
         },
     )) {
         Ok(audio_capture) => {
@@ -79,7 +118,13 @@ fn main() -> Result<()> {
                 },
             ))?;
 
-            Some((audio_capture, resampler, channel_converter, rechunker))
+            let opus_encoder = runtime.add_processor(OpusEncoderProcessor::node(
+                OpusEncoderConfig {
+                    bitrate_bps: Some(audio_bitrate),
+                },
+            ))?;
+
+            Some((audio_capture, resampler, channel_converter, rechunker, opus_encoder))
         }
         Err(e) => {
             println!("⚠️  Audio capture unavailable ({}), streaming video only\n", e);
@@ -91,60 +136,63 @@ fn main() -> Result<()> {
     let webrtc = runtime.add_processor(WebRtcWhipProcessor::node(WebRtcWhipProcessor::Config {
         whip: Whip {
             endpoint_url: whip_url.to_string(),
-            auth_token: None, // Cloudflare endpoint doesn't require authentication
+            auth_token: None,
             timeout_ms: 10000,
         },
         video: Video {
-            width: 1280,
-            height: 720,
-            fps: 30,
-            bitrate_bps: 2_500_000, // 2.5 Mbps
+            width: video_width,
+            height: video_height,
+            fps: video_fps,
+            bitrate_bps: video_bitrate,
         },
         audio: Audio {
             sample_rate: 48000,
-            channels: 2,          // Stereo
-            bitrate_bps: 128_000, // 128 kbps
+            channels: 2,
+            bitrate_bps: audio_bitrate,
         },
     }))?;
     println!("✓ WebRTC WHIP processor added\n");
 
     println!("🔗 Connecting pipeline:");
 
-    println!("   camera.video → webrtc.video_in");
+    println!("   camera.video → h264_encoder.video_in");
     runtime.connect(
         output::<CameraProcessor::OutputLink::video>(&camera),
-        input::<WebRtcWhipProcessor::InputLink::video_in>(&webrtc),
+        input::<H264EncoderProcessor::InputLink::video_in>(&h264_encoder),
     )?;
-    println!("   ✓ Camera → WebRTC");
+    println!("   ✓ Camera → H.264 encoder");
 
-    if let Some((audio_capture, resampler, channel_converter, rechunker)) = &audio_pipeline {
-        println!("   audio_capture.audio → resampler.audio_in");
+    println!("   h264_encoder.encoded_video_out → webrtc.encoded_video_in");
+    runtime.connect(
+        output::<H264EncoderProcessor::OutputLink::encoded_video_out>(&h264_encoder),
+        input::<WebRtcWhipProcessor::InputLink::encoded_video_in>(&webrtc),
+    )?;
+    println!("   ✓ H.264 encoder → WebRTC\n");
+
+    if let Some((audio_capture, resampler, channel_converter, rechunker, opus_encoder)) =
+        &audio_pipeline
+    {
         runtime.connect(
             output::<AudioCaptureProcessor::OutputLink::audio>(audio_capture),
             input::<AudioResamplerProcessor::InputLink::audio_in>(resampler),
         )?;
-        println!("   ✓ Audio capture → resampler");
-
-        println!("   resampler.audio_out → channel_converter.audio_in");
         runtime.connect(
             output::<AudioResamplerProcessor::OutputLink::audio_out>(resampler),
             input::<AudioChannelConverterProcessor::InputLink::audio_in>(channel_converter),
         )?;
-        println!("   ✓ Resampler → channel converter");
-
-        println!("   channel_converter.audio_out → rechunker.audio_in");
         runtime.connect(
             output::<AudioChannelConverterProcessor::OutputLink::audio_out>(channel_converter),
             input::<BufferRechunkerProcessor::InputLink::audio_in>(rechunker),
         )?;
-        println!("   ✓ Channel converter → rechunker");
-
-        println!("   rechunker.audio_out → webrtc.audio_in");
         runtime.connect(
             output::<BufferRechunkerProcessor::OutputLink::audio_out>(rechunker),
-            input::<WebRtcWhipProcessor::InputLink::audio_in>(&webrtc),
+            input::<OpusEncoderProcessor::InputLink::audio_in>(opus_encoder),
         )?;
-        println!("   ✓ Rechunker → WebRTC\n");
+        runtime.connect(
+            output::<OpusEncoderProcessor::OutputLink::encoded_audio_out>(opus_encoder),
+            input::<WebRtcWhipProcessor::InputLink::encoded_audio_in>(&webrtc),
+        )?;
+        println!("   ✓ Mic → resampler → converter → rechunker → Opus → WebRTC\n");
     } else {
         println!("   (audio pipeline skipped — no audio device)\n");
     }
@@ -153,15 +201,14 @@ fn main() -> Result<()> {
 
     println!("🚀 Starting WebRTC streaming to Cloudflare...");
     println!("   WHIP endpoint: {}", whip_url);
-    println!("   Video: H.264 Baseline 1280x720 @ 30fps, 2.5 Mbps");
-    println!("   Audio: Opus 48kHz stereo @ 128 kbps\n");
-    println!("📺 View your stream at:");
-    println!("   https://customer-5xiy6nkciicmt85v.cloudflarestream.com/4e48912c1e10e84c9bab3777695145dbk0072e99f6ddb152545830a794d165fce\n");
+    println!(
+        "   Video: H.264 baseline {}x{} @ {}fps, {} bps",
+        video_width, video_height, video_fps, video_bitrate
+    );
+    println!("   Audio: Opus 48kHz stereo @ {} bps\n", audio_bitrate);
     println!("⏹️  Press Ctrl+C to stop streaming\n");
 
-    // start() blocks on macOS standalone (runs NSApplication event loop)
     runtime.start()?;
-
     runtime.wait_for_signal()?;
 
     println!("\n✅ Streaming stopped, cleaning up...");
