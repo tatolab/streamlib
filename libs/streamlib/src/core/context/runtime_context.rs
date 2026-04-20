@@ -704,6 +704,12 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     }
 
     /// Restricted GPU capability — pool-backed, non-allocating ops only.
+    ///
+    /// Call [`GpuContextLimitedAccess::escalate`] on the returned handle to
+    /// temporarily obtain a [`GpuContextFullAccess`] for mid-run
+    /// reconfiguration (new video session, resized swapchain, etc.).
+    /// Escalation serializes against processor setup via the shared
+    /// setup mutex.
     pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {
         &self.gpu_limited
     }

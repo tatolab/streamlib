@@ -909,6 +909,36 @@ impl GpuContextLimitedAccess {
             inner: self.inner.clone(),
         }
     }
+
+    /// Serialized escalation to full GPU capability. Acquires the
+    /// processor-setup mutex, hands the closure a [`GpuContextFullAccess`]
+    /// scoped to its body, then waits for the device to go idle before
+    /// releasing the lock.
+    ///
+    /// This is the single primitive for GPU resource-creation work outside
+    /// `setup()` — used by the compiler to run each processor's setup()
+    /// and by running processors that need to reconfigure (acquire a new
+    /// video session, resize a swapchain, etc.).
+    ///
+    /// The `device_wait_idle` fires exactly once per escalation (after the
+    /// closure returns). On closure failure its error is returned; a
+    /// follow-up `wait_device_idle` failure is returned only when the
+    /// closure succeeded.
+    pub fn escalate<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&GpuContextFullAccess) -> Result<T>,
+    {
+        let _setup_guard = self.inner.lock_processor_setup();
+        let full = GpuContextFullAccess::new(self.inner.clone());
+        let closure_result = f(&full);
+        drop(full);
+        let wait_result = self.inner.wait_device_idle();
+        match (closure_result, wait_result) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(e), _) => Err(e),
+            (Ok(_), Err(e)) => Err(e),
+        }
+    }
 }
 
 impl GpuContextFullAccess {
@@ -1365,5 +1395,85 @@ mod tests {
         assert_eq!(device_ptr_gpu, device_ptr_full);
 
         println!("GpuContextLimitedAccess + GpuContextFullAccess delegation: OK");
+    }
+
+    #[test]
+    fn test_escalate_serializes_concurrent_callers() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        const THREADS: usize = 8;
+        let in_closure = Arc::new(AtomicBool::new(false));
+        let overlap_count = Arc::new(AtomicUsize::new(0));
+        let completed_count = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let gpu = gpu.clone();
+                let in_closure = Arc::clone(&in_closure);
+                let overlap_count = Arc::clone(&overlap_count);
+                let completed_count = Arc::clone(&completed_count);
+                std::thread::spawn(move || {
+                    let limited = GpuContextLimitedAccess::new(gpu);
+                    limited
+                        .escalate(|_full| {
+                            if in_closure.swap(true, Ordering::SeqCst) {
+                                overlap_count.fetch_add(1, Ordering::SeqCst);
+                            }
+                            std::thread::sleep(Duration::from_millis(10));
+                            in_closure.store(false, Ordering::SeqCst);
+                            completed_count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        })
+                        .expect("escalate closure should succeed");
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        assert_eq!(
+            overlap_count.load(Ordering::SeqCst),
+            0,
+            "escalate closures overlapped — setup mutex not held"
+        );
+        assert_eq!(completed_count.load(Ordering::SeqCst), THREADS);
+
+        println!("escalate serializes concurrent callers: OK");
+    }
+
+    #[test]
+    fn test_escalate_propagates_closure_error() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        let limited = GpuContextLimitedAccess::new(gpu);
+        let result: Result<()> = limited.escalate(|_full| {
+            Err(StreamError::Runtime("synthetic failure".to_string()))
+        });
+        match result {
+            Err(StreamError::Runtime(msg)) if msg == "synthetic failure" => {}
+            other => panic!("expected synthetic Runtime error, got {other:?}"),
+        }
+
+        // Mutex must be released after the error — a second escalation should proceed.
+        let after: Result<u32> = limited.escalate(|_full| Ok(7));
+        assert_eq!(after.expect("escalate after error"), 7);
+
+        println!("escalate propagates closure error + releases lock: OK");
     }
 }

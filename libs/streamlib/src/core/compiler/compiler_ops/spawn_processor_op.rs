@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::scheduling::{scheduling_strategy_for_processor, SchedulingStrategy};
-use crate::core::context::{RuntimeContext, RuntimeContextFullAccess};
+use crate::core::context::{GpuContextLimitedAccess, RuntimeContext, RuntimeContextFullAccess};
 use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Result, StreamError};
 use crate::core::execution::run_processor_loop;
@@ -378,40 +378,29 @@ fn spawn_dedicated_thread(
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
 
-                // Hold the GPU setup mutex for the duration of setup() and the
-                // subsequent device-idle wait. This serializes processor setup
-                // across threads so concurrent video session / DPB / swapchain
-                // creation can't race on the device (fixes flaky NVIDIA
-                // DEVICE_LOST during H.265 decoder + display startup, #304).
-                // Already-running processors continue to execute in parallel —
-                // only the brief setup window is serialized.
-                let _setup_guard = runtime_ctx_clone.gpu.lock_processor_setup();
-
                 tracing::info!(
-                    "[{}] Calling setup on thread '{}' (id={:?}) - setup mutex held",
+                    "[{}] Calling setup on thread '{}' (id={:?}) - escalating via setup mutex",
                     proc_id_clone,
                     thread_name,
                     thread_id
                 );
-                // Build the privileged ctx view for setup. The borrow is
-                // scoped to this block, so `process()` inside the loop
-                // below can never observe a full-access handle.
-                let full_ctx = RuntimeContextFullAccess::new(&processor_context);
-                let mut guard = processor_arc_clone.lock();
-                if let Err(e) = tokio_handle.block_on(guard.__generated_setup(&full_ctx)) {
-                    tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
-                    *state_arc.lock() = ProcessorState::Error;
-                    return;
-                }
-                drop(guard);
-                drop(full_ctx);
 
-                if let Err(e) = runtime_ctx_clone.gpu.wait_device_idle() {
-                    tracing::error!(
-                        "[{}] wait_device_idle after setup failed: {}",
-                        proc_id_clone,
-                        e
-                    );
+                // Serialize setup across processors and wait for device idle
+                // on exit via the escalate primitive. The setup mutex and the
+                // device-idle wait are private implementation details of
+                // escalate; concurrent video session / DPB / swapchain
+                // creation can't race on the device (#304).
+                let sandbox = GpuContextLimitedAccess::new(runtime_ctx_clone.gpu.clone());
+                let setup_result = sandbox.escalate(|_full_gpu| {
+                    // Build the privileged ctx view for setup. The borrow is
+                    // scoped to this closure, so `process()` inside the loop
+                    // below can never observe a full-access handle.
+                    let full_ctx = RuntimeContextFullAccess::new(&processor_context);
+                    let mut guard = processor_arc_clone.lock();
+                    tokio_handle.block_on(guard.__generated_setup(&full_ctx))
+                });
+                if let Err(e) = setup_result {
+                    tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
                     *state_arc.lock() = ProcessorState::Error;
                     return;
                 }

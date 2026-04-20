@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Implement sandbox.escalate() reusing the setup mutex
-status: pending
+status: in_review
 description: Add `GpuContextLimitedAccess::escalate(|full| …)` as the single primitive for all GPU resource-creation work. Internally acquires the mutex from #304, hands the closure a `FullAccess`, waits for idle on exit, releases.
 github_issue: 323
 dependencies:
