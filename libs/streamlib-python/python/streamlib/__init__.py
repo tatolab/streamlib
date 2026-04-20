@@ -14,7 +14,8 @@ class PixelFormat:
 
     Usage:
         from streamlib import PixelFormat
-        buffer = ctx.gpu.acquire_pixel_buffer(1920, 1080, PixelFormat.BGRA32)
+        # setup() / teardown() — ctx is RuntimeContextFullAccess
+        _, buffer = ctx.gpu_full_access.acquire_surface(1920, 1080, PixelFormat.BGRA32)
     """
     BGRA32 = "bgra32"
     RGBA32 = "rgba32"
@@ -49,6 +50,20 @@ from .decorators import (
     output_port,
 )
 
+# Re-export capability-typed runtime context views for processor authors
+from .processor_context import (
+    NativeGpuContextFullAccess,
+    NativeGpuContextLimitedAccess,
+    NativeRuntimeContextFullAccess,
+    NativeRuntimeContextLimitedAccess,
+)
+
+# Public type aliases for processor lifecycle annotations
+RuntimeContextFullAccess = NativeRuntimeContextFullAccess
+RuntimeContextLimitedAccess = NativeRuntimeContextLimitedAccess
+GpuContextFullAccess = NativeGpuContextFullAccess
+GpuContextLimitedAccess = NativeGpuContextLimitedAccess
+
 __all__ = [
     # Processor decorators
     "processor",
@@ -68,4 +83,13 @@ __all__ = [
     "input_port",
     "output_port",
     "PixelFormat",
+    # Capability-typed runtime context
+    "RuntimeContextFullAccess",
+    "RuntimeContextLimitedAccess",
+    "GpuContextFullAccess",
+    "GpuContextLimitedAccess",
+    "NativeRuntimeContextFullAccess",
+    "NativeRuntimeContextLimitedAccess",
+    "NativeGpuContextFullAccess",
+    "NativeGpuContextLimitedAccess",
 ]

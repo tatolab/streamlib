@@ -23,6 +23,8 @@ import time
 import skia
 from OpenGL.GL import glGenTextures
 
+from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
+
 logger = logging.getLogger(__name__)
 
 # OpenGL constants
@@ -197,7 +199,7 @@ class CyberpunkWatermark:
     for compositing by BlendingCompositor.
     """
 
-    def setup(self, ctx):
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Initialize standalone CGL context and Skia."""
         from streamlib.cgl_context import create_cgl_context, make_current
 
@@ -237,15 +239,19 @@ class CyberpunkWatermark:
             f"static picture cached)"
         )
 
-    def process(self, ctx):
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         """Generate watermark overlay frame with transparent background."""
         from streamlib.cgl_context import make_current, bind_iosurface_to_texture, flush
 
         make_current(self.cgl_ctx)
 
-        # Acquire output surface from Rust pool
-        surface_id, handle = ctx.gpu.acquire_surface(
-            width=self.width, height=self.height, format="bgra"
+        # TODO(#325/#369): surface allocation is a privileged op — once the
+        # polyglot escalate IPC grows an acquire_texture op, replace this
+        # AttributeError-at-runtime access pattern with a proper
+        # `ctx.escalate_acquire_pixel_buffer(...)` call. Mirrors the Deno
+        # halftone example's pending-escalate pattern.
+        surface_id, handle = ctx.gpu_full_access.acquire_surface(  # type: ignore[attr-defined]
+            width=self.width, height=self.height, format="bgra",
         )
 
         # Bind IOSurface as GL texture (zero-copy)
@@ -319,7 +325,7 @@ class CyberpunkWatermark:
         if self.frame_count % 300 == 0:
             logger.debug(f"Watermark: generated {self.frame_count} frames")
 
-    def teardown(self, ctx):
+    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         """Cleanup."""
         self.static_picture = None  # Release picture before context
         if hasattr(self, 'skia_ctx') and self.skia_ctx:

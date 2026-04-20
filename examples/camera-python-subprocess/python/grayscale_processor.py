@@ -3,18 +3,20 @@
 
 import numpy as np
 
+from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
+
 
 class GrayscaleProcessor:
-    def setup(self, ctx):
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
         print("[GrayscaleProcessor] setup")
 
-    def process(self, ctx):
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_in")
         if frame is None:
             return
 
         # Resolve input surface → zero-copy IOSurface handle
-        input_surface = ctx.gpu.resolve_surface(frame["surface_id"])
+        input_surface = ctx.gpu_limited_access.resolve_surface(frame["surface_id"])
         input_surface.lock(read_only=True)
         input_pixels = input_surface.as_numpy()  # numpy VIEW, no copy
 
@@ -27,9 +29,13 @@ class GrayscaleProcessor:
 
         input_surface.unlock(read_only=True)
 
-        # Acquire new output surface from Rust pool
+        # TODO(#325/#369): surface allocation is a privileged op — once the
+        # polyglot escalate IPC grows an acquire_texture op, replace this
+        # AttributeError-at-runtime access pattern with a proper
+        # `ctx.escalate_acquire_pixel_buffer(...)` call. For now this mirrors
+        # the Deno halftone example's pending-escalate pattern.
         w, h = input_surface.width, input_surface.height
-        new_surface_id, output_surface = ctx.gpu.acquire_surface(
+        new_surface_id, output_surface = ctx.gpu_full_access.acquire_surface(  # type: ignore[attr-defined]
             width=w, height=h, format="bgra"
         )
 
@@ -50,5 +56,5 @@ class GrayscaleProcessor:
         frame["surface_id"] = new_surface_id
         ctx.outputs.write("video_out", frame)
 
-    def teardown(self, ctx):
+    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         print("[GrayscaleProcessor] teardown")
