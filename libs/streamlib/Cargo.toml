@@ -65,8 +65,8 @@ toml.workspace = true
 schemars = "0.8"  # JSON Schema generation from Rust types
 
 # CLAP audio plugin hosting
-clack-host = { git = "https://github.com/prokopyl/clack" }
-clack-extensions = { git = "https://github.com/prokopyl/clack", features = ["clack-host", "params"] }
+clack-host = { git = "https://github.com/prokopyl/clack", rev = "f53f8fc132c001a332c0a7221267812dfb654e92" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f53f8fc132c001a332c0a7221267812dfb654e92", features = ["clack-host", "params"] }
 
 # Audio resampling for real-time safe sample rate conversion
 rubato = "0.16"
