@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Restrict GpuContextLimitedAccess API surface to safe ops
-status: pending
+status: completed
 description: The enforcement task. Remove every heavy-allocation method from `GpuContextLimitedAccess`. Process() bodies that call privileged methods become compile errors; fix each by pre-reserving in setup() or wrapping in `escalate()`.
 github_issue: 324
 dependencies:
