@@ -392,13 +392,14 @@ class NativeGpu:
 class NativeProcessorContext:
     """Context using direct FFI to iceoryx2."""
 
-    def __init__(self, lib, ctx_ptr, config, broker_ptr=None):
+    def __init__(self, lib, ctx_ptr, config, broker_ptr=None, escalate_channel=None):
         self._lib = lib
         self._ctx_ptr = ctx_ptr
         self._config = config or {}
         self.inputs = NativeInputs(lib, ctx_ptr)
         self.outputs = NativeOutputs(lib, ctx_ptr)
         self.gpu = NativeGpu(lib, broker_ptr)
+        self._escalate_channel = escalate_channel
 
     @property
     def config(self):
@@ -409,3 +410,28 @@ class NativeProcessorContext:
     def time(self):
         """Current monotonic time in nanoseconds."""
         return self._lib.slpn_context_time_ns(self._ctx_ptr)
+
+    def escalate_acquire_pixel_buffer(self, width, height, format="bgra"):
+        """Ask the host to allocate a new-shape pixel buffer on our behalf.
+
+        Routes through the Rust host's `GpuContextLimitedAccess::escalate`,
+        which serializes against every other escalation in the runtime. The
+        buffer lives in the host's pool; we reference it by the returned
+        ``handle_id`` until ``escalate_release_handle(handle_id)``.
+        """
+        channel = self._require_channel()
+        return channel.acquire_pixel_buffer(width, height, format)
+
+    def escalate_release_handle(self, handle_id):
+        """Drop the host's strong reference to a previously-escalated handle."""
+        channel = self._require_channel()
+        return channel.release_handle(handle_id)
+
+    def _require_channel(self):
+        if self._escalate_channel is None:
+            # Fall back to the process-wide singleton so code written for
+            # the run-loop ctx still works if someone calls escalate_* from
+            # a helper that didn't receive `ctx`.
+            from .escalate import channel as _singleton
+            return _singleton()
+        return self._escalate_channel
