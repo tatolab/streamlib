@@ -1,26 +1,35 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Subprocess processor context — native FFI to iceoryx2 + lifecycle protocol.
+"""Capability-typed Python runtime context views for subprocess processors.
 
-Provides the `ctx` object passed to Python processor methods:
-  - ctx.inputs.read("port_name") -> deserialized msgpack data or None
-  - ctx.outputs.write("port_name", data) -> serializes and sends via iceoryx2
-  - ctx.time -> monotonic clock (nanoseconds)
-  - ctx.config -> processor config dict
+Two concrete classes mirror the Rust capability split:
 
-Data I/O uses direct FFI to libstreamlib_python_native via ctypes.
-Lifecycle commands (setup/run/stop/teardown) use length-prefixed JSON over pipes.
+- :class:`NativeRuntimeContextLimitedAccess` — passed to ``process`` /
+  ``on_pause`` / ``on_resume``. Carries no ``gpu_full_access`` attribute, so
+  reaching privileged ops from the hot path raises ``AttributeError`` at
+  runtime (and is flagged by type checkers).
+- :class:`NativeRuntimeContextFullAccess` — passed to ``setup`` /
+  ``teardown`` / Manual-mode ``start`` / ``stop``. Exposes both
+  ``gpu_limited_access`` and ``gpu_full_access``.
+
+Data I/O uses direct FFI to ``libstreamlib_python_native`` via ctypes.
+Lifecycle commands use length-prefixed JSON over stdin/stdout pipes.
 
 Protocol (lifecycle only):
   All messages are length-prefixed: [4 bytes u32 BE length][JSON bytes]
 """
 
+from __future__ import annotations
+
 import json
 import struct
-import time
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 import msgpack
+
+if TYPE_CHECKING:
+    from .escalate import EscalateChannel
 
 
 # ============================================================================
@@ -289,18 +298,22 @@ class NativeGpuSurfaceHandle:
         self.release()
 
 
-class NativeGpu:
-    """GPU context for IOSurface access via FFI, with broker XPC resolution."""
+# ============================================================================
+# GPU capability views
+# ============================================================================
 
-    SURFACE_POOL_SIZE = 3
+
+class NativeGpuContextLimitedAccess:
+    """Non-allocating GPU capability — resolve existing surfaces only.
+
+    Mirrors the Rust [`GpuContextLimitedAccess`] surface. Available in
+    every lifecycle phase, including ``process`` / ``on_pause`` /
+    ``on_resume``.
+    """
 
     def __init__(self, lib, broker_ptr):
         self._lib = lib
         self._broker_ptr = broker_ptr
-        self._output_pool = []  # list of (pool_id, handle_ptr)
-        self._output_pool_index = 0
-        self._output_pool_width = 0
-        self._output_pool_height = 0
 
     def resolve_surface(self, surface_id):
         """Resolve a broker surface_id UUID to a GPU surface handle."""
@@ -319,6 +332,23 @@ class NativeGpu:
         if not handle_ptr:
             raise RuntimeError(f"IOSurface not found: {surface_id}")
         return NativeGpuSurfaceHandle(self._lib, handle_ptr)
+
+
+class NativeGpuContextFullAccess(NativeGpuContextLimitedAccess):
+    """Privileged GPU capability — limited ops plus IOSurface allocation.
+
+    Mirrors the Rust [`GpuContextFullAccess`] surface. Only available in
+    ``setup`` / ``teardown`` / Manual-mode ``start`` / ``stop``.
+    """
+
+    SURFACE_POOL_SIZE = 3
+
+    def __init__(self, lib, broker_ptr):
+        super().__init__(lib, broker_ptr)
+        self._output_pool = []  # list of (pool_id, handle_ptr)
+        self._output_pool_index = 0
+        self._output_pool_width = 0
+        self._output_pool_height = 0
 
     def acquire_surface(self, width, height, format="bgra"):
         """Acquire a pixel buffer from the pool (triple-buffered, round-robin)."""
@@ -389,49 +419,170 @@ class NativeGpu:
         self.release_pool()
 
 
-class NativeProcessorContext:
-    """Context using direct FFI to iceoryx2."""
+# ============================================================================
+# Capability-typed runtime context views
+# ============================================================================
 
-    def __init__(self, lib, ctx_ptr, config, broker_ptr=None, escalate_channel=None):
+
+class NativeProcessorState:
+    """Shared FFI-backed state reused by both capability views for a single
+    processor lifecycle.
+
+    Construction is internal — ``subprocess_runner`` builds one of these per
+    ``setup`` and wraps it in the appropriate view per lifecycle method.
+    """
+
+    def __init__(
+        self,
+        lib,
+        ctx_ptr,
+        config: Optional[Dict[str, Any]],
+        broker_ptr=None,
+        escalate_channel: "Optional[EscalateChannel]" = None,
+    ) -> None:
         self._lib = lib
         self._ctx_ptr = ctx_ptr
         self._config = config or {}
+        self._broker_ptr = broker_ptr
+        self._escalate_channel = escalate_channel
         self.inputs = NativeInputs(lib, ctx_ptr)
         self.outputs = NativeOutputs(lib, ctx_ptr)
-        self.gpu = NativeGpu(lib, broker_ptr)
-        self._escalate_channel = escalate_channel
+        # One instance of each GPU view shared across per-call context
+        # wrappers so pool state and handle lifetimes are stable across
+        # lifecycle phases.
+        self._gpu_limited = NativeGpuContextLimitedAccess(lib, broker_ptr)
+        self._gpu_full = NativeGpuContextFullAccess(lib, broker_ptr)
 
     @property
-    def config(self):
+    def config(self) -> Dict[str, Any]:
         """Processor configuration dictionary."""
         return self._config
 
     @property
-    def time(self):
+    def time(self) -> int:
         """Current monotonic time in nanoseconds."""
         return self._lib.slpn_context_time_ns(self._ctx_ptr)
 
-    def escalate_acquire_pixel_buffer(self, width, height, format="bgra"):
-        """Ask the host to allocate a new-shape pixel buffer on our behalf.
+    def gpu_limited_access(self) -> NativeGpuContextLimitedAccess:
+        """Return the limited-access GPU view (resolution only)."""
+        return self._gpu_limited
 
-        Routes through the Rust host's `GpuContextLimitedAccess::escalate`,
-        which serializes against every other escalation in the runtime. The
-        buffer lives in the host's pool; we reference it by the returned
-        ``handle_id`` until ``escalate_release_handle(handle_id)``.
-        """
+    def gpu_full_access(self) -> NativeGpuContextFullAccess:
+        """Return the full-access GPU view (allocations + resolution)."""
+        return self._gpu_full
+
+    def escalate_acquire_pixel_buffer(
+        self, width: int, height: int, format: str = "bgra"
+    ) -> Dict[str, Any]:
+        """Ask the host to allocate a new-shape pixel buffer on our behalf."""
         channel = self._require_channel()
         return channel.acquire_pixel_buffer(width, height, format)
 
-    def escalate_release_handle(self, handle_id):
+    def escalate_release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Drop the host's strong reference to a previously-escalated handle."""
         channel = self._require_channel()
         return channel.release_handle(handle_id)
 
-    def _require_channel(self):
+    def _require_channel(self) -> "EscalateChannel":
         if self._escalate_channel is None:
-            # Fall back to the process-wide singleton so code written for
-            # the run-loop ctx still works if someone calls escalate_* from
-            # a helper that didn't receive `ctx`.
+            # Fall back to the process-wide singleton so helpers that didn't
+            # receive ctx still work inside the subprocess lifecycle.
             from .escalate import channel as _singleton
             return _singleton()
         return self._escalate_channel
+
+    def release_pool(self) -> None:
+        """Release the full-access pool (called during teardown)."""
+        self._gpu_full.release_pool()
+
+
+class NativeRuntimeContextLimitedAccess:
+    """Restricted-capability runtime context passed to ``process`` /
+    ``on_pause`` / ``on_resume``.
+
+    Exposes :class:`NativeGpuContextLimitedAccess` only — attempting to
+    reach ``gpu_full_access`` raises :class:`AttributeError` at runtime
+    and is flagged by type checkers.
+
+    Mirrors the Rust [`RuntimeContextLimitedAccess`] view.
+    """
+
+    __slots__ = (
+        "_state",
+        "config",
+        "inputs",
+        "outputs",
+        "gpu_limited_access",
+    )
+
+    def __init__(self, state: NativeProcessorState) -> None:
+        self._state = state
+        self.config = state.config
+        self.inputs = state.inputs
+        self.outputs = state.outputs
+        self.gpu_limited_access = state.gpu_limited_access()
+
+    @property
+    def time(self) -> int:
+        """Current monotonic time in nanoseconds."""
+        return self._state.time
+
+    def escalate_acquire_pixel_buffer(
+        self, width: int, height: int, format: str = "bgra"
+    ) -> Dict[str, Any]:
+        """Ask the host to allocate a new-shape pixel buffer on our behalf.
+
+        The escalate channel is the capability-preserving path for
+        allocation in the hot loop — it routes through the Rust host's
+        [`GpuContextLimitedAccess::escalate`], which serializes against
+        every other escalation in the runtime.
+        """
+        return self._state.escalate_acquire_pixel_buffer(width, height, format)
+
+    def escalate_release_handle(self, handle_id: str) -> Dict[str, Any]:
+        """Drop the host's strong reference to a previously-escalated handle."""
+        return self._state.escalate_release_handle(handle_id)
+
+
+class NativeRuntimeContextFullAccess:
+    """Privileged runtime context passed to ``setup`` / ``teardown`` and
+    Manual-mode ``start`` / ``stop``.
+
+    Exposes both :class:`NativeGpuContextFullAccess` (for allocations) and
+    :class:`NativeGpuContextLimitedAccess` (so privileged methods can hand a
+    stashable limited handle to downstream workers).
+
+    Mirrors the Rust [`RuntimeContextFullAccess`] view.
+    """
+
+    __slots__ = (
+        "_state",
+        "config",
+        "inputs",
+        "outputs",
+        "gpu_limited_access",
+        "gpu_full_access",
+    )
+
+    def __init__(self, state: NativeProcessorState) -> None:
+        self._state = state
+        self.config = state.config
+        self.inputs = state.inputs
+        self.outputs = state.outputs
+        self.gpu_limited_access = state.gpu_limited_access()
+        self.gpu_full_access = state.gpu_full_access()
+
+    @property
+    def time(self) -> int:
+        """Current monotonic time in nanoseconds."""
+        return self._state.time
+
+    def escalate_acquire_pixel_buffer(
+        self, width: int, height: int, format: str = "bgra"
+    ) -> Dict[str, Any]:
+        """Ask the host to allocate a new-shape pixel buffer on our behalf."""
+        return self._state.escalate_acquire_pixel_buffer(width, height, format)
+
+    def escalate_release_handle(self, handle_id: str) -> Dict[str, Any]:
+        """Drop the host's strong reference to a previously-escalated handle."""
+        return self._state.escalate_release_handle(handle_id)

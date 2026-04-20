@@ -23,6 +23,8 @@ import random
 import numpy as np
 from OpenGL.GL import *
 
+from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
+
 logger = logging.getLogger(__name__)
 
 
@@ -262,7 +264,7 @@ class CyberpunkGlitch:
     Runs GLSL fragment shaders directly on GL textures backed by IOSurfaces.
     """
 
-    def setup(self, ctx):
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Initialize standalone CGL context and compile shaders."""
         from streamlib.cgl_context import create_cgl_context, make_current
 
@@ -373,7 +375,7 @@ class CyberpunkGlitch:
 
         glBindVertexArray(0)
 
-    def process(self, ctx):
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         """Apply glitch effect using OpenGL shaders."""
         frame = ctx.inputs.read("video_in")
         if frame is None:
@@ -404,14 +406,20 @@ class CyberpunkGlitch:
         make_current(self.cgl_ctx)
 
         # Resolve input surface → IOSurface handle → bind as GL texture
-        input_handle = ctx.gpu.resolve_surface(frame["surface_id"])
+        input_handle = ctx.gpu_limited_access.resolve_surface(frame["surface_id"])
         bind_iosurface_to_texture(
             self.cgl_ctx, self.input_tex_id,
             input_handle.iosurface_ref, w, h
         )
 
-        # Acquire output surface → bind as GL texture
-        out_surface_id, output_handle = ctx.gpu.acquire_surface(width=w, height=h, format="bgra")
+        # TODO(#325/#369): surface allocation is a privileged op — once the
+        # polyglot escalate IPC grows an acquire_texture op, replace this
+        # AttributeError-at-runtime access pattern with a proper
+        # `ctx.escalate_acquire_pixel_buffer(...)` call. Mirrors the Deno
+        # halftone example's pending-escalate pattern.
+        out_surface_id, output_handle = ctx.gpu_full_access.acquire_surface(  # type: ignore[attr-defined]
+            width=w, height=h, format="bgra",
+        )
         bind_iosurface_to_texture(
             self.cgl_ctx, self.output_tex_id,
             output_handle.iosurface_ref, w, h
@@ -487,7 +495,7 @@ class CyberpunkGlitch:
         if self.frame_count % 120 == 0:
             logger.debug(f"Glitch processor: {self.frame_count} frames (active={glitch_active})")
 
-    def teardown(self, ctx):
+    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         """Cleanup OpenGL resources."""
         from streamlib.cgl_context import make_current, destroy_cgl_context
 

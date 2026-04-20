@@ -23,6 +23,8 @@ import sys
 import time
 from pathlib import Path
 
+from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,7 +123,7 @@ class AvatarCharacter:
     Signals readiness by delaying output until first pose is stable.
     """
 
-    def setup(self, ctx):
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
         """Initialize standalone CGL context, MediaPipe, and 3D rendering."""
         # Lazy import heavy dependencies
         _lazy_import()
@@ -245,7 +247,7 @@ class AvatarCharacter:
         self._setup_complete_time = time.monotonic()
         logger.info(f"AvatarCharacter: 3D renderer initialized ({width}x{height}) - sliding in after {self._ready_delay_seconds}s")
 
-    def process(self, ctx):
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         """Process frame: detect pose, render 3D character."""
         frame = ctx.inputs.read("video_in")
         if frame is None:
@@ -283,7 +285,7 @@ class AvatarCharacter:
                 )
 
         # Resolve input surface → bind as GL texture for readback
-        input_handle = ctx.gpu.resolve_surface(frame["surface_id"])
+        input_handle = ctx.gpu_limited_access.resolve_surface(frame["surface_id"])
         bind_iosurface_to_texture(
             self.cgl_ctx, self.input_tex_id,
             input_handle.iosurface_ref, w, h
@@ -338,8 +340,14 @@ class AvatarCharacter:
         # Convert RGBA to BGRA for output (swap R and B channels)
         rendered_bgra = rendered_array[:, :, [2, 1, 0, 3]].copy()
 
-        # Acquire output surface → bind as GL texture → upload rendered pixels
-        out_surface_id, output_handle = ctx.gpu.acquire_surface(width=w, height=h, format="bgra")
+        # TODO(#325/#369): surface allocation is a privileged op — once the
+        # polyglot escalate IPC grows an acquire_texture op, replace this
+        # AttributeError-at-runtime access pattern with a proper
+        # `ctx.escalate_acquire_pixel_buffer(...)` call. Mirrors the Deno
+        # halftone example's pending-escalate pattern.
+        out_surface_id, output_handle = ctx.gpu_full_access.acquire_surface(  # type: ignore[attr-defined]
+            width=w, height=h, format="bgra",
+        )
         bind_iosurface_to_texture(
             self.cgl_ctx, self.output_tex_id,
             output_handle.iosurface_ref, w, h
@@ -376,7 +384,7 @@ class AvatarCharacter:
         if self.frame_count % 300 == 0:
             logger.debug(f"AvatarCharacter: {self.frame_count} frames processed (ready={self._is_ready})")
 
-    def teardown(self, ctx):
+    def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         """Cleanup resources."""
         if self.pose_landmarker is not None:
             self.pose_landmarker.close()
