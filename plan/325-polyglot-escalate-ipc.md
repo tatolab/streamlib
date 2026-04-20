@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: "Polyglot IPC: escalate-on-behalf for Python/Deno processors"
-status: pending
+status: in_review
 description: Extend subprocess-host processors to accept escalate IPC requests from Python/Deno. Subprocess sees only a sandbox; IPC is its escalate channel, routed through the host's serialized queue.
 github_issue: 325
 dependencies:
