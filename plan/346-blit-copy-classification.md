@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: "Research: classify blit_copy cache-growth path (Sandbox vs Split)"
-status: pending
+status: in_review
 description: Gated by #320 §8.Q2. Determine whether RhiBlitter::blit_copy can grow its internal texture cache on a cold key. If yes, blit_copy is Split (callers pre-warm in setup() or escalate on first use). If no, it stays Sandbox. Closes the classification gap in the design doc §1 before #324 ships.
 github_issue: 346
 dependencies:
