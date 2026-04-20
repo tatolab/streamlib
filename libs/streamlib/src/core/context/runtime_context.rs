@@ -13,7 +13,12 @@ use crate::iceoryx2::Iceoryx2Node;
 
 #[derive(Clone)]
 pub struct RuntimeContext {
-    pub gpu: GpuContext,
+    /// Base GPU context. Crate-private so processor code can only reach GPU
+    /// operations through the capability-typed wrappers
+    /// ([`RuntimeContextFullAccess`] / [`RuntimeContextLimitedAccess`]).
+    /// Runtime-internal code (shutdown, diagnostics) still uses this field
+    /// directly for operations not mirrored on the capability types.
+    pub(crate) gpu: GpuContext,
     /// Shared timing context - monotonic clock starting at runtime creation.
     pub time: Arc<TimeContext>,
     /// Unique identifier for this runtime instance.
@@ -573,6 +578,11 @@ impl RuntimeContext {
 ///
 /// Deliberately `!Clone` and borrow-scoped — the handle cannot be stashed
 /// past the call boundary.
+///
+/// ```compile_fail
+/// fn assert_not_clone<T: Clone>() {}
+/// assert_not_clone::<streamlib::core::RuntimeContextFullAccess<'static>>();
+/// ```
 pub struct RuntimeContextFullAccess<'a> {
     base: &'a RuntimeContext,
     gpu_full: GpuContextFullAccess,
@@ -590,6 +600,20 @@ pub struct RuntimeContextFullAccess<'a> {
 /// Deliberately `!Clone` and borrow-scoped — the handle cannot be stashed
 /// past the call boundary. This is the type-system moat that prevents
 /// `process()` bodies from doing setup-only work.
+///
+/// ```compile_fail
+/// fn assert_not_clone<T: Clone>() {}
+/// assert_not_clone::<streamlib::core::RuntimeContextLimitedAccess<'static>>();
+/// ```
+///
+/// `gpu_full_access()` is intentionally absent from this type — a `process()`
+/// body cannot reach privileged GPU operations:
+///
+/// ```compile_fail
+/// fn reach_full(ctx: &streamlib::core::RuntimeContextLimitedAccess<'_>) {
+///     let _ = ctx.gpu_full_access();
+/// }
+/// ```
 pub struct RuntimeContextLimitedAccess<'a> {
     base: &'a RuntimeContext,
     gpu_limited: GpuContextLimitedAccess,
