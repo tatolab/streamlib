@@ -27,6 +27,7 @@ import sys
 import time
 import traceback
 
+from .escalate import EscalateChannel, install_channel
 from .processor_context import (
     NativeProcessorContext,
     bridge_read_message,
@@ -49,7 +50,7 @@ def _load_processor_class(entrypoint: str, project_path: str):
     return getattr(module, class_name)
 
 
-def _setup_native_context(msg, native_lib_path, processor_id):
+def _setup_native_context(msg, native_lib_path, processor_id, escalate_channel=None):
     """Set up native FFI context with iceoryx2 subscriptions and publishers."""
     config = msg.get("config")
     ports = msg.get("ports", {})
@@ -117,7 +118,9 @@ def _setup_native_context(msg, native_lib_path, processor_id):
                 "Broker connect failed for '%s'", xpc_service_name,
             )
 
-    ctx = NativeProcessorContext(lib, ctx_ptr, config, broker_ptr)
+    ctx = NativeProcessorContext(
+        lib, ctx_ptr, config, broker_ptr, escalate_channel=escalate_channel
+    )
     return lib, ctx_ptr, broker_ptr, ctx
 
 
@@ -129,16 +132,37 @@ def _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr):
         native_lib.slpn_context_destroy(native_ctx_ptr)
 
 
-def _handle_stdin_during_run(stdin, stdout, processor, ctx, processor_id):
+def _handle_stdin_during_run(stdin, stdout, processor, ctx, processor_id,
+                              escalate_channel=None):
     """Non-blocking check for lifecycle commands during the run loop.
 
-    Handles on_pause, on_resume, and update_config inline.
-    Returns "stop", "teardown", or None.
+    Also drains any lifecycle commands the escalate channel may have buffered
+    while blocked on a correlated response. Handles on_pause, on_resume, and
+    update_config inline. Returns "stop", "teardown", or None.
     """
+    # Drain deferred lifecycle messages first — they arrived while a
+    # process() call was blocked on ctx.escalate_*, so they're older than
+    # anything still in the pipe.
+    if escalate_channel and escalate_channel.has_deferred_lifecycle_messages():
+        deferred = escalate_channel.take_deferred_lifecycle_messages()
+        for dm in deferred:
+            result = _dispatch_lifecycle_msg(dm, stdout, processor, ctx)
+            if result is not None:
+                # Re-queue any messages we didn't process this turn so a
+                # stop/teardown coming from a deferred slot takes precedence.
+                remaining = deferred[deferred.index(dm) + 1 :]
+                escalate_channel._deferred_lifecycle[:0] = remaining
+                return result
+
     if not select.select([stdin], [], [], 0)[0]:
         return None
 
     msg = bridge_read_message(stdin)
+    return _dispatch_lifecycle_msg(msg, stdout, processor, ctx)
+
+
+def _dispatch_lifecycle_msg(msg, stdout, processor, ctx):
+    """Execute a lifecycle message and reply. Returns 'stop'/'teardown'/None."""
     cmd = msg.get("cmd", "")
 
     if cmd == "stop" or cmd == "teardown":
@@ -200,6 +224,12 @@ def main():
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
 
+    # Install the escalate channel so processors can call ctx.escalate_*
+    # during setup() and process(). The channel shares the same stdio pipes
+    # as the lifecycle protocol and demultiplexes responses by request_id.
+    escalate_channel = EscalateChannel(stdin, stdout)
+    install_channel(escalate_channel)
+
     # Load processor class and instantiate
     processor_class = _load_processor_class(entrypoint, project_path)
     processor = processor_class()
@@ -221,7 +251,8 @@ def main():
                 _logger.info("Native mode: loading %s", native_lib_path)
                 try:
                     native_lib, native_ctx_ptr, native_broker_ptr, ctx = _setup_native_context(
-                        msg, native_lib_path, processor_id
+                        msg, native_lib_path, processor_id,
+                        escalate_channel=escalate_channel,
                     )
                 except Exception as e:
                     traceback.print_exc(file=sys.stderr)
@@ -266,7 +297,8 @@ def main():
                             time.sleep(0.001)  # 1ms yield
 
                         lifecycle_cmd = _handle_stdin_during_run(
-                            stdin, stdout, processor, ctx, processor_id
+                            stdin, stdout, processor, ctx, processor_id,
+                            escalate_channel=escalate_channel,
                         )
                         if lifecycle_cmd == "teardown":
                             running = False
@@ -296,7 +328,8 @@ def main():
                             time.sleep(0)  # yield
 
                         lifecycle_cmd = _handle_stdin_during_run(
-                            stdin, stdout, processor, ctx, processor_id
+                            stdin, stdout, processor, ctx, processor_id,
+                            escalate_channel=escalate_channel,
                         )
                         if lifecycle_cmd == "teardown":
                             running = False

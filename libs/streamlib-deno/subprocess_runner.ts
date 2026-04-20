@@ -21,6 +21,7 @@ import {
   NativeRuntimeContextFullAccess,
   NativeRuntimeContextLimitedAccess,
 } from "./context.ts";
+import { EscalateChannel } from "./escalate.ts";
 import type {
   ContinuousProcessor,
   ManualProcessor,
@@ -66,9 +67,22 @@ async function bridgeSendJson(msg: Record<string, unknown>): Promise<void> {
   const view = new DataView(lenBuf.buffer);
   view.setUint32(0, encoded.length, false); // big-endian
 
-  await stdout.write(lenBuf);
-  await stdout.write(encoded);
+  // Serialize concurrent writes (lifecycle replies + escalate requests) so
+  // the length prefix and payload aren't interleaved across async tasks.
+  await writeLock;
+  let release: () => void;
+  writeLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    await stdout.write(lenBuf);
+    await stdout.write(encoded);
+  } finally {
+    release!();
+  }
 }
+
+let writeLock: Promise<void> = Promise.resolve();
 
 /**
  * Validate that the wire-format capability field matches what the lifecycle
@@ -146,10 +160,23 @@ async function main(): Promise<void> {
   let limitedCtx: NativeRuntimeContextLimitedAccess | null = null;
   let running = false;
 
+  // Escalate channel — requests from the TS processor go out on stdout,
+  // host responses arrive on stdin and are routed here from every stdin
+  // read site (outer loop + run-phase concurrent reader).
+  const escalateChannel = new EscalateChannel(bridgeSendJson);
+
   // Command loop
   try {
     while (true) {
       const msg = await bridgeReadJson();
+      // Drop escalate responses at the outer level too — defensive: the
+      // run-phase concurrent reader is normally the only site that sees
+      // them, but a late-arriving response after `running` flips to
+      // false should still be routed to the channel (it may reject a
+      // pending request so subprocess teardown isn't blocked).
+      if (escalateChannel.handleIncoming(msg)) {
+        continue;
+      }
       const cmd = msg.cmd as string;
 
       switch (cmd) {
@@ -234,7 +261,13 @@ async function main(): Promise<void> {
             // lifecycle. Each view wraps the same underlying FFI ctx, so
             // input/output ports and timing are shared; the capability split
             // is enforced purely by what each view exposes.
-            state = new NativeProcessorState(lib, ctxPtr, config, brokerPtr);
+            state = new NativeProcessorState(
+              lib,
+              ctxPtr,
+              config,
+              brokerPtr,
+              escalateChannel,
+            );
             fullCtx = new NativeRuntimeContextFullAccess(state);
             limitedCtx = new NativeRuntimeContextLimitedAccess(state);
 
@@ -288,6 +321,10 @@ async function main(): Promise<void> {
             try {
               while (running) {
                 const nextMsg = await bridgeReadJson();
+                // Demultiplex escalate responses out of the lifecycle path.
+                if (escalateChannel.handleIncoming(nextMsg)) {
+                  continue;
+                }
                 const nextCmd = nextMsg.cmd as string;
                 if (nextCmd === "teardown") {
                   assertCapability(processorId, nextCmd, nextMsg, "full");
@@ -499,6 +536,7 @@ async function main(): Promise<void> {
         // ignore teardown errors during shutdown
       }
     }
+    escalateChannel.cancelAll("subprocess shutting down");
     lib.symbols.sldn_context_destroy(ctxPtr);
     lib.close();
     Deno.exit(isStdinClosed ? 0 : 1);

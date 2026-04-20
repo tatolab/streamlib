@@ -15,6 +15,7 @@
 import * as msgpack from "@msgpack/msgpack";
 import type { NativeLib } from "./native.ts";
 import { cString } from "./native.ts";
+import type { EscalateChannel, EscalateOkResponse } from "./escalate.ts";
 import type {
   GpuContextFullAccess,
   GpuContextLimitedAccess,
@@ -37,6 +38,7 @@ export class NativeProcessorState {
   readonly config: Record<string, unknown>;
   readonly inputs: NativeInputPorts;
   readonly outputs: NativeOutputPorts;
+  readonly escalate: EscalateChannel | null;
 
   private lib: NativeLib;
   private ctxPtr: Deno.PointerObject;
@@ -47,6 +49,7 @@ export class NativeProcessorState {
     ctxPtr: Deno.PointerObject,
     config: Record<string, unknown>,
     brokerPtr: Deno.PointerObject | null = null,
+    escalate: EscalateChannel | null = null,
   ) {
     this.lib = lib;
     this.ctxPtr = ctxPtr;
@@ -54,6 +57,35 @@ export class NativeProcessorState {
     this.brokerPtr = brokerPtr;
     this.inputs = new NativeInputPorts(lib, ctxPtr);
     this.outputs = new NativeOutputPorts(lib, ctxPtr);
+    this.escalate = escalate;
+  }
+
+  /**
+   * Ask the host to acquire a new-shape pixel buffer on the subprocess's
+   * behalf. Throws if no escalate channel is wired (i.e. outside the
+   * subprocess_runner lifecycle).
+   */
+  async escalateAcquirePixelBuffer(
+    width: number,
+    height: number,
+    format = "bgra",
+  ): Promise<EscalateOkResponse> {
+    if (!this.escalate) {
+      throw new Error(
+        "escalate channel not installed — escalateAcquirePixelBuffer is only available inside the subprocess lifecycle",
+      );
+    }
+    return this.escalate.acquirePixelBuffer(width, height, format);
+  }
+
+  /** Drop the host's strong reference to a previously-escalated handle. */
+  async escalateReleaseHandle(handleId: string): Promise<EscalateOkResponse> {
+    if (!this.escalate) {
+      throw new Error(
+        "escalate channel not installed — escalateReleaseHandle is only available inside the subprocess lifecycle",
+      );
+    }
+    return this.escalate.releaseHandle(handleId);
   }
 
   get timeNs(): bigint {
@@ -95,6 +127,18 @@ export class NativeRuntimeContextLimitedAccess
   get timeNs(): bigint {
     return this.state.timeNs;
   }
+
+  escalateAcquirePixelBuffer(
+    width: number,
+    height: number,
+    format = "bgra",
+  ): Promise<EscalateOkResponse> {
+    return this.state.escalateAcquirePixelBuffer(width, height, format);
+  }
+
+  escalateReleaseHandle(handleId: string): Promise<EscalateOkResponse> {
+    return this.state.escalateReleaseHandle(handleId);
+  }
 }
 
 /**
@@ -122,6 +166,18 @@ export class NativeRuntimeContextFullAccess implements RuntimeContextFullAccess 
 
   get timeNs(): bigint {
     return this.state.timeNs;
+  }
+
+  escalateAcquirePixelBuffer(
+    width: number,
+    height: number,
+    format = "bgra",
+  ): Promise<EscalateOkResponse> {
+    return this.state.escalateAcquirePixelBuffer(width, height, format);
+  }
+
+  escalateReleaseHandle(handleId: string): Promise<EscalateOkResponse> {
+    return this.state.escalateReleaseHandle(handleId);
   }
 }
 

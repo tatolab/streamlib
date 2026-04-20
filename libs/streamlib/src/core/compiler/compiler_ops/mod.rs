@@ -7,6 +7,8 @@ mod spawn_deno_subprocess_op;
 mod spawn_processor_op;
 mod spawn_python_native_subprocess_op;
 mod spawn_python_subprocess_op;
+mod subprocess_bridge;
+mod subprocess_escalate;
 
 pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_processor_op::prepare_processor;
