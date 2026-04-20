@@ -126,9 +126,9 @@ whatever submission validates.
 
 | Method | Cap | Notes |
 |---|---|---|
-| `blit_copy(src, dest)` | S | Uses cached blitter; GPU copy, no allocation. |
-| `blit_copy_iosurface(src, dest, w, h)` (macOS) | S | Platform blit; no allocation. `unsafe` — caller responsible for IOSurface lifetime. |
-| `clear_blitter_cache()` | S | Flushes a cache; no GPU allocation. Arguably `setup()`-only by convention, but not enforced. |
+| `blit_copy(src, dest)` | Split | Metal backend caches an `MTLTexture` per destination IOSurface ID; cold-key path creates one inside `blit_copy`. Bounded by destination pool size; not `VkDeviceMemory`. Callers pre-warm in `setup()` (see [`docs/research/blit-copy-classification.md`](../research/blit-copy-classification.md)). Vulkan backend has no cache. |
+| `blit_copy_iosurface(src, dest, w, h)` (macOS) | Split | Same Metal cache as `blit_copy`. Same pre-warm applies. `unsafe` — caller responsible for IOSurface lifetime. |
+| `clear_blitter_cache()` | F | `setup()` / teardown only. Not called in any production path today. Moving to FullAccess prevents accidental mid-`process()` invalidation of a pre-warm. |
 
 ### Timeline semaphore
 
@@ -182,11 +182,13 @@ sign-off before #324 lands:
    If we later decide submissions must go through an escalation
    boundary for tracing/telemetry reasons, these move to Split. Not
    today.
-2. **`blit_copy` family** — Sandbox today; one open question is
-   whether the blitter's internal `RhiTextureCache` can grow on a
-   cold key. If it can, this is a Split and the first call for a new
-   key needs to escalate. The alternative is to pre-warm the cache
-   in `setup()` for all expected sizes.
+2. **`blit_copy` family** — resolved in
+   [`docs/research/blit-copy-classification.md`](../research/blit-copy-classification.md)
+   (ticket #346). Metal backend's blitter caches one `MTLTexture` per
+   destination IOSurface ID and grows on cold key; Vulkan backend has
+   no cache. Classified **Split**, with pre-warm in `setup()` as the
+   expected caller shape. `clear_blitter_cache()` moves to FullAccess
+   to prevent mid-`process()` cache invalidation.
 3. **`resolve_videoframe_texture` / `check_out_surface`** — the
    first-call DMA-BUF import path is FullAccess but is unusual in
    that the caller doesn't know a priori whether it's the first
@@ -719,10 +721,19 @@ compiler enforces it.
 Option B rejected: would require threading a `ProcessCtx` through
 every `process()` call site with no offsetting benefit today.
 
-### Q2. `blit_copy` classification — **research ticket #346**
+### Q2. `blit_copy` classification — **resolved (#346)**
 
-Not resolved in-doc; filed as blocker for #324. #324's plan file now
-depends on #346.
+Resolution: [`docs/research/blit-copy-classification.md`](../research/blit-copy-classification.md).
+`blit_copy` and `blit_copy_iosurface` are **Split** — Metal backend's
+`MetalBlitter` grows a `HashMap<u32, MTLTexture>` cache keyed by
+destination IOSurface ID, so first-blit-to-slot allocates an
+`MTLTexture`. Callers pre-warm in `setup()` by acquiring every
+destination pool slot and running a warmer blit per slot (or a
+dedicated `warm_blitter_cache` helper on `MetalBlitter`). Vulkan
+backend has no cache; the Linux-only path is naturally Sandbox-safe.
+`clear_blitter_cache()` moves from Sandbox to FullAccess so a
+mid-`process()` call cannot invalidate a pre-warm. See §1's Blitter
+row for the updated classification.
 
 ### Q3. Transparent escalation helpers — **cut**
 
