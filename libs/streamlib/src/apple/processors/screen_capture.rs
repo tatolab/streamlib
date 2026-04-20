@@ -268,13 +268,19 @@ pub struct AppleScreenCaptureProcessor {
 }
 
 impl crate::core::ManualProcessor for AppleScreenCaptureProcessor::Processor {
-    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("ScreenCapture: setup() complete");
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let frame_count = SCREEN_CAPTURE_CALLBACK_CONTEXT
             .get()
             .map(|ctx| ctx.frame_count.load(Ordering::Relaxed))

@@ -24,7 +24,10 @@ pub struct AudioResamplerProcessor {
 }
 
 impl crate::core::ReactiveProcessor for AudioResamplerProcessor::Processor {
-    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.output_sample_rate = self.config.target_sample_rate;
 
         tracing::info!(
@@ -36,7 +39,10 @@ impl crate::core::ReactiveProcessor for AudioResamplerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "[AudioResampler] Stopped (processed {} output frames)",
             self.frame_counter

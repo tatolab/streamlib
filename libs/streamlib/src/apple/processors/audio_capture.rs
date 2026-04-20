@@ -28,13 +28,19 @@ pub struct AppleAudioCaptureProcessor {
 }
 
 impl crate::core::ManualProcessor for AppleAudioCaptureProcessor::Processor {
-    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("[AudioCapture] setup() called - will set up stream in process()");
         self.stream_setup_done = false;
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let device_name = self
             .device_info
             .as_ref()

@@ -21,34 +21,34 @@ use std::future::Future;
 /// [`RuntimeContextLimitedAccess`] — hot-path-safe.
 pub trait ManualProcessor {
     /// Called once when the processor starts. Privileged ctx.
-    fn setup<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
     /// Called once when the processor stops. Privileged ctx.
-    fn teardown<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
     /// Called when the processor is paused. Restricted ctx.
-    fn on_pause<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
     /// Called when the processor is resumed after being paused. Restricted ctx.
-    fn on_resume<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 

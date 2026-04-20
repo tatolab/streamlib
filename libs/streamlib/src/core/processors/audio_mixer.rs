@@ -13,7 +13,10 @@ pub struct AudioMixerProcessor {
 }
 
 impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
-    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.sample_rate = 0;
         self.buffer_size = 0;
         self.frame_counter = 0;
@@ -25,7 +28,10 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("AudioMixer: Stopped");
         std::future::ready(Ok(()))
     }

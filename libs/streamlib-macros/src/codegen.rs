@@ -430,31 +430,31 @@ fn generate_processor_impl_from_schema(
                 Some(self.audio.status_arc())
             }
 
-            fn __generated_setup<'a>(
-                &'a mut self,
-                ctx: &'a ::streamlib::core::RuntimeContextFullAccess<'a>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send + 'a {
+            fn __generated_setup(
+                &mut self,
+                ctx: &::streamlib::core::RuntimeContextFullAccess<'_>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as #processor_trait>::setup(self, ctx)
             }
 
-            fn __generated_teardown<'a>(
-                &'a mut self,
-                ctx: &'a ::streamlib::core::RuntimeContextFullAccess<'a>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send + 'a {
+            fn __generated_teardown(
+                &mut self,
+                ctx: &::streamlib::core::RuntimeContextFullAccess<'_>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as #processor_trait>::teardown(self, ctx)
             }
 
-            fn __generated_on_pause<'a>(
-                &'a mut self,
-                ctx: &'a ::streamlib::core::RuntimeContextLimitedAccess<'a>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send + 'a {
+            fn __generated_on_pause(
+                &mut self,
+                ctx: &::streamlib::core::RuntimeContextLimitedAccess<'_>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as #processor_trait>::on_pause(self, ctx)
             }
 
-            fn __generated_on_resume<'a>(
-                &'a mut self,
-                ctx: &'a ::streamlib::core::RuntimeContextLimitedAccess<'a>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send + 'a {
+            fn __generated_on_resume(
+                &mut self,
+                ctx: &::streamlib::core::RuntimeContextLimitedAccess<'_>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
                 <Self as #processor_trait>::on_resume(self, ctx)
             }
         }

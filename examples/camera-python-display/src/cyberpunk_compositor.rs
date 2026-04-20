@@ -246,7 +246,10 @@ fn run_vision_segmentation(
 }
 
 impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Processor {
-    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             tracing::info!("CyberpunkCompositor: Setting up (reactive mode)...");
 
@@ -432,7 +435,10 @@ impl streamlib::core::ReactiveProcessor for CyberpunkCompositorProcessor::Proces
         std::future::ready(result)
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.segmentation_running.store(false, Ordering::Release);
         self.segmentation_sender.take();
 

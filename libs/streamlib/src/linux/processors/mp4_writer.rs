@@ -31,7 +31,7 @@ pub struct LinuxMp4WriterProcessor {
 }
 
 impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
-    async fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
             "[LinuxMp4Writer] Initialized (output: {}, config fps: {})",
@@ -41,7 +41,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if let Some(mut child) = self.ffmpeg_process.take() {
             // Close stdin to signal ffmpeg that input is done.
             drop(child.stdin.take());

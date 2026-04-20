@@ -29,7 +29,7 @@ pub struct MoqPublishTrackProcessor {
 }
 
 impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
-    async fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Track name: use config value or auto-generate from processor ID
         self.track_name = self.config.track_name.clone().unwrap_or_else(|| {
             ctx.processor_id()
@@ -53,7 +53,7 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_published = self.frames_published,
             "[MoqPublishTrack] Shutting down"

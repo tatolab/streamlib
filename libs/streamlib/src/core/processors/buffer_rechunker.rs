@@ -13,7 +13,10 @@ pub struct BufferRechunkerProcessor {
 }
 
 impl crate::core::ReactiveProcessor for BufferRechunkerProcessor::Processor {
-    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let target_size = self.config.target_buffer_size as usize;
         // Pre-allocate buffer with extra capacity for any channel count
         self.buffer = Vec::with_capacity(target_size * 16);
@@ -24,7 +27,10 @@ impl crate::core::ReactiveProcessor for BufferRechunkerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("[BufferRechunker] Stopped");
         std::future::ready(Ok(()))
     }

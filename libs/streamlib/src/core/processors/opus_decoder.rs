@@ -23,7 +23,7 @@ pub struct OpusDecoderProcessor {
 }
 
 impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
-    async fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let sample_rate = self.config.sample_rate.unwrap_or(48000);
         let channels = self.config.channels.unwrap_or(2) as usize;
 
@@ -39,7 +39,7 @@ impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
             "[OpusDecoder] Shutting down"

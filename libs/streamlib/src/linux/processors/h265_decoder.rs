@@ -30,7 +30,7 @@ pub struct H265DecoderProcessor {
 }
 
 impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
-    async fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
         let decoder_config = SimpleDecoderConfig {
@@ -98,7 +98,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
             "[H265Decoder] Shutting down"

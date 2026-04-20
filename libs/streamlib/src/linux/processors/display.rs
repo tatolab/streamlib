@@ -49,7 +49,10 @@ pub struct LinuxDisplayProcessor {
 }
 
 impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
-    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             tracing::trace!("Display: setup() called");
             self.gpu_context = Some(ctx.gpu_limited_access().clone());
@@ -78,7 +81,10 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         std::future::ready(result)
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("Display {}: Teardown", self.window_title);
         std::future::ready(Ok(()))
     }

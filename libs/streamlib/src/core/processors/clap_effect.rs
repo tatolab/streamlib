@@ -133,7 +133,10 @@ impl ClapEffectProcessor::Processor {
 }
 
 impl crate::core::ManualProcessor for ClapEffectProcessor::Processor {
-    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             self.buffer_size = self.config.buffer_size as usize;
 
@@ -167,7 +170,10 @@ impl crate::core::ManualProcessor for ClapEffectProcessor::Processor {
         std::future::ready(result)
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.stop_polling.store(true, Ordering::SeqCst);
 
         if let Some(handle) = self.polling_thread.take() {

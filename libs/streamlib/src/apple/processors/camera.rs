@@ -360,14 +360,20 @@ pub struct AppleCameraProcessor {
 }
 
 impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
-    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         // Store GPU context for surface store access in start()
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("Camera: setup() complete");
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let frame_count = CAMERA_CALLBACK_CONTEXT
             .get()
             .map(|ctx| ctx.frame_count.load(Ordering::Relaxed))

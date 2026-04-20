@@ -77,7 +77,10 @@ pub struct LinuxAudioOutputProcessor {
 }
 
 impl crate::core::ManualProcessor for LinuxAudioOutputProcessor::Processor {
-    fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.device_id = self
             .config
             .device_id
@@ -89,7 +92,10 @@ impl crate::core::ManualProcessor for LinuxAudioOutputProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         // Signal polling thread to stop
         self.stop_polling.store(true, Ordering::SeqCst);
 

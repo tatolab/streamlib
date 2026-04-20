@@ -86,34 +86,34 @@ pub trait GeneratedProcessor: Send + 'static {
     }
 
     /// Generated setup hook called by runtime with privileged ctx.
-    fn __generated_setup<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn __generated_setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
     /// Generated teardown hook called by runtime with privileged ctx.
-    fn __generated_teardown<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn __generated_teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
     /// Generated on_pause hook — restricted ctx.
-    fn __generated_on_pause<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn __generated_on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
     /// Generated on_resume hook — restricted ctx.
-    fn __generated_on_resume<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn __generated_on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 

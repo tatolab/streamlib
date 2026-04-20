@@ -23,7 +23,7 @@ pub struct OpusEncoderProcessor {
 }
 
 impl crate::core::ReactiveProcessor for OpusEncoderProcessor::Processor {
-    async fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let encoder_config = AudioEncoderConfig {
             sample_rate: 48000,
             channels: 2,
@@ -41,7 +41,7 @@ impl crate::core::ReactiveProcessor for OpusEncoderProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_encoded = self.frames_encoded,
             "[OpusEncoder] Shutting down"

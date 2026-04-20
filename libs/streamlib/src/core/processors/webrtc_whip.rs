@@ -47,7 +47,7 @@ pub struct WebRtcWhipProcessor {
 }
 
 impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
-    async fn setup<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Convert generated config to WhipConfig
         let whip_config = WhipConfig {
             endpoint_url: self.config.whip.endpoint_url.clone(),
@@ -61,7 +61,7 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[WebRtcWhip] Shutting down");
 
         // Drop the channel sender to signal the async task to terminate.

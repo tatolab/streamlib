@@ -53,7 +53,7 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
         }
     }
 
-    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[MoqSubscribeTrack] Shutting down");
 
         if let Some(tx) = self.shutdown_signal_sender.take() {

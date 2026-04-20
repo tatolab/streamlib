@@ -211,10 +211,10 @@ pub struct ApiServerProcessor {
 }
 
 impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
-    fn setup<'a>(
-        &'a mut self,
-        ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         // Stash a cloned RuntimeContext so the long-lived HTTP server task
         // spawned in start() can reach tokio_handle + runtime_id. The crate-
         // internal accessor makes the extraction explicit; external crates
@@ -223,24 +223,24 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    fn on_pause<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    fn on_resume<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 

@@ -72,7 +72,10 @@ impl ChordGeneratorProcessor::Processor {
 }
 
 impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
-    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         // Get sample rate from the audio clock
         let audio_clock = ctx.audio_clock();
         self.sample_rate = audio_clock.sample_rate();
@@ -96,7 +99,10 @@ impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         // Mark as inactive to stop generating
         self.is_active.store(false, Ordering::SeqCst);
         tracing::info!("ChordGenerator: teardown complete");

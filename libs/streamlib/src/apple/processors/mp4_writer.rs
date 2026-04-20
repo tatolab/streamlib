@@ -82,7 +82,10 @@ pub struct AppleMp4WriterProcessor {
 }
 
 impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
-    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             info!("Setting up MP4 writer processor");
 
@@ -334,7 +337,10 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             info!("Tearing down MP4 writer processor");
 

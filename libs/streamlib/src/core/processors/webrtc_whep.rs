@@ -33,10 +33,10 @@ pub struct WebRtcWhepProcessor {
 }
 
 impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
-    fn setup<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         async move {
             // Convert generated config to WhepConfig
             let whep_config = WhepConfig {
@@ -63,7 +63,7 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
         }
     }
 
-    async fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[WebRtcWhep] Shutting down");
 
         if let Some(mut client) = self.whep_client.take() {
@@ -76,17 +76,17 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
         Ok(())
     }
 
-    fn on_pause<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    fn on_resume<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> impl Future<Output = Result<()>> + Send + 'a {
+    fn on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 

@@ -88,7 +88,10 @@ pub struct BlendingCompositorProcessor {
 }
 
 impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Processor {
-    fn setup<'a>(&'a mut self, ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             tracing::info!("BlendingCompositor: Setting up (reactive mode)...");
 
@@ -193,7 +196,10 @@ impl streamlib::core::ReactiveProcessor for BlendingCompositorProcessor::Process
         std::future::ready(result)
     }
 
-    fn teardown<'a>(&'a mut self, _ctx: &'a RuntimeContextFullAccess<'a>) -> impl std::future::Future<Output = Result<()>> + Send + 'a {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "BlendingCompositor: Shutdown ({} frames)",
             self.frame_count.load(Ordering::Relaxed)
