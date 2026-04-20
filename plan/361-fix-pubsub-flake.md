@@ -2,7 +2,7 @@
 whoami: amos
 name: "Fix flaky test_concurrent_publish_from_multiple_threads (iceoryx2 teardown race)"
 status: pending
-description: Test passes in isolation but flakes under parallel test suite due to iceoryx2 service teardown race. Isolate via per-test Iceoryx2Node or serial_test. Pre-existing infrastructure issue; not caused by any particular PR.
+description: 'Test passes in isolation but flakes under parallel test suite due to iceoryx2 service teardown race. Isolate via per-test Iceoryx2Node or serial_test. Pre-existing infrastructure issue; not caused by any particular PR.'
 github_issue: 361
 adapters:
   github: builtin
