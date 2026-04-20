@@ -827,8 +827,8 @@ impl VkImageResource {
     /// Internal destroy — called from `Drop`.
     fn destroy(&mut self) {
         if self.owns_resources {
-            if let (Some(ref allocator), Some(allocation)) =
-                (&self.allocator, self.allocation.take())
+            if let (Some(allocator), Some(allocation)) =
+                (self.allocator.as_ref(), self.allocation.take())
             {
                 // VMA path: destroy image + free memory in one call.
                 if self.image != vk::Image::null() {
