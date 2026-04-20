@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Couple vulkan-video to streamlib RHI
-status: completed
-description: Refactor libs/vulkan-video to use streamlib's VulkanDevice and shared VMA allocator instead of managing its own Vulkan resources. Full RHI boundary compliance.
-github_issue: 270
-dependencies:
-  - "down:@github:tatolab/streamlib#254"
+name: '@github:tatolab/streamlib#270'
 adapters:
   github: builtin
+description: Couple vulkan-video to streamlib RHI — Refactor libs/vulkan-video to use streamlib's VulkanDevice and shared VMA allocator instead of managing its own Vulkan resources. Full RHI boundary compliance.
+github_issue: 270
+blocks:
+- '@github:tatolab/streamlib#254'
 ---
 
 @github:tatolab/streamlib#270

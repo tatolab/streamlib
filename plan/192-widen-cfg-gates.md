@@ -1,14 +1,15 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#192"
+name: '@github:tatolab/streamlib#192'
 description: Linux — widen macOS-only cfg gates for runtime, codecs, and telemetry
-dependencies:
-  - "down:@github:tatolab/streamlib#164"
-  - "down:@github:tatolab/streamlib#165"
-  - "down:@github:tatolab/streamlib#167"
-  - "up:@github:tatolab/streamlib#166"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#166'
+blocks:
+- '@github:tatolab/streamlib#164'
+- '@github:tatolab/streamlib#165'
+- '@github:tatolab/streamlib#167'
 ---
 
 @github:tatolab/streamlib#192

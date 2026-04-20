@@ -1,11 +1,11 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#181"
+name: '@github:tatolab/streamlib#181'
 description: Linux — gpu-allocator for Vulkan sub-allocation to prevent memory fragmentation
-dependencies:
-  - "down:@github:tatolab/streamlib#163"
 adapters:
   github: builtin
+blocks:
+- '@github:tatolab/streamlib#163'
 ---
 
 @github:tatolab/streamlib#181

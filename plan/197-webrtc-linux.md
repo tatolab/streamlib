@@ -1,12 +1,13 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#197"
+name: '@github:tatolab/streamlib#197'
 description: Linux — widen WebRTC WHIP/WHEP and RTP to cross-platform
-dependencies:
-  - "down:@github:tatolab/streamlib#192"
-  - "up:@github:tatolab/streamlib#166"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#166'
+blocks:
+- '@github:tatolab/streamlib#192'
 ---
 
 @github:tatolab/streamlib#197

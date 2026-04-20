@@ -1,21 +1,20 @@
 ---
 whoami: amos
-name: GPU capability-based access (sandbox + escalate)
-status: pending
-description: Umbrella — replace runtime-phase checks with compile-time capability types. `process()` receives `GpuContextLimitedAccess`; escalation to `GpuContextFullAccess` goes through a closure that reuses the setup mutex from #304. Setup becomes "compiler pre-escalates on behalf of the processor." Huge DX and correctness win; unblocks dynamic reconfigure.
-github_issue: 319
-dependencies:
-  - "down:Design doc: GpuContextLimitedAccess + GpuContextFullAccess API surface"
-  - "down:Introduce GpuContextLimitedAccess + GpuContextFullAccess newtype wrappers"
-  - "down:Migrate processor trait signatures to capability-aware setup/process"
-  - "down:Implement sandbox.escalate() reusing the setup mutex"
-  - "down:Restrict GpuContextLimitedAccess API surface to safe ops"
-  - "down:Polyglot IPC: escalate-on-behalf for Python/Deno processors"
-  - "down:Polyglot escalate: add acquire_texture op"
-  - "down:xtask: support JTD discriminator schemas in generate-schemas"
-  - "down:Learning doc: GPU capability typestate pattern"
+name: '@github:tatolab/streamlib#319'
 adapters:
   github: builtin
+description: 'GPU capability-based access (sandbox + escalate) — Umbrella — replace runtime-phase checks with compile-time capability types. `process()` receives `GpuContextLimitedAccess`; escalation to `GpuContextFullAccess` goes through a closure that reuses the setup mutex from #304. Setup becomes "compiler pre-escalates on behalf of the processor." Huge DX and correctness win; unblocks dynamic reconfigure.'
+github_issue: 319
+blocked_by:
+- '@github:tatolab/streamlib#320'
+- '@github:tatolab/streamlib#321'
+- '@github:tatolab/streamlib#322'
+- '@github:tatolab/streamlib#323'
+- '@github:tatolab/streamlib#324'
+- '@github:tatolab/streamlib#325'
+- '@github:tatolab/streamlib#369'
+- '@github:tatolab/streamlib#370'
+- '@github:tatolab/streamlib#326'
 ---
 
 @github:tatolab/streamlib#319

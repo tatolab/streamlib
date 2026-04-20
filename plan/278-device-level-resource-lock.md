@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Device-level lock for GPU resource creation during concurrent operations
-status: completed
-description: Wrap vulkan-video session creation and DPB allocation with VulkanDevice::lock_device() to prevent races with concurrent GPU submissions.
-github_issue: 278
-dependencies:
-  - "down:vulkan-video synchronized queue submission via VulkanDevice"
+name: '@github:tatolab/streamlib#278'
 adapters:
   github: builtin
+description: Device-level lock for GPU resource creation during concurrent operations — Wrap vulkan-video session creation and DPB allocation with VulkanDevice::lock_device() to prevent races with concurrent GPU submissions.
+github_issue: 278
+blocks:
+- '@github:tatolab/streamlib#277'
 ---
 
 @github:tatolab/streamlib#278

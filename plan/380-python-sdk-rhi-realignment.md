@@ -1,15 +1,14 @@
 ---
 whoami: amos
-name: "[BLOCKED — do not start] Umbrella: realign Python polyglot SDK to RHI-mediated GPU model"
-status: pending
-description: "BLOCKED — queued behind #319 (GPU capability umbrella) and all its children, plus #347 DMA-BUF FD research and #369 polyglot acquire_texture. Do NOT pick up. Umbrella to rip the parallel GPU stack (IOSurface FFI, CGL helpers, XPC broker) out of libstreamlib_python_native and libs/streamlib-python, and route every GPU op through escalate IPC → host → GpuContext → RHI so platform-specific code stays inside the RHI's platform subdirectories instead of the Python cdylib."
-github_issue: 380
-dependencies:
-  - "down:GPU capability-based access (sandbox + escalate)"
-  - "down:Research: DMA-BUF FD passing for Linux polyglot escalation"
-  - "down:Polyglot escalate: add acquire_texture op"
+name: '@github:tatolab/streamlib#380'
 adapters:
   github: builtin
+description: '[BLOCKED — do not start] Umbrella: realign Python polyglot SDK to RHI-mediated GPU model — BLOCKED — queued behind #319 (GPU capability umbrella) and all its children, plus #347 DMA-BUF FD research and #369 polyglot acquire_texture. Do NOT pick up. Umbrella to rip the parallel GPU stack (IOSurface FFI, CGL helpers, XPC broker) out of libstreamlib_python_native and libs/streamlib-python, and route every GPU op through escalate IPC → host → GpuContext → RHI so platform-specific code stays inside the RHI''s platform subdirectories instead of the Python cdylib.'
+github_issue: 380
+blocked_by:
+- '@github:tatolab/streamlib#319'
+- '@github:tatolab/streamlib#347'
+- '@github:tatolab/streamlib#369'
 ---
 
 @github:tatolab/streamlib#380

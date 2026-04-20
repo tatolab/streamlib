@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: VulkanDevice thread-safe queue submission synchronization
-status: completed
-description: Add per-queue mutexes to VulkanDevice so concurrent processor threads can safely submit Vulkan commands. Fixes release build SIGSEGV.
-github_issue: 273
-dependencies:
-  - "down:@github:tatolab/streamlib#270"
+name: '@github:tatolab/streamlib#273'
 adapters:
   github: builtin
+description: VulkanDevice thread-safe queue submission synchronization — Add per-queue mutexes to VulkanDevice so concurrent processor threads can safely submit Vulkan commands. Fixes release build SIGSEGV.
+github_issue: 273
+blocks:
+- '@github:tatolab/streamlib#270'
 ---
 
 @github:tatolab/streamlib#273

@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Integrate nvpro-vulkan-video as libs/vulkan-video
-status: completed
-description: Copy nvpro-vulkan-video crate into libs/vulkan-video, create thin processor wrappers for H.264/H.265 encode/decode. Branch feat/vulkan-video-integration from main.
-github_issue: 254
-dependencies:
-  - "down:@github:tatolab/streamlib#253"
+name: '@github:tatolab/streamlib#254'
 adapters:
   github: builtin
+description: Integrate nvpro-vulkan-video as libs/vulkan-video — Copy nvpro-vulkan-video crate into libs/vulkan-video, create thin processor wrappers for H.264/H.265 encode/decode. Branch feat/vulkan-video-integration from main.
+github_issue: 254
+blocks:
+- '@github:tatolab/streamlib#253'
 ---
 
 @github:tatolab/streamlib#254

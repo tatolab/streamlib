@@ -1,17 +1,18 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#166"
+name: '@github:tatolab/streamlib#166'
 description: Linux — Processors — camera, display, audio, MP4 writer, screen capture
-dependencies:
-  - "down:@github:tatolab/streamlib#163"
-  - "down:@github:tatolab/streamlib#164"
-  - "down:@github:tatolab/streamlib#165"
-  - "down:@github:tatolab/streamlib#167"
-  - "down:@github:tatolab/streamlib#178"
-  - "down:@github:tatolab/streamlib#180"
-  - "up:@github:tatolab/streamlib#168"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#168'
+blocks:
+- '@github:tatolab/streamlib#163'
+- '@github:tatolab/streamlib#164'
+- '@github:tatolab/streamlib#165'
+- '@github:tatolab/streamlib#167'
+- '@github:tatolab/streamlib#178'
+- '@github:tatolab/streamlib#180'
 ---
 
 @github:tatolab/streamlib#166

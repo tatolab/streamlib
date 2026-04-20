@@ -1,15 +1,15 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#163"
+name: '@github:tatolab/streamlib#163'
 description: Linux — Vulkan RHI — complete the GPU backend
-dependencies:
-  - "up:@github:tatolab/streamlib#164"
-  - "up:@github:tatolab/streamlib#165"
-  - "up:@github:tatolab/streamlib#166"
-  - "up:@github:tatolab/streamlib#167"
-  - "up:@github:tatolab/streamlib#178"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#164'
+- '@github:tatolab/streamlib#165'
+- '@github:tatolab/streamlib#166'
+- '@github:tatolab/streamlib#167'
+- '@github:tatolab/streamlib#178'
 ---
 
 @github:tatolab/streamlib#163

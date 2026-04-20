@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Migrate RHI from ash to vulkanalia
-status: completed
-description: Replace ash 0.38 (Vulkan 1.3) with vulkanalia 0.35 (Vulkan 1.4) throughout the RHI. Branch refactor/ash-to-vulkanalia from main.
-github_issue: 252
-dependencies:
-  - "down:@github:tatolab/streamlib#251"
+name: '@github:tatolab/streamlib#252'
 adapters:
   github: builtin
+description: Migrate RHI from ash to vulkanalia — Replace ash 0.38 (Vulkan 1.3) with vulkanalia 0.35 (Vulkan 1.4) throughout the RHI. Branch refactor/ash-to-vulkanalia from main.
+github_issue: 252
+blocks:
+- '@github:tatolab/streamlib#251'
 ---
 
 @github:tatolab/streamlib#252

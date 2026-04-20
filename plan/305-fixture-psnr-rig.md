@@ -1,11 +1,10 @@
 ---
 whoami: amos
-name: Fixture-based PSNR rig for encoder/decoder roundtrips
-status: completed
-description: Build a frame-aligned PSNR rig (checked-in reference PNGs fed through BgraFileSource → encoder → decoder) so encoder/decoder PSNR actually measures encode loss instead of timecode drift. Today every scenario ends up as "n/a" per docs/testing.md.
-github_issue: 305
+name: '@github:tatolab/streamlib#305'
 adapters:
   github: builtin
+description: Fixture-based PSNR rig for encoder/decoder roundtrips — Build a frame-aligned PSNR rig (checked-in reference PNGs fed through BgraFileSource → encoder → decoder) so encoder/decoder PSNR actually measures encode loss instead of timecode drift. Today every scenario ends up as "n/a" per docs/testing.md.
+github_issue: 305
 ---
 
 @github:tatolab/streamlib#305

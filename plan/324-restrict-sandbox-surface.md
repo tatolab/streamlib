@@ -1,14 +1,13 @@
 ---
 whoami: amos
-name: Restrict GpuContextLimitedAccess API surface to safe ops
-status: completed
-description: The enforcement task. Remove every heavy-allocation method from `GpuContextLimitedAccess`. Process() bodies that call privileged methods become compile errors; fix each by pre-reserving in setup() or wrapping in `escalate()`.
-github_issue: 324
-dependencies:
-  - "down:Implement sandbox.escalate() reusing the setup mutex"
-  - "down:Research: classify blit_copy cache-growth path (Sandbox vs Split)"
+name: '@github:tatolab/streamlib#324'
 adapters:
   github: builtin
+description: Restrict GpuContextLimitedAccess API surface to safe ops — The enforcement task. Remove every heavy-allocation method from `GpuContextLimitedAccess`. Process() bodies that call privileged methods become compile errors; fix each by pre-reserving in setup() or wrapping in `escalate()`.
+github_issue: 324
+blocks:
+- '@github:tatolab/streamlib#323'
+- '@github:tatolab/streamlib#346'
 ---
 
 @github:tatolab/streamlib#324

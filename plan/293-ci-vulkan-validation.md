@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: CI with Vulkan validation layer
-status: completed
-description: Superseded by #343. The original narrow plan assumed StreamRuntime already honored VK_LOADER_LAYERS_ENABLE. #294's retest disproved that and surfaced two other blockers (#337 hermeticity, #213 GPU runner), so the task was closed with its discovery documented and the full CI-lifecycle scope was moved to umbrella #343.
-github_issue: 293
-dependencies:
-  - "down:Retest camera + encoder + display roundtrip after Vulkan cleanup"
+name: '@github:tatolab/streamlib#293'
 adapters:
   github: builtin
+description: 'CI with Vulkan validation layer — Superseded by #343. The original narrow plan assumed StreamRuntime already honored VK_LOADER_LAYERS_ENABLE. #294''s retest disproved that and surfaced two other blockers (#337 hermeticity, #213 GPU runner), so the task was closed with its discovery documented and the full CI-lifecycle scope was moved to umbrella #343.'
+github_issue: 293
+blocks:
+- '@github:tatolab/streamlib#294'
 ---
 
 @github:tatolab/streamlib#293

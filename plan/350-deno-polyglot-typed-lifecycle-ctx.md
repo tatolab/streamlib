@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: "Deno polyglot SDK — typed lifecycle ctx over IPC"
-status: completed
-description: Propagate the capability-typed lifecycle ctx (RuntimeContextFullAccess / RuntimeContextLimitedAccess) from the Rust-side DenoSubprocessHostProcessor into the Deno-side SDK so TypeScript processor authors get the same LSP-guided, hard-to-misuse API as Rust authors.
-github_issue: 350
-dependencies:
-  - "down:Migrate processor lifecycles to RuntimeContextFullAccess / RuntimeContextLimitedAccess"
+name: '@github:tatolab/streamlib#350'
 adapters:
   github: builtin
+description: Deno polyglot SDK — typed lifecycle ctx over IPC — Propagate the capability-typed lifecycle ctx (RuntimeContextFullAccess / RuntimeContextLimitedAccess) from the Rust-side DenoSubprocessHostProcessor into the Deno-side SDK so TypeScript processor authors get the same LSP-guided, hard-to-misuse API as Rust authors.
+github_issue: 350
+blocks:
+- '@github:tatolab/streamlib#322'
 ---
 
 @github:tatolab/streamlib#350

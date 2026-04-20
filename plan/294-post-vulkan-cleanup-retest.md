@@ -1,28 +1,27 @@
 ---
 whoami: amos
-name: Retest camera + encoder + display roundtrip after Vulkan cleanup
-status: completed
-description: Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, #303, #304, #305, #306, #315, #316, and #330 land and confirm release SIGSEGV and Cam Link OOM are both gone.
-github_issue: 294
-dependencies:
-  - "down:Vulkanalia builder lifetime audit across RHI and processors"
-  - "down:Camera ring textures missing TRANSFER_SRC_BIT"
-  - "down:NV12 image views require VkSamplerYcbcrConversion"
-  - "down:VMA bind-buffer-memory type mismatch"
-  - "down:vkGetDeviceQueue called with unexposed family"
-  - "down:Cam Link encoder ERROR_OUT_OF_DEVICE_MEMORY in debug"
-  - "down:Display render_finished semaphore must be per-swapchain-image"
-  - "down:Encoder src picture profile mismatch"
-  - "down:Decoder pool probe uses hard-coded resolution"
-  - "down:Camera MMAP path sees 0 frames on v4l2loopback"
-  - "down:Flaky H.265 decoder DEVICE_LOST during setup"
-  - "down:Fixture-based PSNR rig for encoder/decoder roundtrips"
-  - "down:Expose encoder quality_level with real-time default"
-  - "down:Enable samplerYcbcrConversion feature and audit NV12 image-create flags"
-  - "down:Swapchain-descriptor image in UNDEFINED layout at sample time"
-  - "down:Research: H.265 encoder quality configuration on Vulkan Video / NVIDIA"
+name: '@github:tatolab/streamlib#294'
 adapters:
   github: builtin
+description: 'Retest camera + encoder + display roundtrip after Vulkan cleanup — Rollup retest that supersedes #279. Run the full matrix after #287-#292, #296, #300, #302, #303, #304, #305, #306, #315, #316, and #330 land and confirm release SIGSEGV and Cam Link OOM are both gone.'
+github_issue: 294
+blocked_by:
+- '@github:tatolab/streamlib#287'
+- '@github:tatolab/streamlib#288'
+- '@github:tatolab/streamlib#289'
+- '@github:tatolab/streamlib#290'
+- '@github:tatolab/streamlib#291'
+- '@github:tatolab/streamlib#292'
+- '@github:tatolab/streamlib#296'
+- '@github:tatolab/streamlib#300'
+- '@github:tatolab/streamlib#302'
+- '@github:tatolab/streamlib#303'
+- '@github:tatolab/streamlib#304'
+- '@github:tatolab/streamlib#305'
+- '@github:tatolab/streamlib#306'
+- '@github:tatolab/streamlib#315'
+- '@github:tatolab/streamlib#316'
+- '@github:tatolab/streamlib#330'
 ---
 
 @github:tatolab/streamlib#294

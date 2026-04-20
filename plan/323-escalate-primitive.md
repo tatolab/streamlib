@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Implement sandbox.escalate() reusing the setup mutex
-status: completed
-description: Add `GpuContextLimitedAccess::escalate(|full| …)` as the single primitive for all GPU resource-creation work. Internally acquires the mutex from #304, hands the closure a `FullAccess`, waits for idle on exit, releases.
-github_issue: 323
-dependencies:
-  - "down:Migrate processor trait signatures to capability-aware setup/process"
+name: '@github:tatolab/streamlib#323'
 adapters:
   github: builtin
+description: 'Implement sandbox.escalate() reusing the setup mutex — Add `GpuContextLimitedAccess::escalate(|full| …)` as the single primitive for all GPU resource-creation work. Internally acquires the mutex from #304, hands the closure a `FullAccess`, waits for idle on exit, releases.'
+github_issue: 323
+blocks:
+- '@github:tatolab/streamlib#322'
 ---
 
 @github:tatolab/streamlib#323

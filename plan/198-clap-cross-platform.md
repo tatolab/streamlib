@@ -1,11 +1,11 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#198"
+name: '@github:tatolab/streamlib#198'
 description: Linux — widen CLAP plugin host to cross-platform
-dependencies:
-  - "down:@github:tatolab/streamlib#192"
 adapters:
   github: builtin
+blocks:
+- '@github:tatolab/streamlib#192'
 ---
 
 @github:tatolab/streamlib#198

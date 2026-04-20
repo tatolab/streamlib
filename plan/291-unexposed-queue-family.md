@@ -1,11 +1,10 @@
 ---
 whoami: amos
-name: vkGetDeviceQueue called with unexposed family
-status: completed
-description: Ensure every queue family whose queue we later fetch is requested at VkDeviceQueueCreateInfo time.
-github_issue: 291
+name: '@github:tatolab/streamlib#291'
 adapters:
   github: builtin
+description: vkGetDeviceQueue called with unexposed family — Ensure every queue family whose queue we later fetch is requested at VkDeviceQueueCreateInfo time.
+github_issue: 291
 ---
 
 @github:tatolab/streamlib#291

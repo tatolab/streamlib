@@ -1,13 +1,14 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#178"
+name: '@github:tatolab/streamlib#178'
 description: Linux — Cross-platform PixelFormat enum
-dependencies:
-  - "down:@github:tatolab/streamlib#163"
-  - "up:@github:tatolab/streamlib#166"
-  - "up:@github:tatolab/streamlib#167"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#166'
+- '@github:tatolab/streamlib#167'
+blocks:
+- '@github:tatolab/streamlib#163'
 ---
 
 @github:tatolab/streamlib#178

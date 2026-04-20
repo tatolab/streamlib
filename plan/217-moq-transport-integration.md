@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: MoQ Transport Integration
-status: pending
-description: "FROZEN — MoQ is partially implemented but stalled on the vulkan-video path. Needs a fresh research+replan pass after the color-management umbrella (#311) lands."
-github_issue: 217
-dependencies:
-  - "down:[BLOCKED — do not start] Pipeline-wide color management (primaries, transfer, range, tone mapping)"
+name: '@github:tatolab/streamlib#217'
 adapters:
   github: builtin
+description: MoQ Transport Integration — FROZEN — MoQ is partially implemented but stalled on the vulkan-video path. Needs a fresh research+replan pass after the color-management umbrella (#311) lands.
+github_issue: 217
+blocks:
+- '@github:tatolab/streamlib#312'
 ---
 
 # 🛑 FROZEN — needs replan after #311 umbrella lands 🛑

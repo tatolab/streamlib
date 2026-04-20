@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Clean Exit for Processor-Based Examples
-status: completed
-description: Fix display window hang on exit — Ctrl+C, SIGTERM, and StreamRuntime shutdown must cleanly close the winit event loop and terminate the process. Branch fix/clean-exit from main.
-github_issue: 236
-dependencies:
-  - "down:@github:tatolab/streamlib#252"
+name: '@github:tatolab/streamlib#236'
 adapters:
   github: builtin
+description: Clean Exit for Processor-Based Examples — Fix display window hang on exit — Ctrl+C, SIGTERM, and StreamRuntime shutdown must cleanly close the winit event loop and terminate the process. Branch fix/clean-exit from main.
+github_issue: 236
+blocks:
+- '@github:tatolab/streamlib#252'
 ---
 
 @github:tatolab/streamlib#236

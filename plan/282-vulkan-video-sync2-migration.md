@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Migrate vulkan-video to Vulkan 1.4 sync2 / SubmitInfo2
-status: completed
-description: Migrate vulkan-video's ported nvpro-samples code to Vulkan 1.4 sync2 (SubmitInfo2, cmd_pipeline_barrier_2) and delete submit_to_queue_legacy. Finishes the modernization #261 started on the streamlib side.
-github_issue: 282
-dependencies:
-  - "down:Retest camera + encoder + display roundtrip in release build"
+name: '@github:tatolab/streamlib#282'
 adapters:
   github: builtin
+description: 'Migrate vulkan-video to Vulkan 1.4 sync2 / SubmitInfo2 — Migrate vulkan-video''s ported nvpro-samples code to Vulkan 1.4 sync2 (SubmitInfo2, cmd_pipeline_barrier_2) and delete submit_to_queue_legacy. Finishes the modernization #261 started on the streamlib side.'
+github_issue: 282
+blocks:
+- '@github:tatolab/streamlib#279'
 ---
 
 @github:tatolab/streamlib#282

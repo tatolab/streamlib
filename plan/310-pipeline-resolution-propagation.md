@@ -1,14 +1,13 @@
 ---
 whoami: amos
-name: Pipeline-wide resolution propagation for non-1080p roundtrips
-status: pending
-description: Design and implement a mechanism so camera → encoder → decoder → display can run at resolutions other than 1920x1080 without editing example sources. Includes a research + choice phase before implementation. Follow-up to #302 / #309.
-github_issue: 310
-dependencies:
-  - "down:Retest camera + encoder + display roundtrip after Vulkan cleanup"
-  - "down:GPU capability-based access (sandbox + escalate)"
+name: '@github:tatolab/streamlib#310'
 adapters:
   github: builtin
+description: 'Pipeline-wide resolution propagation for non-1080p roundtrips — Design and implement a mechanism so camera → encoder → decoder → display can run at resolutions other than 1920x1080 without editing example sources. Includes a research + choice phase before implementation. Follow-up to #302 / #309.'
+github_issue: 310
+blocks:
+- '@github:tatolab/streamlib#294'
+- '@github:tatolab/streamlib#319'
 ---
 
 @github:tatolab/streamlib#310

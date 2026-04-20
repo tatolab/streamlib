@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: "Research: DMA-BUF FD passing for Linux polyglot escalation"
-status: pending
-description: Gated by #320 §8.Q4. #325 ships with pool-IDs-only over JSON-RPC, which can't carry file descriptors. Before the next Linux polyglot iteration (Python/Deno processors rendering to host-allocated DMA-BUF textures), we need a story for FD passing. Compares Unix-domain-socket side-channel, iceoryx2 FD transfer (if available), and generalizing the macOS SurfaceStore broker pattern to Linux.
-github_issue: 347
-dependencies:
-  - "down:Design doc: GpuContextLimitedAccess + GpuContextFullAccess API surface"
+name: '@github:tatolab/streamlib#347'
 adapters:
   github: builtin
+description: 'Research: DMA-BUF FD passing for Linux polyglot escalation — Gated by #320 §8.Q4. #325 ships with pool-IDs-only over JSON-RPC, which can''t carry file descriptors. Before the next Linux polyglot iteration (Python/Deno processors rendering to host-allocated DMA-BUF textures), we need a story for FD passing. Compares Unix-domain-socket side-channel, iceoryx2 FD transfer (if available), and generalizing the macOS SurfaceStore broker pattern to Linux.'
+github_issue: 347
+blocks:
+- '@github:tatolab/streamlib#320'
 ---
 
 @github:tatolab/streamlib#347

@@ -1,11 +1,10 @@
 ---
 whoami: amos
-name: Decoder pool probe uses hard-coded resolution
-status: completed
-description: Replace the hard-coded 1920x1088 probe in H264/H265 decoder setup() with a probe derived from decoder config / session capabilities so non-1080p streams don't regress #292.
-github_issue: 302
+name: '@github:tatolab/streamlib#302'
 adapters:
   github: builtin
+description: 'Decoder pool probe uses hard-coded resolution — Replace the hard-coded 1920x1088 probe in H264/H265 decoder setup() with a probe derived from decoder config / session capabilities so non-1080p streams don''t regress #292.'
+github_issue: 302
 ---
 
 @github:tatolab/streamlib#302

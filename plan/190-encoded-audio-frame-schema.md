@@ -1,11 +1,11 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#190"
+name: '@github:tatolab/streamlib#190'
 description: Replace hand-built EncodedAudioFrame with JTD schema-generated type for IPC compatibility
-dependencies:
-  - "up:@github:tatolab/streamlib#166"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#166'
 ---
 
 @github:tatolab/streamlib#190
