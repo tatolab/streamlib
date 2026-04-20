@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.4.21](https://github.com/tatolab/streamlib/compare/v0.4.20...v0.4.21) (2026-04-20)
+
+
+### Features
+
+* **#306:** expose encoder quality_level with real-time default ([#329](https://github.com/tatolab/streamlib/issues/329)) ([17223a8](https://github.com/tatolab/streamlib/commit/17223a855ad0f3079c74384adda7c4e62cca9285))
+* **#323:** GpuContextLimitedAccess::escalate() primitive ([#362](https://github.com/tatolab/streamlib/issues/362)) ([08162ba](https://github.com/tatolab/streamlib/commit/08162bafdfb7da04d1c2004bceb12ab8b915d1d5))
+* **#324:** restrict GpuContextLimitedAccess API surface to Sandbox ops ([#365](https://github.com/tatolab/streamlib/issues/365)) ([f257e42](https://github.com/tatolab/streamlib/commit/f257e42f5bdbe671fc7bcb485815a31a1bdb3a1a))
+* **#350:** typed capability ctx for Deno polyglot SDK ([#366](https://github.com/tatolab/streamlib/issues/366)) ([72e4d9f](https://github.com/tatolab/streamlib/commit/72e4d9f1707212f95c5003fa908eb44d9e0fd241))
+
+
+### Bug Fixes
+
+* **#291:** request transfer queue family in DeviceQueueCreateInfo ([#313](https://github.com/tatolab/streamlib/issues/313)) ([8505874](https://github.com/tatolab/streamlib/commit/8505874c98b20e4c86bb414043aa0145eefc9ebe))
+* **#296:** size render_finished semaphore per swapchain image ([#317](https://github.com/tatolab/streamlib/issues/317)) ([b2aa513](https://github.com/tatolab/streamlib/commit/b2aa5137cb4292a20db854a515bcf336ccdb1cc3))
+* **#300:** align rgb_to_nv12 source image profile with encode session ([#318](https://github.com/tatolab/streamlib/issues/318)) ([7918222](https://github.com/tatolab/streamlib/commit/791822261d82db5a7130f429a78018e007c2c401))
+* **#304:** serialize processor setup() via GpuContext mutex ([#327](https://github.com/tatolab/streamlib/issues/327)) ([ee4c9af](https://github.com/tatolab/streamlib/commit/ee4c9afd13d325baaddd6c8d44e741a88587c132))
+* **#315:** enable samplerYcbcrConversion and split RGB→NV12 into compute + encode images ([#331](https://github.com/tatolab/streamlib/issues/331)) ([7d7c65a](https://github.com/tatolab/streamlib/commit/7d7c65a97efdf640117c5e1efaf4b099e2d837d1))
+* **#316:** use UNDEFINED old_layout on swapchain pre-render barrier ([#332](https://github.com/tatolab/streamlib/issues/332)) ([69639bf](https://github.com/tatolab/streamlib/commit/69639bfb0f46ed9c7ab93e1a6804438f0a5ff8df))
+* **#359:** pin clack and vulkanalia git deps to specific revs ([#367](https://github.com/tatolab/streamlib/issues/367)) ([f191abf](https://github.com/tatolab/streamlib/commit/f191abfa193dcb2ce43fb6e254e2c0b86d709e89))
+
 ## [0.4.20](https://github.com/tatolab/streamlib/compare/v0.4.19...v0.4.20) (2026-04-19)
 
 
