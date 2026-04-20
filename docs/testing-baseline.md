@@ -1,13 +1,13 @@
 # Workspace test baseline
 
-Canonical command, exclusion list, and expected per-crate test counts for
-streamlib's unit + integration test suite. Use this when reporting test
-results for a PR so reviewers can spot silent test-coverage loss.
+Canonical command and exclusion list for streamlib's unit + integration
+test suite. Use this when reporting test results for a PR so reviewers
+can spot silent test-coverage loss.
 
 **Do not use `cargo test -p streamlib` as the workspace baseline.** It
-covers only the top-level `streamlib` crate (~207 tests) and misses the
-bulk of the suite — `vulkan-video` alone contributes more tests than
-every other crate combined.
+covers only the top-level `streamlib` crate and misses the bulk of the
+suite — `vulkan-video` alone contributes more tests than every other
+crate combined.
 
 ---
 
@@ -22,16 +22,9 @@ cargo test --workspace \
     --exclude webrtc-cloudflare-stream
 ```
 
-Expected result on a clean main (Linux, libssl-dev installed):
-
-```
-passed=848  failed=0  ignored=21
-```
-
-Split across binary tests (844 / 8) and doc tests (4 / 13) — the exact
-split depends on test scheduling, but the **total should not drift
-downward** between runs on the same commit unless a test was deleted
-or gated behind `#[ignore]`.
+The command should print `test result: ok.` from every binary and from
+every `Doc-tests` block, with **zero failures**. That — not any
+particular total — is the pass bar.
 
 ---
 
@@ -52,7 +45,7 @@ excluding them.
 | `webrtc-cloudflare-stream`  | Pulls WebRTC + TLS deps; no tests                 |
 
 If one of these crates later gains real tests, move it off the
-exclusion list and vendor/install the system deps instead.
+exclusion list and install the system deps on the builder instead.
 
 **Review the exclusion list when a new workspace member lands.** A new
 example that silently drags `openssl-sys` will break this command on
@@ -60,33 +53,25 @@ fresh machines.
 
 ---
 
-## Expected per-crate test counts
+## Measuring totals
 
-Measured against `main` on Linux. Counts are **upper bounds under normal
-conditions** — drivers, race conditions, and `#[ignore]` gates can shift
-a handful of tests. A drop of more than ~5 tests in any crate without an
-obvious explanation in the PR is a red flag.
-
-| Crate                      | passed | ignored | notes                                              |
-|----------------------------|-------:|--------:|----------------------------------------------------|
-| `vulkan-video`             |    617 |      11 | RHI, session/DPB, rate control, NV12, validator    |
-| `streamlib`                |    207 |       7 | lib + integration + binary targets                 |
-| `streamlib-codegen-shared` |     12 |       0 |                                                    |
-| `streamlib-macros`         |      7 |       1 | derive macros + compile-tests                      |
-| `streamlib-broker`         |      4 |       0 |                                                    |
-| `streamlib-plugin-abi`     |      0 |       2 | only doctests, currently all ignored               |
-| All other crates           |      0 |       0 | binaries / CLIs with no test targets               |
-
-**How to measure a single crate** (useful when bisecting a drop):
+The totals drift as tests are added or removed, so there's no fixed
+number to validate against. Capture the output summary for a PR with:
 
 ```bash
-cargo test -p <crate> --no-fail-fast 2>&1 \
+cargo test --workspace --exclude ... 2>&1 \
   | grep -E "^test result:" \
-  | awk '{ for (i=1;i<=NF;i++) { \
-        if ($i=="passed;") p+=$(i-1); \
-        if ($i=="failed;") f+=$(i-1); \
-        if ($i=="ignored;") ign+=$(i-1); } } \
+  | awk '{ for (i=1;i<=NF;i++) {
+        if ($i=="passed;") p+=$(i-1);
+        if ($i=="failed;") f+=$(i-1);
+        if ($i=="ignored;") ign+=$(i-1); } }
       END { print "passed="p" failed="f" ignored="ign }'
+```
+
+To isolate a single crate while bisecting a regression:
+
+```bash
+cargo test -p <crate> --no-fail-fast
 ```
 
 ---
@@ -96,42 +81,27 @@ cargo test -p <crate> --no-fail-fast 2>&1 \
 Run the canonical command and quote the totals in the PR description:
 
 ```
-cargo test --workspace --exclude ... → passed=XXX failed=0 ignored=XX
+cargo test --workspace --exclude ... → passed=N failed=0 ignored=M
 ```
 
-If totals changed vs. this doc:
+Compare **against the last PR that ran this command on main**, not
+against any number hardcoded here:
 
-- **Passed count went up** — point at the added tests in the diff.
-- **Passed count went down** — explain why (test deleted, `#[ignore]`d,
-  moved to another crate). If a test was removed silently, the PR
-  should be blocked until it's restored or the removal is justified.
-- **Failed count > 0** — hard block.
+- **Passed went up** — point at the added tests in the diff.
+- **Passed went down** — explain why (test deleted, `#[ignore]`d,
+  moved). A silent drop is a blocker until justified.
+- **Failed > 0** — hard block.
 
-Update the counts in this doc when the expected baseline genuinely
-shifts (e.g., a feature-branch adds a crate full of new tests that
-merged to `main`).
-
----
-
-## Known flakes
-
-- `streamlib::core::utils::loop_control::tests::test_shutdown_event_exits_loop`
-  — occasionally times out under `cargo test -p streamlib` when the
-  iceoryx2 node is contended by other tests in parallel. Passes
-  reliably in isolation and in `cargo test --workspace` ordering.
-  Tracked in #361's follow-up space.
-
-If you hit a failure on `main`, re-run the single affected test in
-isolation with `cargo test -p <crate> <test_name>` before assuming the
-suite is broken.
+Reviewers: if the PR body doesn't include a totals line, ask for one
+before signing off on "tests pass."
 
 ---
 
 ## CI gate (pending)
 
 This command is intended to become a CI gate once the dependencies in
-[#343](https://github.com/tato123/streamlib/issues/343) land (GPU runner,
-validation-layer wiring, hermetic harness). The gate will:
+[#343](https://github.com/tato123/streamlib/issues/343) land (GPU
+runner, validation-layer wiring, hermetic harness). The gate will:
 
 1. Run the canonical command on every PR.
 2. Parse the totals.
