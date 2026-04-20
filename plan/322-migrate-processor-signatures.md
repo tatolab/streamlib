@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: Migrate processor lifecycles to RuntimeContextFullAccess / RuntimeContextLimitedAccess
-status: pending
+status: completed
 description: Flip every processor lifecycle method (setup / teardown / on_pause / on_resume / process, plus Manual mode start / stop) to receive a capability-typed ctx parameter. Setup / teardown / start / stop get RuntimeContextFullAccess; on_pause / on_resume / process get RuntimeContextLimitedAccess. Stashed Option<GpuContext…> fields disappear. Also renames GpuContextSandbox → GpuContextLimitedAccess for naming consistency (FullAccess / LimitedAccess as a coherent pair).
 github_issue: 322
 dependencies:
