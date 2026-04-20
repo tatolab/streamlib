@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: "Deno polyglot SDK — typed lifecycle ctx over IPC"
-status: pending
+status: in_review
 description: Propagate the capability-typed lifecycle ctx (RuntimeContextFullAccess / RuntimeContextLimitedAccess) from the Rust-side DenoSubprocessHostProcessor into the Deno-side SDK so TypeScript processor authors get the same LSP-guided, hard-to-misuse API as Rust authors.
 github_issue: 350
 dependencies:

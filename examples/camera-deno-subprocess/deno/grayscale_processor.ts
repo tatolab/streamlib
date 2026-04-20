@@ -8,27 +8,31 @@
  * directly for zero-copy processing, and writes output frames.
  */
 
-import type { ReactiveProcessor, ProcessorContext } from "../../../libs/streamlib-deno/mod.ts";
+import type {
+  ReactiveProcessor,
+  RuntimeContextFullAccess,
+  RuntimeContextLimitedAccess,
+} from "../../../libs/streamlib-deno/mod.ts";
 import type { Videoframe } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
 
 export default class GrayscaleProcessor implements ReactiveProcessor {
-  setup(ctx: ProcessorContext): void {
+  setup(ctx: RuntimeContextFullAccess): void {
     console.error("[GrayscaleProcessor] setup — config:", JSON.stringify(ctx.config));
   }
 
-  process(ctx: ProcessorContext): void {
+  process(ctx: RuntimeContextLimitedAccess): void {
     const result = ctx.inputs.read<Videoframe>("video_in");
     if (!result) return;
 
     const { value: frame, timestampNs } = result;
 
     // Passthrough: re-encode and forward unchanged.
-    // For actual pixel processing, use ctx.gpu.resolveSurface(frame.surface_id)
+    // For actual pixel processing, use ctx.gpuLimitedAccess.resolveSurface(frame.surface_id)
     // to access IOSurface pixels directly via zero-copy FFI.
     ctx.outputs.write("video_out", frame, timestampNs);
   }
 
-  teardown(_ctx: ProcessorContext): void {
+  teardown(_ctx: RuntimeContextFullAccess): void {
     console.error("[GrayscaleProcessor] teardown");
   }
 }

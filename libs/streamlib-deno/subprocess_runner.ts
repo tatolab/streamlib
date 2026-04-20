@@ -15,13 +15,17 @@
  * - STREAMLIB_EXECUTION_MODE: "reactive", "continuous", or "manual"
  */
 
-import { loadNativeLib, cString, type NativeLib } from "./native.ts";
-import { NativeProcessorContext } from "./context.ts";
+import { cString, loadNativeLib, type NativeLib } from "./native.ts";
+import {
+  NativeProcessorState,
+  NativeRuntimeContextFullAccess,
+  NativeRuntimeContextLimitedAccess,
+} from "./context.ts";
 import type {
-  ReactiveProcessor,
   ContinuousProcessor,
   ManualProcessor,
   ProcessorLifecycle,
+  ReactiveProcessor,
 } from "./types.ts";
 
 // ============================================================================
@@ -64,6 +68,25 @@ async function bridgeSendJson(msg: Record<string, unknown>): Promise<void> {
 
   await stdout.write(lenBuf);
   await stdout.write(encoded);
+}
+
+/**
+ * Validate that the wire-format capability field matches what the lifecycle
+ * method expects. The Rust host is the source of truth; mismatches indicate
+ * a wire-format drift bug and are logged but not fatal (belt-and-braces).
+ */
+function assertCapability(
+  processorId: string,
+  cmd: string,
+  msg: Record<string, unknown>,
+  expected: "full" | "limited",
+): void {
+  const actual = msg.capability as string | undefined;
+  if (actual !== undefined && actual !== expected) {
+    console.error(
+      `[subprocess_runner:${processorId}] capability mismatch for '${cmd}': expected '${expected}', got '${actual}'`,
+    );
+  }
 }
 
 // ============================================================================
@@ -118,7 +141,9 @@ async function main(): Promise<void> {
   }
 
   let processor: ProcessorLifecycle | null = null;
-  let ctx: NativeProcessorContext | null = null;
+  let state: NativeProcessorState | null = null;
+  let fullCtx: NativeRuntimeContextFullAccess | null = null;
+  let limitedCtx: NativeRuntimeContextLimitedAccess | null = null;
   let running = false;
 
   // Command loop
@@ -129,6 +154,7 @@ async function main(): Promise<void> {
 
       switch (cmd) {
         case "setup": {
+          assertCapability(processorId, cmd, msg, "full");
           const config = (msg.config as Record<string, unknown>) ?? {};
           const ports = (msg.ports as {
             inputs?: { name: string; service_name: string; read_mode?: string }[];
@@ -204,12 +230,17 @@ async function main(): Promise<void> {
               processor = ProcessorClass as ProcessorLifecycle;
             }
 
-            // Create context (with broker for surface resolution)
-            ctx = new NativeProcessorContext(lib, ctxPtr, config, brokerPtr);
+            // Build shared FFI state and the two capability views once per
+            // lifecycle. Each view wraps the same underlying FFI ctx, so
+            // input/output ports and timing are shared; the capability split
+            // is enforced purely by what each view exposes.
+            state = new NativeProcessorState(lib, ctxPtr, config, brokerPtr);
+            fullCtx = new NativeRuntimeContextFullAccess(state);
+            limitedCtx = new NativeRuntimeContextLimitedAccess(state);
 
-            // Call setup
+            // setup() — privileged, receives full-access ctx
             if (processor.setup) {
-              await processor.setup(ctx);
+              await processor.setup(fullCtx);
             }
 
             await bridgeSendJson({ rpc: "ready" });
@@ -223,7 +254,7 @@ async function main(): Promise<void> {
         }
 
         case "run": {
-          if (!processor || !ctx) {
+          if (!processor || !state || !fullCtx || !limitedCtx) {
             console.error(
               `[subprocess_runner:${processorId}] run before setup`,
             );
@@ -236,10 +267,10 @@ async function main(): Promise<void> {
           );
 
           if (executionMode === "manual") {
-            // Manual mode: start() returns, outer loop handles stop/teardown
+            // Manual mode: start() is a resource-lifecycle op → full access
             const manualProc = processor as ManualProcessor;
             try {
-              await manualProc.start(ctx);
+              await manualProc.start(fullCtx);
             } catch (e) {
               console.error(
                 `[subprocess_runner:${processorId}] start() error: ${e}`,
@@ -259,11 +290,13 @@ async function main(): Promise<void> {
                 const nextMsg = await bridgeReadJson();
                 const nextCmd = nextMsg.cmd as string;
                 if (nextCmd === "teardown") {
+                  assertCapability(processorId, nextCmd, nextMsg, "full");
                   running = false;
                   teardownReceived = true;
                   return;
                 }
                 if (nextCmd === "stop") {
+                  assertCapability(processorId, nextCmd, nextMsg, "full");
                   running = false;
                   try {
                     await bridgeSendJson({ rpc: "stopped" });
@@ -272,11 +305,13 @@ async function main(): Promise<void> {
                   }
                   return;
                 }
-                if (nextCmd === "on_pause" && processor?.onPause && ctx) {
-                  await processor.onPause(ctx);
+                if (nextCmd === "on_pause" && processor?.onPause && limitedCtx) {
+                  assertCapability(processorId, nextCmd, nextMsg, "limited");
+                  await processor.onPause(limitedCtx);
                   await bridgeSendJson({ rpc: "ok" });
-                } else if (nextCmd === "on_resume" && processor?.onResume && ctx) {
-                  await processor.onResume(ctx);
+                } else if (nextCmd === "on_resume" && processor?.onResume && limitedCtx) {
+                  assertCapability(processorId, nextCmd, nextMsg, "limited");
+                  await processor.onResume(limitedCtx);
                   await bridgeSendJson({ rpc: "ok" });
                 } else if (nextCmd === "update_config" && processor?.updateConfig) {
                   const config = (nextMsg.config as Record<string, unknown>) ?? {};
@@ -295,7 +330,8 @@ async function main(): Promise<void> {
             }
           })();
 
-          // Enter execution loop based on mode
+          // Enter execution loop based on mode. process() always receives
+          // the limited ctx — no path in the hot loop can reach full access.
           if (executionMode === "reactive") {
             const reactiveProc = processor as ReactiveProcessor;
             let pollCount = 0;
@@ -312,7 +348,7 @@ async function main(): Promise<void> {
                   );
                 }
                 try {
-                  await reactiveProc.process(ctx);
+                  await reactiveProc.process(limitedCtx);
                 } catch (e) {
                   console.error(
                     `[subprocess_runner:${processorId}] process() error: ${e}`,
@@ -335,7 +371,7 @@ async function main(): Promise<void> {
               // Poll for any available input data
               lib.symbols.sldn_input_poll(ctxPtr);
               try {
-                await continuousProc.process(ctx);
+                await continuousProc.process(limitedCtx);
               } catch (e) {
                 console.error(
                   `[subprocess_runner:${processorId}] process() error: ${e}`,
@@ -354,9 +390,9 @@ async function main(): Promise<void> {
 
           // Processing loop exited because running = false (teardown or EOF)
           if (teardownReceived) {
-            if (processor?.teardown && ctx) {
+            if (processor?.teardown && fullCtx) {
               try {
-                await processor.teardown(ctx);
+                await processor.teardown(fullCtx);
               } catch (e) {
                 console.error(
                   `[subprocess_runner:${processorId}] teardown() error: ${e}`,
@@ -376,12 +412,13 @@ async function main(): Promise<void> {
         }
 
         case "stop": {
+          assertCapability(processorId, cmd, msg, "full");
           running = false;
-          if (processor && ctx) {
+          if (processor && fullCtx) {
             const manualProc = processor as ManualProcessor;
             if (manualProc.stop) {
               try {
-                await manualProc.stop(ctx);
+                await manualProc.stop(fullCtx);
               } catch (e) {
                 console.error(
                   `[subprocess_runner:${processorId}] stop() error: ${e}`,
@@ -394,16 +431,18 @@ async function main(): Promise<void> {
         }
 
         case "on_pause": {
-          if (processor?.onPause && ctx) {
-            await processor.onPause(ctx);
+          assertCapability(processorId, cmd, msg, "limited");
+          if (processor?.onPause && limitedCtx) {
+            await processor.onPause(limitedCtx);
           }
           await bridgeSendJson({ rpc: "ok" });
           break;
         }
 
         case "on_resume": {
-          if (processor?.onResume && ctx) {
-            await processor.onResume(ctx);
+          assertCapability(processorId, cmd, msg, "limited");
+          if (processor?.onResume && limitedCtx) {
+            await processor.onResume(limitedCtx);
           }
           await bridgeSendJson({ rpc: "ok" });
           break;
@@ -419,10 +458,11 @@ async function main(): Promise<void> {
         }
 
         case "teardown": {
+          assertCapability(processorId, cmd, msg, "full");
           running = false;
-          if (processor?.teardown && ctx) {
+          if (processor?.teardown && fullCtx) {
             try {
-              await processor.teardown(ctx);
+              await processor.teardown(fullCtx);
             } catch (e) {
               console.error(
                 `[subprocess_runner:${processorId}] teardown() error: ${e}`,
@@ -452,9 +492,9 @@ async function main(): Promise<void> {
     } else {
       console.error(`[subprocess_runner:${processorId}] Fatal error: ${e}`);
     }
-    if (processor?.teardown && ctx) {
+    if (processor?.teardown && fullCtx) {
       try {
-        await processor.teardown(ctx);
+        await processor.teardown(fullCtx);
       } catch {
         // ignore teardown errors during shutdown
       }

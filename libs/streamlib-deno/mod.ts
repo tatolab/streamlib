@@ -9,18 +9,24 @@
 
 // Public type exports
 export type {
-  ProcessorContext,
-  InputPorts,
-  OutputPorts,
-  GpuContext,
+  ContinuousProcessor,
+  GpuContextFullAccess,
+  GpuContextLimitedAccess,
   GpuSurface,
+  InputPorts,
+  ManualProcessor,
+  OutputPorts,
   ProcessorLifecycle,
   ReactiveProcessor,
-  ContinuousProcessor,
-  ManualProcessor,
+  RuntimeContextFullAccess,
+  RuntimeContextLimitedAccess,
 } from "./types.ts";
 
 // Public implementation exports
-export { NativeProcessorContext } from "./context.ts";
-export { loadNativeLib, cString } from "./native.ts";
+export {
+  NativeProcessorState,
+  NativeRuntimeContextFullAccess,
+  NativeRuntimeContextLimitedAccess,
+} from "./context.ts";
+export { cString, loadNativeLib } from "./native.ts";
 export type { NativeLib } from "./native.ts";
