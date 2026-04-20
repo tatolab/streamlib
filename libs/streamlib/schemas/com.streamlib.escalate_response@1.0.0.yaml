@@ -1,0 +1,57 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for polyglot GPU escalation responses.
+#
+# Sent from the Rust host processor over the subprocess's stdin in reply to an
+# [`EscalateRequest`]. Correlated by `request_id`.
+#
+# See the sibling escalate_request schema for the rationale behind keeping
+# this file out of the `cargo xtask generate-schemas` pipeline; the
+# hand-authored types live in
+# `libs/streamlib/src/core/compiler/compiler_ops/subprocess_escalate.rs`.
+
+metadata:
+  name: com.streamlib.escalate_response
+  version: 1.0.0
+  description: "Polyglot subprocess escalate-on-behalf response (host → subprocess)"
+
+discriminator: result
+mapping:
+  ok:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates response with request. Matches request_id in EscalateRequest."
+        type: string
+      handle_id:
+        metadata:
+          description: >
+            Opaque handle returned by the host. For acquire_pixel_buffer this
+            is the PixelBufferPoolId the host registered with its
+            pixel-buffer pool and broker SurfaceStore. For release_handle this
+            echoes the released id.
+        type: string
+    optionalProperties:
+      width:
+        metadata:
+          description: "Width in pixels (set on acquire_pixel_buffer responses)."
+        type: uint32
+      height:
+        metadata:
+          description: "Height in pixels (set on acquire_pixel_buffer responses)."
+        type: uint32
+      format:
+        metadata:
+          description: "Resolved pixel format identifier."
+        type: string
+  err:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates response with request."
+        type: string
+      message:
+        metadata:
+          description: "Human-readable error message from the host side."
+        type: string
