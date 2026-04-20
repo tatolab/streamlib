@@ -928,17 +928,86 @@ impl GpuContextLimitedAccess {
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>,
     {
+        let lock_start = std::time::Instant::now();
         let _setup_guard = self.inner.lock_processor_setup();
+        let mutex_wait_ns = lock_start.elapsed().as_nanos() as u64;
+
+        let closure_start = std::time::Instant::now();
         let full = GpuContextFullAccess::new(self.inner.clone());
         let closure_result = f(&full);
         drop(full);
+        let closure_duration_ns = closure_start.elapsed().as_nanos() as u64;
+
+        let wait_start = std::time::Instant::now();
         let wait_result = self.inner.wait_device_idle();
+        let wait_idle_ns = wait_start.elapsed().as_nanos() as u64;
+
+        tracing::trace!(
+            target: "streamlib::gpu_context::escalate",
+            mutex_wait_ns,
+            closure_duration_ns,
+            wait_idle_ns,
+            closure_ok = closure_result.is_ok(),
+            "GpuContextLimitedAccess::escalate completed"
+        );
+
+        check_sustained_escalation_rate();
+
         match (closure_result, wait_result) {
             (Ok(value), Ok(())) => Ok(value),
             (Err(e), _) => Err(e),
             (Ok(_), Err(e)) => Err(e),
         }
     }
+}
+
+// Thread-local escalation rate tracker. Each processor runs `process()` on a
+// dedicated worker thread, so per-thread counters approximate per-processor
+// escalation rates. Sustained rate above the threshold fires `tracing::warn!`.
+std::thread_local! {
+    static ESCALATION_TIMESTAMPS_NS: std::cell::RefCell<std::collections::VecDeque<u64>> =
+        std::cell::RefCell::new(std::collections::VecDeque::with_capacity(16));
+    static ESCALATION_LAST_WARN_NS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+const ESCALATION_RATE_WARN_THRESHOLD_PER_SEC: usize = 1;
+const ESCALATION_RATE_WINDOW_NS: u64 = 1_000_000_000;
+const ESCALATION_WARN_DEBOUNCE_NS: u64 = 5_000_000_000;
+
+fn check_sustained_escalation_rate() {
+    let now_ns = escalation_monotonic_ns();
+    let cutoff = now_ns.saturating_sub(ESCALATION_RATE_WINDOW_NS);
+
+    let (count, last_warn) = ESCALATION_TIMESTAMPS_NS.with(|buf| {
+        let mut buf = buf.borrow_mut();
+        while buf.front().is_some_and(|&ts| ts < cutoff) {
+            buf.pop_front();
+        }
+        buf.push_back(now_ns);
+        let count = buf.len();
+        let last_warn = ESCALATION_LAST_WARN_NS.with(|c| c.get());
+        (count, last_warn)
+    });
+
+    if count > ESCALATION_RATE_WARN_THRESHOLD_PER_SEC
+        && now_ns.saturating_sub(last_warn) >= ESCALATION_WARN_DEBOUNCE_NS
+    {
+        ESCALATION_LAST_WARN_NS.with(|c| c.set(now_ns));
+        let thread = std::thread::current();
+        tracing::warn!(
+            thread = thread.name().unwrap_or("<unnamed>"),
+            escalations_last_second = count,
+            "sustained GpuContextLimitedAccess::escalate rate on this thread — \
+             processor likely needs more pre-reservation in setup()"
+        );
+    }
+}
+
+fn escalation_monotonic_ns() -> u64 {
+    use std::sync::OnceLock;
+    static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
+    let origin = ORIGIN.get_or_init(std::time::Instant::now);
+    origin.elapsed().as_nanos() as u64
 }
 
 impl GpuContextFullAccess {
@@ -962,22 +1031,26 @@ impl GpuContextFullAccess {
 }
 
 // -----------------------------------------------------------------------------
-// GpuContext-mirroring API — both capability types expose the full surface in
-// #321. Restrictions land in #324; until then the methods delegate 1:1.
+// Capability-split API surface (per the design doc in
+// `docs/design/gpu-capability-sandbox.md` §1).
+//
+// `GpuContextLimitedAccess` exposes the Sandbox surface only: pool acquires
+// (pre-reserved), texture sampling, writes to mapped pixel buffers, read-only
+// queries, and the shared command queue. Methods that allocate new GPU
+// memory, create sessions/swapchains/descriptors, or hand out raw device
+// handles live exclusively on [`GpuContextFullAccess`] and are reachable from
+// `process()` only via [`GpuContextLimitedAccess::escalate`].
 // -----------------------------------------------------------------------------
 
 impl GpuContextLimitedAccess {
-    /// Acquire the processor-setup mutex.
-    pub fn lock_processor_setup(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.inner.lock_processor_setup()
-    }
-
-    /// Wait for the GPU device to become idle.
-    pub fn wait_device_idle(&self) -> Result<()> {
-        self.inner.wait_device_idle()
-    }
-
-    /// Acquire a pixel buffer from the shared pool.
+    /// Acquire a pixel buffer from a pre-reserved pool (Split: fast path).
+    ///
+    /// The expected steady-state is a ring-slot hit. Callers should pre-reserve
+    /// the pool in `setup()` by calling `acquire_pixel_buffer` on the
+    /// [`GpuContextFullAccess`] with the target `(width, height, format)`.
+    /// If the pool has to grow to serve this call, the growth path internally
+    /// allocates — nonzero sustained rates will fire the escalation-rate
+    /// warning, indicating a pre-reservation gap.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
@@ -987,7 +1060,7 @@ impl GpuContextLimitedAccess {
         self.inner.acquire_pixel_buffer(width, height, format)
     }
 
-    /// Get a pixel buffer by its pool id.
+    /// Get a pixel buffer by its pool id (Split: local cache).
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
         self.inner.get_pixel_buffer(pool_id)
     }
@@ -1002,32 +1075,9 @@ impl GpuContextLimitedAccess {
         self.inner.register_texture(id, texture);
     }
 
-    /// Resolve a [`Videoframe`]'s texture.
+    /// Resolve a [`Videoframe`]'s texture (Split: cache hit).
     pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
         self.inner.resolve_videoframe_texture(frame)
-    }
-
-    /// Acquire a new output texture with a UUID and register it in the cache.
-    pub fn acquire_output_texture(
-        &self,
-        width: u32,
-        height: u32,
-        format: TextureFormat,
-    ) -> Result<(String, StreamTexture)> {
-        self.inner.acquire_output_texture(width, height, format)
-    }
-
-    /// Upload a pixel buffer's contents to a GPU texture and register it.
-    #[cfg(target_os = "linux")]
-    pub fn upload_pixel_buffer_as_texture(
-        &self,
-        surface_id: &str,
-        pixel_buffer: &RhiPixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        self.inner
-            .upload_pixel_buffer_as_texture(surface_id, pixel_buffer, width, height)
     }
 
     /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
@@ -1040,49 +1090,31 @@ impl GpuContextLimitedAccess {
         self.inner.camera_timeline_semaphore()
     }
 
-    /// Get a reference to the RHI GPU device.
-    pub fn device(&self) -> &Arc<GpuDevice> {
-        self.inner.device()
-    }
-
-    /// Get the texture pool for acquiring pooled textures.
-    pub fn texture_pool(&self) -> &TexturePool {
-        self.inner.texture_pool()
-    }
-
-    /// Acquire a texture from the pool.
+    /// Acquire a texture from a pre-reserved pool (Split: fast path).
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         self.inner.acquire_texture(desc)
     }
 
     /// Get the shared command queue.
+    ///
+    /// Submitting recorded command buffers from `process()` is safe: the
+    /// images/buffers a Sandbox caller can construct are pool-backed and
+    /// pre-reserved. See design doc §8 Q5.
     pub fn command_queue(&self) -> &RhiCommandQueue {
         self.inner.command_queue()
     }
 
-    /// Create a command buffer from the shared queue.
+    /// Create a CPU-side command buffer from the shared queue.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
         self.inner.create_command_buffer()
     }
 
-    /// Get the underlying Metal device (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn metal_device(&self) -> &crate::metal::rhi::MetalDevice {
-        self.inner.metal_device()
-    }
-
-    /// Create a texture cache for converting pixel buffers to texture views.
-    #[cfg(target_os = "macos")]
-    pub fn create_texture_cache(&self) -> Result<crate::core::rhi::RhiTextureCache> {
-        self.inner.create_texture_cache()
-    }
-
-    /// Copy pixels between same-format, same-size buffers.
+    /// Copy pixels between same-format, same-size buffers (Split: cache hit).
     pub fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
         self.inner.blit_copy(src, dest)
     }
 
-    /// Copy from raw IOSurface to a pixel buffer.
+    /// Copy from raw IOSurface to a pixel buffer (Split: cache hit).
     ///
     /// # Safety
     /// - `src` must be a valid IOSurfaceRef pointer
@@ -1098,22 +1130,12 @@ impl GpuContextLimitedAccess {
         unsafe { self.inner.blit_copy_iosurface(src, dest, width, height) }
     }
 
-    /// Clear the blitter's texture cache to free GPU memory.
-    pub fn clear_blitter_cache(&self) {
-        self.inner.clear_blitter_cache();
-    }
-
     /// Get the surface store, if initialized.
     pub fn surface_store(&self) -> Option<SurfaceStore> {
         self.inner.surface_store()
     }
 
-    /// Check in a pixel buffer to the broker.
-    pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
-        self.inner.check_in_surface(pixel_buffer)
-    }
-
-    /// Check out a surface by ID.
+    /// Check out a surface by ID (Split: cache hit).
     pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
         self.inner.check_out_surface(surface_id)
     }
@@ -1387,11 +1409,12 @@ mod tests {
         let limited2 = full.to_limited_access();
         assert_eq!(limited2.camera_timeline_semaphore(), 0xB0B);
 
-        // Delegated accessor reaches the same RHI device.
+        // Delegated accessor reaches the same RHI device. `device()` is
+        // FullAccess-only after #324; Sandbox reaches the same underlying
+        // context through `to_full_access()` (crate-internal) or
+        // `escalate()` for user code.
         let device_ptr_gpu = Arc::as_ptr(gpu.device());
-        let device_ptr_limited = Arc::as_ptr(limited.device());
         let device_ptr_full = Arc::as_ptr(full.device());
-        assert_eq!(device_ptr_gpu, device_ptr_limited);
         assert_eq!(device_ptr_gpu, device_ptr_full);
 
         println!("GpuContextLimitedAccess + GpuContextFullAccess delegation: OK");

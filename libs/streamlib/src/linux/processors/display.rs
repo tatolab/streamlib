@@ -89,7 +89,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!(
             "Display {}: start() called — spawning Vulkan + winit render thread",
             self.window_id.0
@@ -116,8 +116,11 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
             .clone()
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
 
-        // Get Vulkan handles from the GpuDevice
-        let vulkan_device = Arc::clone(&gpu_context.device().inner);
+        // Pull the Vulkan device handle from the FullAccess lifecycle ctx.
+        // The render thread uses it to build its swapchain and rendering
+        // pipeline at startup; the Sandbox clone is what the thread keeps
+        // for steady-state frame resolution.
+        let vulkan_device = Arc::clone(&ctx.gpu_full_access().device().inner);
 
         running.store(true, Ordering::Release);
 

@@ -68,10 +68,17 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
             StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
         })?;
+
+        // Extract the device handle from the FullAccess lifecycle ctx so the
+        // capture thread can create the Vulkan compute resources it needs at
+        // startup. The thread only holds the Sandbox capability for frame
+        // publishing; the device handle is scoped to the thread's setup and
+        // never re-acquired mid-run.
+        let gpu_device = ctx.gpu_full_access().device().clone();
 
         let device_path = match &self.config.device_id {
             Some(id) => id.clone(),
@@ -335,6 +342,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
                     frame_counter,
                     outputs,
                     gpu_context,
+                    gpu_device,
                     camera_name,
                     capture_width,
                     capture_height,
@@ -387,13 +395,14 @@ fn capture_thread_loop(
     frame_counter: Arc<AtomicU64>,
     outputs: Arc<OutputWriter>,
     gpu_context: GpuContextLimitedAccess,
+    gpu_device: Arc<crate::core::rhi::GpuDevice>,
     camera_name: String,
     width: u32,
     height: u32,
     fourcc: FourCC,
     capture_fps: Option<u32>,
 ) {
-    let vulkan_device = &gpu_context.device().inner;
+    let vulkan_device = &gpu_device.inner;
     let device = vulkan_device.device();
     let allocator = vulkan_device.allocator();
     let queue = vulkan_device.queue();

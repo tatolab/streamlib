@@ -146,8 +146,14 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             }
 
             // Register as texture by uploading pixel buffer to GPU texture.
+            // `upload_pixel_buffer_as_texture` creates a new DEVICE_LOCAL texture
+            // per decoded frame, so it's FullAccess-only and must be escalated.
+            // TODO(#324-followup): restructure to a pre-allocated texture ring in
+            // setup() so steady-state decode doesn't escalate per frame.
             let surface_id = pool_id.to_string();
-            gpu_ctx.upload_pixel_buffer_as_texture(&surface_id, &pixel_buffer, width, height)?;
+            gpu_ctx.escalate(|full| {
+                full.upload_pixel_buffer_as_texture(&surface_id, &pixel_buffer, width, height)
+            })?;
 
             let timestamp_ns = encoded.timestamp_ns.clone();
 
