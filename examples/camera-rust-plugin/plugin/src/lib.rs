@@ -20,7 +20,7 @@ extern "C" {
 
 #[streamlib::processor("com.tatolab.grayscale_rust")]
 pub struct GrayscaleProcessor {
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
     running: Arc<AtomicBool>,
     processing_thread: Option<JoinHandle<()>>,
 }
