@@ -4,7 +4,7 @@ version.workspace = true
 # vulkan-video is a port of NVIDIA nvpro-samples and hasn't completed the
 # edition-2024 unsafe cleanup yet (unsafe_op_in_unsafe_fn,
 # #[unsafe(no_mangle)] attrs). It stays on 2021 until the ported codec code
-# gets its own migration pass — tracked as a follow-up.
+# gets its own migration pass — tracked as #352.
 edition = "2021"
 authors.workspace = true
 license-file.workspace = true
