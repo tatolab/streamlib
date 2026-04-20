@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: "Python polyglot SDK — typed lifecycle ctx over IPC"
-status: in_review
+status: completed
 description: Propagate the capability-typed lifecycle ctx (RuntimeContextFullAccess / RuntimeContextLimitedAccess) from the Rust-side Python SubprocessHostProcessor into the Python-side SDK so Python processor authors get capability-aware type hints and runtime enforcement matching the Rust API.
 github_issue: 351
 dependencies:
