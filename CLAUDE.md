@@ -253,6 +253,9 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 - **macOS/iOS code**: `libs/streamlib/src/apple/`
 - **DO NOT** use `#[cfg]` inside platform-specific directories (already conditionally compiled)
 
+### Dependencies
+- **Git dependencies must be pinned** with `rev = "<commit sha>"` (or `tag = "..."`). Never use a bare `git = "..."` or `branch = "..."` — Cargo resolves those against the remote's current HEAD, so fresh clones drift out of sync with the lockfile and stop compiling. This applies to every `Cargo.toml` in the workspace, including `[patch.crates-io]` entries.
+
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
 **NOTHING outside the RHI (`vulkan/rhi/`) may touch Vulkan APIs directly.** No processor, utility, codec wrapper, or any other code may call `ash::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through the RHI. This is non-negotiable.

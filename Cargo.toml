@@ -84,8 +84,8 @@ objc2-vision = "0.3.2"
 libc = "0.2.177"
 
 # Vulkan bindings (tatolab fork for VMA 3.3.0 patch)
-vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", branch = "tatolab/update-vma-3.3.0-patched", features = ["libloading", "provisional", "window"] }
-vulkanalia-vma = { git = "https://github.com/tatolab/vulkanalia.git", branch = "tatolab/update-vma-3.3.0-patched" }
+vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1", features = ["libloading", "provisional", "window"] }
+vulkanalia-vma = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1" }
 
 # Shader compilation
 # TODO: Add when implementing HLSL shader compilation:
@@ -114,5 +114,5 @@ streamlib-telemetry = { path = "libs/streamlib-telemetry" }
 # yuv = "0.8"
 
 [patch.crates-io]
-vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", branch = "tatolab/update-vma-3.3.0-patched" }
-vulkanalia-sys = { git = "https://github.com/tatolab/vulkanalia.git", branch = "tatolab/update-vma-3.3.0-patched" }
+vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1" }
+vulkanalia-sys = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1" }
