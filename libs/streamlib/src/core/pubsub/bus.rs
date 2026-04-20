@@ -133,12 +133,35 @@ impl PubSub {
         // created and used on the same thread.
         let builder = std::thread::Builder::new().name(format!("pubsub-{}", topic));
         if let Err(e) = builder.spawn(move || {
-            let service = match node.open_or_create_event_service(&service_name) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!("Failed to create event service '{}': {}", service_name, e);
-                    return;
+            // Retry `open_or_create` — iceoryx2 can transiently report
+            // `ServiceInCorruptedState` when a concurrent node (e.g. another
+            // streamlib process or another test binary on the same machine)
+            // is scanning/cleaning dead-node state under `/tmp/iceoryx2/`.
+            // The state stabilizes within a few tens of milliseconds.
+            let mut service = None;
+            for attempt in 0..10 {
+                match node.open_or_create_event_service(&service_name) {
+                    Ok(s) => {
+                        service = Some(s);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to create event service '{}' (attempt {}): {}",
+                            service_name,
+                            attempt + 1,
+                            e
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
                 }
+            }
+            let Some(service) = service else {
+                tracing::error!(
+                    "Giving up after 10 attempts to create event service '{}'",
+                    service_name
+                );
+                return;
             };
 
             let subscriber = match service.create_subscriber() {
@@ -231,12 +254,34 @@ impl PubSub {
             // Get or create a cached publisher for this service name.
             // Publishers must stay alive so sent samples remain in shared memory.
             if !cache.contains_key(&service_name) {
-                let service = match node.open_or_create_event_service(&service_name) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!("Failed to open event service '{}': {}", service_name, e);
-                        return;
+                // Same `ServiceInCorruptedState` retry as in `subscribe_inner`
+                // — iceoryx2 dead-node cleanup can transiently flag a fresh
+                // service as corrupted when concurrent nodes scan at the same
+                // time.
+                let mut service = None;
+                for attempt in 0..10 {
+                    match node.open_or_create_event_service(&service_name) {
+                        Ok(s) => {
+                            service = Some(s);
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to open event service '{}' (attempt {}): {}",
+                                service_name,
+                                attempt + 1,
+                                e
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
                     }
+                }
+                let Some(service) = service else {
+                    tracing::error!(
+                        "Giving up after 10 attempts to open event service '{}'",
+                        service_name
+                    );
+                    return;
                 };
 
                 let publisher = match service.create_publisher() {

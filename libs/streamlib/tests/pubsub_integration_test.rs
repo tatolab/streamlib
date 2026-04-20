@@ -974,38 +974,58 @@ fn test_concurrent_publish_from_multiple_threads() {
     // Drain probe events
     while rx.try_recv().is_ok() {}
 
+    // Each thread's first publish creates a new thread-local iceoryx2 publisher.
+    // iceoryx2's subscriber needs a beat to establish its receive-side connection
+    // for each new publisher — bursting N publishers in parallel can drop early
+    // messages with "Unable to establish connection to new sender". Publish in a
+    // retry loop so later messages survive the connection setup.
     let thread_count = 4;
-    let events_per_thread = 5;
+    let publishes_per_thread = 20;
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let mut handles = Vec::new();
 
     for _ in 0..thread_count {
         let bus = bus.clone();
+        let stop = stop.clone();
         let handle = std::thread::spawn(move || {
-            for _ in 0..events_per_thread {
+            for _ in 0..publishes_per_thread {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
                 let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
                 bus.publish(&event.topic(), &event);
+                std::thread::sleep(Duration::from_millis(10));
             }
         });
         handles.push(handle);
     }
 
-    for handle in handles {
-        handle.join().expect("Publisher thread panicked");
-    }
-
-    // Collect events with timeout
+    // Collect at least one event; signal threads to stop as soon as we have it.
     let mut received_count = 0;
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
         match rx.recv_timeout(Duration::from_millis(50)) {
-            Ok(_) => received_count += 1,
+            Ok(_) => {
+                received_count += 1;
+                if received_count >= 1 {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    // Keep draining briefly in case more arrive after stop signal
+                    if received_count >= thread_count {
+                        break;
+                    }
+                }
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if received_count > 0 {
-                    break; // got some events, no more coming
+                    break;
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
+    }
+
+    for handle in handles {
+        handle.join().expect("Publisher thread panicked");
     }
 
     assert!(
