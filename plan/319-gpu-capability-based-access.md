@@ -11,6 +11,8 @@ dependencies:
   - "down:Implement sandbox.escalate() reusing the setup mutex"
   - "down:Restrict GpuContextLimitedAccess API surface to safe ops"
   - "down:Polyglot IPC: escalate-on-behalf for Python/Deno processors"
+  - "down:Polyglot escalate: add acquire_texture op"
+  - "down:xtask: support JTD discriminator schemas in generate-schemas"
   - "down:Learning doc: GPU capability typestate pattern"
 adapters:
   github: builtin
@@ -37,8 +39,10 @@ The #304 setup barrier enforces "resource creation is serialized" at runtime wit
 3. #322 — Migrate processor trait signatures
 4. #323 — Implement `escalate()` primitive; compiler phase 4 becomes a consumer
 5. #324 — Restrict Sandbox's surface (enforcement lands here; compile errors surface)
-6. #325 — Polyglot IPC: escalate-on-behalf
-7. #326 — Learning doc
+6. #325 — Polyglot IPC: escalate-on-behalf (MVP: `acquire_pixel_buffer` + `release_handle`)
+7. #369 — Polyglot escalate: `acquire_texture` op (follow-up to #325)
+8. #370 — xtask: JTD discriminator support so #325/#369 wire-types drop the hand-authored copy
+9. #326 — Learning doc (captures the final shape, after #369 + #370 settle the polyglot wire)
 
 ## Dependencies / impact
 
