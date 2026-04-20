@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: iceoryx2 Slice API Migration
-status: completed
-description: Replace fixed-size FramePayload with iceoryx2 slice-based publish_subscribe for variable-length payloads. Branch feat/iceoryx2-slice-api from main.
-github_issue: 250
-dependencies:
-  - "down:@github:tatolab/streamlib#249"
+name: '@github:tatolab/streamlib#250'
 adapters:
   github: builtin
+description: iceoryx2 Slice API Migration — Replace fixed-size FramePayload with iceoryx2 slice-based publish_subscribe for variable-length payloads. Branch feat/iceoryx2-slice-api from main.
+github_issue: 250
+blocks:
+- '@github:tatolab/streamlib#249'
 ---
 
 @github:tatolab/streamlib#250

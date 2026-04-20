@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: "Polyglot IPC: escalate-on-behalf for Python/Deno processors"
-status: completed
-description: Extend subprocess-host processors to accept escalate IPC requests from Python/Deno. Subprocess sees only a sandbox; IPC is its escalate channel, routed through the host's serialized queue.
-github_issue: 325
-dependencies:
-  - "down:Restrict GpuContextLimitedAccess API surface to safe ops"
+name: '@github:tatolab/streamlib#325'
 adapters:
   github: builtin
+description: 'Polyglot IPC: escalate-on-behalf for Python/Deno processors — Extend subprocess-host processors to accept escalate IPC requests from Python/Deno. Subprocess sees only a sandbox; IPC is its escalate channel, routed through the host''s serialized queue.'
+github_issue: 325
+blocks:
+- '@github:tatolab/streamlib#324'
 ---
 
 @github:tatolab/streamlib#325

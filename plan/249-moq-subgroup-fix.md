@@ -1,12 +1,10 @@
 ---
 whoami: amos
-name: MoQ Subgroup Keyframe Fix
-status: completed
-description: "Bump moq-transport to 0.14.1 (includes LargestObject filter fix) and apply per-GOP subgroup creation. Branch fix/moq-subgroup-keyframe from main."
-github_issue: 249
-dependencies: []
+name: '@github:tatolab/streamlib#249'
 adapters:
   github: builtin
+description: MoQ Subgroup Keyframe Fix — Bump moq-transport to 0.14.1 (includes LargestObject filter fix) and apply per-GOP subgroup creation. Branch fix/moq-subgroup-keyframe from main.
+github_issue: 249
 ---
 
 @github:tatolab/streamlib#249

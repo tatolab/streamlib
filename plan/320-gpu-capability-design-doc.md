@@ -1,11 +1,10 @@
 ---
 whoami: amos
-name: "Design doc: GpuContextLimitedAccess + GpuContextFullAccess API surface"
-status: completed
-description: Write the design doc gating all downstream work in #319. Output is a reviewable document, not code.
-github_issue: 320
+name: '@github:tatolab/streamlib#320'
 adapters:
   github: builtin
+description: 'Design doc: GpuContextLimitedAccess + GpuContextFullAccess API surface — Write the design doc gating all downstream work in #319. Output is a reviewable document, not code.'
+github_issue: 320
 ---
 
 @github:tatolab/streamlib#320

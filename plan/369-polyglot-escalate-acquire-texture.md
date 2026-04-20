@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: "Polyglot escalate: add acquire_texture op"
-status: pending
-description: "Follow-up to #325. Extend the polyglot escalate IPC with AcquireTexture so Python / Deno subprocesses can reach GpuContextFullAccess::acquire_texture on behalf. MVP #325 shipped acquire_pixel_buffer + release_handle only."
-github_issue: 369
-dependencies:
-  - "down:Polyglot IPC: escalate-on-behalf for Python/Deno processors"
+name: '@github:tatolab/streamlib#369'
 adapters:
   github: builtin
+description: 'Polyglot escalate: add acquire_texture op — Follow-up to #325. Extend the polyglot escalate IPC with AcquireTexture so Python / Deno subprocesses can reach GpuContextFullAccess::acquire_texture on behalf. MVP #325 shipped acquire_pixel_buffer + release_handle only.'
+github_issue: 369
+blocks:
+- '@github:tatolab/streamlib#325'
 ---
 
 @github:tatolab/streamlib#369

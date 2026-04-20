@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Remove Vulkan Video and FFmpeg Codec Code
-status: completed
-description: Strip all custom encoder/decoder code from streamlib in preparation for nvpro-vulkan-video integration. Branch refactor/remove-vulkan-video-code from main.
-github_issue: 251
-dependencies:
-  - "down:@github:tatolab/streamlib#250"
+name: '@github:tatolab/streamlib#251'
 adapters:
   github: builtin
+description: Remove Vulkan Video and FFmpeg Codec Code — Strip all custom encoder/decoder code from streamlib in preparation for nvpro-vulkan-video integration. Branch refactor/remove-vulkan-video-code from main.
+github_issue: 251
+blocks:
+- '@github:tatolab/streamlib#250'
 ---
 
 @github:tatolab/streamlib#251

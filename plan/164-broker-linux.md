@@ -1,13 +1,14 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#164"
+name: '@github:tatolab/streamlib#164'
 description: Linux — Broker backend — Unix sockets + DMA-BUF fd passing
-dependencies:
-  - "down:@github:tatolab/streamlib#163"
-  - "down:@github:tatolab/streamlib#180"
-  - "up:@github:tatolab/streamlib#166"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#166'
+blocks:
+- '@github:tatolab/streamlib#163'
+- '@github:tatolab/streamlib#180'
 ---
 
 @github:tatolab/streamlib#164

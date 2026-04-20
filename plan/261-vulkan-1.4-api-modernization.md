@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Vulkan 1.4 API Modernization
-status: completed
-description: Migrate all Vulkan API usage to 1.4 core — sync2 barriers, queue_submit_2, extension cleanup. Performance gain + code simplification.
-github_issue: 261
-dependencies:
-  - "down:@github:tatolab/streamlib#254"
+name: '@github:tatolab/streamlib#261'
 adapters:
   github: builtin
+description: Vulkan 1.4 API Modernization — Migrate all Vulkan API usage to 1.4 core — sync2 barriers, queue_submit_2, extension cleanup. Performance gain + code simplification.
+github_issue: 261
+blocks:
+- '@github:tatolab/streamlib#254'
 ---
 
 @github:tatolab/streamlib#261

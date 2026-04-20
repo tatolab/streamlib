@@ -1,11 +1,10 @@
 ---
 whoami: amos
-name: NV12 image views require VkSamplerYcbcrConversion
-status: completed
-description: Chain VkSamplerYcbcrConversionInfo into the pNext of every NV12-backed image view and sampler so spec requirements are met.
-github_issue: 289
+name: '@github:tatolab/streamlib#289'
 adapters:
   github: builtin
+description: NV12 image views require VkSamplerYcbcrConversion — Chain VkSamplerYcbcrConversionInfo into the pNext of every NV12-backed image view and sampler so spec requirements are met.
+github_issue: 289
 ---
 
 @github:tatolab/streamlib#289

@@ -1,15 +1,14 @@
 ---
 whoami: amos
-name: "[BLOCKED — do not start] Pipeline-wide color management (primaries, transfer, range, tone mapping)"
-status: pending
-description: "BLOCKED — queued behind #310 and the post-Vulkan-cleanup retest + CI work. Do NOT pick up. Umbrella for a standardized color-management pipeline across camera, encoder, decoder, display, and in-graph processors. Adds ColorInfo metadata to frames, leverages VK_KHR_sampler_ycbcr_conversion and _SRGB formats where possible, auto-detects from V4L2 / VUI / EDID, and adds a tone-mapper for gamut mismatches."
-github_issue: 312
-dependencies:
-  - "down:Pipeline-wide resolution propagation for non-1080p roundtrips"
-  - "down:Retest camera + encoder + display roundtrip after Vulkan cleanup"
-  - "down:CI with Vulkan validation layer"
+name: '@github:tatolab/streamlib#312'
 adapters:
   github: builtin
+description: '[BLOCKED — do not start] Pipeline-wide color management (primaries, transfer, range, tone mapping) — BLOCKED — queued behind #310 and the post-Vulkan-cleanup retest + CI work. Do NOT pick up. Umbrella for a standardized color-management pipeline across camera, encoder, decoder, display, and in-graph processors. Adds ColorInfo metadata to frames, leverages VK_KHR_sampler_ycbcr_conversion and _SRGB formats where possible, auto-detects from V4L2 / VUI / EDID, and adds a tone-mapper for gamut mismatches.'
+github_issue: 312
+blocked_by:
+- '@github:tatolab/streamlib#310'
+- '@github:tatolab/streamlib#294'
+- '@github:tatolab/streamlib#293'
 ---
 
 # 🛑 STOP — DO NOT WORK ON THIS PLAN YET 🛑

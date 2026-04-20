@@ -1,11 +1,10 @@
 ---
 whoami: amos
-name: Enable samplerYcbcrConversion feature and audit NV12 image-create flags
-status: completed
-description: Turn on the samplerYcbcrConversion device feature in VulkanDevice and audit the encoder-src NV12 image / image-view flags so VUID-vkCreateSamplerYcbcrConversion-None-01648, VUID-VkImageCreateInfo-pNext-06811, and VUID-VkImageViewCreateInfo-usage-02275 go silent.
-github_issue: 315
+name: '@github:tatolab/streamlib#315'
 adapters:
   github: builtin
+description: Enable samplerYcbcrConversion feature and audit NV12 image-create flags — Turn on the samplerYcbcrConversion device feature in VulkanDevice and audit the encoder-src NV12 image / image-view flags so VUID-vkCreateSamplerYcbcrConversion-None-01648, VUID-VkImageCreateInfo-pNext-06811, and VUID-VkImageViewCreateInfo-usage-02275 go silent.
+github_issue: 315
 ---
 
 @github:tatolab/streamlib#315

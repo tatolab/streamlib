@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: GPU-Resident VkImage Pipeline
-status: completed
-description: Rebuild camera texture ring, display direct sampling, and texture cache with vulkanalia types. Branch feat/gpu-resident-pipeline from main.
-github_issue: 253
-dependencies:
-  - "down:@github:tatolab/streamlib#236"
+name: '@github:tatolab/streamlib#253'
 adapters:
   github: builtin
+description: GPU-Resident VkImage Pipeline — Rebuild camera texture ring, display direct sampling, and texture cache with vulkanalia types. Branch feat/gpu-resident-pipeline from main.
+github_issue: 253
+blocks:
+- '@github:tatolab/streamlib#236'
 ---
 
 @github:tatolab/streamlib#253

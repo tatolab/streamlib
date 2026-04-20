@@ -1,11 +1,11 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#143"
+name: '@github:tatolab/streamlib#143'
 description: Package system — making streamlib.yaml a fully self-describing manifest
-dependencies:
-  - "up:@github:tatolab/streamlib#144"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#144'
 ---
 
 @github:tatolab/streamlib#143

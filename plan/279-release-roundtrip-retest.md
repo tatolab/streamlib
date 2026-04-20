@@ -1,14 +1,13 @@
 ---
 whoami: amos
-name: Retest camera + encoder + display roundtrip in release build
-status: completed
-description: Validate full GPU pipeline (camera + encoder + decoder + display) in release build after synchronization fixes land. Confirms no SIGSEGV or OOM.
-github_issue: 279
-dependencies:
-  - "down:vulkan-video synchronized queue submission via VulkanDevice"
-  - "down:Device-level lock for GPU resource creation during concurrent operations"
+name: '@github:tatolab/streamlib#279'
 adapters:
   github: builtin
+description: Retest camera + encoder + display roundtrip in release build — Validate full GPU pipeline (camera + encoder + decoder + display) in release build after synchronization fixes land. Confirms no SIGSEGV or OOM.
+github_issue: 279
+blocked_by:
+- '@github:tatolab/streamlib#277'
+- '@github:tatolab/streamlib#278'
 ---
 
 @github:tatolab/streamlib#279

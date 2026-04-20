@@ -1,17 +1,16 @@
 ---
 whoami: amos
-name: Retest camera+encoder+display roundtrip after Vulkan-cleanup follow-ups and GPU capability rewrite
-status: pending
-description: Rollup retest #2 — after the #294 follow-ups (#335 h265 teardown race, #336 NV12 chroma, #337 harness hermeticity, #338 validation wiring) and the #319 GPU capability umbrella land. Verifies the real blockers from #294 are resolved and the capability refactor didn't introduce new regressions in the camera / encoder / decoder / display path.
-github_issue: 341
-dependencies:
-  - "down:H.265 shutdown race when decoder lags encoder (Cam Link-class sources)"
-  - "down:NV12 direct-ingest chroma collapse (RGBA↔NV12 converter)"
-  - "down:E2E test harness non-hermetic on NVIDIA Linux"
-  - "down:StreamRuntime does not honor VK_LOADER_LAYERS_ENABLE / VK_INSTANCE_LAYERS"
-  - "down:GPU capability-based access (sandbox + escalate)"
+name: '@github:tatolab/streamlib#341'
 adapters:
   github: builtin
+description: 'Retest camera+encoder+display roundtrip after Vulkan-cleanup follow-ups and GPU capability rewrite — Rollup retest #2 — after the #294 follow-ups (#335 h265 teardown race, #336 NV12 chroma, #337 harness hermeticity, #338 validation wiring) and the #319 GPU capability umbrella land. Verifies the real blockers from #294 are resolved and the capability refactor didn''t introduce new regressions in the camera / encoder / decoder / display path.'
+github_issue: 341
+blocked_by:
+- '@github:tatolab/streamlib#335'
+- '@github:tatolab/streamlib#336'
+- '@github:tatolab/streamlib#337'
+- '@github:tatolab/streamlib#338'
+- '@github:tatolab/streamlib#319'
 ---
 
 @github:tatolab/streamlib#341

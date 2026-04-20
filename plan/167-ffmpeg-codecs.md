@@ -1,13 +1,14 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#167"
+name: '@github:tatolab/streamlib#167'
 description: Linux — FFmpeg codec integration — H.264 encode/decode/mux
-dependencies:
-  - "down:@github:tatolab/streamlib#163"
-  - "down:@github:tatolab/streamlib#178"
-  - "up:@github:tatolab/streamlib#166"
 adapters:
   github: builtin
+blocked_by:
+- '@github:tatolab/streamlib#166'
+blocks:
+- '@github:tatolab/streamlib#163'
+- '@github:tatolab/streamlib#178'
 ---
 
 @github:tatolab/streamlib#167

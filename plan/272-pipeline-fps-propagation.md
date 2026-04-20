@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Propagate FPS through pipeline via Videoframe schema
-status: completed
-description: Add optional fps field to Videoframe so frame rate flows from camera through encoder to MP4 writer, eliminating hardcoded fps values.
-github_issue: 272
-dependencies:
-  - "down:@github:tatolab/streamlib#254"
+name: '@github:tatolab/streamlib#272'
 adapters:
   github: builtin
+description: Propagate FPS through pipeline via Videoframe schema — Add optional fps field to Videoframe so frame rate flows from camera through encoder to MP4 writer, eliminating hardcoded fps values.
+github_issue: 272
+blocks:
+- '@github:tatolab/streamlib#254'
 ---
 
 @github:tatolab/streamlib#272

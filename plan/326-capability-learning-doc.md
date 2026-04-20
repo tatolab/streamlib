@@ -1,13 +1,14 @@
 ---
 whoami: amos
-name: "Learning doc: GPU capability typestate pattern"
-status: pending
-description: Capture the "why" of the sandbox/escalate pattern in `docs/learnings/` so the invariant survives future refactors.
-github_issue: 326
-dependencies:
-  - "down:Polyglot IPC: escalate-on-behalf for Python/Deno processors"
+name: '@github:tatolab/streamlib#326'
 adapters:
   github: builtin
+description: 'Learning doc: GPU capability typestate pattern — Capture the "why" of the sandbox/escalate pattern in `docs/learnings/` so the invariant survives future refactors.'
+github_issue: 326
+blocked_by:
+- '@github:tatolab/streamlib#325'
+- '@github:tatolab/streamlib#369'
+- '@github:tatolab/streamlib#370'
 ---
 
 @github:tatolab/streamlib#326

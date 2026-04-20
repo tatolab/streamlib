@@ -1,11 +1,10 @@
 ---
 whoami: amos
-name: Encoder src picture profile mismatch
-status: completed
-description: Chain VkVideoEncodeUsageInfoKHR into the RGB→NV12 converter's source image profile so srcPictureResource.imageViewBinding is compatible with the session's video profile, silencing VUID-vkCmdEncodeVideoKHR-pEncodeInfo-08206.
-github_issue: 300
+name: '@github:tatolab/streamlib#300'
 adapters:
   github: builtin
+description: Encoder src picture profile mismatch — Chain VkVideoEncodeUsageInfoKHR into the RGB→NV12 converter's source image profile so srcPictureResource.imageViewBinding is compatible with the session's video profile, silencing VUID-vkCmdEncodeVideoKHR-pEncodeInfo-08206.
+github_issue: 300
 ---
 
 @github:tatolab/streamlib#300

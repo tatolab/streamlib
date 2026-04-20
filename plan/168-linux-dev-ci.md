@@ -1,11 +1,11 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#168"
+name: '@github:tatolab/streamlib#168'
 description: Linux — Dev environment & CI pipeline
-dependencies:
-  - "down:@github:tatolab/streamlib#166"
 adapters:
   github: builtin
+blocks:
+- '@github:tatolab/streamlib#166'
 ---
 
 @github:tatolab/streamlib#168

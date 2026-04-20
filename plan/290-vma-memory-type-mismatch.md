@@ -1,11 +1,10 @@
 ---
 whoami: amos
-name: VMA bind-buffer-memory type mismatch
-status: completed
-description: Fix the VMA pool memory-type selection so bound memory is in the buffer's allowed memoryTypeBits.
-github_issue: 290
+name: '@github:tatolab/streamlib#290'
 adapters:
   github: builtin
+description: VMA bind-buffer-memory type mismatch — Fix the VMA pool memory-type selection so bound memory is in the buffer's allowed memoryTypeBits.
+github_issue: 290
 ---
 
 @github:tatolab/streamlib#290

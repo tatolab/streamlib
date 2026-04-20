@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: vulkan-video synchronized queue submission via VulkanDevice
-status: completed
-description: Route SimpleEncoder/SimpleDecoder queue_submit() calls through VulkanDevice's mutex-protected submit_to_queue() methods. Fixes release build SIGSEGV.
-github_issue: 277
-dependencies:
-  - "down:VulkanDevice thread-safe queue submission synchronization"
+name: '@github:tatolab/streamlib#277'
 adapters:
   github: builtin
+description: vulkan-video synchronized queue submission via VulkanDevice — Route SimpleEncoder/SimpleDecoder queue_submit() calls through VulkanDevice's mutex-protected submit_to_queue() methods. Fixes release build SIGSEGV.
+github_issue: 277
+blocks:
+- '@github:tatolab/streamlib#273'
 ---
 
 @github:tatolab/streamlib#277

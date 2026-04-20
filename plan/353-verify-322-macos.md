@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: "macOS compile + test verification of #322"
-status: pending
-description: 'Verify the capability-typed lifecycle ctx rewrite on macOS. Apple processor files were edited on Linux without Metal-path compile coverage; this verifies the entire macOS branch compiles, tests pass, and E2E camera→display works on real AVFoundation.'
-github_issue: 353
-dependencies:
-  - "down:Migrate processor lifecycles to RuntimeContextFullAccess / RuntimeContextLimitedAccess"
+name: '@github:tatolab/streamlib#353'
 adapters:
   github: builtin
+description: 'macOS compile + test verification of #322 — ''Verify the capability-typed lifecycle ctx rewrite on macOS. Apple processor files were edited on Linux without Metal-path compile coverage; this verifies the entire macOS branch compiles, tests pass, and E2E camera→display works on real AVFoundation.'''
+github_issue: 353
+blocks:
+- '@github:tatolab/streamlib#322'
 ---
 
 @github:tatolab/streamlib#353

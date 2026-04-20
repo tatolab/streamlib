@@ -1,12 +1,12 @@
 ---
 whoami: amos
-name: "@github:tatolab/streamlib#200"
+name: '@github:tatolab/streamlib#200'
 description: P0 — Linux rendering performance parity with macOS — 6-phase GPU optimization plan
-dependencies:
-  - "down:@github:tatolab/streamlib#166"
-  - "down:@github:tatolab/streamlib#163"
 adapters:
   github: builtin
+blocks:
+- '@github:tatolab/streamlib#166'
+- '@github:tatolab/streamlib#163'
 ---
 
 @github:tatolab/streamlib#200

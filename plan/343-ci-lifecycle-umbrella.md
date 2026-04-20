@@ -1,15 +1,14 @@
 ---
 whoami: amos
-name: "[BLOCKED — do not start] Umbrella: End-to-end CI lifecycle — GPU runners, validation gates, hermetic harness"
-status: pending
-description: "BLOCKED — queued behind #213 (container/GPU runner), #337 (hermetic harness), #338 (VkInstance validation-layer wiring). Do NOT pick up. Umbrella that replaces the narrow #293 approach with a full CI lifecycle: reviving the disabled test.yml, wiring unit-test / clippy / fmt gates, adding validation-layer roundtrip gates for H.264/H.265, wiring the PSNR fixture rig, and packaging the dev-bootstrap + container image."
-github_issue: 343
-dependencies:
-  - "down:Container/Docker integration for cloud GPU deployment (runpod)"
-  - "down:E2E test harness non-hermetic on NVIDIA Linux"
-  - "down:StreamRuntime does not honor VK_LOADER_LAYERS_ENABLE / VK_INSTANCE_LAYERS"
+name: '@github:tatolab/streamlib#343'
 adapters:
   github: builtin
+description: '[BLOCKED — do not start] Umbrella: End-to-end CI lifecycle — GPU runners, validation gates, hermetic harness — BLOCKED — queued behind #213 (container/GPU runner), #337 (hermetic harness), #338 (VkInstance validation-layer wiring). Do NOT pick up. Umbrella that replaces the narrow #293 approach with a full CI lifecycle: reviving the disabled test.yml, wiring unit-test / clippy / fmt gates, adding validation-layer roundtrip gates for H.264/H.265, wiring the PSNR fixture rig, and packaging the dev-bootstrap + container image.'
+github_issue: 343
+blocked_by:
+- '@github:tatolab/streamlib#213'
+- '@github:tatolab/streamlib#337'
+- '@github:tatolab/streamlib#338'
 ---
 
 @github:tatolab/streamlib#343

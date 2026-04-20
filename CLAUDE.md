@@ -63,7 +63,20 @@ Minor helpers within a single module, bug-fix-scoped private functions, and exte
 
 ### Work Tracking
 
-**Prefer the Task system over todos** for tracking multi-step work and plan mode implementations.
+**GitHub is the source of truth for work in this repo.** Milestones group deliverables; issues track individual tasks within each milestone. Amos is the local cache + AI-context layer — it reflects GitHub, never the other way around.
+
+**Picking up the next task:** invoke the `/amos:next` skill (or just say "continue" / "next task" / "what's next"). It finds the next ready issue in the focused milestone, pulls the issue body from GitHub, auto-loads any matching `.claude/workflows/<label>.md` for the issue's labels, and walks the execution protocol. To set the focused milestone, run `/amos:focus <title>` — `amos milestones` lists candidates.
+
+**Writing issues:** every new issue follows the template in @docs/issue-template.md — Description / Context / Exit criteria / Tests or validation / Related. Cross-cutting concerns (linux, macos, polyglot, ci, frozen) are labels, not milestones. Test harnesses are their own issues. Don't create parallel amos plan files that duplicate issue content — plan files hold AI-specific instructions only, identified by the same `@github:tatolab/streamlib#N` name.
+
+**Specialty workflows** live at `.claude/workflows/<label>.md`. Add a new one by dropping a file there and labeling relevant issues. `/amos:next` loads every matching file into context before starting work. Current workflows:
+- `.claude/workflows/ci.md` — for `ci`-labeled issues (negative test + green baseline evidence required)
+- `.claude/workflows/video-e2e.md` — for encoder/decoder/display changes (scenario matrix + PNG Read-tool check required)
+- `.claude/workflows/macos.md` — for macOS-platform work (cross-compile verification required on Linux)
+- `.claude/workflows/polyglot.md` — for Python/Deno SDK or escalate IPC changes (all three runtimes must stay in sync)
+- `.claude/workflows/research.md` — for research-labeled issues (doc deliverable, no code)
+
+**Prefer the Task system over todos** for in-session multi-step work and plan mode implementations.
 
 ---
 

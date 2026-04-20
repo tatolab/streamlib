@@ -1,13 +1,12 @@
 ---
 whoami: amos
-name: Introduce GpuContextLimitedAccess + GpuContextFullAccess newtype wrappers
-status: completed
-description: Add the two capability types as thin newtype wrappers around `GpuContext`. Both expose the same full API initially — pure compile-time change with no behavioral impact.
-github_issue: 321
-dependencies:
-  - "down:Design doc: GpuContextLimitedAccess + GpuContextFullAccess API surface"
+name: '@github:tatolab/streamlib#321'
 adapters:
   github: builtin
+description: Introduce GpuContextLimitedAccess + GpuContextFullAccess newtype wrappers — Add the two capability types as thin newtype wrappers around `GpuContext`. Both expose the same full API initially — pure compile-time change with no behavioral impact.
+github_issue: 321
+blocks:
+- '@github:tatolab/streamlib#320'
 ---
 
 @github:tatolab/streamlib#321
