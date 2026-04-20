@@ -208,10 +208,10 @@ impl Drop for NativeHandle {
 /// `fd` must be a valid open file descriptor that the caller owns.
 unsafe fn libc_close(fd: RawFd) {
     // `close` is provided by libc which is always linked on Unix targets.
-    extern "C" {
+    unsafe extern "C" {
         fn close(fd: std::os::raw::c_int) -> std::os::raw::c_int;
     }
-    let _ = close(fd);
+    unsafe { let _ = close(fd); }
 }
 
 // ---------------------------------------------------------------------------

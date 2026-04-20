@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
@@ -30,14 +30,17 @@ pub struct LinuxAudioCaptureProcessor {
 impl crate::core::ManualProcessor for LinuxAudioCaptureProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: RuntimeContext,
+        _ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("[AudioCapture] setup() called - will set up stream in start()");
         self.stream_setup_done = false;
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let device_name = self
             .device_info
             .as_ref()
@@ -58,7 +61,7 @@ impl crate::core::ManualProcessor for LinuxAudioCaptureProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if !self.stream_setup_done {
             tracing::info!("[AudioCapture] start() called - setting up cpal stream");
             self.setup_stream()?;

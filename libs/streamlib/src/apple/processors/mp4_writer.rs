@@ -3,7 +3,7 @@
 
 use crate::_generated_::{Audioframe, Videoframe};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContext, Result, RuntimeContext, StreamError,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -84,7 +84,7 @@ pub struct AppleMp4WriterProcessor {
 impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
     fn setup(
         &mut self,
-        ctx: RuntimeContext,
+        ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             info!("Setting up MP4 writer processor");
@@ -96,10 +96,10 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
                 .config
                 .sync_tolerance_ms
                 .unwrap_or(DEFAULT_SYNC_TOLERANCE_MS);
-            self.gpu_context = Some(ctx.gpu.clone());
+            self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
             // Initialize GPU-accelerated pixel transfer (RGBA → NV12) using RHI device
-            let pixel_transfer = crate::apple::PixelTransferSession::new(ctx.gpu.device().clone())?;
+            let pixel_transfer = crate::apple::PixelTransferSession::new(ctx.gpu_full_access().device().clone())?;
             self.pixel_transfer = Some(pixel_transfer);
 
             // AVAssetWriter initialization will happen in process() on first frame
@@ -111,7 +111,7 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
         std::future::ready(result)
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         debug!("=== MP4Writer process() called ===");
 
         // Wait for first video frame to initialize writer (need dimensions)
@@ -337,7 +337,10 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             info!("Tearing down MP4 writer processor");
 

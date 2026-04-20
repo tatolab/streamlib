@@ -11,7 +11,9 @@ use crate::core::execution::ExecutionConfig;
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::{DynamicProcessorConstructorFn, ProcessorInstance};
 use crate::core::runtime::BoxFuture;
-use crate::core::{ProcessorDescriptor, RuntimeContext};
+use crate::core::{
+    ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
 
 use super::spawn_python_subprocess_op::ensure_processor_venv;
 
@@ -38,8 +40,6 @@ pub(crate) struct PythonNativeSubprocessHostProcessor {
     stdin_writer: Option<BufWriter<ChildStdin>>,
     stdout_reader: Option<BufReader<ChildStdout>>,
 
-    // RuntimeContext for runtime ID access
-    runtime_context: Option<RuntimeContext>,
 
     // Config for spawning (set at construction, used during setup)
     entrypoint: String,
@@ -67,10 +67,11 @@ pub(crate) struct PythonNativeSubprocessHostProcessor {
 // ============================================================================
 
 impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHostProcessor {
-    fn __generated_setup(&mut self, ctx: RuntimeContext) -> BoxFuture<'_, Result<()>> {
+    fn __generated_setup<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            self.runtime_context = Some(ctx.clone());
-
             let project_path = PathBuf::from(&self.project_path);
 
             tracing::info!(
@@ -223,7 +224,10 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
         })
     }
 
-    fn __generated_teardown(&mut self) -> BoxFuture<'_, Result<()>> {
+    fn __generated_teardown<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             tracing::info!(
                 "[{}] Tearing down Python native subprocess",
@@ -290,7 +294,10 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
         })
     }
 
-    fn __generated_on_pause(&mut self) -> BoxFuture<'_, Result<()>> {
+    fn __generated_on_pause<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async {
             if self.subprocess_dead {
                 return Ok(());
@@ -315,7 +322,10 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
         })
     }
 
-    fn __generated_on_resume(&mut self) -> BoxFuture<'_, Result<()>> {
+    fn __generated_on_resume<'a>(
+        &'a mut self,
+        _ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async {
             if self.subprocess_dead {
                 return Ok(());
@@ -340,14 +350,14 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
         })
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         // Python native subprocess manages its own iceoryx2 I/O via FFI.
         // The Rust host runs in Manual mode — process() is never called
         // by the thread runner for Manual processors.
         Ok(())
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if self.subprocess_dead {
             return Ok(());
         }
@@ -371,7 +381,7 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if self.subprocess_dead {
             return Ok(());
         }
@@ -551,7 +561,6 @@ pub(crate) fn create_python_native_subprocess_host_constructor(
             child: None,
             stdin_writer: None,
             stdout_reader: None,
-            runtime_context: None,
             entrypoint: entrypoint.clone(),
             project_path: project_path_str.clone(),
             processor_id: node.id.to_string(),

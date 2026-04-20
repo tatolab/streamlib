@@ -4,7 +4,7 @@
 use crate::_generated_::com_tatolab_audio_resampler_config::Quality;
 use crate::_generated_::Audioframe;
 use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
-use crate::core::{Result, RuntimeContext};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 /// Convert generated Quality enum to internal ResamplingQuality.
 fn quality_to_resampling_quality(quality: &Quality) -> ResamplingQuality {
@@ -26,7 +26,7 @@ pub struct AudioResamplerProcessor {
 impl crate::core::ReactiveProcessor for AudioResamplerProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: RuntimeContext,
+        _ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.output_sample_rate = self.config.target_sample_rate;
 
@@ -39,7 +39,10 @@ impl crate::core::ReactiveProcessor for AudioResamplerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!(
             "[AudioResampler] Stopped (processed {} output frames)",
             self.frame_counter
@@ -47,7 +50,7 @@ impl crate::core::ReactiveProcessor for AudioResamplerProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("audio_in") {
             return Ok(());
         }

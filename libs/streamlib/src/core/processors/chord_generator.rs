@@ -3,7 +3,7 @@
 
 use crate::_generated_::Audioframe;
 use crate::core::context::AudioTickContext;
-use crate::core::{Result, RuntimeContext};
+use crate::core::{Result, RuntimeContextFullAccess};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -63,8 +63,6 @@ pub struct ChordGeneratorProcessor {
     sample_rate: u32,
     /// Flag to indicate if audio generation is active.
     is_active: Arc<AtomicBool>,
-    /// Runtime context stored from setup for use in start.
-    runtime_ctx: Option<RuntimeContext>,
 }
 
 impl ChordGeneratorProcessor::Processor {
@@ -76,7 +74,7 @@ impl ChordGeneratorProcessor::Processor {
 impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
     fn setup(
         &mut self,
-        ctx: RuntimeContext,
+        ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         // Get sample rate from the audio clock
         let audio_clock = ctx.audio_clock();
@@ -92,9 +90,6 @@ impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
         *self.oscillators.lock() = Some(oscillators);
         self.frame_counter.store(0, Ordering::SeqCst);
 
-        // Store context for use in start()
-        self.runtime_ctx = Some(ctx.clone());
-
         tracing::info!(
             "ChordGenerator: setup() called (Manual mode with AudioClock - {}Hz, {} samples/tick)",
             self.sample_rate,
@@ -104,21 +99,19 @@ impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         // Mark as inactive to stop generating
         self.is_active.store(false, Ordering::SeqCst);
-        self.runtime_ctx = None;
         tracing::info!("ChordGenerator: teardown complete");
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.is_active.store(true, Ordering::SeqCst);
 
-        // Get the audio clock from stored context
-        let ctx = self.runtime_ctx.as_ref().ok_or_else(|| {
-            crate::core::StreamError::Runtime("RuntimeContext not available in start()".into())
-        })?;
         let audio_clock = ctx.audio_clock();
         let sample_rate = self.sample_rate;
 

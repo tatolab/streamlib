@@ -5,7 +5,7 @@ status: pending
 description: Gated by #320 §8.Q2. Determine whether RhiBlitter::blit_copy can grow its internal texture cache on a cold key. If yes, blit_copy is Split (callers pre-warm in setup() or escalate on first use). If no, it stays Sandbox. Closes the classification gap in the design doc §1 before #324 ships.
 github_issue: 346
 dependencies:
-  - "down:Design doc: GpuContextSandbox + GpuContextFullAccess API surface"
+  - "down:Design doc: GpuContextLimitedAccess + GpuContextFullAccess API surface"
 adapters:
   github: builtin
 ---
@@ -22,4 +22,4 @@ an amendment to `docs/design/gpu-capability-sandbox.md` §1 or a new
 
 ## Blocks
 
-#324 — Restrict GpuContextSandbox API surface to safe ops.
+#324 — Restrict GpuContextLimitedAccess API surface to safe ops.

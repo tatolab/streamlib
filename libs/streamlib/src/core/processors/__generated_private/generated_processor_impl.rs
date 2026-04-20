@@ -4,10 +4,11 @@
 //! Object-safe wrapper for GeneratedProcessor - DO NOT USE DIRECTLY.
 
 use super::GeneratedProcessor;
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::ExecutionConfig;
 use crate::core::runtime::BoxFuture;
 use crate::core::ProcessorDescriptor;
-use crate::core::{Result, RuntimeContext};
+use crate::core::Result;
 
 /// Object-safe version of [`GeneratedProcessor`] for dynamic dispatch.
 ///
@@ -15,34 +16,37 @@ use crate::core::{Result, RuntimeContext};
 ///
 /// Uses [`BoxFuture`] for async lifecycle methods to maintain object safety.
 pub trait DynGeneratedProcessor: Send + 'static {
-    /// Generated setup hook called by runtime.
-    ///
-    /// Returns a boxed future for object safety. The future must not borrow
-    /// from `ctx` - clone it if needed in async code.
-    fn __generated_setup(&mut self, ctx: RuntimeContext) -> BoxFuture<'_, Result<()>>;
+    /// Generated setup hook called by runtime with privileged ctx.
+    fn __generated_setup<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>>;
 
-    /// Generated teardown hook called by runtime.
-    ///
-    /// Returns a boxed future for object safety.
-    fn __generated_teardown(&mut self) -> BoxFuture<'_, Result<()>>;
+    /// Generated teardown hook called by runtime with privileged ctx.
+    fn __generated_teardown<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>>;
 
-    /// Generated on_pause hook called by runtime when processor is paused.
-    ///
-    /// Returns a boxed future for object safety.
-    fn __generated_on_pause(&mut self) -> BoxFuture<'_, Result<()>>;
+    /// Generated on_pause hook — restricted ctx.
+    fn __generated_on_pause<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>>;
 
-    /// Generated on_resume hook called by runtime when processor is resumed.
-    ///
-    /// Returns a boxed future for object safety.
-    fn __generated_on_resume(&mut self) -> BoxFuture<'_, Result<()>>;
+    /// Generated on_resume hook — restricted ctx.
+    fn __generated_on_resume<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>>;
 
-    fn process(&mut self) -> Result<()>;
+    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
 
-    /// Called once to start a Manual mode processor.
-    fn start(&mut self) -> Result<()>;
+    /// Called once to start a Manual mode processor. Privileged ctx.
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
 
-    /// Called to stop a Manual mode processor.
-    fn stop(&mut self) -> Result<()>;
+    /// Called to stop a Manual mode processor. Privileged ctx.
+    fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
 
     fn name(&self) -> &str;
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
@@ -84,32 +88,44 @@ impl<T> DynGeneratedProcessor for T
 where
     T: GeneratedProcessor,
 {
-    fn __generated_setup(&mut self, ctx: RuntimeContext) -> BoxFuture<'_, Result<()>> {
+    fn __generated_setup<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(<Self as GeneratedProcessor>::__generated_setup(self, ctx))
     }
 
-    fn __generated_teardown(&mut self) -> BoxFuture<'_, Result<()>> {
-        Box::pin(<Self as GeneratedProcessor>::__generated_teardown(self))
+    fn __generated_teardown<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextFullAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(<Self as GeneratedProcessor>::__generated_teardown(self, ctx))
     }
 
-    fn __generated_on_pause(&mut self) -> BoxFuture<'_, Result<()>> {
-        Box::pin(<Self as GeneratedProcessor>::__generated_on_pause(self))
+    fn __generated_on_pause<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(<Self as GeneratedProcessor>::__generated_on_pause(self, ctx))
     }
 
-    fn __generated_on_resume(&mut self) -> BoxFuture<'_, Result<()>> {
-        Box::pin(<Self as GeneratedProcessor>::__generated_on_resume(self))
+    fn __generated_on_resume<'a>(
+        &'a mut self,
+        ctx: &'a RuntimeContextLimitedAccess<'a>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(<Self as GeneratedProcessor>::__generated_on_resume(self, ctx))
     }
 
-    fn process(&mut self) -> Result<()> {
-        <Self as GeneratedProcessor>::process(self)
+    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        <Self as GeneratedProcessor>::process(self, ctx)
     }
 
-    fn start(&mut self) -> Result<()> {
-        <Self as GeneratedProcessor>::start(self)
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        <Self as GeneratedProcessor>::start(self, ctx)
     }
 
-    fn stop(&mut self) -> Result<()> {
-        <Self as GeneratedProcessor>::stop(self)
+    fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        <Self as GeneratedProcessor>::stop(self, ctx)
     }
 
     fn name(&self) -> &str {

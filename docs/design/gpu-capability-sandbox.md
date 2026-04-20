@@ -1,4 +1,4 @@
-# Design: `GpuContextSandbox` + `GpuContextFullAccess`
+# Design: `GpuContextLimitedAccess` + `GpuContextFullAccess`
 
 Status: draft — gating the #319 umbrella (tasks #321–#326).
 
@@ -26,7 +26,7 @@ processor spawn. That handles concurrency, but it does nothing to keep
 This design moves the invariant into the type system. Two capability
 wrappers around `GpuContext`:
 
-- **`GpuContextSandbox`** — handed to `process()`. Cheap, pool-backed,
+- **`GpuContextLimitedAccess`** — handed to `process()`. Cheap, pool-backed,
   pre-reserved operations only. Heavy-allocation methods are not in
   scope; calling one is a compile error.
 - **`GpuContextFullAccess`** — handed to `setup()` and inside
@@ -198,7 +198,7 @@ sign-off before #324 lands:
 ## 2. `escalate()` closure signature
 
 ```rust
-impl GpuContextSandbox {
+impl GpuContextLimitedAccess {
     pub fn escalate<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>;
@@ -259,7 +259,7 @@ Implementation note: `FullAccess` is a newtype around
 `Arc<GpuContext>` (same `Arc` the sandbox holds). The lifetime trick
 works because the `&GpuContextFullAccess` is a borrow of a stack
 local inside `escalate`, not of anything reachable from
-`GpuContextSandbox`. Leaking a `FullAccess` out requires cloning its
+`GpuContextLimitedAccess`. Leaking a `FullAccess` out requires cloning its
 inner `Arc`, which we don't expose — only `&GpuContextFullAccess` is
 handed to `f`.
 
@@ -273,7 +273,7 @@ fires on exit unless the error was the `wait_device_idle()` itself.
 ### Internals
 
 ```rust
-impl GpuContextSandbox {
+impl GpuContextLimitedAccess {
     pub fn escalate<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>,
@@ -339,7 +339,7 @@ runtime_ctx_clone.gpu_sandbox.escalate(|full_access| {
 ```
 
 - `lock_processor_setup()` becomes `pub(crate)` and is only called
-  from `GpuContextSandbox::escalate`.
+  from `GpuContextLimitedAccess::escalate`.
 - `wait_device_idle()` is no longer called inline; `escalate()` does
   it on closure exit.
 - Phase 4 no longer has any awareness of the mutex. It calls
@@ -390,14 +390,14 @@ After #322:
 ```rust
 pub struct RuntimeContext {
     // Sandbox accessor available always; process() uses this.
-    gpu_sandbox: GpuContextSandbox,
+    gpu_sandbox: GpuContextLimitedAccess,
     // FullAccess is injected only during setup/escalate windows.
     gpu_full: Option<GpuContextFullAccess>,
     // … time, runtime_id, processor_id, pause_gate, …
 }
 
 impl RuntimeContext {
-    pub fn gpu(&self) -> &GpuContextSandbox { &self.gpu_sandbox }
+    pub fn gpu(&self) -> &GpuContextLimitedAccess { &self.gpu_sandbox }
     pub fn gpu_full(&self) -> Option<&GpuContextFullAccess> { self.gpu_full.as_ref() }
 }
 ```
@@ -427,12 +427,12 @@ stored at construction time** (recommended).
 `RuntimeContext` but exposes `gpu_full()` directly as
 `&GpuContextFullAccess` (not Option-wrapped). `process()` stays
 `&mut self`; the processor is expected to stash its own
-`GpuContextSandbox` (cloned from `ctx.gpu()` in setup) for use in
+`GpuContextLimitedAccess` (cloned from `ctx.gpu()` in setup) for use in
 `process()`. Migration stays mechanical.
 
 Pros: smallest diff to processor bodies. Processors already stash
 `gpu: Option<GpuContext>` today (see `H265DecoderProcessor.gpu_context`
-in research §3); swapping that for `Option<GpuContextSandbox>` is
+in research §3); swapping that for `Option<GpuContextLimitedAccess>` is
 mostly a type rename.
 
 Cons: `process()` still accesses GPU via `self.sandbox.…` rather
@@ -584,7 +584,7 @@ Promise).
 
 Order of operations across #321–#326.
 
-1. **#321 — introduce newtypes**. `GpuContextSandbox` and
+1. **#321 — introduce newtypes**. `GpuContextLimitedAccess` and
    `GpuContextFullAccess`, each holding `Arc<GpuContextInner>`
    (the existing struct renamed to distinguish the internal from
    the wrappers). Both types implement every current `GpuContext`
@@ -599,14 +599,14 @@ Order of operations across #321–#326.
    changes are mechanical renames. E2E roundtrip per
    `docs/testing.md` for h264 + h265 on vivid — no regression.
 3. **#323 — implement `escalate()`**. Add
-   `GpuContextSandbox::escalate`; rewrite Phase 4 in
+   `GpuContextLimitedAccess::escalate`; rewrite Phase 4 in
    `spawn_processor_op.rs` to call it instead of grabbing
    `lock_processor_setup` directly. Verify via #304's 20× h265 loop
    on `/dev/video2` (zero `DEVICE_LOST`) and a new unit test:
    multiple threads concurrently calling `escalate` see serialized
    closures.
 4. **#324 — restrict the Sandbox API surface**. Strip FullAccess
-   methods from `GpuContextSandbox` per §1's table. Every
+   methods from `GpuContextLimitedAccess` per §1's table. Every
    resulting compile error in `process()` bodies is fixed by one
    of:
    - moving the call to `setup()` and stashing the resource,
@@ -712,7 +712,7 @@ Confirmed: Option A. `process()` does not receive a ctx parameter
 today (see research §1 — `ReactiveProcessor::process(&mut self) -> Result<()>`),
 so "same ergonomics, just limited" maps directly to Option A —
 processors keep stashing context the way they do today; the stashed
-type changes from `GpuContext` to `GpuContextSandbox`. Developers
+type changes from `GpuContext` to `GpuContextLimitedAccess`. Developers
 shouldn't have to think about which context they're holding; the
 compiler enforces it.
 

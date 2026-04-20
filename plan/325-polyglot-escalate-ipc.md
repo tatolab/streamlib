@@ -5,7 +5,7 @@ status: pending
 description: Extend subprocess-host processors to accept escalate IPC requests from Python/Deno. Subprocess sees only a sandbox; IPC is its escalate channel, routed through the host's serialized queue.
 github_issue: 325
 dependencies:
-  - "down:Restrict GpuContextSandbox API surface to safe ops"
+  - "down:Restrict GpuContextLimitedAccess API surface to safe ops"
 adapters:
   github: builtin
 ---

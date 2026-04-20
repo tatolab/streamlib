@@ -3,7 +3,7 @@
 
 use crate::_generated_::Audioframe;
 use crate::core::utils::ProcessorAudioConverterTargetFormat;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, StreamError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
 use rtrb::{Producer, RingBuffer};
@@ -79,7 +79,7 @@ pub struct AppleAudioOutputProcessor {
 impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: RuntimeContext,
+        _ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.device_id = self
             .config
@@ -92,7 +92,10 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         // Signal polling thread to stop
         self.stop_polling.store(true, Ordering::SeqCst);
 
@@ -106,7 +109,7 @@ impl crate::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if self.stream_setup_done {
             return Ok(());
         }

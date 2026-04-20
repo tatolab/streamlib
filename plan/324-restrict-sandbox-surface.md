@@ -1,8 +1,8 @@
 ---
 whoami: amos
-name: Restrict GpuContextSandbox API surface to safe ops
+name: Restrict GpuContextLimitedAccess API surface to safe ops
 status: pending
-description: The enforcement task. Remove every heavy-allocation method from `GpuContextSandbox`. Process() bodies that call privileged methods become compile errors; fix each by pre-reserving in setup() or wrapping in `escalate()`.
+description: The enforcement task. Remove every heavy-allocation method from `GpuContextLimitedAccess`. Process() bodies that call privileged methods become compile errors; fix each by pre-reserving in setup() or wrapping in `escalate()`.
 github_issue: 324
 dependencies:
   - "down:Implement sandbox.escalate() reusing the setup mutex"
@@ -19,7 +19,7 @@ adapters:
 
 ## Steps
 
-1. Per the API-split table from #320, strip `GpuContextSandbox`'s impl down to pool acquires (pre-reserved blocks only), texture sampling, writes to mapped pixel buffers, and read-only queries. **Per #320 §8.Q5**: `command_queue()` stays on Sandbox — the type-safety invariant is that Sandbox-reachable types can't compose into hostile payloads, so submitting pre-allocated buffers to the queue is safe.
+1. Per the API-split table from #320, strip `GpuContextLimitedAccess`'s impl down to pool acquires (pre-reserved blocks only), texture sampling, writes to mapped pixel buffers, and read-only queries. **Per #320 §8.Q5**: `command_queue()` stays on Sandbox — the type-safety invariant is that Sandbox-reachable types can't compose into hostile payloads, so submitting pre-allocated buffers to the queue is safe.
 2. Fix every resulting compile error in `process()` bodies: either move the call into an `escalate(|full| …)` closure, or pre-reserve the resource in `setup()` and have `process()` reuse it. **Per #320 §8.Q3**: NO transparent-escalate helpers (`acquire_*_or_escalate`). Pool-miss paths in Sandbox return an error; callers either handle it or wrap the call in an explicit `escalate()` closure. The closure boundary must be visible at every escalation site.
 3. Ensure pool-growth paths internally call `escalate()`. Sandbox callers must never observe a growth allocation that bypasses serialization.
 4. Audit `acquire_pixel_buffer` / `acquire_texture` carefully — fast path on Sandbox, slow/growth path goes through `escalate`.

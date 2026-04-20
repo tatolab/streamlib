@@ -5,7 +5,7 @@ use crate::_generated_::Audioframe;
 use crate::core::clap::ClapPluginHost;
 use crate::core::clap::{ParameterInfo, PluginInfo};
 use crate::core::utils::ProcessorAudioConverterTargetFormat;
-use crate::core::{Result, RuntimeContext};
+use crate::core::{Result, RuntimeContextFullAccess};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -135,7 +135,7 @@ impl ClapEffectProcessor::Processor {
 impl crate::core::ManualProcessor for ClapEffectProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: RuntimeContext,
+        _ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             self.buffer_size = self.config.buffer_size as usize;
@@ -170,7 +170,10 @@ impl crate::core::ManualProcessor for ClapEffectProcessor::Processor {
         std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         self.stop_polling.store(true, Ordering::SeqCst);
 
         if let Some(handle) = self.polling_thread.take() {
@@ -194,7 +197,7 @@ impl crate::core::ManualProcessor for ClapEffectProcessor::Processor {
         std::future::ready(result)
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let stop_flag = Arc::clone(&self.stop_polling);
         stop_flag.store(false, Ordering::SeqCst);
 

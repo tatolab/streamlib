@@ -301,7 +301,9 @@ fn main() -> Result<()> {
     #[cfg(unix)]
     if args.daemon {
         let runtime_name = args.name.clone().unwrap_or_else(generate_runtime_name);
-        std::env::set_var("_STREAMLIB_DAEMON_NAME", &runtime_name);
+        // SAFETY: set_var is called before the tokio runtime starts (single-threaded
+        // context, no concurrent reads of env). Edition 2024 requires the explicit block.
+        unsafe { std::env::set_var("_STREAMLIB_DAEMON_NAME", &runtime_name) };
         daemonize_if_requested(&runtime_name, args.port, &args.host)?;
     }
 
@@ -325,7 +327,8 @@ async fn run(args: Args) -> Result<()> {
 
     // Set runtime ID env var BEFORE creating runtime
     let runtime_id = format!("R{}", cuid2::create_id());
-    std::env::set_var("STREAMLIB_RUNTIME_ID", &runtime_id);
+    // SAFETY: early init, before processor threads spawn; no concurrent env reads.
+    unsafe { std::env::set_var("STREAMLIB_RUNTIME_ID", &runtime_id) };
 
     // Set up telemetry (OTel traces + logs → SQLite, optional OTLP, file + stdout)
     let _telemetry_guard = setup_telemetry(&runtime_name, &runtime_id, &log_path, args.daemon)?;

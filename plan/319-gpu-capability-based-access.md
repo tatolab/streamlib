@@ -2,14 +2,14 @@
 whoami: amos
 name: GPU capability-based access (sandbox + escalate)
 status: pending
-description: Umbrella — replace runtime-phase checks with compile-time capability types. `process()` receives `GpuContextSandbox`; escalation to `GpuContextFullAccess` goes through a closure that reuses the setup mutex from #304. Setup becomes "compiler pre-escalates on behalf of the processor." Huge DX and correctness win; unblocks dynamic reconfigure.
+description: Umbrella — replace runtime-phase checks with compile-time capability types. `process()` receives `GpuContextLimitedAccess`; escalation to `GpuContextFullAccess` goes through a closure that reuses the setup mutex from #304. Setup becomes "compiler pre-escalates on behalf of the processor." Huge DX and correctness win; unblocks dynamic reconfigure.
 github_issue: 319
 dependencies:
-  - "down:Design doc: GpuContextSandbox + GpuContextFullAccess API surface"
-  - "down:Introduce GpuContextSandbox + GpuContextFullAccess newtype wrappers"
+  - "down:Design doc: GpuContextLimitedAccess + GpuContextFullAccess API surface"
+  - "down:Introduce GpuContextLimitedAccess + GpuContextFullAccess newtype wrappers"
   - "down:Migrate processor trait signatures to capability-aware setup/process"
   - "down:Implement sandbox.escalate() reusing the setup mutex"
-  - "down:Restrict GpuContextSandbox API surface to safe ops"
+  - "down:Restrict GpuContextLimitedAccess API surface to safe ops"
   - "down:Polyglot IPC: escalate-on-behalf for Python/Deno processors"
   - "down:Learning doc: GPU capability typestate pattern"
 adapters:
@@ -24,7 +24,7 @@ The #304 setup barrier enforces "resource creation is serialized" at runtime wit
 
 ## Shape
 
-- `process()` receives `&GpuContextSandbox` — pool-backed acquires, sampling, writes to pre-reserved buffers. No heavy-allocation methods in scope.
+- `process()` receives `&GpuContextLimitedAccess` — pool-backed acquires, sampling, writes to pre-reserved buffers. No heavy-allocation methods in scope.
 - `sandbox.escalate(|full: &GpuContextFullAccess| { … })` is the single primitive for resource creation. It acquires the setup mutex (reused from #304), runs the closure, `wait_device_idle`, releases.
 - `setup()` receives `&GpuContextFullAccess` — equivalent to the compiler calling `escalate()` on the processor's behalf before invoking setup.
 - Reconfigure (mid-run resolution change, codec swap) is just a running processor calling `escalate()` itself. Same queue, same guarantees.

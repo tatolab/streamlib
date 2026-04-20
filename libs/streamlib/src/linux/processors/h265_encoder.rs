@@ -11,8 +11,8 @@
 // accepts them directly (zero-copy).
 
 use crate::_generated_::{Encodedvideoframe, Videoframe};
-use crate::core::context::GpuContext;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::context::GpuContextLimitedAccess;
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
 use vulkan_video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
 
@@ -26,15 +26,15 @@ pub struct H265EncoderProcessor {
     encoder: Option<SimpleEncoder>,
 
     /// GPU context for resolving Videoframe textures.
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
 
     /// Frames encoded counter.
     frames_encoded: u64,
 }
 
 impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
-    async fn setup(&mut self, ctx: RuntimeContext) -> Result<()> {
-        self.gpu_context = Some(ctx.gpu.clone());
+    async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
         let width = self.config.width.unwrap_or(1920);
         let height = self.config.height.unwrap_or(1080);
@@ -57,7 +57,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         // Create encoder in setup() — MUST happen before the display swapchain.
         // NVIDIA limits DMA-BUF exportable allocations after swapchain creation
         // (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
-        let vulkan_device = &ctx.gpu.device().inner;
+        let vulkan_device = &ctx.gpu_full_access().device().inner;
 
         let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
             StreamError::Runtime("GPU does not support Vulkan Video encode".into())
@@ -67,7 +67,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         })?;
 
         let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
-            ctx.gpu.device().inner.clone();
+            ctx.gpu_full_access().device().inner.clone();
 
         let mut encoder = SimpleEncoder::from_device(
             encoder_config,
@@ -104,7 +104,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         Ok(())
     }
 
-    async fn teardown(&mut self) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_encoded = self.frames_encoded,
             "[H265Encoder] Shutting down"
@@ -114,7 +114,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         Ok(())
     }
 
-    fn process(&mut self) -> Result<()> {
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }

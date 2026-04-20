@@ -26,16 +26,20 @@ struct MockProcessor;
 impl crate::core::ManualProcessor for MockProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: crate::core::context::RuntimeContext,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
     fn teardown(
         &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn start(&mut self) -> crate::core::error::Result<()> {
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
         Ok(())
     }
 }
@@ -47,16 +51,20 @@ struct MockOutputOnlyProcessor;
 impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: crate::core::context::RuntimeContext,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
     fn teardown(
         &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn start(&mut self) -> crate::core::error::Result<()> {
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
         Ok(())
     }
 }
@@ -68,16 +76,20 @@ struct MockInputOnlyProcessor;
 impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     fn setup(
         &mut self,
-        _ctx: crate::core::context::RuntimeContext,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
     fn teardown(
         &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
-    fn start(&mut self) -> crate::core::error::Result<()> {
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
         Ok(())
     }
 }

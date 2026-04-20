@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::rhi::{PixelFormat, RhiTextureCache};
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, StreamError};
 use crossbeam_channel::{Receiver, Sender};
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
@@ -31,7 +31,7 @@ pub struct AppleDisplayProcessor {
     window_addr: AtomicUsize,
     /// Metal layer address stored as usize for sharing with render thread
     layer_addr: Arc<AtomicUsize>,
-    gpu_context: Option<crate::core::GpuContext>,
+    gpu_context: Option<crate::core::GpuContextLimitedAccess>,
     window_id: AppleWindowId,
     window_title: String,
     width: u32,
@@ -56,11 +56,11 @@ pub struct AppleDisplayProcessor {
 impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
     fn setup(
         &mut self,
-        ctx: RuntimeContext,
+        ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             tracing::trace!("Display: setup() called");
-            self.gpu_context = Some(ctx.gpu.clone());
+            self.gpu_context = Some(ctx.gpu_limited_access().clone());
             self.window_id = AppleWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
             self.width = self.config.width;
             self.height = self.config.height;
@@ -87,7 +87,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             );
 
             // Use shared Metal device from GpuContext
-            let metal_device_ref = ctx.gpu.device().metal_device_ref();
+            let metal_device_ref = ctx.gpu_full_access().device().metal_device_ref();
 
             // Compile Metal shader
             let shader_source = include_str!("shaders/fullscreen.metal");
@@ -170,13 +170,16 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
         std::future::ready(result)
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         tracing::info!("Display {}: Teardown", self.window_title);
         std::future::ready(Ok(()))
     }
 
     // Game loop start - spawns a dedicated render thread that runs at native display refresh rate
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!(
             "Display {}: start() called - spawning game loop render thread",
             self.window_id.0
@@ -387,7 +390,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!("Display {}: stop() called", self.window_id.0);
 
         // Signal render thread to stop

@@ -5,7 +5,7 @@ use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError};
+use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -105,7 +105,7 @@ impl ScreenCaptureInitState {
 /// Callback context for processing frames in ScreenCaptureKit callback.
 struct ScreenCaptureCallbackContext {
     output_writer: *const OutputWriter,
-    gpu_context: GpuContext,
+    gpu_context: GpuContextLimitedAccess,
     frame_count: AtomicU64,
     _outputs_arc: Arc<OutputWriter>,
 }
@@ -270,14 +270,17 @@ pub struct AppleScreenCaptureProcessor {
 impl crate::core::ManualProcessor for AppleScreenCaptureProcessor::Processor {
     fn setup(
         &mut self,
-        ctx: RuntimeContext,
+        ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
-        self.gpu_context = Some(ctx.gpu.clone());
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("ScreenCapture: setup() complete");
         std::future::ready(Ok(()))
     }
 
-    fn teardown(&mut self) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
         let frame_count = SCREEN_CAPTURE_CALLBACK_CONTEXT
             .get()
             .map(|ctx| ctx.frame_count.load(Ordering::Relaxed))
@@ -286,7 +289,7 @@ impl crate::core::ManualProcessor for AppleScreenCaptureProcessor::Processor {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!("ScreenCapture: start() called");
 
         // Validate config
@@ -322,7 +325,7 @@ impl crate::core::ManualProcessor for AppleScreenCaptureProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::trace!("ScreenCapture: stop() called");
 
         std::thread::sleep(std::time::Duration::from_millis(50));

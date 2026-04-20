@@ -10,7 +10,7 @@
 use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
 use crate::core::media_clock::MediaClock;
 use crate::core::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 use std::future::Future;
 use std::sync::Arc;
@@ -22,9 +22,6 @@ use tokio::sync::mpsc;
 
 #[crate::processor("com.streamlib.webrtc_whep")]
 pub struct WebRtcWhepProcessor {
-    // RuntimeContext for tokio handle
-    ctx: Option<RuntimeContext>,
-
     // WHEP client (owns WebRTC session)
     whep_client: Option<WhepClient>,
 
@@ -36,9 +33,10 @@ pub struct WebRtcWhepProcessor {
 }
 
 impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
-    fn setup(&mut self, ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {
-        self.ctx = Some(ctx);
-
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         async move {
             // Convert generated config to WhepConfig
             let whep_config = WhepConfig {
@@ -65,7 +63,7 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
         }
     }
 
-    async fn teardown(&mut self) -> Result<()> {
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[WebRtcWhep] Shutting down");
 
         if let Some(mut client) = self.whep_client.take() {
@@ -78,21 +76,21 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
         Ok(())
     }
 
-    fn on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
+    fn on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    fn on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+    fn on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    fn start(&mut self) -> Result<()> {
-        let ctx = self
-            .ctx
-            .as_ref()
-            .ok_or_else(|| StreamError::Runtime("RuntimeContext not available".into()))?
-            .clone();
-
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Take ownership of receivers from WHEP client
         let client = self
             .whep_client
@@ -120,7 +118,7 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }

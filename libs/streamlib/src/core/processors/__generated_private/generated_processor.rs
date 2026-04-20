@@ -6,11 +6,11 @@
 use serde_json::Value as JsonValue;
 use std::future::Future;
 
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
 use crate::core::processors::Config;
 use crate::core::ProcessorDescriptor;
-use crate::core::RuntimeContext;
 
 /// Internal trait implemented by the processor macro.
 ///
@@ -26,7 +26,7 @@ pub trait GeneratedProcessor: Send + 'static {
     where
         Self: Sized;
 
-    fn process(&mut self) -> Result<()>;
+    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
 
     /// Update configuration at runtime (hot-reload).
     fn update_config(&mut self, _config: Self::Config) -> Result<()> {
@@ -85,51 +85,51 @@ pub trait GeneratedProcessor: Send + 'static {
         JsonValue::Null
     }
 
-    /// Generated setup hook called by runtime.
-    ///
-    /// Returns a future that completes when setup is done.
-    /// Takes ownership of the RuntimeContext to avoid lifetime issues with async.
+    /// Generated setup hook called by runtime with privileged ctx.
     fn __generated_setup(
         &mut self,
-        _ctx: RuntimeContext,
+        _ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    /// Generated teardown hook called by runtime.
-    ///
-    /// Returns a future that completes when teardown is done.
-    fn __generated_teardown(&mut self) -> impl Future<Output = Result<()>> + Send {
+    /// Generated teardown hook called by runtime with privileged ctx.
+    fn __generated_teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    /// Generated on_pause hook called by runtime when processor is paused.
-    ///
-    /// Returns a future that completes when pause handling is done.
-    fn __generated_on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
+    /// Generated on_pause hook — restricted ctx.
+    fn __generated_on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    /// Generated on_resume hook called by runtime when processor is resumed.
-    ///
-    /// Returns a future that completes when resume handling is done.
-    fn __generated_on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+    /// Generated on_resume hook — restricted ctx.
+    fn __generated_on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    /// Called once to start a Manual mode processor.
+    /// Called once to start a Manual mode processor. Privileged ctx.
     ///
     /// Only valid for Manual execution mode. Returns an error for other modes.
-    fn start(&mut self) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Err(crate::core::StreamError::Runtime(
             "start() is only valid for Manual execution mode".into(),
         ))
     }
 
-    /// Called to stop a Manual mode processor.
+    /// Called to stop a Manual mode processor. Privileged ctx.
     ///
     /// Only valid for Manual execution mode. Returns an error for other modes.
-    fn stop(&mut self) -> Result<()> {
+    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Err(crate::core::StreamError::Runtime(
             "stop() is only valid for Manual execution mode".into(),
         ))
