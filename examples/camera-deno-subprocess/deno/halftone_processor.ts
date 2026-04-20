@@ -11,7 +11,12 @@
 
 import tgpu, { type TgpuRoot } from "npm:typegpu@0.8.2";
 import * as d from "npm:typegpu@0.8.2/data";
-import type { ReactiveProcessor, ProcessorContext, GpuSurface } from "../../../libs/streamlib-deno/mod.ts";
+import type {
+  GpuSurface,
+  ReactiveProcessor,
+  RuntimeContextFullAccess,
+  RuntimeContextLimitedAccess,
+} from "../../../libs/streamlib-deno/mod.ts";
 import type { Videoframe } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
 
 const HALFTONE_WGSL = /* wgsl */`
@@ -102,7 +107,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
   private outputPoolId: string | null = null;
   private frameIndex = 0;
 
-  async setup(ctx: ProcessorContext): Promise<void> {
+  async setup(ctx: RuntimeContextFullAccess): Promise<void> {
     console.error("[HalftoneProcessor] setup — config:", JSON.stringify(ctx.config));
 
     // WebGPU init via TypeGPU (gets adapter + device)
@@ -177,7 +182,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     console.error(`[HalftoneProcessor] GPU resources initialized: ${width}x${height}`);
   }
 
-  async process(ctx: ProcessorContext): Promise<void> {
+  async process(ctx: RuntimeContextLimitedAccess): Promise<void> {
     const result = ctx.inputs.read<Videoframe>("video_in");
     if (!result || !this.gpu) return;
 
@@ -190,22 +195,33 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       this.initGpuResources(width, height);
     }
 
-    // Create output surface on first frame or dimension change
+    // Create output surface on first frame or dimension change.
+    // TODO(#325): createSurface is a privileged allocation — RuntimeContextLimitedAccess
+    // deliberately does not expose it. This first-frame-dimensions pattern is
+    // exactly what escalate() in #325 is designed for; at runtime this will
+    // throw until that polyglot IPC primitive lands and we can replace this
+    // with `await ctx.gpuLimitedAccess.escalate(full => full.createSurface(...))`.
     if (!this.outputSurface || this.outputSurface.width !== width || this.outputSurface.height !== height) {
       if (this.outputSurface) {
         this.outputSurface.release();
       }
-      const { poolId, surface } = ctx.gpu.createSurface(width, height, "BGRA");
-      this.outputSurface = surface;
-      this.outputPoolId = poolId;
+      // @ts-expect-error — pending #325 escalate() primitive; see TODO above
+      const created: { poolId: string; surface: GpuSurface } = ctx.gpuFullAccess
+        .createSurface(width, height, "BGRA");
+      this.outputSurface = created.surface;
+      this.outputPoolId = created.poolId;
     }
+    // Non-null after the create-or-resize block above — preserves narrowing
+    // across the @ts-expect-error branch, which would otherwise erase `surface`
+    // to `any` and widen `this.outputSurface` back to `GpuSurface | null`.
+    const outputSurface = this.outputSurface!;
 
     const root = this.gpu.root;
     const device = this.gpu.device;
     const pixelCount = this.gpu.pixelCount;
 
     // --- Read input IOSurface pixels ---
-    const inputSurface = ctx.gpu.resolveSurface(frame.surface_id);
+    const inputSurface = ctx.gpuLimitedAccess.resolveSurface(frame.surface_id);
     inputSurface.lock(true);
     const inputRawBuffer = inputSurface.asBuffer();
     const bytesPerRow = inputSurface.bytesPerRow;
@@ -255,9 +271,9 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     this.gpu.readbackBuffer.unmap();
 
     // --- Write to output IOSurface ---
-    this.outputSurface.lock(false);
-    const outputRawBuffer = this.outputSurface.asBuffer();
-    const outBytesPerRow = this.outputSurface.bytesPerRow;
+    outputSurface.lock(false);
+    const outputRawBuffer = outputSurface.asBuffer();
+    const outBytesPerRow = outputSurface.bytesPerRow;
     const outputBytes = new Uint8Array(outputRawBuffer);
 
     // Add bytesPerRow padding back
@@ -267,7 +283,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       const rowData = new Uint8Array(outputData.buffer, srcOffset * 4, srcRowBytes);
       outputBytes.set(rowData, dstOffset);
     }
-    this.outputSurface.unlock(false);
+    outputSurface.unlock(false);
 
     // --- Write output frame ---
     this.frameIndex++;
@@ -281,7 +297,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     ctx.outputs.write("video_out", outputFrame, timestampNs);
   }
 
-  teardown(_ctx: ProcessorContext): void {
+  teardown(_ctx: RuntimeContextFullAccess): void {
     console.error("[HalftoneProcessor] teardown");
     if (this.gpu) {
       if (this.gpu.inputBuffer) this.gpu.inputBuffer.destroy();

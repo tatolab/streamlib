@@ -2,33 +2,45 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 /**
- * NativeProcessorContext — implements ProcessorContext using FFI bindings.
+ * Native-backed capability-typed runtime context views.
+ *
+ * Two concrete classes mirror the Rust capability split:
+ * - [`NativeRuntimeContextLimitedAccess`] — passed to `process` / `onPause`
+ *   / `onResume`. Carries no `gpuFullAccess` field, so TypeScript compile
+ *   errors prevent reaching privileged ops from the hot path.
+ * - [`NativeRuntimeContextFullAccess`] — passed to `setup` / `teardown` /
+ *   Manual-mode `start` / `stop`. Exposes both limited and full GPU views.
  */
 
 import * as msgpack from "@msgpack/msgpack";
 import type { NativeLib } from "./native.ts";
 import { cString } from "./native.ts";
 import type {
-  ProcessorContext,
+  GpuContextFullAccess,
+  GpuContextLimitedAccess,
+  GpuSurface,
   InputPorts,
   OutputPorts,
-  GpuContext,
-  GpuSurface,
+  RuntimeContextFullAccess,
+  RuntimeContextLimitedAccess,
 } from "./types.ts";
 
 const MAX_PAYLOAD_SIZE = 32768;
 
 /**
- * ProcessorContext implementation backed by the native FFI library.
+ * Shared FFI-backed state reused by both capability views for a single
+ * processor lifecycle. Construction is internal — subprocess_runner builds
+ * one of these per `setup` and wraps it in the appropriate view per
+ * lifecycle method.
  */
-export class NativeProcessorContext implements ProcessorContext {
+export class NativeProcessorState {
   readonly config: Record<string, unknown>;
   readonly inputs: NativeInputPorts;
   readonly outputs: NativeOutputPorts;
-  readonly gpu: NativeGpuContext;
 
   private lib: NativeLib;
   private ctxPtr: Deno.PointerObject;
+  private brokerPtr: Deno.PointerObject | null;
 
   constructor(
     lib: NativeLib,
@@ -39,13 +51,77 @@ export class NativeProcessorContext implements ProcessorContext {
     this.lib = lib;
     this.ctxPtr = ctxPtr;
     this.config = config;
+    this.brokerPtr = brokerPtr;
     this.inputs = new NativeInputPorts(lib, ctxPtr);
     this.outputs = new NativeOutputPorts(lib, ctxPtr);
-    this.gpu = new NativeGpuContext(lib, brokerPtr);
   }
 
   get timeNs(): bigint {
     return this.lib.symbols.sldn_context_time_ns(this.ctxPtr) as bigint;
+  }
+
+  /** Construct a full-access GPU view (allocations + resolution). */
+  gpuFullAccess(): GpuContextFullAccess {
+    return new NativeGpuContextFullAccess(this.lib, this.brokerPtr);
+  }
+
+  /** Construct a limited-access GPU view (resolution only). */
+  gpuLimitedAccess(): GpuContextLimitedAccess {
+    return new NativeGpuContextLimitedAccess(this.lib, this.brokerPtr);
+  }
+}
+
+/**
+ * Limited runtime context implementation. Structurally lacks `gpuFullAccess`
+ * at runtime — user code cannot reach privileged ops even via `as any`.
+ */
+export class NativeRuntimeContextLimitedAccess
+  implements RuntimeContextLimitedAccess {
+  readonly config: Record<string, unknown>;
+  readonly inputs: InputPorts;
+  readonly outputs: OutputPorts;
+  readonly gpuLimitedAccess: GpuContextLimitedAccess;
+
+  private state: NativeProcessorState;
+
+  constructor(state: NativeProcessorState) {
+    this.state = state;
+    this.config = state.config;
+    this.inputs = state.inputs;
+    this.outputs = state.outputs;
+    this.gpuLimitedAccess = state.gpuLimitedAccess();
+  }
+
+  get timeNs(): bigint {
+    return this.state.timeNs;
+  }
+}
+
+/**
+ * Full runtime context implementation. Exposes both GPU capability views —
+ * `gpuFullAccess` for allocations, `gpuLimitedAccess` so privileged methods
+ * can hand a stashable limited handle to downstream workers.
+ */
+export class NativeRuntimeContextFullAccess implements RuntimeContextFullAccess {
+  readonly config: Record<string, unknown>;
+  readonly inputs: InputPorts;
+  readonly outputs: OutputPorts;
+  readonly gpuLimitedAccess: GpuContextLimitedAccess;
+  readonly gpuFullAccess: GpuContextFullAccess;
+
+  private state: NativeProcessorState;
+
+  constructor(state: NativeProcessorState) {
+    this.state = state;
+    this.config = state.config;
+    this.inputs = state.inputs;
+    this.outputs = state.outputs;
+    this.gpuLimitedAccess = state.gpuLimitedAccess();
+    this.gpuFullAccess = state.gpuFullAccess();
+  }
+
+  get timeNs(): bigint {
+    return this.state.timeNs;
   }
 }
 
@@ -138,11 +214,11 @@ class NativeOutputPorts implements OutputPorts {
 }
 
 /**
- * GPU context for IOSurface access via FFI, with broker XPC resolution.
+ * Limited GPU capability — resolve existing surfaces, no allocations.
  */
-class NativeGpuContext implements GpuContext {
-  private lib: NativeLib;
-  private brokerPtr: Deno.PointerObject | null;
+class NativeGpuContextLimitedAccess implements GpuContextLimitedAccess {
+  protected lib: NativeLib;
+  protected brokerPtr: Deno.PointerObject | null;
 
   constructor(lib: NativeLib, brokerPtr: Deno.PointerObject | null) {
     this.lib = lib;
@@ -153,7 +229,10 @@ class NativeGpuContext implements GpuContext {
     if (this.brokerPtr) {
       // Broker-backed resolution: pool_id → XPC lookup → IOSurface
       const poolIdBuf = cString(poolId);
-      const handlePtr = this.lib.symbols.sldn_broker_resolve_surface(this.brokerPtr, poolIdBuf);
+      const handlePtr = this.lib.symbols.sldn_broker_resolve_surface(
+        this.brokerPtr,
+        poolIdBuf,
+      );
       if (handlePtr === null) {
         throw new Error(`Broker failed to resolve surface: ${poolId}`);
       }
@@ -169,8 +248,18 @@ class NativeGpuContext implements GpuContext {
     }
     return new NativeGpuSurface(this.lib, handlePtr, iosurfaceId);
   }
+}
 
-  createSurface(width: number, height: number, _format: string): { poolId: string; surface: GpuSurface } {
+/**
+ * Full GPU capability — limited ops plus IOSurface allocation.
+ */
+class NativeGpuContextFullAccess extends NativeGpuContextLimitedAccess
+  implements GpuContextFullAccess {
+  createSurface(
+    width: number,
+    height: number,
+    _format: string,
+  ): { poolId: string; surface: GpuSurface } {
     const bytesPerElement = 4; // BGRA
 
     if (this.brokerPtr) {
@@ -178,26 +267,42 @@ class NativeGpuContext implements GpuContext {
       const poolIdBuf = new Uint8Array(256);
       const poolIdBufPtr = Deno.UnsafePointer.of(poolIdBuf);
       const handlePtr = this.lib.symbols.sldn_broker_acquire_surface(
-        this.brokerPtr, width, height, bytesPerElement, poolIdBufPtr!, 256,
+        this.brokerPtr,
+        width,
+        height,
+        bytesPerElement,
+        poolIdBufPtr!,
+        256,
       );
       if (handlePtr === null) {
         throw new Error(`Broker failed to acquire surface: ${width}x${height}`);
       }
-      // Read pool_id from output buffer (null-terminated C string)
       const nullIdx = poolIdBuf.indexOf(0);
-      const poolId = new TextDecoder().decode(poolIdBuf.subarray(0, nullIdx === -1 ? poolIdBuf.length : nullIdx));
+      const poolId = new TextDecoder().decode(
+        poolIdBuf.subarray(0, nullIdx === -1 ? poolIdBuf.length : nullIdx),
+      );
       const surfaceId = this.lib.symbols.sldn_gpu_surface_get_id(handlePtr);
-      return { poolId, surface: new NativeGpuSurface(this.lib, handlePtr, surfaceId) };
+      return {
+        poolId,
+        surface: new NativeGpuSurface(this.lib, handlePtr, surfaceId),
+      };
     }
 
     // Fallback: create IOSurface without broker registration
-    const handlePtr = this.lib.symbols.sldn_gpu_surface_create(width, height, bytesPerElement);
+    const handlePtr = this.lib.symbols.sldn_gpu_surface_create(
+      width,
+      height,
+      bytesPerElement,
+    );
     if (handlePtr === null) {
       throw new Error(`Failed to create IOSurface: ${width}x${height}`);
     }
     const surfaceId = this.lib.symbols.sldn_gpu_surface_get_id(handlePtr);
     const poolId = String(surfaceId);
-    return { poolId, surface: new NativeGpuSurface(this.lib, handlePtr, surfaceId) };
+    return {
+      poolId,
+      surface: new NativeGpuSurface(this.lib, handlePtr, surfaceId),
+    };
   }
 }
 

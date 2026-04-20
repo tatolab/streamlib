@@ -167,13 +167,17 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             self.stdin_writer = Some(BufWriter::new(stdin));
             self.stdout_reader = Some(BufReader::new(stdout));
 
-            // Send setup command with processor config and port wiring info
+            // Send setup command with processor config and port wiring info.
+            // `capability: "full"` mirrors the Rust-side `RuntimeContextFullAccess`
+            // passed to `__generated_setup` — the subprocess must construct a
+            // full-access ctx for the TS `setup(ctx)` call.
             let config = self
                 .processor_config
                 .clone()
                 .unwrap_or(serde_json::Value::Null);
             self.bridge_send_json(&serde_json::json!({
                 "cmd": "setup",
+                "capability": "full",
                 "config": config,
                 "processor_id": self.processor_id,
                 "ports": {
@@ -215,7 +219,9 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
 
             // Send teardown command (best-effort)
             if self.stdin_writer.is_some() {
-                if let Err(e) = self.bridge_send_json(&serde_json::json!({"cmd": "teardown"})) {
+                if let Err(e) = self.bridge_send_json(
+                    &serde_json::json!({"cmd": "teardown", "capability": "full"}),
+                ) {
                     tracing::warn!(
                         "[{}] Failed to send teardown command: {}",
                         self.processor_id,
@@ -281,7 +287,9 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             if self.subprocess_dead {
                 return Ok(());
             }
-            if let Err(e) = self.bridge_send_json(&serde_json::json!({"cmd": "on_pause"})) {
+            if let Err(e) = self.bridge_send_json(
+                &serde_json::json!({"cmd": "on_pause", "capability": "limited"}),
+            ) {
                 tracing::warn!("[{}] Failed to send on_pause: {}", self.processor_id, e);
                 self.subprocess_dead = true;
                 return Ok(());
@@ -309,7 +317,9 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             if self.subprocess_dead {
                 return Ok(());
             }
-            if let Err(e) = self.bridge_send_json(&serde_json::json!({"cmd": "on_resume"})) {
+            if let Err(e) = self.bridge_send_json(
+                &serde_json::json!({"cmd": "on_resume", "capability": "limited"}),
+            ) {
                 tracing::warn!("[{}] Failed to send on_resume: {}", self.processor_id, e);
                 self.subprocess_dead = true;
                 return Ok(());
@@ -350,8 +360,13 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
 
         let interval_ms = self.execution_config.execution.interval_ms().unwrap_or(0);
 
+        // `run` enters the subprocess's execution loop; inside the loop
+        // `process()` is dispatched with limited access, `on_pause`/`on_resume`
+        // delivered concurrently are also limited. No single capability applies
+        // to the command itself — the `capability` field is informational.
         self.bridge_send_json(&serde_json::json!({
             "cmd": "run",
+            "capability": "limited",
             "execution": execution_mode,
             "interval_ms": interval_ms,
         }))?;
@@ -364,7 +379,9 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
         if self.subprocess_dead {
             return Ok(());
         }
-        if let Err(e) = self.bridge_send_json(&serde_json::json!({"cmd": "stop"})) {
+        if let Err(e) = self.bridge_send_json(
+            &serde_json::json!({"cmd": "stop", "capability": "full"}),
+        ) {
             tracing::warn!(
                 "[{}] Subprocess pipe broken on stop: {}",
                 self.processor_id,

@@ -2,17 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 /**
- * Processor context providing access to ports, GPU surfaces, and timing.
- */
-export interface ProcessorContext {
-  readonly config: Record<string, unknown>;
-  readonly inputs: InputPorts;
-  readonly outputs: OutputPorts;
-  readonly gpu: GpuContext;
-  readonly timeNs: bigint;
-}
-
-/**
  * Input port access for reading data from upstream processors.
  */
 export interface InputPorts {
@@ -32,17 +21,6 @@ export interface OutputPorts {
 
   /** Write raw bytes to a port. */
   writeRaw(portName: string, data: Uint8Array, timestampNs: bigint): void;
-}
-
-/**
- * GPU context for zero-copy surface access (macOS IOSurface).
- */
-export interface GpuContext {
-  /** Resolve a broker pool_id to a GPU surface handle. */
-  resolveSurface(poolId: string): GpuSurface;
-
-  /** Create a new IOSurface, register with broker, return [poolId, surface]. */
-  createSurface(width: number, height: number, format: string): { poolId: string; surface: GpuSurface };
 }
 
 /**
@@ -67,6 +45,59 @@ export interface GpuSurface {
   release(): void;
 }
 
+/**
+ * Non-allocating GPU capability — resolve existing surfaces from upstream
+ * frames. Mirrors the Rust [`GpuContextLimitedAccess`] surface.
+ */
+export interface GpuContextLimitedAccess {
+  /** Resolve a broker pool_id to a GPU surface handle. */
+  resolveSurface(poolId: string): GpuSurface;
+}
+
+/**
+ * Privileged GPU capability — includes limited-access ops plus allocations.
+ * Mirrors the Rust [`GpuContextFullAccess`] surface.
+ */
+export interface GpuContextFullAccess extends GpuContextLimitedAccess {
+  /** Create a new IOSurface, register with broker, return [poolId, surface]. */
+  createSurface(width: number, height: number, format: string): { poolId: string; surface: GpuSurface };
+}
+
+// ============================================================================
+// Capability-typed runtime context views
+// ============================================================================
+
+interface BaseRuntimeContext {
+  readonly config: Record<string, unknown>;
+  readonly inputs: InputPorts;
+  readonly outputs: OutputPorts;
+  readonly timeNs: bigint;
+}
+
+/**
+ * Restricted-capability runtime context passed to `process` / `onPause` /
+ * `onResume`. Exposes [`GpuContextLimitedAccess`] only — attempting to
+ * reach `gpuFullAccess` is a TypeScript compile error.
+ *
+ * Mirrors the Rust [`RuntimeContextLimitedAccess`] view.
+ */
+export interface RuntimeContextLimitedAccess extends BaseRuntimeContext {
+  readonly gpuLimitedAccess: GpuContextLimitedAccess;
+}
+
+/**
+ * Privileged runtime context passed to `setup` / `teardown` and Manual-mode
+ * `start` / `stop`. Exposes both [`GpuContextFullAccess`] (for allocations)
+ * and [`GpuContextLimitedAccess`] (so the privileged method can hand a
+ * stashable limited handle to downstream workers).
+ *
+ * Mirrors the Rust [`RuntimeContextFullAccess`] view.
+ */
+export interface RuntimeContextFullAccess extends BaseRuntimeContext {
+  readonly gpuLimitedAccess: GpuContextLimitedAccess;
+  readonly gpuFullAccess: GpuContextFullAccess;
+}
+
 // ============================================================================
 // Processor lifecycle interfaces
 // ============================================================================
@@ -75,10 +106,10 @@ export interface GpuSurface {
  * Base lifecycle hooks shared by all processor types.
  */
 export interface ProcessorLifecycle {
-  setup?(ctx: ProcessorContext): void | Promise<void>;
-  teardown?(ctx: ProcessorContext): void | Promise<void>;
-  onPause?(ctx: ProcessorContext): void | Promise<void>;
-  onResume?(ctx: ProcessorContext): void | Promise<void>;
+  setup?(ctx: RuntimeContextFullAccess): void | Promise<void>;
+  teardown?(ctx: RuntimeContextFullAccess): void | Promise<void>;
+  onPause?(ctx: RuntimeContextLimitedAccess): void | Promise<void>;
+  onResume?(ctx: RuntimeContextLimitedAccess): void | Promise<void>;
   updateConfig?(config: Record<string, unknown>): void | Promise<void>;
 }
 
@@ -86,20 +117,20 @@ export interface ProcessorLifecycle {
  * Reactive processor: process() is called when input data arrives.
  */
 export interface ReactiveProcessor extends ProcessorLifecycle {
-  process(ctx: ProcessorContext): void | Promise<void>;
+  process(ctx: RuntimeContextLimitedAccess): void | Promise<void>;
 }
 
 /**
  * Continuous processor: process() is called in a loop.
  */
 export interface ContinuousProcessor extends ProcessorLifecycle {
-  process(ctx: ProcessorContext): void | Promise<void>;
+  process(ctx: RuntimeContextLimitedAccess): void | Promise<void>;
 }
 
 /**
  * Manual processor: start()/stop() control execution.
  */
 export interface ManualProcessor extends ProcessorLifecycle {
-  start(ctx: ProcessorContext): void | Promise<void>;
-  stop?(ctx: ProcessorContext): void | Promise<void>;
+  start(ctx: RuntimeContextFullAccess): void | Promise<void>;
+  stop?(ctx: RuntimeContextFullAccess): void | Promise<void>;
 }
