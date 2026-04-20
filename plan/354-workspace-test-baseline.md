@@ -1,7 +1,7 @@
 ---
 whoami: amos
 name: "Full-workspace cargo test baseline + CI gate"
-status: pending
+status: in_review
 description: 'Establish canonical workspace test command covering all 824+ tests (not just `-p streamlib`''s 193). Documents the exclusion list for environmental blockers. Integrates with #343 lifecycle CI.'
 github_issue: 354
 adapters:
