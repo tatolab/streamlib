@@ -161,12 +161,16 @@ fn source_thread_loop(
 
         // Upload the pixel buffer as a GPU texture so downstream encoder
         // processors (which read via `resolve_videoframe_texture`) can
-        // consume the frame. Without this, the encoder fails with
-        // "No texture or pixel buffer found for surface_id ...".
+        // consume the frame. `upload_pixel_buffer_as_texture` allocates a
+        // new DEVICE_LOCAL texture so it's FullAccess-only and must be
+        // escalated.
+        // TODO(#324-followup): pre-allocate a texture ring in setup() and
+        // reuse across frames so steady state doesn't escalate per frame.
         let surface_id = pool_id.to_string();
-        if let Err(e) =
-            gpu_context.upload_pixel_buffer_as_texture(&surface_id, &pixel_buffer, width, height)
-        {
+        let upload_result = gpu_context.escalate(|full| {
+            full.upload_pixel_buffer_as_texture(&surface_id, &pixel_buffer, width, height)
+        });
+        if let Err(e) = upload_result {
             tracing::error!("[BgraFileSource] Failed to upload frame texture: {e}");
             break;
         }
