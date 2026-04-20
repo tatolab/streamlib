@@ -81,7 +81,7 @@ fn main() -> Result<()> {
             e
         ))
     })?;
-    tracing::info!("Copied plugin dylib to {}", dest_dylib.display());
+    println!("Copied plugin dylib to {}", dest_dylib.display());
 
     // 2. Load plugin project (registers processors from the dylib)
     runtime.load_project(&plugin_dir)?;

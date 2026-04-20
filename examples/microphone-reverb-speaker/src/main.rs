@@ -6,11 +6,22 @@
 //! Demonstrates streamlib's audio processing pipeline using CLAP as the "shader language for audio".
 //! Just as video shaders transform pixels on GPU, CLAP plugins transform audio in real-time.
 
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn main() {
+    eprintln!(
+        "microphone-reverb-speaker currently requires macOS — the CLAP plugin \
+         host is not yet available on Linux. Tracked as a follow-up to issue #358."
+    );
+    std::process::exit(2);
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::{
     input, output, request_audio_permission, AudioCaptureProcessor, AudioOutputProcessor,
     ClapEffectProcessor, ClapScanner, Result, StreamRuntime,
 };
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn main() -> Result<()> {
 
     println!("\n🎙️  Microphone → CLAP Reverb → Speaker Example\n");

@@ -1,6 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+// The grayscale plugin reads pixels directly from CVPixelBuffer memory via
+// CoreVideo, which is Apple-only. On non-Apple targets the crate builds as an
+// empty cdylib; a Linux port (using GPU buffer mapping or a compute shader) is
+// tracked as a follow-up to issue #358.
+#![cfg(any(target_os = "macos", target_os = "ios"))]
+
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -11,7 +17,7 @@ use streamlib::core::{GpuContextLimitedAccess, ManualProcessor, Result, RuntimeC
 use streamlib_plugin_abi::export_plugin;
 
 #[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     fn CVPixelBufferLockBaseAddress(pixel_buffer: *mut c_void, lock_flags: u64) -> i32;
     fn CVPixelBufferUnlockBaseAddress(pixel_buffer: *mut c_void, lock_flags: u64) -> i32;
     fn CVPixelBufferGetBaseAddress(pixel_buffer: *mut c_void) -> *mut c_void;

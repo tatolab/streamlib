@@ -35,19 +35,37 @@
 //! cargo run -p camera-python-display
 //! ```
 
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn main() {
+    eprintln!(
+        "camera-python-display currently requires macOS — the in-tree \
+         blending compositor and CRT/film-grain effect use Metal. A Vulkan \
+         port is tracked as a follow-up to issue #358."
+    );
+    std::process::exit(2);
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod blending_compositor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 mod crt_film_grain;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use std::path::PathBuf;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::{
     ApiServerConfig, ApiServerProcessor, CameraProcessor, DisplayProcessor, ProcessorSpec, Result,
     StreamRuntime,
 };
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use blending_compositor::BlendingCompositorProcessor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use crt_film_grain::CrtFilmGrainProcessor;
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn main() -> Result<()> {
     // Telemetry is initialized automatically by StreamRuntime::new()
 
