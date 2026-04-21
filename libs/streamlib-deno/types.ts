@@ -9,7 +9,9 @@ export interface InputPorts {
   read<T = unknown>(portName: string): { value: T; timestampNs: bigint } | null;
 
   /** Read raw msgpack-encoded bytes from a port. Returns null if no data available. */
-  readRaw(portName: string): { data: Uint8Array; timestampNs: bigint } | null;
+  readRaw(
+    portName: string,
+  ): { data: Uint8Array<ArrayBuffer>; timestampNs: bigint } | null;
 }
 
 /**
@@ -20,7 +22,11 @@ export interface OutputPorts {
   write(portName: string, value: unknown, timestampNs: bigint): void;
 
   /** Write raw bytes to a port. */
-  writeRaw(portName: string, data: Uint8Array, timestampNs: bigint): void;
+  writeRaw(
+    portName: string,
+    data: Uint8Array<ArrayBuffer>,
+    timestampNs: bigint,
+  ): void;
 }
 
 /**
