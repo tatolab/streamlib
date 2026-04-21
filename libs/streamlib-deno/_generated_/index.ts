@@ -5,6 +5,8 @@
 
 export * from "./com_streamlib_api_server_config.ts";
 export * from "./com_streamlib_clap_effect_config.ts";
+export * from "./com_streamlib_escalate_request.ts";
+export * from "./com_streamlib_escalate_response.ts";
 export * from "./com_streamlib_webrtc_whep_config.ts";
 export * from "./com_streamlib_webrtc_whip_config.ts";
 export * from "./com_tatolab_audio_capture_config.ts";

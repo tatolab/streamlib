@@ -3,22 +3,27 @@
 
 //! Polyglot escalate-on-behalf IPC for Python and Deno subprocess host
 //! processors. The subprocess can only see a `GpuContextLimitedAccess`
-//! sandbox; when it needs the privileged GPU surface it sends an
-//! [`EscalateRequest`] to the host over its stdout, the host executes the
-//! operation inside [`GpuContextLimitedAccess::escalate`], and replies with
-//! an [`EscalateResponse`] on the subprocess's stdin.
+//! sandbox; when it needs the privileged `GpuContextFullAccess` surface it
+//! sends an [`EscalateRequest`] to the host over its stdout, the host
+//! executes the operation inside [`GpuContextLimitedAccess::escalate`], and
+//! replies with an [`EscalateResponse`] on the subprocess's stdin.
 //!
 //! Wire format is the existing length-prefixed JSON stdio bridge used for
 //! lifecycle commands (see `SubprocessBridge`). Requests and responses are
-//! discriminated by `op` and `result` fields respectively; see the
-//! `schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml` design
-//! documents for the JTD source of truth.
+//! discriminated by `op` and `result` fields respectively; the shape is
+//! owned by `schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`
+//! and the generated Rust types live in `_generated_`.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
-
+use crate::_generated_::com_streamlib_escalate_request::{
+    EscalateRequestAcquirePixelBuffer, EscalateRequestReleaseHandle,
+};
+use crate::_generated_::com_streamlib_escalate_response::{
+    EscalateResponseErr, EscalateResponseOk,
+};
+use crate::_generated_::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer};
 
@@ -32,58 +37,18 @@ pub(crate) const ESCALATE_REQUEST_RPC: &str = "escalate_request";
 /// Wire tag for responses written back to the subprocess.
 pub(crate) const ESCALATE_RESPONSE_RPC: &str = "escalate_response";
 
-/// Escalate request shape: `{ rpc: "escalate_request", op: "…", request_id, … }`.
-///
-/// Mirrors `com.streamlib.escalate_request@1.0.0.yaml`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub(crate) enum EscalateOp {
-    AcquirePixelBuffer {
-        request_id: String,
-        width: u32,
-        height: u32,
-        format: String,
-    },
-    ReleaseHandle {
-        request_id: String,
-        handle_id: String,
-    },
-}
-
-impl EscalateOp {
-    pub(crate) fn request_id(&self) -> &str {
-        match self {
-            EscalateOp::AcquirePixelBuffer { request_id, .. } => request_id,
-            EscalateOp::ReleaseHandle { request_id, .. } => request_id,
-        }
+fn request_id(op: &EscalateRequest) -> &str {
+    match op {
+        EscalateRequest::AcquirePixelBuffer(p) => &p.request_id,
+        EscalateRequest::ReleaseHandle(p) => &p.request_id,
     }
-}
-
-/// Escalate response shape written back to the subprocess.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "result", rename_all = "snake_case")]
-pub(crate) enum EscalateResult {
-    Ok {
-        request_id: String,
-        handle_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        width: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        height: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        format: Option<String>,
-    },
-    Err {
-        request_id: String,
-        message: String,
-    },
 }
 
 /// Tracks resources acquired on behalf of a subprocess so `release_handle` —
 /// or subprocess death — can drop the host's strong reference. Buffers stay
 /// alive for the duration of the host pool; this map simply prevents the
-/// buffer from being immediately recycled while the subprocess still references
-/// it by ID.
+/// buffer from being immediately recycled while the subprocess still
+/// references it by ID.
 #[derive(Default)]
 pub(crate) struct EscalateHandleRegistry {
     buffers: Mutex<HashMap<String, RhiPixelBuffer>>,
@@ -116,73 +81,73 @@ impl EscalateHandleRegistry {
     }
 }
 
-/// Dispatch an [`EscalateOp`] against `sandbox` and produce a response payload.
+/// Dispatch an [`EscalateRequest`] against `sandbox` and produce a response.
 ///
-/// Never panics — errors inside `escalate()` become [`EscalateResult::Err`]
+/// Never panics — errors inside `escalate()` become [`EscalateResponse::Err`]
 /// with the original request_id preserved so the subprocess can correlate.
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    op: EscalateOp,
-) -> EscalateResult {
-    let request_id = op.request_id().to_string();
+    op: EscalateRequest,
+) -> EscalateResponse {
+    let rid = request_id(&op).to_string();
     match op {
-        EscalateOp::AcquirePixelBuffer {
+        EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
             request_id: _,
             width,
             height,
             format,
-        } => match parse_pixel_format(&format) {
+        }) => match parse_pixel_format(&format) {
             Ok(parsed) => {
                 match sandbox.escalate(|full| full.acquire_pixel_buffer(width, height, parsed)) {
                     Ok((pool_id, buffer)) => {
                         let handle_id = pool_id.as_str().to_string();
                         registry.insert_buffer(handle_id.clone(), buffer);
-                        EscalateResult::Ok {
-                            request_id,
+                        EscalateResponse::Ok(EscalateResponseOk {
+                            request_id: rid,
                             handle_id,
                             width: Some(width),
                             height: Some(height),
                             format: Some(pixel_format_to_wire(parsed).to_string()),
-                        }
+                        })
                     }
-                    Err(e) => EscalateResult::Err {
-                        request_id,
+                    Err(e) => EscalateResponse::Err(EscalateResponseErr {
+                        request_id: rid,
                         message: format!("acquire_pixel_buffer failed: {e}"),
-                    },
+                    }),
                 }
             }
-            Err(e) => EscalateResult::Err {
-                request_id,
+            Err(e) => EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
                 message: e,
-            },
+            }),
         },
-        EscalateOp::ReleaseHandle {
+        EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: _,
             handle_id,
-        } => {
+        }) => {
             let removed = registry.remove_buffer(&handle_id);
             if removed {
-                EscalateResult::Ok {
-                    request_id,
+                EscalateResponse::Ok(EscalateResponseOk {
+                    request_id: rid,
                     handle_id,
                     width: None,
                     height: None,
                     format: None,
-                }
+                })
             } else {
-                EscalateResult::Err {
-                    request_id,
+                EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
                     message: format!("handle_id '{handle_id}' not found in registry"),
-                }
+                })
             }
         }
     }
 }
 
-/// Wrap a [`EscalateResult`] in the outer `{ rpc, payload… }` envelope the
+/// Wrap an [`EscalateResponse`] in the outer `{ rpc, payload… }` envelope the
 /// bridge reader writes to the subprocess stdin.
-pub(crate) fn envelope_response(result: EscalateResult) -> serde_json::Value {
+pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {
     let mut obj = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
     if let Some(map) = obj.as_object_mut() {
         map.insert(
@@ -195,11 +160,11 @@ pub(crate) fn envelope_response(result: EscalateResult) -> serde_json::Value {
 
 /// Parse a wire-format pixel-format string into a [`PixelFormat`] enum.
 ///
-/// The wire format uses lowercase snake-case names (`bgra32`, `nv12_video_range`,
-/// etc.) so Python / Deno callers don't have to know FourCC codes. Also
-/// accepts the mnemonic `"bgra"` for [`PixelFormat::Bgra32`], matching the
-/// existing `NativeGpu.acquire_surface(format="bgra")` default on the Python
-/// side.
+/// The wire format uses lowercase snake-case names (`bgra32`,
+/// `nv12_video_range`, etc.) so Python / Deno callers don't have to know
+/// FourCC codes. Also accepts the mnemonic `"bgra"` for
+/// [`PixelFormat::Bgra32`], matching the existing
+/// `NativeGpu.acquire_surface(format="bgra")` default on the Python side.
 fn parse_pixel_format(s: &str) -> std::result::Result<PixelFormat, String> {
     let normalized = s.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -231,14 +196,14 @@ fn pixel_format_to_wire(fmt: PixelFormat) -> &'static str {
     }
 }
 
-/// Try to parse an incoming bridge message as an [`EscalateOp`]. Returns
-/// `None` when the message isn't an escalate request (lifecycle traffic).
-/// Returns `Some(Err(...))` when the message was tagged as an escalate
-/// request but the payload couldn't be decoded — the bridge still replies
-/// with an `Err` response keyed by `request_id` if possible.
+/// Try to parse an incoming bridge message as an [`EscalateRequest`].
+/// Returns `None` when the message isn't an escalate request (lifecycle
+/// traffic). Returns `Some(Err(...))` when the message was tagged as an
+/// escalate request but the payload couldn't be decoded — the bridge still
+/// replies with an `Err` response keyed by `request_id` if possible.
 pub(crate) fn try_parse_escalate_request(
     value: &serde_json::Value,
-) -> Option<std::result::Result<EscalateOp, EscalateParseError>> {
+) -> Option<std::result::Result<EscalateRequest, EscalateParseError>> {
     let rpc = value.get("rpc").and_then(|v| v.as_str())?;
     if rpc != ESCALATE_REQUEST_RPC {
         return None;
@@ -247,7 +212,15 @@ pub(crate) fn try_parse_escalate_request(
         .get("request_id")
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    match serde_json::from_value::<EscalateOp>(value.clone()) {
+    // The `rpc` field is the bridge-layer envelope tag, not part of the
+    // typed escalate schema. Strip it before deserializing so the generated
+    // variant structs (which carry `#[serde(deny_unknown_fields)]`) don't
+    // reject it.
+    let mut inner = value.clone();
+    if let Some(obj) = inner.as_object_mut() {
+        obj.remove("rpc");
+    }
+    match serde_json::from_value::<EscalateRequest>(inner) {
         Ok(op) => Some(Ok(op)),
         Err(e) => Some(Err(EscalateParseError {
             request_id,
@@ -257,19 +230,19 @@ pub(crate) fn try_parse_escalate_request(
 }
 
 /// Error detail for a malformed escalate request. The bridge converts this
-/// into an [`EscalateResult::Err`] response so the subprocess doesn't block
-/// forever waiting on a correlated response.
+/// into an [`EscalateResponse::Err`] response so the subprocess doesn't
+/// block forever waiting on a correlated response.
 pub(crate) struct EscalateParseError {
     pub(crate) request_id: Option<String>,
     pub(crate) message: String,
 }
 
 impl EscalateParseError {
-    pub(crate) fn into_response(self) -> EscalateResult {
-        EscalateResult::Err {
+    pub(crate) fn into_response(self) -> EscalateResponse {
+        EscalateResponse::Err(EscalateResponseErr {
             request_id: self.request_id.unwrap_or_default(),
             message: self.message,
-        }
+        })
     }
 }
 
@@ -293,7 +266,7 @@ pub(crate) fn process_bridge_message(
 /// can assert on the error text without stringly comparisons against
 /// serde_json diagnostics.
 #[cfg(test)]
-pub(crate) fn parse_op_for_tests(value: &serde_json::Value) -> Result<EscalateOp> {
+pub(crate) fn parse_op_for_tests(value: &serde_json::Value) -> Result<EscalateRequest> {
     try_parse_escalate_request(value)
         .ok_or_else(|| StreamError::Runtime("not an escalate_request".to_string()))?
         .map_err(|e| StreamError::Runtime(e.message))
@@ -338,16 +311,11 @@ mod tests {
         });
         let op = parse_op_for_tests(&msg).expect("decodes");
         match op {
-            EscalateOp::AcquirePixelBuffer {
-                request_id,
-                width,
-                height,
-                format,
-            } => {
-                assert_eq!(request_id, "r-1");
-                assert_eq!(width, 640);
-                assert_eq!(height, 480);
-                assert_eq!(format, "bgra");
+            EscalateRequest::AcquirePixelBuffer(p) => {
+                assert_eq!(p.request_id, "r-1");
+                assert_eq!(p.width, 640);
+                assert_eq!(p.height, 480);
+                assert_eq!(p.format, "bgra");
             }
             _ => panic!("wrong variant"),
         }
@@ -363,12 +331,9 @@ mod tests {
         });
         let op = parse_op_for_tests(&msg).expect("decodes");
         match op {
-            EscalateOp::ReleaseHandle {
-                request_id,
-                handle_id,
-            } => {
-                assert_eq!(request_id, "r-2");
-                assert_eq!(handle_id, "h-abc");
+            EscalateRequest::ReleaseHandle(p) => {
+                assert_eq!(p.request_id, "r-2");
+                assert_eq!(p.handle_id, "h-abc");
             }
             _ => panic!("wrong variant"),
         }
@@ -390,13 +355,13 @@ mod tests {
 
     #[test]
     fn envelope_response_tags_rpc() {
-        let resp = EscalateResult::Ok {
+        let resp = EscalateResponse::Ok(EscalateResponseOk {
             request_id: "r-1".into(),
             handle_id: "h-1".into(),
             width: Some(16),
             height: Some(16),
             format: Some("bgra32".into()),
-        };
+        });
         let env = envelope_response(resp);
         assert_eq!(
             env.get("rpc").and_then(|v| v.as_str()),
@@ -435,68 +400,54 @@ mod tests {
         let sandbox = GpuContextLimitedAccess::new(gpu);
         let registry = EscalateHandleRegistry::new();
 
-        // Acquire a pixel buffer via escalate — registers a handle.
-        let acquire = EscalateOp::AcquirePixelBuffer {
-            request_id: "req-1".to_string(),
-            width: 320,
-            height: 240,
-            format: "bgra".to_string(),
-        };
+        let acquire =
+            EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
+                request_id: "req-1".to_string(),
+                width: 320,
+                height: 240,
+                format: "bgra".to_string(),
+            });
         let response = handle_escalate_op(&sandbox, &registry, acquire);
         let handle_id = match response {
-            EscalateResult::Ok {
-                ref request_id,
-                ref handle_id,
-                width,
-                height,
-                ref format,
-            } => {
-                assert_eq!(request_id, "req-1");
-                assert_eq!(width, Some(320));
-                assert_eq!(height, Some(240));
-                assert_eq!(format.as_deref(), Some("bgra32"));
-                assert!(!handle_id.is_empty(), "handle id should not be empty");
-                handle_id.clone()
+            EscalateResponse::Ok(ref ok) => {
+                assert_eq!(ok.request_id, "req-1");
+                assert_eq!(ok.width, Some(320));
+                assert_eq!(ok.height, Some(240));
+                assert_eq!(ok.format.as_deref(), Some("bgra32"));
+                assert!(!ok.handle_id.is_empty(), "handle id should not be empty");
+                ok.handle_id.clone()
             }
-            EscalateResult::Err { message, .. } => {
-                panic!("acquire_pixel_buffer escalate failed: {message}");
+            EscalateResponse::Err(err) => {
+                panic!("acquire_pixel_buffer escalate failed: {}", err.message);
             }
         };
         assert_eq!(registry.buffer_count(), 1);
 
-        // Release the handle → registry drains.
-        let release = EscalateOp::ReleaseHandle {
+        let release = EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "req-2".to_string(),
             handle_id: handle_id.clone(),
-        };
+        });
         let response = handle_escalate_op(&sandbox, &registry, release);
         match response {
-            EscalateResult::Ok {
-                request_id,
-                handle_id: echoed,
-                ..
-            } => {
-                assert_eq!(request_id, "req-2");
-                assert_eq!(echoed, handle_id);
+            EscalateResponse::Ok(ok) => {
+                assert_eq!(ok.request_id, "req-2");
+                assert_eq!(ok.handle_id, handle_id);
             }
-            EscalateResult::Err { message, .. } => panic!("release_handle failed: {message}"),
+            EscalateResponse::Err(err) => panic!("release_handle failed: {}", err.message),
         }
         assert_eq!(registry.buffer_count(), 0);
 
-        // Releasing an unknown handle is an Err response, not a panic.
-        let release_unknown = EscalateOp::ReleaseHandle {
-            request_id: "req-3".to_string(),
-            handle_id: "never-existed".to_string(),
-        };
+        let release_unknown =
+            EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+                request_id: "req-3".to_string(),
+                handle_id: "never-existed".to_string(),
+            });
         match handle_escalate_op(&sandbox, &registry, release_unknown) {
-            EscalateResult::Err {
-                request_id,
-                message,
-            } => {
-                assert_eq!(request_id, "req-3");
-                assert!(message.contains("not found"));
+            EscalateResponse::Err(err) => {
+                assert_eq!(err.request_id, "req-3");
+                assert!(err.message.contains("not found"));
             }
-            EscalateResult::Ok { .. } => panic!("unknown handle should not succeed"),
+            EscalateResponse::Ok(_) => panic!("unknown handle should not succeed"),
         }
     }
 }

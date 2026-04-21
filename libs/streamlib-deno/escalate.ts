@@ -10,43 +10,49 @@
  * runs the op inside `GpuContextLimitedAccess::escalate` and replies
  * with `escalate_response` on stdin.
  *
- * The channel is designed to be multiplexed into the existing stdin
- * reader loop in `subprocess_runner.ts`. Outstanding requests are
- * keyed by `request_id`; `handleIncoming(msg)` consumes an escalate
- * response and resolves the corresponding promise.
+ * Wire types (`EscalateRequest`, `EscalateResponse`, …) are generated
+ * from `schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`
+ * via `cargo xtask generate-schemas --runtime typescript`. This file
+ * owns only the channel coordination logic (request-id bookkeeping,
+ * lifecycle-message deferral, promise plumbing).
  */
+
+import type {
+  EscalateRequest,
+  EscalateRequestAcquirePixelBuffer,
+  EscalateRequestReleaseHandle,
+} from "./_generated_/com_streamlib_escalate_request.ts";
+import type {
+  EscalateResponse,
+  EscalateResponseErr,
+  EscalateResponseOk,
+} from "./_generated_/com_streamlib_escalate_response.ts";
+
+export type {
+  EscalateRequest,
+  EscalateRequestAcquirePixelBuffer,
+  EscalateRequestReleaseHandle,
+  EscalateResponse,
+  EscalateResponseErr,
+  EscalateResponseOk,
+};
+
+/** Backwards-compat alias for the `ok` variant of [`EscalateResponse`]. */
+export type EscalateOkResponse = EscalateResponseOk;
+/** Backwards-compat alias for the `err` variant of [`EscalateResponse`]. */
+export type EscalateErrResponse = EscalateResponseErr;
 
 export const ESCALATE_REQUEST_RPC = "escalate_request";
 export const ESCALATE_RESPONSE_RPC = "escalate_response";
 
+/**
+ * Caller-facing payload — the discriminator variants of
+ * [`EscalateRequest`] with `request_id` stripped. The channel injects
+ * `request_id` when serializing onto the wire.
+ */
 export type EscalateOpPayload =
-  | {
-    op: "acquire_pixel_buffer";
-    width: number;
-    height: number;
-    format: string;
-  }
-  | {
-    op: "release_handle";
-    handle_id: string;
-  };
-
-export interface EscalateOkResponse {
-  result: "ok";
-  request_id: string;
-  handle_id: string;
-  width?: number;
-  height?: number;
-  format?: string;
-}
-
-export interface EscalateErrResponse {
-  result: "err";
-  request_id: string;
-  message: string;
-}
-
-export type EscalateResponse = EscalateOkResponse | EscalateErrResponse;
+  | Omit<EscalateRequestAcquirePixelBuffer, "request_id">
+  | Omit<EscalateRequestReleaseHandle, "request_id">;
 
 export class EscalateError extends Error {}
 
