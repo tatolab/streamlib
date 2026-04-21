@@ -78,8 +78,27 @@ export class NativeProcessorState {
     return this.escalate.acquirePixelBuffer(width, height, format);
   }
 
+  /**
+   * Ask the host to acquire a pooled GPU texture on the subprocess's behalf.
+   * `usage` is a non-empty list of tokens drawn from `copy_src`, `copy_dst`,
+   * `texture_binding`, `storage_binding`, `render_attachment`.
+   */
+  async escalateAcquireTexture(
+    width: number,
+    height: number,
+    format: string,
+    usage: readonly string[],
+  ): Promise<EscalateOkResponse> {
+    if (!this.escalate) {
+      throw new Error(
+        "escalate channel not installed — escalateAcquireTexture is only available inside the subprocess lifecycle",
+      );
+    }
+    return this.escalate.acquireTexture(width, height, format, usage);
+  }
+
   /** Drop the host's strong reference to a previously-escalated handle. */
-  async escalateReleaseHandle(handleId: string): Promise<EscalateOkResponse> {
+  escalateReleaseHandle(handleId: string): Promise<EscalateOkResponse> {
     if (!this.escalate) {
       throw new Error(
         "escalate channel not installed — escalateReleaseHandle is only available inside the subprocess lifecycle",
@@ -136,6 +155,15 @@ export class NativeRuntimeContextLimitedAccess
     return this.state.escalateAcquirePixelBuffer(width, height, format);
   }
 
+  escalateAcquireTexture(
+    width: number,
+    height: number,
+    format: string,
+    usage: readonly string[],
+  ): Promise<EscalateOkResponse> {
+    return this.state.escalateAcquireTexture(width, height, format, usage);
+  }
+
   escalateReleaseHandle(handleId: string): Promise<EscalateOkResponse> {
     return this.state.escalateReleaseHandle(handleId);
   }
@@ -174,6 +202,15 @@ export class NativeRuntimeContextFullAccess implements RuntimeContextFullAccess 
     format = "bgra",
   ): Promise<EscalateOkResponse> {
     return this.state.escalateAcquirePixelBuffer(width, height, format);
+  }
+
+  escalateAcquireTexture(
+    width: number,
+    height: number,
+    format: string,
+    usage: readonly string[],
+  ): Promise<EscalateOkResponse> {
+    return this.state.escalateAcquireTexture(width, height, format, usage);
   }
 
   escalateReleaseHandle(handleId: string): Promise<EscalateOkResponse> {

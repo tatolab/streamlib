@@ -29,22 +29,30 @@ mapping:
           description: >
             Opaque handle returned by the host. For acquire_pixel_buffer this
             is the PixelBufferPoolId the host registered with its
-            pixel-buffer pool and broker SurfaceStore. For release_handle this
-            echoes the released id.
+            pixel-buffer pool and broker SurfaceStore. For acquire_texture
+            this is a host-side UUID keying the EscalateHandleRegistry's
+            texture slot. For release_handle this echoes the released id.
         type: string
     optionalProperties:
       width:
         metadata:
-          description: "Width in pixels (set on acquire_pixel_buffer responses)."
+          description: "Width in pixels (set on acquire_pixel_buffer and acquire_texture responses)."
         type: uint32
       height:
         metadata:
-          description: "Height in pixels (set on acquire_pixel_buffer responses)."
+          description: "Height in pixels (set on acquire_pixel_buffer and acquire_texture responses)."
         type: uint32
       format:
         metadata:
-          description: "Resolved pixel format identifier."
+          description: "Resolved pixel or texture format identifier."
         type: string
+      usage:
+        metadata:
+          description: >
+            Resolved usage tokens (set on acquire_texture responses). Array
+            reflects the exact flags the host honored.
+        elements:
+          type: string
   err:
     properties:
       request_id:

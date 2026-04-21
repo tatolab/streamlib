@@ -30,7 +30,9 @@ export interface EscalateResponseOk {
   /**
    * Opaque handle returned by the host. For acquire_pixel_buffer this is the
    * PixelBufferPoolId the host registered with its pixel-buffer pool and broker
-   * SurfaceStore. For release_handle this echoes the released id.
+   * SurfaceStore. For acquire_texture this is a host-side UUID keying the
+   * EscalateHandleRegistry's texture slot. For release_handle this echoes the
+   * released id.
    */
   handle_id: string;
 
@@ -40,17 +42,24 @@ export interface EscalateResponseOk {
   request_id: string;
 
   /**
-   * Resolved pixel format identifier.
+   * Resolved pixel or texture format identifier.
    */
   format?: string;
 
   /**
-   * Height in pixels (set on acquire_pixel_buffer responses).
+   * Height in pixels (set on acquire_pixel_buffer and acquire_texture
+   * responses).
    */
   height?: number;
 
   /**
-   * Width in pixels (set on acquire_pixel_buffer responses).
+   * Resolved usage tokens (set on acquire_texture responses).
+   */
+  usage?: string[];
+
+  /**
+   * Width in pixels (set on acquire_pixel_buffer and acquire_texture
+   * responses).
    */
   width?: number;
 }

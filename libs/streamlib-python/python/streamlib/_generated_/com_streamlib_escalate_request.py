@@ -8,7 +8,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Type, Union, get_args, get_origin
+from typing import Any, Dict, List, Type, Union, get_args, get_origin
 
 
 @dataclass
@@ -23,6 +23,7 @@ class EscalateRequest:
     def from_json_data(cls, data: Any) -> 'EscalateRequest':
         variants: Dict[str, Type[EscalateRequest]] = {
             "acquire_pixel_buffer": EscalateRequestAcquirePixelBuffer,
+            "acquire_texture": EscalateRequestAcquireTexture,
             "release_handle": EscalateRequestReleaseHandle,
         }
 
@@ -69,6 +70,55 @@ class EscalateRequestAcquirePixelBuffer(EscalateRequest):
         data["format"] = _to_json_data(self.format)
         data["height"] = _to_json_data(self.height)
         data["request_id"] = _to_json_data(self.request_id)
+        data["width"] = _to_json_data(self.width)
+        return data
+
+@dataclass
+class EscalateRequestAcquireTexture(EscalateRequest):
+    format: 'str'
+    """
+    Texture format identifier (rgba8_unorm, bgra8_unorm, rgba16_float, ...).
+    """
+
+    height: 'int'
+    """
+    Pixel height of the texture.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    usage: 'List[str]'
+    """
+    Usage tokens (copy_src, copy_dst, texture_binding, storage_binding,
+    render_attachment).
+    """
+
+    width: 'int'
+    """
+    Pixel width of the texture.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestAcquireTexture':
+        return cls(
+            "acquire_texture",
+            _from_json_data(str, data.get("format")),
+            _from_json_data(int, data.get("height")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(List[str], data.get("usage")),
+            _from_json_data(int, data.get("width")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "acquire_texture" }
+        data["format"] = _to_json_data(self.format)
+        data["height"] = _to_json_data(self.height)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["usage"] = _to_json_data(self.usage)
         data["width"] = _to_json_data(self.width)
         return data
 

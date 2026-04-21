@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from .processor_context import bridge_read_message, bridge_send_message
 
@@ -71,6 +71,37 @@ class EscalateChannel:
                 "width": int(width),
                 "height": int(height),
                 "format": format,
+            }
+        )
+
+    def acquire_texture(
+        self,
+        width: int,
+        height: int,
+        format: str,
+        usage: Sequence[str],
+    ) -> Dict[str, Any]:
+        """Request a pooled GPU texture from the host.
+
+        ``format`` is a wire token such as ``"rgba8_unorm"``,
+        ``"bgra8_unorm_srgb"``, ``"rgba16_float"``, ``"nv12"``.
+        ``usage`` is a non-empty iterable of tokens drawn from
+        ``copy_src``, ``copy_dst``, ``texture_binding``, ``storage_binding``,
+        ``render_attachment``.
+
+        Returns the ``ok``-payload dict; on failure raises
+        :class:`EscalateError`.
+        """
+        usage_list = [str(u) for u in usage]
+        if not usage_list:
+            raise ValueError("acquire_texture: usage must not be empty")
+        return self.request(
+            {
+                "op": "acquire_texture",
+                "width": int(width),
+                "height": int(height),
+                "format": format,
+                "usage": usage_list,
             }
         )
 

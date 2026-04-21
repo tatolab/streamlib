@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 import struct
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import msgpack
 
@@ -478,6 +478,17 @@ class NativeProcessorState:
         channel = self._require_channel()
         return channel.acquire_pixel_buffer(width, height, format)
 
+    def escalate_acquire_texture(
+        self,
+        width: int,
+        height: int,
+        format: str,
+        usage: "Sequence[str]",
+    ) -> Dict[str, Any]:
+        """Ask the host to allocate a pooled GPU texture on our behalf."""
+        channel = self._require_channel()
+        return channel.acquire_texture(width, height, format, usage)
+
     def escalate_release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Drop the host's strong reference to a previously-escalated handle."""
         channel = self._require_channel()
@@ -539,6 +550,16 @@ class NativeRuntimeContextLimitedAccess:
         """
         return self._state.escalate_acquire_pixel_buffer(width, height, format)
 
+    def escalate_acquire_texture(
+        self,
+        width: int,
+        height: int,
+        format: str,
+        usage: "Sequence[str]",
+    ) -> Dict[str, Any]:
+        """Ask the host to allocate a pooled GPU texture on our behalf."""
+        return self._state.escalate_acquire_texture(width, height, format, usage)
+
     def escalate_release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Drop the host's strong reference to a previously-escalated handle."""
         return self._state.escalate_release_handle(handle_id)
@@ -582,6 +603,16 @@ class NativeRuntimeContextFullAccess:
     ) -> Dict[str, Any]:
         """Ask the host to allocate a new-shape pixel buffer on our behalf."""
         return self._state.escalate_acquire_pixel_buffer(width, height, format)
+
+    def escalate_acquire_texture(
+        self,
+        width: int,
+        height: int,
+        format: str,
+        usage: "Sequence[str]",
+    ) -> Dict[str, Any]:
+        """Ask the host to allocate a pooled GPU texture on our behalf."""
+        return self._state.escalate_acquire_texture(width, height, format, usage)
 
     def escalate_release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Drop the host's strong reference to a previously-escalated handle."""

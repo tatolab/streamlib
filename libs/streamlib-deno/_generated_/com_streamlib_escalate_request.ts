@@ -8,7 +8,10 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest = EscalateRequestAcquirePixelBuffer | EscalateRequestReleaseHandle;
+export type EscalateRequest =
+  | EscalateRequestAcquirePixelBuffer
+  | EscalateRequestAcquireTexture
+  | EscalateRequestReleaseHandle;
 
 export interface EscalateRequestAcquirePixelBuffer {
   op: "acquire_pixel_buffer";
@@ -30,6 +33,36 @@ export interface EscalateRequestAcquirePixelBuffer {
 
   /**
    * Pixel width of the buffer.
+   */
+  width: number;
+}
+
+export interface EscalateRequestAcquireTexture {
+  op: "acquire_texture";
+
+  /**
+   * Texture format identifier (rgba8_unorm, bgra8_unorm, rgba16_float, ...).
+   */
+  format: string;
+
+  /**
+   * Pixel height of the texture.
+   */
+  height: number;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Usage tokens (copy_src, copy_dst, texture_binding, storage_binding,
+   * render_attachment).
+   */
+  usage: string[];
+
+  /**
+   * Pixel width of the texture.
    */
   width: number;
 }
