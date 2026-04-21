@@ -5,6 +5,8 @@
 
 from .com_streamlib_api_server_config import ApiServerConfig
 from .com_streamlib_clap_effect_config import EffectConfig
+from .com_streamlib_escalate_request import EscalateRequest
+from .com_streamlib_escalate_response import EscalateResponse
 from .com_streamlib_webrtc_whep_config import WebrtcWhepConfig
 from .com_streamlib_webrtc_whip_config import WebrtcWhipConfig
 from .com_tatolab_audio_capture_config import AudioCaptureConfig
@@ -26,6 +28,8 @@ from .com_tatolab_videoframe import Videoframe
 __all__ = [
     "ApiServerConfig",
     "EffectConfig",
+    "EscalateRequest",
+    "EscalateResponse",
     "WebrtcWhepConfig",
     "WebrtcWhipConfig",
     "AudioCaptureConfig",

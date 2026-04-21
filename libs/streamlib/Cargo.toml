@@ -207,6 +207,9 @@ schemas = [
     "schemas/com.streamlib.opus_decoder.config@1.0.0.yaml",
     "schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml",
     "schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml",
+    # Polyglot escalate IPC wire schemas (discriminator form)
+    "schemas/com.streamlib.escalate_request@1.0.0.yaml",
+    "schemas/com.streamlib.escalate_response@1.0.0.yaml",
 ]
 
 # Processor schemas (co-located with Rust source)

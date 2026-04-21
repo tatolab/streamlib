@@ -444,62 +444,87 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
 /// - Adds copyright header and standard derives
 /// - Converts camelCase field names to snake_case
 /// - Removes Box<> wrappers from optional fields
-/// - Removes skip_serializing_if annotations
+/// - Preserves skip_serializing_if annotations (correct wire behavior)
 /// - Adds #[serde(deny_unknown_fields)] to structs
-/// - Strips struct name prefix from enum names
-/// - Adds #[default] to first enum variant
+/// - Strips struct/enum name prefix from sub-type names in plain schemas
+/// - Adds #[default] to first variant of plain enums
+/// - Handles discriminator (tagged) enums: no Default derive, no #[default],
+///   preserves #[serde(tag = "…")] ordering, keeps variant payload structs
+///   as fully-qualified names (avoids Ok/Err collisions with std::result).
 fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
-    // First pass: collect struct names.
-    // jtd-codegen puts sub-structs first, root struct last.
-    let mut struct_names: Vec<String> = Vec::new();
-    for line in code.lines() {
-        if line.starts_with("pub struct ") {
-            let name = line
-                .trim_start_matches("pub struct ")
-                .split([' ', '{'])
-                .next()
-                .unwrap_or("");
-            if !name.is_empty() {
-                struct_names.push(name.to_string());
+    let lines: Vec<&str> = code.lines().collect();
+
+    // Collect all `pub struct` / `pub enum` names. jtd-codegen puts sub-types
+    // first and the root last, but we don't rely on that here.
+    let struct_names: Vec<String> = lines
+        .iter()
+        .filter_map(|line| extract_decl_name(line, "pub struct "))
+        .collect();
+    let enum_names: Vec<String> = lines
+        .iter()
+        .filter_map(|line| extract_decl_name(line, "pub enum "))
+        .collect();
+
+    // Detect discriminator (tagged) enum: `#[serde(tag = "…")]` immediately
+    // preceding a `pub enum Name`. The enum is the root of the schema, not
+    // any of the per-variant structs.
+    let discriminator_enum_name = find_discriminator_enum_name(&lines);
+    let is_discriminator = discriminator_enum_name.is_some();
+
+    // Root-rename pass: for plain struct schemas, jtd-codegen's last `pub
+    // struct` is the root and may be named something other than
+    // `expected_struct_name` (e.g. `Whep` vs `WebrtcWhepConfig`). Rewrite the
+    // text so the root name matches. Skip for discriminator schemas — their
+    // root is the enum, which already carries `expected_struct_name`.
+    let rewritten;
+    let code: &str = if !is_discriminator {
+        let root_struct_name = struct_names.last();
+        match root_struct_name {
+            Some(actual_root) if actual_root != expected_struct_name => {
+                let mut buf = String::new();
+                for line in lines.iter() {
+                    let new_line =
+                        replace_exact_type_name(line, actual_root, expected_struct_name);
+                    buf.push_str(&new_line);
+                    buf.push('\n');
+                }
+                rewritten = buf;
+                &rewritten
+            }
+            _ => code,
+        }
+    } else {
+        code
+    };
+
+    // Precompute name renames (full → short) so lines referencing a renamed
+    // type (e.g. enum variant references, field types) can be rewritten in a
+    // single pass. For discriminator schemas we leave variant payload struct
+    // names as-is (avoids `Ok`/`Err` collisions with std::result and keeps
+    // Rust output in step with Python/TS which also keep full names).
+    let post_lines: Vec<&str> = code.lines().collect();
+    let mut name_renames: Vec<(String, String)> = Vec::new();
+    let discriminator_enum_ref = discriminator_enum_name.as_deref();
+    if !is_discriminator {
+        for name in &struct_names {
+            let short = strip_prefix(name, expected_struct_name);
+            if short != *name {
+                name_renames.push((name.clone(), short));
+            }
+        }
+        for name in &enum_names {
+            for struct_name in &struct_names {
+                if name.starts_with(struct_name.as_str()) && name.len() > struct_name.len() {
+                    let short = name[struct_name.len()..].to_string();
+                    name_renames.push((name.clone(), short));
+                    break;
+                }
             }
         }
     }
-
-    // The root struct is the last one in jtd-codegen output.
-    // Only fix the root struct name if it differs from expected.
-    let root_struct_name = struct_names.last().cloned();
-    let code = if let Some(ref actual_root) = root_struct_name {
-        if actual_root != expected_struct_name {
-            // Only replace exact matches (the root name, not sub-struct names that start with it)
-            // Since sub-structs are named like RootNameSubfield, we need word-boundary matching.
-            // Replace "actual_root" only when NOT followed by more PascalCase chars.
-            let mut result = String::new();
-            for line in code.lines() {
-                let new_line = replace_exact_type_name(line, actual_root, expected_struct_name);
-                result.push_str(&new_line);
-                result.push('\n');
-            }
-            result
-        } else {
-            code.to_string()
-        }
-    } else {
-        code.to_string()
-    };
-    let code = code.as_str();
-
-    // Update struct_names to reflect the fixup
-    let struct_names: Vec<String> = struct_names
-        .into_iter()
-        .map(|n| {
-            if let Some(ref actual_root) = root_struct_name {
-                if n == *actual_root && actual_root.as_str() != expected_struct_name {
-                    return expected_struct_name.to_string();
-                }
-            }
-            n
-        })
-        .collect();
+    // Sort renames by descending length of the full name so longer prefixes
+    // match first (prevents `Foo` rewriting the start of `FooBar`).
+    name_renames.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
     let mut result = String::from(
         "// Copyright (c) 2025 Jonathan Fontanez\n\
@@ -509,13 +534,13 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
 
     let mut in_enum = false;
     let mut in_struct = false;
+    let mut in_discriminator_enum = false;
     let mut marked_first_variant = false;
-    let mut next_is_struct = false;
-    // Map from prefixed enum name to short name
-    let mut enum_renames: Vec<(String, String)> = Vec::new();
+    let mut pending_decl_kind: Option<DeclKind> = None;
+    let mut pending_attr_lines: Vec<String> = Vec::new();
 
-    for line in code.lines() {
-        // Skip the jtd-codegen version comment and chrono import
+    for (idx, line) in post_lines.iter().enumerate() {
+        // Skip the jtd-codegen version comment and chrono import.
         if line.starts_with("// Code generated by jtd-codegen") {
             continue;
         }
@@ -523,80 +548,87 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             continue;
         }
 
-        // Enhance derives
+        // Defer derive emission until we see the upcoming declaration — the
+        // derive bundle depends on declaration kind (struct / plain enum /
+        // discriminator enum).
         if line.contains("#[derive(Serialize, Deserialize)]")
             || line.contains("#[derive(Debug, Serialize, Deserialize)]")
         {
-            result
-                .push_str("#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n");
-            next_is_struct = true;
+            pending_decl_kind =
+                Some(peek_decl_kind(&post_lines, idx, discriminator_enum_ref));
+            pending_attr_lines.clear();
             continue;
         }
 
-        // Skip skip_serializing_if annotations
-        if line.trim().starts_with("#[serde(skip_serializing_if") {
+        // Buffer attribute lines that sit between a deferred `#[derive(...)]`
+        // and the upcoming `pub struct`/`pub enum` (e.g. `#[serde(tag = "…")]`).
+        if pending_decl_kind.is_some()
+            && !line.starts_with("pub struct ")
+            && !line.starts_with("pub enum ")
+            && line.trim().starts_with("#[")
+        {
+            pending_attr_lines.push(line.to_string());
             continue;
         }
 
-        // Track struct boundaries — strip root name prefix from sub-struct names
-        if next_is_struct && line.starts_with("pub struct ") {
-            let full_name = line
-                .trim_start_matches("pub struct ")
-                .split([' ', '{'])
-                .next()
-                .unwrap_or("");
+        // Emit a struct declaration.
+        if pending_decl_kind == Some(DeclKind::Struct) && line.starts_with("pub struct ") {
+            let full_name = extract_decl_name(line, "pub struct ").unwrap_or_default();
+            let short_name = rename_lookup(&name_renames, &full_name).unwrap_or(&full_name);
 
-            // Try to strip root struct name prefix from sub-structs
-            let mut short_name = full_name.to_string();
-            // Only rename if this is NOT the root struct (i.e., the expected name)
-            if full_name != expected_struct_name
-                && full_name.starts_with(expected_struct_name)
-                && full_name.len() > expected_struct_name.len()
-            {
-                short_name = full_name[expected_struct_name.len()..].to_string();
-                enum_renames.push((full_name.to_string(), short_name.clone()));
+            result.push_str(
+                "#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n",
+            );
+            for attr in pending_attr_lines.drain(..) {
+                result.push_str(&attr);
+                result.push('\n');
             }
-
             result.push_str("#[serde(deny_unknown_fields)]\n");
             result.push_str(&format!("pub struct {} {{\n", short_name));
             in_struct = true;
-            next_is_struct = false;
+            in_enum = false;
+            in_discriminator_enum = false;
+            pending_decl_kind = None;
             continue;
         }
 
-        // Track enum start — strip struct name prefix from enum name
-        if next_is_struct && line.starts_with("pub enum ") {
+        // Emit an enum declaration.
+        if matches!(
+            pending_decl_kind,
+            Some(DeclKind::RegularEnum) | Some(DeclKind::DiscriminatorEnum)
+        ) && line.starts_with("pub enum ")
+        {
+            let full_name = extract_decl_name(line, "pub enum ").unwrap_or_default();
+            let short_name = rename_lookup(&name_renames, &full_name).unwrap_or(&full_name);
+            let is_disc_variant = pending_decl_kind == Some(DeclKind::DiscriminatorEnum);
+
+            if is_disc_variant {
+                // Wire enum: explicit construction only, no Default.
+                result.push_str(
+                    "#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n",
+                );
+            } else {
+                result.push_str(
+                    "#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n",
+                );
+            }
+            for attr in pending_attr_lines.drain(..) {
+                result.push_str(&attr);
+                result.push('\n');
+            }
+            result.push_str(&format!("pub enum {} {{\n", short_name));
             in_enum = true;
             in_struct = false;
+            in_discriminator_enum = is_disc_variant;
             marked_first_variant = false;
-            next_is_struct = false;
-
-            let full_name = line
-                .trim_start_matches("pub enum ")
-                .split([' ', '{'])
-                .next()
-                .unwrap_or("");
-
-            // Try to strip struct name prefix
-            let mut short_name = full_name.to_string();
-            for struct_name in &struct_names {
-                if full_name.starts_with(struct_name.as_str())
-                    && full_name.len() > struct_name.len()
-                {
-                    short_name = full_name[struct_name.len()..].to_string();
-                    enum_renames.push((full_name.to_string(), short_name.clone()));
-                    break;
-                }
-            }
-
-            result.push_str(&format!("pub enum {} {{\n", short_name));
+            pending_decl_kind = None;
             continue;
         }
 
-        next_is_struct = false;
-
-        // Add #[default] to first enum variant
-        if in_enum && !marked_first_variant {
+        // Plain enums only: insert `#[default]` on the first real variant to
+        // satisfy the Default derive. Discriminator enums don't derive
+        // Default.
+        if in_enum && !in_discriminator_enum && !marked_first_variant {
             let trimmed = line.trim();
             if !trimmed.is_empty()
                 && !trimmed.starts_with('#')
@@ -608,17 +640,18 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             }
         }
 
-        // End of enum/struct
+        // End of enum/struct.
         if line.trim() == "}" {
             if in_enum {
                 in_enum = false;
+                in_discriminator_enum = false;
             }
             if in_struct {
                 in_struct = false;
             }
         }
 
-        // Process struct fields: camelCase → snake_case, remove Box<>
+        // Struct field: camelCase → snake_case, remove Box<>.
         if in_struct
             && line.starts_with("    pub ")
             && line.contains(": ")
@@ -627,8 +660,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
         {
             let mut processed_line = line.to_string();
 
-            // Convert camelCase field name to snake_case
-            // Field lines look like: "    pub fieldName: Type,"
             if let Some(field_start) = processed_line.find("pub ") {
                 let after_pub = &processed_line[field_start + 4..];
                 if let Some(colon_pos) = after_pub.find(':') {
@@ -645,16 +676,12 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
                 }
             }
 
-            // Remove Box<> wrappers: Option<Box<T>> → Option<T>
             processed_line = processed_line.replace("Option<Box<", "Option<");
             if processed_line.contains("Option<") {
-                // Remove the matching closing >
-                // "Option<String>>" → "Option<String>"
                 processed_line = processed_line.replacen(">>", ">", 1);
             }
 
-            // Replace prefixed enum type names with short names in field types
-            for (full_name, short_name) in &enum_renames {
+            for (full_name, short_name) in &name_renames {
                 processed_line = processed_line.replace(full_name.as_str(), short_name.as_str());
             }
 
@@ -663,9 +690,11 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             continue;
         }
 
-        // For non-field lines, also replace prefixed enum names
+        // Non-field lines (doc comments, enum variants, closing braces) —
+        // apply name renames so variant payload types reference the stripped
+        // type names.
         let mut processed_line = line.to_string();
-        for (full_name, short_name) in &enum_renames {
+        for (full_name, short_name) in &name_renames {
             processed_line = processed_line.replace(full_name.as_str(), short_name.as_str());
         }
 
@@ -674,6 +703,103 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
     }
 
     Ok(result)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeclKind {
+    Struct,
+    RegularEnum,
+    DiscriminatorEnum,
+}
+
+/// Look up the short form of a type name in the precomputed rename list.
+fn rename_lookup<'a>(
+    renames: &'a [(String, String)],
+    full_name: &str,
+) -> Option<&'a String> {
+    renames
+        .iter()
+        .find(|(full, _)| full == full_name)
+        .map(|(_, short)| short)
+}
+
+/// Peek forward from a `#[derive(...)]` line to determine what declaration
+/// kind follows. Stops at the first `pub struct` / `pub enum`.
+fn peek_decl_kind(
+    lines: &[&str],
+    derive_idx: usize,
+    discriminator_enum_name: Option<&str>,
+) -> DeclKind {
+    for line in lines.iter().skip(derive_idx + 1) {
+        if line.starts_with("pub struct ") {
+            return DeclKind::Struct;
+        }
+        if line.starts_with("pub enum ") {
+            let name = extract_decl_name(line, "pub enum ").unwrap_or_default();
+            return if discriminator_enum_name == Some(name.as_str()) {
+                DeclKind::DiscriminatorEnum
+            } else {
+                DeclKind::RegularEnum
+            };
+        }
+    }
+    DeclKind::Struct
+}
+
+/// Find the first `pub enum` whose immediately-preceding attributes include
+/// `#[serde(tag = "…")]`. That enum is a discriminator (tagged) enum and is
+/// the schema root for JTD discriminator form.
+fn find_discriminator_enum_name(lines: &[&str]) -> Option<String> {
+    for (i, line) in lines.iter().enumerate() {
+        if !line.starts_with("pub enum ") {
+            continue;
+        }
+        // Walk backward through the contiguous run of attribute lines
+        // preceding this enum declaration.
+        let mut j = i;
+        while j > 0 {
+            j -= 1;
+            let trimmed = lines[j].trim();
+            if trimmed.is_empty() || !trimmed.starts_with("#[") {
+                break;
+            }
+            if extract_tag_attr(trimmed).is_some() {
+                return extract_decl_name(line, "pub enum ");
+            }
+        }
+    }
+    None
+}
+
+/// Extract the value of `tag = "…"` from a `#[serde(...)]` attribute line.
+fn extract_tag_attr(line: &str) -> Option<&str> {
+    if !line.starts_with("#[serde(") {
+        return None;
+    }
+    let after = line.split("tag = \"").nth(1)?;
+    let close_quote = after.find('"')?;
+    Some(&after[..close_quote])
+}
+
+/// Extract the name from a `pub struct Foo` / `pub enum Foo` declaration line.
+fn extract_decl_name(line: &str, prefix: &str) -> Option<String> {
+    let rest = line.strip_prefix(prefix)?;
+    let name = rest.split([' ', '{']).next()?;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+/// Strip `prefix` from `name` if `name` starts with it and is strictly longer.
+/// Returns `name` unchanged if the prefix doesn't apply.
+fn strip_prefix(name: &str, prefix: &str) -> String {
+    if name != prefix && name.starts_with(prefix) && name.len() > prefix.len() {
+        name[prefix.len()..].to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 /// Replace a type name in a line only when it appears as an exact match

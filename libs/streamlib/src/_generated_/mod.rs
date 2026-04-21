@@ -6,6 +6,8 @@
 pub mod com_streamlib_api_server_config;
 pub mod com_streamlib_bgra_file_source_config;
 pub mod com_streamlib_clap_effect_config;
+pub mod com_streamlib_escalate_request;
+pub mod com_streamlib_escalate_response;
 pub mod com_streamlib_h264_decoder_config;
 pub mod com_streamlib_h264_encoder_config;
 pub mod com_streamlib_h265_decoder_config;
@@ -37,6 +39,8 @@ pub mod com_tatolab_videoframe;
 pub use com_streamlib_api_server_config::ApiServerConfig;
 pub use com_streamlib_bgra_file_source_config::BgraFileSourceConfig;
 pub use com_streamlib_clap_effect_config::EffectConfig;
+pub use com_streamlib_escalate_request::EscalateRequest;
+pub use com_streamlib_escalate_response::EscalateResponse;
 pub use com_streamlib_h264_decoder_config::H264DecoderConfig;
 pub use com_streamlib_h264_encoder_config::H264EncoderConfig;
 pub use com_streamlib_h265_decoder_config::H265DecoderConfig;
