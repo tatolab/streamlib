@@ -335,8 +335,8 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
             )
         })?;
 
-        // Post-process: add copyright header
-        let processed_code = post_process_python(&python_code);
+        // Post-process: add copyright header and enforce expected class name
+        let processed_code = post_process_python(&python_code, &class_name);
 
         let output_path = output_dir.join(format!("{}.py", module_name));
         fs::write(&output_path, &processed_code)
@@ -846,14 +846,74 @@ fn camel_to_snake(s: &str) -> String {
 }
 
 /// Post-process jtd-codegen Python output.
-fn post_process_python(code: &str) -> String {
+///
+/// jtd-codegen's Python backend ignores `--root-name` and runs its own
+/// acronym-upcasing pass on the schema name (`api_server` → `APIServerConfig`,
+/// `http_config` → `HTTPConfig`, etc.), so the root class name drifts from
+/// what the generator config expects and from the Rust/TypeScript outputs.
+/// Rewrite the root class name so every language ends up with the same
+/// symbol.
+fn post_process_python(code: &str, expected_class_name: &str) -> String {
+    let actual = find_python_root_class_name(code);
+    let rewritten = match actual {
+        Some(ref name) if name != expected_class_name => {
+            code.replace(name.as_str(), expected_class_name)
+        }
+        _ => code.to_string(),
+    };
+
     format!(
         "# Copyright (c) 2025 Jonathan Fontanez\n\
          # SPDX-License-Identifier: BUSL-1.1\n\
          #\n\
          # Generated from JTD schema using jtd-codegen. DO NOT EDIT.\n\n{}",
-        code
+        rewritten
     )
+}
+
+/// Return the name of the root class in a jtd-codegen Python file.
+///
+/// For discriminator schemas, jtd-codegen emits the parent class first and
+/// variants that inherit from it afterwards (`class Variant(Root):`) — the
+/// root is whichever local class is referenced as a parent of another.
+///
+/// For plain schemas with sub-types, jtd-codegen emits the sub-types first
+/// and the root last, so the last top-level class is the root.
+fn find_python_root_class_name(code: &str) -> Option<String> {
+    let mut classes: Vec<(String, Option<String>)> = Vec::new();
+    for line in code.lines() {
+        let Some(rest) = line.strip_prefix("class ") else {
+            continue;
+        };
+        let name_end = rest.find(|c: char| c == '(' || c == ':' || c == ' ');
+        let (name, parent) = match name_end {
+            Some(idx) if rest.as_bytes().get(idx) == Some(&b'(') => {
+                let name = rest[..idx].to_string();
+                let after = &rest[idx + 1..];
+                let parent = after
+                    .find(')')
+                    .map(|end| after[..end].trim().to_string())
+                    .filter(|p| !p.is_empty());
+                (name, parent)
+            }
+            Some(idx) => (rest[..idx].to_string(), None),
+            None => (rest.to_string(), None),
+        };
+        if !name.is_empty() {
+            classes.push((name, parent));
+        }
+    }
+
+    let local_names: std::collections::HashSet<&str> =
+        classes.iter().map(|(n, _)| n.as_str()).collect();
+    for (_, parent) in &classes {
+        if let Some(p) = parent {
+            if local_names.contains(p.as_str()) {
+                return Some(p.clone());
+            }
+        }
+    }
+    classes.last().map(|(n, _)| n.clone())
 }
 
 /// Post-process jtd-codegen TypeScript output.
@@ -969,6 +1029,65 @@ fn schema_name_to_struct_name(name: &str) -> String {
 fn schema_name_to_module_name(name: &str) -> String {
     let name = name.split('@').next().unwrap_or(name);
     name.replace('.', "_").to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_python_root_class_name_skips_imports() {
+        let code = "import re\nfrom dataclasses import dataclass\n\n\n@dataclass\nclass APIServerConfig:\n    host: 'str'\n";
+        assert_eq!(
+            find_python_root_class_name(code).as_deref(),
+            Some("APIServerConfig")
+        );
+    }
+
+    #[test]
+    fn find_python_root_class_name_picks_last_for_plain_multiclass() {
+        // jtd-codegen emits sub-types first and the root last for plain
+        // schemas that have nested variant enums (e.g. WebrtcWhepConfig).
+        let code = "class WebrtcWhepConfigWhep:\n    pass\nclass WebrtcWhepConfig:\n    pass\n";
+        assert_eq!(
+            find_python_root_class_name(code).as_deref(),
+            Some("WebrtcWhepConfig")
+        );
+    }
+
+    #[test]
+    fn find_python_root_class_name_picks_parent_for_discriminator() {
+        // For discriminator schemas the root is the parent class that
+        // variants inherit from.
+        let code = "class EscalateRequest:\n    pass\nclass EscalateRequestAcquirePixelBuffer(EscalateRequest):\n    pass\n";
+        assert_eq!(
+            find_python_root_class_name(code).as_deref(),
+            Some("EscalateRequest")
+        );
+    }
+
+    #[test]
+    fn find_python_root_class_name_none_when_no_class() {
+        assert_eq!(find_python_root_class_name("import re\n"), None);
+    }
+
+    #[test]
+    fn post_process_python_renames_upcased_acronym() {
+        let code = "@dataclass\nclass APIServerConfig:\n    @classmethod\n    def from_json_data(cls, data) -> 'APIServerConfig':\n        return cls()\n";
+        let out = post_process_python(code, "ApiServerConfig");
+        assert!(out.contains("class ApiServerConfig:"));
+        assert!(out.contains("-> 'ApiServerConfig':"));
+        assert!(!out.contains("APIServerConfig"));
+    }
+
+    #[test]
+    fn post_process_python_noop_when_names_match() {
+        let code = "class WebrtcWhepConfig:\n    pass\n";
+        let out = post_process_python(code, "WebrtcWhepConfig");
+        // Header added, body unchanged
+        assert!(out.contains("class WebrtcWhepConfig:"));
+        assert_eq!(out.matches("WebrtcWhepConfig").count(), 1);
+    }
 }
 
 /// Convert to PascalCase.

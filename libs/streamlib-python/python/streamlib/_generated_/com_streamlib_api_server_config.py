@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, Union, get_args, get_origin
 
 
 @dataclass
-class APIServerConfig:
+class ApiServerConfig:
     """
     Configuration for the runtime API server
     """
@@ -39,7 +39,7 @@ class APIServerConfig:
 
 
     @classmethod
-    def from_json_data(cls, data: Any) -> 'APIServerConfig':
+    def from_json_data(cls, data: Any) -> 'ApiServerConfig':
         return cls(
             _from_json_data(str, data.get("host")),
             _from_json_data(int, data.get("port")),
