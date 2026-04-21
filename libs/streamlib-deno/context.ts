@@ -224,16 +224,16 @@ export class NativeRuntimeContextFullAccess implements RuntimeContextFullAccess 
 class NativeInputPorts implements InputPorts {
   private lib: NativeLib;
   private ctxPtr: Deno.PointerObject;
-  private readBuf: Uint8Array;
-  private outLen: Uint32Array;
-  private outTs: BigInt64Array;
+  private readBuf: Uint8Array<ArrayBuffer>;
+  private outLen: Uint32Array<ArrayBuffer>;
+  private outTs: BigInt64Array<ArrayBuffer>;
 
   constructor(lib: NativeLib, ctxPtr: Deno.PointerObject) {
     this.lib = lib;
     this.ctxPtr = ctxPtr;
-    this.readBuf = new Uint8Array(MAX_PAYLOAD_SIZE);
-    this.outLen = new Uint32Array(1);
-    this.outTs = new BigInt64Array(1);
+    this.readBuf = new Uint8Array(new ArrayBuffer(MAX_PAYLOAD_SIZE));
+    this.outLen = new Uint32Array(new ArrayBuffer(4));
+    this.outTs = new BigInt64Array(new ArrayBuffer(8));
   }
 
   read<T = unknown>(
@@ -245,7 +245,9 @@ class NativeInputPorts implements InputPorts {
     return { value, timestampNs: raw.timestampNs };
   }
 
-  readRaw(portName: string): { data: Uint8Array; timestampNs: bigint } | null {
+  readRaw(
+    portName: string,
+  ): { data: Uint8Array<ArrayBuffer>; timestampNs: bigint } | null {
     const portNameBuf = cString(portName);
     const outLenPtr = Deno.UnsafePointer.of(this.outLen);
     const outTsPtr = Deno.UnsafePointer.of(this.outTs);
@@ -265,7 +267,7 @@ class NativeInputPorts implements InputPorts {
     }
 
     const len = this.outLen[0];
-    const data = new Uint8Array(len);
+    const data = new Uint8Array(new ArrayBuffer(len));
     data.set(this.readBuf.subarray(0, len));
     return { data, timestampNs: this.outTs[0] };
   }
@@ -284,11 +286,17 @@ class NativeOutputPorts implements OutputPorts {
   }
 
   write(portName: string, value: unknown, timestampNs: bigint): void {
-    const data = msgpack.encode(value);
-    this.writeRaw(portName, new Uint8Array(data), timestampNs);
+    const encoded = msgpack.encode(value);
+    const buf = new Uint8Array(new ArrayBuffer(encoded.byteLength));
+    buf.set(encoded);
+    this.writeRaw(portName, buf, timestampNs);
   }
 
-  writeRaw(portName: string, data: Uint8Array, timestampNs: bigint): void {
+  writeRaw(
+    portName: string,
+    data: Uint8Array<ArrayBuffer>,
+    timestampNs: bigint,
+  ): void {
     const portNameBuf = cString(portName);
     const dataPtr = Deno.UnsafePointer.of(data);
 

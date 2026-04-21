@@ -124,10 +124,10 @@ export function loadNativeLib(path: string): NativeLib {
 /**
  * Encode a string to a null-terminated UTF-8 buffer.
  */
-export function cString(str: string): Uint8Array {
+export function cString(str: string): Uint8Array<ArrayBuffer> {
   const encoder = new TextEncoder();
   const encoded = encoder.encode(str);
-  const buf = new Uint8Array(encoded.length + 1);
+  const buf = new Uint8Array(new ArrayBuffer(encoded.length + 1));
   buf.set(encoded);
   buf[encoded.length] = 0; // null terminator
   return buf;
