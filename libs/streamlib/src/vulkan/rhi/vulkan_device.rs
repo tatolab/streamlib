@@ -1066,8 +1066,7 @@ impl VulkanDevice {
     ) -> Result<()> {
         let _lock = self.mutex_for_queue(queue).lock()
             .unwrap_or_else(|e| e.into_inner());
-        self.device
-            .queue_submit2(queue, submits, fence)
+        unsafe { self.device.queue_submit2(queue, submits, fence) }
             .map(|_| ())
             .map_err(|e| StreamError::GpuError(format!("queue_submit2 failed: {e}")))
     }
@@ -1080,7 +1079,7 @@ impl VulkanDevice {
     ) -> std::result::Result<vk::SuccessCode, vk::ErrorCode> {
         let _lock = self.mutex_for_queue(queue).lock()
             .unwrap_or_else(|e| e.into_inner());
-        self.device.queue_present_khr(queue, present_info)
+        unsafe { self.device.queue_present_khr(queue, present_info) }
     }
 
     /// Acquire the device-level mutex for resource creation operations.
@@ -1098,7 +1097,7 @@ impl vulkan_video::RhiQueueSubmitter for VulkanDevice {
     ) -> vulkanalia::VkResult<()> {
         let _lock = self.mutex_for_queue(queue).lock()
             .unwrap_or_else(|e| e.into_inner());
-        self.device.queue_submit2(queue, submits, fence).map(|_| ())
+        unsafe { self.device.queue_submit2(queue, submits, fence) }.map(|_| ())
     }
 
     fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {
@@ -1124,28 +1123,34 @@ impl VulkanDevice {
         let queue = self.queue;
         let qf = self.queue_family_index;
 
-        let pool = device.create_command_pool(
-            &vk::CommandPoolCreateInfo::builder()
-                .queue_family_index(qf)
-                .flags(vk::CommandPoolCreateFlags::TRANSIENT),
-            None,
-        ).map_err(|e| StreamError::GpuError(format!("upload cmd pool: {e}")))?;
+        let pool = unsafe {
+            device.create_command_pool(
+                &vk::CommandPoolCreateInfo::builder()
+                    .queue_family_index(qf)
+                    .flags(vk::CommandPoolCreateFlags::TRANSIENT),
+                None,
+            )
+        }.map_err(|e| StreamError::GpuError(format!("upload cmd pool: {e}")))?;
 
-        let cb = device.allocate_command_buffers(
-            &vk::CommandBufferAllocateInfo::builder()
-                .command_pool(pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1),
-        ).map_err(|e| StreamError::GpuError(format!("upload cmd buf: {e}")))?[0];
+        let cb = unsafe {
+            device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::builder()
+                    .command_pool(pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+        }.map_err(|e| StreamError::GpuError(format!("upload cmd buf: {e}")))?[0];
 
-        let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)
+        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
             .map_err(|e| StreamError::GpuError(format!("upload fence: {e}")))?;
 
-        device.begin_command_buffer(
-            cb,
-            &vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-        ).map_err(|e| StreamError::GpuError(format!("begin cb: {e}")))?;
+        unsafe {
+            device.begin_command_buffer(
+                cb,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+        }.map_err(|e| StreamError::GpuError(format!("begin cb: {e}")))?;
 
         // Barrier: UNDEFINED → TRANSFER_DST
         let barrier_to_dst = vk::ImageMemoryBarrier2::builder()
@@ -1168,7 +1173,7 @@ impl VulkanDevice {
         let barriers_to_dst = [barrier_to_dst];
         let dep_to_dst = vk::DependencyInfo::builder()
             .image_memory_barriers(&barriers_to_dst);
-        device.cmd_pipeline_barrier2(cb, &dep_to_dst);
+        unsafe { device.cmd_pipeline_barrier2(cb, &dep_to_dst) };
 
         // Copy buffer → image
         let region = vk::BufferImageCopy {
@@ -1184,10 +1189,12 @@ impl VulkanDevice {
             image_offset: vk::Offset3D::default(),
             image_extent: vk::Extent3D { width, height, depth: 1 },
         };
-        device.cmd_copy_buffer_to_image(
-            cb, src_buffer, dst_image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region],
-        );
+        unsafe {
+            device.cmd_copy_buffer_to_image(
+                cb, src_buffer, dst_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL, &[region],
+            )
+        };
 
         // Barrier: TRANSFER_DST → SHADER_READ_ONLY
         let barrier_to_read = vk::ImageMemoryBarrier2::builder()
@@ -1210,9 +1217,10 @@ impl VulkanDevice {
         let barriers_to_read = [barrier_to_read];
         let dep_to_read = vk::DependencyInfo::builder()
             .image_memory_barriers(&barriers_to_read);
-        device.cmd_pipeline_barrier2(cb, &dep_to_read);
+        unsafe { device.cmd_pipeline_barrier2(cb, &dep_to_read) };
 
-        device.end_command_buffer(cb).map_err(|e| StreamError::GpuError(format!("end cb: {e}")))?;
+        unsafe { device.end_command_buffer(cb) }
+            .map_err(|e| StreamError::GpuError(format!("end cb: {e}")))?;
 
         let cb_submit = vk::CommandBufferSubmitInfo::builder()
             .command_buffer(cb)
@@ -1221,12 +1229,12 @@ impl VulkanDevice {
         let submit = vk::SubmitInfo2::builder()
             .command_buffer_infos(&cb_submits)
             .build();
-        self.submit_to_queue(queue, &[submit], fence)?;
-        device.wait_for_fences(&[fence], true, u64::MAX)
+        unsafe { self.submit_to_queue(queue, &[submit], fence) }?;
+        unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .map_err(|e| StreamError::GpuError(format!("wait: {e}")))?;
 
-        device.destroy_fence(fence, None);
-        device.destroy_command_pool(pool, None);
+        unsafe { device.destroy_fence(fence, None) };
+        unsafe { device.destroy_command_pool(pool, None) };
 
         Ok(())
     }

@@ -306,22 +306,24 @@ unsafe fn create_bgra_upload_resources(
         required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
         ..Default::default()
     };
-    let (image, allocation) = allocator.create_image(image_info, &alloc_options)?;
+    let (image, allocation) = unsafe { allocator.create_image(image_info, &alloc_options) }?;
 
-    let view = device.create_image_view(
-        &vk::ImageViewCreateInfo::builder()
-            .image(image)
-            .view_type(vk::ImageViewType::_2D)
-            .format(vk::Format::B8G8R8A8_UNORM)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            }),
-        None,
-    )?;
+    let view = unsafe {
+        device.create_image_view(
+            &vk::ImageViewCreateInfo::builder()
+                .image(image)
+                .view_type(vk::ImageViewType::_2D)
+                .format(vk::Format::B8G8R8A8_UNORM)
+                .subresource_range(vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                }),
+            None,
+        )
+    }?;
 
     // Staging buffer (host-visible, for CPU → GPU upload).
     let staging_size = (aligned_w * aligned_h * 4) as u64;
@@ -336,7 +338,7 @@ unsafe fn create_bgra_upload_resources(
             | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
         ..Default::default()
     };
-    let (staging_buf, staging_alloc) = allocator.create_buffer(staging_info, &staging_opts)?;
+    let (staging_buf, staging_alloc) = unsafe { allocator.create_buffer(staging_info, &staging_opts) }?;
     let info = allocator.get_allocation_info(staging_alloc);
     let staging_ptr = info.pMappedData as *mut u8;
 
@@ -364,41 +366,49 @@ unsafe fn upload_and_encode(
     let src_row_bytes = (WIDTH * 4) as usize;
     let dst_row_bytes = (aligned_w * 4) as usize;
     if src_row_bytes == dst_row_bytes && WIDTH == aligned_w && HEIGHT == aligned_h {
-        std::ptr::copy_nonoverlapping(bgra_data.as_ptr(), staging_ptr, bgra_data.len());
+        unsafe { std::ptr::copy_nonoverlapping(bgra_data.as_ptr(), staging_ptr, bgra_data.len()) };
     } else {
         // Clear the staging buffer first (padding rows/columns).
-        std::ptr::write_bytes(staging_ptr, 0, (aligned_w * aligned_h * 4) as usize);
+        unsafe { std::ptr::write_bytes(staging_ptr, 0, (aligned_w * aligned_h * 4) as usize) };
         for row in 0..HEIGHT as usize {
             let src_off = row * src_row_bytes;
             let dst_off = row * dst_row_bytes;
-            std::ptr::copy_nonoverlapping(
-                bgra_data.as_ptr().add(src_off),
-                staging_ptr.add(dst_off),
-                src_row_bytes,
-            );
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bgra_data.as_ptr().add(src_off),
+                    staging_ptr.add(dst_off),
+                    src_row_bytes,
+                )
+            };
         }
     }
 
     // Record transfer commands: copy staging → GPU image, then transition.
     // We create a one-shot command pool per call for simplicity.
-    let pool = device.create_command_pool(
-        &vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(transfer_qf)
-            .flags(vk::CommandPoolCreateFlags::TRANSIENT),
-        None,
-    )?;
-    let cb = device.allocate_command_buffers(
-        &vk::CommandBufferAllocateInfo::builder()
-            .command_pool(pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1),
-    )?[0];
+    let pool = unsafe {
+        device.create_command_pool(
+            &vk::CommandPoolCreateInfo::builder()
+                .queue_family_index(transfer_qf)
+                .flags(vk::CommandPoolCreateFlags::TRANSIENT),
+            None,
+        )
+    }?;
+    let cb = unsafe {
+        device.allocate_command_buffers(
+            &vk::CommandBufferAllocateInfo::builder()
+                .command_pool(pool)
+                .level(vk::CommandBufferLevel::PRIMARY)
+                .command_buffer_count(1),
+        )
+    }?[0];
 
-    device.begin_command_buffer(
-        cb,
-        &vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
-    )?;
+    unsafe {
+        device.begin_command_buffer(
+            cb,
+            &vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+        )
+    }?;
 
     // Transition BGRA image: UNDEFINED → TRANSFER_DST_OPTIMAL
     let barrier_to_dst = vk::ImageMemoryBarrier::builder()
@@ -416,15 +426,17 @@ unsafe fn upload_and_encode(
         })
         .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE);
 
-    device.cmd_pipeline_barrier(
-        cb,
-        vk::PipelineStageFlags::TOP_OF_PIPE,
-        vk::PipelineStageFlags::TRANSFER,
-        vk::DependencyFlags::empty(),
-        &[] as &[vk::MemoryBarrier],
-        &[] as &[vk::BufferMemoryBarrier],
-        &[barrier_to_dst],
-    );
+    unsafe {
+        device.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[] as &[vk::MemoryBarrier],
+            &[] as &[vk::BufferMemoryBarrier],
+            &[barrier_to_dst],
+        )
+    };
 
     // Copy staging buffer → BGRA image.
     let region = vk::BufferImageCopy::builder()
@@ -443,13 +455,15 @@ unsafe fn upload_and_encode(
             depth: 1,
         });
 
-    device.cmd_copy_buffer_to_image(
-        cb,
-        staging_buf,
-        bgra_image,
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        &[region],
-    );
+    unsafe {
+        device.cmd_copy_buffer_to_image(
+            cb,
+            staging_buf,
+            bgra_image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &[region],
+        )
+    };
 
     // Transition BGRA image: TRANSFER_DST_OPTIMAL → SHADER_READ_ONLY_OPTIMAL
     let barrier_to_read = vk::ImageMemoryBarrier::builder()
@@ -468,28 +482,32 @@ unsafe fn upload_and_encode(
         .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
         .dst_access_mask(vk::AccessFlags::SHADER_READ);
 
-    device.cmd_pipeline_barrier(
-        cb,
-        vk::PipelineStageFlags::TRANSFER,
-        vk::PipelineStageFlags::COMPUTE_SHADER,
-        vk::DependencyFlags::empty(),
-        &[] as &[vk::MemoryBarrier],
-        &[] as &[vk::BufferMemoryBarrier],
-        &[barrier_to_read],
-    );
+    unsafe {
+        device.cmd_pipeline_barrier(
+            cb,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::COMPUTE_SHADER,
+            vk::DependencyFlags::empty(),
+            &[] as &[vk::MemoryBarrier],
+            &[] as &[vk::BufferMemoryBarrier],
+            &[barrier_to_read],
+        )
+    };
 
-    device.end_command_buffer(cb)?;
+    unsafe { device.end_command_buffer(cb) }?;
 
     // Submit and wait.
-    let fence = device.create_fence(&vk::FenceCreateInfo::default(), None)?;
-    device.queue_submit(
-        transfer_queue,
-        &[vk::SubmitInfo::builder().command_buffers(&[cb])],
-        fence,
-    )?;
-    device.wait_for_fences(&[fence], true, u64::MAX)?;
-    device.destroy_fence(fence, None);
-    device.destroy_command_pool(pool, None);
+    let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }?;
+    unsafe {
+        device.queue_submit(
+            transfer_queue,
+            &[vk::SubmitInfo::builder().command_buffers(&[cb])],
+            fence,
+        )
+    }?;
+    unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }?;
+    unsafe { device.destroy_fence(fence, None) };
+    unsafe { device.destroy_command_pool(pool, None) };
 
     // Now the BGRA image is in SHADER_READ_ONLY_OPTIMAL — encode it.
     let packets = encoder.encode_image(bgra_view, timestamp_ns)?;
