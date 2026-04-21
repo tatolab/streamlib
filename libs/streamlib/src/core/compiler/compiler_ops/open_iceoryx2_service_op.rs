@@ -360,28 +360,28 @@ fn open_iceoryx2_subprocess_to_subprocess(
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let _service = iceoryx2_node.open_or_create_service(&service_name)?;
 
+    let output_schema = {
+        let source_proc_type = graph
+            .traversal_mut()
+            .v(source_proc_id)
+            .first()
+            .map(|node| node.processor_type().to_string())
+            .unwrap_or_default();
+
+        PROCESSOR_REGISTRY
+            .port_info(&source_proc_type)
+            .and_then(|(_, outputs)| {
+                outputs
+                    .iter()
+                    .find(|p| p.name == source_port)
+                    .map(|p| p.data_type.clone())
+            })
+            .unwrap_or_default()
+    };
+    let max_payload = max_payload_bytes_for_schema(&output_schema);
+
     // Store output wiring info on the source subprocess
     {
-        let output_schema = {
-            let source_proc_type = graph
-                .traversal_mut()
-                .v(source_proc_id)
-                .first()
-                .map(|node| node.processor_type().to_string())
-                .unwrap_or_default();
-
-            PROCESSOR_REGISTRY
-                .port_info(&source_proc_type)
-                .and_then(|(_, outputs)| {
-                    outputs
-                        .iter()
-                        .find(|p| p.name == source_port)
-                        .map(|p| p.data_type.clone())
-                })
-                .unwrap_or_default()
-        };
-
-        let max_payload = max_payload_bytes_for_schema(&output_schema);
         let source_proc_arc = get_single_processor(graph, source_proc_id)?;
         let mut source_guard = source_proc_arc.lock();
         if let Some(deno_host) = source_guard
@@ -423,6 +423,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 "name": dest_port,
                 "service_name": service_name,
                 "read_mode": "skip_to_latest",
+                "max_payload_bytes": max_payload,
             }));
         } else if let Some(python_native_host) = dest_guard
             .as_any_mut()
@@ -434,6 +435,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                     "name": dest_port,
                     "service_name": service_name,
                     "read_mode": "skip_to_latest",
+                    "max_payload_bytes": max_payload,
                 }));
         }
     }
@@ -620,7 +622,8 @@ fn open_iceoryx2_rust_to_subprocess(
     let service = iceoryx2_node.open_or_create_service(&service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
-    let publisher = service.create_publisher(max_payload_bytes_for_schema(&output_schema))?;
+    let max_payload = max_payload_bytes_for_schema(&output_schema);
+    let publisher = service.create_publisher(max_payload)?;
 
     // Configure source OutputWriter with port mapping and publisher
     {
@@ -648,6 +651,7 @@ fn open_iceoryx2_rust_to_subprocess(
                 "name": dest_port,
                 "service_name": service_name,
                 "read_mode": "skip_to_latest",
+                "max_payload_bytes": max_payload,
             }));
             tracing::debug!(
                 "Stored input wiring on Deno processor '{}': port='{}', service='{}'",
@@ -665,6 +669,7 @@ fn open_iceoryx2_rust_to_subprocess(
                     "name": dest_port,
                     "service_name": service_name,
                     "read_mode": "skip_to_latest",
+                    "max_payload_bytes": max_payload,
                 }));
             tracing::debug!(
                 "Stored input wiring on Python native processor '{}': port='{}', service='{}'",

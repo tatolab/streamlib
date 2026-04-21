@@ -20,7 +20,9 @@ use std::time::{Duration, Instant};
 
 use iceoryx2::prelude::*;
 use streamlib::core::embedded_schemas::max_payload_bytes_for_schema;
-use streamlib::iceoryx2::{Iceoryx2Node, MAX_PAYLOAD_SIZE};
+use streamlib::iceoryx2::{
+    FrameHeader, Iceoryx2Node, FRAME_HEADER_SIZE, MAX_PAYLOAD_SIZE,
+};
 
 // =============================================================================
 // A) Direct iceoryx2 slice limit tests
@@ -216,6 +218,75 @@ fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
         "Expected 256 KB loan to succeed on encodedvideoframe-sized publisher ({} bytes), got: {:?}",
         max_bytes,
         result.err()
+    );
+}
+
+/// Full publish/subscribe round-trip using the subprocess FFI wire format:
+/// `[FrameHeader (204 bytes)][encoded video data (256 KB)]` — the exact layout
+/// `sldn_output_write` / `slpn_output_write` build and `sldn_input_poll` /
+/// `slpn_input_poll` parse when a Deno or Python subprocess carries an
+/// encodedvideoframe. Before the per-input `max_payload_bytes` wiring fix,
+/// the TS/Python read buffer was hard-coded to 32 KB and this payload would
+/// have been silently truncated on receipt.
+#[test]
+fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
+    let node = Iceoryx2Node::new().unwrap();
+    let service = node
+        .open_or_create_service("streamlib/test/frame-header-256kb")
+        .unwrap();
+
+    let data_size = 256 * 1024;
+    let max_bytes = max_payload_bytes_for_schema("com.tatolab.encodedvideoframe");
+    // Publisher sized like the FFI layer: schema max + header.
+    let publisher = service.create_publisher(max_bytes).unwrap();
+    let subscriber = service.create_subscriber().unwrap();
+
+    let mut data = vec![0u8; data_size];
+    for (i, byte) in data.iter_mut().enumerate() {
+        *byte = (i % 251) as u8;
+    }
+
+    let total_len = FRAME_HEADER_SIZE + data_size;
+    let mut frame = vec![0u8; total_len];
+    FrameHeader::new("dest_port", "com.tatolab.encodedvideoframe", 42, data_size as u32)
+        .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+    frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
+
+    let sample = publisher.loan_slice_uninit(total_len).expect(
+        "loan_slice_uninit should succeed at FRAME_HEADER_SIZE + 256 KB on an \
+         encodedvideoframe-sized publisher",
+    );
+    let sample = sample.write_from_slice(&frame);
+    sample.send().expect("send should succeed");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut received: Option<Vec<u8>> = None;
+    while received.is_none() && Instant::now() < deadline {
+        if let Ok(Some(sample)) = subscriber.receive() {
+            received = Some(sample.payload().to_vec());
+        } else {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    let buf = received.expect("subscriber should have received the frame within 2s");
+    assert_eq!(
+        buf.len(),
+        total_len,
+        "received frame length should match header + data"
+    );
+
+    let header = FrameHeader::read_from_slice(&buf);
+    assert_eq!(header.port(), "dest_port");
+    assert_eq!(header.schema(), "com.tatolab.encodedvideoframe");
+    assert_eq!(header.timestamp_ns, 42);
+    assert_eq!(header.len as usize, data_size);
+    assert_eq!(
+        &buf[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + data_size],
+        data.as_slice(),
+        "received payload bytes should match sent payload — truncation or \
+         corruption would indicate the slice subscriber dropped data past the \
+         old 32 KB limit"
     );
 }
 

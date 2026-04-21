@@ -34,6 +34,7 @@ from .processor_context import (
     NativeRuntimeContextLimitedAccess,
     bridge_read_message,
     bridge_send_message,
+    compute_read_buf_bytes,
     load_native_lib,
 )
 from .telemetry import setup_subprocess_telemetry
@@ -65,13 +66,15 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
         raise RuntimeError("Failed to create native context")
 
     # Subscribe to input iceoryx2 services
-    for inp in ports.get("inputs", []):
+    inputs = ports.get("inputs", [])
+    read_buf_bytes = compute_read_buf_bytes(inputs)
+    for inp in inputs:
         port_name = inp["name"]
         service_name = inp["service_name"]
         read_mode = inp.get("read_mode", "skip_to_latest")
         _logger.info(
-            "Subscribing to input: port='%s', service='%s', read_mode='%s'",
-            port_name, service_name, read_mode,
+            "Subscribing to input: port='%s', service='%s', read_mode='%s', max_payload_bytes=%s",
+            port_name, service_name, read_mode, inp.get("max_payload_bytes"),
         )
         result = lib.slpn_input_subscribe(ctx_ptr, service_name.encode("utf-8"))
         if result != 0:
@@ -121,7 +124,9 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             )
 
     state = NativeProcessorState(
-        lib, ctx_ptr, config, broker_ptr, escalate_channel=escalate_channel,
+        lib, ctx_ptr, config, broker_ptr,
+        escalate_channel=escalate_channel,
+        read_buf_bytes=read_buf_bytes,
     )
     return lib, ctx_ptr, broker_ptr, state
 

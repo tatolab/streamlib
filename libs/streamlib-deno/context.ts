@@ -26,7 +26,59 @@ import type {
   RuntimeContextLimitedAccess,
 } from "./types.ts";
 
-const MAX_PAYLOAD_SIZE = 32768;
+/**
+ * Default read-buffer capacity when the host sends no per-input
+ * `max_payload_bytes`. Matches Rust's `streamlib_ipc_types::MAX_PAYLOAD_SIZE`.
+ */
+export const DEFAULT_READ_BUF_BYTES = 65536;
+
+/**
+ * Size the input read buffer to the largest per-port `max_payload_bytes` the
+ * host declared, with [`DEFAULT_READ_BUF_BYTES`] as a floor. A fixed smaller
+ * buffer silently truncates payloads larger than it — including encoded video
+ * frames, which can be arbitrarily large depending on how the schema is
+ * configured.
+ */
+export function computeReadBufBytes(
+  inputs: readonly { max_payload_bytes?: number }[],
+): number {
+  return inputs.reduce(
+    (acc, port) => Math.max(acc, port.max_payload_bytes ?? 0),
+    DEFAULT_READ_BUF_BYTES,
+  );
+}
+
+/**
+ * Build the return value of a single FFI read given the output-parameter state
+ * after `sldn_input_read` has populated it. Extracted for testing so the
+ * empty / happy / truncated branches can be exercised without spinning up
+ * iceoryx2.
+ *
+ * Returns `null` when the read produced no data or when the payload the native
+ * side reported exceeds the caller's read buffer (truncation). Otherwise
+ * returns an owned copy of the first `outLen[0]` bytes of `readBuf`.
+ */
+export function decodeReadResult(
+  readBuf: Uint8Array<ArrayBuffer>,
+  outLen: Uint32Array<ArrayBuffer>,
+  outTs: BigInt64Array<ArrayBuffer>,
+  readBufBytes: number,
+  portName: string,
+): { data: Uint8Array<ArrayBuffer>; timestampNs: bigint } | null {
+  if (outLen[0] === 0) {
+    return null;
+  }
+  const len = outLen[0];
+  if (len > readBufBytes) {
+    console.error(
+      `[streamlib-deno] payload truncated on port '${portName}': native reported ${len} bytes but read buffer is ${readBufBytes}`,
+    );
+    return null;
+  }
+  const data = new Uint8Array(new ArrayBuffer(len));
+  data.set(readBuf.subarray(0, len));
+  return { data, timestampNs: outTs[0] };
+}
 
 /**
  * Shared FFI-backed state reused by both capability views for a single
@@ -50,12 +102,13 @@ export class NativeProcessorState {
     config: Record<string, unknown>,
     brokerPtr: Deno.PointerObject | null = null,
     escalate: EscalateChannel | null = null,
+    readBufBytes: number = DEFAULT_READ_BUF_BYTES,
   ) {
     this.lib = lib;
     this.ctxPtr = ctxPtr;
     this.config = config;
     this.brokerPtr = brokerPtr;
-    this.inputs = new NativeInputPorts(lib, ctxPtr);
+    this.inputs = new NativeInputPorts(lib, ctxPtr, readBufBytes);
     this.outputs = new NativeOutputPorts(lib, ctxPtr);
     this.escalate = escalate;
   }
@@ -225,13 +278,15 @@ class NativeInputPorts implements InputPorts {
   private lib: NativeLib;
   private ctxPtr: Deno.PointerObject;
   private readBuf: Uint8Array<ArrayBuffer>;
+  private readBufBytes: number;
   private outLen: Uint32Array<ArrayBuffer>;
   private outTs: BigInt64Array<ArrayBuffer>;
 
-  constructor(lib: NativeLib, ctxPtr: Deno.PointerObject) {
+  constructor(lib: NativeLib, ctxPtr: Deno.PointerObject, readBufBytes: number) {
     this.lib = lib;
     this.ctxPtr = ctxPtr;
-    this.readBuf = new Uint8Array(new ArrayBuffer(MAX_PAYLOAD_SIZE));
+    this.readBufBytes = readBufBytes;
+    this.readBuf = new Uint8Array(new ArrayBuffer(readBufBytes));
     this.outLen = new Uint32Array(new ArrayBuffer(4));
     this.outTs = new BigInt64Array(new ArrayBuffer(8));
   }
@@ -257,19 +312,21 @@ class NativeInputPorts implements InputPorts {
       this.ctxPtr,
       portNameBuf,
       readBufPtr!,
-      MAX_PAYLOAD_SIZE,
+      this.readBufBytes,
       outLenPtr!,
       outTsPtr!,
     );
 
-    if (result !== 0 || this.outLen[0] === 0) {
+    if (result !== 0) {
       return null;
     }
-
-    const len = this.outLen[0];
-    const data = new Uint8Array(new ArrayBuffer(len));
-    data.set(this.readBuf.subarray(0, len));
-    return { data, timestampNs: this.outTs[0] };
+    return decodeReadResult(
+      this.readBuf,
+      this.outLen,
+      this.outTs,
+      this.readBufBytes,
+      portName,
+    );
   }
 }
 

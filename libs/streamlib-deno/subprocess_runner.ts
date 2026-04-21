@@ -17,6 +17,7 @@
 
 import { cString, loadNativeLib, type NativeLib } from "./native.ts";
 import {
+  computeReadBufBytes,
   NativeProcessorState,
   NativeRuntimeContextFullAccess,
   NativeRuntimeContextLimitedAccess,
@@ -184,8 +185,19 @@ async function main(): Promise<void> {
           assertCapability(processorId, cmd, msg, "full");
           const config = (msg.config as Record<string, unknown>) ?? {};
           const ports = (msg.ports as {
-            inputs?: { name: string; service_name: string; read_mode?: string }[];
-            outputs?: { name: string; dest_port: string; dest_service_name: string; schema_name: string }[];
+            inputs?: {
+              name: string;
+              service_name: string;
+              read_mode?: string;
+              max_payload_bytes?: number;
+            }[];
+            outputs?: {
+              name: string;
+              dest_port: string;
+              dest_service_name: string;
+              schema_name: string;
+              max_payload_bytes?: number;
+            }[];
           }) ?? { inputs: [], outputs: [] };
 
           // Subscribe to input iceoryx2 services
@@ -193,7 +205,7 @@ async function main(): Promise<void> {
           for (const input of inputPorts) {
             const readMode = input.read_mode ?? "skip_to_latest";
             console.error(
-              `[subprocess_runner:${processorId}] Subscribing to input: port='${input.name}', service='${input.service_name}', read_mode='${readMode}'`,
+              `[subprocess_runner:${processorId}] Subscribing to input: port='${input.name}', service='${input.service_name}', read_mode='${readMode}', max_payload_bytes=${input.max_payload_bytes ?? "default"}`,
             );
             const result = lib.symbols.sldn_input_subscribe(
               ctxPtr,
@@ -257,6 +269,8 @@ async function main(): Promise<void> {
               processor = ProcessorClass as ProcessorLifecycle;
             }
 
+            const readBufBytes = computeReadBufBytes(inputPorts);
+
             // Build shared FFI state and the two capability views once per
             // lifecycle. Each view wraps the same underlying FFI ctx, so
             // input/output ports and timing are shared; the capability split
@@ -267,6 +281,7 @@ async function main(): Promise<void> {
               config,
               brokerPtr,
               escalateChannel,
+              readBufBytes,
             );
             fullCtx = new NativeRuntimeContextFullAccess(state);
             limitedCtx = new NativeRuntimeContextLimitedAccess(state);

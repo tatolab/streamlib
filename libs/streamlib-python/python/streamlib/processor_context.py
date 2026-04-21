@@ -62,7 +62,48 @@ def bridge_send_message(stdout, msg):
 # ============================================================================
 
 
-MAX_PAYLOAD_SIZE = 32768
+#: Default read-buffer capacity when the host sends no per-input
+#: ``max_payload_bytes``. Matches Rust's ``streamlib_ipc_types::MAX_PAYLOAD_SIZE``.
+DEFAULT_READ_BUF_BYTES = 65536
+
+
+def compute_read_buf_bytes(inputs) -> int:
+    """Size the input read buffer to the largest per-port ``max_payload_bytes``
+    the host declared, floored at :data:`DEFAULT_READ_BUF_BYTES`.
+
+    A fixed smaller buffer silently truncates payloads larger than it —
+    including encoded video frames, which can be arbitrarily large depending
+    on how the schema is configured.
+    """
+    declared = [
+        inp.get("max_payload_bytes") or 0
+        for inp in inputs
+    ]
+    return max(DEFAULT_READ_BUF_BYTES, *declared) if declared else DEFAULT_READ_BUF_BYTES
+
+
+def decode_read_result(read_buf, read_buf_bytes: int, data_len: int, timestamp_ns: int, port_name: str):
+    """Build the return value of a single FFI read given the output state
+    ``slpn_input_read`` populated.
+
+    Returns ``(bytes, timestamp_ns)`` for a valid read, ``(None, None)`` when
+    the read produced no data or when the native side reported more bytes than
+    the read buffer can hold (truncation). Extracted for testing so the empty
+    / happy / truncated branches can be exercised without spinning up iceoryx2.
+    """
+    if data_len == 0:
+        return None, None
+    if data_len > read_buf_bytes:
+        import sys
+
+        print(
+            f"[streamlib-python] payload truncated on port '{port_name}': "
+            f"native reported {data_len} bytes but read buffer is "
+            f"{read_buf_bytes}",
+            file=sys.stderr,
+        )
+        return None, None
+    return bytes(read_buf[:data_len]), timestamp_ns
 
 
 def load_native_lib(lib_path):
@@ -155,50 +196,52 @@ def load_native_lib(lib_path):
 class NativeInputs:
     """Input ports backed by iceoryx2 subscribers via FFI."""
 
-    def __init__(self, lib, ctx_ptr):
+    def __init__(self, lib, ctx_ptr, read_buf_bytes: int = DEFAULT_READ_BUF_BYTES):
         import ctypes
 
         self._lib = lib
         self._ctx_ptr = ctx_ptr
-        self._read_buf = (ctypes.c_uint8 * MAX_PAYLOAD_SIZE)()
+        self._read_buf_bytes = read_buf_bytes
+        self._read_buf = (ctypes.c_uint8 * read_buf_bytes)()
         self._out_len = ctypes.c_uint32(0)
         self._out_ts = ctypes.c_int64(0)
 
-    def read(self, port_name):
-        """Read latest data from a port. Returns deserialized msgpack data or None."""
+    def _read_raw(self, port_name):
+        """Call into FFI and return ``(data_bytes, timestamp_ns)`` or
+        ``(None, None)``. Logs on truncation."""
         import ctypes
 
         result = self._lib.slpn_input_read(
             self._ctx_ptr,
             port_name.encode("utf-8"),
             ctypes.cast(self._read_buf, ctypes.c_void_p),
-            MAX_PAYLOAD_SIZE,
+            self._read_buf_bytes,
             ctypes.byref(self._out_len),
             ctypes.byref(self._out_ts),
         )
-        if result != 0 or self._out_len.value == 0:
+        if result != 0:
+            return None, None
+        return decode_read_result(
+            self._read_buf,
+            self._read_buf_bytes,
+            self._out_len.value,
+            self._out_ts.value,
+            port_name,
+        )
+
+    def read(self, port_name):
+        """Read latest data from a port. Returns deserialized msgpack data or None."""
+        raw, _ = self._read_raw(port_name)
+        if raw is None:
             return None
-        data_len = self._out_len.value
-        raw = bytes(self._read_buf[:data_len])
         return msgpack.unpackb(raw, raw=False)
 
     def read_with_timestamp(self, port_name):
         """Read latest data and timestamp. Returns (data, timestamp_ns) or (None, None)."""
-        import ctypes
-
-        result = self._lib.slpn_input_read(
-            self._ctx_ptr,
-            port_name.encode("utf-8"),
-            ctypes.cast(self._read_buf, ctypes.c_void_p),
-            MAX_PAYLOAD_SIZE,
-            ctypes.byref(self._out_len),
-            ctypes.byref(self._out_ts),
-        )
-        if result != 0 or self._out_len.value == 0:
+        raw, ts = self._read_raw(port_name)
+        if raw is None:
             return None, None
-        data_len = self._out_len.value
-        raw = bytes(self._read_buf[:data_len])
-        return msgpack.unpackb(raw, raw=False), self._out_ts.value
+        return msgpack.unpackb(raw, raw=False), ts
 
 
 class NativeOutputs:
@@ -439,13 +482,14 @@ class NativeProcessorState:
         config: Optional[Dict[str, Any]],
         broker_ptr=None,
         escalate_channel: "Optional[EscalateChannel]" = None,
+        read_buf_bytes: int = DEFAULT_READ_BUF_BYTES,
     ) -> None:
         self._lib = lib
         self._ctx_ptr = ctx_ptr
         self._config = config or {}
         self._broker_ptr = broker_ptr
         self._escalate_channel = escalate_channel
-        self.inputs = NativeInputs(lib, ctx_ptr)
+        self.inputs = NativeInputs(lib, ctx_ptr, read_buf_bytes=read_buf_bytes)
         self.outputs = NativeOutputs(lib, ctx_ptr)
         # One instance of each GPU view shared across per-call context
         # wrappers so pool state and handle lifetimes are stable across

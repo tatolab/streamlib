@@ -1,8 +1,22 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@std/assert@*": "1.0.19",
+    "jsr:@std/assert@^1.0.19": "1.0.19",
+    "jsr:@std/internal@^1.0.12": "1.0.13",
     "npm:@msgpack/msgpack@3.0.0-beta2": "3.0.0-beta2",
     "npm:typegpu@0.8.2": "0.8.2"
+  },
+  "jsr": {
+    "@std/assert@1.0.19": {
+      "integrity": "eaada96ee120cb980bc47e040f82814d786fe8162ecc53c91d8df60b8755991e",
+      "dependencies": [
+        "jsr:@std/internal"
+      ]
+    },
+    "@std/internal@1.0.13": {
+      "integrity": "2f9546691d4ac2d32859c82dff284aaeac980ddeca38430d07941e7e288725c0"
+    }
   },
   "npm": {
     "@msgpack/msgpack@3.0.0-beta2": {
@@ -25,6 +39,7 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@std/assert@^1.0.19",
       "npm:@msgpack/msgpack@3.0.0-beta2"
     ]
   }
