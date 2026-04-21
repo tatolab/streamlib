@@ -106,7 +106,7 @@ See **Follow-ups** for the revised ticket list.
 ## Test matrix executed
 
 Twelve scenarios. Covers every dimension called out in
-[plan/294](../../plan/294-post-vulkan-cleanup-retest.md) steps 1–6 plus
+[#294](https://github.com/tatolab/streamlib/issues/294) steps 1–6 plus
 two additional scenarios I judged in-scope for a QA-owned rollup.
 
 ```mermaid

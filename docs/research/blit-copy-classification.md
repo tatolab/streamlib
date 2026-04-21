@@ -6,9 +6,9 @@ which left the blitter row of the §1 API split table conditional on
 this audit.
 
 Gating: unblocks [#324 Restrict `GpuContextLimitedAccess` API surface to
-safe ops](../../plan/324-restrict-sandbox-surface.md).
+safe ops](https://github.com/tatolab/streamlib/issues/324).
 
-Parent umbrella: [#319 GPU capability-based access](../../plan/319-gpu-capability-based-access.md).
+Parent umbrella: [#319 GPU capability-based access](https://github.com/tatolab/streamlib/issues/319).
 
 ---
 
@@ -206,7 +206,6 @@ not "add a helper."
 ## References
 
 - Design doc: [`docs/design/gpu-capability-sandbox.md`](../design/gpu-capability-sandbox.md) §1, §8.Q2
-- Plan file: [`plan/346-blit-copy-classification.md`](../../plan/346-blit-copy-classification.md)
 - Upstream ticket: [#346](https://github.com/tatolab/streamlib/issues/346)
 - Downstream ticket: [#324 Restrict `GpuContextLimitedAccess` API surface to safe ops](https://github.com/tatolab/streamlib/issues/324)
 - Metal blitter: `libs/streamlib/src/metal/rhi/blitter.rs`

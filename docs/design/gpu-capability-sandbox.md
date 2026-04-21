@@ -3,7 +3,6 @@
 Status: draft — gating the #319 umbrella (tasks #321–#326).
 
 Umbrella: [#319 GPU capability-based access](https://github.com/tatolab/streamlib/issues/319).
-Parent plan file: [`plan/319-gpu-capability-based-access.md`](../../plan/319-gpu-capability-based-access.md).
 
 ## Problem
 
@@ -801,5 +800,5 @@ high-breakage pattern we're trying to eliminate.
 - §8 decisions locked in (done — 2026-04-19).
 - #346 unblocked or completed before #324 starts.
 
-Once §8 decisions are reflected in the downstream plan files,
+Once §8 decisions are reflected in the downstream issues,
 #321 (the newtype introduction) can start on its own branch.

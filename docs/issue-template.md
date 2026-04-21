@@ -47,21 +47,33 @@ listed tests pass. See `docs/testing.md` for which test types apply when.
 ## Related
 
 - Milestone: <name>
-- Blocked by: #N
-- Blocks: #N
-- Related to: #N
+- See also: #N
+
+<!-- amos:ai-notes-begin -->
+## AI Agent Notes
+
+Agent-facing context that doesn't belong in the human-readable sections
+above — exact error strings, VUIDs, file paths, ruled-out approaches,
+hidden invariants. "None." is valid when there's nothing agent-specific
+to add; absence must be deliberate, not forgotten.
+<!-- amos:ai-notes-end -->
 ```
+
+**Dependency edges are native GitHub relationships**, not text. Set
+`Blocked by` / `Blocks` / `Parent` via GitHub's issue UI (or
+`gh api graphql` / `amos sync-edges`) — they don't go in the `Related`
+section. The `Related` section is for free-text context only ("see
+also", "context from #N", etc.).
 
 ## Rules agents must follow
 
-1. **One source of truth.** Create the issue in GitHub. Don't also create a
-   parallel amos plan file with duplicated content. Amos reflects GitHub,
-   not the other way around.
-2. **If local AI instructions are needed**, put them in an amos plan file
-   with the same `@github:tatolab/streamlib#N` identifier. The plan file
-   should contain *only* AI-agent-specific context (short-form notes,
-   references to local files, anything that doesn't belong in the public
-   issue). Never duplicate the description, exit criteria, or test list.
+1. **GitHub is the source of truth.** Every issue — description, exit
+   criteria, tests, dependency edges, AI-agent notes — lives in the
+   issue itself. Local plan files are deprecated; don't create new ones.
+2. **Every issue includes an AI Agent Notes section** (wrapped in the
+   `<!-- amos:ai-notes-begin -->` / `<!-- amos:ai-notes-end -->` markers
+   so tooling can update it safely). The section can be "None." when
+   there's no agent-specific context, but it must be present.
 3. **Every issue has exit criteria.** No exit criteria = scope is unclear.
    Push back and refine before starting work.
 4. **Every non-trivial issue has a Tests / validation section**, even if
