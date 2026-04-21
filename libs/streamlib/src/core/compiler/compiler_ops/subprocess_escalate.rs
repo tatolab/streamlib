@@ -17,15 +17,19 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use uuid::Uuid;
+
 use crate::_generated_::com_streamlib_escalate_request::{
-    EscalateRequestAcquirePixelBuffer, EscalateRequestReleaseHandle,
+    EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
+    EscalateRequestReleaseHandle,
 };
 use crate::_generated_::com_streamlib_escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
 use crate::_generated_::{EscalateRequest, EscalateResponse};
+use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::context::GpuContextLimitedAccess;
-use crate::core::rhi::{PixelFormat, RhiPixelBuffer};
+use crate::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat, TextureUsages};
 
 #[cfg(test)]
 use crate::core::error::{Result, StreamError};
@@ -40,18 +44,32 @@ pub(crate) const ESCALATE_RESPONSE_RPC: &str = "escalate_response";
 fn request_id(op: &EscalateRequest) -> &str {
     match op {
         EscalateRequest::AcquirePixelBuffer(p) => &p.request_id,
+        EscalateRequest::AcquireTexture(p) => &p.request_id,
         EscalateRequest::ReleaseHandle(p) => &p.request_id,
     }
 }
 
+/// Resource kept alive on behalf of a subprocess by
+/// [`EscalateHandleRegistry`]. The fields are only read via the `Drop`
+/// side-effect that releases them back to the host pool when removed
+/// from the registry — the map keeps the resource live, the resource's
+/// destructor does the release on removal.
+pub(crate) enum RegisteredHandle {
+    #[allow(dead_code)]
+    PixelBuffer(RhiPixelBuffer),
+    #[allow(dead_code)]
+    Texture(PooledTextureHandle),
+}
+
 /// Tracks resources acquired on behalf of a subprocess so `release_handle` —
-/// or subprocess death — can drop the host's strong reference. Buffers stay
+/// or subprocess death — can drop the host's strong reference. Resources stay
 /// alive for the duration of the host pool; this map simply prevents the
-/// buffer from being immediately recycled while the subprocess still
-/// references it by ID.
+/// resource from being immediately recycled while the subprocess still
+/// references it by ID. Dropping a [`PooledTextureHandle`] releases the pool
+/// slot; dropping an [`RhiPixelBuffer`] releases its refcount.
 #[derive(Default)]
 pub(crate) struct EscalateHandleRegistry {
-    buffers: Mutex<HashMap<String, RhiPixelBuffer>>,
+    handles: Mutex<HashMap<String, RegisteredHandle>>,
 }
 
 impl EscalateHandleRegistry {
@@ -60,24 +78,29 @@ impl EscalateHandleRegistry {
     }
 
     pub(crate) fn insert_buffer(&self, handle_id: String, buffer: RhiPixelBuffer) {
-        let mut map = self.buffers.lock().expect("poisoned");
-        map.insert(handle_id, buffer);
+        let mut map = self.handles.lock().expect("poisoned");
+        map.insert(handle_id, RegisteredHandle::PixelBuffer(buffer));
     }
 
-    pub(crate) fn remove_buffer(&self, handle_id: &str) -> bool {
-        let mut map = self.buffers.lock().expect("poisoned");
+    pub(crate) fn insert_texture(&self, handle_id: String, texture: PooledTextureHandle) {
+        let mut map = self.handles.lock().expect("poisoned");
+        map.insert(handle_id, RegisteredHandle::Texture(texture));
+    }
+
+    pub(crate) fn remove_handle(&self, handle_id: &str) -> bool {
+        let mut map = self.handles.lock().expect("poisoned");
         map.remove(handle_id).is_some()
     }
 
     pub(crate) fn clear(&self) {
-        let mut map = self.buffers.lock().expect("poisoned");
+        let mut map = self.handles.lock().expect("poisoned");
         map.clear();
     }
 
     /// Number of currently-held handles; visible for tests.
     #[cfg(test)]
-    pub(crate) fn buffer_count(&self) -> usize {
-        self.buffers.lock().expect("poisoned").len()
+    pub(crate) fn handle_count(&self) -> usize {
+        self.handles.lock().expect("poisoned").len()
     }
 }
 
@@ -109,6 +132,7 @@ pub(crate) fn handle_escalate_op(
                             width: Some(width),
                             height: Some(height),
                             format: Some(pixel_format_to_wire(parsed).to_string()),
+                            usage: None,
                         })
                     }
                     Err(e) => EscalateResponse::Err(EscalateResponseErr {
@@ -122,11 +146,57 @@ pub(crate) fn handle_escalate_op(
                 message: e,
             }),
         },
+        EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+            request_id: _,
+            width,
+            height,
+            format,
+            usage,
+        }) => {
+            let parsed_format = match parse_texture_format(&format) {
+                Ok(f) => f,
+                Err(e) => {
+                    return EscalateResponse::Err(EscalateResponseErr {
+                        request_id: rid,
+                        message: e,
+                    });
+                }
+            };
+            let parsed_usage = match parse_texture_usages(&usage) {
+                Ok(u) => u,
+                Err(e) => {
+                    return EscalateResponse::Err(EscalateResponseErr {
+                        request_id: rid,
+                        message: e,
+                    });
+                }
+            };
+            let desc = TexturePoolDescriptor::new(width, height, parsed_format)
+                .with_usage(parsed_usage);
+            match sandbox.escalate(|full| full.acquire_texture(&desc)) {
+                Ok(texture) => {
+                    let handle_id = Uuid::new_v4().to_string();
+                    registry.insert_texture(handle_id.clone(), texture);
+                    EscalateResponse::Ok(EscalateResponseOk {
+                        request_id: rid,
+                        handle_id,
+                        width: Some(width),
+                        height: Some(height),
+                        format: Some(texture_format_to_wire(parsed_format).to_string()),
+                        usage: Some(texture_usages_to_wire(parsed_usage)),
+                    })
+                }
+                Err(e) => EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!("acquire_texture failed: {e}"),
+                }),
+            }
+        }
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: _,
             handle_id,
         }) => {
-            let removed = registry.remove_buffer(&handle_id);
+            let removed = registry.remove_handle(&handle_id);
             if removed {
                 EscalateResponse::Ok(EscalateResponseOk {
                     request_id: rid,
@@ -134,6 +204,7 @@ pub(crate) fn handle_escalate_op(
                     width: None,
                     height: None,
                     format: None,
+                    usage: None,
                 })
             } else {
                 EscalateResponse::Err(EscalateResponseErr {
@@ -194,6 +265,84 @@ fn pixel_format_to_wire(fmt: PixelFormat) -> &'static str {
         PixelFormat::Gray8 => "gray8",
         PixelFormat::Unknown => "unknown",
     }
+}
+
+/// Parse a wire-format texture format string into a [`TextureFormat`].
+///
+/// Lowercase snake-case matches the variant name. Kept separate from
+/// [`parse_pixel_format`] so the vocabularies can evolve independently —
+/// pixel formats include video-specific YUV variants that textures don't
+/// expose, and texture formats include float variants that pixel buffers
+/// don't.
+fn parse_texture_format(s: &str) -> std::result::Result<TextureFormat, String> {
+    let normalized = s.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "rgba8_unorm" => Ok(TextureFormat::Rgba8Unorm),
+        "rgba8_unorm_srgb" => Ok(TextureFormat::Rgba8UnormSrgb),
+        "bgra8_unorm" => Ok(TextureFormat::Bgra8Unorm),
+        "bgra8_unorm_srgb" => Ok(TextureFormat::Bgra8UnormSrgb),
+        "rgba16_float" => Ok(TextureFormat::Rgba16Float),
+        "rgba32_float" => Ok(TextureFormat::Rgba32Float),
+        "nv12" => Ok(TextureFormat::Nv12),
+        other => Err(format!("unknown texture format '{other}'")),
+    }
+}
+
+fn texture_format_to_wire(fmt: TextureFormat) -> &'static str {
+    match fmt {
+        TextureFormat::Rgba8Unorm => "rgba8_unorm",
+        TextureFormat::Rgba8UnormSrgb => "rgba8_unorm_srgb",
+        TextureFormat::Bgra8Unorm => "bgra8_unorm",
+        TextureFormat::Bgra8UnormSrgb => "bgra8_unorm_srgb",
+        TextureFormat::Rgba16Float => "rgba16_float",
+        TextureFormat::Rgba32Float => "rgba32_float",
+        TextureFormat::Nv12 => "nv12",
+    }
+}
+
+/// Parse an array of usage tokens into a combined [`TextureUsages`] bitmask.
+///
+/// An empty list is rejected — a texture must have at least one usage or the
+/// RHI can't create it. Unknown tokens surface as an error so typos fail
+/// loudly on the wire rather than silently dropping flags.
+fn parse_texture_usages(tokens: &[String]) -> std::result::Result<TextureUsages, String> {
+    if tokens.is_empty() {
+        return Err("texture usage list must not be empty".to_string());
+    }
+    let mut out = TextureUsages::NONE;
+    for token in tokens {
+        let normalized = token.trim().to_ascii_lowercase();
+        let flag = match normalized.as_str() {
+            "copy_src" => TextureUsages::COPY_SRC,
+            "copy_dst" => TextureUsages::COPY_DST,
+            "texture_binding" => TextureUsages::TEXTURE_BINDING,
+            "storage_binding" => TextureUsages::STORAGE_BINDING,
+            "render_attachment" => TextureUsages::RENDER_ATTACHMENT,
+            other => return Err(format!("unknown texture usage '{other}'")),
+        };
+        out |= flag;
+    }
+    Ok(out)
+}
+
+fn texture_usages_to_wire(usage: TextureUsages) -> Vec<String> {
+    let mut out = Vec::new();
+    if usage.contains(TextureUsages::COPY_SRC) {
+        out.push("copy_src".to_string());
+    }
+    if usage.contains(TextureUsages::COPY_DST) {
+        out.push("copy_dst".to_string());
+    }
+    if usage.contains(TextureUsages::TEXTURE_BINDING) {
+        out.push("texture_binding".to_string());
+    }
+    if usage.contains(TextureUsages::STORAGE_BINDING) {
+        out.push("storage_binding".to_string());
+    }
+    if usage.contains(TextureUsages::RENDER_ATTACHMENT) {
+        out.push("render_attachment".to_string());
+    }
+    out
 }
 
 /// Try to parse an incoming bridge message as an [`EscalateRequest`].
@@ -361,6 +510,7 @@ mod tests {
             width: Some(16),
             height: Some(16),
             format: Some("bgra32".into()),
+            usage: None,
         });
         let env = envelope_response(resp);
         assert_eq!(
@@ -381,8 +531,55 @@ mod tests {
         // machines without a GPU still build+run the rest of the
         // suite.
         let registry = EscalateHandleRegistry::new();
-        assert_eq!(registry.buffer_count(), 0);
-        assert!(!registry.remove_buffer("missing"));
+        assert_eq!(registry.handle_count(), 0);
+        assert!(!registry.remove_handle("missing"));
+    }
+
+    #[test]
+    fn parse_texture_format_roundtrips_known_variants() {
+        assert_eq!(
+            parse_texture_format("bgra8_unorm"),
+            Ok(TextureFormat::Bgra8Unorm)
+        );
+        assert_eq!(
+            parse_texture_format("RGBA16_FLOAT"),
+            Ok(TextureFormat::Rgba16Float)
+        );
+        assert_eq!(parse_texture_format("nv12"), Ok(TextureFormat::Nv12));
+        assert!(parse_texture_format("xyz").is_err());
+    }
+
+    #[test]
+    fn parse_texture_usages_combines_tokens() {
+        let usage = parse_texture_usages(&[
+            "texture_binding".to_string(),
+            "copy_src".to_string(),
+        ])
+        .expect("known tokens");
+        assert!(usage.contains(TextureUsages::TEXTURE_BINDING));
+        assert!(usage.contains(TextureUsages::COPY_SRC));
+        assert!(!usage.contains(TextureUsages::STORAGE_BINDING));
+    }
+
+    #[test]
+    fn parse_texture_usages_rejects_empty_and_unknown() {
+        assert!(parse_texture_usages(&[]).is_err());
+        assert!(parse_texture_usages(&["bogus".to_string()]).is_err());
+    }
+
+    #[test]
+    fn texture_usages_to_wire_is_stable_order() {
+        let usage = TextureUsages::STORAGE_BINDING
+            | TextureUsages::COPY_SRC
+            | TextureUsages::TEXTURE_BINDING;
+        assert_eq!(
+            texture_usages_to_wire(usage),
+            vec![
+                "copy_src".to_string(),
+                "texture_binding".to_string(),
+                "storage_binding".to_string()
+            ]
+        );
     }
 
     #[test]
@@ -408,12 +605,13 @@ mod tests {
                 format: "bgra".to_string(),
             });
         let response = handle_escalate_op(&sandbox, &registry, acquire);
-        let handle_id = match response {
+        let buffer_handle_id = match response {
             EscalateResponse::Ok(ref ok) => {
                 assert_eq!(ok.request_id, "req-1");
                 assert_eq!(ok.width, Some(320));
                 assert_eq!(ok.height, Some(240));
                 assert_eq!(ok.format.as_deref(), Some("bgra32"));
+                assert!(ok.usage.is_none(), "pixel buffers have no usage field");
                 assert!(!ok.handle_id.is_empty(), "handle id should not be empty");
                 ok.handle_id.clone()
             }
@@ -421,21 +619,68 @@ mod tests {
                 panic!("acquire_pixel_buffer escalate failed: {}", err.message);
             }
         };
-        assert_eq!(registry.buffer_count(), 1);
+        assert_eq!(registry.handle_count(), 1);
+
+        let acquire_tex =
+            EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+                request_id: "req-tex".to_string(),
+                width: 256,
+                height: 128,
+                format: "rgba8_unorm".to_string(),
+                usage: vec![
+                    "texture_binding".to_string(),
+                    "copy_src".to_string(),
+                ],
+            });
+        let response = handle_escalate_op(&sandbox, &registry, acquire_tex);
+        let texture_handle_id = match response {
+            EscalateResponse::Ok(ref ok) => {
+                assert_eq!(ok.request_id, "req-tex");
+                assert_eq!(ok.width, Some(256));
+                assert_eq!(ok.height, Some(128));
+                assert_eq!(ok.format.as_deref(), Some("rgba8_unorm"));
+                let usage = ok.usage.as_deref().expect("acquire_texture sets usage");
+                assert!(usage.iter().any(|u| u == "texture_binding"));
+                assert!(usage.iter().any(|u| u == "copy_src"));
+                assert!(!ok.handle_id.is_empty(), "texture handle id should not be empty");
+                assert_ne!(
+                    ok.handle_id, buffer_handle_id,
+                    "texture and buffer should get distinct handle ids"
+                );
+                ok.handle_id.clone()
+            }
+            EscalateResponse::Err(err) => {
+                panic!("acquire_texture escalate failed: {}", err.message);
+            }
+        };
+        assert_eq!(registry.handle_count(), 2);
+
+        let release_tex = EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+            request_id: "req-tex-rel".to_string(),
+            handle_id: texture_handle_id.clone(),
+        });
+        match handle_escalate_op(&sandbox, &registry, release_tex) {
+            EscalateResponse::Ok(ok) => {
+                assert_eq!(ok.request_id, "req-tex-rel");
+                assert_eq!(ok.handle_id, texture_handle_id);
+            }
+            EscalateResponse::Err(err) => panic!("release_handle (texture) failed: {}", err.message),
+        }
+        assert_eq!(registry.handle_count(), 1);
 
         let release = EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "req-2".to_string(),
-            handle_id: handle_id.clone(),
+            handle_id: buffer_handle_id.clone(),
         });
         let response = handle_escalate_op(&sandbox, &registry, release);
         match response {
             EscalateResponse::Ok(ok) => {
                 assert_eq!(ok.request_id, "req-2");
-                assert_eq!(ok.handle_id, handle_id);
+                assert_eq!(ok.handle_id, buffer_handle_id);
             }
             EscalateResponse::Err(err) => panic!("release_handle failed: {}", err.message),
         }
-        assert_eq!(registry.buffer_count(), 0);
+        assert_eq!(registry.handle_count(), 0);
 
         let release_unknown =
             EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {

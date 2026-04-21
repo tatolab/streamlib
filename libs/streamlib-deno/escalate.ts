@@ -20,6 +20,7 @@
 import type {
   EscalateRequest,
   EscalateRequestAcquirePixelBuffer,
+  EscalateRequestAcquireTexture,
   EscalateRequestReleaseHandle,
 } from "./_generated_/com_streamlib_escalate_request.ts";
 import type {
@@ -31,6 +32,7 @@ import type {
 export type {
   EscalateRequest,
   EscalateRequestAcquirePixelBuffer,
+  EscalateRequestAcquireTexture,
   EscalateRequestReleaseHandle,
   EscalateResponse,
   EscalateResponseErr,
@@ -52,6 +54,7 @@ export const ESCALATE_RESPONSE_RPC = "escalate_response";
  */
 export type EscalateOpPayload =
   | Omit<EscalateRequestAcquirePixelBuffer, "request_id">
+  | Omit<EscalateRequestAcquireTexture, "request_id">
   | Omit<EscalateRequestReleaseHandle, "request_id">;
 
 export class EscalateError extends Error {}
@@ -85,6 +88,24 @@ export class EscalateChannel {
       width,
       height,
       format,
+    });
+  }
+
+  async acquireTexture(
+    width: number,
+    height: number,
+    format: string,
+    usage: readonly string[],
+  ): Promise<EscalateOkResponse> {
+    if (usage.length === 0) {
+      throw new EscalateError("acquireTexture: usage must not be empty");
+    }
+    return this.request({
+      op: "acquire_texture",
+      width,
+      height,
+      format,
+      usage: [...usage],
     });
   }
 

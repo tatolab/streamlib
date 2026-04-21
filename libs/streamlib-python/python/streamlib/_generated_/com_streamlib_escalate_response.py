@@ -8,7 +8,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Type, Union, get_args, get_origin
+from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
 
 
 @dataclass
@@ -64,7 +64,9 @@ class EscalateResponseOk(EscalateResponse):
     """
     Opaque handle returned by the host. For acquire_pixel_buffer this is the
     PixelBufferPoolId the host registered with its pixel-buffer pool and broker
-    SurfaceStore. For release_handle this echoes the released id.
+    SurfaceStore. For acquire_texture this is a host-side UUID keying the
+    EscalateHandleRegistry's texture slot. For release_handle this echoes the
+    released id.
     """
 
     request_id: 'str'
@@ -74,17 +76,24 @@ class EscalateResponseOk(EscalateResponse):
 
     format: 'Optional[str]'
     """
-    Resolved pixel format identifier.
+    Resolved pixel or texture format identifier.
     """
 
     height: 'Optional[int]'
     """
-    Height in pixels (set on acquire_pixel_buffer responses).
+    Height in pixels (set on acquire_pixel_buffer and acquire_texture
+    responses).
+    """
+
+    usage: 'Optional[List[str]]'
+    """
+    Resolved usage tokens (set on acquire_texture responses).
     """
 
     width: 'Optional[int]'
     """
-    Width in pixels (set on acquire_pixel_buffer responses).
+    Width in pixels (set on acquire_pixel_buffer and acquire_texture
+    responses).
     """
 
 
@@ -96,6 +105,7 @@ class EscalateResponseOk(EscalateResponse):
             _from_json_data(str, data.get("request_id")),
             _from_json_data(Optional[str], data.get("format")),
             _from_json_data(Optional[int], data.get("height")),
+            _from_json_data(Optional[List[str]], data.get("usage")),
             _from_json_data(Optional[int], data.get("width")),
         )
 
@@ -107,6 +117,8 @@ class EscalateResponseOk(EscalateResponse):
              data["format"] = _to_json_data(self.format)
         if self.height is not None:
              data["height"] = _to_json_data(self.height)
+        if self.usage is not None:
+             data["usage"] = _to_json_data(self.usage)
         if self.width is not None:
              data["width"] = _to_json_data(self.width)
         return data

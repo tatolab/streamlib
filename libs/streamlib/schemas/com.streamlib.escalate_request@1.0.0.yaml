@@ -40,6 +40,36 @@ mapping:
         metadata:
           description: "Pixel format identifier (e.g. bgra32, nv12_video_range, gray8)."
         type: string
+  acquire_texture:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      width:
+        metadata:
+          description: "Pixel width of the texture."
+        type: uint32
+      height:
+        metadata:
+          description: "Pixel height of the texture."
+        type: uint32
+      format:
+        metadata:
+          description: >
+            Texture format identifier. Lowercase snake-case names:
+            rgba8_unorm, rgba8_unorm_srgb, bgra8_unorm, bgra8_unorm_srgb,
+            rgba16_float, rgba32_float, nv12.
+        type: string
+      usage:
+        metadata:
+          description: >
+            Usage flags the texture must support. Non-empty array of lowercase
+            snake-case tokens drawn from: copy_src, copy_dst, texture_binding,
+            storage_binding, render_attachment. Host validates — unknown
+            tokens return an error response.
+        elements:
+          type: string
   release_handle:
     properties:
       request_id:

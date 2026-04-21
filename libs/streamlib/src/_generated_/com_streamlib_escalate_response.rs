@@ -34,7 +34,9 @@ pub struct EscalateResponseErr {
 pub struct EscalateResponseOk {
     /// Opaque handle returned by the host. For acquire_pixel_buffer this is
     /// the PixelBufferPoolId the host registered with its pixel-buffer pool and
-    /// broker SurfaceStore. For release_handle this echoes the released id.
+    /// broker SurfaceStore. For acquire_texture this is a host-side UUID
+    /// keying the EscalateHandleRegistry's texture slot. For release_handle
+    /// this echoes the released id.
     #[serde(rename = "handle_id")]
     pub handle_id: String,
 
@@ -42,17 +44,22 @@ pub struct EscalateResponseOk {
     #[serde(rename = "request_id")]
     pub request_id: String,
 
-    /// Resolved pixel format identifier.
+    /// Resolved pixel or texture format identifier.
     #[serde(rename = "format")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub format: Option<String>,
 
-    /// Height in pixels (set on acquire_pixel_buffer responses).
+    /// Height in pixels (set on acquire_pixel_buffer and acquire_texture responses).
     #[serde(rename = "height")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
 
-    /// Width in pixels (set on acquire_pixel_buffer responses).
+    /// Resolved usage tokens (set on acquire_texture responses).
+    #[serde(rename = "usage")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Vec<String>>,
+
+    /// Width in pixels (set on acquire_pixel_buffer and acquire_texture responses).
     #[serde(rename = "width")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<u32>,
