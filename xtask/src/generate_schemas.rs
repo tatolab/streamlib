@@ -409,8 +409,8 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
             )
         })?;
 
-        // Post-process: add copyright header
-        let processed_code = post_process_typescript(&ts_code);
+        // Post-process: enforce expected root name and add copyright header
+        let processed_code = post_process_typescript(&ts_code, &class_name);
 
         let output_path = output_dir.join(format!("{}.ts", module_name));
         fs::write(&output_path, &processed_code)
@@ -917,14 +917,60 @@ fn find_python_root_class_name(code: &str) -> Option<String> {
 }
 
 /// Post-process jtd-codegen TypeScript output.
-fn post_process_typescript(code: &str) -> String {
+///
+/// jtd-codegen's TypeScript backend shares the "don't capitalize after a digit"
+/// mangling with its Python backend (`mp4_writer` → `Mp4writerConfig` instead
+/// of `Mp4WriterConfig`), so the root symbol drifts from what the generator
+/// config expects and from the Rust/Python outputs. Rewrite the root
+/// interface/type name so every language lands on the same symbol.
+fn post_process_typescript(code: &str, expected_class_name: &str) -> String {
+    let actual = find_typescript_root_name(code);
+    let rewritten = match actual {
+        Some(ref name) if name != expected_class_name => {
+            code.replace(name.as_str(), expected_class_name)
+        }
+        _ => code.to_string(),
+    };
+
     format!(
         "// Copyright (c) 2025 Jonathan Fontanez\n\
          // SPDX-License-Identifier: BUSL-1.1\n\
          //\n\
          // Generated from JTD schema using jtd-codegen. DO NOT EDIT.\n\n{}",
-        code
+        rewritten
     )
+}
+
+/// Return the name of the root declaration in a jtd-codegen TypeScript file.
+///
+/// For discriminator schemas, jtd-codegen emits a tagged union:
+/// `export type RootName = Variant1 | ... ;` with each variant as a separate
+/// `export interface` below it. The root is the `export type` name.
+///
+/// For plain schemas with sub-types, jtd-codegen emits the sub-types first
+/// and the root last, so the last top-level `export interface` is the root.
+fn find_typescript_root_name(code: &str) -> Option<String> {
+    let mut last_interface: Option<String> = None;
+    for line in code.lines() {
+        if let Some(rest) = line.strip_prefix("export type ") {
+            let name_end = rest.find(|c: char| c == ' ' || c == '=');
+            if let Some(idx) = name_end {
+                let name = rest[..idx].trim();
+                if !name.is_empty() {
+                    return Some(name.to_string());
+                }
+            }
+        } else if let Some(rest) = line.strip_prefix("export interface ") {
+            let name_end = rest.find(|c: char| c == ' ' || c == '{');
+            if let Some(idx) = name_end {
+                let name = rest[..idx].trim();
+                if !name.is_empty() {
+                    last_interface = Some(name.to_string());
+                }
+            }
+        }
+    }
+    last_interface
 }
 
 // =============================================================================
@@ -1087,6 +1133,79 @@ mod tests {
         // Header added, body unchanged
         assert!(out.contains("class WebrtcWhepConfig:"));
         assert_eq!(out.matches("WebrtcWhepConfig").count(), 1);
+    }
+
+    #[test]
+    fn find_typescript_root_name_picks_last_interface_for_plain() {
+        // Plain schema with one sub-type — sub-type declared first, root last.
+        let code = "export interface WebrtcWhepConfigWhep {\n  a: string;\n}\n\nexport interface WebrtcWhepConfig {\n  b: string;\n}\n";
+        assert_eq!(
+            find_typescript_root_name(code).as_deref(),
+            Some("WebrtcWhepConfig")
+        );
+    }
+
+    #[test]
+    fn find_typescript_root_name_picks_type_alias_for_discriminator() {
+        // Discriminator schema — tagged union type alias is the root.
+        let code = "export type EscalateRequest =\n  | EscalateRequestAcquirePixelBuffer\n  | EscalateRequestReleaseHandle;\n\nexport interface EscalateRequestAcquirePixelBuffer {\n  op: \"acquire_pixel_buffer\";\n}\n";
+        assert_eq!(
+            find_typescript_root_name(code).as_deref(),
+            Some("EscalateRequest")
+        );
+    }
+
+    #[test]
+    fn find_typescript_root_name_single_interface() {
+        let code = "export interface Mp4writerConfig {\n  output_path: string;\n}\n";
+        assert_eq!(
+            find_typescript_root_name(code).as_deref(),
+            Some("Mp4writerConfig")
+        );
+    }
+
+    #[test]
+    fn find_typescript_root_name_none_when_no_decl() {
+        assert_eq!(find_typescript_root_name("// just a comment\n"), None);
+    }
+
+    #[test]
+    fn post_process_typescript_renames_digit_mangled_root() {
+        let code = "export interface Mp4writerConfig {\n  output_path: string;\n}\n";
+        let out = post_process_typescript(code, "Mp4WriterConfig");
+        assert!(out.contains("export interface Mp4WriterConfig {"));
+        assert!(!out.contains("Mp4writerConfig"));
+    }
+
+    #[test]
+    fn post_process_typescript_noop_when_names_match() {
+        let code = "export interface WebrtcWhepConfig {\n  a: string;\n}\n";
+        let out = post_process_typescript(code, "WebrtcWhepConfig");
+        assert!(out.contains("export interface WebrtcWhepConfig {"));
+        // Header added, body unchanged
+        assert_eq!(out.matches("WebrtcWhepConfig").count(), 1);
+    }
+
+    #[test]
+    fn post_process_typescript_discriminator_root_rename() {
+        // If jtd-codegen mangled the discriminator root, rewriting should
+        // propagate to every variant that shares the root as a prefix.
+        let code = "export type Mp4writerEvent =\n  | Mp4writerEventStarted\n  | Mp4writerEventStopped;\n\nexport interface Mp4writerEventStarted {\n  op: \"started\";\n}\n\nexport interface Mp4writerEventStopped {\n  op: \"stopped\";\n}\n";
+        let out = post_process_typescript(code, "Mp4WriterEvent");
+        assert!(out.contains("export type Mp4WriterEvent ="));
+        assert!(out.contains("export interface Mp4WriterEventStarted {"));
+        assert!(out.contains("export interface Mp4WriterEventStopped {"));
+        assert!(!out.contains("Mp4writer"));
+    }
+
+    #[test]
+    fn post_process_typescript_discriminator_noop_when_root_matches() {
+        // EscalateRequest + variants: jtd-codegen already emits the canonical
+        // root name, so no rewrite should happen.
+        let code = "export type EscalateRequest =\n  | EscalateRequestAcquirePixelBuffer;\n\nexport interface EscalateRequestAcquirePixelBuffer {\n  op: \"acquire_pixel_buffer\";\n}\n";
+        let out = post_process_typescript(code, "EscalateRequest");
+        assert!(out.contains("export type EscalateRequest ="));
+        assert!(out.contains("export interface EscalateRequestAcquirePixelBuffer {"));
     }
 }
 

@@ -8,7 +8,7 @@
 /**
  * Configuration for MP4 file writer processor
  */
-export interface Mp4writerConfig {
+export interface Mp4WriterConfig {
   /**
    * Path to output MP4 file
    */
