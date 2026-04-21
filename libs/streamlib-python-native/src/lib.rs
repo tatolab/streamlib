@@ -76,7 +76,7 @@ pub unsafe extern "C" fn slpn_context_create(
     let id = if processor_id.is_null() {
         "unknown"
     } else {
-        CStr::from_ptr(processor_id).to_str().unwrap_or("unknown")
+        unsafe { CStr::from_ptr(processor_id) }.to_str().unwrap_or("unknown")
     };
 
     match PythonNativeContext::new(id) {
@@ -92,7 +92,7 @@ pub unsafe extern "C" fn slpn_context_create(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_context_destroy(ctx: *mut PythonNativeContext) {
     if !ctx.is_null() {
-        let _ = Box::from_raw(ctx);
+        let _ = unsafe { Box::from_raw(ctx) };
     }
 }
 
@@ -117,11 +117,11 @@ pub unsafe extern "C" fn slpn_input_subscribe(
     ctx: *mut PythonNativeContext,
     service_name: *const c_char,
 ) -> i32 {
-    let ctx = match ctx.as_mut() {
+    let ctx = match unsafe { ctx.as_mut() } {
         Some(c) => c,
         None => return -1,
     };
-    let service_name = match c_str_to_str(service_name) {
+    let service_name = match unsafe { c_str_to_str(service_name) } {
         Some(s) => s,
         None => return -1,
     };
@@ -189,11 +189,11 @@ pub unsafe extern "C" fn slpn_input_set_read_mode(
     port_name: *const c_char,
     mode: i32,
 ) -> i32 {
-    let ctx = match ctx.as_mut() {
+    let ctx = match unsafe { ctx.as_mut() } {
         Some(c) => c,
         None => return -1,
     };
-    let port_name = match c_str_to_str(port_name) {
+    let port_name = match unsafe { c_str_to_str(port_name) } {
         Some(s) => s,
         None => return -1,
     };
@@ -207,7 +207,7 @@ pub unsafe extern "C" fn slpn_input_set_read_mode(
 /// Returns 1 if any data was received, 0 if none, -1 on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
-    let ctx = match ctx.as_mut() {
+    let ctx = match unsafe { ctx.as_mut() } {
         Some(c) => c,
         None => return -1,
     };
@@ -262,11 +262,11 @@ pub unsafe extern "C" fn slpn_input_read(
     out_len: *mut u32,
     out_ts: *mut i64,
 ) -> i32 {
-    let ctx = match ctx.as_mut() {
+    let ctx = match unsafe { ctx.as_mut() } {
         Some(c) => c,
         None => return -1,
     };
-    let port_name = match c_str_to_str(port_name) {
+    let port_name = match unsafe { c_str_to_str(port_name) } {
         Some(s) => s,
         None => return -1,
     };
@@ -297,13 +297,13 @@ pub unsafe extern "C" fn slpn_input_read(
 
             let copy_len = data.len().min(buf_len as usize);
             if !out_buf.is_null() && copy_len > 0 {
-                std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, copy_len);
+                unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, copy_len) };
             }
             if !out_len.is_null() {
-                *out_len = data.len() as u32;
+                unsafe { *out_len = data.len() as u32 };
             }
             if !out_ts.is_null() {
-                *out_ts = ts;
+                unsafe { *out_ts = ts };
             }
             return 0;
         }
@@ -311,7 +311,7 @@ pub unsafe extern "C" fn slpn_input_read(
 
     // No data available
     if !out_len.is_null() {
-        *out_len = 0;
+        unsafe { *out_len = 0 };
     }
     1
 }
@@ -333,23 +333,23 @@ pub unsafe extern "C" fn slpn_output_publish(
     schema_name: *const c_char,
     max_payload_bytes: usize,
 ) -> i32 {
-    let ctx = match ctx.as_mut() {
+    let ctx = match unsafe { ctx.as_mut() } {
         Some(c) => c,
         None => return -1,
     };
-    let service_name = match c_str_to_str(service_name) {
+    let service_name = match unsafe { c_str_to_str(service_name) } {
         Some(s) => s,
         None => return -1,
     };
-    let port_name = match c_str_to_str(port_name) {
+    let port_name = match unsafe { c_str_to_str(port_name) } {
         Some(s) => s,
         None => return -1,
     };
-    let dest_port_str = match c_str_to_str(dest_port) {
+    let dest_port_str = match unsafe { c_str_to_str(dest_port) } {
         Some(s) => s,
         None => return -1,
     };
-    let schema = match c_str_to_str(schema_name) {
+    let schema = match unsafe { c_str_to_str(schema_name) } {
         Some(s) => s,
         None => return -1,
     };
@@ -417,11 +417,11 @@ pub unsafe extern "C" fn slpn_output_write(
     data_len: u32,
     timestamp_ns: i64,
 ) -> i32 {
-    let ctx = match ctx.as_mut() {
+    let ctx = match unsafe { ctx.as_mut() } {
         Some(c) => c,
         None => return -1,
     };
-    let port_name = match c_str_to_str(port_name) {
+    let port_name = match unsafe { c_str_to_str(port_name) } {
         Some(s) => s,
         None => return -1,
     };
@@ -440,7 +440,7 @@ pub unsafe extern "C" fn slpn_output_write(
     let data_slice = if data.is_null() || data_len == 0 {
         &[]
     } else {
-        std::slice::from_raw_parts(data, data_len as usize)
+        unsafe { std::slice::from_raw_parts(data, data_len as usize) }
     };
 
     let total_len = FRAME_HEADER_SIZE + data_slice.len();
@@ -1388,5 +1388,5 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
     if ptr.is_null() {
         return None;
     }
-    CStr::from_ptr(ptr).to_str().ok()
+    unsafe { CStr::from_ptr(ptr) }.to_str().ok()
 }

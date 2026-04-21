@@ -27,7 +27,7 @@ impl SendableInputsPtr {
     /// Get a reference to the InputMailboxes.
     /// SAFETY: Caller must ensure the pointed-to data is still valid.
     unsafe fn get(&self) -> &crate::iceoryx2::InputMailboxes {
-        &*self.0
+        unsafe { &*self.0 }
     }
 }
 
@@ -45,7 +45,7 @@ impl SendableAudioConverterPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid
     /// and no other thread is accessing it.
     unsafe fn get_mut(&self) -> &mut crate::core::utils::ProcessorAudioConverter {
-        &mut *self.0
+        unsafe { &mut *self.0 }
     }
 }
 
