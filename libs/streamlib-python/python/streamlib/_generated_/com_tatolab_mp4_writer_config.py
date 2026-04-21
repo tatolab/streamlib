@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, Union, get_args, get_origin
 
 
 @dataclass
-class Mp4writerConfig:
+class Mp4WriterConfig:
     """
     Configuration for MP4 file writer processor
     """
@@ -49,7 +49,7 @@ class Mp4writerConfig:
 
 
     @classmethod
-    def from_json_data(cls, data: Any) -> 'Mp4writerConfig':
+    def from_json_data(cls, data: Any) -> 'Mp4WriterConfig':
         return cls(
             _from_json_data(str, data.get("output_path")),
             _from_json_data(Optional[int], data.get("audio_bitrate")),
