@@ -64,6 +64,10 @@ libc.workspace = true
 # UUID generation for surface IDs
 uuid = { version = "1", features = ["v4"] }
 
+# Shared consumer-side wire helpers (Unix-socket + SCM_RIGHTS) — avoids
+# duplicating the trio across the broker and the polyglot cdylibs.
+streamlib-broker-client = { path = "../streamlib-broker-client" }
+
 [build-dependencies]
 tonic-build = "0.12"
 prost-build = "0.13"
