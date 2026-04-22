@@ -20,3 +20,10 @@ iceoryx2 = "0.8.1"
 rmp-serde = "1.3"
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+# Broker unit tests spin up a real UnixSocketSurfaceService + client in-process.
+streamlib-broker = { path = "../streamlib-broker" }
