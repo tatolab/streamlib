@@ -1,0 +1,271 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Linux polyglot Deno consumer integration test (#394).
+//!
+//! Deno twin of `polyglot_linux_check_out.rs`. Spawns `deno` with an inline
+//! TypeScript driver that loads `libstreamlib_deno_native.so` via
+//! `Deno.dlopen`, drives the `sldn_broker_*` / `sldn_gpu_surface_*` FFI like
+//! `subprocess_runner.ts` does, and verifies the bytes it reads through
+//! `mmap` match a host-written memfd pattern.
+//!
+//! Same skip conditions as the Python test: no `deno` on PATH → skip; no
+//! `libstreamlib_deno_native.so` under target/debug|release → skip.
+
+#![cfg(target_os = "linux")]
+
+use std::io::Write;
+use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+use streamlib_broker::unix_socket_service::{
+    connect_to_broker, send_request, UnixSocketSurfaceService,
+};
+use streamlib_broker::BrokerState;
+
+fn locate_native_lib() -> Option<PathBuf> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let workspace = PathBuf::from(&manifest_dir).join("..").join("..");
+    for profile in &["debug", "release"] {
+        let candidate = workspace
+            .join("target")
+            .join(profile)
+            .join("libstreamlib_deno_native.so");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn deno_available() -> bool {
+    Command::new("deno")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn tmp_socket_path(label: &str) -> PathBuf {
+    let mut p = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    p.push(format!(
+        "streamlib-polyglot-deno-test-{}-{}-{}.sock",
+        label,
+        std::process::id(),
+        nanos
+    ));
+    p
+}
+
+fn make_memfd_with(contents: &[u8]) -> RawFd {
+    use std::io::{Seek, SeekFrom};
+
+    let name = std::ffi::CString::new("polyglot-deno-test-memfd").unwrap();
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+    assert!(fd >= 0, "memfd_create: {}", std::io::Error::last_os_error());
+    assert_eq!(
+        unsafe { libc::ftruncate(fd, contents.len() as libc::off_t) },
+        0,
+        "ftruncate: {}",
+        std::io::Error::last_os_error()
+    );
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    file.write_all(contents).expect("memfd write");
+    file.seek(SeekFrom::Start(0)).expect("memfd rewind");
+    file.into_raw_fd()
+}
+
+fn deno_driver() -> &'static str {
+    // `Deno.dlopen` uses `buffer` for C-string args, `pointer` for opaque
+    // handles. `Deno.UnsafePointerView` gives us byte access to the mmap'd
+    // region once we get a base_address pointer back from the native lib.
+    r#"
+const nativeLibPath = Deno.env.get("TEST_NATIVE_LIB")!;
+const socketPath = Deno.env.get("STREAMLIB_BROKER_SOCKET")!;
+const surfaceId = Deno.env.get("TEST_SURFACE_ID")!;
+const expectedWidth = parseInt(Deno.env.get("TEST_WIDTH")!);
+const expectedHeight = parseInt(Deno.env.get("TEST_HEIGHT")!);
+const expectedBpr = parseInt(Deno.env.get("TEST_BYTES_PER_ROW")!);
+const expectedHeadHex = Deno.env.get("TEST_EXPECTED_HEAD_HEX")!;
+
+const lib = Deno.dlopen(nativeLibPath, {
+  sldn_broker_connect: { parameters: ["buffer"], result: "pointer" },
+  sldn_broker_disconnect: { parameters: ["pointer"], result: "void" },
+  sldn_broker_resolve_surface: { parameters: ["pointer", "buffer"], result: "pointer" },
+  sldn_broker_unregister_surface: { parameters: ["pointer", "buffer"], result: "void" },
+  sldn_gpu_surface_lock: { parameters: ["pointer", "i32"], result: "i32" },
+  sldn_gpu_surface_unlock: { parameters: ["pointer", "i32"], result: "i32" },
+  sldn_gpu_surface_base_address: { parameters: ["pointer"], result: "pointer" },
+  sldn_gpu_surface_width: { parameters: ["pointer"], result: "u32" },
+  sldn_gpu_surface_height: { parameters: ["pointer"], result: "u32" },
+  sldn_gpu_surface_bytes_per_row: { parameters: ["pointer"], result: "u32" },
+  sldn_gpu_surface_release: { parameters: ["pointer"], result: "void" },
+});
+
+function cStr(s: string): Uint8Array {
+  return new TextEncoder().encode(s + "\0");
+}
+
+function fatal(msg: string): never {
+  console.error("FAIL: " + msg);
+  Deno.exit(1);
+}
+
+const broker = lib.symbols.sldn_broker_connect(cStr(socketPath));
+if (broker === null) fatal("sldn_broker_connect returned null");
+
+const handle = lib.symbols.sldn_broker_resolve_surface(broker, cStr(surfaceId));
+if (handle === null) fatal("sldn_broker_resolve_surface returned null");
+
+const width = lib.symbols.sldn_gpu_surface_width(handle);
+const height = lib.symbols.sldn_gpu_surface_height(handle);
+const bpr = lib.symbols.sldn_gpu_surface_bytes_per_row(handle);
+if (width !== expectedWidth) fatal(`width: expected ${expectedWidth} got ${width}`);
+if (height !== expectedHeight) fatal(`height: expected ${expectedHeight} got ${height}`);
+if (bpr !== expectedBpr) fatal(`bytes_per_row: expected ${expectedBpr} got ${bpr}`);
+
+if (lib.symbols.sldn_gpu_surface_lock(handle, 1) !== 0) fatal("lock returned non-zero");
+
+const base = lib.symbols.sldn_gpu_surface_base_address(handle);
+if (base === null) fatal("base_address null after lock");
+
+const n = expectedHeadHex.length / 2;
+const view = new Deno.UnsafePointerView(base);
+const headBuf = new Uint8Array(n);
+view.copyInto(headBuf);
+const actualHex = Array.from(headBuf).map((b) => b.toString(16).padStart(2, "0")).join("");
+if (actualHex !== expectedHeadHex) {
+  fatal(`first ${n} bytes mismatch: expected ${expectedHeadHex} got ${actualHex}`);
+}
+
+if (lib.symbols.sldn_gpu_surface_unlock(handle, 1) !== 0) fatal("unlock returned non-zero");
+
+// Second resolve — cache hit path.
+const handle2 = lib.symbols.sldn_broker_resolve_surface(broker, cStr(surfaceId));
+if (handle2 === null) fatal("cached resolve_surface returned null");
+if (lib.symbols.sldn_gpu_surface_width(handle2) !== expectedWidth) fatal("cached width mismatch");
+lib.symbols.sldn_gpu_surface_release(handle2);
+
+lib.symbols.sldn_broker_unregister_surface(broker, cStr(surfaceId));
+lib.symbols.sldn_gpu_surface_release(handle);
+lib.symbols.sldn_broker_disconnect(broker);
+lib.close();
+
+console.log("OK " + actualHex);
+"#
+}
+
+#[test]
+fn deno_subprocess_resolves_and_mmaps_host_published_surface() {
+    let native_lib = match locate_native_lib() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "polyglot_linux_check_out_deno: libstreamlib_deno_native.so not built; \
+                 run `cargo build -p streamlib-deno-native` first — skipping"
+            );
+            return;
+        }
+    };
+    if !deno_available() {
+        eprintln!("polyglot_linux_check_out_deno: deno not on PATH — skipping");
+        return;
+    }
+
+    let state = BrokerState::new();
+    let socket_path = tmp_socket_path("deno-subprocess");
+    let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+    service.start().expect("service start");
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let width: u32 = 64;
+    let height: u32 = 4;
+    let bpp: u32 = 4;
+    let size: usize = (width * height * bpp) as usize;
+    let mut pattern = Vec::with_capacity(size);
+    for i in 0..size {
+        pattern.push(((i * 19 + 11) & 0xFF) as u8);
+    }
+    let fd = make_memfd_with(&pattern);
+
+    let host_stream = connect_to_broker(&socket_path).expect("host connect");
+    let check_in_req = serde_json::json!({
+        "op": "check_in",
+        "runtime_id": "deno-host-polyglot-test",
+        "width": width,
+        "height": height,
+        "format": "Bgra32",
+        "resource_type": "pixel_buffer",
+    });
+    let (resp, _) = send_request(&host_stream, &check_in_req, Some(fd)).expect("host check_in");
+    unsafe { libc::close(fd) };
+    let surface_id = resp
+        .get("surface_id")
+        .and_then(|v| v.as_str())
+        .expect("surface_id")
+        .to_string();
+    drop(host_stream);
+
+    let head_bytes = 32usize.min(size);
+    let expected_head_hex: String = pattern[..head_bytes]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+
+    // `deno run -` reads the script from stdin. Stage the script to a tmpfile
+    // and pass the path instead — simpler than juggling ChildStdin, and deno
+    // flushes / closes on EOF either way.
+    let mut script_file = tempfile::NamedTempFile::new().expect("tempfile");
+    script_file
+        .write_all(deno_driver().as_bytes())
+        .expect("write driver");
+    let script_path = script_file.path().to_path_buf();
+
+    let output = Command::new("deno")
+        .arg("run")
+        .arg("--allow-ffi")
+        .arg("--allow-env")
+        .arg("--allow-read")
+        .arg(&script_path)
+        .env("STREAMLIB_BROKER_SOCKET", &socket_path)
+        .env("TEST_NATIVE_LIB", &native_lib)
+        .env("TEST_SURFACE_ID", &surface_id)
+        .env("TEST_WIDTH", width.to_string())
+        .env("TEST_HEIGHT", height.to_string())
+        .env("TEST_BYTES_PER_ROW", (width * bpp).to_string())
+        .env("TEST_EXPECTED_HEAD_HEX", &expected_head_hex)
+        .output()
+        .expect("spawn deno");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    service.stop();
+
+    assert!(
+        output.status.success(),
+        "deno subprocess failed (exit={:?})\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("OK "),
+        "expected OK prefix from deno driver, got:\nstdout:\n{}\nstderr:\n{}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains(&expected_head_hex),
+        "expected head hex '{}' in stdout '{}'",
+        expected_head_hex,
+        stdout
+    );
+}
