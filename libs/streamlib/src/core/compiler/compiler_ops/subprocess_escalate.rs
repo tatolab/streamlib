@@ -108,6 +108,11 @@ impl EscalateHandleRegistry {
 ///
 /// Never panics — errors inside `escalate()` become [`EscalateResponse::Err`]
 /// with the original request_id preserved so the subprocess can correlate.
+///
+/// On Linux, acquisition handlers additionally check the freshly-allocated
+/// resource in with the broker's [`SurfaceStore`] so the polyglot subprocess
+/// can `check_out` the DMA-BUF FD by the same handle_id. The `handle_id`
+/// returned to the subprocess is the broker-assigned `surface_id`.
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -122,9 +127,13 @@ pub(crate) fn handle_escalate_op(
             format,
         }) => match parse_pixel_format(&format) {
             Ok(parsed) => {
-                match sandbox.escalate(|full| full.acquire_pixel_buffer(width, height, parsed)) {
-                    Ok((pool_id, buffer)) => {
-                        let handle_id = pool_id.as_str().to_string();
+                let acquired = sandbox.escalate(|full| {
+                    let (pool_id, buffer) = full.acquire_pixel_buffer(width, height, parsed)?;
+                    let handle_id = assign_buffer_handle_id(full, &pool_id, &buffer)?;
+                    Ok((handle_id, buffer))
+                });
+                match acquired {
+                    Ok((handle_id, buffer)) => {
                         registry.insert_buffer(handle_id.clone(), buffer);
                         EscalateResponse::Ok(EscalateResponseOk {
                             request_id: rid,
@@ -173,9 +182,13 @@ pub(crate) fn handle_escalate_op(
             };
             let desc = TexturePoolDescriptor::new(width, height, parsed_format)
                 .with_usage(parsed_usage);
-            match sandbox.escalate(|full| full.acquire_texture(&desc)) {
-                Ok(texture) => {
-                    let handle_id = Uuid::new_v4().to_string();
+            let acquired = sandbox.escalate(|full| {
+                let texture = full.acquire_texture(&desc)?;
+                let handle_id = assign_texture_handle_id(full, &texture)?;
+                Ok((handle_id, texture))
+            });
+            match acquired {
+                Ok((handle_id, texture)) => {
                     registry.insert_texture(handle_id.clone(), texture);
                     EscalateResponse::Ok(EscalateResponseOk {
                         request_id: rid,
@@ -198,6 +211,7 @@ pub(crate) fn handle_escalate_op(
         }) => {
             let removed = registry.remove_handle(&handle_id);
             if removed {
+                release_broker_surface(sandbox, &handle_id);
                 EscalateResponse::Ok(EscalateResponseOk {
                     request_id: rid,
                     handle_id,
@@ -211,6 +225,69 @@ pub(crate) fn handle_escalate_op(
                     request_id: rid,
                     message: format!("handle_id '{handle_id}' not found in registry"),
                 })
+            }
+        }
+    }
+}
+
+/// Resolve the `handle_id` returned to the subprocess for a pixel buffer.
+///
+/// On Linux, the buffer is checked in with the broker so the polyglot
+/// subprocess shim can later `check_out` the DMA-BUF FD; the broker-assigned
+/// `surface_id` becomes the handle_id. On other platforms the pool id stays
+/// as-is (macOS uses its own XPC `check_in_surface` path via the native lib
+/// directly; see `streamlib-python-native/src/lib.rs` broker_macos).
+#[allow(unused_variables)]
+fn assign_buffer_handle_id(
+    full: &crate::core::context::GpuContextFullAccess,
+    pool_id: &crate::core::rhi::PixelBufferPoolId,
+    buffer: &RhiPixelBuffer,
+) -> crate::core::error::Result<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(store) = full.surface_store() {
+            return store.check_in(buffer);
+        }
+    }
+    Ok(pool_id.as_str().to_string())
+}
+
+/// Resolve the `handle_id` returned to the subprocess for a pooled texture.
+///
+/// On Linux, register the texture's DMA-BUF with the broker under a fresh UUID
+/// so the subprocess can `check_out` it; on other platforms just mint a UUID.
+#[allow(unused_variables)]
+fn assign_texture_handle_id(
+    full: &crate::core::context::GpuContextFullAccess,
+    texture: &PooledTextureHandle,
+) -> crate::core::error::Result<String> {
+    let handle_id = Uuid::new_v4().to_string();
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(store) = full.surface_store() {
+            store.register_texture(&handle_id, texture.texture())?;
+        }
+    }
+    Ok(handle_id)
+}
+
+/// Best-effort broker release paired with registry eviction on Linux.
+///
+/// The registry drop alone releases the host's strong refcount on the
+/// underlying resource, but the broker still holds a dup of the DMA-BUF FD
+/// until we explicitly call `release`. Errors here are logged, not returned —
+/// the subprocess is not waiting on the broker handshake at this point.
+#[allow(unused_variables)]
+fn release_broker_surface(sandbox: &GpuContextLimitedAccess, handle_id: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(store) = sandbox.surface_store() {
+            if let Err(e) = store.release(handle_id) {
+                tracing::debug!(
+                    "[escalate] broker release for '{}' returned error: {}",
+                    handle_id,
+                    e
+                );
             }
         }
     }

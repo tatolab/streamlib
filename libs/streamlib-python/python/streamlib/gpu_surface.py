@@ -4,7 +4,11 @@
 """Platform-specific zero-copy GPU surface access.
 
 macOS: IOSurface shared memory via ctypes (kernel-managed, cross-process).
-Linux: Not yet implemented (needs Vulkan DMA-BUF / EGL external memory).
+Linux: DMA-BUF FDs + Vulkan `VkImportMemoryFdInfoKHR` via the
+    `slpn_broker_*` FFI in `streamlib-python-native`. There is no direct
+    ctypes CPU-mmap equivalent of `IOSurfaceLookup` — the Linux resolve
+    path lives behind `NativeGpuContext*` in `processor_context.py`, not
+    this module.
 Windows: Not yet implemented (needs DirectX 12 shared textures / NT handles).
 """
 
@@ -92,11 +96,13 @@ if sys.platform == "darwin":
             self.release()
 
 elif sys.platform == "linux":
-    raise NotImplementedError(
-        "GPU surface access not yet implemented on Linux. "
-        "Requires Vulkan DMA-BUF / EGL external memory integration. "
-        "See: VK_EXT_external_memory_dma_buf, VK_KHR_external_memory_fd"
-    )
+    # Intentionally empty — Linux CPU access to GPU surfaces goes through
+    # `NativeGpuContext*` in `processor_context.py`, which owns the DMA-BUF
+    # FD import via `streamlib-python-native`'s `slpn_broker_resolve_surface`
+    # and returns a handle holding an imported VkImage. Importing this
+    # module on Linux must succeed (some processors import it unconditionally)
+    # but no IOSurface-shaped class is defined here.
+    pass
 
 elif sys.platform == "win32":
     raise NotImplementedError(
