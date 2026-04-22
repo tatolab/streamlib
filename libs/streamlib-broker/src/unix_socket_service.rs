@@ -13,7 +13,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
+use streamlib_broker_client::{recv_message_with_fd, send_message_with_fd};
+
 use crate::state::BrokerState;
+
+// Re-export the consumer-side wire helpers so existing call sites
+// (`streamlib_broker::unix_socket_service::connect_to_broker`, etc.) keep
+// working unchanged. See the [`streamlib_broker_client`] crate for the
+// canonical implementations.
+pub use streamlib_broker_client::{connect_to_broker, send_request};
 
 /// Unix socket surface service for cross-process DMA-BUF sharing.
 pub struct UnixSocketSurfaceService {
@@ -211,169 +219,6 @@ fn handle_client_connection(
             unsafe { libc::close(fd) };
         }
     }
-}
-
-// =============================================================================
-// SCM_RIGHTS fd passing helpers
-// =============================================================================
-
-/// Receive a length-prefixed message with optional SCM_RIGHTS fd.
-fn recv_message_with_fd(
-    stream: &UnixStream,
-    msg_len: usize,
-) -> Result<(Vec<u8>, Option<RawFd>), std::io::Error> {
-    use std::os::unix::io::AsRawFd;
-
-    const CMSG_SPACE_SIZE: usize =
-        unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
-
-    // Aligned control message buffer for SCM_RIGHTS (one fd)
-    #[repr(C)]
-    union CmsgBuf {
-        buf: [u8; CMSG_SPACE_SIZE],
-        _align: libc::cmsghdr,
-    }
-    let mut cmsg_buf = CmsgBuf {
-        buf: [0u8; CMSG_SPACE_SIZE],
-    };
-
-    let mut buf = vec![0u8; msg_len];
-
-    let mut iov = libc::iovec {
-        iov_base: buf.as_mut_ptr() as *mut libc::c_void,
-        iov_len: msg_len,
-    };
-
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = unsafe { cmsg_buf.buf.as_mut_ptr() } as *mut libc::c_void;
-    msg.msg_controllen = CMSG_SPACE_SIZE;
-
-    let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, 0) };
-    if n < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if n == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "Connection closed",
-        ));
-    }
-
-    // Check for truncated control message (fd silently lost)
-    if msg.msg_flags & libc::MSG_CTRUNC != 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "SCM_RIGHTS control message truncated",
-        ));
-    }
-
-    // If we didn't get the full message, read the remainder with plain read
-    let mut total_read = n as usize;
-    while total_read < msg_len {
-        let remaining = &mut buf[total_read..];
-        let n = unsafe {
-            libc::read(
-                stream.as_raw_fd(),
-                remaining.as_mut_ptr() as *mut libc::c_void,
-                remaining.len(),
-            )
-        };
-        if n <= 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "Connection closed during message read",
-            ));
-        }
-        total_read += n as usize;
-    }
-
-    // Extract fd from control message if present
-    let mut received_fd = None;
-    let mut cmsg_ptr = unsafe { libc::CMSG_FIRSTHDR(&msg) };
-    while !cmsg_ptr.is_null() {
-        let cmsg = unsafe { &*cmsg_ptr };
-        if cmsg.cmsg_level == libc::SOL_SOCKET && cmsg.cmsg_type == libc::SCM_RIGHTS {
-            let fd_ptr = unsafe { libc::CMSG_DATA(cmsg_ptr) } as *const RawFd;
-            received_fd = Some(unsafe { *fd_ptr });
-        }
-        cmsg_ptr = unsafe { libc::CMSG_NXTHDR(&msg, cmsg_ptr) };
-    }
-
-    Ok((buf, received_fd))
-}
-
-/// Send a length-prefixed message with optional SCM_RIGHTS fd.
-fn send_message_with_fd(
-    stream: &UnixStream,
-    data: &[u8],
-    fd: Option<RawFd>,
-) -> Result<(), std::io::Error> {
-    use std::os::unix::io::AsRawFd;
-
-    // First send the length prefix
-    let len_bytes = (data.len() as u32).to_be_bytes();
-    let mut len_iov = libc::iovec {
-        iov_base: len_bytes.as_ptr() as *mut libc::c_void,
-        iov_len: 4,
-    };
-    let mut len_msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    len_msg.msg_iov = &mut len_iov;
-    len_msg.msg_iovlen = 1;
-
-    let n = unsafe { libc::sendmsg(stream.as_raw_fd(), &len_msg, 0) };
-    if n < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    // Then send the data payload with optional fd
-    let mut iov = libc::iovec {
-        iov_base: data.as_ptr() as *mut libc::c_void,
-        iov_len: data.len(),
-    };
-
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-
-    const CMSG_SPACE_SIZE: usize =
-        unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
-
-    // Aligned control message buffer for SCM_RIGHTS (one fd)
-    #[repr(C)]
-    union CmsgBuf {
-        buf: [u8; CMSG_SPACE_SIZE],
-        _align: libc::cmsghdr,
-    }
-    let mut cmsg_buf = CmsgBuf {
-        buf: [0u8; CMSG_SPACE_SIZE],
-    };
-
-    if let Some(send_fd) = fd {
-        msg.msg_control = unsafe { cmsg_buf.buf.as_mut_ptr() } as *mut libc::c_void;
-        msg.msg_controllen = CMSG_SPACE_SIZE;
-
-        let cmsg_ptr = unsafe { libc::CMSG_FIRSTHDR(&msg) };
-        if !cmsg_ptr.is_null() {
-            unsafe {
-                (*cmsg_ptr).cmsg_level = libc::SOL_SOCKET;
-                (*cmsg_ptr).cmsg_type = libc::SCM_RIGHTS;
-                (*cmsg_ptr).cmsg_len =
-                    libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as usize;
-                let fd_ptr = libc::CMSG_DATA(cmsg_ptr) as *mut RawFd;
-                *fd_ptr = send_fd;
-            }
-            msg.msg_controllen = CMSG_SPACE_SIZE;
-        }
-    }
-
-    let n = unsafe { libc::sendmsg(stream.as_raw_fd(), &msg, 0) };
-    if n < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    Ok(())
 }
 
 // =============================================================================
@@ -609,68 +454,6 @@ fn handle_release(
     request: &serde_json::Value,
 ) -> (serde_json::Value, Option<RawFd>) {
     handle_unregister(state, request)
-}
-
-// =============================================================================
-// Client-side helpers (used by SurfaceStore)
-// =============================================================================
-
-/// Connect to the broker's Unix socket.
-pub fn connect_to_broker(socket_path: &Path) -> Result<UnixStream, std::io::Error> {
-    UnixStream::connect(socket_path)
-}
-
-/// Send a request and receive a response from the broker.
-pub fn send_request(
-    stream: &UnixStream,
-    request: &serde_json::Value,
-    fd: Option<RawFd>,
-) -> Result<(serde_json::Value, Option<RawFd>), std::io::Error> {
-    let request_bytes = serde_json::to_vec(request).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::Other,
-            format!("Failed to serialize request: {}", e),
-        )
-    })?;
-
-    // Send request with optional fd
-    send_message_with_fd(stream, &request_bytes, fd)?;
-
-    // Read response length prefix
-    let mut len_buf = [0u8; 4];
-    {
-        use std::os::unix::io::AsRawFd;
-        let mut total = 0;
-        while total < 4 {
-            let n = unsafe {
-                libc::read(
-                    stream.as_raw_fd(),
-                    len_buf[total..].as_mut_ptr() as *mut libc::c_void,
-                    4 - total,
-                )
-            };
-            if n <= 0 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "Failed to read response length",
-                ));
-            }
-            total += n as usize;
-        }
-    }
-    let response_len = u32::from_be_bytes(len_buf) as usize;
-
-    // Read response with optional fd
-    let (response_bytes, response_fd) = recv_message_with_fd(stream, response_len)?;
-
-    let response: serde_json::Value = serde_json::from_slice(&response_bytes).map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("Invalid JSON response: {}", e),
-        )
-    })?;
-
-    Ok((response, response_fd))
 }
 
 // Safety: The service manages thread-safe BrokerState
