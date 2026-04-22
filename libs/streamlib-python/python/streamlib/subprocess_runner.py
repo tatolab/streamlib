@@ -104,23 +104,36 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
         if result != 0:
             _logger.error("Failed to create publisher for '%s'", dest_service)
 
-    # Connect to broker for surface resolution (if XPC service name is set)
+    # Connect to broker for surface resolution.
+    #
+    # macOS: STREAMLIB_XPC_SERVICE_NAME is the launchd mach-service name.
+    # Linux: STREAMLIB_BROKER_SOCKET is the Unix-socket path the broker
+    #        listens on. Both values funnel through the same FFI entry
+    #        (`slpn_broker_connect`) — the native lib's platform-specific
+    #        broker_macos / broker_linux module interprets the C string
+    #        accordingly.
     broker_ptr = None
-    xpc_service_name = os.environ.get("STREAMLIB_XPC_SERVICE_NAME", "")
+    if sys.platform == "darwin":
+        broker_endpoint = os.environ.get("STREAMLIB_XPC_SERVICE_NAME", "")
+        broker_endpoint_desc = "xpc_service_name"
+    else:
+        broker_endpoint = os.environ.get("STREAMLIB_BROKER_SOCKET", "")
+        broker_endpoint_desc = "broker_socket"
     runtime_id = os.environ.get("STREAMLIB_RUNTIME_ID", "")
-    if xpc_service_name:
+    if broker_endpoint:
         runtime_id_arg = runtime_id.encode("utf-8") if runtime_id else None
         broker_ptr = lib.slpn_broker_connect(
-            xpc_service_name.encode("utf-8"), runtime_id_arg
+            broker_endpoint.encode("utf-8"), runtime_id_arg
         )
         if broker_ptr:
             _logger.info(
-                "Connected to broker '%s' with runtime_id='%s'",
-                xpc_service_name, runtime_id,
+                "Connected to broker (%s='%s', runtime_id='%s')",
+                broker_endpoint_desc, broker_endpoint, runtime_id,
             )
         else:
             _logger.warning(
-                "Broker connect failed for '%s'", xpc_service_name,
+                "Broker connect failed (%s='%s')",
+                broker_endpoint_desc, broker_endpoint,
             )
 
     state = NativeProcessorState(

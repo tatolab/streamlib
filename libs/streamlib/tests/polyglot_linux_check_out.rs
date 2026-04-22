@@ -1,0 +1,369 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Linux polyglot consumer integration test (#394).
+//!
+//! Spawns a real Python 3 subprocess that loads `libstreamlib_python_native.so`
+//! via ctypes, drives the `slpn_broker_*` / `slpn_gpu_surface_*` FFI exactly
+//! like `subprocess_runner.py` does, and verifies the bytes it reads through
+//! `mmap` match a host-written DMA-BUF pattern.
+//!
+//! The goal is to catch breakage between the three moving parts that the
+//! native-lib's in-process unit tests don't exercise together:
+//!   - wire protocol through a second OS process (different FD table),
+//!   - ctypes-level ABI for every FFI symbol Python calls,
+//!   - `STREAMLIB_BROKER_SOCKET` env propagation.
+//!
+//! Uses a `memfd` as the DMA-BUF stand-in — the subprocess consumer path
+//! (`mmap(fd)`) is identical for both. A real Vulkan-exported DMA-BUF is not
+//! required for this particular gate: the native-lib does not call
+//! `vkImportMemoryFdInfoKHR` yet (see PR body on the deferred Vulkan import).
+//!
+//! Skips gracefully when:
+//!   - `python3` is not on PATH (non-Linux CI, minimal sandboxes),
+//!   - `libstreamlib_python_native.so` has not been built under
+//!     `target/debug/` (test ran before `cargo build -p streamlib-python-native`).
+
+#![cfg(target_os = "linux")]
+
+use std::io::Write;
+use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
+
+use streamlib_broker::unix_socket_service::{
+    connect_to_broker, send_request, UnixSocketSurfaceService,
+};
+use streamlib_broker::BrokerState;
+
+/// Locate `libstreamlib_python_native.so` under the workspace target dir.
+///
+/// `CARGO_MANIFEST_DIR` points at `libs/streamlib`; go up two levels to the
+/// workspace root, then descend into `target/{debug,release}`.
+fn locate_native_lib() -> Option<PathBuf> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    let workspace = PathBuf::from(&manifest_dir).join("..").join("..");
+    for profile in &["debug", "release"] {
+        let candidate = workspace
+            .join("target")
+            .join(profile)
+            .join("libstreamlib_python_native.so");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn python3_available() -> bool {
+    Command::new("python3")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn tmp_socket_path(label: &str) -> PathBuf {
+    let mut p = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    p.push(format!(
+        "streamlib-polyglot-test-{}-{}-{}.sock",
+        label,
+        std::process::id(),
+        nanos
+    ));
+    p
+}
+
+fn make_memfd_with(contents: &[u8]) -> RawFd {
+    use std::io::{Seek, SeekFrom};
+
+    let name = std::ffi::CString::new("polyglot-test-memfd").unwrap();
+    let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+    assert!(fd >= 0, "memfd_create: {}", std::io::Error::last_os_error());
+    assert_eq!(
+        unsafe { libc::ftruncate(fd, contents.len() as libc::off_t) },
+        0,
+        "ftruncate: {}",
+        std::io::Error::last_os_error()
+    );
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    file.write_all(contents).expect("memfd write");
+    file.seek(SeekFrom::Start(0)).expect("memfd rewind");
+    file.into_raw_fd()
+}
+
+/// Build the Python driver that runs inside the subprocess. Kept as an
+/// embedded string so the test is self-contained and doesn't have to ship
+/// a fixture .py file.
+fn python_driver_source() -> &'static str {
+    r#"
+import ctypes
+import os
+import sys
+
+native_lib_path = os.environ["TEST_NATIVE_LIB"]
+socket_path = os.environ["STREAMLIB_BROKER_SOCKET"]
+runtime_id = os.environ["STREAMLIB_RUNTIME_ID"]
+surface_id = os.environ["TEST_SURFACE_ID"]
+expected_width = int(os.environ["TEST_WIDTH"])
+expected_height = int(os.environ["TEST_HEIGHT"])
+expected_bpr = int(os.environ["TEST_BYTES_PER_ROW"])
+expected_head_hex = os.environ["TEST_EXPECTED_HEAD_HEX"]
+
+lib = ctypes.cdll.LoadLibrary(native_lib_path)
+
+lib.slpn_broker_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+lib.slpn_broker_connect.restype = ctypes.c_void_p
+lib.slpn_broker_disconnect.argtypes = [ctypes.c_void_p]
+lib.slpn_broker_disconnect.restype = None
+lib.slpn_broker_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+lib.slpn_broker_resolve_surface.restype = ctypes.c_void_p
+lib.slpn_broker_unregister_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+lib.slpn_broker_unregister_surface.restype = None
+
+lib.slpn_gpu_surface_lock.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+lib.slpn_gpu_surface_lock.restype = ctypes.c_int32
+lib.slpn_gpu_surface_unlock.argtypes = [ctypes.c_void_p, ctypes.c_int32]
+lib.slpn_gpu_surface_unlock.restype = ctypes.c_int32
+lib.slpn_gpu_surface_base_address.argtypes = [ctypes.c_void_p]
+lib.slpn_gpu_surface_base_address.restype = ctypes.c_void_p
+lib.slpn_gpu_surface_width.argtypes = [ctypes.c_void_p]
+lib.slpn_gpu_surface_width.restype = ctypes.c_uint32
+lib.slpn_gpu_surface_height.argtypes = [ctypes.c_void_p]
+lib.slpn_gpu_surface_height.restype = ctypes.c_uint32
+lib.slpn_gpu_surface_bytes_per_row.argtypes = [ctypes.c_void_p]
+lib.slpn_gpu_surface_bytes_per_row.restype = ctypes.c_uint32
+lib.slpn_gpu_surface_release.argtypes = [ctypes.c_void_p]
+lib.slpn_gpu_surface_release.restype = None
+
+def fatal(msg):
+    sys.stderr.write("FAIL: " + msg + "\n")
+    sys.stderr.flush()
+    sys.exit(1)
+
+broker = lib.slpn_broker_connect(socket_path.encode("utf-8"), runtime_id.encode("utf-8"))
+if not broker:
+    fatal("slpn_broker_connect returned null")
+
+handle = lib.slpn_broker_resolve_surface(broker, surface_id.encode("utf-8"))
+if not handle:
+    fatal("slpn_broker_resolve_surface returned null")
+
+width = lib.slpn_gpu_surface_width(handle)
+height = lib.slpn_gpu_surface_height(handle)
+bpr = lib.slpn_gpu_surface_bytes_per_row(handle)
+if width != expected_width:
+    fatal("width: expected %d got %d" % (expected_width, width))
+if height != expected_height:
+    fatal("height: expected %d got %d" % (expected_height, height))
+if bpr != expected_bpr:
+    fatal("bytes_per_row: expected %d got %d" % (expected_bpr, bpr))
+
+if lib.slpn_gpu_surface_lock(handle, 1) != 0:
+    fatal("slpn_gpu_surface_lock returned non-zero")
+
+base = lib.slpn_gpu_surface_base_address(handle)
+if not base:
+    fatal("base_address null after lock")
+
+n = len(expected_head_hex) // 2
+head = (ctypes.c_uint8 * n).from_address(base)
+actual_hex = bytes(head).hex()
+if actual_hex != expected_head_hex:
+    fatal("first %d bytes mismatch: expected %s got %s" % (n, expected_head_hex, actual_hex))
+
+if lib.slpn_gpu_surface_unlock(handle, 1) != 0:
+    fatal("slpn_gpu_surface_unlock returned non-zero")
+
+# Second resolve_surface should hit the cache and return identical metadata.
+handle2 = lib.slpn_broker_resolve_surface(broker, surface_id.encode("utf-8"))
+if not handle2:
+    fatal("second resolve_surface returned null (cache miss should still succeed)")
+if lib.slpn_gpu_surface_width(handle2) != expected_width:
+    fatal("cached handle width mismatch")
+lib.slpn_gpu_surface_release(handle2)
+
+lib.slpn_broker_unregister_surface(broker, surface_id.encode("utf-8"))
+lib.slpn_gpu_surface_release(handle)
+lib.slpn_broker_disconnect(broker)
+
+sys.stdout.write("OK " + actual_hex + "\n")
+sys.stdout.flush()
+"#
+}
+
+#[test]
+fn python_subprocess_resolves_and_mmaps_host_published_surface() {
+    let native_lib = match locate_native_lib() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "polyglot_linux_check_out: libstreamlib_python_native.so not built; \
+                 run `cargo build -p streamlib-python-native` first — skipping"
+            );
+            return;
+        }
+    };
+    if !python3_available() {
+        eprintln!("polyglot_linux_check_out: python3 not on PATH — skipping");
+        return;
+    }
+
+    // 1. Start a broker in-process.
+    let state = BrokerState::new();
+    let socket_path = tmp_socket_path("py-subprocess");
+    let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+    service.start().expect("service start");
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // 2. Host: check_in a memfd seeded with a deterministic pattern.
+    let width: u32 = 64;
+    let height: u32 = 4;
+    let bpp: u32 = 4;
+    let size: usize = (width * height * bpp) as usize;
+    let mut pattern = Vec::with_capacity(size);
+    for i in 0..size {
+        pattern.push(((i * 13 + 7) & 0xFF) as u8);
+    }
+    let fd = make_memfd_with(&pattern);
+
+    let host_stream = connect_to_broker(&socket_path).expect("host connect");
+    let check_in_req = serde_json::json!({
+        "op": "check_in",
+        "runtime_id": "host-polyglot-test",
+        "width": width,
+        "height": height,
+        "format": "Bgra32",
+        "resource_type": "pixel_buffer",
+    });
+    let (resp, _) =
+        send_request(&host_stream, &check_in_req, Some(fd)).expect("host check_in");
+    unsafe { libc::close(fd) };
+    let surface_id = resp
+        .get("surface_id")
+        .and_then(|v| v.as_str())
+        .expect("surface_id")
+        .to_string();
+    drop(host_stream);
+
+    // 3. Spawn a Python subprocess driving the native-lib FFI.
+    let head_bytes = 32usize.min(size);
+    let expected_head_hex: String = pattern[..head_bytes]
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+
+    let driver = python_driver_source();
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(driver)
+        .env("STREAMLIB_BROKER_SOCKET", &socket_path)
+        .env("STREAMLIB_RUNTIME_ID", "polyglot-test-runtime")
+        .env("TEST_NATIVE_LIB", &native_lib)
+        .env("TEST_SURFACE_ID", &surface_id)
+        .env("TEST_WIDTH", width.to_string())
+        .env("TEST_HEIGHT", height.to_string())
+        .env("TEST_BYTES_PER_ROW", (width * bpp).to_string())
+        .env("TEST_EXPECTED_HEAD_HEX", &expected_head_hex)
+        .output()
+        .expect("spawn python3");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    service.stop();
+
+    assert!(
+        output.status.success(),
+        "python subprocess failed (exit={:?})\nstdout:\n{}\nstderr:\n{}",
+        output.status.code(),
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.starts_with("OK "),
+        "expected OK prefix from python driver, got:\nstdout:\n{}\nstderr:\n{}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains(&expected_head_hex),
+        "expected head hex '{}' in stdout '{}'",
+        expected_head_hex,
+        stdout
+    );
+}
+
+#[test]
+fn python_subprocess_reports_clear_error_on_missing_broker_socket() {
+    let native_lib = match locate_native_lib() {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "polyglot_linux_check_out: libstreamlib_python_native.so not built; skipping"
+            );
+            return;
+        }
+    };
+    if !python3_available() {
+        eprintln!("polyglot_linux_check_out: python3 not on PATH — skipping");
+        return;
+    }
+
+    // Driver that lazy-connects to a bogus socket and expects the first
+    // resolve to fail (null handle), without crashing the subprocess.
+    let driver = r#"
+import ctypes
+import os
+import sys
+
+native_lib_path = os.environ["TEST_NATIVE_LIB"]
+socket_path = os.environ["STREAMLIB_BROKER_SOCKET"]
+
+lib = ctypes.cdll.LoadLibrary(native_lib_path)
+lib.slpn_broker_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+lib.slpn_broker_connect.restype = ctypes.c_void_p
+lib.slpn_broker_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+lib.slpn_broker_resolve_surface.restype = ctypes.c_void_p
+lib.slpn_broker_disconnect.argtypes = [ctypes.c_void_p]
+lib.slpn_broker_disconnect.restype = None
+
+broker = lib.slpn_broker_connect(socket_path.encode("utf-8"), b"lazy-test")
+assert broker, "connect must succeed lazily even for a bad socket"
+handle = lib.slpn_broker_resolve_surface(broker, b"any-surface")
+assert not handle, "resolve must return null when the socket is unreachable"
+lib.slpn_broker_disconnect(broker)
+
+sys.stdout.write("LAZY_FAIL_OK\n")
+sys.stdout.flush()
+"#;
+
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(driver)
+        .env("STREAMLIB_BROKER_SOCKET", "/nonexistent/broker.sock")
+        .env("TEST_NATIVE_LIB", &native_lib)
+        .output()
+        .expect("spawn python3");
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        output.status.success(),
+        "python subprocess must exit cleanly on lazy-connect failure (exit={:?})\nstderr:\n{}",
+        output.status.code(),
+        stderr
+    );
+    assert!(
+        stdout.contains("LAZY_FAIL_OK"),
+        "expected LAZY_FAIL_OK in stdout, got:\nstdout:\n{}\nstderr:\n{}",
+        stdout,
+        stderr
+    );
+}

@@ -676,3 +676,160 @@ pub fn send_request(
 // Safety: The service manages thread-safe BrokerState
 unsafe impl Send for UnixSocketSurfaceService {}
 unsafe impl Sync for UnixSocketSurfaceService {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::io::FromRawFd;
+
+    /// Create an anonymous kernel fd (memfd) seeded with `contents`. The fd
+    /// supports `lseek` + `read`, so we can verify that an fd received over
+    /// SCM_RIGHTS still refers to the same kernel file object.
+    fn make_memfd_with(contents: &[u8]) -> RawFd {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let name = std::ffi::CString::new("streamlib-broker-test").unwrap();
+        let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+        assert!(fd >= 0, "memfd_create failed: {}", std::io::Error::last_os_error());
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        file.write_all(contents).expect("memfd write");
+        file.seek(SeekFrom::Start(0)).expect("memfd rewind");
+        // Leak the File wrapper so the raw fd stays open — caller owns it.
+        let raw = {
+            use std::os::unix::io::IntoRawFd;
+            file.into_raw_fd()
+        };
+        raw
+    }
+
+    fn read_all_from_fd(fd: RawFd) -> Vec<u8> {
+        use std::io::Read;
+
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        // memfd_create starts read/write and non-sealed, but SCM_RIGHTS
+        // delivers a duplicated fd whose offset is independent of the
+        // sender's. Rewind so we read from the start regardless.
+        use std::io::{Seek, SeekFrom};
+        file.seek(SeekFrom::Start(0)).expect("recv memfd rewind");
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf).expect("recv memfd read");
+        // Let the File drop close the fd.
+        buf
+    }
+
+    fn tmp_socket_path() -> PathBuf {
+        let mut p = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        p.push(format!(
+            "streamlib-broker-test-{}-{}.sock",
+            std::process::id(),
+            nanos
+        ));
+        p
+    }
+
+    #[test]
+    fn check_in_check_out_roundtrip_preserves_fd_content() {
+        // Start a broker service in-process.
+        let state = BrokerState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+
+        // Give the listener a moment to accept.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Client side: connect and check_in a memfd seeded with a pattern.
+        let stream = connect_to_broker(&socket_path).expect("connect");
+
+        let pattern = b"streamlib-broker-test-fd-contents-0123456789";
+        let send_fd = make_memfd_with(pattern);
+
+        let check_in_req = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "test-runtime",
+            "width": 640,
+            "height": 480,
+            "format": "Bgra32",
+            "resource_type": "pixel_buffer",
+        });
+        let (check_in_resp, check_in_fd) =
+            send_request(&stream, &check_in_req, Some(send_fd)).expect("check_in request");
+        // Close our copy of the sent fd — the broker dup'd it.
+        unsafe { libc::close(send_fd) };
+        assert!(check_in_fd.is_none(), "check_in must not return an fd");
+        let surface_id = check_in_resp
+            .get("surface_id")
+            .and_then(|v| v.as_str())
+            .expect("surface_id in response")
+            .to_string();
+        assert!(!surface_id.is_empty());
+
+        // check_out the same surface_id — broker should return a dup of the
+        // stored fd whose contents are byte-for-byte identical.
+        let check_out_req = serde_json::json!({
+            "op": "check_out",
+            "surface_id": surface_id,
+        });
+        let (check_out_resp, check_out_fd) =
+            send_request(&stream, &check_out_req, None).expect("check_out request");
+        assert_eq!(
+            check_out_resp.get("width").and_then(|v| v.as_u64()),
+            Some(640)
+        );
+        assert_eq!(
+            check_out_resp.get("height").and_then(|v| v.as_u64()),
+            Some(480)
+        );
+        assert_eq!(
+            check_out_resp.get("format").and_then(|v| v.as_str()),
+            Some("Bgra32")
+        );
+        let received_fd = check_out_fd.expect("check_out must return an fd");
+        assert!(received_fd >= 0);
+        let received = read_all_from_fd(received_fd);
+        assert_eq!(
+            received, pattern,
+            "SCM_RIGHTS should preserve the underlying memfd contents"
+        );
+
+        // release — fire-and-forget-shaped wire, still returns a JSON reply.
+        let release_req = serde_json::json!({
+            "op": "release",
+            "surface_id": surface_id,
+            "runtime_id": "test-runtime",
+        });
+        let (_release_resp, _) =
+            send_request(&stream, &release_req, None).expect("release request");
+
+        drop(stream);
+        service.stop();
+    }
+
+    #[test]
+    fn check_out_unknown_surface_id_returns_error_no_fd() {
+        let state = BrokerState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_broker(&socket_path).expect("connect");
+        let req = serde_json::json!({
+            "op": "check_out",
+            "surface_id": "never-registered",
+        });
+        let (resp, fd) = send_request(&stream, &req, None).expect("check_out request");
+        assert!(fd.is_none(), "no fd when surface missing");
+        assert!(
+            resp.get("error").and_then(|v| v.as_str()).is_some(),
+            "missing-surface check_out must return an error payload"
+        );
+
+        drop(stream);
+        service.stop();
+    }
+}

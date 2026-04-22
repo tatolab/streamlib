@@ -729,6 +729,30 @@ impl SurfaceStore {
         Ok(mach_port)
     }
 
+    /// Release a single surface from the broker. Platform-dispatched.
+    ///
+    /// Fire-and-forget on macOS (mirrors `release_from_broker`). On Linux the
+    /// broker's `release` op is best-effort; a missing connection returns Ok
+    /// since the broker already treats the client's socket-close as a full
+    /// release.
+    pub fn release(&self, surface_id: &str) -> Result<()> {
+        #[cfg(target_os = "macos")]
+        {
+            self.release_from_broker(surface_id)
+        }
+        #[cfg(target_os = "linux")]
+        {
+            self.release_from_broker_unix(surface_id)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = surface_id;
+            Err(StreamError::NotSupported(
+                "SurfaceStore::release is only supported on macOS and Linux".into(),
+            ))
+        }
+    }
+
     /// Send release request to broker via XPC.
     #[cfg(target_os = "macos")]
     fn release_from_broker(&self, surface_id: &str) -> Result<()> {

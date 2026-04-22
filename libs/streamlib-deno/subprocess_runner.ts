@@ -140,19 +140,31 @@ async function main(): Promise<void> {
     Deno.exit(1);
   }
 
-  // Connect to broker for surface resolution (if XPC service name is set)
-  const xpcServiceName = Deno.env.get("STREAMLIB_XPC_SERVICE_NAME") ?? "";
+  // Connect to broker for surface resolution.
+  //
+  // macOS: STREAMLIB_XPC_SERVICE_NAME is the launchd mach-service name.
+  // Linux: STREAMLIB_BROKER_SOCKET is the Unix-socket path the broker
+  //        listens on. Both values funnel through the same FFI entry
+  //        (`sldn_broker_connect`) — the native lib's platform-specific
+  //        broker_macos / broker_linux module interprets the C string
+  //        accordingly.
+  const isDarwin = Deno.build.os === "darwin";
+  const brokerEndpoint = isDarwin
+    ? (Deno.env.get("STREAMLIB_XPC_SERVICE_NAME") ?? "")
+    : (Deno.env.get("STREAMLIB_BROKER_SOCKET") ?? "");
+  const brokerEndpointDesc = isDarwin ? "xpc_service_name" : "broker_socket";
   let brokerPtr: Deno.PointerObject | null = null;
-  if (xpcServiceName) {
-    const serviceNameBuf = cString(xpcServiceName);
-    brokerPtr = lib.symbols.sldn_broker_connect(serviceNameBuf);
+  if (brokerEndpoint) {
+    const endpointBuf = cString(brokerEndpoint);
+    brokerPtr = lib.symbols.sldn_broker_connect(endpointBuf);
     if (brokerPtr === null) {
-      console.error(`[subprocess_runner:${processorId}] Warning: broker connect failed for '${xpcServiceName}'`);
+      console.error(`[subprocess_runner:${processorId}] Warning: broker connect failed (${brokerEndpointDesc}='${brokerEndpoint}')`);
     } else {
-      console.error(`[subprocess_runner:${processorId}] Connected to broker '${xpcServiceName}'`);
+      console.error(`[subprocess_runner:${processorId}] Connected to broker (${brokerEndpointDesc}='${brokerEndpoint}')`);
     }
   } else {
-    console.error(`[subprocess_runner:${processorId}] No STREAMLIB_XPC_SERVICE_NAME set, broker resolution disabled`);
+    const envName = isDarwin ? "STREAMLIB_XPC_SERVICE_NAME" : "STREAMLIB_BROKER_SOCKET";
+    console.error(`[subprocess_runner:${processorId}] No ${envName} set, broker resolution disabled`);
   }
 
   let processor: ProcessorLifecycle | null = null;

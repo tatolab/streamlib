@@ -760,7 +760,173 @@ mod gpu_surface {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+mod gpu_surface {
+    //! Linux GPU surface handle backed by a DMA-BUF file descriptor.
+    //!
+    //! Mirror of `streamlib-python-native`'s Linux `gpu_surface` module —
+    //! identical shape, `sldn_` prefix. See that file for full background.
+    //! CPU access is via `mmap(fd)` on lock; Vulkan import via
+    //! `vkImportMemoryFdInfoKHR` is deliberately deferred to a follow-up so
+    //! the cdylib stays minimal until a GPU-consuming Deno subprocess needs it.
+    use std::ffi::c_void;
+    use std::os::unix::io::RawFd;
+
+    pub struct SurfaceHandle {
+        pub fd: RawFd,
+        pub width: u32,
+        pub height: u32,
+        pub bytes_per_row: u32,
+        pub size: u64,
+        pub mapped_ptr: *mut u8,
+        pub is_locked: bool,
+    }
+
+    impl Drop for SurfaceHandle {
+        fn drop(&mut self) {
+            if self.is_locked && !self.mapped_ptr.is_null() && self.size > 0 {
+                unsafe {
+                    libc::munmap(self.mapped_ptr as *mut c_void, self.size as usize);
+                }
+            }
+            if self.fd >= 0 {
+                unsafe {
+                    libc::close(self.fd);
+                }
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_lookup(_iosurface_id: u32) -> *mut SurfaceHandle {
+        eprintln!("[sldn] GPU surface lookup by IOSurface id is macOS-only; use broker check_out");
+        std::ptr::null_mut()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_lock(
+        handle: *mut SurfaceHandle,
+        read_only: i32,
+    ) -> i32 {
+        let handle = match unsafe { handle.as_mut() } {
+            Some(h) => h,
+            None => return -1,
+        };
+        if handle.is_locked {
+            return 0;
+        }
+        if handle.size == 0 || handle.fd < 0 {
+            return -1;
+        }
+        let prot = if read_only != 0 {
+            libc::PROT_READ
+        } else {
+            libc::PROT_READ | libc::PROT_WRITE
+        };
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                handle.size as usize,
+                prot,
+                libc::MAP_SHARED,
+                handle.fd,
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            eprintln!(
+                "[sldn] mmap on DMA-BUF fd {} failed: {}",
+                handle.fd,
+                std::io::Error::last_os_error()
+            );
+            return -1;
+        }
+        handle.mapped_ptr = ptr as *mut u8;
+        handle.is_locked = true;
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_unlock(
+        handle: *mut SurfaceHandle,
+        _read_only: i32,
+    ) -> i32 {
+        let handle = match unsafe { handle.as_mut() } {
+            Some(h) => h,
+            None => return -1,
+        };
+        if !handle.is_locked {
+            return 0;
+        }
+        let result = unsafe {
+            libc::munmap(handle.mapped_ptr as *mut c_void, handle.size as usize)
+        };
+        handle.mapped_ptr = std::ptr::null_mut();
+        handle.is_locked = false;
+        if result != 0 {
+            -1
+        } else {
+            0
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_base_address(
+        handle: *const SurfaceHandle,
+    ) -> *mut u8 {
+        match unsafe { handle.as_ref() } {
+            Some(h) => h.mapped_ptr,
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_width(handle: *const SurfaceHandle) -> u32 {
+        unsafe { handle.as_ref() }.map(|h| h.width).unwrap_or(0)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_height(handle: *const SurfaceHandle) -> u32 {
+        unsafe { handle.as_ref() }.map(|h| h.height).unwrap_or(0)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_bytes_per_row(
+        handle: *const SurfaceHandle,
+    ) -> u32 {
+        unsafe { handle.as_ref() }.map(|h| h.bytes_per_row).unwrap_or(0)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_create(
+        _width: u32,
+        _height: u32,
+        _bytes_per_element: u32,
+    ) -> *mut SurfaceHandle {
+        eprintln!(
+            "[sldn] GPU surface creation in subprocess is not supported on Linux; allocation \
+             must go through escalate IPC (GpuContextFullAccess -> RHI -> SurfaceStore.check_in)"
+        );
+        std::ptr::null_mut()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_get_id(handle: *const SurfaceHandle) -> u32 {
+        // Linux surface IDs are broker UUIDs (strings), not u32 IOSurfaceIDs;
+        // return the fd as a best-effort numeric token. See the Python twin
+        // in streamlib-python-native for the same behavior.
+        unsafe { handle.as_ref() }.map(|h| h.fd as u32).unwrap_or(0)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_release(handle: *mut SurfaceHandle) {
+        if !handle.is_null() {
+            let _ = unsafe { Box::from_raw(handle) };
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod gpu_surface {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_gpu_surface_lookup(_iosurface_id: u32) -> *mut std::ffi::c_void {
@@ -1275,7 +1441,509 @@ mod broker_client {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+mod broker_client {
+    //! Linux broker consumer client (Deno twin of `streamlib-python-native`'s).
+    //!
+    //! Speaks the same Unix-socket + SCM_RIGHTS wire protocol as the Python
+    //! shim, with `sldn_` prefix. Consumer-only per the safety posture in
+    //! `docs/research/polyglot-dma-buf-fd.md` — subprocess allocation goes
+    //! through the host via #325 escalate IPC.
+    use std::collections::HashMap;
+    use std::ffi::{c_char, CStr};
+    use std::os::unix::io::RawFd;
+    use std::os::unix::net::UnixStream;
+    use std::sync::Mutex;
+
+    use super::gpu_surface::SurfaceHandle;
+
+    const MAX_RESOLVE_CACHE: usize = 128;
+
+    struct CachedSurface {
+        fd: RawFd,
+        width: u32,
+        height: u32,
+        bytes_per_row: u32,
+        size: u64,
+    }
+
+    impl Drop for CachedSurface {
+        fn drop(&mut self) {
+            if self.fd >= 0 {
+                unsafe { libc::close(self.fd) };
+            }
+        }
+    }
+
+    pub struct BrokerHandle {
+        socket_path: String,
+        runtime_id: String,
+        connection: Mutex<Option<UnixStream>>,
+        resolve_cache: Mutex<HashMap<String, CachedSurface>>,
+    }
+
+    impl BrokerHandle {
+        fn lazy_connect(
+            &self,
+        ) -> std::io::Result<std::sync::MutexGuard<'_, Option<UnixStream>>> {
+            let mut guard = self.connection.lock().expect("poisoned");
+            if guard.is_none() {
+                let stream = UnixStream::connect(&self.socket_path)?;
+                stream.set_nonblocking(false)?;
+                *guard = Some(stream);
+            }
+            Ok(guard)
+        }
+    }
+
+    mod wire {
+        use std::os::unix::io::{AsRawFd, RawFd};
+        use std::os::unix::net::UnixStream;
+
+        pub fn send_message_with_fd(
+            stream: &UnixStream,
+            data: &[u8],
+            fd: Option<RawFd>,
+        ) -> std::io::Result<()> {
+            let len_bytes = (data.len() as u32).to_be_bytes();
+            let mut len_iov = libc::iovec {
+                iov_base: len_bytes.as_ptr() as *mut libc::c_void,
+                iov_len: 4,
+            };
+            let mut len_msg: libc::msghdr = unsafe { std::mem::zeroed() };
+            len_msg.msg_iov = &mut len_iov;
+            len_msg.msg_iovlen = 1;
+            let n = unsafe { libc::sendmsg(stream.as_raw_fd(), &len_msg, 0) };
+            if n < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            let mut iov = libc::iovec {
+                iov_base: data.as_ptr() as *mut libc::c_void,
+                iov_len: data.len(),
+            };
+            let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+
+            const CMSG_SPACE_SIZE: usize =
+                unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+            #[repr(C)]
+            union CmsgBuf {
+                buf: [u8; CMSG_SPACE_SIZE],
+                _align: libc::cmsghdr,
+            }
+            let mut cmsg_buf = CmsgBuf {
+                buf: [0u8; CMSG_SPACE_SIZE],
+            };
+
+            if let Some(send_fd) = fd {
+                msg.msg_control = unsafe { cmsg_buf.buf.as_mut_ptr() } as *mut libc::c_void;
+                msg.msg_controllen = CMSG_SPACE_SIZE;
+                let cmsg_ptr = unsafe { libc::CMSG_FIRSTHDR(&msg) };
+                if !cmsg_ptr.is_null() {
+                    unsafe {
+                        (*cmsg_ptr).cmsg_level = libc::SOL_SOCKET;
+                        (*cmsg_ptr).cmsg_type = libc::SCM_RIGHTS;
+                        (*cmsg_ptr).cmsg_len =
+                            libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as usize;
+                        let fd_ptr = libc::CMSG_DATA(cmsg_ptr) as *mut RawFd;
+                        *fd_ptr = send_fd;
+                    }
+                    msg.msg_controllen = CMSG_SPACE_SIZE;
+                }
+            }
+
+            let n = unsafe { libc::sendmsg(stream.as_raw_fd(), &msg, 0) };
+            if n < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        }
+
+        pub fn recv_message_with_fd(
+            stream: &UnixStream,
+            msg_len: usize,
+        ) -> std::io::Result<(Vec<u8>, Option<RawFd>)> {
+            const CMSG_SPACE_SIZE: usize =
+                unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+            #[repr(C)]
+            union CmsgBuf {
+                buf: [u8; CMSG_SPACE_SIZE],
+                _align: libc::cmsghdr,
+            }
+            let mut cmsg_buf = CmsgBuf {
+                buf: [0u8; CMSG_SPACE_SIZE],
+            };
+
+            let mut buf = vec![0u8; msg_len];
+            let mut iov = libc::iovec {
+                iov_base: buf.as_mut_ptr() as *mut libc::c_void,
+                iov_len: msg_len,
+            };
+            let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+            msg.msg_iov = &mut iov;
+            msg.msg_iovlen = 1;
+            msg.msg_control = unsafe { cmsg_buf.buf.as_mut_ptr() } as *mut libc::c_void;
+            msg.msg_controllen = CMSG_SPACE_SIZE;
+
+            let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, 0) };
+            if n < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if n == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Connection closed",
+                ));
+            }
+            if msg.msg_flags & libc::MSG_CTRUNC != 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "SCM_RIGHTS control message truncated",
+                ));
+            }
+
+            let mut total_read = n as usize;
+            while total_read < msg_len {
+                let remaining = &mut buf[total_read..];
+                let n = unsafe {
+                    libc::read(
+                        stream.as_raw_fd(),
+                        remaining.as_mut_ptr() as *mut libc::c_void,
+                        remaining.len(),
+                    )
+                };
+                if n <= 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "Connection closed during message read",
+                    ));
+                }
+                total_read += n as usize;
+            }
+
+            let mut received_fd = None;
+            let mut cmsg_ptr = unsafe { libc::CMSG_FIRSTHDR(&msg) };
+            while !cmsg_ptr.is_null() {
+                let cmsg = unsafe { &*cmsg_ptr };
+                if cmsg.cmsg_level == libc::SOL_SOCKET && cmsg.cmsg_type == libc::SCM_RIGHTS {
+                    let fd_ptr = unsafe { libc::CMSG_DATA(cmsg_ptr) } as *const RawFd;
+                    received_fd = Some(unsafe { *fd_ptr });
+                }
+                cmsg_ptr = unsafe { libc::CMSG_NXTHDR(&msg, cmsg_ptr) };
+            }
+            let _ = &buf;
+            let mut read_buf = vec![0u8; msg_len];
+            read_buf.copy_from_slice(&buf[..msg_len]);
+            Ok((read_buf, received_fd))
+        }
+
+        pub fn send_request(
+            stream: &UnixStream,
+            request: &serde_json::Value,
+            fd: Option<RawFd>,
+        ) -> std::io::Result<(serde_json::Value, Option<RawFd>)> {
+            let request_bytes = serde_json::to_vec(request).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to serialize request: {}", e),
+                )
+            })?;
+            send_message_with_fd(stream, &request_bytes, fd)?;
+
+            let mut len_buf = [0u8; 4];
+            let mut total = 0;
+            while total < 4 {
+                let n = unsafe {
+                    libc::read(
+                        stream.as_raw_fd(),
+                        len_buf[total..].as_mut_ptr() as *mut libc::c_void,
+                        4 - total,
+                    )
+                };
+                if n <= 0 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "Failed to read response length",
+                    ));
+                }
+                total += n as usize;
+            }
+            let response_len = u32::from_be_bytes(len_buf) as usize;
+            let (response_bytes, response_fd) = recv_message_with_fd(stream, response_len)?;
+            let response: serde_json::Value = serde_json::from_slice(&response_bytes)
+                .map_err(|e| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("Invalid JSON response: {}", e),
+                    )
+                })?;
+            Ok((response, response_fd))
+        }
+    }
+
+    fn c_str_to_string(ptr: *const c_char) -> Option<String> {
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe { CStr::from_ptr(ptr) }
+            .to_str()
+            .ok()
+            .map(|s| s.to_string())
+    }
+
+    fn bytes_per_pixel_from_format(format_str: &str) -> u32 {
+        match format_str {
+            "Bgra32" | "Rgba32" | "Argb32" => 4,
+            "Rgba64" => 8,
+            "Gray8" => 1,
+            "Yuyv422" | "Uyvy422" => 2,
+            "Nv12VideoRange" | "Nv12FullRange" => 1,
+            _ => 4,
+        }
+    }
+
+    /// Deno's `sldn_broker_connect` FFI is single-arg today (no runtime_id).
+    /// Stamp a deterministic-but-unique runtime_id from the process id + a
+    /// monotonic counter so broker logs distinguish subprocess instances.
+    fn default_runtime_id() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("deno-subprocess-{}-{}", std::process::id(), seq)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_broker_connect(socket_path: *const c_char) -> *mut BrokerHandle {
+        let socket_path = match c_str_to_string(socket_path) {
+            Some(s) if !s.is_empty() => s,
+            _ => {
+                eprintln!("[sldn] broker_connect (linux): null or empty socket path");
+                return std::ptr::null_mut();
+            }
+        };
+        let runtime_id = default_runtime_id();
+
+        eprintln!(
+            "[sldn] broker_connect (linux): registered socket_path='{}' runtime_id='{}' \
+             (lazy; will connect on first resolve_surface)",
+            socket_path, runtime_id
+        );
+
+        Box::into_raw(Box::new(BrokerHandle {
+            socket_path,
+            runtime_id,
+            connection: Mutex::new(None),
+            resolve_cache: Mutex::new(HashMap::new()),
+        }))
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_broker_disconnect(broker: *mut BrokerHandle) {
+        if !broker.is_null() {
+            let _ = unsafe { Box::from_raw(broker) };
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_broker_resolve_surface(
+        broker: *mut BrokerHandle,
+        pool_id: *const c_char,
+    ) -> *mut SurfaceHandle {
+        let broker = match unsafe { broker.as_ref() } {
+            Some(b) => b,
+            None => {
+                eprintln!("[sldn] broker_resolve_surface (linux): null broker handle");
+                return std::ptr::null_mut();
+            }
+        };
+        let pool_id_str = match c_str_to_string(pool_id) {
+            Some(s) if !s.is_empty() => s,
+            _ => {
+                eprintln!("[sldn] broker_resolve_surface (linux): null or empty pool_id");
+                return std::ptr::null_mut();
+            }
+        };
+
+        {
+            let cache = broker.resolve_cache.lock().expect("poisoned");
+            if let Some(cached) = cache.get(&pool_id_str) {
+                let dup_fd = unsafe { libc::dup(cached.fd) };
+                if dup_fd < 0 {
+                    eprintln!(
+                        "[sldn] broker_resolve_surface: dup cached fd failed for '{}': {}",
+                        pool_id_str,
+                        std::io::Error::last_os_error()
+                    );
+                    return std::ptr::null_mut();
+                }
+                return Box::into_raw(Box::new(SurfaceHandle {
+                    fd: dup_fd,
+                    width: cached.width,
+                    height: cached.height,
+                    bytes_per_row: cached.bytes_per_row,
+                    size: cached.size,
+                    mapped_ptr: std::ptr::null_mut(),
+                    is_locked: false,
+                }));
+            }
+        }
+
+        let guard = match broker.lazy_connect() {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!(
+                    "[sldn] broker_resolve_surface: connect to '{}' failed: {}. \
+                     Is the broker running? Start it with `sudo systemctl start streamlib-broker` \
+                     or via scripts/dev-setup.sh.",
+                    broker.socket_path, e
+                );
+                return std::ptr::null_mut();
+            }
+        };
+        let stream = guard.as_ref().expect("connection just populated");
+
+        let request = serde_json::json!({
+            "op": "check_out",
+            "surface_id": pool_id_str,
+        });
+        let (response, received_fd) = match wire::send_request(stream, &request, None) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!(
+                    "[sldn] broker_resolve_surface: check_out for '{}' failed: {}",
+                    pool_id_str, e
+                );
+                return std::ptr::null_mut();
+            }
+        };
+        if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
+            eprintln!(
+                "[sldn] broker_resolve_surface: broker error for '{}': {}",
+                pool_id_str, err
+            );
+            if let Some(fd) = received_fd {
+                unsafe { libc::close(fd) };
+            }
+            return std::ptr::null_mut();
+        }
+
+        let dma_buf_fd = match received_fd {
+            Some(fd) => fd,
+            None => {
+                eprintln!(
+                    "[sldn] broker_resolve_surface: no DMA-BUF fd for '{}'",
+                    pool_id_str
+                );
+                return std::ptr::null_mut();
+            }
+        };
+
+        let width = response.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let height = response.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let format_str = response
+            .get("format")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Bgra32");
+        let bpp = bytes_per_pixel_from_format(format_str);
+        let bytes_per_row = width.saturating_mul(bpp);
+        let size = (height as u64).saturating_mul(bytes_per_row as u64);
+
+        let cache_fd = unsafe { libc::dup(dma_buf_fd) };
+        if cache_fd >= 0 {
+            let mut cache = broker.resolve_cache.lock().expect("poisoned");
+            if cache.len() >= MAX_RESOLVE_CACHE {
+                eprintln!(
+                    "[sldn] broker resolve cache exceeded {} entries, dropping all cached fds",
+                    MAX_RESOLVE_CACHE
+                );
+                cache.clear();
+            }
+            cache.insert(
+                pool_id_str.clone(),
+                CachedSurface {
+                    fd: cache_fd,
+                    width,
+                    height,
+                    bytes_per_row,
+                    size,
+                },
+            );
+        }
+
+        Box::into_raw(Box::new(SurfaceHandle {
+            fd: dma_buf_fd,
+            width,
+            height,
+            bytes_per_row,
+            size,
+            mapped_ptr: std::ptr::null_mut(),
+            is_locked: false,
+        }))
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_broker_acquire_surface(
+        _broker: *mut BrokerHandle,
+        _width: u32,
+        _height: u32,
+        _bytes_per_element: u32,
+        _out_pool_id: *mut c_char,
+        _pool_id_buf_len: u32,
+    ) -> *mut SurfaceHandle {
+        eprintln!(
+            "[sldn] broker_acquire_surface: not supported on Linux; subprocess allocation must \
+             escalate to the host (acquire_pixel_buffer / acquire_texture over the stdio IPC) — \
+             the subprocess then calls resolve_surface with the returned handle_id."
+        );
+        std::ptr::null_mut()
+    }
+
+    /// Linux-only companion for `sldn_broker_resolve_surface`.
+    ///
+    /// Evicts the local cache entry for `pool_id` and sends a best-effort
+    /// `release` op to the broker so it can drop its dup of the DMA-BUF FD.
+    /// macOS doesn't ship an equivalent `sldn_broker_unregister_surface`; the
+    /// XPC path relies on connection-close to release refs. The Linux broker
+    /// behaves the same way at socket-close, but an explicit release
+    /// shortens the lifetime window between subprocess handle drop and broker
+    /// GC tick (see `prune_dead_runtimes` in the broker).
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_broker_unregister_surface(
+        broker: *mut BrokerHandle,
+        pool_id: *const c_char,
+    ) {
+        let broker = match unsafe { broker.as_ref() } {
+            Some(b) => b,
+            None => return,
+        };
+        let pool_id_str = match c_str_to_string(pool_id) {
+            Some(s) if !s.is_empty() => s,
+            _ => return,
+        };
+
+        {
+            let mut cache = broker.resolve_cache.lock().expect("poisoned");
+            let _ = cache.remove(&pool_id_str);
+        }
+
+        let guard = match broker.lazy_connect() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if let Some(stream) = guard.as_ref() {
+            let request = serde_json::json!({
+                "op": "release",
+                "surface_id": pool_id_str,
+                "runtime_id": broker.runtime_id,
+            });
+            let _ = wire::send_request(stream, &request, None);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 mod broker_client {
     use std::ffi::{c_char, c_void};
 
@@ -1318,4 +1986,156 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
         return None;
     }
     unsafe { CStr::from_ptr(ptr) }.to_str().ok()
+}
+
+// ============================================================================
+// Tests — Linux broker consumer shim round-trip (Deno twin of the Python tests)
+// ============================================================================
+
+#[cfg(all(test, target_os = "linux"))]
+mod broker_linux_tests {
+    use std::ffi::CString;
+    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+    use std::path::PathBuf;
+
+    use streamlib_broker::{unix_socket_service, BrokerState};
+    use unix_socket_service::UnixSocketSurfaceService;
+
+    use super::broker_client::{
+        sldn_broker_connect, sldn_broker_disconnect, sldn_broker_resolve_surface,
+        sldn_broker_unregister_surface,
+    };
+    use super::gpu_surface::{
+        sldn_gpu_surface_base_address, sldn_gpu_surface_bytes_per_row, sldn_gpu_surface_height,
+        sldn_gpu_surface_lock, sldn_gpu_surface_release, sldn_gpu_surface_unlock,
+        sldn_gpu_surface_width,
+    };
+
+    fn tmp_socket_path(label: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        p.push(format!(
+            "streamlib-deno-native-test-{}-{}-{}.sock",
+            label,
+            std::process::id(),
+            nanos
+        ));
+        p
+    }
+
+    fn make_memfd_with(contents: &[u8]) -> RawFd {
+        use std::io::{Seek, SeekFrom, Write};
+
+        let name = CString::new("sldn-test-memfd").unwrap();
+        let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+        assert!(
+            fd >= 0,
+            "memfd_create failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(
+            unsafe { libc::ftruncate(fd, contents.len() as libc::off_t) },
+            0,
+            "ftruncate failed: {}",
+            std::io::Error::last_os_error()
+        );
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        file.write_all(contents).expect("memfd write");
+        file.seek(SeekFrom::Start(0)).expect("memfd rewind");
+        file.into_raw_fd()
+    }
+
+    #[test]
+    fn resolve_surface_mmap_readback_matches_host_pattern() {
+        let state = BrokerState::new();
+        let socket_path = tmp_socket_path("mmap-readback");
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let width = 32u32;
+        let height = 4u32;
+        let bpp = 4u32;
+        let size = (width * height * bpp) as usize;
+        let mut pattern = Vec::with_capacity(size);
+        for i in 0..size {
+            pattern.push(((i * 23 + 5) & 0xFF) as u8);
+        }
+        let send_fd = make_memfd_with(&pattern);
+
+        let host_stream =
+            unix_socket_service::connect_to_broker(&socket_path).expect("host connect");
+        let check_in_req = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "deno-host-test",
+            "width": width,
+            "height": height,
+            "format": "Bgra32",
+            "resource_type": "pixel_buffer",
+        });
+        let (resp, _) = unix_socket_service::send_request(
+            &host_stream,
+            &check_in_req,
+            Some(send_fd),
+        )
+        .expect("host check_in");
+        unsafe { libc::close(send_fd) };
+        let surface_id = resp
+            .get("surface_id")
+            .and_then(|v| v.as_str())
+            .expect("surface_id")
+            .to_string();
+        drop(host_stream);
+
+        let c_socket = CString::new(socket_path.to_str().unwrap()).unwrap();
+        let broker = unsafe { sldn_broker_connect(c_socket.as_ptr()) };
+        assert!(!broker.is_null());
+
+        let c_pool_id = CString::new(surface_id.as_str()).unwrap();
+        let handle = unsafe { sldn_broker_resolve_surface(broker, c_pool_id.as_ptr()) };
+        assert!(!handle.is_null(), "resolve_surface returned null");
+
+        assert_eq!(unsafe { sldn_gpu_surface_width(handle) }, width);
+        assert_eq!(unsafe { sldn_gpu_surface_height(handle) }, height);
+        assert_eq!(
+            unsafe { sldn_gpu_surface_bytes_per_row(handle) },
+            width * bpp
+        );
+
+        let rc = unsafe { sldn_gpu_surface_lock(handle, 1) };
+        assert_eq!(rc, 0, "sldn_gpu_surface_lock failed");
+        let base = unsafe { sldn_gpu_surface_base_address(handle) };
+        assert!(!base.is_null(), "base_address null after lock");
+        let mapped: &[u8] = unsafe { std::slice::from_raw_parts(base, size) };
+        assert_eq!(mapped, pattern.as_slice());
+        assert_eq!(unsafe { sldn_gpu_surface_unlock(handle, 1) }, 0);
+
+        unsafe { sldn_broker_unregister_surface(broker, c_pool_id.as_ptr()) };
+        unsafe { sldn_gpu_surface_release(handle) };
+        unsafe { sldn_broker_disconnect(broker) };
+        service.stop();
+    }
+
+    #[test]
+    fn resolve_surface_fails_cleanly_on_missing_socket() {
+        let bogus_path = PathBuf::from("/nonexistent/streamlib-broker-test.sock");
+        let c_socket = CString::new(bogus_path.to_str().unwrap()).unwrap();
+        let broker = unsafe { sldn_broker_connect(c_socket.as_ptr()) };
+        assert!(
+            !broker.is_null(),
+            "connect should succeed lazily even for a bogus socket path"
+        );
+
+        let c_pool_id = CString::new("any-surface-id").unwrap();
+        let handle = unsafe { sldn_broker_resolve_surface(broker, c_pool_id.as_ptr()) };
+        assert!(
+            handle.is_null(),
+            "resolve_surface should fail cleanly when the socket is unreachable"
+        );
+
+        unsafe { sldn_broker_disconnect(broker) };
+    }
 }
