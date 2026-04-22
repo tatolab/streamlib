@@ -109,3 +109,10 @@ jobs:
 
       - name: Check streamlib-broker
         run: cargo check -p streamlib-broker
+
+      - name: Run streamlib-broker tests
+        # Includes lib tests and the daemon-lifecycle integration tests
+        # (socket activation, idle-exit, stale-socket cleanup, systemd
+        # unit parsing, dead-runtime pruning). These run on the Linux
+        # job because the broker is Linux-only.
+        run: cargo test -p streamlib-broker

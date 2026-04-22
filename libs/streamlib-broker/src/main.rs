@@ -14,7 +14,7 @@ use tracing::info;
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 use streamlib_broker::{
-    proto::broker_service_server::BrokerServiceServer, BrokerGrpcService, BrokerState,
+    BrokerGrpcService, BrokerState, proto::broker_service_server::BrokerServiceServer,
 };
 
 #[cfg(target_os = "macos")]
@@ -38,10 +38,26 @@ struct Cli {
     #[arg(long, env = "STREAMLIB_XPC_SERVICE_NAME")]
     xpc_service_name: Option<String>,
 
-    /// Unix socket path for surface store (from STREAMLIB_BROKER_SOCKET env var)
+    /// Unix socket path for surface store (from STREAMLIB_BROKER_SOCKET env var).
+    /// Ignored when the listener is inherited via systemd socket activation
+    /// (LISTEN_FDS).
     #[cfg(target_os = "linux")]
     #[arg(long, env = "STREAMLIB_BROKER_SOCKET")]
     socket_path: Option<String>,
+
+    /// Exit after N seconds of no active client connections. Intended for
+    /// socket-activated deployments where systemd re-spawns the daemon on
+    /// the next client connect. Disabled when unset (default).
+    #[cfg(target_os = "linux")]
+    #[arg(long)]
+    idle_exit_seconds: Option<u64>,
+
+    /// Probe an existing broker on the given Unix socket and exit.
+    /// Returns exit code 0 on successful `ping`, 1 otherwise. Does not start
+    /// the gRPC server, surface service, or telemetry pipeline.
+    #[cfg(target_os = "linux")]
+    #[arg(long, value_name = "SOCKET")]
+    probe: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -141,9 +157,20 @@ async fn main() {
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() {
+    use std::os::fd::FromRawFd;
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
     use streamlib_broker::unix_socket_service::UnixSocketSurfaceService;
 
     let cli = Cli::parse();
+
+    // --probe: short-circuit — connect to the given socket and send a ping.
+    // Exits 0 on pong, 1 otherwise. Does not touch telemetry / gRPC / state.
+    if let Some(socket) = cli.probe.as_deref() {
+        std::process::exit(run_probe(socket));
+    }
 
     // Initialize telemetry for the broker's OWN logs
     let _telemetry_guard =
@@ -176,26 +203,53 @@ async fn main() {
     // Create shared state for diagnostics
     let state = BrokerState::new();
 
-    // Determine socket path
-    let socket_path = cli.socket_path.unwrap_or_else(|| {
-        let streamlib_home = std::env::var("STREAMLIB_HOME")
-            .unwrap_or_else(|_| format!("{}/.streamlib", std::env::var("HOME").unwrap()));
-        format!("{}/broker.sock", streamlib_home)
-    });
+    // Decide how we obtain the Unix socket listener: inherited from systemd
+    // via LISTEN_FDS, or bound by us from --socket-path / STREAMLIB_BROKER_SOCKET.
+    //
+    // Systemd socket-activation convention: when the daemon is spawned by a
+    // matching `.socket` unit, systemd sets `LISTEN_PID` to the spawned
+    // process's pid, `LISTEN_FDS` to the count of inherited sockets (we
+    // require exactly 1), and passes the listening fd starting at fd 3.
+    // `LISTEN_PID` lets us guard against inheriting an env accidentally
+    // leaked from a grandparent process.
+    let inherited_listener = match sd_listen_fd() {
+        Ok(Some(fd)) => {
+            info!(
+                "[Broker] Inherited listening socket from systemd (fd {})",
+                fd
+            );
+            // SAFETY: systemd guarantees fd 3 is a valid listening Unix socket
+            // when LISTEN_FDS=1 and LISTEN_PID matches our pid. From this
+            // point on we own the fd.
+            Some(unsafe { UnixListener::from_raw_fd(fd) })
+        }
+        Ok(None) => None,
+        Err(msg) => {
+            tracing::warn!(
+                "[Broker] LISTEN_FDS set but invalid ({}), falling back to bind",
+                msg
+            );
+            None
+        }
+    };
 
-    // Start Unix socket surface service
-    let mut unix_socket_service =
-        UnixSocketSurfaceService::new(state.clone(), std::path::PathBuf::from(&socket_path));
+    let mut unix_socket_service = if let Some(listener) = inherited_listener {
+        UnixSocketSurfaceService::with_inherited_listener(state.clone(), listener)
+    } else {
+        let socket_path = cli.socket_path.clone().unwrap_or_else(|| {
+            let streamlib_home = std::env::var("STREAMLIB_HOME")
+                .unwrap_or_else(|_| format!("{}/.streamlib", std::env::var("HOME").unwrap()));
+            format!("{}/broker.sock", streamlib_home)
+        });
+        UnixSocketSurfaceService::new(state.clone(), std::path::PathBuf::from(&socket_path))
+    };
+
     match unix_socket_service.start() {
         Ok(()) => {
-            info!(
-                "[Broker] Unix socket surface service started on '{}'",
-                socket_path
-            );
+            info!("[Broker] Unix socket surface service started");
         }
         Err(e) => {
             tracing::error!("[Broker] Failed to start Unix socket service: {}", e);
-            // Continue without surface service - gRPC still works
         }
     }
 
@@ -228,6 +282,34 @@ async fn main() {
         }
     });
 
+    // Optional idle-exit watchdog.
+    if let Some(idle_seconds) = cli.idle_exit_seconds {
+        let active_count: Arc<AtomicUsize> = unix_socket_service.active_connection_count_arc();
+        info!(
+            "[Broker] Idle-exit enabled: will exit after {}s of no active clients",
+            idle_seconds
+        );
+        tokio::spawn(async move {
+            // Start the idle clock on launch — if nobody ever connects, we
+            // should still exit after `idle_seconds`.
+            let mut last_active = Instant::now();
+            loop {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                if active_count.load(Ordering::Relaxed) > 0 {
+                    last_active = Instant::now();
+                    continue;
+                }
+                if last_active.elapsed() >= Duration::from_secs(idle_seconds) {
+                    tracing::info!(
+                        "[Broker] Idle-exit after {}s with no active clients",
+                        idle_seconds
+                    );
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+
     // Start gRPC server (blocks forever)
     // Keep _unix_socket_service alive so it doesn't get dropped
     let _unix_socket_service = unix_socket_service;
@@ -235,6 +317,78 @@ async fn main() {
         tracing::error!("[Broker] gRPC server error: {}", e);
         std::process::exit(1);
     }
+}
+
+/// Probe an existing broker by sending `{"op":"ping"}` over the given socket.
+/// Returns an exit code suitable for `std::process::exit`: 0 on pong, 1 on any
+/// failure (connect, send, unexpected payload).
+#[cfg(target_os = "linux")]
+fn run_probe(socket_path: &str) -> i32 {
+    use std::path::Path;
+    use streamlib_broker::unix_socket_service::{connect_to_broker, send_request};
+
+    let path = Path::new(socket_path);
+    let stream = match connect_to_broker(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("probe: connect {:?} failed: {}", path, e);
+            return 1;
+        }
+    };
+    let req = serde_json::json!({"op": "ping"});
+    match send_request(&stream, &req, None) {
+        Ok((resp, _fd)) => {
+            if resp.get("pong").and_then(|v| v.as_bool()) == Some(true) {
+                0
+            } else {
+                eprintln!("probe: unexpected response {}", resp);
+                1
+            }
+        }
+        Err(e) => {
+            eprintln!("probe: ping {:?} failed: {}", path, e);
+            1
+        }
+    }
+}
+
+/// Hand-rolled systemd LISTEN_FDS probe. Returns `Ok(Some(fd))` when exactly
+/// one listening fd has been inherited and it was intended for this process;
+/// `Ok(None)` when socket activation was not requested; `Err` when the env
+/// vars are set but inconsistent (should fall back to bind with a warning).
+#[cfg(target_os = "linux")]
+fn sd_listen_fd() -> Result<Option<std::os::unix::io::RawFd>, String> {
+    let listen_fds = match std::env::var("LISTEN_FDS") {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let count: i32 = listen_fds
+        .parse()
+        .map_err(|_| format!("LISTEN_FDS={} is not an integer", listen_fds))?;
+    if count <= 0 {
+        return Ok(None);
+    }
+    // Validate LISTEN_PID matches our pid if set; otherwise accept (some
+    // minimal activation harnesses omit it). This avoids consuming an env
+    // leaked from a parent process.
+    if let Ok(pid_str) = std::env::var("LISTEN_PID") {
+        let pid: i32 = pid_str
+            .parse()
+            .map_err(|_| format!("LISTEN_PID={} is not an integer", pid_str))?;
+        if pid != std::process::id() as i32 {
+            return Err(format!(
+                "LISTEN_PID={} does not match our pid {}",
+                pid,
+                std::process::id()
+            ));
+        }
+    }
+    if count != 1 {
+        return Err(format!("expected LISTEN_FDS=1, got {}", count));
+    }
+    // Systemd convention: first inherited fd is fd 3.
+    const SD_LISTEN_FDS_START: std::os::unix::io::RawFd = 3;
+    Ok(Some(SD_LISTEN_FDS_START))
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]

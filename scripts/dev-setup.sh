@@ -10,6 +10,9 @@
 #   ./scripts/dev-setup.sh uninstall    # Uninstall dev broker and clean up
 #   ./scripts/dev-setup.sh reinstall    # Uninstall then reinstall (rebuilds broker)
 #   ./scripts/dev-setup.sh --clean      # Alias for reinstall
+#
+# For ad-hoc broker lifecycle without the full environment bootstrap, use
+# `scripts/streamlib-broker-dev.sh` (start|stop|restart|status|probe).
 
 set -euo pipefail
 

@@ -3,11 +3,21 @@
 #
 # StreamLib Broker - systemd user service template
 #
-# Install:
+# Prefer the socket-activated install (clients don't need to start the
+# broker first):
 #   mkdir -p ~/.config/systemd/user
+#   cp scripts/streamlib-broker.socket  ~/.config/systemd/user/
 #   cp scripts/streamlib-broker.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
+#   systemctl --user enable --now streamlib-broker.socket
+#
+# First client connect to %h/.streamlib/broker.sock activates this service;
+# systemd hands the listening socket to the daemon on fd 3 via LISTEN_FDS=1.
+#
+# Non-activated install (legacy):
 #   systemctl --user enable --now streamlib-broker.service
+# The daemon will bind %h/.streamlib/broker.sock itself and fall back to the
+# non-activation code path.
 #
 # Check status:
 #   systemctl --user status streamlib-broker.service
@@ -16,12 +26,16 @@
 [Unit]
 Description=StreamLib Broker Service
 Documentation=https://github.com/tatolab/streamlib
-After=default.target
+Requires=streamlib-broker.socket
+After=streamlib-broker.socket default.target
 
 [Service]
 Type=simple
 Environment=STREAMLIB_HOME=%h/.streamlib
 Environment=STREAMLIB_BROKER_SOCKET=%h/.streamlib/broker.sock
+# When activated via the socket unit, systemd sets LISTEN_FDS=1 and passes
+# the listening fd as fd 3 — --socket-path is ignored in that case. The
+# flag is still present for the non-activated install path.
 ExecStart=%h/.streamlib/bin/streamlib-broker --port 50051 --socket-path %h/.streamlib/broker.sock
 Restart=on-failure
 RestartSec=5

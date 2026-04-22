@@ -11,6 +11,7 @@ use std::os::unix::io::RawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 
 use streamlib_broker_client::{recv_message_with_fd, send_message_with_fd};
@@ -23,41 +24,72 @@ use crate::state::BrokerState;
 // canonical implementations.
 pub use streamlib_broker_client::{connect_to_broker, send_request};
 
+enum ListenerSource {
+    BindPath(PathBuf),
+    Inherited(Option<UnixListener>),
+}
+
 /// Unix socket surface service for cross-process DMA-BUF sharing.
 pub struct UnixSocketSurfaceService {
     state: BrokerState,
-    socket_path: PathBuf,
+    source: ListenerSource,
     listener_thread: Option<thread::JoinHandle<()>>,
-    shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
+    shutdown_flag: Arc<AtomicBool>,
+    active_count: Arc<AtomicUsize>,
 }
 
 impl UnixSocketSurfaceService {
-    /// Create a new Unix socket surface service.
+    /// Create a new Unix socket surface service that will bind `socket_path`
+    /// when [`start`](Self::start) is called.
     pub fn new(state: BrokerState, socket_path: PathBuf) -> Self {
         Self {
             state,
-            socket_path,
+            source: ListenerSource::BindPath(socket_path),
             listener_thread: None,
-            shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
+            active_count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Create a new Unix socket surface service backed by a listener inherited
+    /// from systemd socket activation (or equivalent). The service will not
+    /// attempt to `bind` or to remove the socket file on stop — the listener's
+    /// lifetime is the caller's responsibility (systemd for real activation;
+    /// the test harness for simulated activation).
+    pub fn with_inherited_listener(state: BrokerState, listener: UnixListener) -> Self {
+        Self {
+            state,
+            source: ListenerSource::Inherited(Some(listener)),
+            listener_thread: None,
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
+            active_count: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     /// Start listening for connections.
     pub fn start(&mut self) -> Result<(), String> {
-        // Remove stale socket file if it exists
-        if self.socket_path.exists() {
-            std::fs::remove_file(&self.socket_path)
-                .map_err(|e| format!("Failed to remove stale socket: {}", e))?;
-        }
+        let listener = match &mut self.source {
+            ListenerSource::BindPath(socket_path) => {
+                // Remove stale socket file if it exists
+                if socket_path.exists() {
+                    std::fs::remove_file(&*socket_path)
+                        .map_err(|e| format!("Failed to remove stale socket: {}", e))?;
+                }
 
-        // Ensure parent directory exists
-        if let Some(parent) = self.socket_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create socket directory: {}", e))?;
-        }
+                // Ensure parent directory exists
+                if let Some(parent) = socket_path.parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| format!("Failed to create socket directory: {}", e))?;
+                }
 
-        let listener = UnixListener::bind(&self.socket_path)
-            .map_err(|e| format!("Failed to bind Unix socket at {:?}: {}", self.socket_path, e))?;
+                UnixListener::bind(&*socket_path).map_err(|e| {
+                    format!("Failed to bind Unix socket at {:?}: {}", socket_path, e)
+                })?
+            }
+            ListenerSource::Inherited(slot) => slot.take().ok_or_else(|| {
+                "inherited listener already consumed (start() called twice)".to_string()
+            })?,
+        };
 
         // Set non-blocking so we can check the shutdown flag
         listener
@@ -66,16 +98,20 @@ impl UnixSocketSurfaceService {
 
         let state = self.state.clone();
         let shutdown_flag = self.shutdown_flag.clone();
+        let active_count = self.active_count.clone();
 
         let handle = thread::spawn(move || {
-            run_listener(listener, state, shutdown_flag);
+            run_listener(listener, state, shutdown_flag, active_count);
         });
 
         self.listener_thread = Some(handle);
 
         tracing::info!(
-            "[Broker] Unix socket surface service listening on {:?}",
-            self.socket_path
+            "[Broker] Unix socket surface service listening ({})",
+            match &self.source {
+                ListenerSource::BindPath(p) => format!("bound: {:?}", p),
+                ListenerSource::Inherited(_) => "inherited".to_string(),
+            }
         );
 
         Ok(())
@@ -83,24 +119,42 @@ impl UnixSocketSurfaceService {
 
     /// Stop the Unix socket service.
     pub fn stop(&mut self) {
-        self.shutdown_flag
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.shutdown_flag.store(true, Ordering::Relaxed);
 
         if let Some(handle) = self.listener_thread.take() {
             let _ = handle.join();
         }
 
-        // Clean up socket file
-        if self.socket_path.exists() {
-            let _ = std::fs::remove_file(&self.socket_path);
+        // Only clean up the socket file if we bound it ourselves — for an
+        // inherited listener the socket is owned by systemd (or the test
+        // harness) and must outlive the daemon.
+        if let ListenerSource::BindPath(socket_path) = &self.source
+            && socket_path.exists()
+        {
+            let _ = std::fs::remove_file(socket_path);
         }
 
         tracing::info!("[Broker] Unix socket surface service stopped");
     }
 
-    /// Get the socket path.
-    pub fn socket_path(&self) -> &Path {
-        &self.socket_path
+    /// Current number of in-flight client connections.
+    pub fn active_connection_count(&self) -> usize {
+        self.active_count.load(Ordering::Relaxed)
+    }
+
+    /// Shared handle to the active-connection counter, for external idle-exit
+    /// monitors.
+    pub fn active_connection_count_arc(&self) -> Arc<AtomicUsize> {
+        self.active_count.clone()
+    }
+
+    /// Get the socket path, if this service bound its own socket. Returns
+    /// `None` for inherited listeners.
+    pub fn socket_path(&self) -> Option<&Path> {
+        match &self.source {
+            ListenerSource::BindPath(p) => Some(p.as_path()),
+            ListenerSource::Inherited(_) => None,
+        }
     }
 }
 
@@ -110,21 +164,41 @@ impl Drop for UnixSocketSurfaceService {
     }
 }
 
+/// RAII guard that increments the active-connection counter on construction
+/// and decrements on drop.
+struct ActiveConnectionGuard(Arc<AtomicUsize>);
+
+impl ActiveConnectionGuard {
+    fn new(count: Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::Relaxed);
+        Self(count)
+    }
+}
+
+impl Drop for ActiveConnectionGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Main listener loop.
 fn run_listener(
     listener: UnixListener,
     state: BrokerState,
-    shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
+    shutdown_flag: Arc<AtomicBool>,
+    active_count: Arc<AtomicUsize>,
 ) {
     loop {
-        if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+        if shutdown_flag.load(Ordering::Relaxed) {
             break;
         }
 
         match listener.accept() {
             Ok((stream, _addr)) => {
                 let state = state.clone();
+                let active_count = active_count.clone();
                 thread::spawn(move || {
+                    let _guard = ActiveConnectionGuard::new(active_count);
                     if let Err(e) = handle_client_connection(stream, state) {
                         tracing::debug!("[Broker] Client connection ended: {}", e);
                     }
@@ -135,7 +209,7 @@ fn run_listener(
                 thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(e) => {
-                if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                if shutdown_flag.load(Ordering::Relaxed) {
                     break;
                 }
                 tracing::warn!("[Broker] Unix socket accept error: {}", e);
@@ -178,15 +252,16 @@ fn handle_client_connection(
 
         // Parse JSON
         let request: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid JSON: {}", e))
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid JSON: {}", e),
+            )
         })?;
 
-        let op = request
-            .get("op")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let op = request.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
         let (response, reply_fd) = match op {
+            "ping" => (serde_json::json!({"pong": true}), None),
             "register" => handle_register(&state, &request, received_fd),
             "lookup" => handle_lookup(&state, &request),
             "unregister" => handle_unregister(&state, &request),
@@ -250,14 +325,8 @@ fn handle_register(
         }
     };
 
-    let width = request
-        .get("width")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let height = request
-        .get("height")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    let width = request.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let height = request.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let format = request
         .get("format")
         .and_then(|v| v.as_str())
@@ -276,7 +345,15 @@ fn handle_register(
         );
     }
 
-    let success = state.register_surface(surface_id, runtime_id, dup_fd, width, height, format, resource_type);
+    let success = state.register_surface(
+        surface_id,
+        runtime_id,
+        dup_fd,
+        width,
+        height,
+        format,
+        resource_type,
+    );
 
     if success {
         tracing::debug!(
@@ -326,7 +403,12 @@ fn handle_lookup(
             let surfaces = state.get_surfaces();
             let metadata = surfaces.iter().find(|s| s.surface_id == surface_id);
             let (width, height, format, resource_type) = match metadata {
-                Some(m) => (m.width, m.height, m.format.as_str(), m.resource_type.as_str()),
+                Some(m) => (
+                    m.width,
+                    m.height,
+                    m.format.as_str(),
+                    m.resource_type.as_str(),
+                ),
                 None => (0, 0, "unknown", "pixel_buffer"),
             };
             (
@@ -394,14 +476,8 @@ fn handle_check_in(
         }
     };
 
-    let width = request
-        .get("width")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let height = request
-        .get("height")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
+    let width = request.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+    let height = request.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let format = request
         .get("format")
         .and_then(|v| v.as_str())
@@ -423,7 +499,15 @@ fn handle_check_in(
         );
     }
 
-    let success = state.register_surface(&surface_id, runtime_id, dup_fd, width, height, format, resource_type);
+    let success = state.register_surface(
+        &surface_id,
+        runtime_id,
+        dup_fd,
+        width,
+        height,
+        format,
+        resource_type,
+    );
 
     if !success {
         unsafe { libc::close(dup_fd) };
@@ -473,7 +557,11 @@ mod tests {
 
         let name = std::ffi::CString::new("streamlib-broker-test").unwrap();
         let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
-        assert!(fd >= 0, "memfd_create failed: {}", std::io::Error::last_os_error());
+        assert!(
+            fd >= 0,
+            "memfd_create failed: {}",
+            std::io::Error::last_os_error()
+        );
         let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
         file.write_all(contents).expect("memfd write");
         file.seek(SeekFrom::Start(0)).expect("memfd rewind");
@@ -614,5 +702,94 @@ mod tests {
 
         drop(stream);
         service.stop();
+    }
+
+    /// `ping` returns `{"pong": true}` — used by `--probe` and the fixture
+    /// script to confirm the daemon is responding on the socket. Keeping the
+    /// shape stable matters: `scripts/streamlib_broker.sh` asserts the exact
+    /// key name.
+    #[test]
+    fn ping_returns_pong() {
+        let state = BrokerState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_broker(&socket_path).expect("connect");
+        let req = serde_json::json!({"op": "ping"});
+        let (resp, fd) = send_request(&stream, &req, None).expect("ping request");
+        assert!(fd.is_none(), "ping returns no fd");
+        assert_eq!(resp.get("pong").and_then(|v| v.as_bool()), Some(true));
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// Active-connection counter rises with in-flight clients and falls to
+    /// zero once they disconnect. Drives the idle-exit logic in `main.rs`.
+    #[test]
+    fn active_connection_count_tracks_in_flight_clients() {
+        let state = BrokerState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        assert_eq!(service.active_connection_count(), 0);
+
+        let stream = connect_to_broker(&socket_path).expect("connect");
+        // One round-trip so the server-side handler thread has been spawned
+        // and the guard incremented.
+        let (_resp, _fd) =
+            send_request(&stream, &serde_json::json!({"op": "ping"}), None).expect("ping request");
+        assert_eq!(service.active_connection_count(), 1);
+
+        drop(stream);
+        // The server-side handler returns from its read loop on UnexpectedEof
+        // and drops the guard. Give the scheduler a moment.
+        for _ in 0..50 {
+            if service.active_connection_count() == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(service.active_connection_count(), 0);
+
+        service.stop();
+    }
+
+    /// When the service is handed a pre-bound listener (as in systemd socket
+    /// activation), `start()` must use it directly — no bind attempt, no
+    /// stale-socket removal — and `stop()` must leave the socket file alone
+    /// because it's owned by the caller.
+    #[test]
+    fn inherited_listener_path_does_not_bind_or_unlink() {
+        let socket_path = tmp_socket_path();
+        // Bind ourselves first, as systemd would have done.
+        let listener = UnixListener::bind(&socket_path).expect("pre-bind");
+
+        let state = BrokerState::new();
+        let mut service = UnixSocketSurfaceService::with_inherited_listener(state, listener);
+        assert!(service.socket_path().is_none());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // A client can still round-trip through the inherited listener.
+        let stream = connect_to_broker(&socket_path).expect("connect");
+        let (resp, _) =
+            send_request(&stream, &serde_json::json!({"op": "ping"}), None).expect("ping");
+        assert_eq!(resp.get("pong").and_then(|v| v.as_bool()), Some(true));
+        drop(stream);
+
+        service.stop();
+
+        // The socket file must still exist — systemd (or, in this test, the
+        // caller) owns its lifetime.
+        assert!(
+            socket_path.exists(),
+            "inherited listener path must not be unlinked on stop"
+        );
+        let _ = std::fs::remove_file(&socket_path);
     }
 }

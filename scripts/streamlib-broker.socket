@@ -1,0 +1,33 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# StreamLib Broker - systemd user socket unit (socket activation)
+#
+# Pair with streamlib-broker.service. Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/streamlib-broker.socket  ~/.config/systemd/user/
+#   cp scripts/streamlib-broker.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now streamlib-broker.socket
+#
+# The socket unit keeps %h/.streamlib/broker.sock listening regardless of
+# whether the daemon is running. The first client connect activates
+# streamlib-broker.service, which inherits this socket via LISTEN_FDS=1.
+# If the daemon exits (e.g. --idle-exit-seconds), systemd re-activates it
+# on the next connect.
+
+[Unit]
+Description=StreamLib Broker Socket
+Documentation=https://github.com/tatolab/streamlib
+
+[Socket]
+ListenStream=%h/.streamlib/broker.sock
+SocketMode=0600
+# Accept=no: pass the listening socket to one long-running daemon, not a
+# handler-per-connection (inetd-style).
+Accept=no
+# Keep the socket fd around across daemon restarts.
+RemoveOnStop=false
+
+[Install]
+WantedBy=sockets.target
