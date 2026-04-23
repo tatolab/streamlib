@@ -105,6 +105,19 @@ pub struct StreamRuntime {
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     /// Created in new() so PUBSUB can initialize before start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
+    /// Per-runtime surface-sharing service. Bound to a unique Unix socket in
+    /// `new()`; polyglot subprocesses connect to it via the
+    /// `STREAMLIB_BROKER_SOCKET` env var. Wrapped in `Mutex<Option<...>>` so
+    /// `stop()` can drop it deterministically; the `Drop` impl on
+    /// `UnixSocketSurfaceService` removes the socket file.
+    #[cfg(target_os = "linux")]
+    pub(crate) surface_service: Arc<
+        Mutex<Option<streamlib_broker::unix_socket_service::UnixSocketSurfaceService>>,
+    >,
+    /// Path of the per-runtime surface-sharing socket
+    /// (`$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`).
+    #[cfg(target_os = "linux")]
+    pub(crate) surface_socket_path: std::path::PathBuf,
     /// Telemetry guard — keeps the OTel pipeline alive for the runtime's lifetime.
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
     _telemetry_guard: streamlib_telemetry::TelemetryGuard,
@@ -185,6 +198,14 @@ impl StreamRuntime {
         // Must happen before any subscribe() calls (GraphChangeListener below).
         PUBSUB.init(&runtime_id, iceoryx2_node.clone());
 
+        // Bring up the per-runtime surface-sharing service. Each runtime owns
+        // a unique Unix socket at $XDG_RUNTIME_DIR/streamlib-<uuid>.sock that
+        // its polyglot subprocesses connect to via STREAMLIB_BROKER_SOCKET.
+        // No external broker daemon is required.
+        #[cfg(target_os = "linux")]
+        let (surface_service, surface_socket_path) =
+            bring_up_surface_service(&runtime_id)?;
+
         // Create Arc-wrapped components
         let compiler = Arc::new(Compiler::new());
         let runtime_context = Arc::new(Mutex::new(None));
@@ -209,9 +230,30 @@ impl StreamRuntime {
             status,
             _graph_change_listener: listener,
             iceoryx2_node,
+            #[cfg(target_os = "linux")]
+            surface_service,
+            #[cfg(target_os = "linux")]
+            surface_socket_path,
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _telemetry_guard,
         }))
+    }
+
+    /// Path of the per-runtime surface-sharing Unix socket.
+    ///
+    /// Bound during [`StreamRuntime::new`] at
+    /// `$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`. Polyglot
+    /// subprocesses spawned by this runtime inherit this path via the
+    /// `STREAMLIB_BROKER_SOCKET` env var so their `streamlib-broker-client`
+    /// connects to the runtime-internal service.
+    #[cfg(target_os = "linux")]
+    pub fn surface_socket_path(&self) -> &std::path::Path {
+        &self.surface_socket_path
+    }
+
+    /// Unique identifier for this runtime instance.
+    pub fn runtime_id(&self) -> &RuntimeUniqueId {
+        &self.runtime_id
     }
 
     /// Update a processor's configuration at runtime.
@@ -612,30 +654,29 @@ impl StreamRuntime {
             }
         }
 
-        // Initialize SurfaceStore for cross-process GPU surface sharing (Linux)
+        // Initialize SurfaceStore for cross-process GPU surface sharing (Linux).
+        // Connects to the runtime-internal surface-sharing service that
+        // `new()` already brought up — fail fast if the connection fails,
+        // because the service is guaranteed to be running.
         #[cfg(target_os = "linux")]
         {
             use crate::core::context::SurfaceStore;
 
-            let socket_path = std::env::var("STREAMLIB_BROKER_SOCKET").unwrap_or_else(|_| {
-                let streamlib_home = crate::core::get_streamlib_home();
-                format!("{}/broker.sock", streamlib_home.display())
-            });
+            let socket_path = self.surface_socket_path.to_string_lossy().to_string();
             tracing::info!(
-                "[start] Initializing SurfaceStore with Unix socket '{}'...",
+                "[start] Initializing SurfaceStore against runtime-internal Unix socket '{}'...",
                 socket_path
             );
             let surface_store =
-                SurfaceStore::new(socket_path, self.runtime_id.to_string());
-            if let Err(e) = surface_store.connect() {
-                tracing::warn!(
-                    "[start] SurfaceStore Unix socket connection failed (surface sharing disabled): {}",
-                    e
-                );
-            } else {
-                gpu.set_surface_store(surface_store);
-                tracing::info!("[start] SurfaceStore initialized");
-            }
+                SurfaceStore::new(socket_path.clone(), self.runtime_id.to_string());
+            surface_store.connect().map_err(|e| {
+                StreamError::Runtime(format!(
+                    "Failed to connect to runtime-internal surface-sharing service at {}: {}",
+                    socket_path, e
+                ))
+            })?;
+            gpu.set_surface_store(surface_store);
+            tracing::info!("[start] SurfaceStore initialized against runtime-internal broker");
         }
 
         // Create shared timing context - clock starts now
@@ -689,6 +730,8 @@ impl StreamRuntime {
             self.tokio_runtime_variant.handle(),
             iceoryx2_node,
             Arc::clone(&audio_clock),
+            #[cfg(target_os = "linux")]
+            self.surface_socket_path.clone(),
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
@@ -769,6 +812,21 @@ impl StreamRuntime {
         // This enables per-session tracking (e.g., AI agents analyzing runtime state).
         *self.runtime_context.lock() = None;
         tracing::debug!("[stop] Runtime context cleared");
+
+        // Tear down the per-runtime surface-sharing service. The Drop impl
+        // on UnixSocketSurfaceService also stops it, but doing it here makes
+        // the socket file disappear before stop() returns — important for
+        // tests that immediately re-bind a new runtime on the same path.
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(mut svc) = self.surface_service.lock().take() {
+                svc.stop();
+                tracing::debug!(
+                    "[stop] Runtime-internal surface-sharing service stopped at {}",
+                    self.surface_socket_path.display()
+                );
+            }
+        }
 
         *self.status.lock() = RuntimeStatus::Stopped;
         PUBSUB.publish(
@@ -1275,17 +1333,97 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
     Ok(cache_dir)
 }
 
+/// Compute the per-runtime surface-sharing socket path, refuse to start if
+/// another live runtime is already bound there, clean up an orphan socket
+/// from a prior crashed runtime, and bring the listener up.
+#[cfg(target_os = "linux")]
+fn bring_up_surface_service(
+    runtime_id: &RuntimeUniqueId,
+) -> Result<(
+    Arc<Mutex<Option<streamlib_broker::unix_socket_service::UnixSocketSurfaceService>>>,
+    std::path::PathBuf,
+)> {
+    use streamlib_broker::unix_socket_service::UnixSocketSurfaceService;
+    use streamlib_broker::BrokerState;
+
+    let xdg_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
+        StreamError::Runtime(
+            "XDG_RUNTIME_DIR is not set. The runtime needs a writable directory \
+             for its per-runtime surface-sharing socket — typically /run/user/<uid>. \
+             Set XDG_RUNTIME_DIR or run under a session manager that provides it."
+                .to_string(),
+        )
+    })?;
+
+    let socket_path = std::path::PathBuf::from(xdg_runtime_dir)
+        .join(format!("streamlib-{}.sock", runtime_id));
+
+    if socket_path.exists() {
+        match std::os::unix::net::UnixStream::connect(&socket_path) {
+            Ok(_) => {
+                return Err(StreamError::Runtime(format!(
+                    "Surface-sharing socket {} is already bound by a live process. \
+                     Each StreamRuntime requires a unique runtime_id; check for a \
+                     duplicate STREAMLIB_RUNTIME_ID env var or another runtime in \
+                     the same session.",
+                    socket_path.display()
+                )));
+            }
+            Err(_) => {
+                std::fs::remove_file(&socket_path).map_err(|e| {
+                    StreamError::Runtime(format!(
+                        "Found stale surface-sharing socket {} from a prior crashed \
+                         runtime but failed to remove it: {}",
+                        socket_path.display(),
+                        e
+                    ))
+                })?;
+                tracing::warn!(
+                    "[new] Removed stale surface-sharing socket left by prior runtime: {}",
+                    socket_path.display()
+                );
+            }
+        }
+    }
+
+    let mut service = UnixSocketSurfaceService::new(BrokerState::new(), socket_path.clone());
+    service.start().map_err(|e| {
+        StreamError::Runtime(format!(
+            "Failed to start runtime-internal surface-sharing service at {}: {}",
+            socket_path.display(),
+            e
+        ))
+    })?;
+
+    tracing::info!(
+        "[new] Runtime-internal surface-sharing service bound at {}",
+        socket_path.display()
+    );
+
+    Ok((Arc::new(Mutex::new(Some(service))), socket_path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    // All StreamRuntime::new() tests are `#[serial]` because the runtime
+    // reads/writes process-global env vars (XDG_RUNTIME_DIR,
+    // STREAMLIB_RUNTIME_ID) and its PUBSUB/iceoryx2/telemetry plumbing
+    // races when multiple runtimes construct concurrently. The test
+    // module's `#[serial]` default group serializes every test that
+    // constructs a StreamRuntime so nobody reads env mid-mutation.
 
     #[test]
+    #[serial]
     fn test_runtime_creation() {
         let _runtime = StreamRuntime::new();
         // Runtime creates successfully
     }
 
     #[test]
+    #[serial]
     fn test_new_outside_tokio_creates_owned_runtime() {
         // Outside tokio context - creates owned runtime
         let runtime = StreamRuntime::new().unwrap();
@@ -1296,6 +1434,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_new_inside_tokio_uses_external_handle() {
         // Inside tokio context - auto-detects and uses external handle
         let temp_rt = tokio::runtime::Builder::new_multi_thread()
@@ -1312,6 +1451,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_sync_methods_work_inside_tokio() {
         // Verify sync methods work when called from tokio context
         let temp_rt = tokio::runtime::Builder::new_multi_thread()
@@ -1324,5 +1464,204 @@ mod tests {
             let json = runtime.to_json().unwrap();
             assert!(json["nodes"].is_array());
         });
+    }
+
+    // =========================================================================
+    // Per-runtime surface-sharing service (#428)
+    // =========================================================================
+
+    #[cfg(target_os = "linux")]
+    mod runtime_internal_broker {
+        use super::*;
+        use std::os::unix::net::UnixStream;
+        use streamlib_broker::unix_socket_service::send_request;
+
+        /// Replace XDG_RUNTIME_DIR with a fresh tempdir for the duration of the
+        /// closure. Tests using this must be `#[serial]` so no other runtime
+        /// construct reads the mutated env.
+        fn with_isolated_xdg_runtime_dir<F: FnOnce(&std::path::Path) -> R, R>(f: F) -> R {
+            let prev = std::env::var_os("XDG_RUNTIME_DIR");
+            let tmp = tempfile::tempdir().expect("tempdir");
+            // SAFETY: tests are serialized via #[serial]; no concurrent env mutation.
+            unsafe {
+                std::env::set_var("XDG_RUNTIME_DIR", tmp.path());
+            }
+            let result = f(tmp.path());
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+                    None => std::env::remove_var("XDG_RUNTIME_DIR"),
+                }
+            }
+            result
+        }
+
+        #[test]
+        #[serial]
+        fn runtime_brings_up_internal_broker() {
+            with_isolated_xdg_runtime_dir(|xdg| {
+                let runtime = StreamRuntime::new().expect("runtime should construct");
+                let socket_path = runtime.surface_socket_path();
+                assert!(
+                    socket_path.exists(),
+                    "expected socket file at {}",
+                    socket_path.display()
+                );
+                assert!(
+                    socket_path.starts_with(xdg),
+                    "socket {} should be under XDG_RUNTIME_DIR {}",
+                    socket_path.display(),
+                    xdg.display()
+                );
+
+                // Round-trip a request through the runtime-internal service to prove
+                // it is actually serving — check_out for an unknown surface_id is
+                // the lightest-weight op that exercises the wire path end-to-end.
+                let stream = UnixStream::connect(socket_path).expect("connect to runtime broker");
+                let req = serde_json::json!({
+                    "op": "check_out",
+                    "surface_id": "ping-no-such-surface",
+                });
+                let (resp, fd) = send_request(&stream, &req, None).expect("round-trip");
+                assert!(fd.is_none());
+                assert!(
+                    resp.get("error").and_then(|v| v.as_str()).is_some(),
+                    "expected error for missing surface, got {:?}",
+                    resp
+                );
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn runtime_fails_fast_when_xdg_runtime_dir_missing() {
+            let prev = std::env::var_os("XDG_RUNTIME_DIR");
+            // SAFETY: serialized via #[serial].
+            unsafe {
+                std::env::remove_var("XDG_RUNTIME_DIR");
+            }
+
+            let result = StreamRuntime::new();
+
+            // Restore env before asserting so a panic doesn't leak state.
+            unsafe {
+                if let Some(v) = prev {
+                    std::env::set_var("XDG_RUNTIME_DIR", v);
+                }
+            }
+
+            let err = match result {
+                Err(e) => e,
+                Ok(_) => panic!("runtime should refuse to start without XDG_RUNTIME_DIR"),
+            };
+            let msg = err.to_string();
+            assert!(
+                msg.contains("XDG_RUNTIME_DIR"),
+                "error should name XDG_RUNTIME_DIR; got: {msg}"
+            );
+        }
+
+        #[test]
+        #[serial]
+        fn two_runtimes_coexist_without_collision() {
+            with_isolated_xdg_runtime_dir(|_| {
+                let r1 = StreamRuntime::new().expect("first runtime");
+                let r2 = StreamRuntime::new().expect("second runtime");
+
+                let p1 = r1.surface_socket_path().to_path_buf();
+                let p2 = r2.surface_socket_path().to_path_buf();
+
+                assert_ne!(p1, p2, "each runtime must own a distinct socket path");
+                assert!(p1.exists(), "first socket missing: {}", p1.display());
+                assert!(p2.exists(), "second socket missing: {}", p2.display());
+
+                // Both should serve a round-trip independently.
+                for path in [&p1, &p2] {
+                    let stream = UnixStream::connect(path).expect("connect");
+                    let req = serde_json::json!({
+                        "op": "check_out",
+                        "surface_id": "no-such",
+                    });
+                    let (resp, _) = send_request(&stream, &req, None).expect("round-trip");
+                    assert!(resp.get("error").is_some());
+                }
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn polyglot_subprocess_inherits_socket_env() {
+            with_isolated_xdg_runtime_dir(|_| {
+                let runtime = StreamRuntime::new().expect("runtime");
+                let socket_path = runtime.surface_socket_path().to_path_buf();
+
+                // Mirror what the spawn ops do: build a Command with the env
+                // var set from the runtime's socket path. The spawn ops use
+                // `ctx.surface_socket_path()` which returns the same value as
+                // `runtime.surface_socket_path()` — this test exercises the
+                // contract that polyglot subprocesses see the runtime's socket.
+                let output = std::process::Command::new("printenv")
+                    .arg("STREAMLIB_BROKER_SOCKET")
+                    .env("STREAMLIB_BROKER_SOCKET", &socket_path)
+                    .output()
+                    .expect("spawn printenv");
+
+                assert!(
+                    output.status.success(),
+                    "printenv exited non-zero: stdout={:?} stderr={:?}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let inherited = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                assert_eq!(inherited, socket_path.to_string_lossy());
+            });
+        }
+
+        #[test]
+        #[serial]
+        fn stale_socket_from_dead_runtime_is_cleaned_up() {
+            with_isolated_xdg_runtime_dir(|xdg| {
+                // Pin the runtime ID so we can pre-create a file at the exact
+                // path the runtime will compute.
+                let pinned_id = format!("test-stale-socket-{}", std::process::id());
+                let prev = std::env::var_os("STREAMLIB_RUNTIME_ID");
+                // SAFETY: serialized via #[serial].
+                unsafe {
+                    std::env::set_var("STREAMLIB_RUNTIME_ID", &pinned_id);
+                }
+
+                let stale_path = xdg.join(format!("streamlib-{pinned_id}.sock"));
+                std::fs::write(&stale_path, b"orphan-from-prior-crashed-runtime")
+                    .expect("write orphan");
+                assert!(stale_path.exists());
+
+                let runtime_result = StreamRuntime::new();
+
+                // Restore env before asserting.
+                unsafe {
+                    match prev {
+                        Some(v) => std::env::set_var("STREAMLIB_RUNTIME_ID", v),
+                        None => std::env::remove_var("STREAMLIB_RUNTIME_ID"),
+                    }
+                }
+
+                let runtime = runtime_result.expect(
+                    "runtime should clean up an orphan socket and bind successfully",
+                );
+                let bound = runtime.surface_socket_path();
+                assert_eq!(bound, stale_path.as_path());
+                assert!(bound.exists(), "service should be bound at {}", bound.display());
+
+                // The path is now a Unix socket, not a regular file — connect
+                // should succeed against the runtime-internal service.
+                let stream = UnixStream::connect(bound).expect("connect to fresh service");
+                let req = serde_json::json!({
+                    "op": "check_out",
+                    "surface_id": "no-such",
+                });
+                let (resp, _) = send_request(&stream, &req, None).expect("round-trip");
+                assert!(resp.get("error").is_some());
+            });
+        }
     }
 }

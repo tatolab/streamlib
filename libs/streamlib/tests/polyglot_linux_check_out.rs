@@ -36,10 +36,8 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use streamlib_broker::unix_socket_service::{
-    connect_to_broker, send_request, UnixSocketSurfaceService,
-};
-use streamlib_broker::BrokerState;
+use streamlib::core::runtime::StreamRuntime;
+use streamlib_broker::unix_socket_service::{connect_to_broker, send_request};
 
 #[path = "common/polyglot_dma_buf_producer.rs"]
 mod polyglot_dma_buf_producer;
@@ -72,21 +70,6 @@ fn python3_available() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-}
-
-fn tmp_socket_path(label: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    p.push(format!(
-        "streamlib-polyglot-test-{}-{}-{}.sock",
-        label,
-        std::process::id(),
-        nanos
-    ));
-    p
 }
 
 /// Build the Python driver that runs inside the subprocess. Kept as an
@@ -231,15 +214,15 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         }
     };
 
-    // 1. Start a broker in-process.
-    let state = BrokerState::new();
-    let socket_path = tmp_socket_path("py-subprocess");
-    let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
-    service.start().expect("service start");
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // 1. Stand up a real StreamRuntime — it owns the surface-sharing service
+    //    on a per-runtime Unix socket. No external broker daemon, no manual
+    //    BrokerState/UnixSocketSurfaceService construction.
+    let runtime = StreamRuntime::new().expect("StreamRuntime::new");
+    let socket_path = runtime.surface_socket_path().to_path_buf();
+    let runtime_id = runtime.runtime_id().to_string();
 
     // 2. Host: allocate a real Vulkan-exported DMA-BUF seeded with a
-    //    deterministic pattern, and check_in to the broker.
+    //    deterministic pattern, and check_in to the runtime-internal broker.
     let width: u32 = 64;
     let height: u32 = 4;
     let bpp: u32 = 4;
@@ -255,7 +238,6 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
                 "polyglot_linux_check_out: Vulkan DMA-BUF producer failed — skipping ({})",
                 reason
             );
-            service.stop();
             return;
         }
     };
@@ -263,7 +245,7 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     let host_stream = connect_to_broker(&socket_path).expect("host connect");
     let check_in_req = serde_json::json!({
         "op": "check_in",
-        "runtime_id": "host-polyglot-test",
+        "runtime_id": runtime_id,
         "width": width,
         "height": height,
         "format": "Bgra32",
@@ -291,7 +273,7 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         .arg("-c")
         .arg(driver)
         .env("STREAMLIB_BROKER_SOCKET", &socket_path)
-        .env("STREAMLIB_RUNTIME_ID", "polyglot-test-runtime")
+        .env("STREAMLIB_RUNTIME_ID", &runtime_id)
         .env("TEST_NATIVE_LIB", &native_lib)
         .env("TEST_SURFACE_ID", &surface_id)
         .env("TEST_WIDTH", width.to_string())
@@ -305,7 +287,11 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    service.stop();
+    // Drop the runtime — UnixSocketSurfaceService::Drop tears the service
+    // down and removes the socket file. Explicit so the cleanup happens
+    // before the test asserts (and the ordering matches the prior
+    // service.stop() placement).
+    drop(runtime);
 
     assert!(
         output.status.success(),
