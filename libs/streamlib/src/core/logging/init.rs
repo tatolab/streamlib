@@ -20,6 +20,8 @@ use crate::core::logging::config::{ResolvedTunables, StreamlibLoggingConfig};
 use crate::core::logging::event::Source;
 use crate::core::logging::layer::JsonlSinkLayer;
 use crate::core::logging::paths::runtime_log_path;
+#[cfg(unix)]
+use crate::core::logging::stdio_interceptor::{self, StdioInterceptor};
 use crate::core::logging::worker::{spawn as spawn_worker, WorkerConfig, WorkerHandle, WorkerSignal};
 use crate::core::logging::writer::JsonlBatchedWriter;
 
@@ -32,6 +34,11 @@ pub struct StreamlibLoggingGuard {
     /// Thread-local scope guard for test-mode installations. Dropped
     /// before the worker so no more events arrive during shutdown.
     default_scope: Option<tracing::dispatcher::DefaultGuard>,
+    /// Fd-level stdio interceptor (if installed). Dropped BEFORE the
+    /// worker so the reader threads' tail events drain into the
+    /// worker queue before shutdown.
+    #[cfg(unix)]
+    interceptor: Option<StdioInterceptor>,
 }
 
 impl StreamlibLoggingGuard {
@@ -40,6 +47,8 @@ impl StreamlibLoggingGuard {
             worker: None,
             jsonl_path: None,
             default_scope: None,
+            #[cfg(unix)]
+            interceptor: None,
         }
     }
 
@@ -62,6 +71,12 @@ impl Drop for StreamlibLoggingGuard {
         // Restore the previous thread-local dispatcher first so no new
         // events reach our queue while we're draining.
         drop(self.default_scope.take());
+        // Drop the interceptor before the worker: restoring fds 1/2
+        // unblocks the reader threads with EOF, so their final
+        // intercepted events land in the worker queue while the
+        // worker is still draining.
+        #[cfg(unix)]
+        drop(self.interceptor.take());
         if let Some(mut worker) = self.worker.take() {
             worker.shutdown_and_join();
         }
@@ -136,11 +151,48 @@ fn build_components(
     };
 
     let stdout_enabled = config.effective_stdout();
+
+    // Install fd redirects before spawning the worker so the dup'd
+    // real-stdout handle can be handed to the worker as its pretty-
+    // mirror sink. Reader threads are started AFTER the dispatch is
+    // built so the intercepted events route through the right
+    // subscriber.
+    #[cfg(unix)]
+    let (pending_interceptor, mut real_stdout_file) = if config.intercept_stdio {
+        match stdio_interceptor::install_redirects() {
+            Ok((pending, files)) => {
+                // stderr mirror not wired today — dropping the file
+                // closes the dup'd fd cleanly.
+                drop(files.real_stderr);
+                (Some(pending), Some(files.real_stdout))
+            }
+            Err(e) => {
+                eprintln!(
+                    "streamlib::logging: failed to install stdio interceptor: {} — continuing without interception",
+                    e
+                );
+                (None, None)
+            }
+        }
+    } else {
+        (None, None)
+    };
+    #[cfg(not(unix))]
+    let mut real_stdout_file: Option<std::fs::File> = None;
+
+    let stdout_sink: Option<Box<dyn std::io::Write + Send>> = if !stdout_enabled {
+        None
+    } else if let Some(file) = real_stdout_file.take() {
+        Some(Box::new(file))
+    } else {
+        Some(Box::new(std::io::stdout()))
+    };
+
     let worker = spawn_worker(WorkerConfig {
         runtime_id: config.runtime_id.clone(),
         source: Source::Rust,
         tunables,
-        stdout: stdout_enabled,
+        stdout_sink,
         writer,
     });
 
@@ -154,10 +206,15 @@ fn build_components(
     let subscriber = Registry::default().with(env_filter).with(layer);
     let dispatch = Dispatch::new(subscriber);
 
+    #[cfg(unix)]
+    let interceptor = pending_interceptor.map(|p| p.start_readers(dispatch.clone()));
+
     let guard = StreamlibLoggingGuard {
         worker: Some(worker),
         jsonl_path,
         default_scope: None,
+        #[cfg(unix)]
+        interceptor,
     };
 
     Ok((dispatch, guard))

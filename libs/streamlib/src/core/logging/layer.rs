@@ -73,6 +73,8 @@ where
             pipeline_id: visitor.pipeline_id,
             processor_id: visitor.processor_id,
             rhi_op: visitor.rhi_op,
+            intercepted: visitor.intercepted,
+            channel: visitor.channel,
             attrs: visitor.attrs,
         };
 
@@ -86,6 +88,8 @@ struct Capture {
     pipeline_id: Option<String>,
     processor_id: Option<String>,
     rhi_op: Option<String>,
+    intercepted: bool,
+    channel: Option<String>,
     attrs: BTreeMap<String, serde_json::Value>,
 }
 
@@ -106,6 +110,10 @@ impl Capture {
             }
             "rhi_op" => {
                 self.rhi_op = Some(value);
+                true
+            }
+            "channel" => {
+                self.channel = Some(value);
                 true
             }
             _ => false,
@@ -143,6 +151,10 @@ impl Visit for Capture {
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {
+        if field.name() == "intercepted" {
+            self.intercepted = value;
+            return;
+        }
         self.attrs
             .insert(field.name().to_string(), serde_json::Value::Bool(value));
     }
