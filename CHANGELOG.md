@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.22](https://github.com/tatolab/streamlib/compare/v0.4.21...v0.4.22) (2026-04-23)
+
+
+### Features
+
+* **polyglot:** add acquire_texture op to escalate IPC ([#391](https://github.com/tatolab/streamlib/issues/391)) ([4f23066](https://github.com/tatolab/streamlib/commit/4f230661cdbbb5c74d8b1ab120a3e2e05453fcc5)), closes [#369](https://github.com/tatolab/streamlib/issues/369)
+* **polyglot:** Linux polyglot DMA-BUF FD consumer in native libs ([#394](https://github.com/tatolab/streamlib/issues/394)) ([#419](https://github.com/tatolab/streamlib/issues/419)) ([e4452f6](https://github.com/tatolab/streamlib/commit/e4452f676fda22386a36b179c0afab14825806c9))
+* **polyglot:** Vulkan DMA-BUF import in native-lib consumers ([#420](https://github.com/tatolab/streamlib/issues/420)) ([#432](https://github.com/tatolab/streamlib/issues/432)) ([c931597](https://github.com/tatolab/streamlib/commit/c931597f651a66eadb8b441e58ebe9056a2742b1))
+* **runtime:** own internal surface-sharing broker per runtime ([#428](https://github.com/tatolab/streamlib/issues/428)) ([#434](https://github.com/tatolab/streamlib/issues/434)) ([ef3068a](https://github.com/tatolab/streamlib/commit/ef3068a9d94f8fa1e8f6298f74ab5ae15ee28ff5))
+* **xtask:** support JTD discriminator schemas in generate-schemas ([#370](https://github.com/tatolab/streamlib/issues/370)) ([#384](https://github.com/tatolab/streamlib/issues/384)) ([784a5cc](https://github.com/tatolab/streamlib/commit/784a5ccb7696d2b0a340132f59dbe5f64c4146f5))
+
+
+### Bug Fixes
+
+* **#386:** deno type errors + propagate max_payload_bytes to subprocess read buffers ([#410](https://github.com/tatolab/streamlib/issues/410)) ([15df042](https://github.com/tatolab/streamlib/commit/15df042908a2fee898e6c1ce04ba41aa8cbc5a6c))
+* **xtask:** rewrite Python class names in jtd-codegen post-processor ([#396](https://github.com/tatolab/streamlib/issues/396)) ([1f5ad72](https://github.com/tatolab/streamlib/commit/1f5ad72c09e04ab76e6b443f6d7770e697cd179e)), closes [#388](https://github.com/tatolab/streamlib/issues/388)
+
 ## [0.4.21](https://github.com/tatolab/streamlib/compare/v0.4.20...v0.4.21) (2026-04-20)
 
 
