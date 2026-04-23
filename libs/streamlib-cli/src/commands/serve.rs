@@ -110,13 +110,7 @@ pub fn run(
     }
 
     // Forward relevant env vars to child process
-    for var in &[
-        "STREAMLIB_HOME",
-        "STREAMLIB_BROKER_PORT",
-        "STREAMLIB_XPC_SERVICE_NAME",
-        "STREAMLIB_DEV_MODE",
-        "RUST_LOG",
-    ] {
+    for var in &["STREAMLIB_HOME", "STREAMLIB_DEV_MODE", "RUST_LOG"] {
         if let Ok(val) = std::env::var(var) {
             cmd.env(var, val);
         }

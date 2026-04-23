@@ -131,34 +131,13 @@ fn get_logs_dir() -> Result<PathBuf> {
     Ok(home.join(".streamlib").join("logs"))
 }
 
-fn setup_telemetry(
-    runtime_name: &str,
-    runtime_id: &str,
-    log_path: &Path,
-    daemon: bool,
-) -> Result<TelemetryGuard> {
-    // Resolve broker endpoint from STREAMLIB_BROKER_PORT (same env var used for registration)
-    let broker_endpoint = {
-        let port = std::env::var("STREAMLIB_BROKER_PORT")
-            .ok()
-            .and_then(|p| p.parse::<u16>().ok())
-            .unwrap_or(streamlib_broker::GRPC_PORT);
-        Some(format!("http://127.0.0.1:{}", port))
-    };
-
+fn setup_telemetry(log_path: &Path, daemon: bool) -> Result<TelemetryGuard> {
     streamlib_telemetry::init_telemetry(TelemetryConfig {
         service_name: "streamlib-runtime".into(),
-        resource_attributes: vec![
-            ("runtime.id".into(), runtime_id.to_string()),
-            ("runtime.name".into(), runtime_name.to_string()),
-            ("process.pid".into(), std::process::id().to_string()),
-        ],
         file_log_path: Some(log_path.to_path_buf()),
         stdout_logging: !daemon,
-        otlp_endpoint: std::env::var("STREAMLIB_OTLP_ENDPOINT").ok(),
-        sqlite_database_path: None,
-        broker_endpoint,
     })
+    .map_err(Into::into)
 }
 
 // ---------------------------------------------------------------------------
@@ -330,8 +309,7 @@ async fn run(args: Args) -> Result<()> {
     // SAFETY: early init, before processor threads spawn; no concurrent env reads.
     unsafe { std::env::set_var("STREAMLIB_RUNTIME_ID", &runtime_id) };
 
-    // Set up telemetry (OTel traces + logs → SQLite, optional OTLP, file + stdout)
-    let _telemetry_guard = setup_telemetry(&runtime_name, &runtime_id, &log_path, args.daemon)?;
+    let _telemetry_guard = setup_telemetry(&log_path, args.daemon)?;
 
     tracing::info!("Starting runtime: {} ({})", runtime_name, runtime_id);
     tracing::info!("Log file: {}", log_path.display());

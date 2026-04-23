@@ -112,7 +112,7 @@ pub struct StreamRuntime {
     /// `UnixSocketSurfaceService` removes the socket file.
     #[cfg(target_os = "linux")]
     pub(crate) surface_service: Arc<
-        Mutex<Option<streamlib_broker::unix_socket_service::UnixSocketSurfaceService>>,
+        Mutex<Option<crate::linux::surface_broker::UnixSocketSurfaceService>>,
     >,
     /// Path of the per-runtime surface-sharing socket
     /// (`$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`).
@@ -141,41 +141,23 @@ impl StreamRuntime {
             }
         };
 
-        // Load .env file (dev-setup.sh generates this with STREAMLIB_BROKER_PORT, etc.)
+        // Load .env file (dev-setup.sh-style overrides: RUST_LOG, etc.)
         let _ = dotenvy::dotenv();
 
         // Generate runtime ID first — used as service_name for telemetry.
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
 
-        // Initialize unified telemetry pipeline (broker-as-collector).
-        // Must happen after Tokio runtime exists — gRPC exporters capture the handle.
-        // Safe to call multiple times — only the first call sets up the subscriber.
-        let tokio_handle = tokio_runtime_variant.handle();
-        let _enter_guard = tokio_handle.enter();
-        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-        let broker_endpoint = {
-            let port = std::env::var("STREAMLIB_BROKER_PORT")
-                .ok()
-                .and_then(|p| p.parse::<u16>().ok())
-                .unwrap_or(streamlib_broker::GRPC_PORT);
-            format!("http://127.0.0.1:{}", port)
-        };
+        // Stand up the runtime's logging pipeline (stdout-only — runtime is an
+        // ephemeral log producer; persistent on-disk logging is filed
+        // separately under #430).
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         let _telemetry_guard =
             streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
                 service_name: format!("runtime:{}", runtime_id),
-                resource_attributes: vec![
-                    ("runtime.id".into(), runtime_id.to_string()),
-                    ("process.pid".into(), std::process::id().to_string()),
-                ],
                 file_log_path: None,
                 stdout_logging: true,
-                otlp_endpoint: std::env::var("STREAMLIB_OTLP_ENDPOINT").ok(),
-                sqlite_database_path: None,
-                broker_endpoint: Some(broker_endpoint),
             })
             .map_err(|e| StreamError::Runtime(format!("Failed to initialize telemetry: {}", e)))?;
-        drop(_enter_guard);
         tracing::info!("Creating StreamRuntime with ID: {}", runtime_id);
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
@@ -1340,11 +1322,10 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
 fn bring_up_surface_service(
     runtime_id: &RuntimeUniqueId,
 ) -> Result<(
-    Arc<Mutex<Option<streamlib_broker::unix_socket_service::UnixSocketSurfaceService>>>,
+    Arc<Mutex<Option<crate::linux::surface_broker::UnixSocketSurfaceService>>>,
     std::path::PathBuf,
 )> {
-    use streamlib_broker::unix_socket_service::UnixSocketSurfaceService;
-    use streamlib_broker::BrokerState;
+    use crate::linux::surface_broker::{SurfaceBrokerState, UnixSocketSurfaceService};
 
     let xdg_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
         StreamError::Runtime(
@@ -1386,7 +1367,7 @@ fn bring_up_surface_service(
         }
     }
 
-    let mut service = UnixSocketSurfaceService::new(BrokerState::new(), socket_path.clone());
+    let mut service = UnixSocketSurfaceService::new(SurfaceBrokerState::new(), socket_path.clone());
     service.start().map_err(|e| {
         StreamError::Runtime(format!(
             "Failed to start runtime-internal surface-sharing service at {}: {}",
@@ -1474,7 +1455,7 @@ mod tests {
     mod runtime_internal_broker {
         use super::*;
         use std::os::unix::net::UnixStream;
-        use streamlib_broker::unix_socket_service::send_request;
+        use streamlib_broker_client::send_request;
 
         /// Replace XDG_RUNTIME_DIR with a fresh tempdir for the duration of the
         /// closure. Tests using this must be `#[serial]` so no other runtime

@@ -50,28 +50,16 @@ All platforms supported out of the box—Linux, macOS, Windows—without convolu
 
 See [examples/camera-display](examples/camera-display) for a minimal working example that captures video from a camera and displays it in a window.
 
-## Telemetry & Observability
+## Logging
 
-StreamLib has built-in OpenTelemetry observability. All runtimes send structured logs and traces to the broker, which stores them in SQLite and optionally forwards to any OTLP-compatible backend.
-
-```bash
-# Query logs from the CLI
-streamlib telemetry logs --since 1h
-streamlib telemetry spans --service streamlib-runtime
-
-# Connect to Grafana, Jaeger, Datadog, or any OTLP backend
-STREAMLIB_OTLP_ENDPOINT=http://localhost:4317 ./.streamlib/bin/streamlib-broker
-
-# Backfill historical data to your dashboard
-streamlib telemetry export --endpoint http://localhost:4317 --since 7d
-```
-
-See [docs/telemetry.md](docs/telemetry.md) for setup details, environment variables, and direct SQL access.
+StreamLib runtimes emit `tracing`-formatted logs to stdout. Filter via `RUST_LOG`
+(e.g. `RUST_LOG=info,streamlib::core::runtime=debug`). Persistent on-disk
+JSONL logging is tracked under
+[#430](https://github.com/tatolab/streamlib/issues/430).
 
 ## Documentation
 
 - [Architecture Overview](docs/) - How StreamLib works
-- [Telemetry Guide](docs/telemetry.md) - Observability setup and usage
 - [API Documentation](https://docs.rs/streamlib) - Rust API reference
 - [Examples](examples/) - Working example applications
 
@@ -191,14 +179,14 @@ See [CLA.md](docs/license/CLA.md) for the Contributor License Agreement.
 ```
 streamlib/
 ├── libs/
-│   ├── streamlib/           # Core library
-│   ├── streamlib-broker/    # Broker service (runtime coordination + telemetry collection)
-│   ├── streamlib-cli/       # CLI (streamlib command)
-│   ├── streamlib-runtime/   # Standalone runtime binary
-│   ├── streamlib-telemetry/ # OpenTelemetry observability (SQLite + OTLP)
-│   └── streamlib-macros/    # Procedural macros
-├── examples/                # Example applications
-└── docs/                    # Documentation
+│   ├── streamlib/                # Core library
+│   ├── streamlib-broker-client/  # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
+│   ├── streamlib-cli/            # CLI (streamlib command)
+│   ├── streamlib-runtime/        # Standalone runtime binary
+│   ├── streamlib-telemetry/      # tracing-subscriber pipeline for runtime processes
+│   └── streamlib-macros/         # Procedural macros
+├── examples/                     # Example applications
+└── docs/                         # Documentation
 ```
 
 ## Requirements

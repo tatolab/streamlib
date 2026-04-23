@@ -27,7 +27,7 @@ clap = { version = "4.5", features = ["derive"] }
 # Async runtime
 tokio.workspace = true
 
-# HTTP client for remote inspection
+# HTTP client (used by `streamlib pkg install` for HTTP URL sources)
 reqwest = { version = "0.12", features = ["json"] }
 
 # Serialization
@@ -42,30 +42,15 @@ anyhow.workspace = true
 # Load .env files for development environment
 dotenvy = "0.15"
 
-# Logging / Telemetry
+# Logging
 tracing.workspace = true
 streamlib-telemetry.workspace = true
-rusqlite = { version = "0.38.0", features = ["bundled"] }
-
-# OTLP export for telemetry backfill
-opentelemetry = "0.31.0"
-opentelemetry_sdk = { version = "0.31.0", features = ["trace", "logs"] }
-opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic", "trace", "logs"] }
 
 # Timestamp parsing for log filtering
 chrono = "0.4"
 
-# gRPC client for broker diagnostics
-tonic = "0.12"
-
-# Broker crate (for version info)
-streamlib-broker = { path = "../streamlib-broker" }
-
 # Home directory detection
 dirs = "6.0"
-
-# System calls (getuid for launchctl domain)
-libc.workspace = true
 
 # ZIP archive creation
 zip = "2.2"

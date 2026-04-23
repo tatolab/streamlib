@@ -131,12 +131,7 @@ pollster = "0.3"  # For blocking on async
 cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 mach2 = "0.4"  # Mach kernel API for thread priorities and timing
 opus = "0.3"  # Opus audio codec encoder/decoder
-launchd = "0.3"  # Launchd plist generation for broker service
-ctor = "0.4"  # Global constructor for automatic broker mode detection
-tonic = "0.12"  # gRPC client for broker availability check
-prost = "0.13"  # Protocol Buffers for gRPC message types
-streamlib-broker = { path = "../streamlib-broker" }  # Broker proto types for gRPC client
-streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified telemetry pipeline
+streamlib-telemetry.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 vulkanalia = { workspace = true }
@@ -148,10 +143,9 @@ opus = "0.3"  # Opus audio codec encoder/decoder
 cpal = "0.15"  # Cross-platform audio I/O (uses ALSA on Linux)
 winit = "0.30"  # Window creation and event loop for display processor
 raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
-# TODO: extract broker protocol helpers (send_request, framing) to a shared crate
-# to avoid this inverted dependency (streamlib depending on streamlib-broker)
-streamlib-broker = { path = "../streamlib-broker" }
-streamlib-telemetry = { workspace = true, features = ["broker"] }  # Unified telemetry pipeline
+# Wire-format helpers for the per-runtime surface-sharing socket
+streamlib-broker-client = { path = "../streamlib-broker-client" }
+streamlib-telemetry.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"

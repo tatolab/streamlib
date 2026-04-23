@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-runtime"
-description = "StreamLib runtime binary — hosts processors, API server, and broker registration"
+description = "StreamLib runtime binary — hosts processors and the API server"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -22,18 +22,15 @@ streamlib = { path = "../streamlib" }
 libloading = "0.8"
 streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
 
-# Broker client (for version info / gRPC registration is via streamlib)
-streamlib-broker = { path = "../streamlib-broker" }
-
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }
 
 # Async runtime
 tokio.workspace = true
 
-# Logging / Telemetry
+# Logging
 tracing.workspace = true
-streamlib-telemetry = { workspace = true, features = ["broker"] }
+streamlib-telemetry.workspace = true
 
 # Home directory detection
 dirs = "6.0"
