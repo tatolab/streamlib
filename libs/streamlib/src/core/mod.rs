@@ -15,6 +15,7 @@ pub mod rhi;
 pub mod graph;
 pub mod graph_file;
 pub mod json_schema;
+pub mod logging;
 pub mod media_clock;
 pub mod observability;
 pub mod prelude;

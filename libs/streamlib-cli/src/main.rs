@@ -154,12 +154,10 @@ fn main() -> Result<()> {
 }
 
 async fn async_main(cli: Cli) -> Result<()> {
-    let _telemetry_guard =
-        streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
-            service_name: "streamlib-cli".into(),
-            file_log_path: None,
-            stdout_logging: false,
-        })?;
+    // Short-lived CLI invocation: stdout-only tracing, no JSONL file.
+    let _logging_guard = streamlib::logging::init(
+        streamlib::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
+    )?;
 
     match cli.command {
         Some(Commands::Pack {

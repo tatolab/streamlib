@@ -59,6 +59,7 @@ impl CommandBuffer {
 
     /// Commit the command buffer for execution.
     pub fn commit(self) {
+        tracing::trace!(rhi_op = "queue_submit", "CommandBuffer::commit");
         // Metal backend
         #[cfg(all(
             not(feature = "backend-vulkan"),
@@ -85,6 +86,7 @@ impl CommandBuffer {
 
     /// Commit and wait for completion.
     pub fn commit_and_wait(self) {
+        tracing::trace!(rhi_op = "queue_submit_and_wait", "CommandBuffer::commit_and_wait");
         // Metal backend
         #[cfg(all(
             not(feature = "backend-vulkan"),

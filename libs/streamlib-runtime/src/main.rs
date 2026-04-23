@@ -14,7 +14,6 @@ use libloading::Library;
 use streamlib::core::processors::PROCESSOR_REGISTRY;
 use streamlib::{ApiServerConfig, ApiServerProcessor, StreamRuntime};
 use streamlib_plugin_abi::{PluginDeclaration, STREAMLIB_ABI_VERSION};
-use streamlib_telemetry::{TelemetryConfig, TelemetryGuard};
 
 // ---------------------------------------------------------------------------
 // CLI arguments
@@ -119,25 +118,6 @@ fn generate_runtime_name() -> String {
     let adj = ADJECTIVES[fastrand::usize(..ADJECTIVES.len())];
     let noun = NOUNS[fastrand::usize(..NOUNS.len())];
     format!("{}-{}", adj, noun)
-}
-
-// ---------------------------------------------------------------------------
-// Logging
-// ---------------------------------------------------------------------------
-
-fn get_logs_dir() -> Result<PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    Ok(home.join(".streamlib").join("logs"))
-}
-
-fn setup_telemetry(log_path: &Path, daemon: bool) -> Result<TelemetryGuard> {
-    streamlib_telemetry::init_telemetry(TelemetryConfig {
-        service_name: "streamlib-runtime".into(),
-        file_log_path: Some(log_path.to_path_buf()),
-        stdout_logging: !daemon,
-    })
-    .map_err(Into::into)
 }
 
 // ---------------------------------------------------------------------------
@@ -302,17 +282,20 @@ async fn run(args: Args) -> Result<()> {
         args.name.unwrap_or_else(generate_runtime_name)
     };
 
-    let log_path = get_logs_dir()?.join(format!("{}.log", runtime_name));
-
-    // Set runtime ID env var BEFORE creating runtime
+    // Set runtime ID env var BEFORE creating runtime. StreamRuntime::new
+    // picks it up via RuntimeUniqueId::from_env_or_generate and owns the
+    // JSONL log file going forward.
     let runtime_id = format!("R{}", cuid2::create_id());
     // SAFETY: early init, before processor threads spawn; no concurrent env reads.
     unsafe { std::env::set_var("STREAMLIB_RUNTIME_ID", &runtime_id) };
-
-    let _telemetry_guard = setup_telemetry(&log_path, args.daemon)?;
+    // In daemon mode stdout is about to be closed; ask the logging
+    // pathway to skip the pretty mirror so no records are lost to a
+    // dev/null sink. JSONL keeps writing regardless.
+    if args.daemon {
+        unsafe { std::env::set_var("STREAMLIB_QUIET", "1") };
+    }
 
     tracing::info!("Starting runtime: {} ({})", runtime_name, runtime_id);
-    tracing::info!("Log file: {}", log_path.display());
 
     // Load plugins BEFORE creating runtime (registers processors in global registry)
     let mut loader = PluginLoader::new();
@@ -331,11 +314,19 @@ async fn run(args: Args) -> Result<()> {
 
     let runtime = StreamRuntime::new()?;
 
+    let log_path = runtime
+        .jsonl_log_path()
+        .map(|p| p.to_string_lossy().into_owned());
+    tracing::info!(
+        log_path = log_path.as_deref().unwrap_or("(none)"),
+        "runtime JSONL log path"
+    );
+
     let config = ApiServerConfig {
         host: args.host.clone(),
         port: args.port,
         name: Some(runtime_name.clone()),
-        log_path: Some(log_path.to_string_lossy().into_owned()),
+        log_path,
     };
     runtime.add_processor(ApiServerProcessor::node(config))?;
 

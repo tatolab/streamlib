@@ -44,7 +44,6 @@ dotenvy = "0.15"
 
 # Logging
 tracing.workspace = true
-streamlib-telemetry.workspace = true
 
 # Timestamp parsing for log filtering
 chrono = "0.4"
