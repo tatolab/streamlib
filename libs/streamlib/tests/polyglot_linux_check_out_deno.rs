@@ -1,21 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Linux polyglot Deno consumer integration test (#394).
+//! Linux polyglot Deno consumer integration test (#394 / #420).
 //!
 //! Deno twin of `polyglot_linux_check_out.rs`. Spawns `deno` with an inline
 //! TypeScript driver that loads `libstreamlib_deno_native.so` via
 //! `Deno.dlopen`, drives the `sldn_broker_*` / `sldn_gpu_surface_*` FFI like
-//! `subprocess_runner.ts` does, and verifies the bytes it reads through
-//! `mmap` match a host-written memfd pattern.
+//! `subprocess_runner.ts` does, and verifies the bytes read through
+//! `sldn_gpu_surface_base_address` match the host-written DMA-BUF pattern
+//! AND that `sldn_gpu_surface_backend` reports the Vulkan import path was
+//! used (sentinel against regression to an mmap fallback).
 //!
-//! Same skip conditions as the Python test: no `deno` on PATH → skip; no
-//! `libstreamlib_deno_native.so` under target/debug|release → skip.
+//! Skip conditions: no `deno` on PATH → skip; no `libstreamlib_deno_native.so`
+//! under target/debug|release → skip; no Vulkan-capable device → skip.
 
 #![cfg(target_os = "linux")]
 
 use std::io::Write;
-use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -23,6 +24,10 @@ use streamlib_broker::unix_socket_service::{
     connect_to_broker, send_request, UnixSocketSurfaceService,
 };
 use streamlib_broker::BrokerState;
+
+#[path = "common/polyglot_dma_buf_producer.rs"]
+mod polyglot_dma_buf_producer;
+use polyglot_dma_buf_producer::TestDmaBufProducer;
 
 fn locate_native_lib() -> Option<PathBuf> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
@@ -64,23 +69,10 @@ fn tmp_socket_path(label: &str) -> PathBuf {
     p
 }
 
-fn make_memfd_with(contents: &[u8]) -> RawFd {
-    use std::io::{Seek, SeekFrom};
-
-    let name = std::ffi::CString::new("polyglot-deno-test-memfd").unwrap();
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
-    assert!(fd >= 0, "memfd_create: {}", std::io::Error::last_os_error());
-    assert_eq!(
-        unsafe { libc::ftruncate(fd, contents.len() as libc::off_t) },
-        0,
-        "ftruncate: {}",
-        std::io::Error::last_os_error()
-    );
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    file.write_all(contents).expect("memfd write");
-    file.seek(SeekFrom::Start(0)).expect("memfd rewind");
-    file.into_raw_fd()
-}
+/// `sldn_gpu_surface_backend` value that indicates the Vulkan import path
+/// was used — must match `gpu_surface::SURFACE_BACKEND_VULKAN` in the Deno
+/// native lib.
+const EXPECTED_BACKEND_VULKAN: u32 = 2;
 
 fn deno_driver() -> &'static str {
     // `Deno.dlopen` uses `buffer` for C-string args, `pointer` for opaque
@@ -94,6 +86,7 @@ const expectedWidth = parseInt(Deno.env.get("TEST_WIDTH")!);
 const expectedHeight = parseInt(Deno.env.get("TEST_HEIGHT")!);
 const expectedBpr = parseInt(Deno.env.get("TEST_BYTES_PER_ROW")!);
 const expectedHeadHex = Deno.env.get("TEST_EXPECTED_HEAD_HEX")!;
+const expectedBackend = parseInt(Deno.env.get("TEST_EXPECTED_BACKEND")!);
 
 const lib = Deno.dlopen(nativeLibPath, {
   sldn_broker_connect: { parameters: ["buffer"], result: "pointer" },
@@ -106,6 +99,7 @@ const lib = Deno.dlopen(nativeLibPath, {
   sldn_gpu_surface_width: { parameters: ["pointer"], result: "u32" },
   sldn_gpu_surface_height: { parameters: ["pointer"], result: "u32" },
   sldn_gpu_surface_bytes_per_row: { parameters: ["pointer"], result: "u32" },
+  sldn_gpu_surface_backend: { parameters: ["pointer"], result: "u32" },
   sldn_gpu_surface_release: { parameters: ["pointer"], result: "void" },
 });
 
@@ -132,6 +126,11 @@ if (height !== expectedHeight) fatal(`height: expected ${expectedHeight} got ${h
 if (bpr !== expectedBpr) fatal(`bytes_per_row: expected ${expectedBpr} got ${bpr}`);
 
 if (lib.symbols.sldn_gpu_surface_lock(handle, 1) !== 0) fatal("lock returned non-zero");
+
+const backend = lib.symbols.sldn_gpu_surface_backend(handle);
+if (backend !== expectedBackend) {
+  fatal(`backend: expected ${expectedBackend} (Vulkan) got ${backend}`);
+}
 
 const base = lib.symbols.sldn_gpu_surface_base_address(handle);
 if (base === null) fatal("base_address null after lock");
@@ -163,7 +162,7 @@ console.log("OK " + actualHex);
 }
 
 #[test]
-fn deno_subprocess_resolves_and_mmaps_host_published_surface() {
+fn deno_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     let native_lib = match locate_native_lib() {
         Some(p) => p,
         None => {
@@ -178,6 +177,16 @@ fn deno_subprocess_resolves_and_mmaps_host_published_surface() {
         eprintln!("polyglot_linux_check_out_deno: deno not on PATH — skipping");
         return;
     }
+    let producer = match TestDmaBufProducer::try_new() {
+        Ok(p) => p,
+        Err(reason) => {
+            eprintln!(
+                "polyglot_linux_check_out_deno: no Vulkan DMA-BUF producer — skipping ({})",
+                reason
+            );
+            return;
+        }
+    };
 
     let state = BrokerState::new();
     let socket_path = tmp_socket_path("deno-subprocess");
@@ -193,7 +202,17 @@ fn deno_subprocess_resolves_and_mmaps_host_published_surface() {
     for i in 0..size {
         pattern.push(((i * 19 + 11) & 0xFF) as u8);
     }
-    let fd = make_memfd_with(&pattern);
+    let fd = match producer.produce(&pattern) {
+        Ok(fd) => fd,
+        Err(reason) => {
+            eprintln!(
+                "polyglot_linux_check_out_deno: Vulkan DMA-BUF producer failed — skipping ({})",
+                reason
+            );
+            service.stop();
+            return;
+        }
+    };
 
     let host_stream = connect_to_broker(&socket_path).expect("host connect");
     let check_in_req = serde_json::json!({
@@ -241,6 +260,7 @@ fn deno_subprocess_resolves_and_mmaps_host_published_surface() {
         .env("TEST_HEIGHT", height.to_string())
         .env("TEST_BYTES_PER_ROW", (width * bpp).to_string())
         .env("TEST_EXPECTED_HEAD_HEX", &expected_head_hex)
+        .env("TEST_EXPECTED_BACKEND", EXPECTED_BACKEND_VULKAN.to_string())
         .output()
         .expect("spawn deno");
 

@@ -24,6 +24,11 @@ serde_json.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
 streamlib-broker-client = { path = "../streamlib-broker-client" }
+# Vulkan import of DMA-BUF fds from the broker (issue #420). Consumer-only —
+# this cdylib never allocates GPU memory, it only imports fds the host already
+# exported via escalate IPC. `libloading` feature avoids a hard link to
+# libvulkan.so so the cdylib loads on systems without a Vulkan driver.
+vulkanalia = { workspace = true }
 
 [dev-dependencies]
 # Broker unit tests spin up a real UnixSocketSurfaceService + client in-process.

@@ -1,33 +1,38 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Linux polyglot consumer integration test (#394).
+//! Linux polyglot consumer integration test (#394 / #420).
 //!
 //! Spawns a real Python 3 subprocess that loads `libstreamlib_python_native.so`
 //! via ctypes, drives the `slpn_broker_*` / `slpn_gpu_surface_*` FFI exactly
-//! like `subprocess_runner.py` does, and verifies the bytes it reads through
-//! `mmap` match a host-written DMA-BUF pattern.
+//! like `subprocess_runner.py` does, and verifies:
+//!   - the bytes read through `slpn_gpu_surface_base_address` match a host-written
+//!     DMA-BUF pattern (byte-for-byte),
+//!   - `slpn_gpu_surface_backend` reports the Vulkan import path took effect
+//!     rather than silently falling back (the mmap fallback was removed in
+//!     #420 so this is a sentinel against regressions).
 //!
-//! The goal is to catch breakage between the three moving parts that the
-//! native-lib's in-process unit tests don't exercise together:
+//! Catches breakage between the three moving parts that the native-lib's
+//! in-process unit tests don't exercise together:
 //!   - wire protocol through a second OS process (different FD table),
 //!   - ctypes-level ABI for every FFI symbol Python calls,
 //!   - `STREAMLIB_BROKER_SOCKET` env propagation.
 //!
-//! Uses a `memfd` as the DMA-BUF stand-in — the subprocess consumer path
-//! (`mmap(fd)`) is identical for both. A real Vulkan-exported DMA-BUF is not
-//! required for this particular gate: the native-lib does not call
-//! `vkImportMemoryFdInfoKHR` yet (see PR body on the deferred Vulkan import).
+//! The host side uses a real Vulkan-exported DMA-BUF
+//! ([`common::polyglot_dma_buf_producer::TestDmaBufProducer`]) — memfd is
+//! no longer a valid substrate because NVIDIA's Vulkan driver rejects memfd
+//! fds as `DMA_BUF_EXT` handle types, and the subprocess consumer now imports
+//! via `VkImportMemoryFdInfoKHR`.
 //!
 //! Skips gracefully when:
 //!   - `python3` is not on PATH (non-Linux CI, minimal sandboxes),
 //!   - `libstreamlib_python_native.so` has not been built under
-//!     `target/debug/` (test ran before `cargo build -p streamlib-python-native`).
+//!     `target/debug/` (test ran before `cargo build -p streamlib-python-native`),
+//!   - no Vulkan-capable device is present (matches the native-lib's
+//!     lazy-init behavior on GPU-less hosts).
 
 #![cfg(target_os = "linux")]
 
-use std::io::Write;
-use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -35,6 +40,10 @@ use streamlib_broker::unix_socket_service::{
     connect_to_broker, send_request, UnixSocketSurfaceService,
 };
 use streamlib_broker::BrokerState;
+
+#[path = "common/polyglot_dma_buf_producer.rs"]
+mod polyglot_dma_buf_producer;
+use polyglot_dma_buf_producer::TestDmaBufProducer;
 
 /// Locate `libstreamlib_python_native.so` under the workspace target dir.
 ///
@@ -80,24 +89,6 @@ fn tmp_socket_path(label: &str) -> PathBuf {
     p
 }
 
-fn make_memfd_with(contents: &[u8]) -> RawFd {
-    use std::io::{Seek, SeekFrom};
-
-    let name = std::ffi::CString::new("polyglot-test-memfd").unwrap();
-    let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
-    assert!(fd >= 0, "memfd_create: {}", std::io::Error::last_os_error());
-    assert_eq!(
-        unsafe { libc::ftruncate(fd, contents.len() as libc::off_t) },
-        0,
-        "ftruncate: {}",
-        std::io::Error::last_os_error()
-    );
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    file.write_all(contents).expect("memfd write");
-    file.seek(SeekFrom::Start(0)).expect("memfd rewind");
-    file.into_raw_fd()
-}
-
 /// Build the Python driver that runs inside the subprocess. Kept as an
 /// embedded string so the test is self-contained and doesn't have to ship
 /// a fixture .py file.
@@ -115,6 +106,7 @@ expected_width = int(os.environ["TEST_WIDTH"])
 expected_height = int(os.environ["TEST_HEIGHT"])
 expected_bpr = int(os.environ["TEST_BYTES_PER_ROW"])
 expected_head_hex = os.environ["TEST_EXPECTED_HEAD_HEX"]
+expected_backend = int(os.environ["TEST_EXPECTED_BACKEND"])
 
 lib = ctypes.cdll.LoadLibrary(native_lib_path)
 
@@ -139,6 +131,8 @@ lib.slpn_gpu_surface_height.argtypes = [ctypes.c_void_p]
 lib.slpn_gpu_surface_height.restype = ctypes.c_uint32
 lib.slpn_gpu_surface_bytes_per_row.argtypes = [ctypes.c_void_p]
 lib.slpn_gpu_surface_bytes_per_row.restype = ctypes.c_uint32
+lib.slpn_gpu_surface_backend.argtypes = [ctypes.c_void_p]
+lib.slpn_gpu_surface_backend.restype = ctypes.c_uint32
 lib.slpn_gpu_surface_release.argtypes = [ctypes.c_void_p]
 lib.slpn_gpu_surface_release.restype = None
 
@@ -167,6 +161,10 @@ if bpr != expected_bpr:
 
 if lib.slpn_gpu_surface_lock(handle, 1) != 0:
     fatal("slpn_gpu_surface_lock returned non-zero")
+
+backend = lib.slpn_gpu_surface_backend(handle)
+if backend != expected_backend:
+    fatal("backend: expected %d (Vulkan) got %d" % (expected_backend, backend))
 
 base = lib.slpn_gpu_surface_base_address(handle)
 if not base:
@@ -198,8 +196,13 @@ sys.stdout.flush()
 "#
 }
 
+/// `slpn_gpu_surface_backend` value that indicates the Vulkan import path
+/// was used — must match `gpu_surface::SURFACE_BACKEND_VULKAN` in the Python
+/// native lib.
+const EXPECTED_BACKEND_VULKAN: u32 = 2;
+
 #[test]
-fn python_subprocess_resolves_and_mmaps_host_published_surface() {
+fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     let native_lib = match locate_native_lib() {
         Some(p) => p,
         None => {
@@ -215,6 +218,19 @@ fn python_subprocess_resolves_and_mmaps_host_published_surface() {
         return;
     }
 
+    // 0. Skip cleanly if no Vulkan-capable device is present. Matches the
+    //    native-lib's lazy-init behavior on GPU-less hosts.
+    let producer = match TestDmaBufProducer::try_new() {
+        Ok(p) => p,
+        Err(reason) => {
+            eprintln!(
+                "polyglot_linux_check_out: no Vulkan DMA-BUF producer — skipping ({})",
+                reason
+            );
+            return;
+        }
+    };
+
     // 1. Start a broker in-process.
     let state = BrokerState::new();
     let socket_path = tmp_socket_path("py-subprocess");
@@ -222,7 +238,8 @@ fn python_subprocess_resolves_and_mmaps_host_published_surface() {
     service.start().expect("service start");
     std::thread::sleep(std::time::Duration::from_millis(50));
 
-    // 2. Host: check_in a memfd seeded with a deterministic pattern.
+    // 2. Host: allocate a real Vulkan-exported DMA-BUF seeded with a
+    //    deterministic pattern, and check_in to the broker.
     let width: u32 = 64;
     let height: u32 = 4;
     let bpp: u32 = 4;
@@ -231,7 +248,17 @@ fn python_subprocess_resolves_and_mmaps_host_published_surface() {
     for i in 0..size {
         pattern.push(((i * 13 + 7) & 0xFF) as u8);
     }
-    let fd = make_memfd_with(&pattern);
+    let fd = match producer.produce(&pattern) {
+        Ok(fd) => fd,
+        Err(reason) => {
+            eprintln!(
+                "polyglot_linux_check_out: Vulkan DMA-BUF producer failed — skipping ({})",
+                reason
+            );
+            service.stop();
+            return;
+        }
+    };
 
     let host_stream = connect_to_broker(&socket_path).expect("host connect");
     let check_in_req = serde_json::json!({
@@ -271,6 +298,7 @@ fn python_subprocess_resolves_and_mmaps_host_published_surface() {
         .env("TEST_HEIGHT", height.to_string())
         .env("TEST_BYTES_PER_ROW", (width * bpp).to_string())
         .env("TEST_EXPECTED_HEAD_HEX", &expected_head_hex)
+        .env("TEST_EXPECTED_BACKEND", EXPECTED_BACKEND_VULKAN.to_string())
         .output()
         .expect("spawn python3");
 

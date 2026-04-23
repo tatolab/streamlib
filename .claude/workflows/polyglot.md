@@ -54,8 +54,18 @@ blocked by it.
 
 ## Rules specific to polyglot issues
 
-- **Don't add new GPU APIs (IOSurface, CGL, Metal, Vulkan) to the
-  polyglot native libs.** Every GPU op goes through escalate IPC.
+- **Don't add new GPU *allocation* APIs (IOSurface, CGL, Metal, Vulkan)
+  to the polyglot native libs.** Every allocation goes through escalate
+  IPC → `GpuContextFullAccess` → RHI → `SurfaceStore.check_in`. In code
+  terms: no `vkAllocateMemory`, no `vkGetMemoryFdKHR`, no
+  `IOSurfaceCreate`, no Metal heap allocation inside
+  `streamlib-*-native`.
+  - **Import-side carve-out:** on Linux, native libs *do* call
+    `VkImportMemoryFdInfoKHR` + `vkBindBufferMemory` + `vkMapMemory` on
+    an fd the broker (host allocation) already handed them — shipped in
+    #420. This mirrors macOS's `IOSurfaceLookupFromMachPort` in the
+    existing XPC shim. It's *consumer-only* by construction (no
+    exportable memory ever originates in the subprocess).
 - **Don't bypass typed ctx.** Python/Deno SDKs must propagate
   `RuntimeContextFullAccess`/`RuntimeContextLimitedAccess` to processor
   lifecycle methods exactly like Rust.

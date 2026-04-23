@@ -781,12 +781,24 @@ mod gpu_surface {
     //! `slpn_gpu_surface_*` FFI symbols — same shape as the macOS IOSurface
     //! variant so Python's `ctypes` bindings don't branch by platform.
     //!
-    //! CPU access is via `mmap(fd)` on lock; Vulkan import via
-    //! `vkImportMemoryFdInfoKHR` is intentionally deferred to a follow-up so
-    //! this crate keeps its minimal cdylib dependency footprint until a
-    //! GPU-consuming Python subprocess materializes.
+    //! CPU access on lock goes through a Vulkan DMA-BUF import
+    //! (`VkImportMemoryFdInfoKHR` + `vkBindBufferMemory` + `vkMapMemory`) —
+    //! same shape as the host's `VulkanPixelBuffer::from_dma_buf_fd` so both
+    //! ends speak the canonical driver-supported path. The import-side only —
+    //! allocation always escalates to the host per the research doc.
     use std::ffi::c_void;
     use std::os::unix::io::RawFd;
+    use std::sync::Arc;
+
+    use vulkanalia::vk::{self, Handle as _};
+
+    use super::broker_vulkan_linux::BrokerVulkanDevice;
+
+    /// Surface backend used for the currently-locked mapping. Reported via
+    /// [`slpn_gpu_surface_backend`] so tests can assert the import took the
+    /// Vulkan path rather than silently falling back.
+    pub const SURFACE_BACKEND_NONE: u32 = 0;
+    pub const SURFACE_BACKEND_VULKAN: u32 = 2;
 
     pub struct SurfaceHandle {
         pub fd: RawFd,
@@ -796,15 +808,30 @@ mod gpu_surface {
         pub size: u64,
         pub mapped_ptr: *mut u8,
         pub is_locked: bool,
+        /// Vulkan device attached by [`super::broker_client::slpn_broker_resolve_surface`].
+        /// `None` means the broker could not create a Vulkan device and lock
+        /// will fail cleanly.
+        pub vulkan_device: Option<Arc<BrokerVulkanDevice>>,
+        /// Imported `vk::Buffer` — valid only while `is_locked`.
+        pub vulkan_buffer: vk::Buffer,
+        /// Imported `vk::DeviceMemory` — valid only while `is_locked`.
+        pub vulkan_memory: vk::DeviceMemory,
+        /// Backend used for the current (or most recent) lock.
+        pub backend: u32,
     }
 
     impl Drop for SurfaceHandle {
         fn drop(&mut self) {
-            if self.is_locked && !self.mapped_ptr.is_null() && self.size > 0 {
-                unsafe {
-                    libc::munmap(self.mapped_ptr as *mut c_void, self.size as usize);
+            // Tear down any outstanding Vulkan import (lock without unlock).
+            // `lock` imports a dup of `self.fd`; Vulkan owns that dup. Freeing
+            // the imported memory releases the dup, not `self.fd`.
+            if self.is_locked {
+                if let Some(device) = self.vulkan_device.as_ref() {
+                    device.destroy_imported(self.vulkan_buffer, self.vulkan_memory);
                 }
             }
+            // The original fd stays with the SurfaceHandle across lock/unlock
+            // cycles — close it last.
             if self.fd >= 0 {
                 unsafe {
                     libc::close(self.fd);
@@ -822,7 +849,7 @@ mod gpu_surface {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_gpu_surface_lock(
         handle: *mut SurfaceHandle,
-        read_only: i32,
+        _read_only: i32,
     ) -> i32 {
         let handle = match unsafe { handle.as_mut() } {
             Some(h) => h,
@@ -834,31 +861,45 @@ mod gpu_surface {
         if handle.size == 0 || handle.fd < 0 {
             return -1;
         }
-        let prot = if read_only != 0 {
-            libc::PROT_READ
-        } else {
-            libc::PROT_READ | libc::PROT_WRITE
+        let device = match handle.vulkan_device.as_ref() {
+            Some(d) => Arc::clone(d),
+            None => {
+                eprintln!(
+                    "[slpn] gpu_surface_lock: no Vulkan device attached — resolve_surface \
+                     must have failed to initialize one"
+                );
+                return -1;
+            }
         };
-        let ptr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                handle.size as usize,
-                prot,
-                libc::MAP_SHARED,
-                handle.fd,
-                0,
-            )
-        };
-        if ptr == libc::MAP_FAILED {
+        // Dup the fd before import: vkAllocateMemory takes ownership of the
+        // fd on success. Keeping the original fd on the SurfaceHandle lets
+        // the caller lock/unlock/lock again (each lock imports a fresh dup).
+        let dup_fd = unsafe { libc::dup(handle.fd) };
+        if dup_fd < 0 {
             eprintln!(
-                "[slpn] mmap on DMA-BUF fd {} failed: {}",
-                handle.fd,
+                "[slpn] gpu_surface_lock: dup fd failed: {}",
                 std::io::Error::last_os_error()
             );
             return -1;
         }
-        handle.mapped_ptr = ptr as *mut u8;
+        let imported = match device.import_dma_buf_fd(dup_fd, handle.size) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!(
+                    "[slpn] gpu_surface_lock: Vulkan DMA-BUF import failed for fd {} ({}B): {}",
+                    handle.fd, handle.size, e
+                );
+                // On import failure Vulkan has not taken the fd — we must
+                // close the dup ourselves.
+                unsafe { libc::close(dup_fd) };
+                return -1;
+            }
+        };
+        handle.vulkan_buffer = imported.buffer;
+        handle.vulkan_memory = imported.memory;
+        handle.mapped_ptr = imported.mapped_ptr;
         handle.is_locked = true;
+        handle.backend = SURFACE_BACKEND_VULKAN;
         0
     }
 
@@ -874,16 +915,28 @@ mod gpu_surface {
         if !handle.is_locked {
             return 0;
         }
-        let result = unsafe {
-            libc::munmap(handle.mapped_ptr as *mut c_void, handle.size as usize)
-        };
+        if let Some(device) = handle.vulkan_device.as_ref() {
+            device.destroy_imported(handle.vulkan_buffer, handle.vulkan_memory);
+        }
+        handle.vulkan_buffer = vk::Buffer::null();
+        handle.vulkan_memory = vk::DeviceMemory::null();
         handle.mapped_ptr = std::ptr::null_mut();
         handle.is_locked = false;
-        if result != 0 {
-            -1
-        } else {
-            0
-        }
+        0
+    }
+
+    /// Return which backend was used for the current (or most recent) lock.
+    ///
+    /// `0` = no backend active (handle never locked, or unlock cleared state),
+    /// `2` = Vulkan DMA-BUF import via `VkImportMemoryFdInfoKHR`.
+    ///
+    /// Exposed so tests and polyglot drivers can confirm the Vulkan path was
+    /// taken rather than silently falling back.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_gpu_surface_backend(handle: *const SurfaceHandle) -> u32 {
+        unsafe { handle.as_ref() }
+            .map(|h| h.backend)
+            .unwrap_or(SURFACE_BACKEND_NONE)
     }
 
     #[unsafe(no_mangle)]
@@ -1518,13 +1571,299 @@ mod broker_client {
 }
 
 #[cfg(target_os = "linux")]
+mod broker_vulkan_linux {
+    //! Minimal Vulkan device used by the polyglot consumer to import DMA-BUF
+    //! fds handed out by the broker (issue #420).
+    //!
+    //! Consumer-only per the subprocess-import-only safety posture: we load
+    //! libvulkan.so via `libloading`, create a bare instance + logical device
+    //! enabling only `VK_KHR_external_memory` + `VK_KHR_external_memory_fd` +
+    //! `VK_EXT_external_memory_dma_buf`, and expose a single
+    //! [`BrokerVulkanDevice::import_dma_buf_fd`] method. Export paths
+    //! (`vkGetMemoryFdKHR`) are intentionally absent — allocation is the
+    //! host's job via escalate IPC.
+    //!
+    //! One instance+device per [`super::broker_client::BrokerHandle`], lazily
+    //! created on first [`super::broker_client::slpn_broker_resolve_surface`]
+    //! and torn down with the handle.
+    use std::ffi::{c_char, CStr};
+    use std::os::unix::io::RawFd;
+    use std::sync::Arc;
+
+    use vulkanalia::loader::{LibloadingLoader, LIBRARY};
+    use vulkanalia::prelude::v1_1::*;
+    use vulkanalia::vk;
+
+    /// Minimal per-broker Vulkan device used only for DMA-BUF import.
+    pub struct BrokerVulkanDevice {
+        _entry: vulkanalia::Entry,
+        instance: vulkanalia::Instance,
+        device: vulkanalia::Device,
+        memory_properties: vk::PhysicalDeviceMemoryProperties,
+    }
+
+    // Vulkan handles are thread-safe; vulkanalia wrappers don't auto-impl
+    // these because they wrap function pointers via raw loaders.
+    unsafe impl Send for BrokerVulkanDevice {}
+    unsafe impl Sync for BrokerVulkanDevice {}
+
+    /// A successfully-imported DMA-BUF, persistently mapped.
+    pub struct ImportedBuffer {
+        pub buffer: vk::Buffer,
+        pub memory: vk::DeviceMemory,
+        pub mapped_ptr: *mut u8,
+    }
+
+    impl BrokerVulkanDevice {
+        /// Lazily create the broker's Vulkan device. Returns `Err` with a
+        /// human-readable reason when Vulkan is unavailable or a required
+        /// extension is missing — caller is expected to null out the
+        /// resolve_surface result and log the reason.
+        pub fn try_new() -> Result<Arc<Self>, String> {
+            let loader = unsafe { LibloadingLoader::new(LIBRARY) }
+                .map_err(|e| format!("load libvulkan: {e}"))?;
+            let entry = unsafe { vulkanalia::Entry::new(loader) }
+                .map_err(|e| format!("vulkan entry: {e}"))?;
+
+            let app_info = vk::ApplicationInfo::builder()
+                .application_name(b"streamlib-polyglot-consumer\0")
+                .application_version(vk::make_version(0, 1, 0))
+                .engine_name(b"streamlib\0")
+                .engine_version(vk::make_version(0, 1, 0))
+                .api_version(vk::make_version(1, 1, 0))
+                .build();
+            let instance_info = vk::InstanceCreateInfo::builder()
+                .application_info(&app_info)
+                .build();
+            let instance = unsafe { entry.create_instance(&instance_info, None) }
+                .map_err(|e| format!("create_instance: {e}"))?;
+
+            let result = Self::select_and_create_device(&instance);
+            match result {
+                Ok((device, physical_device)) => {
+                    let memory_properties = unsafe {
+                        instance.get_physical_device_memory_properties(physical_device)
+                    };
+                    Ok(Arc::new(BrokerVulkanDevice {
+                        _entry: entry,
+                        instance,
+                        device,
+                        memory_properties,
+                    }))
+                }
+                Err(e) => {
+                    unsafe { instance.destroy_instance(None) };
+                    Err(e)
+                }
+            }
+        }
+
+        fn select_and_create_device(
+            instance: &vulkanalia::Instance,
+        ) -> Result<(vulkanalia::Device, vk::PhysicalDevice), String> {
+            let physical_devices = unsafe { instance.enumerate_physical_devices() }
+                .map_err(|e| format!("enumerate_physical_devices: {e}"))?;
+            if physical_devices.is_empty() {
+                return Err("no Vulkan-capable physical devices".into());
+            }
+            let physical_device = physical_devices
+                .iter()
+                .find(|&&pd| {
+                    let p = unsafe { instance.get_physical_device_properties(pd) };
+                    p.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
+                })
+                .copied()
+                .unwrap_or(physical_devices[0]);
+
+            let available_ext =
+                unsafe { instance.enumerate_device_extension_properties(physical_device, None) }
+                    .map_err(|e| format!("enumerate_device_extension_properties: {e}"))?;
+            let available_names: Vec<&CStr> = available_ext
+                .iter()
+                .map(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) })
+                .collect();
+            let ext_external_memory = c"VK_KHR_external_memory";
+            let ext_external_memory_fd = c"VK_KHR_external_memory_fd";
+            let ext_dma_buf = c"VK_EXT_external_memory_dma_buf";
+            for required in [ext_external_memory, ext_external_memory_fd, ext_dma_buf] {
+                if !available_names.contains(&required) {
+                    return Err(format!(
+                        "required device extension missing: {}",
+                        required.to_string_lossy()
+                    ));
+                }
+            }
+
+            // Vulkan requires at least one queue at device creation even
+            // though we never submit. Pick family 0 — every conformant driver
+            // has at least one family.
+            let queue_families =
+                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+            if queue_families.is_empty() {
+                return Err("physical device has no queue families".into());
+            }
+            let queue_family_index = 0u32;
+            let queue_priorities = [1.0f32];
+            let queue_create_infos = [vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(queue_family_index)
+                .queue_priorities(&queue_priorities)
+                .build()];
+            let device_extensions: Vec<*const c_char> = vec![
+                ext_external_memory.as_ptr(),
+                ext_external_memory_fd.as_ptr(),
+                ext_dma_buf.as_ptr(),
+            ];
+            let device_info = vk::DeviceCreateInfo::builder()
+                .queue_create_infos(&queue_create_infos)
+                .enabled_extension_names(&device_extensions)
+                .build();
+            let device =
+                unsafe { instance.create_device(physical_device, &device_info, None) }
+                    .map_err(|e| format!("create_device: {e}"))?;
+            Ok((device, physical_device))
+        }
+
+        fn find_memory_type(
+            &self,
+            type_filter: u32,
+            required_flags: vk::MemoryPropertyFlags,
+        ) -> Option<u32> {
+            for i in 0..self.memory_properties.memory_type_count {
+                let type_supported = (type_filter & (1 << i)) != 0;
+                let flags = self.memory_properties.memory_types[i as usize].property_flags;
+                if type_supported && flags.contains(required_flags) {
+                    return Some(i);
+                }
+            }
+            None
+        }
+
+        /// Import a DMA-BUF fd as a `HOST_VISIBLE | HOST_COHERENT` buffer,
+        /// persistently mapped. Mirrors the host's
+        /// `VulkanPixelBuffer::from_dma_buf_fd` shape.
+        ///
+        /// On success, Vulkan takes ownership of `fd` — the caller must
+        /// **not** `close(fd)`. On error, the caller retains ownership.
+        pub fn import_dma_buf_fd(
+            &self,
+            fd: RawFd,
+            size: u64,
+        ) -> Result<ImportedBuffer, String> {
+            if size == 0 {
+                return Err("import_dma_buf_fd: size is 0".into());
+            }
+            let device_size = size as vk::DeviceSize;
+
+            let mut external_info = vk::ExternalMemoryBufferCreateInfo::builder()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                .build();
+            let buffer_info = vk::BufferCreateInfo::builder()
+                .size(device_size)
+                .usage(
+                    vk::BufferUsageFlags::TRANSFER_SRC
+                        | vk::BufferUsageFlags::TRANSFER_DST
+                        | vk::BufferUsageFlags::STORAGE_BUFFER,
+                )
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .push_next(&mut external_info)
+                .build();
+            let buffer = unsafe { self.device.create_buffer(&buffer_info, None) }
+                .map_err(|e| format!("create_buffer: {e}"))?;
+
+            let mem_req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+            let memory_type_index = match self.find_memory_type(
+                mem_req.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ) {
+                Some(i) => i,
+                None => {
+                    unsafe { self.device.destroy_buffer(buffer, None) };
+                    return Err(format!(
+                        "no HOST_VISIBLE|HOST_COHERENT memory type satisfies filter 0x{:x}",
+                        mem_req.memory_type_bits
+                    ));
+                }
+            };
+            let alloc_size = device_size.max(mem_req.size);
+
+            let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
+                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                .fd(fd)
+                .build();
+            let alloc_info = vk::MemoryAllocateInfo::builder()
+                .allocation_size(alloc_size)
+                .memory_type_index(memory_type_index)
+                .push_next(&mut import_info)
+                .build();
+
+            let memory = match unsafe { self.device.allocate_memory(&alloc_info, None) } {
+                Ok(m) => m,
+                Err(e) => {
+                    unsafe { self.device.destroy_buffer(buffer, None) };
+                    return Err(format!("allocate_memory (import): {e}"));
+                }
+            };
+            // fd ownership transferred to Vulkan on success.
+
+            if let Err(e) = unsafe { self.device.bind_buffer_memory(buffer, memory, 0) } {
+                unsafe {
+                    self.device.free_memory(memory, None);
+                    self.device.destroy_buffer(buffer, None);
+                }
+                return Err(format!("bind_buffer_memory: {e}"));
+            }
+
+            let mapped_ptr = match unsafe {
+                self.device
+                    .map_memory(memory, 0, alloc_size, vk::MemoryMapFlags::empty())
+            } {
+                Ok(p) => p as *mut u8,
+                Err(e) => {
+                    unsafe {
+                        self.device.free_memory(memory, None);
+                        self.device.destroy_buffer(buffer, None);
+                    }
+                    return Err(format!("map_memory: {e}"));
+                }
+            };
+
+            Ok(ImportedBuffer {
+                buffer,
+                memory,
+                mapped_ptr,
+            })
+        }
+
+        /// Tear down an imported buffer in the reverse order of creation:
+        /// `vkUnmapMemory` → `vkDestroyBuffer` → `vkFreeMemory`.
+        pub fn destroy_imported(&self, buffer: vk::Buffer, memory: vk::DeviceMemory) {
+            unsafe {
+                self.device.unmap_memory(memory);
+                self.device.destroy_buffer(buffer, None);
+                self.device.free_memory(memory, None);
+            }
+        }
+    }
+
+    impl Drop for BrokerVulkanDevice {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = self.device.device_wait_idle();
+                self.device.destroy_device(None);
+                self.instance.destroy_instance(None);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 mod broker_client {
     //! Linux broker consumer client.
     //!
     //! Mirrors the macOS XPC shim's FFI surface (same `slpn_broker_*` symbols,
     //! same arg shapes) but speaks the Unix-socket + SCM_RIGHTS wire protocol
     //! that [`streamlib_broker::unix_socket_service`] listens on. Consumer-only
-    //! per the safety posture in `docs/research/polyglot-dma-buf-fd.md` —
+    //! per the subprocess-import-only safety posture —
     //! allocation always goes through the host via #325 escalate IPC.
     //!
     //! Lifecycle:
@@ -1543,9 +1882,12 @@ mod broker_client {
     use std::ffi::{c_char, CStr};
     use std::os::unix::io::RawFd;
     use std::os::unix::net::UnixStream;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
-    use super::gpu_surface::SurfaceHandle;
+    use super::broker_vulkan_linux::BrokerVulkanDevice;
+    use super::gpu_surface::{SurfaceHandle, SURFACE_BACKEND_NONE};
+
+    use vulkanalia::vk::{self, Handle as _};
 
     /// Maximum cached resolved surfaces before we drop the whole cache.
     const MAX_RESOLVE_CACHE: usize = 128;
@@ -1572,6 +1914,10 @@ mod broker_client {
         runtime_id: String,
         connection: Mutex<Option<UnixStream>>,
         resolve_cache: Mutex<HashMap<String, CachedSurface>>,
+        /// Lazily-created per-handle Vulkan device for DMA-BUF import (#420).
+        /// Populated on first [`slpn_broker_resolve_surface`] call; dropped
+        /// with the handle.
+        vulkan_device: Mutex<Option<Arc<BrokerVulkanDevice>>>,
     }
 
     impl BrokerHandle {
@@ -1586,6 +1932,33 @@ mod broker_client {
                 *guard = Some(stream);
             }
             Ok(guard)
+        }
+
+        /// Return the per-broker Vulkan device, creating it on first use.
+        /// Returns `None` (with a logged reason) if Vulkan is unavailable —
+        /// resolve_surface then fails cleanly rather than handing back a
+        /// SurfaceHandle whose lock would fail later.
+        fn get_or_init_vulkan_device(&self) -> Option<Arc<BrokerVulkanDevice>> {
+            let mut guard = self.vulkan_device.lock().expect("poisoned");
+            if let Some(d) = guard.as_ref() {
+                return Some(Arc::clone(d));
+            }
+            match BrokerVulkanDevice::try_new() {
+                Ok(d) => {
+                    let cloned = Arc::clone(&d);
+                    *guard = Some(d);
+                    Some(cloned)
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[slpn] broker: failed to create Vulkan device for DMA-BUF import: {}. \
+                         resolve_surface will fail — the subprocess cannot map broker-published \
+                         surfaces without a Vulkan-capable driver.",
+                        e
+                    );
+                    None
+                }
+            }
         }
     }
 
@@ -1652,6 +2025,7 @@ mod broker_client {
             runtime_id,
             connection: Mutex::new(None),
             resolve_cache: Mutex::new(HashMap::new()),
+            vulkan_device: Mutex::new(None),
         }))
     }
 
@@ -1683,9 +2057,17 @@ mod broker_client {
             }
         };
 
+        // Lazy-create the per-broker Vulkan device before either path returns
+        // a SurfaceHandle. Every handle carries an Arc<BrokerVulkanDevice> so
+        // [`slpn_gpu_surface_lock`] can import without plumbing the broker
+        // pointer through the FFI surface.
+        let vulkan_device = match broker.get_or_init_vulkan_device() {
+            Some(d) => d,
+            None => return std::ptr::null_mut(),
+        };
+
         // Cache hit — dup the stored fd so the returned SurfaceHandle owns
-        // an independent fd copy. (mmap on the cached fd is not allowed since
-        // each SurfaceHandle manages its own mmap lifecycle.)
+        // an independent fd copy.
         {
             let cache = broker.resolve_cache.lock().expect("poisoned");
             if let Some(cached) = cache.get(&pool_id_str) {
@@ -1706,6 +2088,10 @@ mod broker_client {
                     size: cached.size,
                     mapped_ptr: std::ptr::null_mut(),
                     is_locked: false,
+                    vulkan_device: Some(Arc::clone(&vulkan_device)),
+                    vulkan_buffer: vk::Buffer::null(),
+                    vulkan_memory: vk::DeviceMemory::null(),
+                    backend: SURFACE_BACKEND_NONE,
                 }));
             }
         }
@@ -1803,6 +2189,10 @@ mod broker_client {
             size,
             mapped_ptr: std::ptr::null_mut(),
             is_locked: false,
+            vulkan_device: Some(vulkan_device),
+            vulkan_buffer: vk::Buffer::null(),
+            vulkan_memory: vk::DeviceMemory::null(),
+            backend: SURFACE_BACKEND_NONE,
         }))
     }
 
@@ -1939,22 +2329,26 @@ unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod broker_linux_tests {
-    use std::ffi::CString;
-    use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
+    use std::ffi::{c_char, CStr, CString};
+    use std::os::unix::io::RawFd;
     use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
 
     use streamlib_broker::{unix_socket_service, BrokerState};
     use unix_socket_service::UnixSocketSurfaceService;
 
+    use vulkanalia::loader::{LibloadingLoader, LIBRARY};
+    use vulkanalia::prelude::v1_1::*;
+    use vulkanalia::vk::{self, KhrExternalMemoryFdExtensionDeviceCommands as _};
+
     use super::broker_client::{
         slpn_broker_connect, slpn_broker_disconnect, slpn_broker_resolve_surface,
         slpn_broker_unregister_surface,
     };
     use super::gpu_surface::{
-        slpn_gpu_surface_base_address, slpn_gpu_surface_bytes_per_row, slpn_gpu_surface_height,
-        slpn_gpu_surface_lock, slpn_gpu_surface_release, slpn_gpu_surface_unlock,
-        slpn_gpu_surface_width,
+        slpn_gpu_surface_backend, slpn_gpu_surface_base_address, slpn_gpu_surface_bytes_per_row,
+        slpn_gpu_surface_height, slpn_gpu_surface_lock, slpn_gpu_surface_release,
+        slpn_gpu_surface_unlock, slpn_gpu_surface_width, SURFACE_BACKEND_VULKAN,
     };
 
     fn tmp_socket_path(label: &str) -> PathBuf {
@@ -1972,42 +2366,267 @@ mod broker_linux_tests {
         p
     }
 
-    /// Seed an anonymous file with `contents`. Returned fd is owned by caller.
-    fn make_memfd_with(contents: &[u8]) -> RawFd {
-        use std::io::{Seek, SeekFrom, Write};
+    /// Test-only producer that creates a real Vulkan-exported DMA-BUF fd and
+    /// fills it with a deterministic byte pattern. The consumer-under-test
+    /// (the native lib's [`super::broker_vulkan_linux::BrokerVulkanDevice`])
+    /// imports that fd through the broker and verifies the bytes match.
+    ///
+    /// Deliberately kept in the test module — the production `broker_vulkan_linux`
+    /// is strictly import-only (no `vkGetMemoryFdKHR`, no export-side
+    /// allocation), so allocation paths only exist in host or test code.
+    struct TestDmaBufProducer {
+        _entry: vulkanalia::Entry,
+        instance: vulkanalia::Instance,
+        device: vulkanalia::Device,
+        memory_properties: vk::PhysicalDeviceMemoryProperties,
+    }
 
-        let name = CString::new("slpn-test-memfd").unwrap();
-        let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
-        assert!(
-            fd >= 0,
-            "memfd_create failed: {}",
-            std::io::Error::last_os_error()
-        );
-        // memfd starts with zero size — ftruncate to the content length first
-        // so subsequent mmap calls see the full region.
-        assert_eq!(
-            unsafe { libc::ftruncate(fd, contents.len() as libc::off_t) },
-            0,
-            "ftruncate failed: {}",
-            std::io::Error::last_os_error()
-        );
-        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-        file.write_all(contents).expect("memfd write");
-        file.seek(SeekFrom::Start(0)).expect("memfd rewind");
-        file.into_raw_fd()
+    impl TestDmaBufProducer {
+        fn try_new() -> Result<Self, String> {
+            let loader = unsafe { LibloadingLoader::new(LIBRARY) }
+                .map_err(|e| format!("load libvulkan: {e}"))?;
+            let entry = unsafe { vulkanalia::Entry::new(loader) }
+                .map_err(|e| format!("vulkan entry: {e}"))?;
+
+            let app_info = vk::ApplicationInfo::builder()
+                .application_name(b"streamlib-polyglot-test-producer\0")
+                .application_version(vk::make_version(0, 1, 0))
+                .engine_name(b"streamlib\0")
+                .engine_version(vk::make_version(0, 1, 0))
+                .api_version(vk::make_version(1, 1, 0))
+                .build();
+            let instance_info = vk::InstanceCreateInfo::builder()
+                .application_info(&app_info)
+                .build();
+            let instance = unsafe { entry.create_instance(&instance_info, None) }
+                .map_err(|e| format!("create_instance: {e}"))?;
+
+            let result = Self::select_and_create(&instance);
+            match result {
+                Ok((device, physical_device)) => {
+                    let memory_properties = unsafe {
+                        instance.get_physical_device_memory_properties(physical_device)
+                    };
+                    Ok(Self {
+                        _entry: entry,
+                        instance,
+                        device,
+                        memory_properties,
+                    })
+                }
+                Err(e) => {
+                    unsafe { instance.destroy_instance(None) };
+                    Err(e)
+                }
+            }
+        }
+
+        fn select_and_create(
+            instance: &vulkanalia::Instance,
+        ) -> Result<(vulkanalia::Device, vk::PhysicalDevice), String> {
+            let physical_devices = unsafe { instance.enumerate_physical_devices() }
+                .map_err(|e| format!("enumerate_physical_devices: {e}"))?;
+            if physical_devices.is_empty() {
+                return Err("no Vulkan-capable physical devices".into());
+            }
+            let physical_device = physical_devices
+                .iter()
+                .find(|&&pd| {
+                    let p = unsafe { instance.get_physical_device_properties(pd) };
+                    p.device_type == vk::PhysicalDeviceType::DISCRETE_GPU
+                })
+                .copied()
+                .unwrap_or(physical_devices[0]);
+
+            let available_ext =
+                unsafe { instance.enumerate_device_extension_properties(physical_device, None) }
+                    .map_err(|e| format!("enumerate_device_extension_properties: {e}"))?;
+            let available_names: Vec<&CStr> = available_ext
+                .iter()
+                .map(|e| unsafe { CStr::from_ptr(e.extension_name.as_ptr()) })
+                .collect();
+            let ext_external_memory = c"VK_KHR_external_memory";
+            let ext_external_memory_fd = c"VK_KHR_external_memory_fd";
+            let ext_dma_buf = c"VK_EXT_external_memory_dma_buf";
+            for required in [ext_external_memory, ext_external_memory_fd, ext_dma_buf] {
+                if !available_names.contains(&required) {
+                    return Err(format!(
+                        "required device extension missing: {}",
+                        required.to_string_lossy()
+                    ));
+                }
+            }
+
+            let queue_families =
+                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+            if queue_families.is_empty() {
+                return Err("physical device has no queue families".into());
+            }
+            let queue_family_index = 0u32;
+            let queue_priorities = [1.0f32];
+            let queue_create_infos = [vk::DeviceQueueCreateInfo::builder()
+                .queue_family_index(queue_family_index)
+                .queue_priorities(&queue_priorities)
+                .build()];
+            let device_extensions: Vec<*const c_char> = vec![
+                ext_external_memory.as_ptr(),
+                ext_external_memory_fd.as_ptr(),
+                ext_dma_buf.as_ptr(),
+            ];
+            let device_info = vk::DeviceCreateInfo::builder()
+                .queue_create_infos(&queue_create_infos)
+                .enabled_extension_names(&device_extensions)
+                .build();
+            let device =
+                unsafe { instance.create_device(physical_device, &device_info, None) }
+                    .map_err(|e| format!("create_device: {e}"))?;
+            Ok((device, physical_device))
+        }
+
+        fn find_memory_type(
+            &self,
+            type_filter: u32,
+            required_flags: vk::MemoryPropertyFlags,
+        ) -> Option<u32> {
+            for i in 0..self.memory_properties.memory_type_count {
+                let type_supported = (type_filter & (1 << i)) != 0;
+                let flags = self.memory_properties.memory_types[i as usize].property_flags;
+                if type_supported && flags.contains(required_flags) {
+                    return Some(i);
+                }
+            }
+            None
+        }
+
+        /// Allocate a HOST_VISIBLE DMA-BUF-exportable buffer, write `pattern`
+        /// into it, and return the exported DMA-BUF fd. Caller owns the fd.
+        fn produce(&self, pattern: &[u8]) -> Result<RawFd, String> {
+            let size = pattern.len() as u64;
+            let device_size = size as vk::DeviceSize;
+
+            let mut external_info = vk::ExternalMemoryBufferCreateInfo::builder()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                .build();
+            let buffer_info = vk::BufferCreateInfo::builder()
+                .size(device_size)
+                .usage(
+                    vk::BufferUsageFlags::TRANSFER_SRC
+                        | vk::BufferUsageFlags::TRANSFER_DST
+                        | vk::BufferUsageFlags::STORAGE_BUFFER,
+                )
+                .sharing_mode(vk::SharingMode::EXCLUSIVE)
+                .push_next(&mut external_info)
+                .build();
+            let buffer = unsafe { self.device.create_buffer(&buffer_info, None) }
+                .map_err(|e| format!("create_buffer: {e}"))?;
+
+            let mem_req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+            let memory_type_index = match self.find_memory_type(
+                mem_req.memory_type_bits,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ) {
+                Some(i) => i,
+                None => {
+                    unsafe { self.device.destroy_buffer(buffer, None) };
+                    return Err("no HOST_VISIBLE|HOST_COHERENT memory type".into());
+                }
+            };
+            let alloc_size = device_size.max(mem_req.size);
+
+            let mut export_info = vk::ExportMemoryAllocateInfo::builder()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                .build();
+            let alloc_info = vk::MemoryAllocateInfo::builder()
+                .allocation_size(alloc_size)
+                .memory_type_index(memory_type_index)
+                .push_next(&mut export_info)
+                .build();
+            let memory = match unsafe { self.device.allocate_memory(&alloc_info, None) } {
+                Ok(m) => m,
+                Err(e) => {
+                    unsafe { self.device.destroy_buffer(buffer, None) };
+                    return Err(format!("allocate_memory: {e}"));
+                }
+            };
+            if let Err(e) = unsafe { self.device.bind_buffer_memory(buffer, memory, 0) } {
+                unsafe {
+                    self.device.free_memory(memory, None);
+                    self.device.destroy_buffer(buffer, None);
+                }
+                return Err(format!("bind_buffer_memory: {e}"));
+            }
+            let mapped_ptr = match unsafe {
+                self.device
+                    .map_memory(memory, 0, alloc_size, vk::MemoryMapFlags::empty())
+            } {
+                Ok(p) => p as *mut u8,
+                Err(e) => {
+                    unsafe {
+                        self.device.free_memory(memory, None);
+                        self.device.destroy_buffer(buffer, None);
+                    }
+                    return Err(format!("map_memory: {e}"));
+                }
+            };
+            unsafe {
+                std::ptr::copy_nonoverlapping(pattern.as_ptr(), mapped_ptr, pattern.len());
+                self.device.unmap_memory(memory);
+            }
+
+            let get_fd_info = vk::MemoryGetFdInfoKHR::builder()
+                .memory(memory)
+                .handle_type(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                .build();
+            let fd_result = unsafe { self.device.get_memory_fd_khr(&get_fd_info) };
+            // The exported fd independently keeps the DMA-BUF alive — it's
+            // safe to free the VkDeviceMemory + VkBuffer here.
+            unsafe {
+                self.device.destroy_buffer(buffer, None);
+                self.device.free_memory(memory, None);
+            }
+            fd_result.map_err(|e| format!("get_memory_fd_khr: {e}"))
+        }
+    }
+
+    impl Drop for TestDmaBufProducer {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = self.device.device_wait_idle();
+                self.device.destroy_device(None);
+                self.instance.destroy_instance(None);
+            }
+        }
     }
 
     #[test]
-    fn resolve_surface_mmap_readback_matches_host_pattern() {
+    fn resolve_surface_vulkan_import_readback() {
+        // 0. Skip cleanly if no Vulkan-capable device / driver missing the
+        //    DMA-BUF extensions (mirrors the `handle_escalate_op_end_to_end`
+        //    "no GPU, skip" pattern).
+        let producer = match TestDmaBufProducer::try_new() {
+            Ok(p) => p,
+            Err(reason) => {
+                eprintln!(
+                    "resolve_surface_vulkan_import_readback: skipping — {}",
+                    reason
+                );
+                return;
+            }
+        };
+
         // 1. Start a broker service in-process.
         let state = BrokerState::new();
-        let socket_path = tmp_socket_path("mmap-readback");
+        let socket_path = tmp_socket_path("vk-import-readback");
         let mut service =
             UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        // 2. Host side: check_in a memfd under a known pattern.
+        // 2. Host side: allocate a real Vulkan-exported DMA-BUF, fill with a
+        //    deterministic pattern, and check_in to the broker. The subprocess
+        //    will import this fd via VkImportMemoryFdInfoKHR (the path under
+        //    test) — memfd can't be used because NVIDIA's driver rejects
+        //    memfd fds as DMA_BUF_EXT handle types.
         let width = 32u32;
         let height = 4u32;
         let bpp = 4u32; // Bgra32 default
@@ -2016,7 +2635,17 @@ mod broker_linux_tests {
         for i in 0..size {
             pattern.push(((i * 17 + 3) & 0xFF) as u8);
         }
-        let send_fd = make_memfd_with(&pattern);
+        let send_fd = match producer.produce(&pattern) {
+            Ok(fd) => fd,
+            Err(reason) => {
+                eprintln!(
+                    "resolve_surface_vulkan_import_readback: skipping — producer: {}",
+                    reason
+                );
+                service.stop();
+                return;
+            }
+        };
 
         let host_stream =
             unix_socket_service::connect_to_broker(&socket_path).expect("host connect");
@@ -2059,9 +2688,15 @@ mod broker_linux_tests {
             width * bpp
         );
 
-        // 4. Lock → mmap; verify byte-for-byte match.
+        // 4. Lock → Vulkan import → vkMapMemory; verify byte-for-byte match
+        //    and that the Vulkan backend (not mmap) produced the mapping.
         let rc = unsafe { slpn_gpu_surface_lock(handle, 1) };
         assert_eq!(rc, 0, "slpn_gpu_surface_lock failed");
+        assert_eq!(
+            unsafe { slpn_gpu_surface_backend(handle) },
+            SURFACE_BACKEND_VULKAN,
+            "lock must take the Vulkan import path, not silently fall back"
+        );
         let base = unsafe { slpn_gpu_surface_base_address(handle) };
         assert!(!base.is_null(), "base_address null after lock");
         let mapped: &[u8] = unsafe { std::slice::from_raw_parts(base, size) };
@@ -2069,16 +2704,20 @@ mod broker_linux_tests {
 
         assert_eq!(unsafe { slpn_gpu_surface_unlock(handle, 1) }, 0);
 
-        // 5. Resolve a second time → cache hit path, same bytes.
+        // 5. Resolve a second time → cache hit path, same bytes, still Vulkan.
         let handle2 = unsafe { slpn_broker_resolve_surface(broker, c_pool_id.as_ptr()) };
         assert!(!handle2.is_null(), "cached resolve_surface returned null");
         assert_eq!(unsafe { slpn_gpu_surface_width(handle2) }, width);
         assert_eq!(unsafe { slpn_gpu_surface_lock(handle2, 1) }, 0);
+        assert_eq!(
+            unsafe { slpn_gpu_surface_backend(handle2) },
+            SURFACE_BACKEND_VULKAN
+        );
         let base2 = unsafe { slpn_gpu_surface_base_address(handle2) };
         let mapped2: &[u8] = unsafe { std::slice::from_raw_parts(base2, size) };
         assert_eq!(
             mapped2, pattern.as_slice(),
-            "cached handle should surface the same bytes"
+            "cached handle should surface the same bytes via Vulkan import"
         );
         assert_eq!(unsafe { slpn_gpu_surface_unlock(handle2, 1) }, 0);
         unsafe { slpn_gpu_surface_release(handle2) };
