@@ -19,5 +19,7 @@ pub(crate) struct LogRecord {
     pub pipeline_id: Option<String>,
     pub processor_id: Option<String>,
     pub rhi_op: Option<String>,
+    pub intercepted: bool,
+    pub channel: Option<String>,
     pub attrs: BTreeMap<String, serde_json::Value>,
 }

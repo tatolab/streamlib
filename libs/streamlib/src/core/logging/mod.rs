@@ -18,6 +18,8 @@ mod init;
 mod layer;
 mod paths;
 mod record;
+#[cfg(unix)]
+mod stdio_interceptor;
 mod worker;
 mod writer;
 

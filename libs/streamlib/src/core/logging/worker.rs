@@ -60,7 +60,11 @@ pub(crate) struct WorkerConfig {
     pub runtime_id: Option<Arc<RuntimeUniqueId>>,
     pub source: Source,
     pub tunables: ResolvedTunables,
-    pub stdout: bool,
+    /// Pretty-mirror sink. `None` disables the mirror entirely. When
+    /// the fd-level interceptor is active this MUST point at the
+    /// dup'd real-stdout handle, not at `std::io::stdout()`, otherwise
+    /// mirror output re-enters the pipe and recurses.
+    pub stdout_sink: Option<Box<dyn std::io::Write + Send>>,
     pub writer: Option<JsonlBatchedWriter>,
 }
 
@@ -79,7 +83,7 @@ pub(crate) fn spawn(config: WorkerConfig) -> WorkerHandle {
 
     let queue_worker = Arc::clone(&queue);
     let dropped_worker = Arc::clone(&dropped);
-    let stdout_enabled = config.stdout;
+    let mut stdout_sink = config.stdout_sink;
     let tunables = config.tunables;
     let source = config.source;
     let mut writer = config.writer;
@@ -94,11 +98,12 @@ pub(crate) fn spawn(config: WorkerConfig) -> WorkerHandle {
                 runtime_id_str,
                 source,
                 tunables,
-                stdout_enabled,
+                &mut stdout_sink,
                 &mut writer,
             );
             // Final fsync happens inside run_worker on clean shutdown.
             drop(writer);
+            drop(stdout_sink);
         })
         .expect("spawn drain worker thread");
 
@@ -118,18 +123,12 @@ fn run_worker(
     runtime_id: String,
     source: Source,
     tunables: ResolvedTunables,
-    stdout_enabled: bool,
+    stdout_sink: &mut Option<Box<dyn std::io::Write + Send>>,
     writer: &mut Option<JsonlBatchedWriter>,
 ) {
     let mut last_flush = Instant::now();
     let mut last_dropped_emit = Instant::now();
     let mut last_dropped_seen: u64 = 0;
-
-    let stdout = if stdout_enabled {
-        Some(std::io::stdout())
-    } else {
-        None
-    };
 
     let mut serialize_buf = Vec::with_capacity(1024);
     let mut pretty_buf = String::with_capacity(256);
@@ -150,7 +149,7 @@ fn run_worker(
             &runtime_id,
             source,
             writer,
-            stdout.as_ref(),
+            stdout_sink,
             &mut serialize_buf,
             &mut pretty_buf,
         );
@@ -172,6 +171,8 @@ fn run_worker(
                 pipeline_id: None,
                 processor_id: None,
                 rhi_op: None,
+                intercepted: false,
+                channel: None,
                 attrs: {
                     let mut m = std::collections::BTreeMap::new();
                     m.insert(
@@ -190,7 +191,7 @@ fn run_worker(
                 &runtime_id,
                 source,
                 writer,
-                stdout.as_ref(),
+                stdout_sink,
                 &mut serialize_buf,
                 &mut pretty_buf,
             );
@@ -221,7 +222,7 @@ fn run_worker(
                     &runtime_id,
                     source,
                     writer,
-                    stdout.as_ref(),
+                    stdout_sink,
                     &mut serialize_buf,
                     &mut pretty_buf,
                 );
@@ -240,7 +241,7 @@ fn drain_queue(
     runtime_id: &str,
     source: Source,
     writer: &mut Option<JsonlBatchedWriter>,
-    stdout: Option<&std::io::Stdout>,
+    stdout_sink: &mut Option<Box<dyn std::io::Write + Send>>,
     serialize_buf: &mut Vec<u8>,
     pretty_buf: &mut String,
 ) {
@@ -250,7 +251,7 @@ fn drain_queue(
             runtime_id,
             source,
             writer,
-            stdout,
+            stdout_sink,
             serialize_buf,
             pretty_buf,
         );
@@ -263,7 +264,7 @@ fn write_one(
     runtime_id: &str,
     source: Source,
     writer: &mut Option<JsonlBatchedWriter>,
-    stdout: Option<&std::io::Stdout>,
+    stdout_sink: &mut Option<Box<dyn std::io::Write + Send>>,
     serialize_buf: &mut Vec<u8>,
     pretty_buf: &mut String,
 ) {
@@ -281,8 +282,8 @@ fn write_one(
         rhi_op: record.rhi_op.clone(),
         source_ts: None,
         source_seq: None,
-        intercepted: false,
-        channel: None,
+        intercepted: record.intercepted,
+        channel: record.channel.clone(),
         attrs: record.attrs.clone(),
     };
 
@@ -295,13 +296,12 @@ fn write_one(
         let _ = w.append_record(serialize_buf);
     }
 
-    if let Some(stdout) = stdout {
+    if let Some(sink) = stdout_sink.as_mut() {
         pretty_buf.clear();
         format_pretty(record, runtime_id, source, pretty_buf);
-        let mut handle = stdout.lock();
-        let _ = handle.write_all(pretty_buf.as_bytes());
+        let _ = sink.write_all(pretty_buf.as_bytes());
         // Line-buffered: one flush per record so humans tail it live.
-        let _ = handle.flush();
+        let _ = sink.flush();
     }
 }
 

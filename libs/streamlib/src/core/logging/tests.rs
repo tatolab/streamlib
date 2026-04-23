@@ -339,6 +339,306 @@ fn hot_path_is_not_blocked_on_io() {
     clear_xdg_state_home();
 }
 
+/// Cargo's libtest installs a thread-local `OUTPUT_CAPTURE` hook
+/// that intercepts `println!` (and `io::stdout()` writes) BEFORE
+/// they reach fd 1, and propagates that capture to threads spawned
+/// via `std::thread::spawn`. So "test `println!`" can't reach fd 1
+/// from inside a cargo test — we simulate the fd-level write that
+/// `println!` performs in a non-test runtime binary by wrapping fd
+/// 1 as a `File` and using `writeln!`. This bypasses
+/// `OUTPUT_CAPTURE` and hits our interceptor pipe exactly as
+/// `println!` would in production.
+#[cfg(unix)]
+#[test]
+#[serial]
+fn rust_println_captured_via_fd_redirect() {
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdPrint"));
+    let config = StreamlibLoggingConfig {
+        service_name: "test".into(),
+        runtime_id: Some(Arc::clone(&runtime_id)),
+        stdout: false,
+        jsonl: true,
+        intercept_stdio: true,
+        tunables: LoggingTunables::default(),
+    };
+    let guard = init_for_tests(config).unwrap();
+
+    // Dup fd 1 so the File wrapper owns a separate fd we can close
+    // on drop without touching the interceptor's fd 1.
+    let dup_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
+    assert!(dup_fd >= 0, "libc::dup failed");
+    let mut f = unsafe { std::fs::File::from_raw_fd(dup_fd) };
+    writeln!(f, "sneaky-fd-interception").unwrap();
+    drop(f);
+
+    std::thread::sleep(Duration::from_millis(150));
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    assert!(
+        events.iter().any(|e| e.message == "sneaky-fd-interception"
+            && e.intercepted
+            && e.channel.as_deref() == Some("fd1")
+            && e.source == Source::Rust
+            && e.level == LogLevel::Warn),
+        "expected intercepted record (fd1, warn, rust); got {:#?}",
+        events
+    );
+
+    clear_xdg_state_home();
+}
+
+/// `libc::write(1, ...)` bypasses stdlib / libtest entirely and hits
+/// the OS-level fd, so the interceptor pipe catches it.
+#[cfg(unix)]
+#[test]
+#[serial]
+fn rust_c_printf_via_libc_captured() {
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdLibc"));
+    let config = StreamlibLoggingConfig {
+        service_name: "test".into(),
+        runtime_id: Some(Arc::clone(&runtime_id)),
+        stdout: false,
+        jsonl: true,
+        intercept_stdio: true,
+        tunables: LoggingTunables::default(),
+    };
+    let guard = init_for_tests(config).unwrap();
+
+    unsafe {
+        let bytes = b"hi-from-libc\n";
+        libc::write(
+            libc::STDOUT_FILENO,
+            bytes.as_ptr() as *const libc::c_void,
+            bytes.len(),
+        );
+    }
+
+    std::thread::sleep(Duration::from_millis(150));
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    assert!(
+        events.iter().any(|e| e.message == "hi-from-libc"
+            && e.intercepted
+            && e.channel.as_deref() == Some("fd1")
+            && e.source == Source::Rust
+            && e.level == LogLevel::Warn),
+        "expected intercepted libc::write record; got {:#?}",
+        events
+    );
+
+    clear_xdg_state_home();
+}
+
+/// With `intercept_stdio: false`, `libc::write(1, ...)` reaches the
+/// cargo test harness stdout as normal and does NOT appear as an
+/// intercepted record in the JSONL.
+#[cfg(unix)]
+#[test]
+#[serial]
+fn intercept_stdio_off_in_tests() {
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdOff"));
+    let config = StreamlibLoggingConfig {
+        service_name: "test".into(),
+        runtime_id: Some(Arc::clone(&runtime_id)),
+        stdout: false,
+        jsonl: true,
+        intercept_stdio: false,
+        tunables: LoggingTunables::default(),
+    };
+    let guard = init_for_tests(config).unwrap();
+
+    unsafe {
+        let bytes = b"off-bypass-interceptor\n";
+        libc::write(
+            libc::STDOUT_FILENO,
+            bytes.as_ptr() as *const libc::c_void,
+            bytes.len(),
+        );
+    }
+
+    std::thread::sleep(Duration::from_millis(50));
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.message == "off-bypass-interceptor" && e.intercepted),
+        "expected NO intercepted record when intercept_stdio=false; got {:#?}",
+        events
+    );
+
+    clear_xdg_state_home();
+}
+
+/// Writes to fd 2 land in JSONL with `channel: "fd2"`.
+#[cfg(unix)]
+#[test]
+#[serial]
+fn intercepted_fd2_uses_channel_fd2() {
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFd2"));
+    let config = StreamlibLoggingConfig {
+        service_name: "test".into(),
+        runtime_id: Some(Arc::clone(&runtime_id)),
+        stdout: false,
+        jsonl: true,
+        intercept_stdio: true,
+        tunables: LoggingTunables::default(),
+    };
+    let guard = init_for_tests(config).unwrap();
+
+    unsafe {
+        let bytes = b"stderr-interception-line\n";
+        libc::write(
+            libc::STDERR_FILENO,
+            bytes.as_ptr() as *const libc::c_void,
+            bytes.len(),
+        );
+    }
+
+    std::thread::sleep(Duration::from_millis(150));
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    assert!(
+        events.iter().any(|e| e.message == "stderr-interception-line"
+            && e.intercepted
+            && e.channel.as_deref() == Some("fd2")),
+        "expected intercepted record with channel=fd2; got {:#?}",
+        events
+    );
+
+    clear_xdg_state_home();
+}
+
+/// With both the pretty-mirror and the interceptor on, the mirror
+/// writes must go to the dup'd real-stdout handle, NOT to fd 1 — so
+/// they do not re-enter the pipe. Emitting one `tracing::info!`
+/// therefore produces exactly one JSONL record, never two (which
+/// would indicate a recursion).
+#[cfg(unix)]
+#[test]
+#[serial]
+fn no_redirect_loop_when_mirror_enabled() {
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdLoop"));
+    let config = StreamlibLoggingConfig {
+        service_name: "test".into(),
+        runtime_id: Some(Arc::clone(&runtime_id)),
+        stdout: true,
+        jsonl: true,
+        intercept_stdio: true,
+        tunables: LoggingTunables::default(),
+    };
+    let guard = init_for_tests(config).unwrap();
+
+    tracing::info!("unique-loop-token-xyz123");
+
+    std::thread::sleep(Duration::from_millis(150));
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    let matching: Vec<_> = events
+        .iter()
+        .filter(|e| e.message.contains("unique-loop-token-xyz123"))
+        .collect();
+    assert_eq!(
+        matching.len(),
+        1,
+        "expected exactly one record, got {}: {:#?}",
+        matching.len(),
+        matching
+    );
+    assert!(
+        !matching[0].intercepted,
+        "the one record should not be intercepted; got {:#?}",
+        matching[0]
+    );
+
+    clear_xdg_state_home();
+}
+
+/// Dropping the guard restores fds 1/2, closes the pipe write ends,
+/// and joins the reader threads quickly — no stranded threads on
+/// process exit.
+#[cfg(unix)]
+#[test]
+#[serial]
+fn reader_thread_shuts_down_on_runtime_drop() {
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdShut"));
+    let config = StreamlibLoggingConfig {
+        service_name: "test".into(),
+        runtime_id: Some(Arc::clone(&runtime_id)),
+        stdout: false,
+        jsonl: true,
+        intercept_stdio: true,
+        tunables: LoggingTunables::default(),
+    };
+    let guard = init_for_tests(config).unwrap();
+
+    // Put the readers through at least one wake-up so we're verifying
+    // shutdown from a live-reader state, not a fresh-spawn state.
+    unsafe {
+        let bytes = b"pre-shutdown\n";
+        libc::write(
+            libc::STDOUT_FILENO,
+            bytes.as_ptr() as *const libc::c_void,
+            bytes.len(),
+        );
+    }
+    std::thread::sleep(Duration::from_millis(50));
+
+    let start = std::time::Instant::now();
+    drop(guard);
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "guard drop took {:?} — reader threads likely stranded",
+        elapsed
+    );
+
+    clear_xdg_state_home();
+}
+
 #[test]
 #[serial]
 fn burst_surfaces_dropped_counter_record() {

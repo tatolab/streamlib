@@ -111,14 +111,17 @@ impl StreamlibLoggingConfig {
         }
     }
 
-    /// Full config for a long-lived runtime: stdout + JSONL to disk.
+    /// Full config for a long-lived runtime: stdout + JSONL to disk,
+    /// with fd-level stdio interception on by default so raw
+    /// `println!` / `printf` output lands in the JSONL flagged as
+    /// intercepted.
     pub fn for_runtime(service_name: impl Into<String>, runtime_id: Arc<RuntimeUniqueId>) -> Self {
         Self {
             service_name: service_name.into(),
             runtime_id: Some(runtime_id),
             stdout: true,
             jsonl: true,
-            intercept_stdio: false,
+            intercept_stdio: true,
             tunables: LoggingTunables::default(),
         }
     }
