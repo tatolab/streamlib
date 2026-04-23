@@ -124,7 +124,8 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
 
             let runner_path = sdk_path.join("subprocess_runner.ts");
 
-            let mut child = Command::new(&deno_binary)
+            let mut command = Command::new(&deno_binary);
+            command
                 .arg("run")
                 .arg("--allow-ffi")
                 .arg("--allow-read")
@@ -143,8 +144,12 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 )
                 .env("STREAMLIB_NATIVE_LIB_PATH", &native_lib_path)
                 .env("STREAMLIB_PROCESSOR_ID", &self.processor_id)
-                .env("STREAMLIB_EXECUTION_MODE", execution_mode)
-                .spawn()
+                .env("STREAMLIB_EXECUTION_MODE", execution_mode);
+
+            #[cfg(target_os = "linux")]
+            command.env("STREAMLIB_BROKER_SOCKET", ctx.surface_socket_path());
+
+            let mut child = command.spawn()
                 .map_err(|e| {
                     StreamError::Runtime(format!(
                         "Failed to spawn Deno subprocess for '{}': {}. Deno: '{}'",

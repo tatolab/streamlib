@@ -20,10 +20,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use streamlib_broker::unix_socket_service::{
-    connect_to_broker, send_request, UnixSocketSurfaceService,
-};
-use streamlib_broker::BrokerState;
+use streamlib::core::runtime::StreamRuntime;
+use streamlib_broker::unix_socket_service::{connect_to_broker, send_request};
 
 #[path = "common/polyglot_dma_buf_producer.rs"]
 mod polyglot_dma_buf_producer;
@@ -52,21 +50,6 @@ fn deno_available() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-}
-
-fn tmp_socket_path(label: &str) -> PathBuf {
-    let mut p = std::env::temp_dir();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    p.push(format!(
-        "streamlib-polyglot-deno-test-{}-{}-{}.sock",
-        label,
-        std::process::id(),
-        nanos
-    ));
-    p
 }
 
 /// `sldn_gpu_surface_backend` value that indicates the Vulkan import path
@@ -188,11 +171,11 @@ fn deno_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         }
     };
 
-    let state = BrokerState::new();
-    let socket_path = tmp_socket_path("deno-subprocess");
-    let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
-    service.start().expect("service start");
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Stand up a real StreamRuntime — owns the per-runtime surface-sharing
+    // socket. No external broker daemon, no manual fixture.
+    let runtime = StreamRuntime::new().expect("StreamRuntime::new");
+    let socket_path = runtime.surface_socket_path().to_path_buf();
+    let runtime_id = runtime.runtime_id().to_string();
 
     let width: u32 = 64;
     let height: u32 = 4;
@@ -209,7 +192,6 @@ fn deno_subprocess_resolves_and_vulkan_imports_host_published_surface() {
                 "polyglot_linux_check_out_deno: Vulkan DMA-BUF producer failed — skipping ({})",
                 reason
             );
-            service.stop();
             return;
         }
     };
@@ -217,7 +199,7 @@ fn deno_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     let host_stream = connect_to_broker(&socket_path).expect("host connect");
     let check_in_req = serde_json::json!({
         "op": "check_in",
-        "runtime_id": "deno-host-polyglot-test",
+        "runtime_id": runtime_id,
         "width": width,
         "height": height,
         "format": "Bgra32",
@@ -267,7 +249,10 @@ fn deno_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
-    service.stop();
+    // Drop the runtime — UnixSocketSurfaceService::Drop tears the service
+    // down and removes the socket file. Explicit drop matches the prior
+    // service.stop() placement.
+    drop(runtime);
 
     assert!(
         output.status.success(),

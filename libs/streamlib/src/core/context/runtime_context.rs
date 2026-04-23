@@ -35,6 +35,12 @@ pub struct RuntimeContext {
     iceoryx2_node: Iceoryx2Node,
     /// Audio clock for synchronized audio timing.
     audio_clock: SharedAudioClock,
+    /// Per-runtime surface-sharing Unix socket path. Polyglot subprocesses
+    /// receive this via the `STREAMLIB_BROKER_SOCKET` env var so their
+    /// `streamlib-broker-client` connects to the runtime-internal service
+    /// rather than an external daemon.
+    #[cfg(target_os = "linux")]
+    surface_socket_path: std::path::PathBuf,
     /// Shared MoQ sessions (one publish + one subscribe per runtime).
     #[cfg(feature = "moq")]
     moq_sessions: crate::core::streaming::SharedMoqSessions,
@@ -49,6 +55,7 @@ impl RuntimeContext {
         tokio_handle: tokio::runtime::Handle,
         iceoryx2_node: Iceoryx2Node,
         audio_clock: SharedAudioClock,
+        #[cfg(target_os = "linux")] surface_socket_path: std::path::PathBuf,
     ) -> Self {
         Self {
             gpu,
@@ -62,6 +69,8 @@ impl RuntimeContext {
             tokio_handle,
             iceoryx2_node,
             audio_clock,
+            #[cfg(target_os = "linux")]
+            surface_socket_path,
         }
     }
 
@@ -100,6 +109,14 @@ impl RuntimeContext {
     /// Get the runtime's unique identifier.
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
         &self.runtime_id
+    }
+
+    /// Per-runtime surface-sharing Unix socket path. Polyglot subprocess
+    /// spawn ops set `STREAMLIB_BROKER_SOCKET` to this so the child's
+    /// `streamlib-broker-client` connects to the runtime-internal service.
+    #[cfg(target_os = "linux")]
+    pub fn surface_socket_path(&self) -> &std::path::Path {
+        &self.surface_socket_path
     }
 
     /// Get the processor's unique identifier (None for shared/global context).
@@ -155,6 +172,8 @@ impl RuntimeContext {
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
             audio_clock: Arc::clone(&self.audio_clock),
+            #[cfg(target_os = "linux")]
+            surface_socket_path: self.surface_socket_path.clone(),
             #[cfg(feature = "moq")]
             moq_sessions: self.moq_sessions.clone(),
         }
@@ -172,6 +191,8 @@ impl RuntimeContext {
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
             audio_clock: Arc::clone(&self.audio_clock),
+            #[cfg(target_os = "linux")]
+            surface_socket_path: self.surface_socket_path.clone(),
             #[cfg(feature = "moq")]
             moq_sessions: self.moq_sessions.clone(),
         }
@@ -665,6 +686,10 @@ impl<'a> RuntimeContextFullAccess<'a> {
     }
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
         self.base.runtime_id()
+    }
+    #[cfg(target_os = "linux")]
+    pub fn surface_socket_path(&self) -> &std::path::Path {
+        self.base.surface_socket_path()
     }
     pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
         self.base.processor_id()

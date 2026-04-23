@@ -122,7 +122,8 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
 
             let runtime_id = ctx.runtime_id().to_string();
 
-            let mut child = Command::new(&python_executable)
+            let mut command = Command::new(&python_executable);
+            command
                 .arg("-m")
                 .arg("streamlib.subprocess_runner")
                 .stdin(Stdio::piped())
@@ -135,8 +136,12 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 .env("STREAMLIB_PYTHON_NATIVE_LIB", &self.native_lib_path)
                 .env("STREAMLIB_PROCESSOR_ID", &self.processor_id)
                 .env("STREAMLIB_EXECUTION_MODE", execution_mode)
-                .env("STREAMLIB_RUNTIME_ID", &runtime_id)
-                .spawn()
+                .env("STREAMLIB_RUNTIME_ID", &runtime_id);
+
+            #[cfg(target_os = "linux")]
+            command.env("STREAMLIB_BROKER_SOCKET", ctx.surface_socket_path());
+
+            let mut child = command.spawn()
                 .map_err(|e| {
                     StreamError::Runtime(format!(
                         "Failed to spawn Python native subprocess for '{}': {}. Python: '{}'",
