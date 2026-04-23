@@ -490,6 +490,13 @@ impl GpuContext {
         height: u32,
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+        tracing::debug!(
+            rhi_op = "acquire_pixel_buffer",
+            width,
+            height,
+            format = ?format,
+            "GpuContext::acquire_pixel_buffer"
+        );
         let surface_store = self.surface_store.lock().unwrap();
         self.pixel_buffer_pool_manager
             .acquire(width, height, format, surface_store.as_ref())
@@ -655,6 +662,13 @@ impl GpuContext {
 
     /// Acquire a texture from the pool.
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
+        tracing::debug!(
+            rhi_op = "acquire_texture",
+            width = desc.width,
+            height = desc.height,
+            format = ?desc.format,
+            "GpuContext::acquire_texture"
+        );
         self.texture_pool.acquire(desc)
     }
 

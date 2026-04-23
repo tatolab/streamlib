@@ -118,9 +118,11 @@ pub struct StreamRuntime {
     /// (`$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`).
     #[cfg(target_os = "linux")]
     pub(crate) surface_socket_path: std::path::PathBuf,
-    /// Telemetry guard — keeps the OTel pipeline alive for the runtime's lifetime.
+    /// Logging guard — keeps the drain worker alive for the runtime's
+    /// lifetime. On drop, flushes buffered JSONL records and
+    /// `fdatasync`s the log file.
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-    _telemetry_guard: streamlib_telemetry::TelemetryGuard,
+    _logging_guard: crate::core::logging::StreamlibLoggingGuard,
 }
 
 impl StreamRuntime {
@@ -147,17 +149,21 @@ impl StreamRuntime {
         // Generate runtime ID first — used as service_name for telemetry.
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
 
-        // Stand up the runtime's logging pipeline (stdout-only — runtime is an
-        // ephemeral log producer; persistent on-disk logging is filed
-        // separately under #430).
+        // Stand up the runtime's unified logging pathway: `tracing` →
+        // bounded lossy channel → drain worker → line-buffered pretty
+        // stdout + batched JSONL file at
+        // `$XDG_STATE_HOME/streamlib/logs/<runtime_id>-<started_at>.jsonl`.
+        // See `docs/logging-schema.md` for the schema (the durable
+        // interface contract) and `streamlib::core::logging` for the
+        // implementation.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-        let _telemetry_guard =
-            streamlib_telemetry::init_telemetry(streamlib_telemetry::TelemetryConfig {
-                service_name: format!("runtime:{}", runtime_id),
-                file_log_path: None,
-                stdout_logging: true,
-            })
-            .map_err(|e| StreamError::Runtime(format!("Failed to initialize telemetry: {}", e)))?;
+        let _logging_guard = crate::core::logging::init(
+            crate::core::logging::StreamlibLoggingConfig::for_runtime(
+                format!("runtime:{}", runtime_id),
+                Arc::clone(&runtime_id),
+            ),
+        )
+        .map_err(|e| StreamError::Runtime(format!("Failed to initialize logging: {}", e)))?;
         tracing::info!("Creating StreamRuntime with ID: {}", runtime_id);
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
@@ -217,7 +223,7 @@ impl StreamRuntime {
             #[cfg(target_os = "linux")]
             surface_socket_path,
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-            _telemetry_guard,
+            _logging_guard,
         }))
     }
 
@@ -236,6 +242,14 @@ impl StreamRuntime {
     /// Unique identifier for this runtime instance.
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
         &self.runtime_id
+    }
+
+    /// Path of the JSONL log file this runtime is writing to, if any.
+    /// Returns `None` on platforms where the logging pathway is not
+    /// installed, or when the caller opted out of JSONL output.
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
+    pub fn jsonl_log_path(&self) -> Option<&std::path::Path> {
+        self._logging_guard.jsonl_path()
     }
 
     /// Update a processor's configuration at runtime.

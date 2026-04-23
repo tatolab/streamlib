@@ -30,7 +30,6 @@ tokio.workspace = true
 
 # Logging
 tracing.workspace = true
-streamlib-telemetry.workspace = true
 
 # Home directory detection
 dirs = "6.0"

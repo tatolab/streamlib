@@ -22,6 +22,9 @@ pub use serde_json;
 pub mod core;
 pub mod iceoryx2;
 
+/// Unified logging pathway — public re-export of [`core::logging`].
+pub use core::logging;
+
 /// Generated types from JTD schemas.
 /// Run `cargo xtask generate-schemas` to regenerate.
 pub mod _generated_;

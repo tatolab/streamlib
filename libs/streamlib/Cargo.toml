@@ -35,7 +35,7 @@ streamlib-ipc-types = { path = "../streamlib-ipc-types" }
 thiserror.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
-tracing-subscriber = "0.3"
+tracing-subscriber.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync"] }
 crossbeam-channel = "0.5"
 inventory = "0.3"
@@ -131,7 +131,6 @@ pollster = "0.3"  # For blocking on async
 cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 mach2 = "0.4"  # Mach kernel API for thread priorities and timing
 opus = "0.3"  # Opus audio codec encoder/decoder
-streamlib-telemetry.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 vulkanalia = { workspace = true }
@@ -145,7 +144,6 @@ winit = "0.30"  # Window creation and event loop for display processor
 raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 # Wire-format helpers for the per-runtime surface-sharing socket
 streamlib-broker-client = { path = "../streamlib-broker-client" }
-streamlib-telemetry.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"

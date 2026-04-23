@@ -183,7 +183,6 @@ streamlib/
 │   ├── streamlib-broker-client/  # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
 │   ├── streamlib-cli/            # CLI (streamlib command)
 │   ├── streamlib-runtime/        # Standalone runtime binary
-│   ├── streamlib-telemetry/      # tracing-subscriber pipeline for runtime processes
 │   └── streamlib-macros/         # Procedural macros
 ├── examples/                     # Example applications
 └── docs/                         # Documentation
