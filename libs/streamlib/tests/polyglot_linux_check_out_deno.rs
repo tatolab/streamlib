@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use streamlib::core::runtime::StreamRuntime;
-use streamlib_broker::unix_socket_service::{connect_to_broker, send_request};
+use streamlib_broker_client::{connect_to_broker, send_request};
 
 #[path = "common/polyglot_dma_buf_producer.rs"]
 mod polyglot_dma_buf_producer;

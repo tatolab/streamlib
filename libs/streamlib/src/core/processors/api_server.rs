@@ -21,11 +21,7 @@ use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
-use std::path::PathBuf;
 use std::sync::Arc;
-use streamlib_broker::proto::broker_service_client::BrokerServiceClient;
-use streamlib_broker::proto::{RegisterRuntimeRequest, UnregisterRuntimeRequest};
-use streamlib_broker::GRPC_PORT;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use utoipa::OpenApi;
@@ -110,20 +106,6 @@ fn generate_runtime_name() -> String {
     let adj = ADJECTIVES[(hash as usize) % ADJECTIVES.len()];
     let noun = NOUNS[((hash >> 32) as usize) % NOUNS.len()];
     format!("{}-{}", adj, noun)
-}
-
-/// Get the broker gRPC endpoint from environment or default.
-fn broker_endpoint() -> String {
-    let port = std::env::var("STREAMLIB_BROKER_PORT")
-        .ok()
-        .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(GRPC_PORT);
-    format!("http://127.0.0.1:{}", port)
-}
-
-/// Get the default logs directory (~/.streamlib/logs).
-fn default_logs_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".streamlib").join("logs"))
 }
 
 #[derive(Clone)]
@@ -262,22 +244,7 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
             .unwrap_or_else(generate_runtime_name);
         self.resolved_name = Some(runtime_name.clone());
 
-        // Use the runtime's own ID so that gRPC registration matches
-        // the runtime_id used by SurfaceStore for XPC surface registration.
-        let runtime_id = ctx.runtime_id().to_string();
-        self.runtime_id = Some(runtime_id.clone());
-
-        // Resolve log path (from config or derive from name)
-        let log_path: PathBuf = self
-            .config
-            .log_path
-            .clone()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                default_logs_dir()
-                    .unwrap_or_else(|| PathBuf::from("/tmp/streamlib/logs"))
-                    .join(format!("{}.log", runtime_name))
-            });
+        self.runtime_id = Some(ctx.runtime_id().to_string());
 
         // Build OpenAPI router with documented routes
         let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
@@ -359,45 +326,6 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
             api_endpoint
         );
 
-        // Register with broker (non-blocking, continues even if broker unavailable)
-        let log_path_str = log_path.to_string_lossy().to_string();
-        let pid = std::process::id() as i32;
-        let endpoint = broker_endpoint();
-        let reg_runtime_id = runtime_id.clone();
-        let reg_name = runtime_name.clone();
-        let reg_api_endpoint = api_endpoint.clone();
-
-        ctx.tokio_handle().spawn(async move {
-            match BrokerServiceClient::connect(endpoint.clone()).await {
-                Ok(mut client) => {
-                    match client
-                        .register_runtime(RegisterRuntimeRequest {
-                            runtime_id: reg_runtime_id,
-                            name: reg_name,
-                            api_endpoint: reg_api_endpoint,
-                            log_path: log_path_str,
-                            pid,
-                        })
-                        .await
-                    {
-                        Ok(_) => {
-                            tracing::info!("Registered with broker at {}", endpoint);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to register with broker: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Could not connect to broker at {}: {}. Runtime will run standalone.",
-                        endpoint,
-                        e
-                    );
-                }
-            }
-        });
-
         // Spawn the HTTP server
         ctx.tokio_handle().spawn(async move {
             axum::serve(listener, app)
@@ -412,27 +340,7 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
     }
 
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Unregister from broker before stopping
-        if let Some(runtime_id) = self.runtime_id.take() {
-            let endpoint = broker_endpoint();
-            // Use a new tokio runtime for cleanup since we may not have access to the original
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build();
-            if let Ok(rt) = rt {
-                rt.block_on(async {
-                    if let Ok(mut client) = BrokerServiceClient::connect(endpoint).await {
-                        let _ = client
-                            .unregister_runtime(UnregisterRuntimeRequest {
-                                runtime_id: runtime_id.clone(),
-                            })
-                            .await;
-                        tracing::info!("Unregistered runtime {} from broker", runtime_id);
-                    }
-                });
-            }
-        }
-
+        self.runtime_id.take();
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }

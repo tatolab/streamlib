@@ -96,7 +96,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy -p streamlib -p streamlib-broker --features ffmpeg -- -D warnings
+        run: cargo clippy -p streamlib --features ffmpeg -- -D warnings
 
       - name: Check streamlib
         run: cargo check -p streamlib
@@ -106,6 +106,3 @@ jobs:
 
       - name: Run unit tests
         run: cargo test -p streamlib --lib
-
-      - name: Check streamlib-broker
-        run: cargo check -p streamlib-broker

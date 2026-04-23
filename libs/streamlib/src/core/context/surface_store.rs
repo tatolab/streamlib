@@ -876,7 +876,7 @@ impl SurfaceStore {
         })?;
 
         let (response, _response_fd): (serde_json::Value, _) =
-            streamlib_broker::unix_socket_service::send_request(stream, &request, Some(fd))
+            streamlib_broker_client::send_request(stream, &request, Some(fd))
                 .map_err(|e| {
                     StreamError::Configuration(format!("Unix socket check_in failed: {}", e))
                 })?;
@@ -938,7 +938,7 @@ impl SurfaceStore {
         })?;
 
         let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
-            streamlib_broker::unix_socket_service::send_request(stream, &request, None).map_err(
+            streamlib_broker_client::send_request(stream, &request, None).map_err(
                 |e| StreamError::Configuration(format!("Unix socket check_out failed: {}", e)),
             )?;
 
@@ -1000,7 +1000,7 @@ impl SurfaceStore {
         })?;
 
         let (response, _): (serde_json::Value, _) =
-            streamlib_broker::unix_socket_service::send_request(stream, &request, Some(fd))
+            streamlib_broker_client::send_request(stream, &request, Some(fd))
                 .map_err(|e| {
                     StreamError::Configuration(format!("Unix socket register failed: {}", e))
                 })?;
@@ -1045,7 +1045,7 @@ impl SurfaceStore {
         })?;
 
         let (response, _): (serde_json::Value, _) =
-            streamlib_broker::unix_socket_service::send_request(stream, &request, Some(fd))
+            streamlib_broker_client::send_request(stream, &request, Some(fd))
                 .map_err(|e| {
                     StreamError::Configuration(format!("Unix socket register_texture failed: {}", e))
                 })?;
@@ -1078,7 +1078,7 @@ impl SurfaceStore {
         })?;
 
         let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
-            streamlib_broker::unix_socket_service::send_request(stream, &request, None).map_err(
+            streamlib_broker_client::send_request(stream, &request, None).map_err(
                 |e| StreamError::Configuration(format!("Unix socket lookup failed: {}", e)),
             )?;
 
@@ -1116,7 +1116,7 @@ impl SurfaceStore {
         })?;
 
         let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
-            streamlib_broker::unix_socket_service::send_request(stream, &request, None).map_err(
+            streamlib_broker_client::send_request(stream, &request, None).map_err(
                 |e| StreamError::Configuration(format!("Unix socket lookup_texture failed: {}", e)),
             )?;
 
@@ -1209,7 +1209,7 @@ impl SurfaceStore {
             None => return Ok(()), // Already disconnected
         };
 
-        let _ = streamlib_broker::unix_socket_service::send_request(stream, &request, None);
+        let _ = streamlib_broker_client::send_request(stream, &request, None);
         Ok(())
     }
 

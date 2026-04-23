@@ -26,5 +26,4 @@ export PYTHONHOME="/opt/homebrew/opt/python@3.12/Frameworks/Python.framework/Ver
 # You generally don't need to edit these manually
 
 # export STREAMLIB_HOME="/path/to/repo/.streamlib"
-# export STREAMLIB_BROKER_PORT="50052"
 # export STREAMLIB_DEV_MODE="1"
