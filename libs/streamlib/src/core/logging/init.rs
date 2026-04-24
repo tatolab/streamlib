@@ -20,6 +20,7 @@ use crate::core::logging::config::{ResolvedTunables, StreamlibLoggingConfig};
 use crate::core::logging::event::Source;
 use crate::core::logging::layer::JsonlSinkLayer;
 use crate::core::logging::paths::runtime_log_path;
+use crate::core::logging::polyglot_sink::{self, PolyglotLogSink};
 #[cfg(unix)]
 use crate::core::logging::stdio_interceptor::{self, StdioInterceptor};
 use crate::core::logging::worker::{spawn as spawn_worker, WorkerConfig, WorkerHandle, WorkerSignal};
@@ -71,6 +72,9 @@ impl Drop for StreamlibLoggingGuard {
         // Restore the previous thread-local dispatcher first so no new
         // events reach our queue while we're draining.
         drop(self.default_scope.take());
+        // Clear the polyglot sink before shutting the worker down so
+        // late-arriving escalate-IPC log pushes can't race a dead queue.
+        polyglot_sink::uninstall();
         // Drop the interceptor before the worker: restoring fds 1/2
         // unblocks the reader threads with EOF, so their final
         // intercepted events land in the worker queue while the
@@ -195,6 +199,12 @@ fn build_components(
         stdout_sink,
         writer,
     });
+
+    // Install the process-wide polyglot sink so escalate-IPC log records
+    // relayed from Python/Deno subprocesses converge on the same drain
+    // worker as local tracing events. See [`polyglot_sink`] for why this
+    // bypasses `tracing::*!()` rather than routing through it.
+    polyglot_sink::install(Arc::new(PolyglotLogSink::from_worker(&worker)));
 
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info"));

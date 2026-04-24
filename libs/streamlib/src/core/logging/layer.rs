@@ -76,6 +76,12 @@ where
             intercepted: visitor.intercepted,
             channel: visitor.channel,
             attrs: visitor.attrs,
+            // Tracing events are always local call-site events; they
+            // inherit the worker's configured source and have no
+            // subprocess timestamp / sequence number.
+            source: None,
+            source_ts: None,
+            source_seq: None,
         };
 
         self.enqueue(record);

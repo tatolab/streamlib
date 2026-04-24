@@ -14,14 +14,15 @@
 //! owned by `schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`
 //! and the generated Rust types live in `_generated_`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
 use crate::_generated_::com_streamlib_escalate_request::{
-    EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
-    EscalateRequestReleaseHandle,
+    EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture, EscalateRequestLog,
+    EscalateRequestLogLevel, EscalateRequestLogSource, EscalateRequestReleaseHandle,
 };
 use crate::_generated_::com_streamlib_escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
@@ -29,6 +30,7 @@ use crate::_generated_::com_streamlib_escalate_response::{
 use crate::_generated_::{EscalateRequest, EscalateResponse};
 use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::context::GpuContextLimitedAccess;
+use crate::core::logging::{push_polyglot_record, LogLevel, LogRecord, Source};
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat, TextureUsages};
 
 #[cfg(test)]
@@ -41,11 +43,15 @@ pub(crate) const ESCALATE_REQUEST_RPC: &str = "escalate_request";
 /// Wire tag for responses written back to the subprocess.
 pub(crate) const ESCALATE_RESPONSE_RPC: &str = "escalate_response";
 
-fn request_id(op: &EscalateRequest) -> &str {
+/// Extract `request_id` from a request/response-shaped op. Returns `None`
+/// for fire-and-forget ops ([`EscalateRequest::Log`]), which carry no
+/// correlation token because the host never writes a reply.
+fn request_id(op: &EscalateRequest) -> Option<&str> {
     match op {
-        EscalateRequest::AcquirePixelBuffer(p) => &p.request_id,
-        EscalateRequest::AcquireTexture(p) => &p.request_id,
-        EscalateRequest::ReleaseHandle(p) => &p.request_id,
+        EscalateRequest::AcquirePixelBuffer(p) => Some(&p.request_id),
+        EscalateRequest::AcquireTexture(p) => Some(&p.request_id),
+        EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
+        EscalateRequest::Log(_) => None,
     }
 }
 
@@ -104,7 +110,11 @@ impl EscalateHandleRegistry {
     }
 }
 
-/// Dispatch an [`EscalateRequest`] against `sandbox` and produce a response.
+/// Dispatch an [`EscalateRequest`] against `sandbox`. Returns
+/// `Some(EscalateResponse)` for request/response ops so the bridge can
+/// write a reply; returns `None` for fire-and-forget ops
+/// ([`EscalateRequest::Log`]) whose effect lands directly in the unified
+/// logging pathway and needs no correlated reply.
 ///
 /// Never panics — errors inside `escalate()` become [`EscalateResponse::Err`]
 /// with the original request_id preserved so the subprocess can correlate.
@@ -117,15 +127,15 @@ pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
     op: EscalateRequest,
-) -> EscalateResponse {
-    let rid = request_id(&op).to_string();
+) -> Option<EscalateResponse> {
+    let rid = request_id(&op).map(str::to_string).unwrap_or_default();
     match op {
         EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
             request_id: _,
             width,
             height,
             format,
-        }) => match parse_pixel_format(&format) {
+        }) => Some(match parse_pixel_format(&format) {
             Ok(parsed) => {
                 let acquired = sandbox.escalate(|full| {
                     let (pool_id, buffer) = full.acquire_pixel_buffer(width, height, parsed)?;
@@ -154,7 +164,7 @@ pub(crate) fn handle_escalate_op(
                 request_id: rid,
                 message: e,
             }),
-        },
+        }),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: _,
             width,
@@ -165,19 +175,19 @@ pub(crate) fn handle_escalate_op(
             let parsed_format = match parse_texture_format(&format) {
                 Ok(f) => f,
                 Err(e) => {
-                    return EscalateResponse::Err(EscalateResponseErr {
+                    return Some(EscalateResponse::Err(EscalateResponseErr {
                         request_id: rid,
                         message: e,
-                    });
+                    }));
                 }
             };
             let parsed_usage = match parse_texture_usages(&usage) {
                 Ok(u) => u,
                 Err(e) => {
-                    return EscalateResponse::Err(EscalateResponseErr {
+                    return Some(EscalateResponse::Err(EscalateResponseErr {
                         request_id: rid,
                         message: e,
-                    });
+                    }));
                 }
             };
             let desc = TexturePoolDescriptor::new(width, height, parsed_format)
@@ -187,7 +197,7 @@ pub(crate) fn handle_escalate_op(
                 let handle_id = assign_texture_handle_id(full, &texture)?;
                 Ok((handle_id, texture))
             });
-            match acquired {
+            Some(match acquired {
                 Ok((handle_id, texture)) => {
                     registry.insert_texture(handle_id.clone(), texture);
                     EscalateResponse::Ok(EscalateResponseOk {
@@ -203,14 +213,14 @@ pub(crate) fn handle_escalate_op(
                     request_id: rid,
                     message: format!("acquire_texture failed: {e}"),
                 }),
-            }
+            })
         }
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: _,
             handle_id,
         }) => {
             let removed = registry.remove_handle(&handle_id);
-            if removed {
+            Some(if removed {
                 release_broker_surface(sandbox, &handle_id);
                 EscalateResponse::Ok(EscalateResponseOk {
                     request_id: rid,
@@ -225,9 +235,67 @@ pub(crate) fn handle_escalate_op(
                     request_id: rid,
                     message: format!("handle_id '{handle_id}' not found in registry"),
                 })
-            }
+            })
+        }
+        EscalateRequest::Log(log_op) => {
+            push_polyglot_record(log_record_from_wire(log_op));
+            None
         }
     }
+}
+
+/// Convert a wire-format [`EscalateRequestLog`] into a host-side
+/// [`LogRecord`]. Stamps `host_ts` at the moment of receipt — the
+/// subprocess-supplied `source_ts` is advisory only and never used for
+/// ordering. Parses `source_seq` from its string wire encoding (JTD has
+/// no native u64); silently drops the value on parse failure so a
+/// malformed subprocess can't block log delivery.
+fn log_record_from_wire(log: EscalateRequestLog) -> LogRecord {
+    let source = match log.source {
+        EscalateRequestLogSource::Python => Source::Python,
+        EscalateRequestLogSource::Deno => Source::Deno,
+    };
+    let level = match log.level {
+        EscalateRequestLogLevel::Trace => LogLevel::Trace,
+        EscalateRequestLogLevel::Debug => LogLevel::Debug,
+        EscalateRequestLogLevel::Info => LogLevel::Info,
+        EscalateRequestLogLevel::Warn => LogLevel::Warn,
+        EscalateRequestLogLevel::Error => LogLevel::Error,
+    };
+    let target = match source {
+        Source::Python => "streamlib::polyglot::python",
+        Source::Deno => "streamlib::polyglot::deno",
+        Source::Rust => "streamlib::polyglot",
+    };
+    let source_seq = log.source_seq.parse::<u64>().ok();
+    let attrs: BTreeMap<String, serde_json::Value> = log
+        .attrs
+        .into_iter()
+        .map(|(k, v)| (k, v.unwrap_or(serde_json::Value::Null)))
+        .collect();
+
+    LogRecord {
+        host_ts: now_ns(),
+        level,
+        target: target.to_string(),
+        message: log.message,
+        pipeline_id: log.pipeline_id,
+        processor_id: log.processor_id,
+        rhi_op: None,
+        intercepted: log.intercepted,
+        channel: log.channel,
+        attrs,
+        source: Some(source),
+        source_ts: Some(log.source_ts),
+        source_seq,
+    }
+}
+
+fn now_ns() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 /// Resolve the `handle_id` returned to the subprocess for a pixel buffer.
@@ -482,7 +550,9 @@ pub(crate) fn process_bridge_message(
 ) -> Option<serde_json::Value> {
     let parsed = try_parse_escalate_request(value)?;
     let response = match parsed {
-        Ok(op) => handle_escalate_op(sandbox, registry, op),
+        // Fire-and-forget ops (log) return `None` from the handler — no
+        // reply is written back to the subprocess.
+        Ok(op) => handle_escalate_op(sandbox, registry, op)?,
         Err(err) => err.into_response(),
     };
     Some(envelope_response(response))
@@ -681,7 +751,8 @@ mod tests {
                 height: 240,
                 format: "bgra".to_string(),
             });
-        let response = handle_escalate_op(&sandbox, &registry, acquire);
+        let response = handle_escalate_op(&sandbox, &registry, acquire)
+            .expect("acquire_pixel_buffer must produce a response");
         let buffer_handle_id = match response {
             EscalateResponse::Ok(ref ok) => {
                 assert_eq!(ok.request_id, "req-1");
@@ -709,7 +780,8 @@ mod tests {
                     "copy_src".to_string(),
                 ],
             });
-        let response = handle_escalate_op(&sandbox, &registry, acquire_tex);
+        let response = handle_escalate_op(&sandbox, &registry, acquire_tex)
+            .expect("acquire_texture must produce a response");
         let texture_handle_id = match response {
             EscalateResponse::Ok(ref ok) => {
                 assert_eq!(ok.request_id, "req-tex");
@@ -736,7 +808,9 @@ mod tests {
             request_id: "req-tex-rel".to_string(),
             handle_id: texture_handle_id.clone(),
         });
-        match handle_escalate_op(&sandbox, &registry, release_tex) {
+        match handle_escalate_op(&sandbox, &registry, release_tex)
+            .expect("release_handle must produce a response")
+        {
             EscalateResponse::Ok(ok) => {
                 assert_eq!(ok.request_id, "req-tex-rel");
                 assert_eq!(ok.handle_id, texture_handle_id);
@@ -749,7 +823,8 @@ mod tests {
             request_id: "req-2".to_string(),
             handle_id: buffer_handle_id.clone(),
         });
-        let response = handle_escalate_op(&sandbox, &registry, release);
+        let response = handle_escalate_op(&sandbox, &registry, release)
+            .expect("release_handle must produce a response");
         match response {
             EscalateResponse::Ok(ok) => {
                 assert_eq!(ok.request_id, "req-2");
@@ -764,12 +839,237 @@ mod tests {
                 request_id: "req-3".to_string(),
                 handle_id: "never-existed".to_string(),
             });
-        match handle_escalate_op(&sandbox, &registry, release_unknown) {
+        match handle_escalate_op(&sandbox, &registry, release_unknown)
+            .expect("release_handle must produce a response")
+        {
             EscalateResponse::Err(err) => {
                 assert_eq!(err.request_id, "req-3");
                 assert!(err.message.contains("not found"));
             }
             EscalateResponse::Ok(_) => panic!("unknown handle should not succeed"),
+        }
+    }
+
+    /// Tests for the escalate-IPC `{op:"log"}` variant (issue #442).
+    ///
+    /// These tests assert the full pipeline: wire parse → host dispatch →
+    /// polyglot sink → drain worker → JSONL file. Each test runs with
+    /// `#[serial]` and its own `TempDir`-scoped `XDG_STATE_HOME` so the
+    /// JSONL writer writes to a path we can read back.
+    mod log_op {
+        use super::*;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use serial_test::serial;
+        use tempfile::TempDir;
+
+        use crate::core::logging::{
+            init_for_tests, LogLevel, RuntimeLogEvent, Source,
+            StreamlibLoggingConfig, StreamlibLoggingGuard,
+        };
+        use crate::core::runtime::RuntimeUniqueId;
+
+        fn install_logging(runtime_tag: &str) -> (TempDir, StreamlibLoggingGuard) {
+            let tmp = TempDir::new().unwrap();
+            unsafe {
+                std::env::set_var("XDG_STATE_HOME", tmp.path());
+                // Capture debug+ so all the test levels surface.
+                std::env::set_var("RUST_LOG", "debug");
+                std::env::remove_var("STREAMLIB_QUIET");
+            }
+            let runtime_id = Arc::new(RuntimeUniqueId::from(runtime_tag));
+            let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
+            let guard = init_for_tests(config).unwrap();
+            (tmp, guard)
+        }
+
+        fn read_jsonl(path: &std::path::Path) -> Vec<RuntimeLogEvent> {
+            let contents = std::fs::read_to_string(path).unwrap_or_default();
+            contents
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| serde_json::from_str::<RuntimeLogEvent>(l).expect("valid JSONL"))
+                .collect()
+        }
+
+        fn dispatch_log(log: EscalateRequestLog) {
+            push_polyglot_record(log_record_from_wire(log));
+        }
+
+        fn sample_log(seq: &str, ts: &str, level: EscalateRequestLogLevel) -> EscalateRequestLog {
+            EscalateRequestLog {
+                source: EscalateRequestLogSource::Python,
+                source_seq: seq.to_string(),
+                source_ts: ts.to_string(),
+                level,
+                message: format!("record {seq}"),
+                intercepted: false,
+                channel: None,
+                pipeline_id: Some("pl-1".into()),
+                processor_id: Some("pr-1".into()),
+                attrs: HashMap::new(),
+            }
+        }
+
+        /// Every optional and required field on the wire round-trips
+        /// byte-for-byte through serde; the discriminator dispatches to
+        /// [`EscalateRequest::Log`] on decode.
+        #[test]
+        fn schema_round_trip() {
+            let mut attrs = HashMap::new();
+            attrs.insert("device".to_string(), Some(serde_json::json!("/dev/video0")));
+            attrs.insert("count".to_string(), Some(serde_json::json!(3)));
+            let original = EscalateRequestLog {
+                source: EscalateRequestLogSource::Python,
+                source_seq: "9001".into(),
+                source_ts: "2026-04-23T14:00:00Z".into(),
+                level: EscalateRequestLogLevel::Warn,
+                message: "hello".into(),
+                intercepted: true,
+                channel: Some("fd1".into()),
+                pipeline_id: Some("pl-42".into()),
+                processor_id: Some("camera-1".into()),
+                attrs: attrs.clone(),
+            };
+            let wrapped = EscalateRequest::Log(original.clone());
+            let json = serde_json::to_value(&wrapped).expect("serializes");
+            assert_eq!(json.get("op").and_then(|v| v.as_str()), Some("log"));
+
+            let decoded: EscalateRequest = serde_json::from_value(json).expect("decodes");
+            match decoded {
+                EscalateRequest::Log(back) => {
+                    assert_eq!(back.source, original.source);
+                    assert_eq!(back.source_seq, original.source_seq);
+                    assert_eq!(back.source_ts, original.source_ts);
+                    assert_eq!(back.level, original.level);
+                    assert_eq!(back.message, original.message);
+                    assert_eq!(back.intercepted, original.intercepted);
+                    assert_eq!(back.channel, original.channel);
+                    assert_eq!(back.pipeline_id, original.pipeline_id);
+                    assert_eq!(back.processor_id, original.processor_id);
+                    assert_eq!(back.attrs, original.attrs);
+                }
+                other => panic!("expected Log variant, got {other:?}"),
+            }
+        }
+
+        /// `level: "warn"` on the wire produces a JSONL record with
+        /// `level: "warn"`; required structured fields land in their
+        /// dedicated columns (not `attrs`) and `host_ts` is stamped
+        /// non-zero by the host.
+        #[test]
+        #[serial]
+        fn host_emits_jsonl_record_at_correct_level() {
+            let (_tmp, guard) = install_logging("RlogOpLv");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            dispatch_log(sample_log("42", "2026-04-23T14:00:00Z", EscalateRequestLogLevel::Warn));
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let record = events
+                .iter()
+                .find(|e| e.source == Source::Python && e.message == "record 42")
+                .unwrap_or_else(|| panic!("no polyglot record; got {events:#?}"));
+            assert_eq!(record.level, LogLevel::Warn);
+            assert_eq!(record.source_seq, Some(42));
+            assert_eq!(record.source_ts.as_deref(), Some("2026-04-23T14:00:00Z"));
+            assert_eq!(record.pipeline_id.as_deref(), Some("pl-1"));
+            assert_eq!(record.processor_id.as_deref(), Some("pr-1"));
+            assert!(record.host_ts > 0, "host stamp must be non-zero");
+        }
+
+        /// Two records with identical `source_ts` receive distinct
+        /// monotonically-increasing `host_ts` — subprocesses with broken
+        /// clocks can't collapse ordering by accident.
+        #[test]
+        #[serial]
+        fn host_stamps_host_ts() {
+            let (_tmp, guard) = install_logging("RlogOpTs");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            let ts = "2026-04-23T14:00:00Z";
+            dispatch_log(sample_log("1", ts, EscalateRequestLogLevel::Info));
+            std::thread::sleep(Duration::from_millis(2));
+            dispatch_log(sample_log("2", ts, EscalateRequestLogLevel::Info));
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let polyglot: Vec<_> = events
+                .iter()
+                .filter(|e| e.source == Source::Python)
+                .collect();
+            assert_eq!(polyglot.len(), 2, "expected exactly 2 polyglot records");
+            assert_eq!(polyglot[0].source_ts, polyglot[1].source_ts);
+            assert!(
+                polyglot[1].host_ts > polyglot[0].host_ts,
+                "host_ts must be monotonic: {} vs {}",
+                polyglot[0].host_ts,
+                polyglot[1].host_ts,
+            );
+        }
+
+        /// `intercepted: true` + `channel: "fd1"` survive the wire → host
+        /// → JSONL hop untouched, landing in their dedicated columns.
+        #[test]
+        #[serial]
+        fn intercepted_flag_round_trip() {
+            let (_tmp, guard) = install_logging("RlogOpInt");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            let mut log = sample_log("7", "2026-04-23T14:00:00Z", EscalateRequestLogLevel::Error);
+            log.intercepted = true;
+            log.channel = Some("fd1".into());
+            log.message = "fd1 capture".into();
+            dispatch_log(log);
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let record = events
+                .iter()
+                .find(|e| e.source == Source::Python && e.message == "fd1 capture")
+                .unwrap_or_else(|| panic!("no polyglot record; got {events:#?}"));
+            assert!(record.intercepted);
+            assert_eq!(record.channel.as_deref(), Some("fd1"));
+            assert_eq!(record.level, LogLevel::Error);
+        }
+
+        /// 1000 records with strictly increasing `source_seq` arrive at
+        /// the JSONL file in the same order. Proves the single-producer
+        /// path preserves FIFO without extra sequencing logic.
+        #[test]
+        #[serial]
+        fn within_source_fifo_preserved() {
+            let (_tmp, guard) = install_logging("RlogOpFif");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            for i in 0..1000 {
+                dispatch_log(sample_log(
+                    &i.to_string(),
+                    "2026-04-23T14:00:00Z",
+                    EscalateRequestLogLevel::Debug,
+                ));
+            }
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let seqs: Vec<u64> = events
+                .iter()
+                .filter(|e| e.source == Source::Python)
+                .filter_map(|e| e.source_seq)
+                .collect();
+            assert_eq!(seqs.len(), 1000, "all records must land in JSONL");
+            for (expected, got) in seqs.iter().enumerate() {
+                assert_eq!(
+                    *got, expected as u64,
+                    "records out of order at index {expected}",
+                );
+            }
         }
     }
 }

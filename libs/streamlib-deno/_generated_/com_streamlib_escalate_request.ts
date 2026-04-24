@@ -8,10 +8,7 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest =
-  | EscalateRequestAcquirePixelBuffer
-  | EscalateRequestAcquireTexture
-  | EscalateRequestReleaseHandle;
+export type EscalateRequest = EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle;
 
 export interface EscalateRequestAcquirePixelBuffer {
   op: "acquire_pixel_buffer";
@@ -41,7 +38,9 @@ export interface EscalateRequestAcquireTexture {
   op: "acquire_texture";
 
   /**
-   * Texture format identifier (rgba8_unorm, bgra8_unorm, rgba16_float, ...).
+   * Texture format identifier. Lowercase snake-case names: rgba8_unorm,
+   * rgba8_unorm_srgb, bgra8_unorm, bgra8_unorm_srgb, rgba16_float,
+   * rgba32_float, nv12.
    */
   format: string;
 
@@ -56,8 +55,10 @@ export interface EscalateRequestAcquireTexture {
   request_id: string;
 
   /**
-   * Usage tokens (copy_src, copy_dst, texture_binding, storage_binding,
-   * render_attachment).
+   * Usage flags the texture must support. Non-empty array of lowercase
+   * snake-case tokens drawn from: copy_src, copy_dst, texture_binding,
+   * storage_binding, render_attachment. Host validates — unknown tokens return
+   * an error response.
    */
   usage: string[];
 
@@ -65,6 +66,94 @@ export interface EscalateRequestAcquireTexture {
    * Pixel width of the texture.
    */
   width: number;
+}
+
+/**
+ * Severity level of the record. Maps 1:1 onto tracing::Level.
+ */
+export enum EscalateRequestLogLevel {
+  Debug = "debug",
+  Error = "error",
+  Info = "info",
+  Trace = "trace",
+  Warn = "warn",
+}
+
+/**
+ * Origin runtime of the record. Always "python" or "deno" on the wire — Rust
+ * never routes through escalate; Rust call sites hit `tracing::*!()` directly
+ * on the host.
+ */
+export enum EscalateRequestLogSource {
+  Deno = "deno",
+  Python = "python",
+}
+
+export interface EscalateRequestLog {
+  op: "log";
+
+  /**
+   * User-supplied structured fields. Copied flat onto the emitted
+   * RuntimeLogEvent's `attrs` map — not nested under an `attrs.key` path in
+   * the JSONL.
+   */
+  attrs: { [key: string]: any };
+
+  /**
+   * Interceptor channel when `intercepted: true`. Conventional values:
+   * "stdout", "stderr", "console.log", "logging", "fd1", "fd2". Null when
+   * `intercepted: false`.
+   */
+  channel: (string | null);
+
+  /**
+   * True when the record was captured from subprocess stdout/stderr,
+   * console.log, root logging handler, or a raw fd write, rather than a direct
+   * `streamlib.log.*` call.
+   */
+  intercepted: boolean;
+
+  /**
+   * Severity level of the record. Maps 1:1 onto tracing::Level.
+   */
+  level: EscalateRequestLogLevel;
+
+  /**
+   * Primary human-readable message.
+   */
+  message: string;
+
+  /**
+   * Pipeline identifier. Null for runtime-level records.
+   */
+  pipeline_id: (string | null);
+
+  /**
+   * Processor identifier. Null outside a processor.
+   */
+  processor_id: (string | null);
+
+  /**
+   * Origin runtime of the record. Always "python" or "deno" on the wire — Rust
+   * never routes through escalate; Rust call sites hit `tracing::*!()` directly
+   * on the host.
+   */
+  source: EscalateRequestLogSource;
+
+  /**
+   * Subprocess-monotonic sequence number (uint64 as string — JTD has no native
+   * u64). Escape hatch for recovering subprocess-local order within a single
+   * source. Not authoritative across sources — use `host_ts` for merged-stream
+   * ordering.
+   */
+  source_seq: string;
+
+  /**
+   * Subprocess wall-clock timestamp ISO8601 (advisory). Never used for
+   * ordering; the host stamps `host_ts` on receipt as the authoritative sort
+   * key.
+   */
+  source_ts: string;
 }
 
 export interface EscalateRequestReleaseHandle {

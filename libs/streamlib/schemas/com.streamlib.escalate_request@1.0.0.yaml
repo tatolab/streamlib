@@ -1,19 +1,15 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# JSON Type Definition (RFC 8927) schema for polyglot GPU escalation requests.
+# JSON Type Definition (RFC 8927) schema for polyglot escalation requests.
 #
 # Sent from a Python or Deno subprocess over its stdout to the Rust host
-# processor. The host routes the op through `GpuContextLimitedAccess::escalate`
-# and replies with [`EscalateResponse`] on the same stdin pipe.
-#
-# This schema is checked in as design documentation. It is **not** wired into
-# `cargo xtask generate-schemas` because jtd-codegen v0.4.1's discriminator
-# support emits tagged Rust enums whose shape collides with the existing
-# post-processing rules for plain config/payload schemas. The hand-authored
-# types live in
-# `libs/streamlib/src/core/compiler/compiler_ops/subprocess_escalate.rs`
-# and are kept in sync with this file manually.
+# processor. Acquire/release ops are request/response — the host routes the
+# op through `GpuContextLimitedAccess::escalate` and replies with
+# [`EscalateResponse`] on the same stdin pipe. The `log` op is fire-and-
+# forget: the host enriches the record with an authoritative `host_ts` and
+# enqueues it into the unified JSONL pipeline (see parent #430), no reply
+# is written back.
 
 metadata:
   name: com.streamlib.escalate_request
@@ -80,3 +76,74 @@ mapping:
         metadata:
           description: "Opaque handle ID previously returned by acquire_*."
         type: string
+  log:
+    properties:
+      source:
+        metadata:
+          description: >
+            Origin runtime of the record. Always "python" or "deno" on the
+            wire — Rust never routes through escalate; Rust call sites hit
+            `tracing::*!()` directly on the host.
+        enum:
+          - python
+          - deno
+      source_seq:
+        metadata:
+          description: >
+            Subprocess-monotonic sequence number (uint64 as string — JTD has
+            no native u64). Escape hatch for recovering subprocess-local
+            order within a single source. Not authoritative across sources
+            — use `host_ts` for merged-stream ordering.
+        type: string
+      source_ts:
+        metadata:
+          description: >
+            Subprocess wall-clock timestamp ISO8601 (advisory). Never used
+            for ordering; the host stamps `host_ts` on receipt as the
+            authoritative sort key.
+        type: string
+      level:
+        metadata:
+          description: "Severity level of the record. Maps 1:1 onto tracing::Level."
+        enum:
+          - trace
+          - debug
+          - info
+          - warn
+          - error
+      message:
+        metadata:
+          description: "Primary human-readable message."
+        type: string
+      intercepted:
+        metadata:
+          description: >
+            True when the record was captured from subprocess stdout/stderr,
+            console.log, root logging handler, or a raw fd write, rather
+            than a direct `streamlib.log.*` call.
+        type: boolean
+      channel:
+        metadata:
+          description: >
+            Interceptor channel when `intercepted: true`. Conventional
+            values: "stdout", "stderr", "console.log", "logging", "fd1",
+            "fd2". Null when `intercepted: false`.
+        type: string
+        nullable: true
+      pipeline_id:
+        metadata:
+          description: "Pipeline identifier. Null for runtime-level records."
+        type: string
+        nullable: true
+      processor_id:
+        metadata:
+          description: "Processor identifier. Null outside a processor."
+        type: string
+        nullable: true
+      attrs:
+        metadata:
+          description: >
+            User-supplied structured fields. Copied flat onto the emitted
+            RuntimeLogEvent's `attrs` map — not nested under an `attrs.key`
+            path in the JSONL.
+        values: {}
