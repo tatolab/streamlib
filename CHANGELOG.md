@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.23](https://github.com/tatolab/streamlib/compare/v0.4.22...v0.4.23) (2026-04-24)
+
+
+### Features
+
+* **ci:** lockout enforcement — clippy disallowed-macros + xtask lint-logging + CI wiring (closes [#441](https://github.com/tatolab/streamlib/issues/441)) ([#455](https://github.com/tatolab/streamlib/issues/455)) ([52a31e0](https://github.com/tatolab/streamlib/commit/52a31e05f7e5fe43f5041074a48517a6676a0494))
+* **logging:** fd-level stdio interceptor (closes [#438](https://github.com/tatolab/streamlib/issues/438)) ([#449](https://github.com/tatolab/streamlib/issues/449)) ([80aa8ae](https://github.com/tatolab/streamlib/commit/80aa8ae6b856635e24cb121850a1fbe00494822c))
+* **logging:** release-build trace-strip + opt-in strip_debug_logging (closes [#439](https://github.com/tatolab/streamlib/issues/439)) ([#456](https://github.com/tatolab/streamlib/issues/456)) ([7a0b7d3](https://github.com/tatolab/streamlib/commit/7a0b7d3786f0fd1503a3969661ff93bf053c7f7d))
+* **logging:** unified JSONL producer + stdout mirror + schema ([#437](https://github.com/tatolab/streamlib/issues/437)) ([#445](https://github.com/tatolab/streamlib/issues/445)) ([bd0417d](https://github.com/tatolab/streamlib/commit/bd0417dc2f9f667b09b62877dfd1505e0ddc317a))
+* **polyglot-deno:** streamlib.log API + interceptors + print audit (closes [#444](https://github.com/tatolab/streamlib/issues/444)) ([#453](https://github.com/tatolab/streamlib/issues/453)) ([24fae9b](https://github.com/tatolab/streamlib/commit/24fae9b78f8964963df4c5dee403de8f65e36151))
+* **polyglot-python:** streamlib.log API + interceptors + print audit (closes [#443](https://github.com/tatolab/streamlib/issues/443)) ([#452](https://github.com/tatolab/streamlib/issues/452)) ([2e0c0a3](https://github.com/tatolab/streamlib/commit/2e0c0a3c12f3b6d21f7a55240de59274835f7380))
+* **polyglot:** dedicated IPC fd pair — free fd1/fd2 for log capture (closes [#451](https://github.com/tatolab/streamlib/issues/451)) ([#454](https://github.com/tatolab/streamlib/issues/454)) ([0a3d0f2](https://github.com/tatolab/streamlib/commit/0a3d0f2e7a6c46963d73e7fc34b112d3148cc672))
+* **polyglot:** escalate-IPC {op:"log"} wire format + host handler (closes [#442](https://github.com/tatolab/streamlib/issues/442)) ([#450](https://github.com/tatolab/streamlib/issues/450)) ([3430142](https://github.com/tatolab/streamlib/commit/34301420d981234e447aeb45b051df83b7c4ca4f))
+
+
+### Bug Fixes
+
+* **ci:** xtask lint-logging covers Rust (drops glslc requirement) ([#461](https://github.com/tatolab/streamlib/issues/461)) ([4b528c5](https://github.com/tatolab/streamlib/commit/4b528c5085dab03988be2e2f8e30762f16bec00c))
+
+
+### Performance
+
+* **logging:** criterion bench harness + strace no-syscalls test (closes [#447](https://github.com/tatolab/streamlib/issues/447)) ([#460](https://github.com/tatolab/streamlib/issues/460)) ([39e66a3](https://github.com/tatolab/streamlib/commit/39e66a3de8e9d19973de5242e691556eaf93964e))
+
 ## [0.4.22](https://github.com/tatolab/streamlib/compare/v0.4.21...v0.4.22) (2026-04-23)
 
 
