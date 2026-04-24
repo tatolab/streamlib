@@ -21,6 +21,7 @@ import type {
   EscalateRequest,
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
+  EscalateRequestLog,
   EscalateRequestReleaseHandle,
 } from "./_generated_/com_streamlib_escalate_request.ts";
 import type {
@@ -33,6 +34,7 @@ export type {
   EscalateRequest,
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
+  EscalateRequestLog,
   EscalateRequestReleaseHandle,
   EscalateResponse,
   EscalateResponseErr,
@@ -111,6 +113,21 @@ export class EscalateChannel {
 
   async releaseHandle(handleId: string): Promise<EscalateOkResponse> {
     return this.request({ op: "release_handle", handle_id: handleId });
+  }
+
+  /**
+   * Send a fire-and-forget `log` op. The host enqueues the record into
+   * the unified JSONL pipeline and returns nothing — no `request_id`,
+   * no correlated response. The frame goes through the same writer lock
+   * as request/response traffic so length-prefix and payload stay
+   * contiguous on the wire.
+   */
+  async logFireAndForget(payload: EscalateRequestLog): Promise<void> {
+    const msg = {
+      rpc: ESCALATE_REQUEST_RPC,
+      ...payload,
+    } as Record<string, unknown>;
+    await this.writer(msg);
   }
 
   async request(op: EscalateOpPayload): Promise<EscalateOkResponse> {

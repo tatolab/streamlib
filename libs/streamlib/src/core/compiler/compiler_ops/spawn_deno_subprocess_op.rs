@@ -136,7 +136,13 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 .arg(runner_path.to_str().unwrap_or(""))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                .stderr(Stdio::inherit())
+                // Pipe stderr (was inherit) so we can intercept fd2 writes
+                // — both Deno runtime chatter and any third-party native
+                // module writing directly to fd2 — and surface them as
+                // `intercepted=true, channel="fd2", source="deno"` records
+                // in the unified JSONL pipeline. fd1 is reserved for the
+                // length-prefixed IPC channel and is NOT captured. See #444.
+                .stderr(Stdio::piped())
                 .env("STREAMLIB_ENTRYPOINT", &self.entrypoint)
                 .env(
                     "STREAMLIB_PROJECT_PATH",
@@ -170,6 +176,41 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             let stdout = child.stdout.take().ok_or_else(|| {
                 StreamError::Runtime("Failed to capture subprocess stdout".to_string())
             })?;
+
+            // Defense-in-depth log capture on the subprocess's fd2 (stderr).
+            // Records are tagged `intercepted=true, channel="fd2",
+            // source="deno"` so a JSONL consumer can tell these apart from
+            // first-party `streamlib.log.*` records. fd1 is reserved for
+            // the length-prefixed IPC channel and is NOT captured — any
+            // raw writes to fd1 would desynchronize bridge framing. See
+            // #444 / #451.
+            if let Some(stderr) = child.stderr.take() {
+                let proc_id = self.processor_id.clone();
+                std::thread::Builder::new()
+                    .name(format!("dn-stderr-{}", &proc_id[..8.min(proc_id.len())]))
+                    .spawn(move || {
+                        use std::io::{BufRead, BufReader};
+                        let reader = BufReader::new(stderr);
+                        for line in reader.lines() {
+                            match line {
+                                Ok(text) if !text.is_empty() => {
+                                    tracing::warn!(
+                                        target: "streamlib::polyglot::deno",
+                                        intercepted = true,
+                                        channel = "fd2",
+                                        source = "deno",
+                                        processor_id = %proc_id,
+                                        "{}",
+                                        text
+                                    );
+                                }
+                                Err(_) => break,
+                                _ => {}
+                            }
+                        }
+                    })
+                    .ok();
+            }
 
             // Clone the sandbox so the bridge reader thread can dispatch
             // escalate requests on behalf of the subprocess.

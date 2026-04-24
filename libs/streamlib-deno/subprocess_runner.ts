@@ -23,12 +23,28 @@ import {
   NativeRuntimeContextLimitedAccess,
 } from "./context.ts";
 import { EscalateChannel } from "./escalate.ts";
+import * as log from "./log.ts";
 import type {
   ContinuousProcessor,
   ManualProcessor,
   ProcessorLifecycle,
   ReactiveProcessor,
 } from "./types.ts";
+
+/**
+ * Pre-install fatal — escalate channel not up yet, so fall back to raw
+ * stderr. The host's fd2 reader will still capture this line and surface
+ * it as `intercepted=true, channel="fd2", source="deno"`.
+ */
+function fatalPreInstall(message: string): never {
+  const text = `[streamlib-deno] ${message}\n`;
+  try {
+    Deno.stderr.writeSync(new TextEncoder().encode(text));
+  } catch {
+    // Even raw stderr broken; nothing else to try.
+  }
+  Deno.exit(1);
+}
 
 // ============================================================================
 // Bridge protocol (length-prefixed JSON over stdin/stdout)
@@ -98,9 +114,12 @@ function assertCapability(
 ): void {
   const actual = msg.capability as string | undefined;
   if (actual !== undefined && actual !== expected) {
-    console.error(
-      `[subprocess_runner:${processorId}] capability mismatch for '${cmd}': expected '${expected}', got '${actual}'`,
-    );
+    log.error("capability mismatch", {
+      processor_id: processorId,
+      cmd,
+      expected,
+      actual,
+    });
   }
 }
 
@@ -115,19 +134,43 @@ async function main(): Promise<void> {
   const processorId = Deno.env.get("STREAMLIB_PROCESSOR_ID") ?? "unknown";
   const executionMode = Deno.env.get("STREAMLIB_EXECUTION_MODE") ?? "reactive";
 
-  console.error(`[subprocess_runner:${processorId}] Starting`);
-  console.error(`  entrypoint: ${entrypoint}`);
-  console.error(`  project_path: ${projectPath}`);
-  console.error(`  native_lib: ${nativeLibPath}`);
-  console.error(`  execution_mode: ${executionMode}`);
+  if (!entrypoint) {
+    fatalPreInstall("STREAMLIB_ENTRYPOINT not set");
+  }
+
+  // Escalate channel — requests from the TS processor go out on stdout,
+  // host responses arrive on stdin and are routed here from every stdin
+  // read site (outer loop + run-phase concurrent reader). Constructed
+  // BEFORE installing logging so `log.install` has a channel to drain to.
+  const escalateChannel = new EscalateChannel(bridgeSendJson);
+
+  // Install unified logging: writer task + console / Deno.stdout/stderr
+  // interceptors. After this point, `console.*` and `Deno.stdout.write`
+  // route through `streamlib.log.*` with `intercepted: true`. fd1 is the
+  // IPC channel and is NOT intercepted; raw fd1 writes would corrupt
+  // bridge framing — see #444 / #451.
+  log.setProcessorContext({ processorId });
+  await log.install(escalateChannel);
+
+  log.info("Subprocess runner starting", {
+    processor_id: processorId,
+    entrypoint,
+    project_path: projectPath,
+    native_lib: nativeLibPath,
+    execution_mode: executionMode,
+  });
 
   // Load native library
   let lib: NativeLib;
   try {
     lib = loadNativeLib(nativeLibPath);
   } catch (e) {
-    console.error(`[subprocess_runner:${processorId}] Failed to load native lib: ${e}`);
+    log.error("Failed to load native lib", {
+      processor_id: processorId,
+      error: String(e),
+    });
     await bridgeSendJson({ rpc: "error", error: `Failed to load native lib: ${e}` });
+    await log.shutdown();
     Deno.exit(1);
   }
 
@@ -135,8 +178,9 @@ async function main(): Promise<void> {
   const processorIdBuf = cString(processorId);
   const ctxPtr = lib.symbols.sldn_context_create(processorIdBuf);
   if (ctxPtr === null) {
-    console.error(`[subprocess_runner:${processorId}] Failed to create native context`);
+    log.error("Failed to create native context", { processor_id: processorId });
     await bridgeSendJson({ rpc: "error", error: "Failed to create native context" });
+    await log.shutdown();
     Deno.exit(1);
   }
 
@@ -158,13 +202,19 @@ async function main(): Promise<void> {
     const endpointBuf = cString(brokerEndpoint);
     brokerPtr = lib.symbols.sldn_broker_connect(endpointBuf);
     if (brokerPtr === null) {
-      console.error(`[subprocess_runner:${processorId}] Warning: broker connect failed (${brokerEndpointDesc}='${brokerEndpoint}')`);
+      log.warn("Broker connect failed", {
+        endpoint_kind: brokerEndpointDesc,
+        endpoint: brokerEndpoint,
+      });
     } else {
-      console.error(`[subprocess_runner:${processorId}] Connected to broker (${brokerEndpointDesc}='${brokerEndpoint}')`);
+      log.info("Connected to broker", {
+        endpoint_kind: brokerEndpointDesc,
+        endpoint: brokerEndpoint,
+      });
     }
   } else {
     const envName = isDarwin ? "STREAMLIB_XPC_SERVICE_NAME" : "STREAMLIB_BROKER_SOCKET";
-    console.error(`[subprocess_runner:${processorId}] No ${envName} set, broker resolution disabled`);
+    log.info("Broker resolution disabled", { missing_env: envName });
   }
 
   let processor: ProcessorLifecycle | null = null;
@@ -172,11 +222,6 @@ async function main(): Promise<void> {
   let fullCtx: NativeRuntimeContextFullAccess | null = null;
   let limitedCtx: NativeRuntimeContextLimitedAccess | null = null;
   let running = false;
-
-  // Escalate channel — requests from the TS processor go out on stdout,
-  // host responses arrive on stdin and are routed here from every stdin
-  // read site (outer loop + run-phase concurrent reader).
-  const escalateChannel = new EscalateChannel(bridgeSendJson);
 
   // Command loop
   try {
@@ -216,17 +261,20 @@ async function main(): Promise<void> {
           const inputPorts = ports.inputs ?? [];
           for (const input of inputPorts) {
             const readMode = input.read_mode ?? "skip_to_latest";
-            console.error(
-              `[subprocess_runner:${processorId}] Subscribing to input: port='${input.name}', service='${input.service_name}', read_mode='${readMode}', max_payload_bytes=${input.max_payload_bytes ?? "default"}`,
-            );
+            log.info("Subscribing to input", {
+              port: input.name,
+              service: input.service_name,
+              read_mode: readMode,
+              max_payload_bytes: input.max_payload_bytes ?? null,
+            });
             const result = lib.symbols.sldn_input_subscribe(
               ctxPtr,
               cString(input.service_name),
             );
             if (result !== 0) {
-              console.error(
-                `[subprocess_runner:${processorId}] Failed to subscribe to '${input.service_name}'`,
-              );
+              log.error("Failed to subscribe to input", {
+                service: input.service_name,
+              });
             }
             // Configure per-port read mode (0 = skip_to_latest, 1 = read_next_in_order)
             const modeInt = readMode === "skip_to_latest" ? 0 : 1;
@@ -236,9 +284,12 @@ async function main(): Promise<void> {
           // Create publishers for output iceoryx2 services
           const outputPorts = ports.outputs ?? [];
           for (const output of outputPorts) {
-            console.error(
-              `[subprocess_runner:${processorId}] Publishing to output: port='${output.name}', dest_port='${output.dest_port}', service='${output.dest_service_name}', schema='${output.schema_name}'`,
-            );
+            log.info("Publishing to output", {
+              port: output.name,
+              dest_port: output.dest_port,
+              service: output.dest_service_name,
+              schema: output.schema_name,
+            });
             const result = lib.symbols.sldn_output_publish(
               ctxPtr,
               cString(output.dest_service_name),
@@ -248,9 +299,9 @@ async function main(): Promise<void> {
               BigInt(output.max_payload_bytes ?? 65536),
             );
             if (result !== 0) {
-              console.error(
-                `[subprocess_runner:${processorId}] Failed to create publisher for '${output.dest_service_name}'`,
-              );
+              log.error("Failed to create publisher", {
+                service: output.dest_service_name,
+              });
             }
           }
 
@@ -260,9 +311,10 @@ async function main(): Promise<void> {
             ? `${projectPath}/${modulePath}`
             : modulePath;
 
-          console.error(
-            `[subprocess_runner:${processorId}] Importing ${fullModulePath}:${exportName}`,
-          );
+          log.info("Importing processor module", {
+            module: fullModulePath,
+            export: exportName,
+          });
 
           try {
             const module = await import(`file://${fullModulePath}`);
@@ -305,9 +357,7 @@ async function main(): Promise<void> {
 
             await bridgeSendJson({ rpc: "ready" });
           } catch (e) {
-            console.error(
-              `[subprocess_runner:${processorId}] Setup failed: ${e}`,
-            );
+            log.error("Setup failed", { error: String(e) });
             await bridgeSendJson({ rpc: "error", error: String(e) });
           }
           break;
@@ -315,16 +365,12 @@ async function main(): Promise<void> {
 
         case "run": {
           if (!processor || !state || !fullCtx || !limitedCtx) {
-            console.error(
-              `[subprocess_runner:${processorId}] run before setup`,
-            );
+            log.warn("run before setup");
             break;
           }
 
           running = true;
-          console.error(
-            `[subprocess_runner:${processorId}] Entering ${executionMode} loop`,
-          );
+          log.info("Entering execution loop", { mode: executionMode });
 
           if (executionMode === "manual") {
             // Manual mode: start() is a resource-lifecycle op → full access
@@ -332,9 +378,7 @@ async function main(): Promise<void> {
             try {
               await manualProc.start(fullCtx);
             } catch (e) {
-              console.error(
-                `[subprocess_runner:${processorId}] start() error: ${e}`,
-              );
+              log.error("start() error", { error: String(e) });
             }
             break;
           }
@@ -382,9 +426,7 @@ async function main(): Promise<void> {
                   await processor.updateConfig(config);
                   await bridgeSendJson({ rpc: "ok" });
                 } else {
-                  console.error(
-                    `[subprocess_runner:${processorId}] Unknown command during run: ${nextCmd}`,
-                  );
+                  log.warn("Unknown command during run", { cmd: nextCmd });
                 }
               }
             } catch {
@@ -407,22 +449,19 @@ async function main(): Promise<void> {
               if (hasData === 1) {
                 dataCount++;
                 if (dataCount <= 3 || dataCount % 60 === 0) {
-                  console.error(
-                    `[subprocess_runner:${processorId}] poll: data received (frame #${dataCount})`,
-                  );
+                  log.debug("poll: data received", { frame_index: dataCount });
                 }
                 try {
                   await reactiveProc.process(limitedCtx);
                 } catch (e) {
-                  console.error(
-                    `[subprocess_runner:${processorId}] process() error: ${e}`,
-                  );
+                  log.error("process() error", { error: String(e) });
                 }
               } else {
                 if (pollCount === 100) {
-                  console.error(
-                    `[subprocess_runner:${processorId}] poll: no data after ${pollCount} polls (${dataCount} frames so far)`,
-                  );
+                  log.debug("poll: no data", {
+                    polls: pollCount,
+                    frames_so_far: dataCount,
+                  });
                 }
                 // No data, yield to event loop briefly
                 await new Promise((resolve) => setTimeout(resolve, 1));
@@ -437,9 +476,7 @@ async function main(): Promise<void> {
               try {
                 await continuousProc.process(limitedCtx);
               } catch (e) {
-                console.error(
-                  `[subprocess_runner:${processorId}] process() error: ${e}`,
-                );
+                log.error("process() error", { error: String(e) });
               }
               if (intervalMs > 0) {
                 await new Promise((resolve) =>
@@ -458,9 +495,7 @@ async function main(): Promise<void> {
               try {
                 await processor.teardown(fullCtx);
               } catch (e) {
-                console.error(
-                  `[subprocess_runner:${processorId}] teardown() error: ${e}`,
-                );
+                log.error("teardown() error", { error: String(e) });
               }
             }
             try {
@@ -470,6 +505,7 @@ async function main(): Promise<void> {
             }
             lib.symbols.sldn_context_destroy(ctxPtr);
             lib.close();
+            await log.shutdown();
             Deno.exit(0);
           }
           break;
@@ -484,9 +520,7 @@ async function main(): Promise<void> {
               try {
                 await manualProc.stop(fullCtx);
               } catch (e) {
-                console.error(
-                  `[subprocess_runner:${processorId}] stop() error: ${e}`,
-                );
+                log.error("stop() error", { error: String(e) });
               }
             }
           }
@@ -528,9 +562,7 @@ async function main(): Promise<void> {
             try {
               await processor.teardown(fullCtx);
             } catch (e) {
-              console.error(
-                `[subprocess_runner:${processorId}] teardown() error: ${e}`,
-              );
+              log.error("teardown() error", { error: String(e) });
             }
           }
           await bridgeSendJson({ rpc: "done" });
@@ -538,13 +570,12 @@ async function main(): Promise<void> {
           // Cleanup native context
           lib.symbols.sldn_context_destroy(ctxPtr);
           lib.close();
+          await log.shutdown();
           Deno.exit(0);
         }
 
         default: {
-          console.error(
-            `[subprocess_runner:${processorId}] Unknown command: ${cmd}`,
-          );
+          log.warn("Unknown command", { cmd });
           break;
         }
       }
@@ -552,9 +583,9 @@ async function main(): Promise<void> {
   } catch (e) {
     const isStdinClosed = e instanceof Error && e.message === "stdin closed";
     if (isStdinClosed) {
-      console.error(`[subprocess_runner:${processorId}] stdin closed, shutting down`);
+      log.info("stdin closed, shutting down");
     } else {
-      console.error(`[subprocess_runner:${processorId}] Fatal error: ${e}`);
+      log.error("Fatal error", { error: String(e) });
     }
     if (processor?.teardown && fullCtx) {
       try {
@@ -566,6 +597,7 @@ async function main(): Promise<void> {
     escalateChannel.cancelAll("subprocess shutting down");
     lib.symbols.sldn_context_destroy(ctxPtr);
     lib.close();
+    await log.shutdown();
     Deno.exit(isStdinClosed ? 0 : 1);
   }
 }
