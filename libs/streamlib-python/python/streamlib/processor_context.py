@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import struct
+import threading
 from typing import Any, Dict, Optional, Sequence, Tuple, TYPE_CHECKING
 
 import msgpack
@@ -35,6 +36,13 @@ if TYPE_CHECKING:
 # ============================================================================
 # Lifecycle protocol I/O (length-prefixed JSON over stdin/stdout)
 # ============================================================================
+
+
+# Serializes frame writes across the main thread (lifecycle + escalate
+# request/response) and the log writer daemon (fire-and-forget escalate log
+# ops). Without this, two threads can interleave halves of a length-prefixed
+# frame and desynchronize the bridge reader on the host side.
+_bridge_send_lock = threading.Lock()
 
 
 def bridge_read_message(stdin):
@@ -52,9 +60,10 @@ def bridge_read_message(stdin):
 def bridge_send_message(stdout, msg):
     """Send a length-prefixed JSON message to stdout."""
     json_bytes = json.dumps(msg, separators=(",", ":")).encode("utf-8")
-    stdout.write(struct.pack(">I", len(json_bytes)))
-    stdout.write(json_bytes)
-    stdout.flush()
+    with _bridge_send_lock:
+        stdout.write(struct.pack(">I", len(json_bytes)))
+        stdout.write(json_bytes)
+        stdout.flush()
 
 
 # ============================================================================
@@ -94,13 +103,13 @@ def decode_read_result(read_buf, read_buf_bytes: int, data_len: int, timestamp_n
     if data_len == 0:
         return None, None
     if data_len > read_buf_bytes:
-        import sys
+        from . import log
 
-        print(
-            f"[streamlib-python] payload truncated on port '{port_name}': "
-            f"native reported {data_len} bytes but read buffer is "
-            f"{read_buf_bytes}",
-            file=sys.stderr,
+        log.warn(
+            "payload truncated on input port",
+            port=port_name,
+            reported_bytes=data_len,
+            read_buf_bytes=read_buf_bytes,
         )
         return None, None
     return bytes(read_buf[:data_len]), timestamp_ns

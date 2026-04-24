@@ -28,6 +28,10 @@ class PixelFormat:
     GRAY8 = "gray8"
 
 
+# Unified logging API — `streamlib.log.info(...)`, etc.
+# Routes through the escalate-IPC `{op:"log"}` path to the host JSONL.
+from . import log
+
 # Re-export decorators and schema API
 from .decorators import (
     # Processor decorators
@@ -65,6 +69,8 @@ GpuContextFullAccess = NativeGpuContextFullAccess
 GpuContextLimitedAccess = NativeGpuContextLimitedAccess
 
 __all__ = [
+    # Unified logging
+    "log",
     # Processor decorators
     "processor",
     "input",

@@ -21,7 +21,7 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Layer;
 
-use crate::core::logging::event::LogLevel;
+use crate::core::logging::event::{LogLevel, Source};
 use crate::core::logging::record::LogRecord;
 use crate::core::logging::worker::{now_ns, WorkerSignal};
 
@@ -76,10 +76,11 @@ where
             intercepted: visitor.intercepted,
             channel: visitor.channel,
             attrs: visitor.attrs,
-            // Tracing events are always local call-site events; they
-            // inherit the worker's configured source and have no
-            // subprocess timestamp / sequence number.
-            source: None,
+            // `source` is typically None for first-party Rust call-sites
+            // (the worker stamps it as `Source::Rust` on serialize). Set
+            // explicitly when a tracing event captures a subprocess pipe
+            // (the Python stderr forwarder passes `source = "python"`).
+            source: visitor.source,
             source_ts: None,
             source_seq: None,
         };
@@ -96,6 +97,7 @@ struct Capture {
     rhi_op: Option<String>,
     intercepted: bool,
     channel: Option<String>,
+    source: Option<Source>,
     attrs: BTreeMap<String, serde_json::Value>,
 }
 
@@ -121,6 +123,18 @@ impl Capture {
             "channel" => {
                 self.channel = Some(value);
                 true
+            }
+            "source" => {
+                // Recognised only for the documented enum values; anything
+                // else (stray attribute named `source`) falls back into
+                // `attrs` so we don't silently drop it.
+                self.source = match value.as_str() {
+                    "rust" => Some(Source::Rust),
+                    "python" => Some(Source::Python),
+                    "deno" => Some(Source::Deno),
+                    _ => None,
+                };
+                self.source.is_some()
             }
             _ => false,
         }
