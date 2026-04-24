@@ -9,13 +9,10 @@
 
 pub use config::{LoggingTunables, StreamlibLoggingConfig};
 pub use event::{LogLevel, RuntimeLogEvent, Source, SCHEMA_VERSION};
-pub use init::{init, StreamlibLoggingGuard};
+pub use init::{init, init_for_tests, StreamlibLoggingGuard};
 pub use paths::{log_dir, runtime_log_path};
 pub(crate) use polyglot_sink::push_polyglot_record;
 pub(crate) use record::LogRecord;
-
-#[cfg(test)]
-pub(crate) use init::init_for_tests;
 
 mod config;
 mod event;
