@@ -1311,4 +1311,266 @@ log.shutdown()
             );
         }
     }
+
+    /// End-to-end tests that spawn a real Deno subprocess, have it call
+    /// `streamlib.log.*`, read framed escalate-IPC traffic off its
+    /// stdout, dispatch each frame through the host handler, and assert
+    /// the records land in the unified JSONL.
+    ///
+    /// Mirrors `python_subprocess` above for the Deno runtime.
+    ///
+    /// Skipped when `deno` is not on PATH or when the streamlib-deno
+    /// source tree is not present.
+    mod deno_subprocess {
+        use std::io::{BufReader, Read, Write};
+        use std::path::PathBuf;
+        use std::process::{Command, Stdio};
+
+        use super::*;
+        use crate::core::logging::{
+            init_for_tests, LogLevel, RuntimeLogEvent, Source,
+            StreamlibLoggingConfig, StreamlibLoggingGuard,
+        };
+        use crate::core::runtime::RuntimeUniqueId;
+        use serial_test::serial;
+        use std::sync::Arc;
+        use tempfile::TempDir;
+
+        fn deno_binary() -> Option<PathBuf> {
+            let path_env = std::env::var_os("PATH")?;
+            for dir in std::env::split_paths(&path_env) {
+                let candidate = dir.join("deno");
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+            None
+        }
+
+        fn streamlib_deno_path() -> PathBuf {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("streamlib-deno")
+        }
+
+        fn install_logging(tag: &str) -> (TempDir, StreamlibLoggingGuard) {
+            let tmp = TempDir::new().unwrap();
+            unsafe {
+                std::env::set_var("XDG_STATE_HOME", tmp.path());
+                std::env::set_var("RUST_LOG", "debug");
+                std::env::remove_var("STREAMLIB_QUIET");
+            }
+            let runtime_id = Arc::new(RuntimeUniqueId::from(tag));
+            let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
+            let guard = init_for_tests(config).unwrap();
+            (tmp, guard)
+        }
+
+        fn read_jsonl(path: &std::path::Path) -> Vec<RuntimeLogEvent> {
+            let contents = std::fs::read_to_string(path).unwrap_or_default();
+            contents
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(|l| {
+                    serde_json::from_str::<RuntimeLogEvent>(l).expect("valid JSONL")
+                })
+                .collect()
+        }
+
+        /// Build a Deno helper script (TypeScript) that imports `log` +
+        /// `EscalateChannel` from the streamlib-deno SDK at `sdk_path`,
+        /// sets the processor context, installs the writer, and runs the
+        /// caller-supplied `body` inside a top-level async IIFE. Writes
+        /// the script to a temp file inside `tmp` and returns its path.
+        fn write_helper_script(
+            tmp: &TempDir,
+            sdk_path: &std::path::Path,
+            body: &str,
+        ) -> PathBuf {
+            let log_url = format!("file://{}/log.ts", sdk_path.display());
+            let escalate_url =
+                format!("file://{}/escalate.ts", sdk_path.display());
+            let script = format!(
+                r#"// auto-generated test helper
+import * as log from "{log_url}";
+import {{ EscalateChannel }} from "{escalate_url}";
+
+async function bridgeWrite(msg: Record<string, unknown>): Promise<void> {{
+  const text = JSON.stringify(msg);
+  const encoded = new TextEncoder().encode(text);
+  const lenBuf = new Uint8Array(4);
+  new DataView(lenBuf.buffer).setUint32(0, encoded.length, false);
+  await Deno.stdout.write(lenBuf);
+  await Deno.stdout.write(encoded);
+}}
+
+const channel = new EscalateChannel(bridgeWrite);
+log.setProcessorContext({{ processorId: "pr-test", pipelineId: "pl-test" }});
+await log.install(channel, {{ installInterceptors: false }});
+
+(async () => {{
+{body}
+await log.shutdown();
+}})();
+"#,
+                log_url = log_url,
+                escalate_url = escalate_url,
+                body = body,
+            );
+            let script_path = tmp.path().join("deno_log_helper.ts");
+            std::fs::write(&script_path, script).expect("write helper script");
+            script_path
+        }
+
+        /// Run the helper, drain framed escalate frames from the
+        /// subprocess's stdout, dispatch each `log` op into the host
+        /// JSONL pipeline. Returns frame count, or `None` when `deno`
+        /// or the SDK source isn't available.
+        fn run_and_drain(body: &str) -> Option<usize> {
+            let deno = deno_binary()?;
+            let sdk = streamlib_deno_path();
+            if !sdk.exists() {
+                return None;
+            }
+            let tmp = TempDir::new().unwrap();
+            let script = write_helper_script(&tmp, &sdk, body);
+
+            let mut child = Command::new(deno)
+                .arg("run")
+                .arg("--quiet")
+                .arg("--allow-read")
+                .arg("--allow-env")
+                .arg("--no-prompt")
+                .arg(&script)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn deno");
+
+            // Subprocess never reads from stdin; close it so the writer
+            // task can drain and shutdown returns cleanly.
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(&[]);
+            }
+
+            let stdout = child.stdout.take().expect("child stdout");
+            let mut reader = BufReader::new(stdout);
+            let mut frame_count = 0usize;
+
+            loop {
+                let mut len_buf = [0u8; 4];
+                match reader.read_exact(&mut len_buf) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                    Err(e) => panic!("bridge read failed: {e}"),
+                }
+                let len = u32::from_be_bytes(len_buf) as usize;
+                let mut buf = vec![0u8; len];
+                reader.read_exact(&mut buf).expect("read frame body");
+                let value: serde_json::Value =
+                    serde_json::from_slice(&buf).expect("valid JSON frame");
+                let parsed = match try_parse_escalate_request(&value) {
+                    Some(Ok(op)) => op,
+                    Some(Err(e)) => panic!("escalate decode failed: {}", e.message),
+                    None => panic!(
+                        "deno subprocess only sends escalate traffic; got {value}"
+                    ),
+                };
+                if let EscalateRequest::Log(log_op) = parsed {
+                    push_polyglot_record(log_record_from_wire(log_op));
+                    frame_count += 1;
+                } else {
+                    panic!("unexpected escalate op from helper snippet");
+                }
+            }
+
+            // Drain stderr for diagnostics.
+            if let Some(mut stderr) = child.stderr.take() {
+                let mut s = String::new();
+                let _ = stderr.read_to_string(&mut s);
+                if !s.is_empty() {
+                    eprintln!("deno subprocess stderr:\n{s}");
+                }
+            }
+
+            let _ = child.wait();
+            Some(frame_count)
+        }
+
+        /// `streamlib.log.info("hi", ...)` from Deno surfaces in the
+        /// host JSONL with `source=deno`, correct message, level, and
+        /// context fields.
+        #[test]
+        #[serial]
+        fn deno_log_surfaces_in_host_jsonl() {
+            let (_tmp, guard) = install_logging("DenoLogSurf");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            let body = r#"log.info("hi from deno", { count: 7 });"#;
+            let frames = match run_and_drain(body) {
+                Some(n) => n,
+                None => {
+                    println!(
+                        "deno or streamlib-deno source missing — skipping"
+                    );
+                    return;
+                }
+            };
+            assert!(frames >= 1, "expected at least one frame, got {frames}");
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let record = events
+                .iter()
+                .find(|e| {
+                    e.source == Source::Deno && e.message == "hi from deno"
+                })
+                .unwrap_or_else(|| panic!("no deno record; got {events:#?}"));
+            assert_eq!(record.level, LogLevel::Info);
+            assert_eq!(record.pipeline_id.as_deref(), Some("pl-test"));
+            assert_eq!(record.processor_id.as_deref(), Some("pr-test"));
+            assert_eq!(
+                record.attrs.get("count").and_then(|v| v.as_i64()),
+                Some(7)
+            );
+            assert!(record.host_ts > 0);
+        }
+
+        /// A burst of 20 records arrives fully ordered and distinct —
+        /// FIFO holds across the queue → writer-task → length-prefixed-
+        /// frame → wire path.
+        #[test]
+        #[serial]
+        fn deno_log_burst_preserves_order() {
+            let (_tmp, guard) = install_logging("DenoLogBurst");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            let body = r#"for (let i = 0; i < 20; i++) log.info("burst", { index: i });"#;
+            let frames = match run_and_drain(body) {
+                Some(n) => n,
+                None => {
+                    println!("deno missing — skipping");
+                    return;
+                }
+            };
+            assert_eq!(frames, 20, "subprocess should emit all 20 frames");
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let indices: Vec<i64> = events
+                .iter()
+                .filter(|e| e.source == Source::Deno && e.message == "burst")
+                .filter_map(|e| e.attrs.get("index").and_then(|v| v.as_i64()))
+                .collect();
+            assert_eq!(indices.len(), 20, "all 20 records should land");
+            assert_eq!(
+                indices,
+                (0..20).collect::<Vec<i64>>(),
+                "order must match emission order"
+            );
+        }
+    }
 }

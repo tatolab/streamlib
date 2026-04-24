@@ -30,3 +30,6 @@ export {
 } from "./context.ts";
 export { cString, loadNativeLib } from "./native.ts";
 export type { NativeLib } from "./native.ts";
+
+// Unified polyglot logging — see issue #444 / parent #430.
+export * as log from "./log.ts";

@@ -16,6 +16,7 @@ import * as msgpack from "@msgpack/msgpack";
 import type { NativeLib } from "./native.ts";
 import { cString } from "./native.ts";
 import type { EscalateChannel, EscalateOkResponse } from "./escalate.ts";
+import * as log from "./log.ts";
 import type {
   GpuContextFullAccess,
   GpuContextLimitedAccess,
@@ -70,9 +71,11 @@ export function decodeReadResult(
   }
   const len = outLen[0];
   if (len > readBufBytes) {
-    console.error(
-      `[streamlib-deno] payload truncated on port '${portName}': native reported ${len} bytes but read buffer is ${readBufBytes}`,
-    );
+    log.warn("payload truncated on port", {
+      port: portName,
+      reported_bytes: len,
+      read_buf_bytes: readBufBytes,
+    });
     return null;
   }
   const data = new Uint8Array(new ArrayBuffer(len));
@@ -366,7 +369,7 @@ class NativeOutputPorts implements OutputPorts {
     );
 
     if (result !== 0) {
-      console.error(`[streamlib-deno] Failed to write to port '${portName}'`);
+      log.error("Failed to write to port", { port: portName });
     }
   }
 }

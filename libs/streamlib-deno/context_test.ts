@@ -32,6 +32,7 @@ import {
   decodeReadResult,
   DEFAULT_READ_BUF_BYTES,
 } from "./context.ts";
+import * as log from "./log.ts";
 
 // ============================================================================
 // Helpers
@@ -77,21 +78,21 @@ function patternBytes(size: number): Uint8Array {
 }
 
 /**
- * Capture stderr writes for the duration of `fn` so we can assert that
- * truncation paths log without polluting the test runner output.
+ * Run `fn`, then drain the `streamlib.log` queue and return a single
+ * string containing every queued message + serialized attrs. The
+ * truncation path under test enqueues into the local queue without
+ * needing the writer task / escalate channel to be running.
  */
-function withStderrCapture(fn: () => void): string {
-  const buffered: string[] = [];
-  const original = console.error;
-  console.error = (...args: unknown[]) => {
-    buffered.push(args.map((a) => String(a)).join(" "));
-  };
-  try {
-    fn();
-  } finally {
-    console.error = original;
-  }
-  return buffered.join("\n");
+function withLogCapture(fn: () => void): string {
+  // No `install()` — the queue accepts records without a writer running,
+  // and `_drainForTests()` reads them directly. Reset first so tests
+  // don't see records from other tests in the same process.
+  void log._resetForTests();
+  fn();
+  return log
+    ._drainForTests()
+    .map((rec) => `${rec.message} ${JSON.stringify(rec.attrs)}`)
+    .join("\n");
 }
 
 // ============================================================================
@@ -172,7 +173,7 @@ Deno.test("decodeReadResult: zero-length read returns null without logging", () 
     new Uint8Array(0),
     123n,
   );
-  const log = withStderrCapture(() => {
+  const captured = withLogCapture(() => {
     const result = decodeReadResult(
       readBuf,
       outLen,
@@ -182,7 +183,7 @@ Deno.test("decodeReadResult: zero-length read returns null without logging", () 
     );
     assertEquals(result, null);
   });
-  assertEquals(log, "");
+  assertEquals(captured, "");
 });
 
 // Happy paths — parameterize over a matrix of (read_buf_bytes, data_len)
@@ -237,7 +238,7 @@ for (const { label, readBufBytes, dataLen } of happyPathMatrix) {
     const ts = BigInt(dataLen) * 1000n;
     const { readBuf, outLen, outTs } = makeFfiResult(readBufBytes, data, ts);
 
-    const log = withStderrCapture(() => {
+    const captured = withLogCapture(() => {
       const result = decodeReadResult(
         readBuf,
         outLen,
@@ -260,7 +261,7 @@ for (const { label, readBufBytes, dataLen } of happyPathMatrix) {
         "returned Uint8Array should own its own ArrayBuffer",
       );
     });
-    assertEquals(log, "", "happy path must not log truncation warnings");
+    assertEquals(captured, "", "happy path must not log truncation warnings");
   });
 }
 
@@ -299,7 +300,7 @@ for (const { label, readBufBytes, dataLen } of truncationMatrix) {
     const data = patternBytes(dataLen);
     const { readBuf, outLen, outTs } = makeFfiResult(readBufBytes, data, 42n);
 
-    const log = withStderrCapture(() => {
+    const captured = withLogCapture(() => {
       const result = decodeReadResult(
         readBuf,
         outLen,
@@ -314,11 +315,12 @@ for (const { label, readBufBytes, dataLen } of truncationMatrix) {
       );
     });
     assertStringIncludes(
-      log,
-      "payload truncated on port 'truncated_port'",
-      "truncation must log a descriptive error identifying the port",
+      captured,
+      "payload truncated on port",
+      "truncation must log a descriptive message",
     );
-    assertStringIncludes(log, String(dataLen));
-    assertStringIncludes(log, String(readBufBytes));
+    assertStringIncludes(captured, "truncated_port");
+    assertStringIncludes(captured, String(dataLen));
+    assertStringIncludes(captured, String(readBufBytes));
   });
 }
