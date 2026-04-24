@@ -112,11 +112,11 @@ pub fn init(config: StreamlibLoggingConfig) -> Result<StreamlibLoggingGuard> {
 
 /// Install the logging pathway as a **thread-local** default subscriber.
 /// Used by tests that run with `#[serial]` to avoid global-subscriber
-/// conflicts. The returned guard holds a
-/// [`tracing::dispatcher::DefaultGuard`]; drop order is: default guard
-/// first, drain worker after, so no tracing events race the shutdown.
-#[cfg(test)]
-pub(crate) fn init_for_tests(config: StreamlibLoggingConfig) -> Result<StreamlibLoggingGuard> {
+/// conflicts and by criterion benches measuring hot-path latency. The
+/// returned guard holds a [`tracing::dispatcher::DefaultGuard`]; drop
+/// order is: default guard first, drain worker after, so no tracing
+/// events race the shutdown.
+pub fn init_for_tests(config: StreamlibLoggingConfig) -> Result<StreamlibLoggingGuard> {
     let (dispatch, mut guard) = build_components(config)?;
     let default_scope = tracing::dispatcher::set_default(&dispatch);
     guard.default_scope = Some(default_scope);

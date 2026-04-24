@@ -158,6 +158,17 @@ hound = "3.5"  # WAV file writing for examples
 rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 tempfile = "3.14"  # Temporary directories for config tests
+criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
+
+[[bench]]
+name = "logging"
+harness = false
+
+[[bin]]
+name = "log_emit_1000"
+path = "tests/bin/log_emit_1000.rs"
+# Strace-backed no-syscalls test child. Built under `cargo test` via
+# the path dep; not needed for normal builds.
 
 # Build dependencies for protobuf compilation (broker gRPC)
 [target.'cfg(target_os = "macos")'.build-dependencies]
