@@ -63,6 +63,20 @@ Binary-only crates (`streamlib-cli`, `streamlib-runtime`, `xtask`, examples)
 do NOT opt into the workspace `[lints]` block because stdout IS their user
 output channel. The rule only applies to library crates.
 
+### Test code
+
+`#[cfg(test)]` modules inside library crates and integration tests under
+`libs/*/tests/` are allow-listed — `println!` / `eprintln!` there are
+fine. This matches the original lockout design (#441): "Overrides
+allowed only in `tests/`, `examples/`, `build.rs`, and `xtask`." CI
+enforces this naturally — `cargo clippy --workspace --no-deps` compiles
+only lib + bin targets, so `#[cfg(test)]` code isn't linted.
+
+If you run `cargo clippy --workspace --all-targets` or `--tests` locally
+you'll see disallowed-macro errors from this test-side code. They are
+NOT regressions and do NOT need fixing — the CI gate intentionally
+doesn't include `--tests`.
+
 ### Individual files
 
 Two kinds of files legitimately bypass the unified pathway, because they
@@ -111,11 +125,42 @@ records `intercepted=true channel=stdout|stderr`. You don't need to do
 anything. If the noise is genuinely unhelpful, consider filtering it in
 the subscriber rather than suppressing at the source.
 
+## Release-build level stripping
+
+`tracing` supports compile-time level filtering — call sites above the
+configured maximum are codegen'd to `{}` and have zero runtime cost.
+Streamlib pins two behaviors:
+
+| Build | `trace!` | `debug!` | `info!` / `warn!` / `error!` |
+| --- | --- | --- | --- |
+| debug | live | live | live |
+| release (default) | **stripped** | live | live |
+| release + `--features streamlib/strip_debug_logging` | **stripped** | **stripped** | live |
+
+- **Workspace default** enables `tracing/release_max_level_debug` — every
+  release build strips `trace!` so per-frame / per-RHI-op tracing is
+  safe to sprinkle on hot paths without runtime cost.
+- **Opt-in `strip_debug_logging`** on the `streamlib` crate activates
+  `tracing/release_max_level_info`, which additionally strips `debug!`.
+  Production images that want a smaller release output enable this
+  explicitly: `cargo build --release --features streamlib/strip_debug_logging`.
+- **`warn!` / `error!` are never stripped.** Production JSONL must
+  capture failure modes under every config. `release_max_level_off`,
+  `release_max_level_error`, and `release_max_level_warn` are NOT
+  exposed as streamlib features.
+- **`debug!` stays live in release by default** — on-site diagnostics
+  rely on it. Don't bump the workspace default to `release_max_level_info`.
+
+Verify the effective level at compile time via
+`tracing::level_filters::STATIC_MAX_LEVEL`.
+
 ## Recap
 
 - One API per language: `tracing::*!` (Rust) / `streamlib.log.*` (Python,
   Deno).
 - Three enforcement layers: clippy, xtask lint, runtime interceptors.
+- `trace!` is zero-cost in release; `debug!` is opt-out via
+  `strip_debug_logging`; `warn!` / `error!` are never stripped.
 - Binary crates and installer/bootstrap files are the only acceptable
   exceptions.
 - CI fails fast on regressions; don't try to bypass it — extend the

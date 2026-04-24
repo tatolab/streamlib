@@ -639,6 +639,200 @@ fn reader_thread_shuts_down_on_runtime_drop() {
     clear_xdg_state_home();
 }
 
+/// Workspace default pins `tracing/release_max_level_debug`. Verify the
+/// compile-time constant reflects that (TRACE in debug builds, DEBUG in
+/// release builds with no `strip_debug_logging`) and that a `trace!`
+/// call emits zero records in release while `debug!` survives.
+#[test]
+#[serial]
+#[cfg(not(feature = "strip_debug_logging"))]
+fn trace_compiled_out_in_release() {
+    reset_for_test();
+    // Open the subscriber filter as wide as possible so any record that
+    // survives the compile-time strip reaches the JSONL.
+    unsafe { std::env::set_var("RUST_LOG", "trace") };
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestTraceStrip"));
+    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
+    let guard = init_for_tests(config).unwrap();
+
+    tracing::trace!("trace-release-stripped-token");
+    tracing::debug!("debug-release-default-token");
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    let trace_count = events
+        .iter()
+        .filter(|e| e.message == "trace-release-stripped-token")
+        .count();
+    let debug_count = events
+        .iter()
+        .filter(|e| e.message == "debug-release-default-token")
+        .count();
+
+    if cfg!(debug_assertions) {
+        assert_eq!(
+            tracing::level_filters::STATIC_MAX_LEVEL,
+            tracing::level_filters::LevelFilter::TRACE,
+            "debug builds must keep every level live"
+        );
+        assert_eq!(trace_count, 1, "trace! must emit in debug builds");
+        assert_eq!(debug_count, 1, "debug! must emit in debug builds");
+    } else {
+        assert_eq!(
+            tracing::level_filters::STATIC_MAX_LEVEL,
+            tracing::level_filters::LevelFilter::DEBUG,
+            "release builds must strip trace! via release_max_level_debug"
+        );
+        assert_eq!(
+            trace_count, 0,
+            "trace! must be compiled out in release (workspace default)"
+        );
+        assert_eq!(
+            debug_count, 1,
+            "debug! must stay live in release without strip_debug_logging"
+        );
+    }
+
+    clear_xdg_state_home();
+}
+
+/// Without the opt-in feature, `debug!` produces a JSONL record under
+/// every profile.
+#[test]
+#[serial]
+#[cfg(not(feature = "strip_debug_logging"))]
+fn debug_lives_in_release_default() {
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDebugLive"));
+    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
+    let guard = init_for_tests(config).unwrap();
+
+    tracing::debug!("debug-default-must-survive");
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    assert!(
+        events
+            .iter()
+            .any(|e| e.message == "debug-default-must-survive" && e.level == LogLevel::Debug),
+        "expected debug! record in JSONL; got {:#?}",
+        events
+    );
+
+    clear_xdg_state_home();
+}
+
+/// With `--features streamlib/strip_debug_logging`, release builds
+/// additionally strip `debug!` (STATIC_MAX_LEVEL = INFO) while `info!`
+/// stays live.
+#[test]
+#[serial]
+#[cfg(feature = "strip_debug_logging")]
+fn strip_debug_logging_feature_strips_debug() {
+    reset_for_test();
+    unsafe { std::env::set_var("RUST_LOG", "trace") };
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDebugStrip"));
+    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
+    let guard = init_for_tests(config).unwrap();
+
+    tracing::debug!("debug-feature-stripped-token");
+    tracing::info!("info-feature-keeps-token");
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    let debug_count = events
+        .iter()
+        .filter(|e| e.message == "debug-feature-stripped-token")
+        .count();
+    let info_count = events
+        .iter()
+        .filter(|e| e.message == "info-feature-keeps-token")
+        .count();
+
+    if cfg!(debug_assertions) {
+        // `release_max_level_*` features only apply in release.
+        assert_eq!(
+            tracing::level_filters::STATIC_MAX_LEVEL,
+            tracing::level_filters::LevelFilter::TRACE,
+            "debug builds ignore release_max_level_info"
+        );
+        assert_eq!(debug_count, 1);
+        assert_eq!(info_count, 1);
+    } else {
+        assert_eq!(
+            tracing::level_filters::STATIC_MAX_LEVEL,
+            tracing::level_filters::LevelFilter::INFO,
+            "release builds with strip_debug_logging must raise the cap to INFO"
+        );
+        assert_eq!(
+            debug_count, 0,
+            "debug! must be compiled out with strip_debug_logging"
+        );
+        assert_eq!(info_count, 1, "info! must survive strip_debug_logging");
+    }
+
+    clear_xdg_state_home();
+}
+
+/// `warn!` and `error!` must always reach the JSONL. No feature combo
+/// may strip them — production diagnostics depend on it.
+#[test]
+#[serial]
+fn warn_and_error_never_stripped() {
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_xdg_state_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestWarnErr"));
+    let config = StreamlibLoggingConfig::for_runtime("test", runtime_id);
+    let guard = init_for_tests(config).unwrap();
+
+    tracing::warn!("warn-never-stripped-token");
+    tracing::error!("error-never-stripped-token");
+
+    let path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let events = read_jsonl(&path);
+    assert!(
+        events
+            .iter()
+            .any(|e| e.message == "warn-never-stripped-token" && e.level == LogLevel::Warn),
+        "expected warn! record in JSONL; got {:#?}",
+        events
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.message == "error-never-stripped-token" && e.level == LogLevel::Error),
+        "expected error! record in JSONL; got {:#?}",
+        events
+    );
+    assert!(
+        tracing::level_filters::STATIC_MAX_LEVEL
+            >= tracing::level_filters::LevelFilter::INFO,
+        "STATIC_MAX_LEVEL must always admit warn!/error!; got {:?}",
+        tracing::level_filters::STATIC_MAX_LEVEL
+    );
+
+    clear_xdg_state_home();
+}
+
 #[test]
 #[serial]
 fn burst_surfaces_dropped_counter_record() {

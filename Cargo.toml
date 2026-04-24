@@ -60,7 +60,7 @@ disallowed_macros = "deny"
 # Core dependencies
 thiserror = "2.0.17"
 anyhow = "1.0.100"
-tracing = "0.1.41"
+tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 tokio = { version = "1.48.0", features = ["full"] }
 
