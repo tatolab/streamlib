@@ -855,19 +855,28 @@ impl SurfaceStore {
     pub fn check_in(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
         use crate::core::rhi::RhiPixelBufferExport;
 
-        // Export the DMA-BUF fd
-        let handle = pixel_buffer.export_handle()?;
-        let (fd, _size) = match handle {
-            crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
-        };
+        // Export every plane's fd. Single-plane pixel buffers return a
+        // one-element vec; multi-plane DMA-BUFs (e.g. NV12 under DRM format
+        // modifiers) return one fd per plane.
+        let planes = pixel_buffer.export_plane_handles()?;
+        let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
+        let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
+        let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
+        for handle in planes {
+            let crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } = handle;
+            plane_fds.push(fd);
+            plane_sizes.push(size as u64);
+            plane_offsets.push(0);
+        }
 
-        // Send check_in request with fd
         let request = serde_json::json!({
             "op": "check_in",
             "runtime_id": self.inner.runtime_id,
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
             "format": format!("{:?}", pixel_buffer.format()),
+            "plane_sizes": plane_sizes,
+            "plane_offsets": plane_offsets,
         });
 
         let connection = self.inner.connection.lock();
@@ -875,16 +884,25 @@ impl SurfaceStore {
             StreamError::Configuration("SurfaceStore not connected to broker".into())
         })?;
 
-        let (response, _response_fd): (serde_json::Value, _) =
-            streamlib_broker_client::send_request(stream, &request, Some(fd))
-                .map_err(|e| {
-                    StreamError::Configuration(format!("Unix socket check_in failed: {}", e))
-                })?;
+        let send_result =
+            streamlib_broker_client::send_request_with_fds(stream, &request, &plane_fds, 0);
 
-        // Close the exported fd (broker has its own dup)
-        unsafe { libc::close(fd) };
+        // Close the exported fds (broker has its own dups) regardless of
+        // the request outcome — the peer owns its kernel-delivered fds and
+        // we never keep ours.
+        for fd in &plane_fds {
+            unsafe { libc::close(*fd) };
+        }
 
-        // Extract surface_id from response
+        let (response, response_fds) = send_result.map_err(|e| {
+            StreamError::Configuration(format!("Unix socket check_in failed: {}", e))
+        })?;
+        // check_in never returns fds; close any the broker may have attached
+        // defensively so a future protocol drift doesn't leak them.
+        for fd in &response_fds {
+            unsafe { libc::close(*fd) };
+        }
+
         let surface_id = response
             .get("surface_id")
             .and_then(|v: &serde_json::Value| v.as_str())
@@ -893,7 +911,6 @@ impl SurfaceStore {
             })?
             .to_string();
 
-        // Cache locally
         self.inner
             .cache
             .lock()
@@ -937,29 +954,62 @@ impl SurfaceStore {
             StreamError::Configuration("SurfaceStore not connected to broker".into())
         })?;
 
-        let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
-            streamlib_broker_client::send_request(stream, &request, None).map_err(
-                |e| StreamError::Configuration(format!("Unix socket check_out failed: {}", e)),
-            )?;
+        let (response, received_fds) = streamlib_broker_client::send_request_with_fds(
+            stream,
+            &request,
+            &[],
+            streamlib_broker_client::MAX_DMA_BUF_PLANES,
+        )
+        .map_err(|e| {
+            StreamError::Configuration(format!("Unix socket check_out failed: {}", e))
+        })?;
 
-        // Check for error
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            for fd in &received_fds {
+                unsafe { libc::close(*fd) };
+            }
             return Err(StreamError::Configuration(format!(
                 "check_out: {}",
                 error
             )));
         }
 
-        let dma_buf_fd = received_fd.ok_or_else(|| {
-            StreamError::Configuration("check_out: no DMA-BUF fd in response".into())
-        })?;
+        if received_fds.is_empty() {
+            return Err(StreamError::Configuration(
+                "check_out: no DMA-BUF fd in response".into(),
+            ));
+        }
+
+        // The Rust-side importer is single-plane today — no in-tree Rust
+        // consumer imports a multi-plane DMA-BUF. Take plane 0 as the
+        // primary and close the rest so a future multi-plane broker payload
+        // doesn't leak fds. The polyglot shims take the full vec.
+        let dma_buf_fd = received_fds[0];
+        if received_fds.len() > 1 {
+            tracing::warn!(
+                "SurfaceStore::check_out: broker returned {} plane fds; Rust importer \
+                 consumes plane 0 only, closing the rest. Multi-plane consumers belong \
+                 in the polyglot shims for now.",
+                received_fds.len()
+            );
+            for fd in &received_fds[1..] {
+                unsafe { libc::close(*fd) };
+            }
+        }
 
         // Import pixel buffer from DMA-BUF fd
         use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
 
+        let plane0_size = response
+            .get("plane_sizes")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
         let handle = RhiExternalHandle::DmaBuf {
             fd: dma_buf_fd,
-            size: 0,
+            size: plane0_size,
         };
         let pixel_buffer =
             RhiPixelBuffer::from_external_handle(handle, 0, 0, PixelFormat::default())?;
@@ -999,14 +1049,15 @@ impl SurfaceStore {
             StreamError::Configuration("SurfaceStore not connected to broker".into())
         })?;
 
-        let (response, _): (serde_json::Value, _) =
-            streamlib_broker_client::send_request(stream, &request, Some(fd))
-                .map_err(|e| {
-                    StreamError::Configuration(format!("Unix socket register failed: {}", e))
-                })?;
-
-        // Close the exported fd
+        let send_result =
+            streamlib_broker_client::send_request_with_fds(stream, &request, &[fd], 0);
         unsafe { libc::close(fd) };
+        let (response, response_fds) = send_result.map_err(|e| {
+            StreamError::Configuration(format!("Unix socket register failed: {}", e))
+        })?;
+        for f in &response_fds {
+            unsafe { libc::close(*f) };
+        }
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
             return Err(StreamError::Configuration(format!(
@@ -1044,14 +1095,15 @@ impl SurfaceStore {
             StreamError::Configuration("SurfaceStore not connected to broker".into())
         })?;
 
-        let (response, _): (serde_json::Value, _) =
-            streamlib_broker_client::send_request(stream, &request, Some(fd))
-                .map_err(|e| {
-                    StreamError::Configuration(format!("Unix socket register_texture failed: {}", e))
-                })?;
-
-        // Close the exported fd (broker has its own dup)
+        let send_result =
+            streamlib_broker_client::send_request_with_fds(stream, &request, &[fd], 0);
         unsafe { libc::close(fd) };
+        let (response, response_fds) = send_result.map_err(|e| {
+            StreamError::Configuration(format!("Unix socket register_texture failed: {}", e))
+        })?;
+        for f in &response_fds {
+            unsafe { libc::close(*f) };
+        }
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
             return Err(StreamError::Configuration(format!(
@@ -1077,27 +1129,48 @@ impl SurfaceStore {
             StreamError::Configuration("SurfaceStore not connected to broker".into())
         })?;
 
-        let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
-            streamlib_broker_client::send_request(stream, &request, None).map_err(
-                |e| StreamError::Configuration(format!("Unix socket lookup failed: {}", e)),
-            )?;
+        let (response, received_fds) = streamlib_broker_client::send_request_with_fds(
+            stream,
+            &request,
+            &[],
+            streamlib_broker_client::MAX_DMA_BUF_PLANES,
+        )
+        .map_err(|e| {
+            StreamError::Configuration(format!("Unix socket lookup failed: {}", e))
+        })?;
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            for fd in &received_fds {
+                unsafe { libc::close(*fd) };
+            }
             return Err(StreamError::Configuration(format!(
                 "lookup: {}",
                 error
             )));
         }
 
-        let dma_buf_fd = received_fd.ok_or_else(|| {
-            StreamError::Configuration("lookup: no DMA-BUF fd in response".into())
-        })?;
+        if received_fds.is_empty() {
+            return Err(StreamError::Configuration(
+                "lookup: no DMA-BUF fd in response".into(),
+            ));
+        }
+        let dma_buf_fd = received_fds[0];
+        for fd in &received_fds[1..] {
+            unsafe { libc::close(*fd) };
+        }
 
         use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
 
+        let plane0_size = response
+            .get("plane_sizes")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+
         let handle = RhiExternalHandle::DmaBuf {
             fd: dma_buf_fd,
-            size: 0,
+            size: plane0_size,
         };
         RhiPixelBuffer::from_external_handle(handle, 0, 0, PixelFormat::default())
     }
@@ -1115,21 +1188,35 @@ impl SurfaceStore {
             StreamError::Configuration("SurfaceStore not connected to broker".into())
         })?;
 
-        let (response, received_fd): (serde_json::Value, Option<std::os::unix::io::RawFd>) =
-            streamlib_broker_client::send_request(stream, &request, None).map_err(
-                |e| StreamError::Configuration(format!("Unix socket lookup_texture failed: {}", e)),
-            )?;
+        let (response, received_fds) = streamlib_broker_client::send_request_with_fds(
+            stream,
+            &request,
+            &[],
+            streamlib_broker_client::MAX_DMA_BUF_PLANES,
+        )
+        .map_err(|e| {
+            StreamError::Configuration(format!("Unix socket lookup_texture failed: {}", e))
+        })?;
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            for fd in &received_fds {
+                unsafe { libc::close(*fd) };
+            }
             return Err(StreamError::Configuration(format!(
                 "lookup_texture: {}",
                 error
             )));
         }
 
-        let dma_buf_fd = received_fd.ok_or_else(|| {
-            StreamError::Configuration("lookup_texture: no DMA-BUF fd in response".into())
-        })?;
+        if received_fds.is_empty() {
+            return Err(StreamError::Configuration(
+                "lookup_texture: no DMA-BUF fd in response".into(),
+            ));
+        }
+        let dma_buf_fd = received_fds[0];
+        for fd in &received_fds[1..] {
+            unsafe { libc::close(*fd) };
+        }
 
         // Extract width, height, format from the response
         let width = response
@@ -1209,7 +1296,7 @@ impl SurfaceStore {
             None => return Ok(()), // Already disconnected
         };
 
-        let _ = streamlib_broker_client::send_request(stream, &request, None);
+        let _ = streamlib_broker_client::send_request_with_fds(stream, &request, &[], 0);
         Ok(())
     }
 

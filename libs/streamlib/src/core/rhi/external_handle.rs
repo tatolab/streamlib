@@ -56,6 +56,16 @@ impl RhiExternalHandle {
 pub trait RhiPixelBufferExport {
     /// Export the GPU buffer for sharing with another process.
     fn export_handle(&self) -> Result<RhiExternalHandle>;
+
+    /// Export one handle per plane for multi-plane DMA-BUFs. The default
+    /// implementation wraps [`Self::export_handle`] in a single-element vec
+    /// — correct for every single-allocation format in tree today (BGRA,
+    /// RGBA, NV12 contiguous). Backends that truly split planes across
+    /// separate allocations (e.g. NV12 under `VK_EXT_image_drm_format_modifier`
+    /// with disjoint Y and UV) must override.
+    fn export_plane_handles(&self) -> Result<Vec<RhiExternalHandle>> {
+        Ok(vec![self.export_handle()?])
+    }
 }
 
 /// Extension trait for importing RhiPixelBuffer from external handle.

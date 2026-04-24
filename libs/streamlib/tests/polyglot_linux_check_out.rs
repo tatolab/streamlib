@@ -37,7 +37,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use streamlib::core::runtime::StreamRuntime;
-use streamlib_broker_client::{connect_to_broker, send_request};
+use streamlib_broker_client::{connect_to_broker, send_request_with_fds};
 
 #[path = "common/polyglot_dma_buf_producer.rs"]
 mod polyglot_dma_buf_producer;
@@ -252,7 +252,7 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         "resource_type": "pixel_buffer",
     });
     let (resp, _) =
-        send_request(&host_stream, &check_in_req, Some(fd)).expect("host check_in");
+        send_request_with_fds(&host_stream, &check_in_req, &[fd], 0).expect("host check_in");
     unsafe { libc::close(fd) };
     let surface_id = resp
         .get("surface_id")
