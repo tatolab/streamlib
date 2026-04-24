@@ -5,7 +5,9 @@
 
 Entry point for Python subprocess processors spawned by the Rust runtime.
 Lifecycle commands (setup/run/stop/teardown) use length-prefixed JSON over
-stdin/stdout pipes. Data I/O uses direct iceoryx2 FFI via
+a dedicated Unix-domain socketpair advertised via STREAMLIB_ESCALATE_FD;
+fd1/fd2 stay as free log pipes that the host captures as `intercepted`
+records in the unified JSONL. Data I/O uses direct iceoryx2 FFI via
 libstreamlib_python_native.
 
 Usage:
@@ -17,11 +19,14 @@ Environment variables:
     STREAMLIB_PYTHON_NATIVE_LIB: Path to libstreamlib_python_native.dylib
     STREAMLIB_PROCESSOR_ID: Unique processor ID
     STREAMLIB_EXECUTION_MODE: "reactive", "continuous", or "manual"
+    STREAMLIB_ESCALATE_FD: Inherited child-end fd of the escalate IPC
+        socketpair (decimal). The host sets this before spawn.
 """
 
 import importlib
 import os
 import select
+import socket
 import sys
 import time
 import traceback
@@ -37,6 +42,38 @@ from .processor_context import (
     compute_read_buf_bytes,
     load_native_lib,
 )
+
+
+def _open_escalate_fd_stream():
+    """Resolve STREAMLIB_ESCALATE_FD and return `(read_stream, write_stream, socket)`.
+
+    Both streams wrap the inherited socketpair fd; the `socket` return is
+    kept alive so the underlying fd stays open for the life of the
+    subprocess. Exits with code 1 if the env var is missing or unparseable
+    — the host always sets it, so a missing value indicates a spawn-path
+    regression.
+    """
+    raw = os.environ.get("STREAMLIB_ESCALATE_FD")
+    if not raw:
+        sys.stderr.write(
+            "[streamlib] STREAMLIB_ESCALATE_FD not set — "
+            "escalate IPC transport unavailable\n"
+        )
+        sys.stderr.flush()
+        sys.exit(1)
+    try:
+        fd = int(raw)
+    except ValueError:
+        sys.stderr.write(
+            f"[streamlib] STREAMLIB_ESCALATE_FD is not an integer: {raw!r}\n"
+        )
+        sys.stderr.flush()
+        sys.exit(1)
+
+    sock = socket.socket(fileno=fd)
+    reader = sock.makefile("rb", buffering=0)
+    writer = sock.makefile("wb", buffering=0)
+    return reader, writer, sock
 
 
 def _load_processor_class(entrypoint: str, project_path: str):
@@ -275,15 +312,15 @@ def main():
         sys.stderr.flush()
         sys.exit(1)
 
-    # Use binary stdin/stdout for the lifecycle protocol. Capture these
-    # references BEFORE installing the stdio interceptors so the bridge
-    # keeps writing framed IPC traffic to the real fd1.
-    stdin = sys.stdin.buffer
-    stdout = sys.stdout.buffer
+    # Bridge framing rides a dedicated socketpair, not stdin/stdout —
+    # fd1/fd2 stay as log pipes (see #451). Capture the escalate fds
+    # BEFORE installing the stdio interceptors so the bridge never
+    # touches sys.stdin/sys.stdout.
+    stdin, stdout, _escalate_sock = _open_escalate_fd_stream()
 
     # Install the escalate channel so processors can call ctx.escalate_*
-    # during setup() and process(). The channel shares the same stdio pipes
-    # as the lifecycle protocol and demultiplexes responses by request_id.
+    # during setup() and process(). The channel demultiplexes responses
+    # by request_id.
     escalate_channel = EscalateChannel(stdin, stdout)
     install_channel(escalate_channel)
 

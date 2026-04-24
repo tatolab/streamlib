@@ -23,6 +23,12 @@ import {
   NativeRuntimeContextLimitedAccess,
 } from "./context.ts";
 import { EscalateChannel } from "./escalate.ts";
+import {
+  closeLibcHandle,
+  readFrame as readEscalateFrame,
+  resolveEscalateFd,
+  writeFrame as writeEscalateFrame,
+} from "./escalate_fd.ts";
 import * as log from "./log.ts";
 import type {
   ContinuousProcessor,
@@ -47,53 +53,33 @@ function fatalPreInstall(message: string): never {
 }
 
 // ============================================================================
-// Bridge protocol (length-prefixed JSON over stdin/stdout)
+// Bridge protocol — length-prefixed JSON over the dedicated
+// `STREAMLIB_ESCALATE_FD` socketpair. fd0/fd1 stay free for log capture
+// (see #451).
 // ============================================================================
 
-const stdin = Deno.stdin;
-const stdout = Deno.stdout;
+let _escalateFd = -1;
+
+function escalateFd(): number {
+  if (_escalateFd < 0) _escalateFd = resolveEscalateFd();
+  return _escalateFd;
+}
 
 async function bridgeReadJson(): Promise<Record<string, unknown>> {
-  const lenBuf = new Uint8Array(4);
-  let bytesRead = 0;
-  while (bytesRead < 4) {
-    const n = await stdin.read(lenBuf.subarray(bytesRead));
-    if (n === null) throw new Error("stdin closed");
-    bytesRead += n;
-  }
-
-  const view = new DataView(lenBuf.buffer);
-  const len = view.getUint32(0, false); // big-endian
-
-  const msgBuf = new Uint8Array(len);
-  bytesRead = 0;
-  while (bytesRead < len) {
-    const n = await stdin.read(msgBuf.subarray(bytesRead));
-    if (n === null) throw new Error("stdin closed");
-    bytesRead += n;
-  }
-
-  const text = new TextDecoder().decode(msgBuf);
-  return JSON.parse(text);
+  return await readEscalateFrame(escalateFd());
 }
 
 async function bridgeSendJson(msg: Record<string, unknown>): Promise<void> {
-  const text = JSON.stringify(msg);
-  const encoded = new TextEncoder().encode(text);
-  const lenBuf = new Uint8Array(4);
-  const view = new DataView(lenBuf.buffer);
-  view.setUint32(0, encoded.length, false); // big-endian
-
-  // Serialize concurrent writes (lifecycle replies + escalate requests) so
-  // the length prefix and payload aren't interleaved across async tasks.
+  // Serialize concurrent writes (lifecycle replies + escalate requests)
+  // so the length prefix and payload aren't interleaved across async
+  // tasks sharing the same fd.
   await writeLock;
   let release: () => void;
   writeLock = new Promise<void>((resolve) => {
     release = resolve;
   });
   try {
-    await stdout.write(lenBuf);
-    await stdout.write(encoded);
+    await writeEscalateFrame(escalateFd(), msg);
   } finally {
     release!();
   }
@@ -170,6 +156,7 @@ async function main(): Promise<void> {
       error: String(e),
     });
     await bridgeSendJson({ rpc: "error", error: `Failed to load native lib: ${e}` });
+    closeLibcHandle();
     await log.shutdown();
     Deno.exit(1);
   }
@@ -180,6 +167,7 @@ async function main(): Promise<void> {
   if (ctxPtr === null) {
     log.error("Failed to create native context", { processor_id: processorId });
     await bridgeSendJson({ rpc: "error", error: "Failed to create native context" });
+    closeLibcHandle();
     await log.shutdown();
     Deno.exit(1);
   }
@@ -505,6 +493,7 @@ async function main(): Promise<void> {
             }
             lib.symbols.sldn_context_destroy(ctxPtr);
             lib.close();
+            closeLibcHandle();
             await log.shutdown();
             Deno.exit(0);
           }
@@ -570,6 +559,7 @@ async function main(): Promise<void> {
           // Cleanup native context
           lib.symbols.sldn_context_destroy(ctxPtr);
           lib.close();
+          closeLibcHandle();
           await log.shutdown();
           Deno.exit(0);
         }
@@ -581,9 +571,10 @@ async function main(): Promise<void> {
       }
     }
   } catch (e) {
-    const isStdinClosed = e instanceof Error && e.message === "stdin closed";
-    if (isStdinClosed) {
-      log.info("stdin closed, shutting down");
+    const isEscalateClosed = e instanceof Error &&
+      e.message === "escalate fd closed";
+    if (isEscalateClosed) {
+      log.info("escalate fd closed, shutting down");
     } else {
       log.error("Fatal error", { error: String(e) });
     }
@@ -597,8 +588,9 @@ async function main(): Promise<void> {
     escalateChannel.cancelAll("subprocess shutting down");
     lib.symbols.sldn_context_destroy(ctxPtr);
     lib.close();
+    closeLibcHandle();
     await log.shutdown();
-    Deno.exit(isStdinClosed ? 0 : 1);
+    Deno.exit(isEscalateClosed ? 0 : 1);
   }
 }
 

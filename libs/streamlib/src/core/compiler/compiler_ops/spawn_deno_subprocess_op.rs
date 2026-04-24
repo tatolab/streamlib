@@ -15,7 +15,7 @@ use crate::core::{
     ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
 
-use super::subprocess_bridge::SubprocessBridge;
+use super::subprocess_bridge::{spawn_fd_line_reader, EscalateTransport, SubprocessBridge};
 
 // ============================================================================
 // DenoSubprocessHostProcessor — Rust host for Deno subprocess processors
@@ -136,12 +136,6 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 .arg(runner_path.to_str().unwrap_or(""))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
-                // Pipe stderr (was inherit) so we can intercept fd2 writes
-                // — both Deno runtime chatter and any third-party native
-                // module writing directly to fd2 — and surface them as
-                // `intercepted=true, channel="fd2", source="deno"` records
-                // in the unified JSONL pipeline. fd1 is reserved for the
-                // length-prefixed IPC channel and is NOT captured. See #444.
                 .stderr(Stdio::piped())
                 .env("STREAMLIB_ENTRYPOINT", &self.entrypoint)
                 .env(
@@ -155,6 +149,12 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             #[cfg(target_os = "linux")]
             command.env("STREAMLIB_BROKER_SOCKET", ctx.surface_socket_path());
 
+            // Escalate IPC rides a dedicated `AF_UNIX` socketpair, not
+            // fd1/fd2, so the subprocess's stdout/stderr can be captured
+            // as `intercepted` log pipes without corrupting the framed
+            // JSON protocol. See #451.
+            let mut escalate_transport = EscalateTransport::attach(&mut command)?;
+
             let mut child = command.spawn()
                 .map_err(|e| {
                     StreamError::Runtime(format!(
@@ -163,6 +163,8 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                     ))
                 })?;
 
+            escalate_transport.release_child_end();
+
             let child_pid = child.id();
             tracing::info!(
                 "[{}] Deno subprocess spawned: pid={}",
@@ -170,52 +172,38 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 child_pid
             );
 
-            let stdin = child.stdin.take().ok_or_else(|| {
-                StreamError::Runtime("Failed to capture subprocess stdin".to_string())
-            })?;
-            let stdout = child.stdout.take().ok_or_else(|| {
-                StreamError::Runtime("Failed to capture subprocess stdout".to_string())
-            })?;
-
-            // Defense-in-depth log capture on the subprocess's fd2 (stderr).
-            // Records are tagged `intercepted=true, channel="fd2",
-            // source="deno"` so a JSONL consumer can tell these apart from
-            // first-party `streamlib.log.*` records. fd1 is reserved for
-            // the length-prefixed IPC channel and is NOT captured — any
-            // raw writes to fd1 would desynchronize bridge framing. See
-            // #444 / #451.
+            // Capture fd1 and fd2 from the subprocess as `intercepted`
+            // log pipes. Each line produced on either pipe surfaces as
+            // `tracing::warn!(intercepted=true, channel="fd1"|"fd2",
+            // source="deno")` in the unified JSONL. fd1 used to be
+            // reserved for framed IPC; #451 moved IPC to a socketpair
+            // so fd1 is now free to capture raw writes.
+            if let Some(stdout) = child.stdout.take() {
+                spawn_fd_line_reader(
+                    stdout,
+                    "dn-stdout",
+                    "fd1",
+                    &self.processor_id,
+                );
+            }
             if let Some(stderr) = child.stderr.take() {
-                let proc_id = self.processor_id.clone();
-                std::thread::Builder::new()
-                    .name(format!("dn-stderr-{}", &proc_id[..8.min(proc_id.len())]))
-                    .spawn(move || {
-                        use std::io::{BufRead, BufReader};
-                        let reader = BufReader::new(stderr);
-                        for line in reader.lines() {
-                            match line {
-                                Ok(text) if !text.is_empty() => {
-                                    tracing::warn!(
-                                        target: "streamlib::polyglot::deno",
-                                        intercepted = true,
-                                        channel = "fd2",
-                                        source = "deno",
-                                        processor_id = %proc_id,
-                                        "{}",
-                                        text
-                                    );
-                                }
-                                Err(_) => break,
-                                _ => {}
-                            }
-                        }
-                    })
-                    .ok();
+                spawn_fd_line_reader(
+                    stderr,
+                    "dn-stderr",
+                    "fd2",
+                    &self.processor_id,
+                );
             }
 
             // Clone the sandbox so the bridge reader thread can dispatch
             // escalate requests on behalf of the subprocess.
             let sandbox = ctx.gpu_limited_access().clone();
-            let bridge = SubprocessBridge::new(stdin, stdout, sandbox, self.processor_id.clone());
+            let escalate_stream = escalate_transport.into_parent_stream();
+            let bridge = SubprocessBridge::new(
+                escalate_stream,
+                sandbox,
+                self.processor_id.clone(),
+            )?;
 
             self.child = Some(child);
             self.bridge = Some(bridge);
