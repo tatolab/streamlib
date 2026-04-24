@@ -1469,7 +1469,7 @@ mod tests {
     mod runtime_internal_broker {
         use super::*;
         use std::os::unix::net::UnixStream;
-        use streamlib_broker_client::send_request;
+        use streamlib_broker_client::{send_request_with_fds, MAX_DMA_BUF_PLANES};
 
         /// Replace XDG_RUNTIME_DIR with a fresh tempdir for the duration of the
         /// closure. Tests using this must be `#[serial]` so no other runtime
@@ -1517,8 +1517,10 @@ mod tests {
                     "op": "check_out",
                     "surface_id": "ping-no-such-surface",
                 });
-                let (resp, fd) = send_request(&stream, &req, None).expect("round-trip");
-                assert!(fd.is_none());
+                let (resp, fds) =
+                    send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                        .expect("round-trip");
+                assert!(fds.is_empty());
                 assert!(
                     resp.get("error").and_then(|v| v.as_str()).is_some(),
                     "expected error for missing surface, got {:?}",
@@ -1577,7 +1579,9 @@ mod tests {
                         "op": "check_out",
                         "surface_id": "no-such",
                     });
-                    let (resp, _) = send_request(&stream, &req, None).expect("round-trip");
+                    let (resp, _) =
+                        send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                            .expect("round-trip");
                     assert!(resp.get("error").is_some());
                 }
             });
@@ -1654,7 +1658,9 @@ mod tests {
                     "op": "check_out",
                     "surface_id": "no-such",
                 });
-                let (resp, _) = send_request(&stream, &req, None).expect("round-trip");
+                let (resp, _) =
+                    send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                        .expect("round-trip");
                 assert!(resp.get("error").is_some());
             });
         }

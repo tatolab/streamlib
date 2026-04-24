@@ -52,6 +52,25 @@ impl RhiPixelBuffer {
         &self.ref_
     }
 
+    /// Number of DMA-BUF planes backing this pixel buffer. Always `>= 1`.
+    /// Mirror of `slpn_gpu_surface_plane_count` on the polyglot shims.
+    pub fn plane_count(&self) -> u32 {
+        self.ref_.plane_count()
+    }
+
+    /// Mapped base address for the given plane, or null if out of range.
+    /// Plane 0 on a VMA-allocated or single-plane-imported buffer points
+    /// at the same bytes as [`mapped_ptr`](RhiPixelBufferRef::plane_base_address)
+    /// with index 0.
+    pub fn plane_base_address(&self, plane_index: u32) -> *mut u8 {
+        self.ref_.plane_base_address(plane_index)
+    }
+
+    /// Byte size of the given plane, or `0` if out of range.
+    pub fn plane_size(&self, plane_index: u32) -> u64 {
+        self.ref_.plane_size(plane_index)
+    }
+
     /// Get the raw platform pointer (CVPixelBufferRef on macOS).
     #[cfg(target_os = "macos")]
     pub fn as_ptr(&self) -> *mut std::ffi::c_void {

@@ -56,11 +56,21 @@ impl RhiExternalHandle {
 pub trait RhiPixelBufferExport {
     /// Export the GPU buffer for sharing with another process.
     fn export_handle(&self) -> Result<RhiExternalHandle>;
+
+    /// Export one handle per plane for multi-plane DMA-BUFs. The default
+    /// implementation wraps [`Self::export_handle`] in a single-element vec
+    /// — correct for every single-allocation format in tree today (BGRA,
+    /// RGBA, NV12 contiguous). Backends that truly split planes across
+    /// separate allocations (e.g. NV12 under `VK_EXT_image_drm_format_modifier`
+    /// with disjoint Y and UV) must override.
+    fn export_plane_handles(&self) -> Result<Vec<RhiExternalHandle>> {
+        Ok(vec![self.export_handle()?])
+    }
 }
 
 /// Extension trait for importing RhiPixelBuffer from external handle.
 pub trait RhiPixelBufferImport {
-    /// Import a GPU buffer from an external handle.
+    /// Import a GPU buffer from a single external handle.
     fn from_external_handle(
         handle: RhiExternalHandle,
         width: u32,
@@ -69,6 +79,33 @@ pub trait RhiPixelBufferImport {
     ) -> Result<Self>
     where
         Self: Sized;
+
+    /// Import a multi-plane GPU buffer from one external handle per plane.
+    ///
+    /// The default implementation only accepts a single-plane input —
+    /// backends that can't natively represent multiple planes still
+    /// compile and refuse multi-plane input at runtime. Linux overrides
+    /// with a real multi-plane import so the Rust surface-store path
+    /// keeps feature parity with the polyglot Python and Deno shims.
+    fn from_external_plane_handles(
+        handles: &[RhiExternalHandle],
+        width: u32,
+        height: u32,
+        format: super::PixelFormat,
+    ) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        match handles {
+            [only] => Self::from_external_handle(only.clone(), width, height, format),
+            [] => Err(crate::core::StreamError::Configuration(
+                "from_external_plane_handles: empty plane vec".into(),
+            )),
+            _ => Err(crate::core::StreamError::NotSupported(
+                "multi-plane import is only implemented on Linux today".into(),
+            )),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -88,7 +125,20 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         height: u32,
         format: super::PixelFormat,
     ) -> Result<Self> {
-        let RhiExternalHandle::DmaBuf { fd, size } = handle;
+        Self::from_external_plane_handles(&[handle], width, height, format)
+    }
+
+    fn from_external_plane_handles(
+        handles: &[RhiExternalHandle],
+        width: u32,
+        height: u32,
+        format: super::PixelFormat,
+    ) -> Result<Self> {
+        if handles.is_empty() {
+            return Err(crate::core::StreamError::Configuration(
+                "DMA-BUF import: empty plane vec".into(),
+            ));
+        }
 
         let vulkan_device =
             crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
@@ -107,26 +157,38 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
             ));
         }
 
-        let allocation_size = if size > 0 {
-            size as u64
-        } else if width > 0 && height > 0 {
-            (width as u64) * (height as u64) * (bytes_per_pixel as u64)
-        } else {
-            return Err(crate::core::StreamError::Configuration(
-                "DMA-BUF import: cannot determine allocation size (size=0, width=0 or height=0)"
-                    .into(),
-            ));
-        };
+        // Unpack every plane's fd + size. Every handle must be a DmaBuf
+        // today — Windows / macOS handles would trip this and belong in a
+        // future widening when those backends grow multi-plane surfaces.
+        let mut fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(handles.len());
+        let mut plane_sizes: Vec<vulkanalia::vk::DeviceSize> = Vec::with_capacity(handles.len());
+        for (idx, h) in handles.iter().enumerate() {
+            let RhiExternalHandle::DmaBuf { fd, size } = h.clone();
+            fds.push(fd);
+            let effective = if size > 0 {
+                size as vulkanalia::vk::DeviceSize
+            } else if idx == 0 && width > 0 && height > 0 {
+                // Plane 0 falls back to width*height*bpp (back-compat with
+                // legacy single-plane callers that don't pass a size).
+                (width as u64) * (height as u64) * (bytes_per_pixel as u64)
+            } else {
+                return Err(crate::core::StreamError::Configuration(format!(
+                    "DMA-BUF import: plane {} has size=0 and cannot be derived",
+                    idx
+                )));
+            };
+            plane_sizes.push(effective);
+        }
 
         let vulkan_pixel_buffer =
-            crate::vulkan::rhi::VulkanPixelBuffer::from_dma_buf_fd(
+            crate::vulkan::rhi::VulkanPixelBuffer::from_dma_buf_fds(
                 vulkan_device,
-                fd,
+                &fds,
+                &plane_sizes,
                 width,
                 height,
                 bytes_per_pixel,
                 format,
-                allocation_size,
             )?;
 
         let pixel_buffer_ref = super::RhiPixelBufferRef {

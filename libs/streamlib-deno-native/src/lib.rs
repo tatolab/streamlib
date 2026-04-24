@@ -786,12 +786,23 @@ mod gpu_surface {
     pub const SURFACE_BACKEND_VULKAN: u32 = 2;
 
     pub struct SurfaceHandle {
-        pub fd: RawFd,
+        /// One fd per DMA-BUF plane. Multi-plane DMA-BUFs (e.g. NV12 under
+        /// DRM format modifiers with disjoint Y/UV allocations) carry one
+        /// per plane, keyed by plane index; single-plane surfaces carry a
+        /// one-element vec. Mirrors the Python-native twin.
+        pub fds: Vec<RawFd>,
+        pub plane_sizes: Vec<u64>,
+        pub plane_offsets: Vec<u64>,
         pub width: u32,
         pub height: u32,
         pub bytes_per_row: u32,
+        /// Total byte size across all planes — the sum of `plane_sizes`.
         pub size: u64,
+        /// Host-mapped base address of plane 0, populated by `lock` (Vulkan
+        /// path) or `plane_mmap` (CPU path). Multi-plane accessor reads
+        /// from [`Self::plane_mapped_ptrs`].
         pub mapped_ptr: *mut u8,
+        pub plane_mapped_ptrs: Vec<*mut u8>,
         pub is_locked: bool,
         /// Vulkan device attached by [`super::broker_client::sldn_broker_resolve_surface`].
         /// `None` means the broker could not create a Vulkan device and lock
@@ -805,21 +816,35 @@ mod gpu_surface {
         pub backend: u32,
     }
 
+    impl SurfaceHandle {
+        pub fn base_address(&self, plane_index: usize) -> *mut u8 {
+            if plane_index == 0 && !self.mapped_ptr.is_null() {
+                return self.mapped_ptr;
+            }
+            match self.plane_mapped_ptrs.get(plane_index) {
+                Some(&p) => p,
+                None => std::ptr::null_mut(),
+            }
+        }
+    }
+
     impl Drop for SurfaceHandle {
         fn drop(&mut self) {
-            // Tear down any outstanding Vulkan import (lock without unlock).
-            // `lock` imports a dup of `self.fd`; Vulkan owns that dup. Freeing
-            // the imported memory releases the dup, not `self.fd`.
             if self.is_locked {
                 if let Some(device) = self.vulkan_device.as_ref() {
                     device.destroy_imported(self.vulkan_buffer, self.vulkan_memory);
                 }
             }
-            // The original fd stays with the SurfaceHandle across lock/unlock
-            // cycles — close it last.
-            if self.fd >= 0 {
-                unsafe {
-                    libc::close(self.fd);
+            for (i, ptr) in self.plane_mapped_ptrs.iter().enumerate() {
+                if !ptr.is_null() {
+                    if let Some(size) = self.plane_sizes.get(i) {
+                        unsafe { libc::munmap(*ptr as *mut libc::c_void, *size as usize) };
+                    }
+                }
+            }
+            for fd in &self.fds {
+                if *fd >= 0 {
+                    unsafe { libc::close(*fd) };
                 }
             }
         }
@@ -843,7 +868,15 @@ mod gpu_surface {
         if handle.is_locked {
             return 0;
         }
-        if handle.size == 0 || handle.fd < 0 {
+        // Vulkan lock imports plane 0 only — multi-plane Vulkan producers
+        // do not exist in tree yet. Multi-plane consumers use
+        // `sldn_gpu_surface_plane_mmap` for CPU access to non-0 planes.
+        let fd0 = match handle.fds.first() {
+            Some(&fd) if fd >= 0 => fd,
+            _ => return -1,
+        };
+        let plane0_size = handle.plane_sizes.first().copied().unwrap_or(handle.size);
+        if plane0_size == 0 {
             return -1;
         }
         let device = match handle.vulkan_device.as_ref() {
@@ -856,10 +889,7 @@ mod gpu_surface {
                 return -1;
             }
         };
-        // Dup the fd before import: vkAllocateMemory takes ownership of the
-        // fd on success. Keeping the original fd on the SurfaceHandle lets
-        // the caller lock/unlock/lock again (each lock imports a fresh dup).
-        let dup_fd = unsafe { libc::dup(handle.fd) };
+        let dup_fd = unsafe { libc::dup(fd0) };
         if dup_fd < 0 {
             tracing::error!(
                 "gpu_surface_lock: dup fd failed: {}",
@@ -867,15 +897,13 @@ mod gpu_surface {
             );
             return -1;
         }
-        let imported = match device.import_dma_buf_fd(dup_fd, handle.size) {
+        let imported = match device.import_dma_buf_fd(dup_fd, plane0_size) {
             Ok(i) => i,
             Err(e) => {
                 tracing::error!(
                     "gpu_surface_lock: Vulkan DMA-BUF import failed for fd {} ({}B): {}",
-                    handle.fd, handle.size, e
+                    fd0, plane0_size, e
                 );
-                // On import failure Vulkan has not taken the fd — we must
-                // close the dup ourselves.
                 unsafe { libc::close(dup_fd) };
                 return -1;
             }
@@ -885,6 +913,59 @@ mod gpu_surface {
         handle.mapped_ptr = imported.mapped_ptr;
         handle.is_locked = true;
         handle.backend = SURFACE_BACKEND_VULKAN;
+        0
+    }
+
+    /// mmap a specific plane into user space. See the Python twin for the
+    /// full contract.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_plane_mmap(
+        handle: *mut SurfaceHandle,
+        plane_index: u32,
+    ) -> i32 {
+        let handle = match unsafe { handle.as_mut() } {
+            Some(h) => h,
+            None => return -1,
+        };
+        let idx = plane_index as usize;
+        let fd = match handle.fds.get(idx) {
+            Some(&fd) if fd >= 0 => fd,
+            _ => return -1,
+        };
+        let size = match handle.plane_sizes.get(idx) {
+            Some(&s) if s > 0 => s as usize,
+            _ => return -1,
+        };
+        if handle
+            .plane_mapped_ptrs
+            .get(idx)
+            .map(|p| !p.is_null())
+            .unwrap_or(false)
+        {
+            return 0;
+        }
+        let offset = handle.plane_offsets.get(idx).copied().unwrap_or(0) as libc::off_t;
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                offset,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            tracing::error!(
+                "sldn_gpu_surface_plane_mmap: mmap failed for plane {} (fd {}, size {}): {}",
+                idx, fd, size, std::io::Error::last_os_error()
+            );
+            return -1;
+        }
+        handle.plane_mapped_ptrs[idx] = ptr as *mut u8;
+        if idx == 0 && handle.mapped_ptr.is_null() {
+            handle.mapped_ptr = ptr as *mut u8;
+        }
         0
     }
 
@@ -926,9 +1007,44 @@ mod gpu_surface {
         handle: *const SurfaceHandle,
     ) -> *mut u8 {
         match unsafe { handle.as_ref() } {
-            Some(h) => h.mapped_ptr,
+            Some(h) => h.base_address(0),
             None => std::ptr::null_mut(),
         }
+    }
+
+    /// Per-plane base address accessor. Returns null if the plane index is
+    /// out of range, if the plane is not mmap'd, or if the handle is null.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_plane_base_address(
+        handle: *const SurfaceHandle,
+        plane_index: u32,
+    ) -> *mut u8 {
+        match unsafe { handle.as_ref() } {
+            Some(h) => h.base_address(plane_index as usize),
+            None => std::ptr::null_mut(),
+        }
+    }
+
+    /// Number of DMA-BUF planes on this surface (always >= 1).
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_plane_count(
+        handle: *const SurfaceHandle,
+    ) -> u32 {
+        unsafe { handle.as_ref() }
+            .map(|h| h.fds.len() as u32)
+            .unwrap_or(0)
+    }
+
+    /// Byte size of the given plane, or `0` if the plane index is out of
+    /// range or the handle is null.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_gpu_surface_plane_size(
+        handle: *const SurfaceHandle,
+        plane_index: u32,
+    ) -> u64 {
+        unsafe { handle.as_ref() }
+            .and_then(|h| h.plane_sizes.get(plane_index as usize).copied())
+            .unwrap_or(0)
     }
 
     #[unsafe(no_mangle)]
@@ -966,7 +1082,10 @@ mod gpu_surface {
         // Linux surface IDs are broker UUIDs (strings), not u32 IOSurfaceIDs;
         // return the fd as a best-effort numeric token. See the Python twin
         // in streamlib-python-native for the same behavior.
-        unsafe { handle.as_ref() }.map(|h| h.fd as u32).unwrap_or(0)
+        unsafe { handle.as_ref() }
+            .and_then(|h| h.fds.first().copied())
+            .map(|fd| fd as u32)
+            .unwrap_or(0)
     }
 
     #[unsafe(no_mangle)]
@@ -1778,7 +1897,9 @@ mod broker_client {
     const MAX_RESOLVE_CACHE: usize = 128;
 
     struct CachedSurface {
-        fd: RawFd,
+        fds: Vec<RawFd>,
+        plane_sizes: Vec<u64>,
+        plane_offsets: Vec<u64>,
         width: u32,
         height: u32,
         bytes_per_row: u32,
@@ -1787,8 +1908,10 @@ mod broker_client {
 
     impl Drop for CachedSurface {
         fn drop(&mut self) {
-            if self.fd >= 0 {
-                unsafe { libc::close(self.fd) };
+            for fd in &self.fds {
+                if *fd >= 0 {
+                    unsafe { libc::close(*fd) };
+                }
             }
         }
     }
@@ -1939,22 +2062,38 @@ mod broker_client {
         {
             let cache = broker.resolve_cache.lock().expect("poisoned");
             if let Some(cached) = cache.get(&pool_id_str) {
-                let dup_fd = unsafe { libc::dup(cached.fd) };
-                if dup_fd < 0 {
-                    tracing::error!(
-                        "broker_resolve_surface: dup cached fd failed for '{}': {}",
-                        pool_id_str,
-                        std::io::Error::last_os_error()
-                    );
+                let mut dup_fds: Vec<RawFd> = Vec::with_capacity(cached.fds.len());
+                let mut dup_ok = true;
+                for fd in &cached.fds {
+                    let dup = unsafe { libc::dup(*fd) };
+                    if dup < 0 {
+                        tracing::error!(
+                            "broker_resolve_surface: dup cached fd failed for '{}': {}",
+                            pool_id_str,
+                            std::io::Error::last_os_error()
+                        );
+                        dup_ok = false;
+                        break;
+                    }
+                    dup_fds.push(dup);
+                }
+                if !dup_ok {
+                    for fd in &dup_fds {
+                        unsafe { libc::close(*fd) };
+                    }
                     return std::ptr::null_mut();
                 }
+                let n_planes = dup_fds.len();
                 return Box::into_raw(Box::new(SurfaceHandle {
-                    fd: dup_fd,
+                    fds: dup_fds,
+                    plane_sizes: cached.plane_sizes.clone(),
+                    plane_offsets: cached.plane_offsets.clone(),
                     width: cached.width,
                     height: cached.height,
                     bytes_per_row: cached.bytes_per_row,
                     size: cached.size,
                     mapped_ptr: std::ptr::null_mut(),
+                    plane_mapped_ptrs: vec![std::ptr::null_mut(); n_planes],
                     is_locked: false,
                     vulkan_device: Some(Arc::clone(&vulkan_device)),
                     vulkan_buffer: vk::Buffer::null(),
@@ -1982,7 +2121,12 @@ mod broker_client {
             "op": "check_out",
             "surface_id": pool_id_str,
         });
-        let (response, received_fd) = match wire::send_request(stream, &request, None) {
+        let (response, received_fds) = match wire::send_request_with_fds(
+            stream,
+            &request,
+            &[],
+            wire::MAX_DMA_BUF_PLANES,
+        ) {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(
@@ -1997,22 +2141,19 @@ mod broker_client {
                 "broker_resolve_surface: broker error for '{}': {}",
                 pool_id_str, err
             );
-            if let Some(fd) = received_fd {
-                unsafe { libc::close(fd) };
+            for fd in &received_fds {
+                unsafe { libc::close(*fd) };
             }
             return std::ptr::null_mut();
         }
 
-        let dma_buf_fd = match received_fd {
-            Some(fd) => fd,
-            None => {
-                tracing::error!(
-                    "broker_resolve_surface: no DMA-BUF fd for '{}'",
-                    pool_id_str
-                );
-                return std::ptr::null_mut();
-            }
-        };
+        if received_fds.is_empty() {
+            tracing::error!(
+                "broker_resolve_surface: no DMA-BUF fd for '{}'",
+                pool_id_str
+            );
+            return std::ptr::null_mut();
+        }
 
         let width = response.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
         let height = response.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -2022,10 +2163,42 @@ mod broker_client {
             .unwrap_or("Bgra32");
         let bpp = bytes_per_pixel_from_format(format_str);
         let bytes_per_row = width.saturating_mul(bpp);
-        let size = (height as u64).saturating_mul(bytes_per_row as u64);
 
-        let cache_fd = unsafe { libc::dup(dma_buf_fd) };
-        if cache_fd >= 0 {
+        // Zero size = "unknown" → use the width*bpp*height fallback so the
+        // Vulkan import path still has a byte count.
+        let fallback_total = (height as u64).saturating_mul(bytes_per_row as u64);
+        let plane_sizes: Vec<u64> = {
+            let raw: Option<Vec<u64>> = response
+                .get("plane_sizes")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect());
+            match raw {
+                Some(v) if v.len() == received_fds.len() => v
+                    .into_iter()
+                    .map(|s| if s == 0 { fallback_total } else { s })
+                    .collect(),
+                _ => vec![fallback_total; received_fds.len()],
+            }
+        };
+        let plane_offsets: Vec<u64> = response
+            .get("plane_offsets")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .filter(|v: &Vec<u64>| v.len() == received_fds.len())
+            .unwrap_or_else(|| vec![0u64; received_fds.len()]);
+        let size: u64 = plane_sizes.iter().copied().sum();
+
+        let mut cache_fds: Vec<RawFd> = Vec::with_capacity(received_fds.len());
+        let mut cache_dup_ok = true;
+        for fd in &received_fds {
+            let dup = unsafe { libc::dup(*fd) };
+            if dup < 0 {
+                cache_dup_ok = false;
+                break;
+            }
+            cache_fds.push(dup);
+        }
+        if cache_dup_ok {
             let mut cache = broker.resolve_cache.lock().expect("poisoned");
             if cache.len() >= MAX_RESOLVE_CACHE {
                 tracing::error!(
@@ -2037,22 +2210,32 @@ mod broker_client {
             cache.insert(
                 pool_id_str.clone(),
                 CachedSurface {
-                    fd: cache_fd,
+                    fds: cache_fds,
+                    plane_sizes: plane_sizes.clone(),
+                    plane_offsets: plane_offsets.clone(),
                     width,
                     height,
                     bytes_per_row,
                     size,
                 },
             );
+        } else {
+            for fd in &cache_fds {
+                unsafe { libc::close(*fd) };
+            }
         }
 
+        let n_planes = received_fds.len();
         Box::into_raw(Box::new(SurfaceHandle {
-            fd: dma_buf_fd,
+            fds: received_fds,
+            plane_sizes,
+            plane_offsets,
             width,
             height,
             bytes_per_row,
             size,
             mapped_ptr: std::ptr::null_mut(),
+            plane_mapped_ptrs: vec![std::ptr::null_mut(); n_planes],
             is_locked: false,
             vulkan_device: Some(vulkan_device),
             vulkan_buffer: vk::Buffer::null(),
@@ -2116,7 +2299,7 @@ mod broker_client {
                 "surface_id": pool_id_str,
                 "runtime_id": broker.runtime_id,
             });
-            let _ = wire::send_request(stream, &request, None);
+            let _ = wire::send_request_with_fds(stream, &request, &[], 0);
         }
     }
 }
