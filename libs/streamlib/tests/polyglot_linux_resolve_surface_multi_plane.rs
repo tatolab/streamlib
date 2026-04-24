@@ -1,28 +1,30 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Multi-plane DMA-BUF round-trip through the polyglot consumer shims.
+//! Multi-plane DMA-BUF round-trip through the polyglot consumer shims and
+//! the Rust-side `SurfaceStore::check_out` path.
 //!
-//! This is the shim-level exit-criterion test for the multi-FD SCM_RIGHTS
-//! widening (#423). A real `StreamRuntime` runs the surface-sharing service;
-//! the host side `check_in`s a 2-plane surface built from two memfds seeded
-//! with distinct byte patterns; the shim's `*_broker_resolve_surface`
-//! resolves the surface_id, and `*_gpu_surface_plane_mmap` plus
-//! `*_gpu_surface_plane_base_address` expose each plane's bytes so the test
-//! can assert the patterns survived the wire.
+//! This is the shim + Rust-importer exit-criterion test for the multi-FD
+//! SCM_RIGHTS widening (#423). A real `StreamRuntime` runs the
+//! surface-sharing service; the host side `check_in`s a 2-plane surface,
+//! then each language consumer (Python, Deno, Rust) resolves that
+//! surface and verifies both planes' bytes survived the wire.
 //!
-//! memfds stand in for real DMA-BUFs here. The shim never maps them as
-//! GPU memory (no Vulkan `lock` call in this test), so SCM_RIGHTS +
-//! `mmap(MAP_SHARED)` is enough to verify the wire + per-plane layout.
-//! The Vulkan `lock` path is covered by the existing
-//! `polyglot_linux_check_out*` tests with real DMA-BUFs.
+//! The Python / Deno shim tests use memfds as stand-ins for real
+//! DMA-BUFs — the shim only `mmap`s them, never Vulkan-imports, so
+//! SCM_RIGHTS + `mmap(MAP_SHARED)` is enough.
+//!
+//! The Rust-side test goes through `VulkanPixelBuffer::from_dma_buf_fds`
+//! via `SurfaceStore::check_out`, which *does* Vulkan-import each plane.
+//! NVIDIA's driver rejects memfds as DMA_BUF_EXT handles, so the Rust
+//! case uses `TestDmaBufProducer` to mint two real Vulkan-exported
+//! DMA-BUFs (one per plane) — same helper the existing
+//! `polyglot_linux_check_out*` tests already rely on.
 //!
 //! Skip conditions:
-//!   - `libstreamlib_{python,deno}_native.so` not under target/ → skip (as
-//!     with the existing polyglot tests).
-//!   - no Vulkan-capable device available to the shim → skip; the shim's
-//!     resolve_surface gates on `BrokerVulkanDevice::try_new()` even for
-//!     mmap-only consumers.
+//!   - `libstreamlib_{python,deno}_native.so` not under target/ → skip
+//!     the Python/Deno shim case (Rust case is unaffected).
+//!   - no Vulkan-capable device available → skip every case.
 
 #![cfg(target_os = "linux")]
 
@@ -275,4 +277,166 @@ fn deno_native_resolve_surface_multi_plane() {
         }
     };
     run_shim_test(lib, "sldn_", ConnectFlavor::OneArg);
+}
+
+#[path = "common/polyglot_dma_buf_producer.rs"]
+mod polyglot_dma_buf_producer;
+
+/// Rust analogue of the Python / Deno shim tests: the host check_ins a
+/// 2-plane surface backed by real Vulkan-exported DMA-BUFs, then the
+/// Rust consumer calls `SurfaceStore::check_out` and confirms the
+/// returned `RhiPixelBuffer` carries two mapped planes whose bytes match
+/// the source patterns. This is the symmetry gate — if the Rust
+/// importer silently dropped a plane, this test fails.
+#[test]
+fn rust_surface_store_resolve_surface_multi_plane() {
+    use polyglot_dma_buf_producer::TestDmaBufProducer;
+    use streamlib::core::context::GpuContext;
+    use streamlib::core::context::SurfaceStore;
+
+    // Initialize the process-global `VulkanDevice` — `SurfaceStore::check_out`
+    // needs it for DMA-BUF import. `GpuContext::init_for_platform` wires up
+    // the global; duplicate calls across tests are accepted via
+    // `OnceLock::get_or_init`.
+    if GpuContext::init_for_platform_sync().is_err() {
+        eprintln!(
+            "rust_surface_store_resolve_surface_multi_plane: no Vulkan device — skipping"
+        );
+        return;
+    }
+
+    let producer = match TestDmaBufProducer::try_new() {
+        Ok(p) => p,
+        Err(reason) => {
+            eprintln!(
+                "rust_surface_store_resolve_surface_multi_plane: no Vulkan DMA-BUF \
+                 producer — skipping ({})",
+                reason
+            );
+            return;
+        }
+    };
+
+    let runtime = StreamRuntime::new().expect("StreamRuntime::new");
+    let socket_path = runtime.surface_socket_path().to_path_buf();
+    let runtime_id = runtime.runtime_id().to_string();
+
+    // Produce two independent DMA-BUFs with distinct byte patterns so
+    // any cross-plane swap would be visible on readback.
+    let plane_y: Vec<u8> = (0..(64 * 4))
+        .map(|i| (((i as u32) * 19 + 3) & 0xFF) as u8)
+        .collect();
+    let plane_uv: Vec<u8> = (0..(64 * 4))
+        .map(|i| (((i as u32) * 31 + 137) & 0xFF) as u8)
+        .collect();
+    let fd_y = match producer.produce(&plane_y) {
+        Ok(fd) => fd,
+        Err(reason) => {
+            eprintln!(
+                "rust_surface_store_resolve_surface_multi_plane: Vulkan producer plane 0 \
+                 failed — skipping ({})",
+                reason
+            );
+            return;
+        }
+    };
+    let fd_uv = match producer.produce(&plane_uv) {
+        Ok(fd) => fd,
+        Err(reason) => {
+            unsafe { libc::close(fd_y) };
+            eprintln!(
+                "rust_surface_store_resolve_surface_multi_plane: Vulkan producer plane 1 \
+                 failed — skipping ({})",
+                reason
+            );
+            return;
+        }
+    };
+
+    // Host-side: check_in both fds as planes of a single surface directly
+    // on the wire (no multi-plane Rust producer exists yet, so we
+    // synthesize the check_in instead of going through
+    // `SurfaceStore::check_in`). This exercises the SAME wire the
+    // polyglot shims consume.
+    let host_stream = connect_to_broker(&socket_path).expect("host connect");
+    let check_in_req = serde_json::json!({
+        "op": "check_in",
+        "runtime_id": runtime_id,
+        "width": 64u32,
+        "height": 4u32,
+        "format": "Nv12VideoRange",
+        "resource_type": "pixel_buffer",
+        "plane_sizes": [plane_y.len() as u64, plane_uv.len() as u64],
+        "plane_offsets": [0u64, 0u64],
+    });
+    let (resp, _) = send_request_with_fds(&host_stream, &check_in_req, &[fd_y, fd_uv], 0)
+        .expect("host check_in");
+    unsafe {
+        libc::close(fd_y);
+        libc::close(fd_uv);
+    }
+    let surface_id = resp
+        .get("surface_id")
+        .and_then(|v| v.as_str())
+        .expect("surface_id in check_in response")
+        .to_string();
+    drop(host_stream);
+
+    // Consumer-side: build a SurfaceStore pointing at the same runtime
+    // socket, connect, call check_out. This is the critical symmetry
+    // check — the Rust consumer must see both planes, not just plane 0.
+    let store = SurfaceStore::new(
+        socket_path.to_string_lossy().to_string(),
+        runtime_id.clone(),
+    );
+    store.connect().expect("SurfaceStore connect");
+
+    let pixel_buffer = store
+        .check_out(&surface_id)
+        .expect("SurfaceStore::check_out");
+
+    assert_eq!(
+        pixel_buffer.plane_count(),
+        2,
+        "Rust importer must see 2 planes — symmetry with polyglot shims"
+    );
+    assert_eq!(
+        pixel_buffer.plane_size(0) as usize,
+        plane_y.len(),
+        "plane 0 size"
+    );
+    assert_eq!(
+        pixel_buffer.plane_size(1) as usize,
+        plane_uv.len(),
+        "plane 1 size"
+    );
+
+    let p0 = pixel_buffer.plane_base_address(0);
+    let p1 = pixel_buffer.plane_base_address(1);
+    assert!(!p0.is_null(), "plane 0 mapped");
+    assert!(!p1.is_null(), "plane 1 mapped");
+    let mapped0 = unsafe { std::slice::from_raw_parts(p0, plane_y.len()) };
+    let mapped1 = unsafe { std::slice::from_raw_parts(p1, plane_uv.len()) };
+    assert_eq!(mapped0, plane_y.as_slice(), "plane 0 content preserved");
+    assert_eq!(mapped1, plane_uv.as_slice(), "plane 1 content preserved");
+
+    // Out-of-range index returns 0 / null.
+    assert_eq!(pixel_buffer.plane_size(7), 0);
+    assert!(pixel_buffer.plane_base_address(7).is_null());
+
+    drop(pixel_buffer);
+    store.disconnect().ok();
+
+    // Best-effort release.
+    let stream = connect_to_broker(&socket_path).expect("reconnect for release");
+    let _ = send_request_with_fds(
+        &stream,
+        &serde_json::json!({
+            "op": "release",
+            "surface_id": surface_id,
+            "runtime_id": runtime_id,
+        }),
+        &[],
+        0,
+    );
 }

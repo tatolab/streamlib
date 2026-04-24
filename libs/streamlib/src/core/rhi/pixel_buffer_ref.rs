@@ -74,6 +74,52 @@ impl RhiPixelBufferRef {
         }
     }
 
+    /// Number of DMA-BUF planes backing this pixel buffer.
+    ///
+    /// `1` for VMA-allocated buffers and single-plane DMA-BUF imports.
+    /// `N` for multi-plane imports — mirror of
+    /// `slpn_gpu_surface_plane_count` / `sldn_gpu_surface_plane_count`
+    /// on the polyglot shim side. On macOS and unsupported platforms
+    /// this always reports `1`.
+    pub fn plane_count(&self) -> u32 {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.plane_count()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            1
+        }
+    }
+
+    /// Mapped base address for `plane_index`, or null if the plane index
+    /// is out of range or the backend doesn't expose CPU-mapped planes.
+    pub fn plane_base_address(&self, plane_index: u32) -> *mut u8 {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.plane_mapped_ptr(plane_index)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = plane_index;
+            std::ptr::null_mut()
+        }
+    }
+
+    /// Byte size of `plane_index`, or `0` if the plane index is out of
+    /// range.
+    pub fn plane_size(&self, plane_index: u32) -> u64 {
+        #[cfg(target_os = "linux")]
+        {
+            self.inner.plane_size(plane_index) as u64
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = plane_index;
+            0
+        }
+    }
+
     /// Get the raw platform pointer (CVPixelBufferRef on macOS).
     #[cfg(target_os = "macos")]
     pub fn as_ptr(&self) -> *mut std::ffi::c_void {

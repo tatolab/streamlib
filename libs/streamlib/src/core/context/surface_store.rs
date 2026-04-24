@@ -980,39 +980,28 @@ impl SurfaceStore {
             ));
         }
 
-        // The Rust-side importer is single-plane today — no in-tree Rust
-        // consumer imports a multi-plane DMA-BUF. Take plane 0 as the
-        // primary and close the rest so a future multi-plane broker payload
-        // doesn't leak fds. The polyglot shims take the full vec.
-        let dma_buf_fd = received_fds[0];
-        if received_fds.len() > 1 {
-            tracing::warn!(
-                "SurfaceStore::check_out: broker returned {} plane fds; Rust importer \
-                 consumes plane 0 only, closing the rest. Multi-plane consumers belong \
-                 in the polyglot shims for now.",
-                received_fds.len()
-            );
-            for fd in &received_fds[1..] {
-                unsafe { libc::close(*fd) };
-            }
-        }
-
-        // Import pixel buffer from DMA-BUF fd
+        // Import every plane as a `RhiExternalHandle::DmaBuf`. The Rust
+        // importer now tracks the full vec symmetrically with the
+        // polyglot Python / Deno shims — no plane is dropped.
         use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
 
-        let plane0_size = response
+        let plane_sizes: Vec<u64> = response
             .get("plane_sizes")
             .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .filter(|v: &Vec<u64>| v.len() == received_fds.len())
+            .unwrap_or_else(|| vec![0u64; received_fds.len()]);
 
-        let handle = RhiExternalHandle::DmaBuf {
-            fd: dma_buf_fd,
-            size: plane0_size,
-        };
+        let handles: Vec<RhiExternalHandle> = received_fds
+            .iter()
+            .zip(plane_sizes.iter())
+            .map(|(fd, size)| RhiExternalHandle::DmaBuf {
+                fd: *fd,
+                size: *size as usize,
+            })
+            .collect();
         let pixel_buffer =
-            RhiPixelBuffer::from_external_handle(handle, 0, 0, PixelFormat::default())?;
+            RhiPixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())?;
 
         // Cache for future use
         self.inner
@@ -1154,25 +1143,25 @@ impl SurfaceStore {
                 "lookup: no DMA-BUF fd in response".into(),
             ));
         }
-        let dma_buf_fd = received_fds[0];
-        for fd in &received_fds[1..] {
-            unsafe { libc::close(*fd) };
-        }
 
         use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
 
-        let plane0_size = response
+        let plane_sizes: Vec<u64> = response
             .get("plane_sizes")
             .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .filter(|v: &Vec<u64>| v.len() == received_fds.len())
+            .unwrap_or_else(|| vec![0u64; received_fds.len()]);
 
-        let handle = RhiExternalHandle::DmaBuf {
-            fd: dma_buf_fd,
-            size: plane0_size,
-        };
-        RhiPixelBuffer::from_external_handle(handle, 0, 0, PixelFormat::default())
+        let handles: Vec<RhiExternalHandle> = received_fds
+            .iter()
+            .zip(plane_sizes.iter())
+            .map(|(fd, size)| RhiExternalHandle::DmaBuf {
+                fd: *fd,
+                size: *size as usize,
+            })
+            .collect();
+        RhiPixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())
     }
 
     /// Lookup a texture from the broker via Unix socket.
