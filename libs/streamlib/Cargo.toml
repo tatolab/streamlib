@@ -20,6 +20,9 @@ backend-metal = []
 backend-vulkan = ["dep:vulkanalia"]
 # MoQ (Media over QUIC) transport layer for network-transparent IPC
 moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url", "dep:rustls-native-certs"]
+# Strip `debug!` (and `trace!`) from release builds. Opt-in per deployment
+# image. `warn!` / `error!` / `info!` are never stripped. See docs/logging.md.
+strip_debug_logging = ["tracing/release_max_level_info"]
 
 [dependencies]
 # Execution types (shared with macros for code generation)
