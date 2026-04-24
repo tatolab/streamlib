@@ -185,6 +185,9 @@ fn run_worker(
                     );
                     m
                 },
+                source: None,
+                source_ts: None,
+                source_seq: None,
             };
             write_one(
                 &synthetic,
@@ -262,12 +265,17 @@ fn drain_queue(
 fn write_one(
     record: &LogRecord,
     runtime_id: &str,
-    source: Source,
+    worker_source: Source,
     writer: &mut Option<JsonlBatchedWriter>,
     stdout_sink: &mut Option<Box<dyn std::io::Write + Send>>,
     serialize_buf: &mut Vec<u8>,
     pretty_buf: &mut String,
 ) {
+    // A record carries its own `source` only when it originated outside the
+    // worker's runtime (polyglot subprocess records). Tracing-sourced
+    // records leave it `None` and inherit the worker's configured source.
+    let source = record.source.unwrap_or(worker_source);
+
     // Build a full JSONL event and serialize once.
     let event = RuntimeLogEvent {
         schema_version: SCHEMA_VERSION,
@@ -280,8 +288,8 @@ fn write_one(
         pipeline_id: record.pipeline_id.clone(),
         processor_id: record.processor_id.clone(),
         rhi_op: record.rhi_op.clone(),
-        source_ts: None,
-        source_seq: None,
+        source_ts: record.source_ts.clone(),
+        source_seq: record.source_seq,
         intercepted: record.intercepted,
         channel: record.channel.clone(),
         attrs: record.attrs.clone(),

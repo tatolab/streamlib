@@ -8,7 +8,8 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Type, Union, get_args, get_origin
+from enum import Enum
+from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
 
 
 @dataclass
@@ -24,6 +25,7 @@ class EscalateRequest:
         variants: Dict[str, Type[EscalateRequest]] = {
             "acquire_pixel_buffer": EscalateRequestAcquirePixelBuffer,
             "acquire_texture": EscalateRequestAcquireTexture,
+            "log": EscalateRequestLog,
             "release_handle": EscalateRequestReleaseHandle,
         }
 
@@ -77,7 +79,9 @@ class EscalateRequestAcquirePixelBuffer(EscalateRequest):
 class EscalateRequestAcquireTexture(EscalateRequest):
     format: 'str'
     """
-    Texture format identifier (rgba8_unorm, bgra8_unorm, rgba16_float, ...).
+    Texture format identifier. Lowercase snake-case names: rgba8_unorm,
+    rgba8_unorm_srgb, bgra8_unorm, bgra8_unorm_srgb, rgba16_float, rgba32_float,
+    nv12.
     """
 
     height: 'int'
@@ -92,8 +96,10 @@ class EscalateRequestAcquireTexture(EscalateRequest):
 
     usage: 'List[str]'
     """
-    Usage tokens (copy_src, copy_dst, texture_binding, storage_binding,
-    render_attachment).
+    Usage flags the texture must support. Non-empty array of lowercase
+    snake-case tokens drawn from: copy_src, copy_dst, texture_binding,
+    storage_binding, render_attachment. Host validates — unknown tokens return
+    an error response.
     """
 
     width: 'int'
@@ -120,6 +126,134 @@ class EscalateRequestAcquireTexture(EscalateRequest):
         data["request_id"] = _to_json_data(self.request_id)
         data["usage"] = _to_json_data(self.usage)
         data["width"] = _to_json_data(self.width)
+        return data
+
+class EscalateRequestLogLevel(Enum):
+    """
+    Severity level of the record. Maps 1:1 onto tracing::Level.
+    """
+
+    DEBUG = "debug"
+    ERROR = "error"
+    INFO = "info"
+    TRACE = "trace"
+    WARN = "warn"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestLogLevel':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestLogSource(Enum):
+    """
+    Origin runtime of the record. Always "python" or "deno" on the wire — Rust
+    never routes through escalate; Rust call sites hit `tracing::*!()` directly
+    on the host.
+    """
+
+    DENO = "deno"
+    PYTHON = "python"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestLogSource':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestLog(EscalateRequest):
+    attrs: 'Dict[str, Any]'
+    """
+    User-supplied structured fields. Copied flat onto the emitted
+    RuntimeLogEvent's `attrs` map — not nested under an `attrs.key` path in
+    the JSONL.
+    """
+
+    channel: 'Optional[str]'
+    """
+    Interceptor channel when `intercepted: true`. Conventional values: "stdout",
+    "stderr", "console.log", "logging", "fd1", "fd2". Null when `intercepted:
+    false`.
+    """
+
+    intercepted: 'bool'
+    """
+    True when the record was captured from subprocess stdout/stderr,
+    console.log, root logging handler, or a raw fd write, rather than a direct
+    `streamlib.log.*` call.
+    """
+
+    level: 'EscalateRequestLogLevel'
+    """
+    Severity level of the record. Maps 1:1 onto tracing::Level.
+    """
+
+    message: 'str'
+    """
+    Primary human-readable message.
+    """
+
+    pipeline_id: 'Optional[str]'
+    """
+    Pipeline identifier. Null for runtime-level records.
+    """
+
+    processor_id: 'Optional[str]'
+    """
+    Processor identifier. Null outside a processor.
+    """
+
+    source: 'EscalateRequestLogSource'
+    """
+    Origin runtime of the record. Always "python" or "deno" on the wire — Rust
+    never routes through escalate; Rust call sites hit `tracing::*!()` directly
+    on the host.
+    """
+
+    source_seq: 'str'
+    """
+    Subprocess-monotonic sequence number (uint64 as string — JTD has no native
+    u64). Escape hatch for recovering subprocess-local order within a single
+    source. Not authoritative across sources — use `host_ts` for merged-stream
+    ordering.
+    """
+
+    source_ts: 'str'
+    """
+    Subprocess wall-clock timestamp ISO8601 (advisory). Never used for ordering;
+    the host stamps `host_ts` on receipt as the authoritative sort key.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestLog':
+        return cls(
+            "log",
+            _from_json_data(Dict[str, Any], data.get("attrs")),
+            _from_json_data(Optional[str], data.get("channel")),
+            _from_json_data(bool, data.get("intercepted")),
+            _from_json_data(EscalateRequestLogLevel, data.get("level")),
+            _from_json_data(str, data.get("message")),
+            _from_json_data(Optional[str], data.get("pipeline_id")),
+            _from_json_data(Optional[str], data.get("processor_id")),
+            _from_json_data(EscalateRequestLogSource, data.get("source")),
+            _from_json_data(str, data.get("source_seq")),
+            _from_json_data(str, data.get("source_ts")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "log" }
+        data["attrs"] = _to_json_data(self.attrs)
+        data["channel"] = _to_json_data(self.channel)
+        data["intercepted"] = _to_json_data(self.intercepted)
+        data["level"] = _to_json_data(self.level)
+        data["message"] = _to_json_data(self.message)
+        data["pipeline_id"] = _to_json_data(self.pipeline_id)
+        data["processor_id"] = _to_json_data(self.processor_id)
+        data["source"] = _to_json_data(self.source)
+        data["source_seq"] = _to_json_data(self.source_seq)
+        data["source_ts"] = _to_json_data(self.source_ts)
         return data
 
 @dataclass

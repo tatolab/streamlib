@@ -676,9 +676,16 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
                 }
             }
 
-            processed_line = processed_line.replace("Option<Box<", "Option<");
-            if processed_line.contains("Option<") {
-                processed_line = processed_line.replacen(">>", ">", 1);
+            // Strip the `Box<...>` that jtd-codegen wraps optional recursive
+            // field types in, but only touch `>>` that we actually opened —
+            // otherwise unrelated nested generics like
+            // `HashMap<String, Option<Value>>` lose their closing bracket.
+            let boxed_count = processed_line.matches("Option<Box<").count();
+            if boxed_count > 0 {
+                processed_line = processed_line.replace("Option<Box<", "Option<");
+                for _ in 0..boxed_count {
+                    processed_line = processed_line.replacen(">>", ">", 1);
+                }
             }
 
             for (full_name, short_name) in &name_renames {
