@@ -421,9 +421,10 @@ fn capture_thread_loop(
             include_bytes!("shaders/yuyv_to_rgba.spv"),
         ),
         _ => {
-            eprintln!(
-                "[Camera {}] Unsupported format {:?} — no GPU compute shader available",
-                camera_name, fourcc
+            tracing::error!(
+                camera = camera_name,
+                ?fourcc,
+                "unsupported format — no GPU compute shader available",
             );
             return;
         }
@@ -460,7 +461,7 @@ fn capture_thread_loop(
             match unsafe { allocator.create_buffer(input_buffer_info, &input_alloc_opts) } {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("[Camera {}] Failed to create input SSBO[{}]: {}", camera_name, i, e);
+                    tracing::error!(camera = camera_name, ssbo_index = i, error = %e, "failed to create input SSBO");
                     for j in 0..i {
                         if let Some(alloc) = input_allocations[j].take() {
                             unsafe { allocator.destroy_buffer(input_buffers[j], alloc) };
@@ -492,7 +493,7 @@ fn capture_thread_loop(
     let shader_module = match unsafe { device.create_shader_module(&shader_module_info, None) } {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("[Camera {}] Failed to create shader module: {}", camera_name, e);
+            tracing::error!(camera = camera_name, error = %e, "failed to create shader module");
             unsafe {
                 for k in 0..2 {
                     if let Some(alloc) = input_allocations[k].take() {
@@ -527,7 +528,7 @@ fn capture_thread_loop(
         match unsafe { device.create_descriptor_set_layout(&descriptor_set_layout_info, None) } {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[Camera {}] Failed to create descriptor set layout: {}", camera_name, e);
+                tracing::error!(camera = camera_name, error = %e, "failed to create descriptor set layout");
                 unsafe {
                     device.destroy_shader_module(shader_module, None);
                     for k in 0..2 {
@@ -558,7 +559,7 @@ fn capture_thread_loop(
         match unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) } {
             Ok(l) => l,
             Err(e) => {
-                eprintln!("[Camera {}] Failed to create pipeline layout: {}", camera_name, e);
+                tracing::error!(camera = camera_name, error = %e, "failed to create pipeline layout");
                 unsafe {
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
@@ -589,7 +590,7 @@ fn capture_thread_loop(
     } {
         Ok((pipelines, _)) => pipelines[0],
         Err(e) => {
-            eprintln!("[Camera {}] Failed to create compute pipeline: {}", camera_name, e);
+            tracing::error!(camera = camera_name, error = %e, "failed to create compute pipeline");
             unsafe {
                 device.destroy_pipeline_layout(pipeline_layout, None);
                 device.destroy_descriptor_set_layout(descriptor_set_layout, None);
@@ -625,7 +626,7 @@ fn capture_thread_loop(
         match unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) } {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("[Camera {}] Failed to create descriptor pool: {}", camera_name, e);
+                tracing::error!(camera = camera_name, error = %e, "failed to create descriptor pool");
                 unsafe {
                     device.destroy_pipeline(compute_pipeline, None);
                     device.destroy_pipeline_layout(pipeline_layout, None);
@@ -650,7 +651,7 @@ fn capture_thread_loop(
     let descriptor_set = match unsafe { device.allocate_descriptor_sets(&alloc_info) } {
         Ok(sets) => sets[0],
         Err(e) => {
-            eprintln!("[Camera {}] Failed to allocate descriptor set: {}", camera_name, e);
+            tracing::error!(camera = camera_name, error = %e, "failed to allocate descriptor set");
             unsafe {
                 device.destroy_descriptor_pool(descriptor_pool, None);
                 device.destroy_pipeline(compute_pipeline, None);
@@ -678,7 +679,7 @@ fn capture_thread_loop(
     let compute_command_pool = match unsafe { device.create_command_pool(&pool_info, None) } {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[Camera {}] Failed to create compute command pool: {}", camera_name, e);
+            tracing::error!(camera = camera_name, error = %e, "failed to create compute command pool");
             unsafe {
                 device.destroy_descriptor_pool(descriptor_pool, None);
                 device.destroy_pipeline(compute_pipeline, None);
@@ -705,7 +706,7 @@ fn capture_thread_loop(
         match unsafe { device.allocate_command_buffers(&cmd_alloc_info) } {
             Ok(bufs) => bufs[0],
             Err(e) => {
-                eprintln!("[Camera {}] Failed to allocate compute command buffer: {}", camera_name, e);
+                tracing::error!(camera = camera_name, error = %e, "failed to allocate compute command buffer");
                 unsafe {
                     device.destroy_command_pool(compute_command_pool, None);
                     device.destroy_descriptor_pool(descriptor_pool, None);
@@ -738,10 +739,7 @@ fn capture_thread_loop(
         match unsafe { device.create_semaphore(&timeline_semaphore_info, None) } {
             Ok(s) => s,
             Err(e) => {
-                eprintln!(
-                    "[Camera {}] Failed to create timeline semaphore: {}",
-                    camera_name, e
-                );
+                tracing::error!(camera = camera_name, error = %e, "failed to create timeline semaphore");
                 unsafe {
                     device.destroy_command_pool(compute_command_pool, None);
                     device.destroy_descriptor_pool(descriptor_pool, None);
@@ -785,9 +783,11 @@ fn capture_thread_loop(
         let vk_texture = match VulkanTexture::new(vulkan_device, &ring_texture_desc) {
             Ok(t) => t,
             Err(e) => {
-                eprintln!(
-                    "[Camera {}] Failed to create ring texture[{}]: {}",
-                    camera_name, i, e
+                tracing::error!(
+                    camera = camera_name,
+                    ring_index = i,
+                    error = %e,
+                    "failed to create ring texture",
                 );
                 unsafe {
                     device.destroy_semaphore(camera_timeline_semaphore, None);
@@ -809,9 +809,11 @@ fn capture_thread_loop(
 
         // Create image view eagerly so we can fail fast
         if let Err(e) = vk_texture.image_view() {
-            eprintln!(
-                "[Camera {}] Failed to create ring texture[{}] image view: {}",
-                camera_name, i, e
+            tracing::error!(
+                camera = camera_name,
+                ring_index = i,
+                error = %e,
+                "failed to create ring texture image view",
             );
             unsafe {
                 device.destroy_semaphore(camera_timeline_semaphore, None);
@@ -838,10 +840,11 @@ fn capture_thread_loop(
             let surface_store = gpu_context.surface_store();
             if let Some(store) = surface_store {
                 if let Err(e) = store.register_texture(&texture_id, &stream_texture) {
-                    eprintln!(
-                        "[Camera {}] Failed to register ring texture[{}] with broker: {} \
-                         (cross-process GPU sharing unavailable, same-process still works)",
-                        camera_name, i, e
+                    tracing::warn!(
+                        camera = camera_name,
+                        ring_index = i,
+                        error = %e,
+                        "failed to register ring texture with broker — cross-process GPU sharing unavailable, same-process still works",
                     );
                 }
             }
@@ -852,9 +855,12 @@ fn capture_thread_loop(
         ring_textures.push(stream_texture);
     }
 
-    eprintln!(
-        "[Camera {}] Ring textures created: {} x {}x{} RGBA8 DEVICE_LOCAL DMA-BUF exportable (STORAGE | SAMPLED)",
-        camera_name, RING_TEXTURE_COUNT, width, height
+    tracing::info!(
+        camera = camera_name,
+        count = RING_TEXTURE_COUNT,
+        width,
+        height,
+        "ring textures created (RGBA8 DEVICE_LOCAL DMA-BUF exportable, STORAGE | SAMPLED)",
     );
 
     // Get ring texture image handles and views for compute dispatch
@@ -905,9 +911,14 @@ fn capture_thread_loop(
     let dispatch_y = (height + 15) / 16;
     let output_buffer_size = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
 
-    eprintln!(
-        "[Camera {}] GPU compute pipeline ready ({:?}, {}x{}, dispatch {}x{})",
-        camera_name, fourcc, width, height, dispatch_x, dispatch_y
+    tracing::info!(
+        camera = camera_name,
+        ?fourcc,
+        width,
+        height,
+        dispatch_x,
+        dispatch_y,
+        "GPU compute pipeline ready",
     );
 
     // -----------------------------------------------------------------------
@@ -962,10 +973,7 @@ fn capture_thread_loop(
             );
 
             if expbuf_result != 0 {
-                eprintln!(
-                    "[Camera {}] VIDIOC_EXPBUF not supported — using MMAP path",
-                    camera_name
-                );
+                tracing::info!(camera = camera_name, "VIDIOC_EXPBUF not supported — using MMAP path");
                 false
             } else {
                 let probe_fd = expbuf.fd;
@@ -996,9 +1004,10 @@ fn capture_thread_loop(
                                         true
                                     }
                                     Err(e) => {
-                                        eprintln!(
-                                            "[Camera {}] DMA-BUF bind failed: {} — using MMAP path",
-                                            camera_name, e
+                                        tracing::warn!(
+                                            camera = camera_name,
+                                            error = %e,
+                                            "DMA-BUF bind failed — using MMAP path",
                                         );
                                         vulkan_device.free_imported_memory(memory);
                                         device.destroy_buffer(buffer, None);
@@ -1111,9 +1120,10 @@ fn capture_thread_loop(
 
             if all_imported {
                 use_dmabuf = true;
-                eprintln!(
-                    "[Camera {}] DMA-BUF zero-copy enabled ({} buffers imported into Vulkan)",
-                    camera_name, V4L2_BUFFER_COUNT
+                tracing::info!(
+                    camera = camera_name,
+                    buffers_imported = V4L2_BUFFER_COUNT,
+                    "DMA-BUF zero-copy enabled",
                 );
             } else {
                 // Clean up any partially imported buffers
@@ -1133,10 +1143,7 @@ fn capture_thread_loop(
                         }
                     }
                 }
-                eprintln!(
-                    "[Camera {}] DMA-BUF partial import failed — using MMAP path",
-                    camera_name
-                );
+                tracing::warn!(camera = camera_name, "DMA-BUF partial import failed — using MMAP path");
             }
         }
     }
@@ -1193,7 +1200,7 @@ fn capture_thread_loop(
                 }
                 if poll_result < 0 {
                     if is_capturing.load(Ordering::Acquire) {
-                        eprintln!("[Camera {}] V4L2 poll error", camera_name);
+                        tracing::error!(camera = camera_name, "V4L2 poll error");
                     }
                     break;
                 }
@@ -1209,7 +1216,7 @@ fn capture_thread_loop(
                 ) != 0
                 {
                     if is_capturing.load(Ordering::Acquire) {
-                        eprintln!("[Camera {}] DQBUF failed", camera_name);
+                        tracing::error!(camera = camera_name, "DQBUF failed");
                     }
                     continue;
                 }
@@ -1250,7 +1257,7 @@ fn capture_thread_loop(
                 }
                 Err(e) => {
                     if is_capturing.load(Ordering::Acquire) {
-                        eprintln!("[Camera {}] V4L2 stream error: {}", camera_name, e);
+                        tracing::error!(camera = camera_name, error = %e, "V4L2 stream error");
                     }
                     break;
                 }
@@ -1304,10 +1311,7 @@ fn capture_thread_loop(
                 Ok(result) => result,
                 Err(e) => {
                     if frame_num == 0 {
-                        eprintln!(
-                            "[Camera {}] Failed to acquire pixel buffer: {}",
-                            camera_name, e
-                        );
+                        tracing::error!(camera = camera_name, error = %e, "failed to acquire pixel buffer");
                     }
                     if let Some(mut v4l2_buf) = v4l2_requeue_buf {
                         unsafe {
@@ -1600,10 +1604,7 @@ fn capture_thread_loop(
 
             if let Err(e) = vulkan_device.submit_to_queue(queue, &[submit], vk::Fence::null()) {
                 if frame_num == 0 {
-                    eprintln!(
-                        "[Camera {}] Failed to submit compute dispatch: {}",
-                        camera_name, e
-                    );
+                    tracing::error!(camera = camera_name, error = %e, "failed to submit compute dispatch");
                 }
                 if let Some(mut v4l2_buf) = v4l2_requeue_buf {
                     libc::ioctl(
@@ -1655,18 +1656,23 @@ fn capture_thread_loop(
         };
 
         if let Err(e) = outputs.write("video", &ipc_frame) {
-            eprintln!("[Camera {}] Failed to write frame: {}", camera_name, e);
+            tracing::error!(camera = camera_name, error = %e, "failed to write frame");
             continue;
         }
 
         if frame_num == 0 {
             let mode = if use_dmabuf { "DMA-BUF zero-copy" } else { "MMAP + memcpy" };
-            eprintln!(
-                "[Camera {}] First frame captured via GPU compute ({}, seq={}, {}x{} {:?})",
-                camera_name, mode, frame_sequence, width, height, fourcc
+            tracing::info!(
+                camera = camera_name,
+                mode,
+                seq = frame_sequence,
+                width,
+                height,
+                ?fourcc,
+                "first frame captured via GPU compute",
             );
         } else if frame_num % 300 == 0 {
-            eprintln!("[Camera {}] Frame #{}", camera_name, frame_num);
+            tracing::debug!(camera = camera_name, frame = frame_num, "frame milestone");
         }
 
         // Toggle ping-pong index for next frame (MMAP path only)

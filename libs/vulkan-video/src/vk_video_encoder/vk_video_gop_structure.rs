@@ -414,6 +414,7 @@ impl VkVideoGopStructure {
     /// Print the GOP structure for `num_frames` frames.
     ///
     /// Equivalent to the C++ `PrintGopStructure` virtual method.
+    #[allow(clippy::disallowed_macros)] // diagnostic dumper invoked from test bins; stdout is the output channel
     pub fn print_gop_structure(&self, num_frames: u64) {
         // Frame Index
         print!("\nFrame Index:   ");
@@ -492,6 +493,7 @@ impl VkVideoGopStructure {
     /// Dump a single frame's GOP structure info.
     ///
     /// Equivalent to the C++ `DumpFrameGopStructure` method.
+    #[allow(clippy::disallowed_macros)] // diagnostic dumper invoked from test bins; stdout is the output channel
     pub fn dump_frame_gop_structure(
         &self,
         gop_state: &mut GopState,
@@ -513,6 +515,7 @@ impl VkVideoGopStructure {
     /// Dump GOP structure for a range of frames.
     ///
     /// Equivalent to the C++ `DumpFramesGopStructure` method.
+    #[allow(clippy::disallowed_macros)] // diagnostic dumper invoked from test bins; stdout is the output channel
     pub fn dump_frames_gop_structure(
         &self,
         first_frame_num_in_input_order: u64,

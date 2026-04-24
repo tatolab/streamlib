@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![allow(clippy::disallowed_macros)] // codegen binary: stdout is the output channel
+
 //! Generates JSON Schema files for streamlib API responses.
 //!
 //! Run with: `cargo run --bin generate_schemas`

@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
+# streamlib:lint-logging:allow-file — subprocess bootstrap; writes to sys.stderr before the log pipeline is installed
 
 """Subprocess runner for Python processors (native FFI mode).
 

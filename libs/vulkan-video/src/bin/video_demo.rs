@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![allow(clippy::disallowed_macros)] // dev demo binary: stdout is the output channel
+
 //! Video demo: encode NV12 fixture with SimpleEncoder, decode with SimpleDecoder,
 //! produce MP4 files for visual verification.
 

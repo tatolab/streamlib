@@ -375,8 +375,15 @@ impl SimpleEncoder {
         self.encode_config = Some(config.clone());
         self.configured = true;
         self.effective_quality_level = effective_quality_level;
-        eprintln!("[ENCODER] configured: {}x{} codec={:?} quality={}->{} dpb={}",
-            aligned_w, aligned_h, self.codec_flag, config.quality_level, effective_quality_level, max_dpb);
+        tracing::info!(
+            width = aligned_w,
+            height = aligned_h,
+            codec = ?self.codec_flag,
+            quality_level = config.quality_level,
+            effective_quality_level,
+            max_dpb,
+            "encoder configured",
+        );
         self.frame_count = 0;
         self.poc_counter = 0;
         self.encode_order_count = 0;

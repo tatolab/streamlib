@@ -1,0 +1,7 @@
+disallowed-macros = [
+    { path = "std::println", reason = "Use tracing::info! / streamlib.log.info() instead. See docs/logging.md." },
+    { path = "std::eprintln", reason = "Use tracing::warn! / tracing::error! / streamlib.log.warn() instead. See docs/logging.md." },
+    { path = "std::print", reason = "Use tracing::info! / streamlib.log.info() instead. See docs/logging.md." },
+    { path = "std::eprint", reason = "Use tracing::warn! / tracing::error! / streamlib.log.warn() instead. See docs/logging.md." },
+    { path = "std::dbg", reason = "Use tracing::debug! instead. See docs/logging.md." },
+]

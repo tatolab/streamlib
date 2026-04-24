@@ -142,11 +142,16 @@ fn build_components(
             ) {
                 Ok(w) => (Some(w), Some(path)),
                 Err(e) => {
-                    eprintln!(
-                        "streamlib::logging: failed to open JSONL file {}: {} — continuing with stdout only",
-                        path.display(),
-                        e
-                    );
+                    // Pre-init error path: the tracing subscriber we're trying to
+                    // build owns this error — emit via raw stderr before giving up.
+                    #[allow(clippy::disallowed_macros)]
+                    {
+                        eprintln!(
+                            "streamlib::logging: failed to open JSONL file {}: {} — continuing with stdout only",
+                            path.display(),
+                            e
+                        );
+                    }
                     (None, None)
                 }
             }
@@ -171,10 +176,14 @@ fn build_components(
                 (Some(pending), Some(files.real_stdout))
             }
             Err(e) => {
-                eprintln!(
-                    "streamlib::logging: failed to install stdio interceptor: {} — continuing without interception",
-                    e
-                );
+                // Pre-init error path: interceptor failed before the subscriber exists.
+                #[allow(clippy::disallowed_macros)]
+                {
+                    eprintln!(
+                        "streamlib::logging: failed to install stdio interceptor: {} — continuing without interception",
+                        e
+                    );
+                }
                 (None, None)
             }
         }

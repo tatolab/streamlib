@@ -175,7 +175,7 @@ impl LinuxAudioCaptureProcessor::Processor {
                     };
 
                     if let Err(e) = outputs_clone.write("audio", &ipc_frame) {
-                        eprintln!("[AudioCapture] Failed to write frame: {}", e);
+                        tracing::error!(error = %e, "AudioCapture: failed to write frame");
                     }
                 },
                 move |err| {

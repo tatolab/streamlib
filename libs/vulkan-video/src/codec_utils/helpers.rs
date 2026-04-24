@@ -657,6 +657,7 @@ impl DeviceUuidUtils {
 
     /// Format as the standard 8-4-4-4-12 hex string.
     /// Port of `DeviceUuidUtils::ToString`.
+    #[allow(clippy::inherent_to_string_shadow_display)]
     pub fn to_string(&self) -> String {
         let mut s = String::with_capacity(36);
         for (i, byte) in self.device_uuid.iter().enumerate() {

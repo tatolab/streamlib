@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
+# streamlib:lint-logging:allow-file — installs the unified pathway; must touch sys.stdout/sys.stderr directly
 
 """Subprocess-side interceptors that route `print`, raw stdout/stderr
 writes, and `logging` records through `streamlib.log`.
