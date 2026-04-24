@@ -26,6 +26,12 @@ tempfile = "3.15"
 # Recursive file walk for lint-logging
 walkdir = "2.5"
 
+# Rust AST parsing for lint-logging — matches clippy's disallowed_macros
+# semantics (respects #[cfg(test)], #[allow(clippy::disallowed_macros)], and
+# file-level #![allow(...)]) without having to compile the workspace.
+syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+
 [dev-dependencies]
 tempfile = "3.15"
 
