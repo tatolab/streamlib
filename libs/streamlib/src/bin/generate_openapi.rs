@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 #![allow(dead_code)] // Structs/functions are only used for schema generation
+#![allow(clippy::disallowed_macros)] // codegen binary: stdout is the output channel
 
 //! Generates OpenAPI specification for the StreamLib Runtime API.
 //!

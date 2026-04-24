@@ -82,7 +82,7 @@ pub unsafe extern "C" fn slpn_context_create(
     match PythonNativeContext::new(id) {
         Ok(ctx) => Box::into_raw(Box::new(ctx)),
         Err(e) => {
-            eprintln!("[slpn] Failed to create context: {}", e);
+            tracing::error!("Failed to create context: {}", e);
             std::ptr::null_mut()
         }
     }
@@ -129,7 +129,7 @@ pub unsafe extern "C" fn slpn_input_subscribe(
     let service_name_iox = match ServiceName::new(service_name) {
         Ok(n) => n,
         Err(e) => {
-            eprintln!(
+            tracing::error!(
                 "[slpn:{}] Invalid service name '{}': {}",
                 ctx.processor_id, service_name, e
             );
@@ -147,7 +147,7 @@ pub unsafe extern "C" fn slpn_input_subscribe(
     {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
+            tracing::error!(
                 "[slpn:{}] Failed to open service '{}': {}",
                 ctx.processor_id, service_name, e
             );
@@ -158,7 +158,7 @@ pub unsafe extern "C" fn slpn_input_subscribe(
     let subscriber = match service.subscriber_builder().buffer_size(16).create() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
+            tracing::error!(
                 "[slpn:{}] Failed to create subscriber for '{}': {}",
                 ctx.processor_id, service_name, e
             );
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
         while let Ok(Some(sample)) = state.subscriber.receive() {
             let buf: &[u8] = sample.payload();
             if buf.len() < FRAME_HEADER_SIZE {
-                eprintln!("[slpn] received frame smaller than header ({} bytes)", buf.len());
+                tracing::error!("received frame smaller than header ({} bytes)", buf.len());
                 continue;
             }
             let header = FrameHeader::read_from_slice(buf);
@@ -226,7 +226,7 @@ pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
             let ts = header.timestamp_ns;
             let data_len = header.len as usize;
             if FRAME_HEADER_SIZE + data_len > buf.len() {
-                eprintln!("[slpn] frame data truncated: header.len={} buf.len()={}", data_len, buf.len());
+                tracing::error!("frame data truncated: header.len={} buf.len()={}", data_len, buf.len());
                 continue;
             }
             let data = buf[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + data_len].to_vec();
@@ -357,7 +357,7 @@ pub unsafe extern "C" fn slpn_output_publish(
     let service_name_iox = match ServiceName::new(service_name) {
         Ok(n) => n,
         Err(e) => {
-            eprintln!(
+            tracing::error!(
                 "[slpn:{}] Invalid service name '{}': {}",
                 ctx.processor_id, service_name, e
             );
@@ -375,7 +375,7 @@ pub unsafe extern "C" fn slpn_output_publish(
     {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
+            tracing::error!(
                 "[slpn:{}] Failed to open service '{}': {}",
                 ctx.processor_id, service_name, e
             );
@@ -386,7 +386,7 @@ pub unsafe extern "C" fn slpn_output_publish(
     let publisher = match service.publisher_builder().initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE).create() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!(
+            tracing::error!(
                 "[slpn:{}] Failed to create publisher for '{}': {}",
                 ctx.processor_id, service_name, e
             );
@@ -429,7 +429,7 @@ pub unsafe extern "C" fn slpn_output_write(
     let state = match ctx.publishers.get(port_name) {
         Some(s) => s,
         None => {
-            eprintln!(
+            tracing::error!(
                 "[slpn:{}] No publisher for port '{}'",
                 ctx.processor_id, port_name
             );
@@ -452,7 +452,7 @@ pub unsafe extern "C" fn slpn_output_write(
     let sample = match state.publisher.loan_slice_uninit(total_len) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!(
+            tracing::error!(
                 "[slpn:{}] Failed to loan slice for port '{}': {:?}",
                 ctx.processor_id, port_name, e
             );
@@ -461,7 +461,7 @@ pub unsafe extern "C" fn slpn_output_write(
     };
     let sample = sample.write_from_slice(&frame);
     if let Err(e) = sample.send() {
-        eprintln!(
+        tracing::error!(
             "[slpn:{}] Failed to send sample for port '{}': {:?}",
             ctx.processor_id, port_name, e
         );
@@ -565,7 +565,7 @@ mod gpu_surface {
     pub unsafe extern "C" fn slpn_gpu_surface_lookup(iosurface_id: u32) -> *mut SurfaceHandle {
         let surface_ref = IOSurfaceLookup(iosurface_id);
         if surface_ref.is_null() {
-            eprintln!("[slpn] IOSurface not found: {}", iosurface_id);
+            tracing::error!("IOSurface not found: {}", iosurface_id);
             return std::ptr::null_mut();
         }
 
@@ -602,8 +602,8 @@ mod gpu_surface {
 
         let result = IOSurfaceLock(handle.surface_ref, options, std::ptr::null_mut());
         if result != 0 {
-            eprintln!(
-                "[slpn] IOSurface lock failed: surface={}, result={}",
+            tracing::error!(
+                "IOSurface lock failed: surface={}, result={}",
                 handle.surface_id, result
             );
             return -1;
@@ -735,8 +735,8 @@ mod gpu_surface {
         }
 
         if surface_ref.is_null() {
-            eprintln!(
-                "[slpn] IOSurfaceCreate failed: {}x{} bpe={}",
+            tracing::error!(
+                "IOSurfaceCreate failed: {}x{} bpe={}",
                 width, height, bytes_per_element
             );
             return std::ptr::null_mut();
@@ -842,7 +842,7 @@ mod gpu_surface {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_gpu_surface_lookup(_iosurface_id: u32) -> *mut SurfaceHandle {
-        eprintln!("[slpn] GPU surface lookup by IOSurface id is macOS-only; use broker check_out");
+        tracing::error!("GPU surface lookup by IOSurface id is macOS-only; use broker check_out");
         std::ptr::null_mut()
     }
 
@@ -864,8 +864,8 @@ mod gpu_surface {
         let device = match handle.vulkan_device.as_ref() {
             Some(d) => Arc::clone(d),
             None => {
-                eprintln!(
-                    "[slpn] gpu_surface_lock: no Vulkan device attached — resolve_surface \
+                tracing::error!(
+                    "gpu_surface_lock: no Vulkan device attached — resolve_surface \
                      must have failed to initialize one"
                 );
                 return -1;
@@ -876,8 +876,8 @@ mod gpu_surface {
         // the caller lock/unlock/lock again (each lock imports a fresh dup).
         let dup_fd = unsafe { libc::dup(handle.fd) };
         if dup_fd < 0 {
-            eprintln!(
-                "[slpn] gpu_surface_lock: dup fd failed: {}",
+            tracing::error!(
+                "gpu_surface_lock: dup fd failed: {}",
                 std::io::Error::last_os_error()
             );
             return -1;
@@ -885,8 +885,8 @@ mod gpu_surface {
         let imported = match device.import_dma_buf_fd(dup_fd, handle.size) {
             Ok(i) => i,
             Err(e) => {
-                eprintln!(
-                    "[slpn] gpu_surface_lock: Vulkan DMA-BUF import failed for fd {} ({}B): {}",
+                tracing::error!(
+                    "gpu_surface_lock: Vulkan DMA-BUF import failed for fd {} ({}B): {}",
                     handle.fd, handle.size, e
                 );
                 // On import failure Vulkan has not taken the fd — we must
@@ -972,8 +972,8 @@ mod gpu_surface {
         _height: u32,
         _bytes_per_element: u32,
     ) -> *mut SurfaceHandle {
-        eprintln!(
-            "[slpn] GPU surface creation in subprocess is not supported on Linux; allocation \
+        tracing::error!(
+            "GPU surface creation in subprocess is not supported on Linux; allocation \
              must go through escalate IPC (GpuContextFullAccess -> RHI -> SurfaceStore.check_in)"
         );
         std::ptr::null_mut()
@@ -1010,7 +1010,7 @@ mod gpu_surface {
 mod gpu_surface {
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_gpu_surface_lookup(_iosurface_id: u32) -> *mut std::ffi::c_void {
-        eprintln!("[slpn] GPU surface operations not supported on this platform");
+        tracing::error!("GPU surface operations not supported on this platform");
         std::ptr::null_mut()
     }
 
@@ -1060,7 +1060,7 @@ mod gpu_surface {
         _height: u32,
         _bytes_per_element: u32,
     ) -> *mut std::ffi::c_void {
-        eprintln!("[slpn] GPU surface creation not supported on this platform");
+        tracing::error!("GPU surface creation not supported on this platform");
         std::ptr::null_mut()
     }
 
@@ -1200,7 +1200,7 @@ mod broker_client {
         runtime_id: *const c_char,
     ) -> *mut BrokerHandle {
         if xpc_service_name.is_null() {
-            eprintln!("[slpn] broker_connect: null service name");
+            tracing::error!("broker_connect: null service name");
             return std::ptr::null_mut();
         }
 
@@ -1215,8 +1215,8 @@ mod broker_client {
 
         if connection.is_null() {
             let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
-            eprintln!(
-                "[slpn] broker_connect: failed to create XPC connection to '{}'",
+            tracing::error!(
+                "broker_connect: failed to create XPC connection to '{}'",
                 name
             );
             return std::ptr::null_mut();
@@ -1243,8 +1243,8 @@ mod broker_client {
         xpc_connection_resume(connection);
 
         let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
-        eprintln!(
-            "[slpn] broker_connect: connected to '{}' with runtime_id='{}'",
+        tracing::error!(
+            "broker_connect: connected to '{}' with runtime_id='{}'",
             name, rid
         );
 
@@ -1276,7 +1276,7 @@ mod broker_client {
         let broker = match broker.as_mut() {
             Some(b) => b,
             None => {
-                eprintln!("[slpn] broker_resolve_surface: null broker handle");
+                tracing::error!("broker_resolve_surface: null broker handle");
                 return std::ptr::null_mut();
             }
         };
@@ -1284,7 +1284,7 @@ mod broker_client {
         let pool_id_str = match c_str_to_str(pool_id) {
             Some(s) => s,
             None => {
-                eprintln!("[slpn] broker_resolve_surface: null pool_id");
+                tracing::error!("broker_resolve_surface: null pool_id");
                 return std::ptr::null_mut();
             }
         };
@@ -1307,7 +1307,7 @@ mod broker_client {
         // Cache miss — XPC lookup to broker
         let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
         if request.is_null() {
-            eprintln!("[slpn] broker_resolve_surface: failed to create XPC request");
+            tracing::error!("broker_resolve_surface: failed to create XPC request");
             return std::ptr::null_mut();
         }
 
@@ -1326,8 +1326,8 @@ mod broker_client {
             if !reply.is_null() {
                 xpc_release(reply);
             }
-            eprintln!(
-                "[slpn] broker_resolve_surface: XPC lookup failed for '{}'",
+            tracing::error!(
+                "broker_resolve_surface: XPC lookup failed for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1338,8 +1338,8 @@ mod broker_client {
         let error_ptr = xpc_dictionary_get_string(reply, error_key.as_ptr());
         if !error_ptr.is_null() {
             let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
-            eprintln!(
-                "[slpn] broker_resolve_surface: broker error for '{}': {}",
+            tracing::error!(
+                "broker_resolve_surface: broker error for '{}': {}",
                 pool_id_str, error_msg
             );
             xpc_release(reply);
@@ -1352,8 +1352,8 @@ mod broker_client {
         xpc_release(reply);
 
         if mach_port == 0 {
-            eprintln!(
-                "[slpn] broker_resolve_surface: invalid mach port for '{}'",
+            tracing::error!(
+                "broker_resolve_surface: invalid mach port for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1367,8 +1367,8 @@ mod broker_client {
         mach_port_deallocate(task, mach_port);
 
         if surface_ref.is_null() {
-            eprintln!(
-                "[slpn] broker_resolve_surface: IOSurfaceLookupFromMachPort failed for '{}'",
+            tracing::error!(
+                "broker_resolve_surface: IOSurfaceLookupFromMachPort failed for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1429,7 +1429,7 @@ mod broker_client {
         let broker = match broker.as_mut() {
             Some(b) => b,
             None => {
-                eprintln!("[slpn] broker_acquire_surface: null broker handle");
+                tracing::error!("broker_acquire_surface: null broker handle");
                 return std::ptr::null_mut();
             }
         };
@@ -1446,7 +1446,7 @@ mod broker_client {
         // Create mach port for the IOSurface
         let mach_port = IOSurfaceCreateMachPort(surface_handle.surface_ref);
         if mach_port == 0 {
-            eprintln!("[slpn] broker_acquire_surface: IOSurfaceCreateMachPort failed");
+            tracing::error!("broker_acquire_surface: IOSurfaceCreateMachPort failed");
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
         }
@@ -1462,7 +1462,7 @@ mod broker_client {
         // Register with broker via XPC
         let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
         if request.is_null() {
-            eprintln!("[slpn] broker_acquire_surface: failed to create XPC request");
+            tracing::error!("broker_acquire_surface: failed to create XPC request");
             let task = mach_task_self();
             mach_port_deallocate(task, mach_port);
             let _ = Box::from_raw(surface_handle_ptr);
@@ -1495,7 +1495,7 @@ mod broker_client {
             if !reply.is_null() {
                 xpc_release(reply);
             }
-            eprintln!("[slpn] broker_acquire_surface: XPC register failed");
+            tracing::error!("broker_acquire_surface: XPC register failed");
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
         }
@@ -1505,7 +1505,7 @@ mod broker_client {
         let error_ptr = xpc_dictionary_get_string(reply, error_key.as_ptr());
         if !error_ptr.is_null() {
             let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
-            eprintln!("[slpn] broker_acquire_surface: broker error: {}", error_msg);
+            tracing::error!("broker_acquire_surface: broker error: {}", error_msg);
             xpc_release(reply);
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
@@ -1950,8 +1950,8 @@ mod broker_client {
                     Some(cloned)
                 }
                 Err(e) => {
-                    eprintln!(
-                        "[slpn] broker: failed to create Vulkan device for DMA-BUF import: {}. \
+                    tracing::error!(
+                        "broker: failed to create Vulkan device for DMA-BUF import: {}. \
                          resolve_surface will fail — the subprocess cannot map broker-published \
                          surfaces without a Vulkan-capable driver.",
                         e
@@ -2004,7 +2004,7 @@ mod broker_client {
         let socket_path = match c_str_to_string(socket_path) {
             Some(s) if !s.is_empty() => s,
             _ => {
-                eprintln!("[slpn] broker_connect (linux): null or empty socket path");
+                tracing::error!("broker_connect (linux): null or empty socket path");
                 return std::ptr::null_mut();
             }
         };
@@ -2014,8 +2014,8 @@ mod broker_client {
         // Intentional: do NOT open the socket yet. Per the research doc,
         // lazy-connect + fail-at-first-use decouples subprocess lifecycle
         // from broker lifecycle.
-        eprintln!(
-            "[slpn] broker_connect (linux): registered socket_path='{}' runtime_id='{}' \
+        tracing::error!(
+            "broker_connect (linux): registered socket_path='{}' runtime_id='{}' \
              (lazy; will connect on first resolve_surface)",
             socket_path, runtime_id
         );
@@ -2045,14 +2045,14 @@ mod broker_client {
         let broker = match unsafe { broker.as_ref() } {
             Some(b) => b,
             None => {
-                eprintln!("[slpn] broker_resolve_surface (linux): null broker handle");
+                tracing::error!("broker_resolve_surface (linux): null broker handle");
                 return std::ptr::null_mut();
             }
         };
         let pool_id_str = match c_str_to_string(pool_id) {
             Some(s) if !s.is_empty() => s,
             _ => {
-                eprintln!("[slpn] broker_resolve_surface (linux): null or empty pool_id");
+                tracing::error!("broker_resolve_surface (linux): null or empty pool_id");
                 return std::ptr::null_mut();
             }
         };
@@ -2073,8 +2073,8 @@ mod broker_client {
             if let Some(cached) = cache.get(&pool_id_str) {
                 let dup_fd = unsafe { libc::dup(cached.fd) };
                 if dup_fd < 0 {
-                    eprintln!(
-                        "[slpn] broker_resolve_surface: dup cached fd failed for '{}': {}",
+                    tracing::error!(
+                        "broker_resolve_surface: dup cached fd failed for '{}': {}",
                         pool_id_str,
                         std::io::Error::last_os_error()
                     );
@@ -2100,8 +2100,8 @@ mod broker_client {
         let guard = match broker.lazy_connect() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!(
-                    "[slpn] broker_resolve_surface: connect to '{}' failed: {}. \
+                tracing::error!(
+                    "broker_resolve_surface: connect to '{}' failed: {}. \
                      The parent StreamRuntime owns this socket; check the runtime logs \
                      and confirm STREAMLIB_BROKER_SOCKET points at a live runtime.",
                     broker.socket_path, e
@@ -2118,16 +2118,16 @@ mod broker_client {
         let (response, received_fd) = match wire::send_request(stream, &request, None) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!(
-                    "[slpn] broker_resolve_surface: check_out for '{}' failed: {}",
+                tracing::error!(
+                    "broker_resolve_surface: check_out for '{}' failed: {}",
                     pool_id_str, e
                 );
                 return std::ptr::null_mut();
             }
         };
         if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
-            eprintln!(
-                "[slpn] broker_resolve_surface: broker error for '{}': {}",
+            tracing::error!(
+                "broker_resolve_surface: broker error for '{}': {}",
                 pool_id_str, err
             );
             if let Some(fd) = received_fd {
@@ -2139,8 +2139,8 @@ mod broker_client {
         let dma_buf_fd = match received_fd {
             Some(fd) => fd,
             None => {
-                eprintln!(
-                    "[slpn] broker_resolve_surface: no DMA-BUF fd for '{}'",
+                tracing::error!(
+                    "broker_resolve_surface: no DMA-BUF fd for '{}'",
                     pool_id_str
                 );
                 return std::ptr::null_mut();
@@ -2163,8 +2163,8 @@ mod broker_client {
         if cache_fd >= 0 {
             let mut cache = broker.resolve_cache.lock().expect("poisoned");
             if cache.len() >= MAX_RESOLVE_CACHE {
-                eprintln!(
-                    "[slpn] broker resolve cache exceeded {} entries, dropping all cached fds",
+                tracing::error!(
+                    "broker resolve cache exceeded {} entries, dropping all cached fds",
                     MAX_RESOLVE_CACHE
                 );
                 cache.clear();
@@ -2211,8 +2211,8 @@ mod broker_client {
         _out_pool_id: *mut c_char,
         _pool_id_buf_len: u32,
     ) -> *mut SurfaceHandle {
-        eprintln!(
-            "[slpn] broker_acquire_surface: not supported on Linux; subprocess allocation must \
+        tracing::error!(
+            "broker_acquire_surface: not supported on Linux; subprocess allocation must \
              escalate to the host (acquire_pixel_buffer / acquire_texture over the stdio IPC) — \
              the subprocess then calls resolve_surface with the returned handle_id."
         );
@@ -2265,7 +2265,7 @@ mod broker_client {
         _xpc_service_name: *const c_char,
         _runtime_id: *const c_char,
     ) -> *mut c_void {
-        eprintln!("[slpn] Broker operations not supported on this platform");
+        tracing::error!("Broker operations not supported on this platform");
         std::ptr::null_mut()
     }
 

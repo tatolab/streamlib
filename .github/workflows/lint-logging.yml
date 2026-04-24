@@ -1,0 +1,68 @@
+name: Lint Logging
+
+# Enforces the unified logging pathway — see docs/logging.md.
+# - Rust: clippy `disallowed-macros` denies println!/eprintln!/print!/eprint!/dbg!
+#   in library crates (configured via clippy.toml + [workspace.lints.clippy]).
+# - Python + TypeScript: `cargo xtask lint-logging` bans print()/sys.stdout/
+#   console.log/Deno.stdout.write in libs/streamlib-python and libs/streamlib-deno.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  clippy-disallowed-macros:
+    name: Rust — clippy disallowed-macros
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-lint-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-lint-
+
+      - name: cargo clippy --workspace (enforces disallowed-macros in lib crates)
+        run: cargo clippy --workspace --no-deps
+
+  xtask-lint-logging:
+    name: Python + TypeScript — xtask lint-logging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-xtask-${{ hashFiles('xtask/Cargo.toml', 'xtask/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-xtask-
+
+      - name: cargo xtask lint-logging
+        run: cargo xtask lint-logging
+
+      - name: cargo test -p xtask lint_logging (fixture tests)
+        run: cargo test -p xtask lint_logging

@@ -23,3 +23,9 @@ anyhow = "1.0"
 # Temp directory for jtd-codegen
 tempfile = "3.15"
 
+# Recursive file walk for lint-logging
+walkdir = "2.5"
+
+[dev-dependencies]
+tempfile = "3.15"
+

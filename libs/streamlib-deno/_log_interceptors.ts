@@ -1,5 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
+// streamlib:lint-logging:allow-file — installs the unified pathway; must monkey-patch console.* and Deno.stdout/Deno.stderr directly
 
 /**
  * Subprocess-side interceptors that route `console.*` output and raw

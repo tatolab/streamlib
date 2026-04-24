@@ -2174,7 +2174,10 @@ impl VulkanAv1Decoder {
         let subsampling_y = sps.color_config.subsampling_y;
 
         if film_grain_params_present && (self.pic_data.show_frame || self.showable_frame) {
-            self.pic_data.std_info.flags.delta_q_present = self.pic_data.std_info.flags.delta_q_present; // no-op, preserve
+            #[allow(clippy::self_assignment)] // intentional: documents preservation across this path
+            {
+                self.pic_data.std_info.flags.delta_q_present = self.pic_data.std_info.flags.delta_q_present;
+            }
             self.pic_data.film_grain.apply_grain = bs.u(1) != 0;
 
             if !self.pic_data.film_grain.apply_grain {
@@ -2310,7 +2313,9 @@ impl VulkanAv1Decoder {
         }
 
         // LAST_FRAME index = 0, GOLDEN_FRAME index = 3
-        self.ref_frame_idx[REFERENCE_NAME_LAST_FRAME - REFERENCE_NAME_LAST_FRAME] = last_frame_idx;
+        #[allow(clippy::eq_op)] // documents LAST_FRAME's relative slot in the reference frame table
+        let last_frame_slot = REFERENCE_NAME_LAST_FRAME - REFERENCE_NAME_LAST_FRAME;
+        self.ref_frame_idx[last_frame_slot] = last_frame_idx;
         self.ref_frame_idx[REFERENCE_NAME_GOLDEN_FRAME - REFERENCE_NAME_LAST_FRAME] = gold_frame_idx;
         if last_frame_idx >= 0 {
             used_frame[last_frame_idx as usize] = true;

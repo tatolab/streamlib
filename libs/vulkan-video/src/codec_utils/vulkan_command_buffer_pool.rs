@@ -233,9 +233,10 @@ impl PoolNode {
         );
 
         if result != vk::Result::SUCCESS {
-            eprintln!(
-                "\nERROR: wait_and_reset_fence() for {} with result: {:?}",
-                fence_name, result
+            tracing::error!(
+                fence = fence_name,
+                ?result,
+                "wait_and_reset_fence() failed",
             );
         }
 
@@ -593,11 +594,11 @@ pub unsafe fn wait_and_reset_fence(
                 break;
             }
             Ok(vk::SuccessCode::TIMEOUT) => {
-                eprintln!(
-                    "\t **** WARNING: fence {}({:?}) is not done after {} mSec ****",
-                    fence_name,
-                    fence,
-                    current_wait / (1000 * 1000)
+                tracing::warn!(
+                    fence = fence_name,
+                    fence_handle = ?fence,
+                    elapsed_ms = current_wait / (1000 * 1000),
+                    "fence not signaled",
                 );
                 result = vk::Result::TIMEOUT;
             }
@@ -613,12 +614,12 @@ pub unsafe fn wait_and_reset_fence(
     }
 
     if result != vk::Result::SUCCESS {
-        eprintln!(
-            "\t **** ERROR: fence {}({:?}) is not done after {} mSec with status {:?} ****",
-            fence_name,
-            fence,
-            fence_total_wait_timeout / (1000 * 1000),
-            device.get_fence_status(fence),
+        tracing::error!(
+            fence = fence_name,
+            fence_handle = ?fence,
+            total_wait_ms = fence_total_wait_timeout / (1000 * 1000),
+            status = ?device.get_fence_status(fence),
+            "fence wait exhausted without signal",
         );
         return result;
     }
@@ -940,6 +941,7 @@ impl PoolNodeHandle {
     /// The caller must not hold multiple mutable references to the same node.
     /// This is safe in practice because `PoolNodeHandle` has exclusive ownership
     /// of the node index (guaranteed by the bitmask).
+    #[allow(clippy::mut_from_ref)] // interior mutability via UnsafeCell; caller-guaranteed exclusivity
     pub unsafe fn node_mut(&self) -> &mut PoolNode {
         let nodes = &mut *self.pool.pool_nodes.get();
         &mut nodes[self.index as usize]

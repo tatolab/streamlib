@@ -48,6 +48,14 @@ authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 license-file = "LICENSE"
 repository = "https://github.com/tato123/streamlib"
 
+# Workspace-wide clippy lints. Library crates opt in by adding
+# `[lints] workspace = true` in their own Cargo.toml. Binary-only crates
+# (streamlib-cli, streamlib-runtime, xtask, examples) do not opt in, because
+# stdout IS the user output channel for them. The `disallowed-macros` list
+# itself lives in clippy.toml at the workspace root. See docs/logging.md.
+[workspace.lints.clippy]
+disallowed_macros = "deny"
+
 [workspace.dependencies]
 # Core dependencies
 thiserror = "2.0.17"

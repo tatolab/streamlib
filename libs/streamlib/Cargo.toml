@@ -229,3 +229,6 @@ processors = [
 # name = "streamlib-mcp"
 # path = "src/bin/streamlib-mcp.rs"
 # required-features = ["mcp"]
+
+[lints]
+workspace = true

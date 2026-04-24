@@ -42,3 +42,6 @@ path = "src/bin/video_demo.rs"
 [[bin]]
 name = "h265-caps"
 path = "src/bin/h265_caps.rs"
+
+[lints]
+workspace = true

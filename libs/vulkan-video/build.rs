@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![allow(clippy::disallowed_macros)] // build.rs uses println!/eprintln! for `cargo:` directives and diagnostics
+
 //! Build script: compiles GLSL compute shaders to SPIR-V using glslc.
 
 use std::path::Path;

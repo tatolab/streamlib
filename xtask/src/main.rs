@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 mod generate_schemas;
+pub mod lint_logging;
 
 #[derive(Parser)]
 #[command(name = "xtask")]
@@ -52,6 +53,10 @@ enum Commands {
         #[arg(long, group = "input")]
         schema_dir: Option<PathBuf>,
     },
+
+    /// Ban ad-hoc logging in polyglot SDK library code (Python + TypeScript).
+    /// Paired with the workspace clippy.toml `disallowed-macros` rule for Rust.
+    LintLogging,
 }
 
 fn main() -> Result<()> {
@@ -65,6 +70,7 @@ fn main() -> Result<()> {
             schema_file,
             schema_dir,
         } => generate_schemas::run(runtime, output, project_file, schema_file, schema_dir)?,
+        Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
     }
 
     Ok(())

@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![allow(clippy::disallowed_macros)] // dev diagnostic binary: stdout is the output channel
+
 //! Diagnostic tool: dump ALL Vulkan Video H.265 encode capabilities.
 //!
 //! Creates a Vulkan 1.3 instance, finds the first physical device with
