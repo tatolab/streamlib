@@ -124,6 +124,17 @@ class EscalateChannel:
             bridge_send_message(self._stdout, req)
             return self._await_response(request_id)
 
+    def log_fire_and_forget(self, payload: Dict[str, Any]) -> None:
+        """Send a fire-and-forget escalate op (currently `log`).
+
+        No response correlation — the host enqueues the record into the
+        unified logging pathway and returns nothing. `bridge_send_message`
+        is already frame-atomic via its module lock, so no additional
+        synchronization is required here.
+        """
+        req = {"rpc": ESCALATE_REQUEST_RPC, **payload}
+        bridge_send_message(self._stdout, req)
+
     def _await_response(self, request_id: str) -> Dict[str, Any]:
         while True:
             msg = bridge_read_message(self._stdin)

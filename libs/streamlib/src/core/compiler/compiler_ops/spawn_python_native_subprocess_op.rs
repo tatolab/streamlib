@@ -163,7 +163,13 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 StreamError::Runtime("Failed to capture subprocess stdout".to_string())
             })?;
 
-            // Forward stderr lines through the tracing pipeline → broker telemetry
+            // Defense-in-depth log capture on the subprocess's fd2 (stderr).
+            // Records are tagged `intercepted=true, channel="fd2",
+            // source="python"` so a consumer of the unified JSONL can tell
+            // these apart from first-party `streamlib.log.*` records. fd1 is
+            // reserved for the length-prefixed IPC channel and is NOT
+            // captured — any raw writes to fd1 would desynchronize the
+            // bridge framing. See #443.
             if let Some(stderr) = child.stderr.take() {
                 let proc_id = self.processor_id.clone();
                 std::thread::Builder::new()
@@ -174,8 +180,11 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                         for line in reader.lines() {
                             match line {
                                 Ok(text) if !text.is_empty() => {
-                                    tracing::info!(
-                                        target: "streamlib::python",
+                                    tracing::warn!(
+                                        target: "streamlib::polyglot::python",
+                                        intercepted = true,
+                                        channel = "fd2",
+                                        source = "python",
                                         processor_id = %proc_id,
                                         "{}",
                                         text

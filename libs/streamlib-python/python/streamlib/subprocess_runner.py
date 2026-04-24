@@ -20,13 +20,13 @@ Environment variables:
 """
 
 import importlib
-import logging
 import os
 import select
 import sys
 import time
 import traceback
 
+from . import log
 from .escalate import EscalateChannel, install_channel
 from .processor_context import (
     NativeProcessorState,
@@ -37,10 +37,6 @@ from .processor_context import (
     compute_read_buf_bytes,
     load_native_lib,
 )
-from .telemetry import setup_subprocess_telemetry
-
-# Module-level logger, initialized in main()
-_logger: logging.Logger | None = None
 
 
 def _load_processor_class(entrypoint: str, project_path: str):
@@ -72,13 +68,16 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
         port_name = inp["name"]
         service_name = inp["service_name"]
         read_mode = inp.get("read_mode", "skip_to_latest")
-        _logger.info(
-            "Subscribing to input: port='%s', service='%s', read_mode='%s', max_payload_bytes=%s",
-            port_name, service_name, read_mode, inp.get("max_payload_bytes"),
+        log.info(
+            "Subscribing to input",
+            port=port_name,
+            service=service_name,
+            read_mode=read_mode,
+            max_payload_bytes=inp.get("max_payload_bytes"),
         )
         result = lib.slpn_input_subscribe(ctx_ptr, service_name.encode("utf-8"))
         if result != 0:
-            _logger.error("Failed to subscribe to '%s'", service_name)
+            log.error("Failed to subscribe to input", service=service_name)
         # Configure per-port read mode (0 = skip_to_latest, 1 = read_next_in_order)
         mode_int = 0 if read_mode == "skip_to_latest" else 1
         lib.slpn_input_set_read_mode(ctx_ptr, port_name.encode("utf-8"), mode_int)
@@ -89,9 +88,11 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
         dest_port = out["dest_port"]
         dest_service = out["dest_service_name"]
         schema_name = out.get("schema_name", "")
-        _logger.info(
-            "Publishing to output: port='%s', dest='%s', service='%s'",
-            port_name, dest_port, dest_service,
+        log.info(
+            "Publishing to output",
+            port=port_name,
+            dest=dest_port,
+            service=dest_service,
         )
         result = lib.slpn_output_publish(
             ctx_ptr,
@@ -102,7 +103,7 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             out.get("max_payload_bytes", 65536),
         )
         if result != 0:
-            _logger.error("Failed to create publisher for '%s'", dest_service)
+            log.error("Failed to create publisher", service=dest_service)
 
     # Connect to broker for surface resolution.
     #
@@ -126,14 +127,17 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             broker_endpoint.encode("utf-8"), runtime_id_arg
         )
         if broker_ptr:
-            _logger.info(
-                "Connected to broker (%s='%s', runtime_id='%s')",
-                broker_endpoint_desc, broker_endpoint, runtime_id,
+            log.info(
+                "Connected to broker",
+                endpoint_kind=broker_endpoint_desc,
+                endpoint=broker_endpoint,
+                runtime_id=runtime_id,
             )
         else:
-            _logger.warning(
-                "Broker connect failed (%s='%s')",
-                broker_endpoint_desc, broker_endpoint,
+            log.warn(
+                "Broker connect failed",
+                endpoint_kind=broker_endpoint_desc,
+                endpoint=broker_endpoint,
             )
 
     state = NativeProcessorState(
@@ -164,9 +168,12 @@ def _assert_capability(processor_id: str, cmd: str, msg: dict, expected: str) ->
     """
     actual = msg.get("capability")
     if actual is not None and actual != expected:
-        _logger.error(
-            "[%s] capability mismatch for '%s': expected '%s', got '%s'",
-            processor_id, cmd, expected, actual,
+        log.error(
+            "capability mismatch",
+            processor_id=processor_id,
+            cmd=cmd,
+            expected=expected,
+            actual=actual,
         )
 
 
@@ -221,7 +228,7 @@ def _dispatch_lifecycle_msg(
             try:
                 processor.on_pause(limited_ctx)
             except Exception as e:
-                _logger.error("on_pause() error: %s", e)
+                log.error("on_pause() error", error=str(e))
         bridge_send_message(stdout, {"rpc": "ok"})
         return None
 
@@ -231,7 +238,7 @@ def _dispatch_lifecycle_msg(
             try:
                 processor.on_resume(limited_ctx)
             except Exception as e:
-                _logger.error("on_resume() error: %s", e)
+                log.error("on_resume() error", error=str(e))
         bridge_send_message(stdout, {"rpc": "ok"})
         return None
 
@@ -241,35 +248,36 @@ def _dispatch_lifecycle_msg(
             try:
                 processor.update_config(config)
             except Exception as e:
-                _logger.error("update_config() error: %s", e)
+                log.error("update_config() error", error=str(e))
         bridge_send_message(stdout, {"rpc": "ok"})
         return None
 
-    _logger.warning("Unknown command during run: %s", cmd)
+    log.warn("Unknown command during run", cmd=cmd)
     return None
 
 
 def main():
     """Main entry point for the subprocess runner."""
-    global _logger
-
     entrypoint = os.environ.get("STREAMLIB_ENTRYPOINT")
     if not entrypoint:
-        print("[streamlib] STREAMLIB_ENTRYPOINT not set", file=sys.stderr)
+        # Pre-install fatal — escalate channel not up yet, so fall back to
+        # raw stderr. The host's fd2 reader will still capture this line.
+        sys.stderr.write("[streamlib] STREAMLIB_ENTRYPOINT not set\n")
+        sys.stderr.flush()
         sys.exit(1)
 
     project_path = os.environ.get("STREAMLIB_PROJECT_PATH", "")
     native_lib_path = os.environ.get("STREAMLIB_PYTHON_NATIVE_LIB", "")
     processor_id = os.environ.get("STREAMLIB_PROCESSOR_ID", "unknown")
 
-    # Initialize telemetry logger (writes to SQLite + stderr)
-    _logger = setup_subprocess_telemetry(processor_id)
-
     if not native_lib_path:
-        _logger.error("STREAMLIB_PYTHON_NATIVE_LIB not set")
+        sys.stderr.write("[streamlib] STREAMLIB_PYTHON_NATIVE_LIB not set\n")
+        sys.stderr.flush()
         sys.exit(1)
 
-    # Use binary stdin/stdout for the lifecycle protocol
+    # Use binary stdin/stdout for the lifecycle protocol. Capture these
+    # references BEFORE installing the stdio interceptors so the bridge
+    # keeps writing framed IPC traffic to the real fd1.
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
 
@@ -278,6 +286,12 @@ def main():
     # as the lifecycle protocol and demultiplexes responses by request_id.
     escalate_channel = EscalateChannel(stdin, stdout)
     install_channel(escalate_channel)
+
+    # Install unified logging: writer thread + stdio / logging interceptors.
+    # After this point, `print()` / `sys.stderr.write()` / `logging.*` all
+    # route through streamlib.log with `intercepted=true`.
+    log.set_processor_id(processor_id)
+    log.install(escalate_channel)
 
     # Load processor class and instantiate
     processor_class = _load_processor_class(entrypoint, project_path)
@@ -291,7 +305,7 @@ def main():
     native_broker_ptr = None
     running = False
 
-    _logger.info("Subprocess runner started: entrypoint=%s", entrypoint)
+    log.info("Subprocess runner started", entrypoint=entrypoint)
 
     try:
         while True:
@@ -300,7 +314,7 @@ def main():
 
             if cmd == "setup":
                 _assert_capability(processor_id, cmd, msg, "full")
-                _logger.info("Native mode: loading %s", native_lib_path)
+                log.info("Native mode: loading library", lib=native_lib_path)
                 try:
                     native_lib, native_ctx_ptr, native_broker_ptr, state = _setup_native_state(
                         msg, native_lib_path, processor_id,
@@ -329,7 +343,7 @@ def main():
 
             elif cmd == "run":
                 if not native_lib or state is None:
-                    _logger.warning("run before setup")
+                    log.warn("run before setup")
                     continue
 
                 execution_mode = msg.get("execution", "reactive")
@@ -337,7 +351,7 @@ def main():
                 running = True
                 data_count = 0
 
-                _logger.info("Entering %s loop", execution_mode)
+                log.info("Entering execution loop", mode=execution_mode)
 
                 if execution_mode == "reactive":
                     while running:
@@ -345,15 +359,16 @@ def main():
                         if has_data == 1:
                             data_count += 1
                             if data_count <= 3 or data_count % 60 == 0:
-                                _logger.debug(
-                                    "poll: data received (frame #%d)", data_count,
+                                log.debug(
+                                    "poll: data received",
+                                    frame_index=data_count,
                                 )
                             try:
                                 if hasattr(processor, "process"):
                                     # process() — hot loop, receives limited ctx
                                     processor.process(limited_ctx)
                             except Exception as e:
-                                _logger.error("process() error: %s", e)
+                                log.error("process() error", error=str(e))
                         else:
                             time.sleep(0.001)  # 1ms yield
 
@@ -367,7 +382,7 @@ def main():
                                 try:
                                     processor.teardown(full_ctx)
                                 except Exception as e:
-                                    _logger.error("teardown() error: %s", e)
+                                    log.error("teardown() error", error=str(e))
                             bridge_send_message(stdout, {"rpc": "done"})
                             _cleanup_native(
                                 native_lib, native_ctx_ptr, native_broker_ptr, state,
@@ -384,7 +399,7 @@ def main():
                             if hasattr(processor, "process"):
                                 processor.process(limited_ctx)
                         except Exception as e:
-                            _logger.error("process() error: %s", e)
+                            log.error("process() error", error=str(e))
                         if interval_ms > 0:
                             time.sleep(interval_ms / 1000.0)
                         else:
@@ -400,7 +415,7 @@ def main():
                                 try:
                                     processor.teardown(full_ctx)
                                 except Exception as e:
-                                    _logger.error("teardown() error: %s", e)
+                                    log.error("teardown() error", error=str(e))
                             bridge_send_message(stdout, {"rpc": "done"})
                             _cleanup_native(
                                 native_lib, native_ctx_ptr, native_broker_ptr, state,
@@ -416,7 +431,7 @@ def main():
                         try:
                             processor.start(full_ctx)
                         except Exception as e:
-                            _logger.error("start() error: %s", e)
+                            log.error("start() error", error=str(e))
 
             elif cmd == "teardown":
                 _assert_capability(processor_id, cmd, msg, "full")
@@ -469,19 +484,21 @@ def main():
                 bridge_send_message(stdout, {"rpc": "ok"})
 
             else:
-                _logger.warning("Unknown command: %s", cmd)
+                log.warn("Unknown command", cmd=cmd)
 
     except EOFError:
-        _logger.info("stdin closed, shutting down")
+        log.info("stdin closed, shutting down")
     except Exception as e:
-        _logger.error("Fatal error: %s", e, exc_info=True)
+        log.error("Fatal error", error=str(e), traceback=traceback.format_exc())
         if native_lib and native_ctx_ptr:
             _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr, state)
+        log.shutdown()
         sys.exit(1)
 
     _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr, state)
 
-    _logger.info("Subprocess runner exiting")
+    log.info("Subprocess runner exiting")
+    log.shutdown()
 
 
 if __name__ == "__main__":

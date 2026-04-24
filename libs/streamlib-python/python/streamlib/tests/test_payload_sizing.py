@@ -33,11 +33,33 @@ import sys
 
 import pytest
 
+from streamlib import log
 from streamlib.processor_context import (
     DEFAULT_READ_BUF_BYTES,
     compute_read_buf_bytes,
     decode_read_result,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_log_queue():
+    """Drain the streamlib.log queue between tests so truncation records
+    from one case don't leak into the next."""
+    log._reset_for_tests()
+    yield
+    log._reset_for_tests()
+
+
+def _drain_log_records():
+    """Pull every queued record out of `streamlib.log` (no writer thread
+    is running here) and return them as `_QueuedRecord` instances."""
+    records = []
+    while True:
+        try:
+            records.append(log._queue.get_nowait())
+        except Exception:
+            break
+    return records
 
 
 # ============================================================================
@@ -131,15 +153,15 @@ def test_compute_read_buf_bytes_multi_input_all_below_default_clamps():
 # ============================================================================
 
 
-def test_decode_read_result_zero_length_returns_none_without_logging(capsys):
+def test_decode_read_result_zero_length_returns_none_without_logging():
     read_buf, _ = make_ffi_result(DEFAULT_READ_BUF_BYTES, b"")
     data, ts = decode_read_result(
         read_buf, DEFAULT_READ_BUF_BYTES, 0, 123, "port_a"
     )
     assert data is None
     assert ts is None
-    captured = capsys.readouterr()
-    assert captured.err == ""
+    # A zero-length read must not enqueue a truncation record.
+    assert _drain_log_records() == []
 
 
 # Happy paths — parameterize over a matrix of (read_buf_bytes, data_len)
@@ -162,7 +184,7 @@ HAPPY_PATH_MATRIX = [
 
 
 @pytest.mark.parametrize(("read_buf_bytes", "data_len"), HAPPY_PATH_MATRIX)
-def test_decode_read_result_happy_path(capsys, read_buf_bytes, data_len):
+def test_decode_read_result_happy_path(read_buf_bytes, data_len):
     payload = pattern_bytes(data_len)
     read_buf, reported_len = make_ffi_result(read_buf_bytes, payload)
     ts = data_len * 1000
@@ -182,8 +204,8 @@ def test_decode_read_result_happy_path(capsys, read_buf_bytes, data_len):
     read_buf[0] = (read_buf[0] + 1) % 256
     assert data[0] == payload[0]
 
-    captured = capsys.readouterr()
-    assert captured.err == "", "happy path must not log truncation warnings"
+    # Happy path must not enqueue truncation warnings.
+    assert _drain_log_records() == []
 
 
 # Truncation paths — native reported more bytes than the read buffer can hold.
@@ -198,7 +220,7 @@ TRUNCATION_MATRIX = [
 
 
 @pytest.mark.parametrize(("read_buf_bytes", "data_len"), TRUNCATION_MATRIX)
-def test_decode_read_result_truncation(capsys, read_buf_bytes, data_len):
+def test_decode_read_result_truncation(read_buf_bytes, data_len):
     payload = pattern_bytes(data_len)
     read_buf, reported_len = make_ffi_result(read_buf_bytes, payload)
 
@@ -209,7 +231,12 @@ def test_decode_read_result_truncation(capsys, read_buf_bytes, data_len):
     assert data is None, "truncation must surface as None, not a short/corrupt payload"
     assert out_ts is None
 
-    captured = capsys.readouterr()
-    assert "payload truncated on port 'truncated_port'" in captured.err
-    assert str(data_len) in captured.err
-    assert str(read_buf_bytes) in captured.err
+    records = _drain_log_records()
+    assert len(records) == 1, f"expected one truncation record, got {records!r}"
+    rec = records[0]
+    assert rec.level == "warn"
+    assert rec.message == "payload truncated on input port"
+    assert rec.attrs["port"] == "truncated_port"
+    assert rec.attrs["reported_bytes"] == data_len
+    assert rec.attrs["read_buf_bytes"] == read_buf_bytes
+    assert rec.intercepted is False
