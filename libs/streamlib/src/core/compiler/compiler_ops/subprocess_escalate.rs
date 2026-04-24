@@ -1087,8 +1087,12 @@ mod tests {
         use std::io::{BufReader, Read};
         use std::path::PathBuf;
         use std::process::{Command, Stdio};
+        use std::time::Duration;
 
         use super::*;
+        use crate::core::compiler::compiler_ops::subprocess_bridge::{
+            spawn_fd_line_reader, EscalateTransport,
+        };
         use crate::core::logging::{
             init_for_tests, LogLevel, RuntimeLogEvent, Source,
             StreamlibLoggingConfig, StreamlibLoggingGuard,
@@ -1310,6 +1314,146 @@ log.shutdown()
                 "order must match emission order"
             );
         }
+
+        /// Spawn `python3` with the host's escalate-transport + fd1/fd2
+        /// line readers installed exactly like the real spawn path does,
+        /// then run a caller-supplied snippet. Parent closes its end of
+        /// the escalate socketpair immediately so the child is free to
+        /// exit once the snippet finishes. Returns the child handle +
+        /// the kept-alive parent-side socket half (dropped by the
+        /// caller after it's done with the run). `None` when `python3`
+        /// isn't available.
+        fn spawn_python_with_host_fd_readers(
+            snippet: &str,
+            processor_id: &str,
+        ) -> Option<(std::process::Child, std::os::unix::net::UnixStream)> {
+            let py = python3()?;
+            let lib = streamlib_python_path();
+            if !lib.exists() {
+                return None;
+            }
+            let mut command = Command::new(py);
+            command
+                .arg("-c")
+                .arg(snippet)
+                .env("PYTHONPATH", &lib)
+                .env_remove("PYTHONHOME")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut transport =
+                EscalateTransport::attach(&mut command).expect("attach transport");
+
+            let mut child = command.spawn().expect("spawn python3");
+            transport.release_child_end();
+
+            if let Some(stdout) = child.stdout.take() {
+                spawn_fd_line_reader(stdout, "py-stdout", "fd1", processor_id);
+            }
+            if let Some(stderr) = child.stderr.take() {
+                spawn_fd_line_reader(stderr, "py-stderr", "fd2", processor_id);
+            }
+
+            let parent_socket = transport.into_parent_stream();
+            Some((child, parent_socket))
+        }
+
+        /// A raw `os.write(1, …)` from a Python subprocess — the
+        /// canonical case a C-extension or `printf` from a loaded C
+        /// library would hit — must now surface in the host JSONL as
+        /// `intercepted=true, channel="fd1", source="python"`. Deferred
+        /// from #443; unlocked by moving escalate IPC onto the
+        /// dedicated socketpair so fd1 is free to capture raw writes.
+        #[cfg(unix)]
+        #[test]
+        #[serial]
+        fn python_os_write_fd1_intercepted() {
+            let (_tmp, guard) = install_logging("PyFd1Intercept");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            let snippet = r#"
+import os
+os.write(1, b"hi from c\n")
+"#;
+            let (mut child, _sock) =
+                match spawn_python_with_host_fd_readers(snippet, "pr-fd1") {
+                    Some(v) => v,
+                    None => {
+                        println!("python3 missing — skipping");
+                        return;
+                    }
+                };
+
+            // Wait for child to exit and for the fd1 reader thread to
+            // flush the final line into the JSONL worker queue.
+            let _ = child.wait();
+            std::thread::sleep(Duration::from_millis(200));
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let record = events
+                .iter()
+                .find(|e| {
+                    e.intercepted
+                        && e.channel.as_deref() == Some("fd1")
+                        && e.source == Source::Python
+                        && e.message == "hi from c"
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no fd1-intercepted record for python; got {events:#?}"
+                    )
+                });
+            assert_eq!(record.level, LogLevel::Warn);
+            assert_eq!(record.processor_id.as_deref(), Some("pr-fd1"));
+        }
+
+        /// Sanity: fd2 capture survives the transport move. Confirms
+        /// the existing fd2 path from #443 still works after #451
+        /// promoted fd1 to a captured log pipe.
+        #[cfg(unix)]
+        #[test]
+        #[serial]
+        fn python_stderr_fd2_intercepted_on_dedicated_fd_transport() {
+            let (_tmp, guard) = install_logging("PyFd2Intercept");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            let snippet = r#"
+import os
+os.write(2, b"stderr after transport move\n")
+"#;
+            let (mut child, _sock) =
+                match spawn_python_with_host_fd_readers(snippet, "pr-fd2") {
+                    Some(v) => v,
+                    None => {
+                        println!("python3 missing — skipping");
+                        return;
+                    }
+                };
+
+            let _ = child.wait();
+            std::thread::sleep(Duration::from_millis(200));
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let record = events
+                .iter()
+                .find(|e| {
+                    e.intercepted
+                        && e.channel.as_deref() == Some("fd2")
+                        && e.source == Source::Python
+                        && e.message == "stderr after transport move"
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no fd2-intercepted record for python; got {events:#?}"
+                    )
+                });
+            assert_eq!(record.level, LogLevel::Warn);
+            assert_eq!(record.processor_id.as_deref(), Some("pr-fd2"));
+        }
     }
 
     /// End-to-end tests that spawn a real Deno subprocess, have it call
@@ -1325,8 +1469,12 @@ log.shutdown()
         use std::io::{BufReader, Read, Write};
         use std::path::PathBuf;
         use std::process::{Command, Stdio};
+        use std::time::Duration;
 
         use super::*;
+        use crate::core::compiler::compiler_ops::subprocess_bridge::{
+            spawn_fd_line_reader, EscalateTransport,
+        };
         use crate::core::logging::{
             init_for_tests, LogLevel, RuntimeLogEvent, Source,
             StreamlibLoggingConfig, StreamlibLoggingGuard,
@@ -1571,6 +1719,126 @@ await log.shutdown();
                 (0..20).collect::<Vec<i64>>(),
                 "order must match emission order"
             );
+        }
+
+        /// Spawn `deno eval` with the host's escalate-transport +
+        /// fd1/fd2 line readers installed. Mirrors the Python helper.
+        /// Returns `(child, parent_socket)` or `None` when Deno is
+        /// missing.
+        fn spawn_deno_with_host_fd_readers(
+            snippet: &str,
+            processor_id: &str,
+        ) -> Option<(std::process::Child, std::os::unix::net::UnixStream)> {
+            let deno = deno_binary()?;
+            let mut command = Command::new(deno);
+            command
+                .arg("eval")
+                .arg(snippet)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut transport =
+                EscalateTransport::attach(&mut command).expect("attach transport");
+
+            let mut child = command.spawn().expect("spawn deno");
+            transport.release_child_end();
+
+            if let Some(stdout) = child.stdout.take() {
+                spawn_fd_line_reader(stdout, "dn-stdout", "fd1", processor_id);
+            }
+            if let Some(stderr) = child.stderr.take() {
+                spawn_fd_line_reader(stderr, "dn-stderr", "fd2", processor_id);
+            }
+
+            let parent_socket = transport.into_parent_stream();
+            Some((child, parent_socket))
+        }
+
+        /// Raw `Deno.stdout.writeSync(…)` from a Deno subprocess lands
+        /// in the host JSONL as
+        /// `intercepted=true, channel="fd1", source="deno"`. Equivalent
+        /// to `python_os_write_fd1_intercepted`; unlocked by #451
+        /// moving escalate IPC onto the dedicated socketpair.
+        #[cfg(unix)]
+        #[test]
+        #[serial]
+        fn deno_stdout_fd1_intercepted() {
+            let (_tmp, guard) = install_logging("DenoFd1Intercept");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            let snippet = r#"Deno.stdout.writeSync(new TextEncoder().encode("hi from deno\n"));"#;
+            let (mut child, _sock) =
+                match spawn_deno_with_host_fd_readers(snippet, "pr-fd1-deno") {
+                    Some(v) => v,
+                    None => {
+                        println!("deno missing — skipping");
+                        return;
+                    }
+                };
+
+            let _ = child.wait();
+            std::thread::sleep(Duration::from_millis(200));
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let record = events
+                .iter()
+                .find(|e| {
+                    e.intercepted
+                        && e.channel.as_deref() == Some("fd1")
+                        && e.source == Source::Deno
+                        && e.message == "hi from deno"
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no fd1-intercepted record for deno; got {events:#?}"
+                    )
+                });
+            assert_eq!(record.level, LogLevel::Warn);
+            assert_eq!(record.processor_id.as_deref(), Some("pr-fd1-deno"));
+        }
+
+        /// Sanity: fd2 capture survives the Deno transport move.
+        /// Mirrors `python_stderr_fd2_intercepted_on_dedicated_fd_transport`.
+        #[cfg(unix)]
+        #[test]
+        #[serial]
+        fn deno_stderr_fd2_intercepted_on_dedicated_fd_transport() {
+            let (_tmp, guard) = install_logging("DenoFd2Intercept");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            let snippet = r#"Deno.stderr.writeSync(new TextEncoder().encode("stderr after transport move\n"));"#;
+            let (mut child, _sock) =
+                match spawn_deno_with_host_fd_readers(snippet, "pr-fd2-deno") {
+                    Some(v) => v,
+                    None => {
+                        println!("deno missing — skipping");
+                        return;
+                    }
+                };
+
+            let _ = child.wait();
+            std::thread::sleep(Duration::from_millis(200));
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let record = events
+                .iter()
+                .find(|e| {
+                    e.intercepted
+                        && e.channel.as_deref() == Some("fd2")
+                        && e.source == Source::Deno
+                        && e.message == "stderr after transport move"
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no fd2-intercepted record for deno; got {events:#?}"
+                    )
+                });
+            assert_eq!(record.level, LogLevel::Warn);
+            assert_eq!(record.processor_id.as_deref(), Some("pr-fd2-deno"));
         }
     }
 }

@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::io::BufReader;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -17,7 +16,7 @@ use crate::core::{
 };
 
 use super::spawn_python_subprocess_op::ensure_processor_venv;
-use super::subprocess_bridge::SubprocessBridge;
+use super::subprocess_bridge::{spawn_fd_line_reader, EscalateTransport, SubprocessBridge};
 
 // ============================================================================
 // PythonNativeSubprocessHostProcessor — Rust host for Python native-mode processors
@@ -141,6 +140,12 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
             #[cfg(target_os = "linux")]
             command.env("STREAMLIB_BROKER_SOCKET", ctx.surface_socket_path());
 
+            // Escalate IPC rides a dedicated `AF_UNIX` socketpair, not
+            // fd1/fd2, so the subprocess's stdout/stderr can be captured
+            // as `intercepted` log pipes without corrupting the framed
+            // JSON protocol. See #451.
+            let mut escalate_transport = EscalateTransport::attach(&mut command)?;
+
             let mut child = command.spawn()
                 .map_err(|e| {
                     StreamError::Runtime(format!(
@@ -149,6 +154,10 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                     ))
                 })?;
 
+            // Drop the parent's reference to the child-end socketpair fd
+            // so only the subprocess keeps it open.
+            escalate_transport.release_child_end();
+
             let child_pid = child.id();
             tracing::info!(
                 "[{}] Python native subprocess spawned: pid={}",
@@ -156,52 +165,38 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 child_pid
             );
 
-            let stdin = child.stdin.take().ok_or_else(|| {
-                StreamError::Runtime("Failed to capture subprocess stdin".to_string())
-            })?;
-            let stdout = child.stdout.take().ok_or_else(|| {
-                StreamError::Runtime("Failed to capture subprocess stdout".to_string())
-            })?;
-
-            // Defense-in-depth log capture on the subprocess's fd2 (stderr).
-            // Records are tagged `intercepted=true, channel="fd2",
-            // source="python"` so a consumer of the unified JSONL can tell
-            // these apart from first-party `streamlib.log.*` records. fd1 is
-            // reserved for the length-prefixed IPC channel and is NOT
-            // captured — any raw writes to fd1 would desynchronize the
-            // bridge framing. See #443.
+            // Capture fd1 and fd2 from the subprocess as `intercepted`
+            // log pipes. Each line produced on either pipe surfaces as
+            // `tracing::warn!(intercepted=true, channel="fd1"|"fd2",
+            // source="python")` in the unified JSONL. This catches both
+            // raw C-extension writes (`os.write(1, …)`, C `printf`) and
+            // anything else bypassing the `streamlib.log` pathway.
+            if let Some(stdout) = child.stdout.take() {
+                spawn_fd_line_reader(
+                    stdout,
+                    "py-stdout",
+                    "fd1",
+                    &self.processor_id,
+                );
+            }
             if let Some(stderr) = child.stderr.take() {
-                let proc_id = self.processor_id.clone();
-                std::thread::Builder::new()
-                    .name(format!("py-stderr-{}", &proc_id[..8.min(proc_id.len())]))
-                    .spawn(move || {
-                        use std::io::BufRead;
-                        let reader = BufReader::new(stderr);
-                        for line in reader.lines() {
-                            match line {
-                                Ok(text) if !text.is_empty() => {
-                                    tracing::warn!(
-                                        target: "streamlib::polyglot::python",
-                                        intercepted = true,
-                                        channel = "fd2",
-                                        source = "python",
-                                        processor_id = %proc_id,
-                                        "{}",
-                                        text
-                                    );
-                                }
-                                Err(_) => break,
-                                _ => {}
-                            }
-                        }
-                    })
-                    .ok();
+                spawn_fd_line_reader(
+                    stderr,
+                    "py-stderr",
+                    "fd2",
+                    &self.processor_id,
+                );
             }
 
             // Clone the sandbox for the bridge reader thread so escalate
             // requests can be served on behalf of the subprocess.
             let sandbox = ctx.gpu_limited_access().clone();
-            let bridge = SubprocessBridge::new(stdin, stdout, sandbox, self.processor_id.clone());
+            let escalate_stream = escalate_transport.into_parent_stream();
+            let bridge = SubprocessBridge::new(
+                escalate_stream,
+                sandbox,
+                self.processor_id.clone(),
+            )?;
 
             self.child = Some(child);
             self.bridge = Some(bridge);
