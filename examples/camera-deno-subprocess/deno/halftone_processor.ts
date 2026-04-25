@@ -4,9 +4,11 @@
 /**
  * Halftone dot pattern processor — WebGPU compute shader via TypeGPU.
  *
- * Converts live camera frames into a newspaper/pop-art style dot pattern.
- * The image is divided into 8x8 cells; each cell becomes a colored circle
- * whose radius is proportional to the luminance of the center pixel.
+ * Demonstrates the canonical polyglot allocation path: subprocess holds a
+ * limited-access GPU capability, and asks the host to allocate output pixel
+ * buffers via `escalateAcquirePixelBuffer`. The returned `handle_id` is then
+ * resolved locally with `gpuLimitedAccess.resolveSurface` for zero-copy
+ * write access — the same shape the input frame takes.
  */
 
 import tgpu, { type TgpuRoot } from "npm:typegpu@0.8.2";
@@ -36,43 +38,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let x = index % width;
     let y = index / width;
 
-    // Cell grid (8px cells)
     let cellSize = 8u;
     let cellX = x / cellSize;
     let cellY = y / cellSize;
     let centerX = cellX * cellSize + cellSize / 2u;
     let centerY = cellY * cellSize + cellSize / 2u;
 
-    // Clamp center to image bounds
     let cx = min(centerX, width - 1u);
     let cy = min(centerY, height - 1u);
 
-    // Sample center pixel — get original color and luminance
     let centerBgra = inputPixels[cy * width + cx];
     let b = f32(centerBgra & 0xFFu) / 255.0;
     let g = f32((centerBgra >> 8u) & 0xFFu) / 255.0;
     let r = f32((centerBgra >> 16u) & 0xFFu) / 255.0;
     let lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
 
-    // Dot radius proportional to luminance (brighter = bigger)
     let maxRadius = f32(cellSize) * 0.55;
     let radius = maxRadius * lum;
 
-    // Distance from pixel to cell center
     let dx = f32(x) - f32(cx);
     let dy = f32(y) - f32(cy);
     let dist = sqrt(dx * dx + dy * dy);
 
-    // Inside circle: use boosted original color. Outside: near-black.
     if (dist <= radius) {
-        // Boost saturation slightly for pop-art look
         let boost = 1.3;
         let ob = u32(clamp(b * boost, 0.0, 1.0) * 255.0);
         let og = u32(clamp(g * boost, 0.0, 1.0) * 255.0);
         let or_ = u32(clamp(r * boost, 0.0, 1.0) * 255.0);
         outputPixels[index] = ob | (og << 8u) | (or_ << 16u) | 0xFF000000u;
     } else {
-        outputPixels[index] = 0xFF101010u; // near-black background
+        outputPixels[index] = 0xFF101010u;
     }
 }
 `;
@@ -87,8 +82,8 @@ interface GpuResources {
   root: TgpuRoot;
   device: GPUDevice;
   pipeline: GPUComputePipeline;
-  // Buffers are dynamically sized (dimensions unknown until first frame),
-  // so we store them untyped and rely on TypeGPU's runtime validation.
+  // Sized lazily on first frame. TypeGPU buffers carry their own type info,
+  // so they're stored untyped here and validated at runtime.
   // deno-lint-ignore no-explicit-any
   inputBuffer: any;
   // deno-lint-ignore no-explicit-any
@@ -101,21 +96,26 @@ interface GpuResources {
   height: number;
 }
 
+const OUTPUT_POOL_SIZE = 3;
+
+interface PoolSlot {
+  handleId: string;
+}
+
 export default class HalftoneProcessor implements ReactiveProcessor {
   private gpu: GpuResources | null = null;
-  private outputSurface: GpuSurface | null = null;
-  private outputPoolId: string | null = null;
+  private outputPool: PoolSlot[] = [];
+  private outputPoolIndex = 0;
+  private outputPoolWidth = 0;
+  private outputPoolHeight = 0;
   private frameIndex = 0;
 
   async setup(ctx: RuntimeContextFullAccess): Promise<void> {
     console.error("[HalftoneProcessor] setup — config:", JSON.stringify(ctx.config));
 
-    // WebGPU init via TypeGPU (gets adapter + device)
     const root = await tgpu.init();
     const device = root.device;
-    console.error("[HalftoneProcessor] WebGPU device acquired via TypeGPU");
 
-    // Create pipeline once (WGSL is dimension-independent)
     const shaderModule = device.createShaderModule({ code: HALFTONE_WGSL });
     const pipeline = device.createComputePipeline({
       layout: device.createPipelineLayout({
@@ -124,7 +124,6 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       compute: { module: shaderModule, entryPoint: "main" },
     });
 
-    // Buffers will be created on first frame when we know dimensions
     this.gpu = {
       root,
       device,
@@ -143,12 +142,10 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     if (!this.gpu) return;
 
     const root = this.gpu.root;
-    const pixelCount = width * height;
-
     const device = this.gpu.device;
+    const pixelCount = width * height;
     const bufferSize = pixelCount * 4;
 
-    // Destroy old TypeGPU buffers if resizing
     if (this.gpu.inputBuffer) {
       this.gpu.inputBuffer.destroy();
       this.gpu.outputBuffer.destroy();
@@ -156,7 +153,6 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       this.gpu.readbackBuffer.destroy();
     }
 
-    // TypeGPU typed buffers — no manual size/usage flags
     this.gpu.inputBuffer = root
       .createBuffer(d.arrayOf(d.u32, pixelCount))
       .$usage("storage");
@@ -169,7 +165,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       .createBuffer(d.vec2u, d.vec2u(width, height))
       .$usage("uniform");
 
-    // Raw readback buffer for fast GPU→CPU transfer (avoids TypeGPU serialization)
+    // Raw readback buffer for fast GPU→CPU transfer (avoids TypeGPU serialization).
     this.gpu.readbackBuffer = device.createBuffer({
       size: bufferSize,
       usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
@@ -182,6 +178,53 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     console.error(`[HalftoneProcessor] GPU resources initialized: ${width}x${height}`);
   }
 
+  private async ensureOutputPool(
+    ctx: RuntimeContextLimitedAccess,
+    width: number,
+    height: number,
+  ): Promise<void> {
+    if (
+      this.outputPool.length === OUTPUT_POOL_SIZE &&
+      this.outputPoolWidth === width &&
+      this.outputPoolHeight === height
+    ) {
+      return;
+    }
+
+    await this.releaseOutputPool(ctx);
+
+    for (let i = 0; i < OUTPUT_POOL_SIZE; i++) {
+      const ok = await ctx.escalateAcquirePixelBuffer(width, height, "bgra");
+      this.outputPool.push({ handleId: ok.handle_id });
+    }
+    this.outputPoolWidth = width;
+    this.outputPoolHeight = height;
+    this.outputPoolIndex = 0;
+    console.error(
+      `[HalftoneProcessor] output pool ready: ${OUTPUT_POOL_SIZE}× ${width}x${height}`,
+    );
+  }
+
+  private async releaseOutputPool(
+    ctx: RuntimeContextLimitedAccess | RuntimeContextFullAccess,
+  ): Promise<void> {
+    const drained = this.outputPool;
+    this.outputPool = [];
+    this.outputPoolWidth = 0;
+    this.outputPoolHeight = 0;
+    this.outputPoolIndex = 0;
+    for (const slot of drained) {
+      try {
+        await ctx.escalateReleaseHandle(slot.handleId);
+      } catch (e) {
+        console.error(
+          `[HalftoneProcessor] escalateReleaseHandle(${slot.handleId}) failed:`,
+          e,
+        );
+      }
+    }
+  }
+
   async process(ctx: RuntimeContextLimitedAccess): Promise<void> {
     const result = ctx.inputs.read<Videoframe>("video_in");
     if (!result || !this.gpu) return;
@@ -190,59 +233,45 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     const width = frame.width;
     const height = frame.height;
 
-    // Re-init GPU resources if dimensions changed
     if (width !== this.gpu.width || height !== this.gpu.height) {
       this.initGpuResources(width, height);
     }
-
-    // Create output surface on first frame or dimension change.
-    // TODO(#325): createSurface is a privileged allocation — RuntimeContextLimitedAccess
-    // deliberately does not expose it. This first-frame-dimensions pattern is
-    // exactly what escalate() in #325 is designed for; at runtime this will
-    // throw until that polyglot IPC primitive lands and we can replace this
-    // with `await ctx.gpuLimitedAccess.escalate(full => full.createSurface(...))`.
-    if (!this.outputSurface || this.outputSurface.width !== width || this.outputSurface.height !== height) {
-      if (this.outputSurface) {
-        this.outputSurface.release();
-      }
-      // @ts-expect-error — pending #325 escalate() primitive; see TODO above
-      const created: { poolId: string; surface: GpuSurface } = ctx.gpuFullAccess
-        .createSurface(width, height, "BGRA");
-      this.outputSurface = created.surface;
-      this.outputPoolId = created.poolId;
-    }
-    // Non-null after the create-or-resize block above — preserves narrowing
-    // across the @ts-expect-error branch, which would otherwise erase `surface`
-    // to `any` and widen `this.outputSurface` back to `GpuSurface | null`.
-    const outputSurface = this.outputSurface!;
+    await this.ensureOutputPool(ctx, width, height);
 
     const root = this.gpu.root;
     const device = this.gpu.device;
     const pixelCount = this.gpu.pixelCount;
 
-    // --- Read input IOSurface pixels ---
+    // --- Read input surface pixels (zero-copy lock + typed-array view) ---
     const inputSurface = ctx.gpuLimitedAccess.resolveSurface(frame.surface_id);
     inputSurface.lock(true);
-    const inputRawBuffer = inputSurface.asBuffer();
-    const bytesPerRow = inputSurface.bytesPerRow;
-    const srcRowBytes = width * 4;
+    const inputBytes = new Uint8Array(inputSurface.asBuffer());
+    const inputBytesPerRow = inputSurface.bytesPerRow;
+    const tightRowBytes = width * 4;
 
-    // Strip bytesPerRow padding → packed pixel array
     const packedInput = new Uint32Array(pixelCount);
-    const inputBytes = new Uint8Array(inputRawBuffer);
-    for (let row = 0; row < height; row++) {
-      const srcOffset = row * bytesPerRow;
-      const dstOffset = row * width;
-      const rowSlice = new Uint32Array(inputBytes.buffer, srcOffset, width);
-      packedInput.set(rowSlice, dstOffset);
+    if (inputBytesPerRow === tightRowBytes) {
+      // Fast path — tightly packed; one aligned u32 view, no per-row copy.
+      packedInput.set(
+        new Uint32Array(inputBytes.buffer, inputBytes.byteOffset, pixelCount),
+      );
+    } else {
+      for (let row = 0; row < height; row++) {
+        const srcOffset = inputBytes.byteOffset + row * inputBytesPerRow;
+        const rowSlice = new Uint32Array(inputBytes.buffer, srcOffset, width);
+        packedInput.set(rowSlice, row * width);
+      }
     }
     inputSurface.unlock(true);
     inputSurface.release();
 
-    // --- Upload to GPU (raw writeBuffer for zero-copy typed array transfer) ---
-    device.queue.writeBuffer(root.unwrap(this.gpu.inputBuffer) as unknown as GPUBuffer, 0, packedInput);
+    // --- Upload + dispatch + readback ---
+    device.queue.writeBuffer(
+      root.unwrap(this.gpu.inputBuffer) as unknown as GPUBuffer,
+      0,
+      packedInput,
+    );
 
-    // --- Dispatch compute shader ---
     const workgroupCount = Math.ceil(pixelCount / 256);
     const bindGroup = root.createBindGroup(halftoneBindGroupLayout, {
       inputPixels: this.gpu.inputBuffer,
@@ -257,7 +286,6 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     pass.dispatchWorkgroups(workgroupCount);
     pass.end();
 
-    // Copy output to readback buffer for fast GPU→CPU transfer
     encoder.copyBufferToBuffer(
       root.unwrap(this.gpu.outputBuffer) as unknown as GPUBuffer, 0,
       this.gpu.readbackBuffer, 0,
@@ -265,40 +293,49 @@ export default class HalftoneProcessor implements ReactiveProcessor {
     );
     device.queue.submit([encoder.finish()]);
 
-    // --- Read back results (raw mapAsync for zero-copy) ---
     await this.gpu.readbackBuffer.mapAsync(GPUMapMode.READ);
     const outputData = new Uint32Array(this.gpu.readbackBuffer.getMappedRange().slice(0));
     this.gpu.readbackBuffer.unmap();
 
-    // --- Write to output IOSurface ---
-    outputSurface.lock(false);
-    const outputRawBuffer = outputSurface.asBuffer();
-    const outBytesPerRow = outputSurface.bytesPerRow;
-    const outputBytes = new Uint8Array(outputRawBuffer);
+    // --- Write to next pool slot ---
+    const slot = this.outputPool[this.outputPoolIndex];
+    this.outputPoolIndex = (this.outputPoolIndex + 1) % this.outputPool.length;
 
-    // Add bytesPerRow padding back
-    for (let row = 0; row < height; row++) {
-      const srcOffset = row * width;
-      const dstOffset = row * outBytesPerRow;
-      const rowData = new Uint8Array(outputData.buffer, srcOffset * 4, srcRowBytes);
-      outputBytes.set(rowData, dstOffset);
+    const outputSurface: GpuSurface = ctx.gpuLimitedAccess.resolveSurface(slot.handleId);
+    outputSurface.lock(false);
+    const outputBytes = new Uint8Array(outputSurface.asBuffer());
+    const outputBytesPerRow = outputSurface.bytesPerRow;
+
+    if (outputBytesPerRow === tightRowBytes) {
+      outputBytes.set(new Uint8Array(outputData.buffer));
+    } else {
+      for (let row = 0; row < height; row++) {
+        const srcOffset = row * width * 4;
+        const dstOffset = row * outputBytesPerRow;
+        outputBytes.set(
+          new Uint8Array(outputData.buffer, srcOffset, tightRowBytes),
+          dstOffset,
+        );
+      }
     }
     outputSurface.unlock(false);
+    outputSurface.release();
 
-    // --- Write output frame ---
+    // --- Forward downstream ---
     this.frameIndex++;
     const outputFrame: Videoframe = {
-      surface_id: this.outputPoolId!,
-      width: width,
-      height: height,
+      surface_id: slot.handleId,
+      width,
+      height,
       timestamp_ns: String(timestampNs),
       frame_index: String(this.frameIndex),
     };
     ctx.outputs.write("video_out", outputFrame, timestampNs);
   }
 
-  teardown(_ctx: RuntimeContextFullAccess): void {
+  async teardown(ctx: RuntimeContextFullAccess): Promise<void> {
     console.error("[HalftoneProcessor] teardown");
+    await this.releaseOutputPool(ctx);
     if (this.gpu) {
       if (this.gpu.inputBuffer) this.gpu.inputBuffer.destroy();
       if (this.gpu.outputBuffer) this.gpu.outputBuffer.destroy();
@@ -306,10 +343,6 @@ export default class HalftoneProcessor implements ReactiveProcessor {
       if (this.gpu.readbackBuffer) this.gpu.readbackBuffer.destroy();
       this.gpu.root.destroy();
       this.gpu = null;
-    }
-    if (this.outputSurface) {
-      this.outputSurface.release();
-      this.outputSurface = null;
     }
   }
 }
