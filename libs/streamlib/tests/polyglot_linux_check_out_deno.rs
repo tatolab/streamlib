@@ -5,7 +5,7 @@
 //!
 //! Deno twin of `polyglot_linux_check_out.rs`. Spawns `deno` with an inline
 //! TypeScript driver that loads `libstreamlib_deno_native.so` via
-//! `Deno.dlopen`, drives the `sldn_broker_*` / `sldn_gpu_surface_*` FFI like
+//! `Deno.dlopen`, drives the `sldn_surface_*` / `sldn_gpu_surface_*` FFI like
 //! `subprocess_runner.ts` does, and verifies the bytes read through
 //! `sldn_gpu_surface_base_address` match the host-written DMA-BUF pattern
 //! AND that `sldn_gpu_surface_backend` reports the Vulkan import path was
@@ -63,7 +63,7 @@ fn deno_driver() -> &'static str {
     // region once we get a base_address pointer back from the native lib.
     r#"
 const nativeLibPath = Deno.env.get("TEST_NATIVE_LIB")!;
-const socketPath = Deno.env.get("STREAMLIB_BROKER_SOCKET")!;
+const socketPath = Deno.env.get("STREAMLIB_SURFACE_SOCKET")!;
 const surfaceId = Deno.env.get("TEST_SURFACE_ID")!;
 const expectedWidth = parseInt(Deno.env.get("TEST_WIDTH")!);
 const expectedHeight = parseInt(Deno.env.get("TEST_HEIGHT")!);
@@ -72,10 +72,10 @@ const expectedHeadHex = Deno.env.get("TEST_EXPECTED_HEAD_HEX")!;
 const expectedBackend = parseInt(Deno.env.get("TEST_EXPECTED_BACKEND")!);
 
 const lib = Deno.dlopen(nativeLibPath, {
-  sldn_broker_connect: { parameters: ["buffer"], result: "pointer" },
-  sldn_broker_disconnect: { parameters: ["pointer"], result: "void" },
-  sldn_broker_resolve_surface: { parameters: ["pointer", "buffer"], result: "pointer" },
-  sldn_broker_unregister_surface: { parameters: ["pointer", "buffer"], result: "void" },
+  sldn_surface_connect: { parameters: ["buffer"], result: "pointer" },
+  sldn_surface_disconnect: { parameters: ["pointer"], result: "void" },
+  sldn_surface_resolve_surface: { parameters: ["pointer", "buffer"], result: "pointer" },
+  sldn_surface_unregister_surface: { parameters: ["pointer", "buffer"], result: "void" },
   sldn_gpu_surface_lock: { parameters: ["pointer", "i32"], result: "i32" },
   sldn_gpu_surface_unlock: { parameters: ["pointer", "i32"], result: "i32" },
   sldn_gpu_surface_base_address: { parameters: ["pointer"], result: "pointer" },
@@ -95,11 +95,11 @@ function fatal(msg: string): never {
   Deno.exit(1);
 }
 
-const broker = lib.symbols.sldn_broker_connect(cStr(socketPath));
-if (broker === null) fatal("sldn_broker_connect returned null");
+const conn = lib.symbols.sldn_surface_connect(cStr(socketPath));
+if (conn === null) fatal("sldn_surface_connect returned null");
 
-const handle = lib.symbols.sldn_broker_resolve_surface(broker, cStr(surfaceId));
-if (handle === null) fatal("sldn_broker_resolve_surface returned null");
+const handle = lib.symbols.sldn_surface_resolve_surface(conn, cStr(surfaceId));
+if (handle === null) fatal("sldn_surface_resolve_surface returned null");
 
 const width = lib.symbols.sldn_gpu_surface_width(handle);
 const height = lib.symbols.sldn_gpu_surface_height(handle);
@@ -130,14 +130,14 @@ if (actualHex !== expectedHeadHex) {
 if (lib.symbols.sldn_gpu_surface_unlock(handle, 1) !== 0) fatal("unlock returned non-zero");
 
 // Second resolve — cache hit path.
-const handle2 = lib.symbols.sldn_broker_resolve_surface(broker, cStr(surfaceId));
+const handle2 = lib.symbols.sldn_surface_resolve_surface(conn, cStr(surfaceId));
 if (handle2 === null) fatal("cached resolve_surface returned null");
 if (lib.symbols.sldn_gpu_surface_width(handle2) !== expectedWidth) fatal("cached width mismatch");
 lib.symbols.sldn_gpu_surface_release(handle2);
 
-lib.symbols.sldn_broker_unregister_surface(broker, cStr(surfaceId));
+lib.symbols.sldn_surface_unregister_surface(conn, cStr(surfaceId));
 lib.symbols.sldn_gpu_surface_release(handle);
-lib.symbols.sldn_broker_disconnect(broker);
+lib.symbols.sldn_surface_disconnect(conn);
 lib.close();
 
 console.log("OK " + actualHex);
@@ -172,7 +172,7 @@ fn deno_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     };
 
     // Stand up a real StreamRuntime — owns the per-runtime surface-sharing
-    // socket. No external broker daemon, no manual fixture.
+    // socket. No external surface-share daemon, no manual fixture.
     let runtime = StreamRuntime::new().expect("StreamRuntime::new");
     let socket_path = runtime.surface_socket_path().to_path_buf();
     let runtime_id = runtime.runtime_id().to_string();
@@ -236,7 +236,7 @@ fn deno_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         .arg("--allow-env")
         .arg("--allow-read")
         .arg(&script_path)
-        .env("STREAMLIB_BROKER_SOCKET", &socket_path)
+        .env("STREAMLIB_SURFACE_SOCKET", &socket_path)
         .env("TEST_NATIVE_LIB", &native_lib)
         .env("TEST_SURFACE_ID", &surface_id)
         .env("TEST_WIDTH", width.to_string())

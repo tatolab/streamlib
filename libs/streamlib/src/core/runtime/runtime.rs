@@ -107,8 +107,7 @@ pub struct StreamRuntime {
     pub(crate) iceoryx2_node: Iceoryx2Node,
     /// Per-runtime surface-sharing service. Bound to a unique Unix socket in
     /// `new()`; polyglot subprocesses connect to it via the
-    /// `STREAMLIB_SURFACE_SOCKET` env var (legacy `STREAMLIB_BROKER_SOCKET`
-    /// is also set for one release cycle). Wrapped in `Mutex<Option<...>>`
+    /// `STREAMLIB_SURFACE_SOCKET` env var. Wrapped in `Mutex<Option<...>>`
     /// so `stop()` can drop it deterministically; the `Drop` impl on
     /// `UnixSocketSurfaceService` removes the socket file.
     #[cfg(target_os = "linux")]
@@ -189,9 +188,8 @@ impl StreamRuntime {
 
         // Bring up the per-runtime surface-sharing service. Each runtime owns
         // a unique Unix socket at $XDG_RUNTIME_DIR/streamlib-<uuid>.sock that
-        // its polyglot subprocesses connect to via STREAMLIB_SURFACE_SOCKET
-        // (legacy STREAMLIB_BROKER_SOCKET is also honored for one release
-        // cycle). No external daemon is required.
+        // its polyglot subprocesses connect to via STREAMLIB_SURFACE_SOCKET.
+        // No external daemon is required.
         #[cfg(target_os = "linux")]
         let (surface_service, surface_socket_path) =
             bring_up_surface_service(&runtime_id)?;
@@ -234,9 +232,8 @@ impl StreamRuntime {
     /// Bound during [`StreamRuntime::new`] at
     /// `$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`. Polyglot
     /// subprocesses spawned by this runtime inherit this path via the
-    /// `STREAMLIB_SURFACE_SOCKET` env var (legacy `STREAMLIB_BROKER_SOCKET`
-    /// is also set) so their `streamlib-surface-client` connects to the
-    /// runtime-internal service.
+    /// `STREAMLIB_SURFACE_SOCKET` env var so their `streamlib-surface-client`
+    /// connects to the runtime-internal service.
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
         &self.surface_socket_path
@@ -1619,42 +1616,6 @@ mod tests {
             });
         }
 
-        /// Spawn ops must set both `STREAMLIB_SURFACE_SOCKET` (canonical)
-        /// and `STREAMLIB_BROKER_SOCKET` (legacy, retained for one release
-        /// cycle) to the same path so older Python/Deno subprocesses still
-        /// resolve the surface-share socket. Mirrors `spawn_python_native_subprocess_op`
-        /// and `spawn_deno_subprocess_op` — those ops set both vars
-        /// directly on the `Command`. This test asserts the contract holds
-        /// from the child process's point of view. See #463.
-        #[test]
-        #[serial]
-        fn polyglot_subprocess_sees_both_surface_and_legacy_broker_env() {
-            with_isolated_xdg_runtime_dir(|_| {
-                let runtime = StreamRuntime::new().expect("runtime");
-                let socket_path = runtime.surface_socket_path().to_path_buf();
-
-                let output = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(r#"echo "$STREAMLIB_SURFACE_SOCKET|$STREAMLIB_BROKER_SOCKET""#)
-                    .env("STREAMLIB_SURFACE_SOCKET", &socket_path)
-                    .env("STREAMLIB_BROKER_SOCKET", &socket_path)
-                    .output()
-                    .expect("spawn sh");
-
-                assert!(output.status.success(), "sh exited non-zero");
-                let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let expected = format!(
-                    "{p}|{p}",
-                    p = socket_path.to_string_lossy()
-                );
-                assert_eq!(
-                    line, expected,
-                    "subprocess must see both env vars set to the surface-share \
-                     socket — legacy STREAMLIB_BROKER_SOCKET is required for one \
-                     release cycle of back-compat"
-                );
-            });
-        }
 
         #[test]
         #[serial]

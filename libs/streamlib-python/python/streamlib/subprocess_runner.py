@@ -147,11 +147,10 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
     #
     # macOS: STREAMLIB_XPC_SERVICE_NAME is the launchd mach-service name.
     # Linux: STREAMLIB_SURFACE_SOCKET is the Unix-socket path the per-runtime
-    #        service listens on. STREAMLIB_BROKER_SOCKET is the legacy name
-    #        and is honored for one release cycle with a deprecation warning.
-    #        Both endpoints funnel through the same FFI entry
-    #        (`slpn_surface_connect`) — the native lib's platform-specific
-    #        surface_client module interprets the C string accordingly.
+    #        service listens on. Both endpoints funnel through the same FFI
+    #        entry (`slpn_surface_connect`) — the native lib's
+    #        platform-specific surface_client module interprets the C string
+    #        accordingly.
     handle_ptr = None
     if sys.platform == "darwin":
         surface_endpoint = os.environ.get("STREAMLIB_XPC_SERVICE_NAME", "")
@@ -159,22 +158,10 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
     else:
         surface_endpoint = os.environ.get("STREAMLIB_SURFACE_SOCKET", "")
         surface_endpoint_desc = "surface_socket"
-        if not surface_endpoint:
-            surface_endpoint = os.environ.get("STREAMLIB_BROKER_SOCKET", "")
-            if surface_endpoint:
-                log.warn(
-                    "STREAMLIB_BROKER_SOCKET is deprecated; set STREAMLIB_SURFACE_SOCKET instead "
-                    "(see docs/migration/broker-to-surface-share.md)"
-                )
     runtime_id = os.environ.get("STREAMLIB_RUNTIME_ID", "")
     if surface_endpoint:
         runtime_id_arg = runtime_id.encode("utf-8") if runtime_id else None
-        # Prefer the canonical `slpn_surface_connect`; fall back to the
-        # legacy `slpn_broker_connect` for native libs that ship before the
-        # rename. Both symbols are exported today; only the latter fallback
-        # keeps older cdylibs working.
-        connect_fn = getattr(lib, "slpn_surface_connect", None) or lib.slpn_broker_connect
-        handle_ptr = connect_fn(
+        handle_ptr = lib.slpn_surface_connect(
             surface_endpoint.encode("utf-8"), runtime_id_arg
         )
         if handle_ptr:
@@ -204,9 +191,7 @@ def _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state=None):
     if state is not None:
         state.release_pool()
     if native_lib and native_handle_ptr:
-        # Prefer canonical name; fall back to legacy for older cdylibs.
-        disconnect_fn = getattr(native_lib, "slpn_surface_disconnect", None) or native_lib.slpn_broker_disconnect
-        disconnect_fn(native_handle_ptr)
+        native_lib.slpn_surface_disconnect(native_handle_ptr)
     if native_lib and native_ctx_ptr:
         native_lib.slpn_context_destroy(native_ctx_ptr)
 

@@ -5,11 +5,10 @@
 
 macOS: IOSurface shared memory via ctypes (kernel-managed, cross-process).
 Linux: DMA-BUF FDs + Vulkan `VkImportMemoryFdInfoKHR` via the
-    `slpn_surface_*` FFI in `streamlib-python-native` (legacy
-    `slpn_broker_*` aliases are accepted for one release cycle). There is
-    no direct ctypes CPU-mmap equivalent of `IOSurfaceLookup` — the Linux
-    resolve path lives behind `NativeGpuContext*` in `processor_context.py`,
-    not this module.
+    `slpn_surface_*` FFI in `streamlib-python-native`. There is no direct
+    ctypes CPU-mmap equivalent of `IOSurfaceLookup` — the Linux resolve
+    path lives behind `NativeGpuContext*` in `processor_context.py`, not
+    this module.
 Windows: Not yet implemented (needs DirectX 12 shared textures / NT handles).
 """
 
@@ -100,11 +99,10 @@ elif sys.platform == "linux":
     # Intentionally empty — Linux CPU access to GPU surfaces goes through
     # `NativeGpuContext*` in `processor_context.py`, which owns the DMA-BUF
     # FD import via `streamlib-python-native`'s
-    # `slpn_surface_resolve_surface` (the legacy `slpn_broker_resolve_surface`
-    # alias works too during the back-compat window) and returns a handle
-    # holding an imported VkImage. Importing this module on Linux must
-    # succeed (some processors import it unconditionally) but no
-    # IOSurface-shaped class is defined here.
+    # `slpn_surface_resolve_surface` and returns a handle holding an
+    # imported VkImage. Importing this module on Linux must succeed (some
+    # processors import it unconditionally) but no IOSurface-shaped class
+    # is defined here.
     pass
 
 elif sys.platform == "win32":

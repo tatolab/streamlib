@@ -179,42 +179,20 @@ def load_native_lib(lib_path):
     lib.slpn_gpu_surface_iosurface_ref.argtypes = [ctypes.c_void_p]
     lib.slpn_gpu_surface_iosurface_ref.restype = ctypes.c_void_p
 
-    # Surface-share service FFI. Bind both the canonical `slpn_surface_*`
-    # names (preferred) and the legacy `slpn_broker_*` aliases (deprecated,
-    # retained for one release cycle). Any missing symbol on one side only
-    # is tolerated so older native libs still load.
-    def _bind(symbol_new: str, symbol_old: str, argtypes, restype):
-        for sym in (symbol_new, symbol_old):
-            fn = getattr(lib, sym, None)
-            if fn is None:
-                continue
-            fn.argtypes = argtypes
-            fn.restype = restype
-
-    _bind(
-        "slpn_surface_connect", "slpn_broker_connect",
-        [ctypes.c_char_p, ctypes.c_char_p], ctypes.c_void_p,
-    )
-    _bind(
-        "slpn_surface_disconnect", "slpn_broker_disconnect",
-        [ctypes.c_void_p], None,
-    )
-    _bind(
-        "slpn_surface_resolve_surface", "slpn_broker_resolve_surface",
-        [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_void_p,
-    )
-    _bind(
-        "slpn_surface_acquire_surface", "slpn_broker_acquire_surface",
-        [
-            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
-            ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
-        ],
-        ctypes.c_void_p,
-    )
-    _bind(
-        "slpn_surface_unregister_surface", "slpn_broker_unregister_surface",
-        [ctypes.c_void_p, ctypes.c_char_p], None,
-    )
+    # Surface-share service FFI.
+    lib.slpn_surface_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+    lib.slpn_surface_connect.restype = ctypes.c_void_p
+    lib.slpn_surface_disconnect.argtypes = [ctypes.c_void_p]
+    lib.slpn_surface_disconnect.restype = None
+    lib.slpn_surface_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.slpn_surface_resolve_surface.restype = ctypes.c_void_p
+    lib.slpn_surface_acquire_surface.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+        ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
+    ]
+    lib.slpn_surface_acquire_surface.restype = ctypes.c_void_p
+    lib.slpn_surface_unregister_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.slpn_surface_unregister_surface.restype = None
 
     return lib
 

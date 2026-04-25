@@ -390,7 +390,7 @@ class NativeGpuContextLimitedAccess implements GpuContextLimitedAccess {
     if (this.surfaceHandlePtr) {
       // Surface-share-backed resolution: pool_id → XPC lookup → IOSurface
       const poolIdBuf = cString(poolId);
-      const handlePtr = (this.lib.symbols.sldn_surface_resolve_surface ?? this.lib.symbols.sldn_broker_resolve_surface)!(
+      const handlePtr = this.lib.symbols.sldn_surface_resolve_surface(
         this.surfaceHandlePtr,
         poolIdBuf,
       );
@@ -427,7 +427,7 @@ class NativeGpuContextFullAccess extends NativeGpuContextLimitedAccess
       // Surface-share-backed: create IOSurface + register with service
       const poolIdBuf = new Uint8Array(256);
       const poolIdBufPtr = Deno.UnsafePointer.of(poolIdBuf);
-      const handlePtr = (this.lib.symbols.sldn_surface_acquire_surface ?? this.lib.symbols.sldn_broker_acquire_surface)!(
+      const handlePtr = this.lib.symbols.sldn_surface_acquire_surface(
         this.surfaceHandlePtr,
         width,
         height,

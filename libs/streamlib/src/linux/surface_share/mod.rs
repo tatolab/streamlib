@@ -6,9 +6,7 @@
 //! Each `StreamRuntime` owns one [`UnixSocketSurfaceService`] listening on a
 //! unique Unix socket under `$XDG_RUNTIME_DIR`. Polyglot subprocesses
 //! spawned by the runtime receive the socket path through
-//! `STREAMLIB_SURFACE_SOCKET` (legacy `STREAMLIB_BROKER_SOCKET` is accepted
-//! during the back-compat window — see `docs/migration/broker-to-surface-share.md`)
-//! and exchange DMA-BUF fds via `SCM_RIGHTS`.
+//! `STREAMLIB_SURFACE_SOCKET` and exchange DMA-BUF fds via `SCM_RIGHTS`.
 
 pub mod state;
 pub mod unix_socket_service;

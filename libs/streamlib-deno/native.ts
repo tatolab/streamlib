@@ -93,61 +93,26 @@ const symbols = {
     result: "void" as const,
   },
 
-  // Surface-share client — canonical `sldn_surface_*` names.
+  // Surface-share client
   sldn_surface_connect: {
     parameters: ["buffer"] as const,
     result: "pointer" as const,
-    optional: true as const,
   },
   sldn_surface_disconnect: {
     parameters: ["pointer"] as const,
     result: "void" as const,
-    optional: true as const,
   },
   sldn_surface_resolve_surface: {
     parameters: ["pointer", "buffer"] as const,
     result: "pointer" as const,
-    optional: true as const,
   },
   sldn_surface_acquire_surface: {
     parameters: ["pointer", "u32", "u32", "u32", "pointer", "u32"] as const,
     result: "pointer" as const,
-    optional: true as const,
   },
   sldn_surface_unregister_surface: {
     parameters: ["pointer", "buffer"] as const,
     result: "void" as const,
-    optional: true as const,
-  },
-
-  // Legacy `sldn_broker_*` aliases — declared optional so the SDK still
-  // loads against a native lib that shipped only the old names. Either set
-  // of symbols will be present; `surface-client.ts` picks whichever is
-  // resolved. See docs/migration/broker-to-surface-share.md for removal.
-  sldn_broker_connect: {
-    parameters: ["buffer"] as const,
-    result: "pointer" as const,
-    optional: true as const,
-  },
-  sldn_broker_disconnect: {
-    parameters: ["pointer"] as const,
-    result: "void" as const,
-    optional: true as const,
-  },
-  sldn_broker_resolve_surface: {
-    parameters: ["pointer", "buffer"] as const,
-    result: "pointer" as const,
-    optional: true as const,
-  },
-  sldn_broker_acquire_surface: {
-    parameters: ["pointer", "u32", "u32", "u32", "pointer", "u32"] as const,
-    result: "pointer" as const,
-    optional: true as const,
-  },
-  sldn_broker_unregister_surface: {
-    parameters: ["pointer", "buffer"] as const,
-    result: "void" as const,
-    optional: true as const,
   },
 } as const;
 

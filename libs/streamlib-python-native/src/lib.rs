@@ -1715,50 +1715,6 @@ mod surface_client {
         CStr::from_ptr(ptr).to_str().ok()
     }
 
-    // Back-compat aliases for the legacy `slpn_broker_*` FFI names.
-    // Every alias forwards to its canonical `slpn_surface_*` counterpart; the
-    // symbol ships for one release cycle so Python/Deno apps pinned to the old
-    // name keep working. Rust callers (tests, examples) see a `#[deprecated]`
-    // warning. See `docs/migration/broker-to-surface-share.md` for the removal
-    // plan.
-
-    #[deprecated(note = "renamed to `slpn_surface_connect`; `slpn_broker_connect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_connect(xpc_service_name: *const c_char,
-        runtime_id: *const c_char) -> *mut SurfaceShareHandle {
-        unsafe { slpn_surface_connect(xpc_service_name, runtime_id) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_disconnect`; `slpn_broker_disconnect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_disconnect(handle: *mut SurfaceShareHandle) {
-        unsafe { slpn_surface_disconnect(handle) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_resolve_surface`; `slpn_broker_resolve_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_resolve_surface(handle: *mut SurfaceShareHandle,
-        pool_id: *const c_char) -> *mut SurfaceHandle {
-        unsafe { slpn_surface_resolve_surface(handle, pool_id) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_acquire_surface`; `slpn_broker_acquire_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_acquire_surface(handle: *mut SurfaceShareHandle,
-        width: u32,
-        height: u32,
-        bytes_per_element: u32,
-        out_pool_id: *mut c_char,
-        pool_id_buf_len: u32) -> *mut SurfaceHandle {
-        unsafe { slpn_surface_acquire_surface(handle, width, height, bytes_per_element, out_pool_id, pool_id_buf_len) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_unregister_surface`; `slpn_broker_unregister_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_unregister_surface(handle: *mut SurfaceShareHandle,
-        pool_id: *const c_char) {
-        unsafe { slpn_surface_unregister_surface(handle, pool_id) }
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -2314,8 +2270,7 @@ mod surface_client {
                 tracing::error!(
                     "surface_resolve_surface: connect to '{}' failed: {}. \
                      The parent StreamRuntime owns this socket; check the runtime logs \
-                     and confirm STREAMLIB_SURFACE_SOCKET (or legacy \
-                     STREAMLIB_BROKER_SOCKET) points at a live runtime.",
+                     and confirm STREAMLIB_SURFACE_SOCKET points at a live runtime.",
                     handle.socket_path, e
                 );
                 return std::ptr::null_mut();
@@ -2515,50 +2470,6 @@ mod surface_client {
     }
 
 
-    // Back-compat aliases for the legacy `slpn_broker_*` FFI names.
-    // Every alias forwards to its canonical `slpn_surface_*` counterpart; the
-    // symbol ships for one release cycle so Python/Deno apps pinned to the old
-    // name keep working. Rust callers (tests, examples) see a `#[deprecated]`
-    // warning. See `docs/migration/broker-to-surface-share.md` for the removal
-    // plan.
-
-    #[deprecated(note = "renamed to `slpn_surface_connect`; `slpn_broker_connect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_connect(socket_path: *const c_char,
-        runtime_id: *const c_char) -> *mut SurfaceShareHandle {
-        unsafe { slpn_surface_connect(socket_path, runtime_id) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_disconnect`; `slpn_broker_disconnect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_disconnect(handle: *mut SurfaceShareHandle) {
-        unsafe { slpn_surface_disconnect(handle) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_resolve_surface`; `slpn_broker_resolve_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_resolve_surface(handle: *mut SurfaceShareHandle,
-        pool_id: *const c_char) -> *mut SurfaceHandle {
-        unsafe { slpn_surface_resolve_surface(handle, pool_id) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_acquire_surface`; `slpn_broker_acquire_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_acquire_surface(_handle: *mut SurfaceShareHandle,
-        _width: u32,
-        _height: u32,
-        _bytes_per_element: u32,
-        _out_pool_id: *mut c_char,
-        _pool_id_buf_len: u32) -> *mut SurfaceHandle {
-        unsafe { slpn_surface_acquire_surface(_handle, _width, _height, _bytes_per_element, _out_pool_id, _pool_id_buf_len) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_unregister_surface`; `slpn_broker_unregister_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_unregister_surface(handle: *mut SurfaceShareHandle,
-        pool_id: *const c_char) {
-        unsafe { slpn_surface_unregister_surface(handle, pool_id) }
-    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -2604,50 +2515,6 @@ mod surface_client {
     ) {
     }
 
-    // Back-compat aliases for the legacy `slpn_broker_*` FFI names.
-    // Every alias forwards to its canonical `slpn_surface_*` counterpart; the
-    // symbol ships for one release cycle so Python/Deno apps pinned to the old
-    // name keep working. Rust callers (tests, examples) see a `#[deprecated]`
-    // warning. See `docs/migration/broker-to-surface-share.md` for the removal
-    // plan.
-
-    #[deprecated(note = "renamed to `slpn_surface_connect`; `slpn_broker_connect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_connect(_xpc_service_name: *const c_char,
-        _runtime_id: *const c_char) -> *mut c_void {
-        unsafe { slpn_surface_connect(_xpc_service_name, _runtime_id) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_disconnect`; `slpn_broker_disconnect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_disconnect(_handle: *mut c_void) {
-        unsafe { slpn_surface_disconnect(_handle) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_resolve_surface`; `slpn_broker_resolve_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_resolve_surface(_handle: *mut c_void,
-        _pool_id: *const c_char) -> *mut c_void {
-        unsafe { slpn_surface_resolve_surface(_handle, _pool_id) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_acquire_surface`; `slpn_broker_acquire_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_acquire_surface(_handle: *mut c_void,
-        _width: u32,
-        _height: u32,
-        _bytes_per_element: u32,
-        _out_pool_id: *mut c_char,
-        _pool_id_buf_len: u32) -> *mut c_void {
-        unsafe { slpn_surface_acquire_surface(_handle, _width, _height, _bytes_per_element, _out_pool_id, _pool_id_buf_len) }
-    }
-
-    #[deprecated(note = "renamed to `slpn_surface_unregister_surface`; `slpn_broker_unregister_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_unregister_surface(_handle: *mut c_void,
-        _pool_id: *const c_char) {
-        unsafe { slpn_surface_unregister_surface(_handle, _pool_id) }
-    }
 }
 
 // ============================================================================

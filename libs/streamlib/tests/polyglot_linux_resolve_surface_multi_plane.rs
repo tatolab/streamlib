@@ -111,13 +111,13 @@ fn check_in_multi_plane(
     surface_id
 }
 
-/// How the shim's `broker_connect` is called. The Python shim takes
+/// How the shim's `surface_connect` is called. The Python shim takes
 /// `(socket_path, runtime_id)`; the Deno shim takes only `(socket_path)`.
 /// The two cdylibs are ABI-independent, so we resolve each signature
 /// exactly rather than gambling on x86_64 calling convention leniency.
 enum ConnectFlavor {
-    TwoArg, // Python: slpn_broker_connect(socket_path, runtime_id)
-    OneArg, // Deno:   sldn_broker_connect(socket_path)
+    TwoArg, // Python: slpn_surface_connect(socket_path, runtime_id)
+    OneArg, // Deno:   sldn_surface_connect(socket_path)
 }
 
 /// Shared test body: load `lib_path` (a `libstreamlib_*_native.so`), call
@@ -134,13 +134,13 @@ fn run_shim_test(lib_path: PathBuf, prefix: &str, flavor: ConnectFlavor) {
 
     let lib = unsafe { libloading::Library::new(&lib_path) }.expect("load native lib");
 
-    let broker_disconnect: libloading::Symbol<unsafe extern "C" fn(*mut c_void)> =
-        unsafe { lib.get(format!("{}broker_disconnect", prefix).as_bytes()) }
-            .expect("broker_disconnect");
-    let broker_resolve_surface: libloading::Symbol<
+    let surface_disconnect: libloading::Symbol<unsafe extern "C" fn(*mut c_void)> =
+        unsafe { lib.get(format!("{}surface_disconnect", prefix).as_bytes()) }
+            .expect("surface_disconnect");
+    let surface_resolve_surface: libloading::Symbol<
         unsafe extern "C" fn(*mut c_void, *const i8) -> *mut c_void,
-    > = unsafe { lib.get(format!("{}broker_resolve_surface", prefix).as_bytes()) }
-        .expect("broker_resolve_surface");
+    > = unsafe { lib.get(format!("{}surface_resolve_surface", prefix).as_bytes()) }
+        .expect("surface_resolve_surface");
     let gpu_surface_release: libloading::Symbol<unsafe extern "C" fn(*mut c_void)> =
         unsafe { lib.get(format!("{}gpu_surface_release", prefix).as_bytes()) }
             .expect("gpu_surface_release");
@@ -164,33 +164,33 @@ fn run_shim_test(lib_path: PathBuf, prefix: &str, flavor: ConnectFlavor) {
     .expect("gpu_surface_plane_base_address");
 
     let socket_path_c = CString::new(socket_path.to_str().expect("path utf8")).unwrap();
-    let broker = match flavor {
+    let handle = match flavor {
         ConnectFlavor::TwoArg => {
-            let broker_connect: libloading::Symbol<
+            let surface_connect: libloading::Symbol<
                 unsafe extern "C" fn(*const i8, *const i8) -> *mut c_void,
-            > = unsafe { lib.get(format!("{}broker_connect", prefix).as_bytes()) }
-                .expect("broker_connect");
+            > = unsafe { lib.get(format!("{}surface_connect", prefix).as_bytes()) }
+                .expect("surface_connect");
             let runtime_id_c = CString::new("multi-plane-subprocess").unwrap();
-            unsafe { broker_connect(socket_path_c.as_ptr(), runtime_id_c.as_ptr()) }
+            unsafe { surface_connect(socket_path_c.as_ptr(), runtime_id_c.as_ptr()) }
         }
         ConnectFlavor::OneArg => {
-            let broker_connect: libloading::Symbol<
+            let surface_connect: libloading::Symbol<
                 unsafe extern "C" fn(*const i8) -> *mut c_void,
-            > = unsafe { lib.get(format!("{}broker_connect", prefix).as_bytes()) }
-                .expect("broker_connect");
-            unsafe { broker_connect(socket_path_c.as_ptr()) }
+            > = unsafe { lib.get(format!("{}surface_connect", prefix).as_bytes()) }
+                .expect("surface_connect");
+            unsafe { surface_connect(socket_path_c.as_ptr()) }
         }
     };
-    if broker.is_null() {
+    if handle.is_null() {
         eprintln!(
-            "{}resolve_surface_multi_plane: broker_connect returned null — skipping",
+            "{}resolve_surface_multi_plane: surface_connect returned null — skipping",
             prefix
         );
         return;
     }
 
     let surface_id_c = CString::new(surface_id.as_str()).unwrap();
-    let surface = unsafe { broker_resolve_surface(broker, surface_id_c.as_ptr()) };
+    let surface = unsafe { surface_resolve_surface(handle, surface_id_c.as_ptr()) };
     if surface.is_null() {
         // resolve_surface gates on Vulkan device creation — skip cleanly
         // rather than fail when the host has no Vulkan-capable driver.
@@ -198,7 +198,7 @@ fn run_shim_test(lib_path: PathBuf, prefix: &str, flavor: ConnectFlavor) {
             "{}resolve_surface_multi_plane: resolve_surface returned null — skipping (no Vulkan device?)",
             prefix
         );
-        unsafe { broker_disconnect(broker) };
+        unsafe { surface_disconnect(handle) };
         return;
     }
 
@@ -237,9 +237,9 @@ fn run_shim_test(lib_path: PathBuf, prefix: &str, flavor: ConnectFlavor) {
     assert!(unsafe { gpu_surface_plane_base_address(surface, 7) }.is_null());
 
     unsafe { gpu_surface_release(surface) };
-    unsafe { broker_disconnect(broker) };
+    unsafe { surface_disconnect(handle) };
 
-    // Best-effort release on the broker.
+    // Best-effort release on the surface-share service.
     let stream = connect_to_surface_share_socket(&socket_path).expect("host reconnect for release");
     let release_req = serde_json::json!({
         "op": "release",
