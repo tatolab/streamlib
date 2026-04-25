@@ -1105,6 +1105,139 @@ mod tests {
                 );
             }
         }
+
+        /// Rust + Python + Deno emit interleaved records into the unified
+        /// JSONL pathway. Verifies the architectural contract from #430:
+        /// `host_ts` is the authoritative sort key across the merged
+        /// stream (monotonically non-decreasing) and `source_seq` is
+        /// preserved within each subprocess source (monotonically
+        /// increasing). Rust records carry no `source_seq` because the
+        /// host-local tracing layer has no need for one — host receipt
+        /// IS the local order.
+        #[test]
+        #[serial]
+        fn cross_language_source_seq_monotonic_within_source() {
+            let (_tmp, guard) = install_logging("RxLang");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            // Round-robin emit Rust / Python / Deno. Each subprocess
+            // source carries a monotonic `source_seq`; Rust records do
+            // not. A 50µs nap between emissions guarantees `host_ts`
+            // strictly increases, which is the stronger property — the
+            // contract only requires non-decreasing.
+            const ROUNDS: u64 = 16;
+            let mut py_seq = 0u64;
+            let mut deno_seq = 0u64;
+            for _ in 0..ROUNDS {
+                tracing::info!(round = py_seq, "rust-merged");
+                std::thread::sleep(Duration::from_micros(50));
+
+                let py_log = EscalateRequestLog {
+                    source: EscalateRequestLogSource::Python,
+                    source_seq: py_seq.to_string(),
+                    source_ts: "2026-04-25T12:00:00Z".into(),
+                    level: EscalateRequestLogLevel::Info,
+                    message: format!("py-merged-{py_seq}"),
+                    intercepted: false,
+                    channel: None,
+                    pipeline_id: Some("pl-merge".into()),
+                    processor_id: Some("pr-merge".into()),
+                    attrs: HashMap::new(),
+                };
+                dispatch_log(py_log);
+                py_seq += 1;
+                std::thread::sleep(Duration::from_micros(50));
+
+                let deno_log = EscalateRequestLog {
+                    source: EscalateRequestLogSource::Deno,
+                    source_seq: deno_seq.to_string(),
+                    source_ts: "2026-04-25T12:00:00Z".into(),
+                    level: EscalateRequestLogLevel::Info,
+                    message: format!("deno-merged-{deno_seq}"),
+                    intercepted: false,
+                    channel: None,
+                    pipeline_id: Some("pl-merge".into()),
+                    processor_id: Some("pr-merge".into()),
+                    attrs: HashMap::new(),
+                };
+                dispatch_log(deno_log);
+                deno_seq += 1;
+                std::thread::sleep(Duration::from_micros(50));
+            }
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+
+            let merged: Vec<&RuntimeLogEvent> = events
+                .iter()
+                .filter(|e| {
+                    e.message.starts_with("rust-merged")
+                        || e.message.starts_with("py-merged-")
+                        || e.message.starts_with("deno-merged-")
+                })
+                .collect();
+            assert_eq!(
+                merged.len(),
+                (ROUNDS * 3) as usize,
+                "expected {} merged-stream records, got {}: {merged:#?}",
+                ROUNDS * 3,
+                merged.len()
+            );
+
+            // host_ts is the authoritative cross-source order.
+            for pair in merged.windows(2) {
+                assert!(
+                    pair[1].host_ts >= pair[0].host_ts,
+                    "host_ts must be monotonic across merged stream: \
+                     {} ({:?}) precedes {} ({:?})",
+                    pair[0].message,
+                    pair[0].host_ts,
+                    pair[1].message,
+                    pair[1].host_ts,
+                );
+            }
+
+            // source_seq is monotonic within each subprocess source and
+            // covers exactly [0, ROUNDS).
+            let py_seqs: Vec<u64> = merged
+                .iter()
+                .filter(|e| e.source == Source::Python)
+                .filter_map(|e| e.source_seq)
+                .collect();
+            assert_eq!(
+                py_seqs,
+                (0..ROUNDS).collect::<Vec<u64>>(),
+                "python source_seq must be monotonic and contiguous"
+            );
+            let deno_seqs: Vec<u64> = merged
+                .iter()
+                .filter(|e| e.source == Source::Deno)
+                .filter_map(|e| e.source_seq)
+                .collect();
+            assert_eq!(
+                deno_seqs,
+                (0..ROUNDS).collect::<Vec<u64>>(),
+                "deno source_seq must be monotonic and contiguous"
+            );
+
+            // Rust records carry no source_seq — host-local tracing has
+            // no use for one.
+            let rust_records: Vec<&RuntimeLogEvent> = merged
+                .iter()
+                .copied()
+                .filter(|e| e.source == Source::Rust)
+                .collect();
+            assert_eq!(rust_records.len(), ROUNDS as usize);
+            for record in &rust_records {
+                assert!(
+                    record.source_seq.is_none(),
+                    "rust records must not carry source_seq; got {:?}",
+                    record.source_seq,
+                );
+                assert_eq!(record.level, LogLevel::Info);
+            }
+        }
     }
 
     /// End-to-end tests that spawn a real Python 3 subprocess, have it
