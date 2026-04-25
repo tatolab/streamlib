@@ -270,33 +270,49 @@ fn reader_loop(
             }
         };
 
-        if let Some(response) = process_bridge_message(&sandbox, &registry, &msg) {
-            // Escalate request handled inline. Write response with the
-            // shared writer lock.
-            let send_result: Result<()> = {
-                let mut writer = match writer.lock() {
-                    Ok(g) => g,
-                    Err(_) => {
-                        tracing::warn!(
-                            "[{}] bridge reader saw poisoned writer mutex",
-                            processor_id
-                        );
-                        break;
-                    }
+        // Classify the frame on the rpc tag, not the handler's reply
+        // shape: fire-and-forget escalate ops (e.g. log) consume the
+        // message but produce no response, so a `None` from
+        // `process_bridge_message` cannot be used as the "this wasn't
+        // an escalate request" signal — that would silently re-route
+        // every log message to the lifecycle queue and trip the
+        // setup/teardown waiters.
+        let is_escalate_request = msg
+            .get("rpc")
+            .and_then(|v| v.as_str())
+            == Some(super::subprocess_escalate::ESCALATE_REQUEST_RPC);
+
+        if is_escalate_request {
+            if let Some(response) = process_bridge_message(&sandbox, &registry, &msg) {
+                // Escalate request handled inline. Write response with the
+                // shared writer lock.
+                let send_result: Result<()> = {
+                    let mut writer = match writer.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            tracing::warn!(
+                                "[{}] bridge reader saw poisoned writer mutex",
+                                processor_id
+                            );
+                            break;
+                        }
+                    };
+                    write_frame(&mut *writer, &response)
                 };
-                write_frame(&mut *writer, &response)
-            };
-            if let Err(e) = send_result {
-                tracing::warn!(
-                    "[{}] bridge reader failed to write escalate response: {}",
-                    processor_id,
-                    e
-                );
-                if let Ok(mut dead) = dead.lock() {
-                    *dead = true;
+                if let Err(e) = send_result {
+                    tracing::warn!(
+                        "[{}] bridge reader failed to write escalate response: {}",
+                        processor_id,
+                        e
+                    );
+                    if let Ok(mut dead) = dead.lock() {
+                        *dead = true;
+                    }
+                    break;
                 }
-                break;
             }
+            // Fire-and-forget ops (log) leave nothing to write. Either way,
+            // never forward escalate traffic to the lifecycle channel.
             continue;
         }
 
@@ -431,4 +447,116 @@ fn read_frame<R: Read>(reader: &mut R) -> Result<serde_json::Value> {
         .map_err(|e| StreamError::Runtime(format!("bridge read failed: {e}")))?;
     serde_json::from_slice(&buf)
         .map_err(|e| StreamError::Runtime(format!("bridge frame decode failed: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use std::sync::mpsc::RecvTimeoutError;
+
+    fn gpu_sandbox_or_skip(test_name: &str) -> Option<GpuContextLimitedAccess> {
+        match GpuContext::init_for_platform_sync() {
+            Ok(gpu) => Some(GpuContextLimitedAccess::new(gpu)),
+            Err(e) => {
+                println!("{test_name}: no GPU device ({e}) — skipping");
+                None
+            }
+        }
+    }
+
+    fn log_frame() -> serde_json::Value {
+        serde_json::json!({
+            "rpc": "escalate_request",
+            "op": "log",
+            "source": "python",
+            "source_seq": "1",
+            "source_ts": "1970-01-01T00:00:00Z",
+            "level": "info",
+            "message": "hello from subprocess",
+            "intercepted": false,
+            "channel": serde_json::Value::Null,
+            "pipeline_id": serde_json::Value::Null,
+            "processor_id": "p-bridge-test",
+            "attrs": {},
+        })
+    }
+
+    // Regression gate for the fire-and-forget classification in `reader_loop`
+    // (`if is_escalate_request { … } else { lifecycle_tx.send(msg) }`).
+    //
+    // Before the fix, `process_bridge_message` returning `None` for log ops
+    // was indistinguishable from "this frame isn't an escalate request", so
+    // the reader forwarded every log frame to the lifecycle channel. The
+    // first host-side `bridge_recv()` after `setup` then saw the log frame
+    // in place of `{"rpc":"ready"}` and reported `setup failed: unknown`.
+    //
+    // This test drives a real reader_loop over a `UnixStream::pair()` and
+    // asserts that a log frame arriving on the bridge does not leak to
+    // `lifecycle_rx`. Reverting the reader_loop classification change will
+    // turn this test red.
+    #[test]
+    fn log_frame_does_not_leak_to_lifecycle_channel() {
+        const TEST: &str = "log_frame_does_not_leak_to_lifecycle_channel";
+        let Some(sandbox) = gpu_sandbox_or_skip(TEST) else {
+            return;
+        };
+
+        let (parent_end, child_end) = UnixStream::pair().expect("socketpair");
+        let bridge = SubprocessBridge::new(parent_end, sandbox, "p-bridge-test".into())
+            .expect("bridge construction");
+
+        // Keep the child stream alive across the entire test so the reader
+        // loop stays in its read → classify → continue cycle instead of
+        // hitting EOF and dropping `lifecycle_tx` (which would mask a real
+        // leak as `Disconnected`).
+        let mut child_writer = BufWriter::new(child_end);
+        write_frame(&mut child_writer, &log_frame()).expect("write log frame");
+        child_writer.flush().expect("flush");
+
+        // If reader_loop regresses, the log frame arrives on lifecycle_rx
+        // within a few ms. With the fix, it's consumed by
+        // `process_bridge_message` and the lifecycle channel stays empty.
+        let result = bridge.recv_lifecycle_timeout(Duration::from_millis(250));
+        match result {
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(frame) => panic!(
+                "log frame leaked to lifecycle channel \
+                 — reader_loop classification has regressed: {frame}"
+            ),
+            Err(RecvTimeoutError::Disconnected) => panic!(
+                "bridge reader exited before the test could assert — \
+                 check for panics in the reader thread"
+            ),
+        }
+
+        // Hold the child side open until the assertion completes.
+        drop(child_writer);
+    }
+
+    // Positive control: a genuine lifecycle frame MUST arrive on
+    // `lifecycle_rx`. Pairs with the negative test above to prove the
+    // classification is a shift, not a blanket block.
+    #[test]
+    fn lifecycle_frame_still_routes_to_lifecycle_channel() {
+        const TEST: &str = "lifecycle_frame_still_routes_to_lifecycle_channel";
+        let Some(sandbox) = gpu_sandbox_or_skip(TEST) else {
+            return;
+        };
+
+        let (parent_end, child_end) = UnixStream::pair().expect("socketpair");
+        let bridge = SubprocessBridge::new(parent_end, sandbox, "p-bridge-test".into())
+            .expect("bridge construction");
+
+        let ready = serde_json::json!({"rpc": "ready"});
+        let mut child_writer = BufWriter::new(child_end);
+        write_frame(&mut child_writer, &ready).expect("write ready frame");
+        drop(child_writer);
+
+        let got = bridge
+            .recv_lifecycle_timeout(Duration::from_millis(500))
+            .expect("lifecycle frame must route through");
+        assert_eq!(got.get("rpc").and_then(|v| v.as_str()), Some("ready"));
+    }
 }

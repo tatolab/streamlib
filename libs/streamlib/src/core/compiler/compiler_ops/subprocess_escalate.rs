@@ -650,6 +650,40 @@ mod tests {
     }
 
     #[test]
+    fn log_frame_parses_as_escalate_request_log_variant() {
+        // Parser-shape assertion: the wire-format `log` frame must carry
+        // `rpc == "escalate_request"` and decode as `EscalateRequest::Log`.
+        // This locks the JTD discriminator tag — the actual "bridge does not
+        // forward log frames to the lifecycle channel" contract is locked by
+        // `subprocess_bridge::tests::log_frame_does_not_leak_to_lifecycle_channel`,
+        // which drives a real reader_loop over a socketpair.
+        let log_frame = serde_json::json!({
+            "rpc": "escalate_request",
+            "op": "log",
+            "source": "python",
+            "source_seq": "1",
+            "source_ts": "1970-01-01T00:00:00Z",
+            "level": "info",
+            "message": "hello from subprocess",
+            "intercepted": false,
+            "channel": serde_json::Value::Null,
+            "pipeline_id": serde_json::Value::Null,
+            "processor_id": "p-1",
+            "attrs": {},
+        });
+        assert_eq!(
+            log_frame.get("rpc").and_then(|v| v.as_str()),
+            Some(ESCALATE_REQUEST_RPC),
+            "log frames must carry the escalate-request rpc tag"
+        );
+        let parsed = match try_parse_escalate_request(&log_frame).expect("escalate-shaped") {
+            Ok(op) => op,
+            Err(e) => panic!("log frame must decode: {}", e.message),
+        };
+        assert!(matches!(parsed, EscalateRequest::Log(_)));
+    }
+
+    #[test]
     fn envelope_response_tags_rpc() {
         let resp = EscalateResponse::Ok(EscalateResponseOk {
             request_id: "r-1".into(),
