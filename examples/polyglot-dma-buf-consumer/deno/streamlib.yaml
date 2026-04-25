@@ -1,0 +1,18 @@
+package:
+  name: polyglot-dma-buf-consumer-deno
+  version: "0.1.0"
+  description: "Linux DMA-BUF consumer — Deno twin of the Python polyglot E2E"
+
+processors:
+  - name: com.tatolab.dma_buf_consumer_deno
+    version: "1.0.0"
+    description: "Resolves an upstream surface_id to a DMA-BUF, locks/reads it, and forwards the frame downstream"
+    runtime: deno
+    execution: reactive
+    entrypoint: "dma_buf_consumer.ts:default"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0
+    outputs:
+      - name: video_out
+        schema: com.tatolab.videoframe@1.0.0
