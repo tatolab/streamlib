@@ -376,6 +376,12 @@ pub struct GpuContext {
     blitter: Arc<dyn RhiBlitter>,
     /// Same-process texture cache — maps surface_id to StreamTexture.
     texture_cache: Arc<Mutex<HashMap<String, StreamTexture>>>,
+    /// Cache of textures backing surface-share-registered pixel buffers
+    /// (`escalate_acquire_pixel_buffer` flow). Refreshed on every resolve so
+    /// rotating-pool producers don't render stale contents — kept separate
+    /// from `texture_cache` so a same-process cache hit can't shortcut the
+    /// refresh.
+    buffer_texture_cache: Arc<Mutex<HashMap<String, StreamTexture>>>,
     /// Raw handle for the camera's timeline semaphore (same-process GPU-GPU sync).
     /// Stored as u64 for platform-agnostic GpuContext (0 = not set).
     camera_timeline_semaphore_handle: Arc<AtomicU64>,
@@ -399,6 +405,7 @@ impl GpuContext {
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
             processor_setup_lock: Arc::new(Mutex::new(())),
         }
@@ -416,6 +423,7 @@ impl GpuContext {
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
             processor_setup_lock: Arc::new(Mutex::new(())),
         }
@@ -555,7 +563,10 @@ impl GpuContext {
     /// Tries the fastest available path in order:
     /// 1. Same-process texture cache (zero-copy, direct ring texture)
     /// 2. Cross-process DMA-BUF VkImage import via SurfaceStore (GPU-to-GPU)
-    /// 3. Cross-process pixel buffer import, wrapped as texture (CPU-accessible fallback)
+    /// 3. Cross-process pixel buffer fallback — copy buffer contents into a
+    ///    private cached texture every call so rotating-pool producers (polyglot
+    ///    subprocess processors using `escalate_acquire_pixel_buffer`) see fresh
+    ///    contents per frame.
     pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
         // Path 1: same-process texture cache (fastest)
         {
@@ -566,6 +577,7 @@ impl GpuContext {
         }
 
         // Path 2: cross-process DMA-BUF VkImage import via surface-share service
+        #[cfg(target_os = "linux")]
         {
             let surface_store = self.surface_store.lock().unwrap();
             if let Some(store) = surface_store.as_ref() {
@@ -575,9 +587,29 @@ impl GpuContext {
             }
         }
 
-        // Path 3: pixel buffer fallback — resolve buffer, wrap as texture for sampling
-        // This path is for cross-process consumers where the producer only
-        // registered a pixel buffer (not a texture) with the surface-share service.
+        // Path 3: cross-process pixel buffer fallback — refresh a private
+        // host-owned texture from the latest buffer contents. The cache is
+        // separate from `texture_cache` because rotating-pool producers reuse
+        // surface_ids across cycles and a cache hit on stale contents would
+        // silently render the previous frame.
+        #[cfg(target_os = "linux")]
+        {
+            let buffer = {
+                let surface_store = self.surface_store.lock().unwrap();
+                surface_store
+                    .as_ref()
+                    .and_then(|store| store.lookup_buffer(&frame.surface_id).ok())
+            };
+            if let Some(buffer) = buffer {
+                return self.refresh_pixel_buffer_texture(
+                    &frame.surface_id,
+                    &buffer,
+                    frame.width,
+                    frame.height,
+                );
+            }
+        }
+
         Err(StreamError::GpuError(format!(
             "No texture or pixel buffer found for surface_id '{}'",
             frame.surface_id
@@ -597,6 +629,66 @@ impl GpuContext {
         let id = uuid::Uuid::new_v4().to_string();
         self.register_texture(&id, texture.clone());
         Ok((id, texture))
+    }
+
+    /// Refresh a private texture from a host-visible pixel buffer for cross-
+    /// process producers that registered a buffer (not a texture). The texture
+    /// is created on first call and reused for subsequent calls under the same
+    /// `surface_id`; contents are re-uploaded every time so rotating-pool
+    /// producers see fresh frames.
+    #[cfg(target_os = "linux")]
+    fn refresh_pixel_buffer_texture(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &crate::core::rhi::RhiPixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<StreamTexture> {
+        use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+
+        // Get-or-create the cached texture for this surface_id.
+        let texture = {
+            let mut cache = self.buffer_texture_cache.lock().unwrap();
+            if let Some(existing) = cache.get(surface_id) {
+                if existing.width() == width && existing.height() == height {
+                    existing.clone()
+                } else {
+                    cache.remove(surface_id);
+                    let desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
+                        .with_usage(
+                            TextureUsages::COPY_DST
+                                | TextureUsages::TEXTURE_BINDING
+                                | TextureUsages::STORAGE_BINDING,
+                        );
+                    let new_texture = self.device.create_texture_local(&desc)?;
+                    cache.insert(surface_id.to_string(), new_texture.clone());
+                    new_texture
+                }
+            } else {
+                let desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
+                    .with_usage(
+                        TextureUsages::COPY_DST
+                            | TextureUsages::TEXTURE_BINDING
+                            | TextureUsages::STORAGE_BINDING,
+                    );
+                let new_texture = self.device.create_texture_local(&desc)?;
+                cache.insert(surface_id.to_string(), new_texture.clone());
+                new_texture
+            }
+        };
+
+        unsafe {
+            let image = texture.inner.image().ok_or_else(|| {
+                StreamError::GpuError("Texture has no VkImage".into())
+            })?;
+            self.device.inner.upload_buffer_to_image(
+                pixel_buffer.buffer_ref().inner.buffer(),
+                image,
+                width,
+                height,
+            )?;
+        }
+        Ok(texture)
     }
 
     /// Upload a pixel buffer's contents to a GPU texture and register it in the texture cache.

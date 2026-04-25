@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+import type { EscalateOkResponse } from "./escalate.ts";
+
 /**
  * Input port access for reading data from upstream processors.
  */
@@ -78,12 +80,41 @@ interface BaseRuntimeContext {
   readonly inputs: InputPorts;
   readonly outputs: OutputPorts;
   readonly timeNs: bigint;
+
+  /**
+   * Ask the host to allocate a pixel buffer on this subprocess's behalf.
+   * Returns the host-assigned `handle_id`, which can then be passed to
+   * [`GpuContextLimitedAccess.resolveSurface`] for zero-copy CPU access
+   * and emitted downstream as `surface_id`.
+   */
+  escalateAcquirePixelBuffer(
+    width: number,
+    height: number,
+    format?: string,
+  ): Promise<EscalateOkResponse>;
+
+  /**
+   * Ask the host to allocate a pooled GPU texture on this subprocess's
+   * behalf. `usage` is a non-empty list drawn from `copy_src`, `copy_dst`,
+   * `texture_binding`, `storage_binding`, `render_attachment`.
+   */
+  escalateAcquireTexture(
+    width: number,
+    height: number,
+    format: string,
+    usage: readonly string[],
+  ): Promise<EscalateOkResponse>;
+
+  /** Drop the host's strong reference to a previously-escalated handle. */
+  escalateReleaseHandle(handleId: string): Promise<EscalateOkResponse>;
 }
 
 /**
  * Restricted-capability runtime context passed to `process` / `onPause` /
  * `onResume`. Exposes [`GpuContextLimitedAccess`] only — attempting to
- * reach `gpuFullAccess` is a TypeScript compile error.
+ * reach `gpuFullAccess` is a TypeScript compile error. Allocation goes
+ * through `escalateAcquirePixelBuffer` / `escalateAcquireTexture`, which
+ * route to the host's [`GpuContextFullAccess`].
  *
  * Mirrors the Rust [`RuntimeContextLimitedAccess`] view.
  */
@@ -93,9 +124,9 @@ export interface RuntimeContextLimitedAccess extends BaseRuntimeContext {
 
 /**
  * Privileged runtime context passed to `setup` / `teardown` and Manual-mode
- * `start` / `stop`. Exposes both [`GpuContextFullAccess`] (for allocations)
- * and [`GpuContextLimitedAccess`] (so the privileged method can hand a
- * stashable limited handle to downstream workers).
+ * `start` / `stop`. Exposes both [`GpuContextFullAccess`] (for direct
+ * allocations) and [`GpuContextLimitedAccess`] (so the privileged method can
+ * hand a stashable limited handle to downstream workers).
  *
  * Mirrors the Rust [`RuntimeContextFullAccess`] view.
  */

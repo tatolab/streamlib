@@ -1106,8 +1106,19 @@ impl SurfaceStore {
     }
 
     /// Lookup a buffer from the surface-share service via Unix socket.
+    ///
+    /// Checks the host-local cache first so producers that `check_in`'d the
+    /// buffer in the same process (e.g. the escalate-on-behalf flow) skip the
+    /// per-frame unix-socket round-trip and DMA-BUF re-import.
     #[cfg(target_os = "linux")]
     pub fn lookup_buffer(&self, pool_id: &str) -> Result<RhiPixelBuffer> {
+        {
+            let cache = self.inner.cache.lock();
+            if let Some(cached) = cache.surfaces.get(pool_id) {
+                return Ok(cached.pixel_buffer.clone());
+            }
+        }
+
         let request = serde_json::json!({
             "op": "lookup",
             "surface_id": pool_id,
