@@ -4,7 +4,7 @@
 //! Linux polyglot consumer integration test (#394 / #420).
 //!
 //! Spawns a real Python 3 subprocess that loads `libstreamlib_python_native.so`
-//! via ctypes, drives the `slpn_broker_*` / `slpn_gpu_surface_*` FFI exactly
+//! via ctypes, drives the `slpn_surface_*` / `slpn_gpu_surface_*` FFI exactly
 //! like `subprocess_runner.py` does, and verifies:
 //!   - the bytes read through `slpn_gpu_surface_base_address` match a host-written
 //!     DMA-BUF pattern (byte-for-byte),
@@ -16,7 +16,7 @@
 //! in-process unit tests don't exercise together:
 //!   - wire protocol through a second OS process (different FD table),
 //!   - ctypes-level ABI for every FFI symbol Python calls,
-//!   - `STREAMLIB_BROKER_SOCKET` env propagation.
+//!   - `STREAMLIB_SURFACE_SOCKET` env propagation.
 //!
 //! The host side uses a real Vulkan-exported DMA-BUF
 //! ([`common::polyglot_dma_buf_producer::TestDmaBufProducer`]) — memfd is
@@ -37,7 +37,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use streamlib::core::runtime::StreamRuntime;
-use streamlib_broker_client::{connect_to_broker, send_request_with_fds};
+use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
 #[path = "common/polyglot_dma_buf_producer.rs"]
 mod polyglot_dma_buf_producer;
@@ -82,7 +82,7 @@ import os
 import sys
 
 native_lib_path = os.environ["TEST_NATIVE_LIB"]
-socket_path = os.environ["STREAMLIB_BROKER_SOCKET"]
+socket_path = os.environ["STREAMLIB_SURFACE_SOCKET"]
 runtime_id = os.environ["STREAMLIB_RUNTIME_ID"]
 surface_id = os.environ["TEST_SURFACE_ID"]
 expected_width = int(os.environ["TEST_WIDTH"])
@@ -93,14 +93,14 @@ expected_backend = int(os.environ["TEST_EXPECTED_BACKEND"])
 
 lib = ctypes.cdll.LoadLibrary(native_lib_path)
 
-lib.slpn_broker_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-lib.slpn_broker_connect.restype = ctypes.c_void_p
-lib.slpn_broker_disconnect.argtypes = [ctypes.c_void_p]
-lib.slpn_broker_disconnect.restype = None
-lib.slpn_broker_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-lib.slpn_broker_resolve_surface.restype = ctypes.c_void_p
-lib.slpn_broker_unregister_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-lib.slpn_broker_unregister_surface.restype = None
+lib.slpn_surface_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+lib.slpn_surface_connect.restype = ctypes.c_void_p
+lib.slpn_surface_disconnect.argtypes = [ctypes.c_void_p]
+lib.slpn_surface_disconnect.restype = None
+lib.slpn_surface_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+lib.slpn_surface_resolve_surface.restype = ctypes.c_void_p
+lib.slpn_surface_unregister_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+lib.slpn_surface_unregister_surface.restype = None
 
 lib.slpn_gpu_surface_lock.argtypes = [ctypes.c_void_p, ctypes.c_int32]
 lib.slpn_gpu_surface_lock.restype = ctypes.c_int32
@@ -124,13 +124,13 @@ def fatal(msg):
     sys.stderr.flush()
     sys.exit(1)
 
-broker = lib.slpn_broker_connect(socket_path.encode("utf-8"), runtime_id.encode("utf-8"))
-if not broker:
-    fatal("slpn_broker_connect returned null")
+conn = lib.slpn_surface_connect(socket_path.encode("utf-8"), runtime_id.encode("utf-8"))
+if not conn:
+    fatal("slpn_surface_connect returned null")
 
-handle = lib.slpn_broker_resolve_surface(broker, surface_id.encode("utf-8"))
+handle = lib.slpn_surface_resolve_surface(conn, surface_id.encode("utf-8"))
 if not handle:
-    fatal("slpn_broker_resolve_surface returned null")
+    fatal("slpn_surface_resolve_surface returned null")
 
 width = lib.slpn_gpu_surface_width(handle)
 height = lib.slpn_gpu_surface_height(handle)
@@ -163,16 +163,16 @@ if lib.slpn_gpu_surface_unlock(handle, 1) != 0:
     fatal("slpn_gpu_surface_unlock returned non-zero")
 
 # Second resolve_surface should hit the cache and return identical metadata.
-handle2 = lib.slpn_broker_resolve_surface(broker, surface_id.encode("utf-8"))
+handle2 = lib.slpn_surface_resolve_surface(conn, surface_id.encode("utf-8"))
 if not handle2:
     fatal("second resolve_surface returned null (cache miss should still succeed)")
 if lib.slpn_gpu_surface_width(handle2) != expected_width:
     fatal("cached handle width mismatch")
 lib.slpn_gpu_surface_release(handle2)
 
-lib.slpn_broker_unregister_surface(broker, surface_id.encode("utf-8"))
+lib.slpn_surface_unregister_surface(conn, surface_id.encode("utf-8"))
 lib.slpn_gpu_surface_release(handle)
-lib.slpn_broker_disconnect(broker)
+lib.slpn_surface_disconnect(conn)
 
 sys.stdout.write("OK " + actual_hex + "\n")
 sys.stdout.flush()
@@ -215,14 +215,14 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     };
 
     // 1. Stand up a real StreamRuntime — it owns the surface-sharing service
-    //    on a per-runtime Unix socket. No external broker daemon, no manual
-    //    BrokerState/UnixSocketSurfaceService construction.
+    //    on a per-runtime Unix socket. No external surface-share daemon, no manual
+    //    SurfaceShareState/UnixSocketSurfaceService construction.
     let runtime = StreamRuntime::new().expect("StreamRuntime::new");
     let socket_path = runtime.surface_socket_path().to_path_buf();
     let runtime_id = runtime.runtime_id().to_string();
 
     // 2. Host: allocate a real Vulkan-exported DMA-BUF seeded with a
-    //    deterministic pattern, and check_in to the runtime-internal broker.
+    //    deterministic pattern, and check_in to the runtime-internal surface-share service.
     let width: u32 = 64;
     let height: u32 = 4;
     let bpp: u32 = 4;
@@ -242,7 +242,7 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         }
     };
 
-    let host_stream = connect_to_broker(&socket_path).expect("host connect");
+    let host_stream = connect_to_surface_share_socket(&socket_path).expect("host connect");
     let check_in_req = serde_json::json!({
         "op": "check_in",
         "runtime_id": runtime_id,
@@ -272,7 +272,7 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
     let output = Command::new("python3")
         .arg("-c")
         .arg(driver)
-        .env("STREAMLIB_BROKER_SOCKET", &socket_path)
+        .env("STREAMLIB_SURFACE_SOCKET", &socket_path)
         .env("STREAMLIB_RUNTIME_ID", &runtime_id)
         .env("TEST_NATIVE_LIB", &native_lib)
         .env("TEST_SURFACE_ID", &surface_id)
@@ -315,7 +315,7 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
 }
 
 #[test]
-fn python_subprocess_reports_clear_error_on_missing_broker_socket() {
+fn python_subprocess_reports_clear_error_on_missing_surface_socket() {
     let native_lib = match locate_native_lib() {
         Some(p) => p,
         None => {
@@ -338,21 +338,21 @@ import os
 import sys
 
 native_lib_path = os.environ["TEST_NATIVE_LIB"]
-socket_path = os.environ["STREAMLIB_BROKER_SOCKET"]
+socket_path = os.environ["STREAMLIB_SURFACE_SOCKET"]
 
 lib = ctypes.cdll.LoadLibrary(native_lib_path)
-lib.slpn_broker_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-lib.slpn_broker_connect.restype = ctypes.c_void_p
-lib.slpn_broker_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-lib.slpn_broker_resolve_surface.restype = ctypes.c_void_p
-lib.slpn_broker_disconnect.argtypes = [ctypes.c_void_p]
-lib.slpn_broker_disconnect.restype = None
+lib.slpn_surface_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+lib.slpn_surface_connect.restype = ctypes.c_void_p
+lib.slpn_surface_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+lib.slpn_surface_resolve_surface.restype = ctypes.c_void_p
+lib.slpn_surface_disconnect.argtypes = [ctypes.c_void_p]
+lib.slpn_surface_disconnect.restype = None
 
-broker = lib.slpn_broker_connect(socket_path.encode("utf-8"), b"lazy-test")
-assert broker, "connect must succeed lazily even for a bad socket"
-handle = lib.slpn_broker_resolve_surface(broker, b"any-surface")
-assert not handle, "resolve must return null when the socket is unreachable"
-lib.slpn_broker_disconnect(broker)
+conn = lib.slpn_surface_connect(socket_path.encode("utf-8"), b"lazy-test")
+assert conn, "connect must succeed lazily even for a bad socket"
+surface = lib.slpn_surface_resolve_surface(conn, b"any-surface")
+assert not surface, "resolve must return null when the socket is unreachable"
+lib.slpn_surface_disconnect(conn)
 
 sys.stdout.write("LAZY_FAIL_OK\n")
 sys.stdout.flush()
@@ -361,7 +361,7 @@ sys.stdout.flush()
     let output = Command::new("python3")
         .arg("-c")
         .arg(driver)
-        .env("STREAMLIB_BROKER_SOCKET", "/nonexistent/broker.sock")
+        .env("STREAMLIB_SURFACE_SOCKET", "/nonexistent/surface-share.sock")
         .env("TEST_NATIVE_LIB", &native_lib)
         .output()
         .expect("spawn python3");

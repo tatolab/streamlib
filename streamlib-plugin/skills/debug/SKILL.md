@@ -1,5 +1,5 @@
 ---
-description: Use this skill when debugging StreamLib runtime issues or broker problems. Activates on "broker not running", "runtime error", "gRPC error".
+description: Use this skill when debugging StreamLib runtime issues. Activates on "runtime error", "gRPC error", "surface-share socket missing".
 ---
 
 # StreamLib Debugging

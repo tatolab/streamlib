@@ -107,12 +107,12 @@ pub struct StreamRuntime {
     pub(crate) iceoryx2_node: Iceoryx2Node,
     /// Per-runtime surface-sharing service. Bound to a unique Unix socket in
     /// `new()`; polyglot subprocesses connect to it via the
-    /// `STREAMLIB_BROKER_SOCKET` env var. Wrapped in `Mutex<Option<...>>` so
-    /// `stop()` can drop it deterministically; the `Drop` impl on
+    /// `STREAMLIB_SURFACE_SOCKET` env var. Wrapped in `Mutex<Option<...>>`
+    /// so `stop()` can drop it deterministically; the `Drop` impl on
     /// `UnixSocketSurfaceService` removes the socket file.
     #[cfg(target_os = "linux")]
     pub(crate) surface_service: Arc<
-        Mutex<Option<crate::linux::surface_broker::UnixSocketSurfaceService>>,
+        Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>,
     >,
     /// Path of the per-runtime surface-sharing socket
     /// (`$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`).
@@ -188,8 +188,8 @@ impl StreamRuntime {
 
         // Bring up the per-runtime surface-sharing service. Each runtime owns
         // a unique Unix socket at $XDG_RUNTIME_DIR/streamlib-<uuid>.sock that
-        // its polyglot subprocesses connect to via STREAMLIB_BROKER_SOCKET.
-        // No external broker daemon is required.
+        // its polyglot subprocesses connect to via STREAMLIB_SURFACE_SOCKET.
+        // No external daemon is required.
         #[cfg(target_os = "linux")]
         let (surface_service, surface_socket_path) =
             bring_up_surface_service(&runtime_id)?;
@@ -232,7 +232,7 @@ impl StreamRuntime {
     /// Bound during [`StreamRuntime::new`] at
     /// `$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`. Polyglot
     /// subprocesses spawned by this runtime inherit this path via the
-    /// `STREAMLIB_BROKER_SOCKET` env var so their `streamlib-broker-client`
+    /// `STREAMLIB_SURFACE_SOCKET` env var so their `streamlib-surface-client`
     /// connects to the runtime-internal service.
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
@@ -1336,10 +1336,10 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
 fn bring_up_surface_service(
     runtime_id: &RuntimeUniqueId,
 ) -> Result<(
-    Arc<Mutex<Option<crate::linux::surface_broker::UnixSocketSurfaceService>>>,
+    Arc<Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>>,
     std::path::PathBuf,
 )> {
-    use crate::linux::surface_broker::{SurfaceBrokerState, UnixSocketSurfaceService};
+    use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
     let xdg_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
         StreamError::Runtime(
@@ -1381,7 +1381,7 @@ fn bring_up_surface_service(
         }
     }
 
-    let mut service = UnixSocketSurfaceService::new(SurfaceBrokerState::new(), socket_path.clone());
+    let mut service = UnixSocketSurfaceService::new(SurfaceShareState::new(), socket_path.clone());
     service.start().map_err(|e| {
         StreamError::Runtime(format!(
             "Failed to start runtime-internal surface-sharing service at {}: {}",
@@ -1466,10 +1466,10 @@ mod tests {
     // =========================================================================
 
     #[cfg(target_os = "linux")]
-    mod runtime_internal_broker {
+    mod runtime_internal_surface_share {
         use super::*;
         use std::os::unix::net::UnixStream;
-        use streamlib_broker_client::{send_request_with_fds, MAX_DMA_BUF_PLANES};
+        use streamlib_surface_client::{send_request_with_fds, MAX_DMA_BUF_PLANES};
 
         /// Replace XDG_RUNTIME_DIR with a fresh tempdir for the duration of the
         /// closure. Tests using this must be `#[serial]` so no other runtime
@@ -1493,7 +1493,7 @@ mod tests {
 
         #[test]
         #[serial]
-        fn runtime_brings_up_internal_broker() {
+        fn runtime_brings_up_internal_surface_share_service() {
             with_isolated_xdg_runtime_dir(|xdg| {
                 let runtime = StreamRuntime::new().expect("runtime should construct");
                 let socket_path = runtime.surface_socket_path();
@@ -1600,8 +1600,8 @@ mod tests {
                 // `runtime.surface_socket_path()` — this test exercises the
                 // contract that polyglot subprocesses see the runtime's socket.
                 let output = std::process::Command::new("printenv")
-                    .arg("STREAMLIB_BROKER_SOCKET")
-                    .env("STREAMLIB_BROKER_SOCKET", &socket_path)
+                    .arg("STREAMLIB_SURFACE_SOCKET")
+                    .env("STREAMLIB_SURFACE_SOCKET", &socket_path)
                     .output()
                     .expect("spawn printenv");
 
@@ -1615,6 +1615,7 @@ mod tests {
                 assert_eq!(inherited, socket_path.to_string_lossy());
             });
         }
+
 
         #[test]
         #[serial]

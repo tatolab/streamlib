@@ -143,55 +143,55 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
         if result != 0:
             log.error("Failed to create publisher", service=dest_service)
 
-    # Connect to broker for surface resolution.
+    # Connect to the surface-share service for surface resolution.
     #
     # macOS: STREAMLIB_XPC_SERVICE_NAME is the launchd mach-service name.
-    # Linux: STREAMLIB_BROKER_SOCKET is the Unix-socket path the broker
-    #        listens on. Both values funnel through the same FFI entry
-    #        (`slpn_broker_connect`) — the native lib's platform-specific
-    #        broker_macos / broker_linux module interprets the C string
+    # Linux: STREAMLIB_SURFACE_SOCKET is the Unix-socket path the per-runtime
+    #        service listens on. Both endpoints funnel through the same FFI
+    #        entry (`slpn_surface_connect`) — the native lib's
+    #        platform-specific surface_client module interprets the C string
     #        accordingly.
-    broker_ptr = None
+    handle_ptr = None
     if sys.platform == "darwin":
-        broker_endpoint = os.environ.get("STREAMLIB_XPC_SERVICE_NAME", "")
-        broker_endpoint_desc = "xpc_service_name"
+        surface_endpoint = os.environ.get("STREAMLIB_XPC_SERVICE_NAME", "")
+        surface_endpoint_desc = "xpc_service_name"
     else:
-        broker_endpoint = os.environ.get("STREAMLIB_BROKER_SOCKET", "")
-        broker_endpoint_desc = "broker_socket"
+        surface_endpoint = os.environ.get("STREAMLIB_SURFACE_SOCKET", "")
+        surface_endpoint_desc = "surface_socket"
     runtime_id = os.environ.get("STREAMLIB_RUNTIME_ID", "")
-    if broker_endpoint:
+    if surface_endpoint:
         runtime_id_arg = runtime_id.encode("utf-8") if runtime_id else None
-        broker_ptr = lib.slpn_broker_connect(
-            broker_endpoint.encode("utf-8"), runtime_id_arg
+        handle_ptr = lib.slpn_surface_connect(
+            surface_endpoint.encode("utf-8"), runtime_id_arg
         )
-        if broker_ptr:
+        if handle_ptr:
             log.info(
-                "Connected to broker",
-                endpoint_kind=broker_endpoint_desc,
-                endpoint=broker_endpoint,
+                "Connected to surface-share service",
+                endpoint_kind=surface_endpoint_desc,
+                endpoint=surface_endpoint,
                 runtime_id=runtime_id,
             )
         else:
             log.warn(
-                "Broker connect failed",
-                endpoint_kind=broker_endpoint_desc,
-                endpoint=broker_endpoint,
+                "Surface-share connect failed",
+                endpoint_kind=surface_endpoint_desc,
+                endpoint=surface_endpoint,
             )
 
     state = NativeProcessorState(
-        lib, ctx_ptr, config, broker_ptr,
+        lib, ctx_ptr, config, handle_ptr,
         escalate_channel=escalate_channel,
         read_buf_bytes=read_buf_bytes,
     )
-    return lib, ctx_ptr, broker_ptr, state
+    return lib, ctx_ptr, handle_ptr, state
 
 
-def _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr, state=None):
-    """Destroy native context and disconnect broker."""
+def _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state=None):
+    """Destroy native context and disconnect surface-share handle."""
     if state is not None:
         state.release_pool()
-    if native_lib and native_broker_ptr:
-        native_lib.slpn_broker_disconnect(native_broker_ptr)
+    if native_lib and native_handle_ptr:
+        native_lib.slpn_surface_disconnect(native_handle_ptr)
     if native_lib and native_ctx_ptr:
         native_lib.slpn_context_destroy(native_ctx_ptr)
 
@@ -340,7 +340,7 @@ def main():
     limited_ctx: NativeRuntimeContextLimitedAccess | None = None
     native_lib = None
     native_ctx_ptr = None
-    native_broker_ptr = None
+    native_handle_ptr = None
     running = False
 
     log.info("Subprocess runner started", entrypoint=entrypoint)
@@ -354,7 +354,7 @@ def main():
                 _assert_capability(processor_id, cmd, msg, "full")
                 log.info("Native mode: loading library", lib=native_lib_path)
                 try:
-                    native_lib, native_ctx_ptr, native_broker_ptr, state = _setup_native_state(
+                    native_lib, native_ctx_ptr, native_handle_ptr, state = _setup_native_state(
                         msg, native_lib_path, processor_id,
                         escalate_channel=escalate_channel,
                     )
@@ -423,7 +423,7 @@ def main():
                                     log.error("teardown() error", error=str(e))
                             bridge_send_message(stdout, {"rpc": "done"})
                             _cleanup_native(
-                                native_lib, native_ctx_ptr, native_broker_ptr, state,
+                                native_lib, native_ctx_ptr, native_handle_ptr, state,
                             )
                             sys.exit(0)
                         elif lifecycle_cmd == "stop":
@@ -456,7 +456,7 @@ def main():
                                     log.error("teardown() error", error=str(e))
                             bridge_send_message(stdout, {"rpc": "done"})
                             _cleanup_native(
-                                native_lib, native_ctx_ptr, native_broker_ptr, state,
+                                native_lib, native_ctx_ptr, native_handle_ptr, state,
                             )
                             sys.exit(0)
                         elif lifecycle_cmd == "stop":
@@ -480,7 +480,7 @@ def main():
                     traceback.print_exc(file=sys.stderr)
                 bridge_send_message(stdout, {"rpc": "done"})
                 if native_lib and native_ctx_ptr:
-                    _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr, state)
+                    _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state)
                 break
 
             elif cmd == "stop":
@@ -529,11 +529,11 @@ def main():
     except Exception as e:
         log.error("Fatal error", error=str(e), traceback=traceback.format_exc())
         if native_lib and native_ctx_ptr:
-            _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr, state)
+            _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state)
         log.shutdown()
         sys.exit(1)
 
-    _cleanup_native(native_lib, native_ctx_ptr, native_broker_ptr, state)
+    _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state)
 
     log.info("Subprocess runner exiting")
     log.shutdown()

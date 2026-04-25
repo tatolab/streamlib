@@ -173,37 +173,37 @@ async function main(): Promise<void> {
     Deno.exit(1);
   }
 
-  // Connect to broker for surface resolution.
+  // Connect to the surface-share service for surface resolution.
   //
   // macOS: STREAMLIB_XPC_SERVICE_NAME is the launchd mach-service name.
-  // Linux: STREAMLIB_BROKER_SOCKET is the Unix-socket path the broker
-  //        listens on. Both values funnel through the same FFI entry
-  //        (`sldn_broker_connect`) — the native lib's platform-specific
-  //        broker_macos / broker_linux module interprets the C string
+  // Linux: STREAMLIB_SURFACE_SOCKET is the Unix-socket path the per-runtime
+  //        service listens on. Both endpoints funnel through the same FFI
+  //        entry (`sldn_surface_connect`) — the native lib's
+  //        platform-specific surface_client module interprets the C string
   //        accordingly.
   const isDarwin = Deno.build.os === "darwin";
-  const brokerEndpoint = isDarwin
+  const endpoint = isDarwin
     ? (Deno.env.get("STREAMLIB_XPC_SERVICE_NAME") ?? "")
-    : (Deno.env.get("STREAMLIB_BROKER_SOCKET") ?? "");
-  const brokerEndpointDesc = isDarwin ? "xpc_service_name" : "broker_socket";
-  let brokerPtr: Deno.PointerObject | null = null;
-  if (brokerEndpoint) {
-    const endpointBuf = cString(brokerEndpoint);
-    brokerPtr = lib.symbols.sldn_broker_connect(endpointBuf);
-    if (brokerPtr === null) {
-      log.warn("Broker connect failed", {
-        endpoint_kind: brokerEndpointDesc,
-        endpoint: brokerEndpoint,
+    : (Deno.env.get("STREAMLIB_SURFACE_SOCKET") ?? "");
+  const endpointDesc = isDarwin ? "xpc_service_name" : "surface_socket";
+  let surfaceHandlePtr: Deno.PointerObject | null = null;
+  if (endpoint) {
+    const endpointBuf = cString(endpoint);
+    surfaceHandlePtr = lib.symbols.sldn_surface_connect(endpointBuf);
+    if (surfaceHandlePtr === null) {
+      log.warn("Surface-share connect failed", {
+        endpoint_kind: endpointDesc,
+        endpoint,
       });
     } else {
-      log.info("Connected to broker", {
-        endpoint_kind: brokerEndpointDesc,
-        endpoint: brokerEndpoint,
+      log.info("Connected to surface-share service", {
+        endpoint_kind: endpointDesc,
+        endpoint,
       });
     }
   } else {
-    const envName = isDarwin ? "STREAMLIB_XPC_SERVICE_NAME" : "STREAMLIB_BROKER_SOCKET";
-    log.info("Broker resolution disabled", { missing_env: envName });
+    const envName = isDarwin ? "STREAMLIB_XPC_SERVICE_NAME" : "STREAMLIB_SURFACE_SOCKET";
+    log.info("Surface-share resolution disabled", { missing_env: envName });
   }
 
   let processor: ProcessorLifecycle | null = null;
@@ -332,7 +332,7 @@ async function main(): Promise<void> {
               lib,
               ctxPtr,
               config,
-              brokerPtr,
+              surfaceHandlePtr,
               escalateChannel,
               readBufBytes,
             );

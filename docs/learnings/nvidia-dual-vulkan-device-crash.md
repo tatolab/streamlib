@@ -40,7 +40,7 @@ streamlib's GpuContext.
 
 Run encode/decode in a separate process that doesn't share the camera's
 Vulkan device. This is the architecture for cross-process IPC via
-iceoryx2/broker, but adds latency and complexity.
+iceoryx2 + the surface-share service, but adds latency and complexity.
 
 ## Reference
 - Discovery: #254 (vulkan-video integration) — live camera pipeline

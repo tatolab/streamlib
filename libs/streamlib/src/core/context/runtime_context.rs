@@ -36,8 +36,8 @@ pub struct RuntimeContext {
     /// Audio clock for synchronized audio timing.
     audio_clock: SharedAudioClock,
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocesses
-    /// receive this via the `STREAMLIB_BROKER_SOCKET` env var so their
-    /// `streamlib-broker-client` connects to the runtime-internal service
+    /// receive this via the `STREAMLIB_SURFACE_SOCKET` env var so their
+    /// `streamlib-surface-client` connects to the runtime-internal service
     /// rather than an external daemon.
     #[cfg(target_os = "linux")]
     surface_socket_path: std::path::PathBuf,
@@ -112,8 +112,8 @@ impl RuntimeContext {
     }
 
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocess
-    /// spawn ops set `STREAMLIB_BROKER_SOCKET` to this so the child's
-    /// `streamlib-broker-client` connects to the runtime-internal service.
+    /// spawn ops set `STREAMLIB_SURFACE_SOCKET` to this so the child's
+    /// `streamlib-surface-client` connects to the runtime-internal service.
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
         &self.surface_socket_path

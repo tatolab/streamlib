@@ -93,22 +93,26 @@ const symbols = {
     result: "void" as const,
   },
 
-  // Broker XPC client
-  sldn_broker_connect: {
+  // Surface-share client
+  sldn_surface_connect: {
     parameters: ["buffer"] as const,
     result: "pointer" as const,
   },
-  sldn_broker_disconnect: {
+  sldn_surface_disconnect: {
     parameters: ["pointer"] as const,
     result: "void" as const,
   },
-  sldn_broker_resolve_surface: {
+  sldn_surface_resolve_surface: {
     parameters: ["pointer", "buffer"] as const,
     result: "pointer" as const,
   },
-  sldn_broker_acquire_surface: {
+  sldn_surface_acquire_surface: {
     parameters: ["pointer", "u32", "u32", "u32", "pointer", "u32"] as const,
     result: "pointer" as const,
+  },
+  sldn_surface_unregister_surface: {
+    parameters: ["pointer", "buffer"] as const,
+    result: "void" as const,
   },
 } as const;
 

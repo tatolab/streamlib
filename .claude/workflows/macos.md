@@ -38,7 +38,7 @@ fallback when a real device test is needed and no macOS CI exists yet.
 - **Never edit Apple processor files on Linux without compile
   verification.** PR #322 did this and required the *Post-Typed-Ctx
   Verification* milestone to clean up; don't repeat that.
-- **Don't add new IOSurface / CGL / XPC broker code.** If the issue
+- **Don't add new IOSurface / CGL / XPC surface-share code.** If the issue
   seems to require it, escalate to the user — it's a sign the issue
   belongs in the *Polyglot SDK Realignment* milestone, not wherever it
   currently sits.

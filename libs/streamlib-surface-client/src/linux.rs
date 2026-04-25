@@ -15,8 +15,8 @@ use std::path::Path;
 /// they cost an fd table entry.
 pub const MAX_DMA_BUF_PLANES: usize = 4;
 
-/// Connect to the broker's Unix socket.
-pub fn connect_to_broker(socket_path: &Path) -> std::io::Result<UnixStream> {
+/// Connect to the per-runtime surface-share Unix socket.
+pub fn connect_to_surface_share_socket(socket_path: &Path) -> std::io::Result<UnixStream> {
     UnixStream::connect(socket_path)
 }
 
@@ -224,7 +224,7 @@ fn extract_cmsg_fds(msg: &libc::msghdr) -> Vec<RawFd> {
     out
 }
 
-/// Send a request and receive a response from the broker.
+/// Send a request and receive a response over the surface-share socket.
 ///
 /// `fds` is the set of SCM_RIGHTS fds to attach to the request (empty for
 /// requests that don't transfer any, e.g. `check_out`, `release`).
@@ -303,7 +303,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         p.push(format!(
-            "streamlib-broker-client-test-{}-{}-{}.sock",
+            "streamlib-surface-client-test-{}-{}-{}.sock",
             label,
             std::process::id(),
             nanos
@@ -315,7 +315,7 @@ mod tests {
     fn make_memfd_with(contents: &[u8]) -> RawFd {
         use std::io::{Seek, SeekFrom, Write};
 
-        let name = std::ffi::CString::new("streamlib-broker-client-test").unwrap();
+        let name = std::ffi::CString::new("streamlib-surface-client-test").unwrap();
         let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
         assert!(fd >= 0, "memfd_create failed: {}", std::io::Error::last_os_error());
         let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
@@ -392,7 +392,7 @@ mod tests {
             recv_message_with_fds(&stream, payload_len, 1).expect("recv")
         });
 
-        let pattern = b"streamlib-broker-client-scm-rights-fixture-0123456789";
+        let pattern = b"streamlib-surface-client-scm-rights-fixture-0123456789";
         let send_fd = make_memfd_with(pattern);
         let client = UnixStream::connect(&socket_path).expect("connect");
         let payload = br#"{"op":"noop"}"#;
@@ -498,7 +498,7 @@ mod tests {
 
     /// `send_request_with_fds` composes send + length-prefixed recv into a
     /// JSON request / JSON response round-trip. Lock the full shape here so
-    /// the three consumers (broker proper, python-native, deno-native) all
+    /// the three consumers (surface-share service, python-native, deno-native) all
     /// see identical serialization + deserialization behavior.
     #[test]
     fn send_request_round_trips_json_and_returns_response_fds() {
@@ -542,7 +542,7 @@ mod tests {
             }
         });
 
-        let client = connect_to_broker(&socket_path).expect("connect");
+        let client = connect_to_surface_share_socket(&socket_path).expect("connect");
         let request = serde_json::json!({"op": "echo", "payload": "hi"});
         let (response, response_fds) =
             send_request_with_fds(&client, &request, &[], MAX_DMA_BUF_PLANES)

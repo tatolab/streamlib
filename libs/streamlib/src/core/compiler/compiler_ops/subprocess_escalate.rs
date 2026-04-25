@@ -120,9 +120,9 @@ impl EscalateHandleRegistry {
 /// with the original request_id preserved so the subprocess can correlate.
 ///
 /// On Linux, acquisition handlers additionally check the freshly-allocated
-/// resource in with the broker's [`SurfaceStore`] so the polyglot subprocess
+/// resource in with the surface-share service's [`SurfaceStore`] so the polyglot subprocess
 /// can `check_out` the DMA-BUF FD by the same handle_id. The `handle_id`
-/// returned to the subprocess is the broker-assigned `surface_id`.
+/// returned to the subprocess is the surface-share service-assigned `surface_id`.
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -221,7 +221,7 @@ pub(crate) fn handle_escalate_op(
         }) => {
             let removed = registry.remove_handle(&handle_id);
             Some(if removed {
-                release_broker_surface(sandbox, &handle_id);
+                release_surface_share_surface(sandbox, &handle_id);
                 EscalateResponse::Ok(EscalateResponseOk {
                     request_id: rid,
                     handle_id,
@@ -300,11 +300,11 @@ fn now_ns() -> u64 {
 
 /// Resolve the `handle_id` returned to the subprocess for a pixel buffer.
 ///
-/// On Linux, the buffer is checked in with the broker so the polyglot
-/// subprocess shim can later `check_out` the DMA-BUF FD; the broker-assigned
+/// On Linux, the buffer is checked in with the surface-share service so the polyglot
+/// subprocess shim can later `check_out` the DMA-BUF FD; the surface-share service-assigned
 /// `surface_id` becomes the handle_id. On other platforms the pool id stays
 /// as-is (macOS uses its own XPC `check_in_surface` path via the native lib
-/// directly; see `streamlib-python-native/src/lib.rs` broker_macos).
+/// directly; see `streamlib-python-native/src/lib.rs` surface-share service_macos).
 #[allow(unused_variables)]
 fn assign_buffer_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
@@ -322,7 +322,7 @@ fn assign_buffer_handle_id(
 
 /// Resolve the `handle_id` returned to the subprocess for a pooled texture.
 ///
-/// On Linux, register the texture's DMA-BUF with the broker under a fresh UUID
+/// On Linux, register the texture's DMA-BUF with the surface-share service under a fresh UUID
 /// so the subprocess can `check_out` it; on other platforms just mint a UUID.
 #[allow(unused_variables)]
 fn assign_texture_handle_id(
@@ -339,20 +339,20 @@ fn assign_texture_handle_id(
     Ok(handle_id)
 }
 
-/// Best-effort broker release paired with registry eviction on Linux.
+/// Best-effort surface-share service release paired with registry eviction on Linux.
 ///
 /// The registry drop alone releases the host's strong refcount on the
-/// underlying resource, but the broker still holds a dup of the DMA-BUF FD
+/// underlying resource, but the surface-share service still holds a dup of the DMA-BUF FD
 /// until we explicitly call `release`. Errors here are logged, not returned —
-/// the subprocess is not waiting on the broker handshake at this point.
+/// the subprocess is not waiting on the surface-share service handshake at this point.
 #[allow(unused_variables)]
-fn release_broker_surface(sandbox: &GpuContextLimitedAccess, handle_id: &str) {
+fn release_surface_share_surface(sandbox: &GpuContextLimitedAccess, handle_id: &str) {
     #[cfg(target_os = "linux")]
     {
         if let Some(store) = sandbox.surface_store() {
             if let Err(e) = store.release(handle_id) {
                 tracing::debug!(
-                    "[escalate] broker release for '{}' returned error: {}",
+                    "[escalate] surface-share service release for '{}' returned error: {}",
                     handle_id,
                     e
                 );

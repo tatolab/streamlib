@@ -564,7 +564,7 @@ impl DisplayEventLoopHandler {
 
         // Unified texture resolution — GpuContext picks the fastest path:
         // 1. Same-process texture cache (zero-copy ring texture)
-        // 2. Cross-process DMA-BUF VkImage import via broker (GPU-to-GPU)
+        // 2. Cross-process DMA-BUF VkImage import via surface-share service (GPU-to-GPU)
         let camera_texture = match self.gpu_context.resolve_videoframe_texture(&ipc_frame) {
             Ok(tex) => tex,
             Err(e) => {

@@ -147,7 +147,7 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 .env("STREAMLIB_EXECUTION_MODE", execution_mode);
 
             #[cfg(target_os = "linux")]
-            command.env("STREAMLIB_BROKER_SOCKET", ctx.surface_socket_path());
+            command.env("STREAMLIB_SURFACE_SOCKET", ctx.surface_socket_path());
 
             // Escalate IPC rides a dedicated `AF_UNIX` socketpair, not
             // fd1/fd2, so the subprocess's stdout/stderr can be captured

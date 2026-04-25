@@ -63,7 +63,7 @@ class EscalateResponseOk(EscalateResponse):
     handle_id: 'str'
     """
     Opaque handle returned by the host. For acquire_pixel_buffer this is the
-    PixelBufferPoolId the host registered with its pixel-buffer pool and broker
+    PixelBufferPoolId the host registered with its pixel-buffer pool and
     SurfaceStore. For acquire_texture this is a host-side UUID keying the
     EscalateHandleRegistry's texture slot. For release_handle this echoes the
     released id.
