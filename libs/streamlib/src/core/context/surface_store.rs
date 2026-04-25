@@ -3,7 +3,7 @@
 
 //! Surface Store for cross-process GPU surface sharing.
 //!
-//! Provides check-in/check-out semantics for IOSurfaces via the broker's XPC service.
+//! Provides check-in/check-out semantics for IOSurfaces via the macOS XPC surface-share service.
 //! Surfaces are cached locally after first checkout to minimize XPC overhead.
 
 use std::collections::HashMap;
@@ -111,7 +111,7 @@ impl CheckedInSurfaces {
 
 /// Surface store client for cross-process GPU surface sharing.
 ///
-/// Connects to the broker's XPC service to exchange mach ports for surface IDs.
+/// Connects to the macOS XPC surface-share service to exchange mach ports for surface IDs.
 /// Caches resolved surfaces locally to minimize XPC round-trips.
 #[derive(Clone)]
 pub struct SurfaceStore {
@@ -119,11 +119,11 @@ pub struct SurfaceStore {
 }
 
 struct SurfaceStoreInner {
-    /// XPC connection to the broker (macOS only).
+    /// XPC connection to the surface-share service (macOS only).
     #[cfg(target_os = "macos")]
     connection: Mutex<Option<xpc_connection_t>>,
 
-    /// Unix socket connection to the broker (Linux only).
+    /// Unix socket connection to the surface-share service (Linux only).
     #[cfg(target_os = "linux")]
     connection: Mutex<Option<std::os::unix::net::UnixStream>>,
 
@@ -155,7 +155,7 @@ impl SurfaceStore {
         }
     }
 
-    /// Connect to the broker's XPC service.
+    /// Connect to the macOS XPC surface-share service.
     ///
     /// This should be called during runtime.start().
     #[cfg(target_os = "macos")]
@@ -196,15 +196,15 @@ impl SurfaceStore {
         Ok(())
     }
 
-    /// Disconnect from the broker and release all surfaces.
+    /// Disconnect from the surface-share service and release all surfaces.
     ///
     /// This should be called during runtime.stop().
     #[cfg(target_os = "macos")]
     pub fn disconnect(&self) -> Result<()> {
-        // Release all checked-in surfaces from the broker
+        // Release all checked-in surfaces from the surface-share service
         let surface_ids = self.inner.checked_in.lock().surface_ids();
         for surface_id in surface_ids {
-            if let Err(e) = self.release_from_broker(&surface_id) {
+            if let Err(e) = self.release_from_surface_share(&surface_id) {
                 tracing::warn!(
                     "SurfaceStore: Failed to release surface '{}': {}",
                     surface_id,
@@ -231,7 +231,7 @@ impl SurfaceStore {
     /// Check in a pixel buffer, returning a surface ID.
     ///
     /// If this pixel buffer was already checked in, returns the existing ID.
-    /// Otherwise, sends the mach port to the broker and receives a new ID.
+    /// Otherwise, sends the mach port to the surface-share service and receives a new ID.
     #[cfg(target_os = "macos")]
     pub fn check_in(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
         use crate::apple::corevideo_ffi::{mach_port_deallocate, mach_task_self, IOSurfaceGetID};
@@ -259,8 +259,8 @@ impl SurfaceStore {
         // Export mach port from the pixel buffer
         let (_, mach_port) = pixel_buffer_ref.export_handle_as_mach_port()?;
 
-        // Send to broker via XPC
-        let surface_id = self.check_in_to_broker(mach_port);
+        // Send to surface-share service via XPC
+        let surface_id = self.check_in_to_surface_share(mach_port);
 
         // Deallocate our copy of the mach port - XPC copied the send right to its dictionary,
         // so we must release ours to avoid leaking ports
@@ -274,7 +274,7 @@ impl SurfaceStore {
             );
         }
 
-        // Now propagate any error from the broker call
+        // Now propagate any error from the surface-share service call
         let surface_id = surface_id?;
 
         // Store reverse mapping
@@ -300,7 +300,7 @@ impl SurfaceStore {
 
     /// Check out a surface by ID, returning the pixel buffer.
     ///
-    /// Returns from cache if available, otherwise fetches from broker.
+    /// Returns from cache if available, otherwise fetches from the surface-share service.
     #[cfg(target_os = "macos")]
     pub fn check_out(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
         // Check cache first
@@ -317,12 +317,12 @@ impl SurfaceStore {
             }
         }
 
-        // Cache miss - fetch from broker
+        // Cache miss - fetch from the surface-share service
         tracing::debug!(
-            "SurfaceStore: Cache miss for '{}', fetching from broker",
+            "SurfaceStore: Cache miss for '{}', fetching from the surface-share service",
             surface_id
         );
-        let mach_port = self.check_out_from_broker(surface_id)?;
+        let mach_port = self.check_out_from_surface_share(surface_id)?;
 
         // Import the pixel buffer from mach port
         use crate::core::rhi::{
@@ -345,12 +345,12 @@ impl SurfaceStore {
         Ok(pixel_buffer)
     }
 
-    /// Send check-in request to broker via XPC.
+    /// Send check-in request to surface-share service via XPC.
     #[cfg(target_os = "macos")]
-    fn check_in_to_broker(&self, mach_port: u32) -> Result<String> {
+    fn check_in_to_surface_share(&self, mach_port: u32) -> Result<String> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
@@ -391,7 +391,7 @@ impl SurfaceStore {
 
         if reply.is_null() {
             return Err(StreamError::Configuration(
-                "XPC check_in: null reply from broker".into(),
+                "XPC check_in: null reply from the surface-share service".into(),
             ));
         }
 
@@ -401,7 +401,7 @@ impl SurfaceStore {
                 xpc_release(reply);
             }
             return Err(StreamError::Configuration(
-                "XPC check_in: broker returned error".into(),
+                "XPC check_in: surface-share service returned error".into(),
             ));
         }
 
@@ -429,12 +429,12 @@ impl SurfaceStore {
         Ok(surface_id)
     }
 
-    /// Send check-out request to broker via XPC.
+    /// Send check-out request to surface-share service via XPC.
     #[cfg(target_os = "macos")]
-    fn check_out_from_broker(&self, surface_id: &str) -> Result<u32> {
+    fn check_out_from_surface_share(&self, surface_id: &str) -> Result<u32> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
@@ -469,7 +469,7 @@ impl SurfaceStore {
 
         if reply.is_null() {
             return Err(StreamError::Configuration(
-                "XPC check_out: null reply from broker".into(),
+                "XPC check_out: null reply from the surface-share service".into(),
             ));
         }
 
@@ -479,7 +479,7 @@ impl SurfaceStore {
                 xpc_release(reply);
             }
             return Err(StreamError::Configuration(format!(
-                "XPC check_out: broker returned error for surface '{}'",
+                "XPC check_out: surface-share service returned error for surface '{}'",
                 surface_id
             )));
         }
@@ -502,7 +502,7 @@ impl SurfaceStore {
         Ok(mach_port)
     }
 
-    /// Register a buffer with the broker using the new protocol.
+    /// Register a buffer with the surface-share service using the new protocol.
     ///
     /// The client provides the UUID (PixelBufferPoolId) and the buffer.
     /// This is used for pre-registering pooled buffers.
@@ -514,8 +514,8 @@ impl SurfaceStore {
         let pixel_buffer_ref = pixel_buffer.buffer_ref();
         let (_, mach_port) = pixel_buffer_ref.export_handle_as_mach_port()?;
 
-        // Register with broker
-        let result = self.register_with_broker(pool_id, mach_port);
+        // Register with the surface-share service
+        let result = self.register_with_surface_share(pool_id, mach_port);
 
         // Deallocate our copy of the mach port
         let task = unsafe { mach_task_self() };
@@ -531,12 +531,12 @@ impl SurfaceStore {
         result
     }
 
-    /// Send register request to broker via XPC (new protocol).
+    /// Send register request to surface-share service via XPC (new protocol).
     #[cfg(target_os = "macos")]
-    fn register_with_broker(&self, pool_id: &str, mach_port: u32) -> Result<()> {
+    fn register_with_surface_share(&self, pool_id: &str, mach_port: u32) -> Result<()> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
@@ -584,7 +584,7 @@ impl SurfaceStore {
 
         if reply.is_null() {
             return Err(StreamError::Configuration(
-                "XPC register: null reply from broker".into(),
+                "XPC register: null reply from the surface-share service".into(),
             ));
         }
 
@@ -594,7 +594,7 @@ impl SurfaceStore {
                 xpc_release(reply);
             }
             return Err(StreamError::Configuration(
-                "XPC register: broker returned error".into(),
+                "XPC register: surface-share service returned error".into(),
             ));
         }
 
@@ -622,12 +622,12 @@ impl SurfaceStore {
         Ok(())
     }
 
-    /// Lookup a buffer from the broker using the new protocol.
+    /// Lookup a buffer from the surface-share service using the new protocol.
     ///
     /// Returns the mach port for the given UUID.
     #[cfg(target_os = "macos")]
     pub fn lookup_buffer(&self, pool_id: &str) -> Result<RhiPixelBuffer> {
-        let mach_port = self.lookup_from_broker(pool_id)?;
+        let mach_port = self.lookup_from_surface_share(pool_id)?;
 
         // Import the pixel buffer from mach port
         use crate::core::rhi::{
@@ -640,12 +640,12 @@ impl SurfaceStore {
         Ok(RhiPixelBuffer::new(pixel_buffer_ref))
     }
 
-    /// Send lookup request to broker via XPC (new protocol).
+    /// Send lookup request to surface-share service via XPC (new protocol).
     #[cfg(target_os = "macos")]
-    fn lookup_from_broker(&self, pool_id: &str) -> Result<u32> {
+    fn lookup_from_surface_share(&self, pool_id: &str) -> Result<u32> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
@@ -680,7 +680,7 @@ impl SurfaceStore {
 
         if reply.is_null() {
             return Err(StreamError::Configuration(
-                "XPC lookup: null reply from broker".into(),
+                "XPC lookup: null reply from the surface-share service".into(),
             ));
         }
 
@@ -690,7 +690,7 @@ impl SurfaceStore {
                 xpc_release(reply);
             }
             return Err(StreamError::Configuration(format!(
-                "XPC lookup: broker returned error for '{}'",
+                "XPC lookup: surface-share service returned error for '{}'",
                 pool_id
             )));
         }
@@ -729,20 +729,20 @@ impl SurfaceStore {
         Ok(mach_port)
     }
 
-    /// Release a single surface from the broker. Platform-dispatched.
+    /// Release a single surface from the surface-share service. Platform-dispatched.
     ///
-    /// Fire-and-forget on macOS (mirrors `release_from_broker`). On Linux the
-    /// broker's `release` op is best-effort; a missing connection returns Ok
-    /// since the broker already treats the client's socket-close as a full
+    /// Fire-and-forget on macOS (mirrors `release_from_surface_share`). On Linux the
+    /// surface-share service's `release` op is best-effort; a missing connection returns Ok
+    /// since the surface-share service already treats the client's socket-close as a full
     /// release.
     pub fn release(&self, surface_id: &str) -> Result<()> {
         #[cfg(target_os = "macos")]
         {
-            self.release_from_broker(surface_id)
+            self.release_from_surface_share(surface_id)
         }
         #[cfg(target_os = "linux")]
         {
-            self.release_from_broker_unix(surface_id)
+            self.release_from_surface_share_unix(surface_id)
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -753,12 +753,12 @@ impl SurfaceStore {
         }
     }
 
-    /// Send release request to broker via XPC.
+    /// Send release request to surface-share service via XPC.
     #[cfg(target_os = "macos")]
-    fn release_from_broker(&self, surface_id: &str) -> Result<()> {
+    fn release_from_surface_share(&self, surface_id: &str) -> Result<()> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
@@ -803,13 +803,13 @@ impl SurfaceStore {
     // Linux: Unix socket client
     // =========================================================================
 
-    /// Connect to the broker's Unix socket.
+    /// Connect to the surface-share Unix socket.
     #[cfg(target_os = "linux")]
     pub fn connect(&self) -> Result<()> {
         let stream = std::os::unix::net::UnixStream::connect(&self.inner.service_name)
             .map_err(|e| {
                 StreamError::Configuration(format!(
-                    "Failed to connect to broker socket '{}': {}",
+                    "Failed to connect to surface-share socket '{}': {}",
                     self.inner.service_name, e
                 ))
             })?;
@@ -817,20 +817,20 @@ impl SurfaceStore {
         *self.inner.connection.lock() = Some(stream);
 
         tracing::info!(
-            "SurfaceStore: Connected to broker socket '{}'",
+            "SurfaceStore: Connected to surface-share service socket '{}'",
             self.inner.service_name
         );
 
         Ok(())
     }
 
-    /// Disconnect from the broker and release all surfaces.
+    /// Disconnect from the surface-share service and release all surfaces.
     #[cfg(target_os = "linux")]
     pub fn disconnect(&self) -> Result<()> {
         // Release all checked-in surfaces
         let surface_ids = self.inner.checked_in.lock().surface_ids();
         for surface_id in surface_ids {
-            if let Err(e) = self.release_from_broker_unix(&surface_id) {
+            if let Err(e) = self.release_from_surface_share_unix(&surface_id) {
                 tracing::warn!(
                     "SurfaceStore: Failed to release surface '{}': {}",
                     surface_id,
@@ -846,7 +846,7 @@ impl SurfaceStore {
         // Drop the connection
         self.inner.connection.lock().take();
 
-        tracing::info!("SurfaceStore: Disconnected from broker socket");
+        tracing::info!("SurfaceStore: Disconnected from surface-share socket");
         Ok(())
     }
 
@@ -881,13 +881,13 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let send_result =
-            streamlib_broker_client::send_request_with_fds(stream, &request, &plane_fds, 0);
+            streamlib_surface_client::send_request_with_fds(stream, &request, &plane_fds, 0);
 
-        // Close the exported fds (broker has its own dups) regardless of
+        // Close the exported fds (surface-share service has its own dups) regardless of
         // the request outcome — the peer owns its kernel-delivered fds and
         // we never keep ours.
         for fd in &plane_fds {
@@ -897,7 +897,7 @@ impl SurfaceStore {
         let (response, response_fds) = send_result.map_err(|e| {
             StreamError::Configuration(format!("Unix socket check_in failed: {}", e))
         })?;
-        // check_in never returns fds; close any the broker may have attached
+        // check_in never returns fds; close any the surface-share service may have attached
         // defensively so a future protocol drift doesn't leak them.
         for fd in &response_fds {
             unsafe { libc::close(*fd) };
@@ -938,9 +938,9 @@ impl SurfaceStore {
             }
         }
 
-        // Cache miss - fetch from broker
+        // Cache miss - fetch from the surface-share service
         tracing::debug!(
-            "SurfaceStore: Cache miss for '{}', fetching from broker",
+            "SurfaceStore: Cache miss for '{}', fetching from the surface-share service",
             surface_id
         );
 
@@ -951,14 +951,14 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
-        let (response, received_fds) = streamlib_broker_client::send_request_with_fds(
+        let (response, received_fds) = streamlib_surface_client::send_request_with_fds(
             stream,
             &request,
             &[],
-            streamlib_broker_client::MAX_DMA_BUF_PLANES,
+            streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
         .map_err(|e| {
             StreamError::Configuration(format!("Unix socket check_out failed: {}", e))
@@ -1012,7 +1012,7 @@ impl SurfaceStore {
         Ok(pixel_buffer)
     }
 
-    /// Register a buffer with the broker via Unix socket.
+    /// Register a buffer with the surface-share service via Unix socket.
     #[cfg(target_os = "linux")]
     pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &RhiPixelBuffer) -> Result<()> {
         use crate::core::rhi::RhiPixelBufferExport;
@@ -1035,11 +1035,11 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let send_result =
-            streamlib_broker_client::send_request_with_fds(stream, &request, &[fd], 0);
+            streamlib_surface_client::send_request_with_fds(stream, &request, &[fd], 0);
         unsafe { libc::close(fd) };
         let (response, response_fds) = send_result.map_err(|e| {
             StreamError::Configuration(format!("Unix socket register failed: {}", e))
@@ -1059,7 +1059,7 @@ impl SurfaceStore {
         Ok(())
     }
 
-    /// Register a texture with the broker via Unix socket.
+    /// Register a texture with the surface-share service via Unix socket.
     #[cfg(target_os = "linux")]
     pub fn register_texture(
         &self,
@@ -1081,11 +1081,11 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let send_result =
-            streamlib_broker_client::send_request_with_fds(stream, &request, &[fd], 0);
+            streamlib_surface_client::send_request_with_fds(stream, &request, &[fd], 0);
         unsafe { libc::close(fd) };
         let (response, response_fds) = send_result.map_err(|e| {
             StreamError::Configuration(format!("Unix socket register_texture failed: {}", e))
@@ -1105,7 +1105,7 @@ impl SurfaceStore {
         Ok(())
     }
 
-    /// Lookup a buffer from the broker via Unix socket.
+    /// Lookup a buffer from the surface-share service via Unix socket.
     #[cfg(target_os = "linux")]
     pub fn lookup_buffer(&self, pool_id: &str) -> Result<RhiPixelBuffer> {
         let request = serde_json::json!({
@@ -1115,14 +1115,14 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
-        let (response, received_fds) = streamlib_broker_client::send_request_with_fds(
+        let (response, received_fds) = streamlib_surface_client::send_request_with_fds(
             stream,
             &request,
             &[],
-            streamlib_broker_client::MAX_DMA_BUF_PLANES,
+            streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
         .map_err(|e| {
             StreamError::Configuration(format!("Unix socket lookup failed: {}", e))
@@ -1164,7 +1164,7 @@ impl SurfaceStore {
         RhiPixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())
     }
 
-    /// Lookup a texture from the broker via Unix socket.
+    /// Lookup a texture from the surface-share service via Unix socket.
     #[cfg(target_os = "linux")]
     pub fn lookup_texture(&self, surface_id: &str) -> Result<crate::core::rhi::StreamTexture> {
         let request = serde_json::json!({
@@ -1174,14 +1174,14 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to broker".into())
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
-        let (response, received_fds) = streamlib_broker_client::send_request_with_fds(
+        let (response, received_fds) = streamlib_surface_client::send_request_with_fds(
             stream,
             &request,
             &[],
-            streamlib_broker_client::MAX_DMA_BUF_PLANES,
+            streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
         .map_err(|e| {
             StreamError::Configuration(format!("Unix socket lookup_texture failed: {}", e))
@@ -1270,9 +1270,9 @@ impl SurfaceStore {
         Ok(crate::core::rhi::StreamTexture::from_vulkan(vulkan_texture))
     }
 
-    /// Send release request to broker via Unix socket.
+    /// Send release request to surface-share service via Unix socket.
     #[cfg(target_os = "linux")]
-    fn release_from_broker_unix(&self, surface_id: &str) -> Result<()> {
+    fn release_from_surface_share_unix(&self, surface_id: &str) -> Result<()> {
         let request = serde_json::json!({
             "op": "release",
             "surface_id": surface_id,
@@ -1285,7 +1285,7 @@ impl SurfaceStore {
             None => return Ok(()), // Already disconnected
         };
 
-        let _ = streamlib_broker_client::send_request_with_fds(stream, &request, &[], 0);
+        let _ = streamlib_surface_client::send_request_with_fds(stream, &request, &[], 0);
         Ok(())
     }
 

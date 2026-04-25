@@ -20,12 +20,12 @@ export interface ApiServerConfig {
   port: number;
 
   /**
-   * Log file path for broker registration
+   * Log file path for surface-share registration
    */
   log_path?: string;
 
   /**
-   * Runtime name for broker registration (auto-generated if not provided)
+   * Runtime name for surface-share registration (auto-generated if not provided)
    */
   name?: string;
 }

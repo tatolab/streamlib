@@ -5,7 +5,7 @@
 //! service. Stores DMA-BUF fds keyed by `surface_id` so polyglot
 //! subprocesses can `check_out` them via `SCM_RIGHTS`.
 //!
-//! Each surface may hold up to [`streamlib_broker_client::MAX_DMA_BUF_PLANES`]
+//! Each surface may hold up to [`streamlib_surface_client::MAX_DMA_BUF_PLANES`]
 //! fds — one per plane for multi-plane DMA-BUFs under DRM format modifiers
 //! (e.g. NV12 with separate Y and UV allocations). Single-plane surfaces
 //! register a one-element vec; the multi-plane path is strictly additive.
@@ -31,9 +31,9 @@ pub struct SurfaceMetadata {
     pub checkout_count: u64,
 }
 
-/// Thread-safe surface table for the runtime-internal broker.
+/// Thread-safe surface table for the runtime-internal surface-share service.
 #[derive(Clone, Default)]
-pub struct SurfaceBrokerState {
+pub struct SurfaceShareState {
     inner: Arc<Inner>,
 }
 
@@ -43,7 +43,7 @@ struct Inner {
     surface_counter: AtomicU64,
 }
 
-/// Arguments to [`SurfaceBrokerState::register_surface`]. Grouped so the
+/// Arguments to [`SurfaceShareState::register_surface`]. Grouped so the
 /// signature stays legible as the per-plane fields grow.
 pub struct SurfaceRegistration<'a> {
     pub surface_id: &'a str,
@@ -57,7 +57,7 @@ pub struct SurfaceRegistration<'a> {
     pub resource_type: &'a str,
 }
 
-impl SurfaceBrokerState {
+impl SurfaceShareState {
     pub fn new() -> Self {
         Self::default()
     }
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn register_surface_with_resource_type() {
-        let state = SurfaceBrokerState::new();
+        let state = SurfaceShareState::new();
         assert!(state
             .register_surface(reg("buf-001", "runtime-1", "pixel_buffer"))
             .is_ok());
@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn duplicate_surface_id_rejected() {
-        let state = SurfaceBrokerState::new();
+        let state = SurfaceShareState::new();
         assert!(state.register_surface(reg("dup", "rt", "texture")).is_ok());
         let rejected = state
             .register_surface(reg("dup", "rt", "texture"))
@@ -186,7 +186,7 @@ mod tests {
     /// leaking any plane would leak the whole DMA-BUF.
     #[test]
     fn release_surface_closes_every_plane_fd() {
-        let state = SurfaceBrokerState::new();
+        let state = SurfaceShareState::new();
         // Pair of real, independently-owned memfds so libc::close actually
         // observable succeeds / fails per fd.
         let plane_fds: Vec<RawFd> = (0..3)

@@ -146,7 +146,7 @@ cpal = "0.15"  # Cross-platform audio I/O (uses ALSA on Linux)
 winit = "0.30"  # Window creation and event loop for display processor
 raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 # Wire-format helpers for the per-runtime surface-sharing socket
-streamlib-broker-client = { path = "../streamlib-broker-client" }
+streamlib-surface-client = { path = "../streamlib-surface-client" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
@@ -170,7 +170,7 @@ path = "tests/bin/log_emit_1000.rs"
 # Strace-backed no-syscalls test child. Built under `cargo test` via
 # the path dep; not needed for normal builds.
 
-# Build dependencies for protobuf compilation (broker gRPC)
+# Build dependencies for protobuf compilation (surface-share service gRPC)
 [target.'cfg(target_os = "macos")'.build-dependencies]
 tonic-build = "0.12"
 prost-build = "0.13"

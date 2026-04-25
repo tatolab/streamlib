@@ -4,10 +4,10 @@
 //! Per-runtime Unix socket surface-sharing service.
 //!
 //! Each `StreamRuntime` owns one of these listening on a unique socket under
-//! `$XDG_RUNTIME_DIR`. Polyglot subprocesses connect via `connect_to_broker`
-//! / `send_request_with_fds` (from [`streamlib_broker_client`]) and exchange
+//! `$XDG_RUNTIME_DIR`. Polyglot subprocesses connect via `connect_to_surface_share_socket`
+//! / `send_request_with_fds` (from [`streamlib_surface_client`]) and exchange
 //! DMA-BUF fds over `SCM_RIGHTS`. Surfaces may carry up to
-//! [`streamlib_broker_client::MAX_DMA_BUF_PLANES`] plane fds — one per plane
+//! [`streamlib_surface_client::MAX_DMA_BUF_PLANES`] plane fds — one per plane
 //! for multi-plane DMA-BUFs (e.g. NV12 with separate Y and UV allocations).
 
 use std::io::Read;
@@ -17,21 +17,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use streamlib_broker_client::{
+use streamlib_surface_client::{
     recv_message_with_fds, send_message_with_fds, MAX_DMA_BUF_PLANES,
 };
 
-use super::state::{SurfaceBrokerState, SurfaceRegistration};
+use super::state::{SurfaceShareState, SurfaceRegistration};
 
 pub struct UnixSocketSurfaceService {
-    state: SurfaceBrokerState,
+    state: SurfaceShareState,
     socket_path: PathBuf,
     listener_thread: Option<thread::JoinHandle<()>>,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl UnixSocketSurfaceService {
-    pub fn new(state: SurfaceBrokerState, socket_path: PathBuf) -> Self {
+    pub fn new(state: SurfaceShareState, socket_path: PathBuf) -> Self {
         Self {
             state,
             socket_path,
@@ -68,7 +68,7 @@ impl UnixSocketSurfaceService {
         self.listener_thread = Some(handle);
 
         tracing::info!(
-            "[Runtime broker] Unix socket surface service listening on {:?}",
+            "[Surface share] Unix socket surface service listening on {:?}",
             self.socket_path
         );
 
@@ -87,7 +87,7 @@ impl UnixSocketSurfaceService {
             let _ = std::fs::remove_file(&self.socket_path);
         }
 
-        tracing::info!("[Runtime broker] Unix socket surface service stopped");
+        tracing::info!("[Surface share] Unix socket surface service stopped");
     }
 }
 
@@ -99,7 +99,7 @@ impl Drop for UnixSocketSurfaceService {
 
 fn run_listener(
     listener: UnixListener,
-    state: SurfaceBrokerState,
+    state: SurfaceShareState,
     shutdown_flag: Arc<std::sync::atomic::AtomicBool>,
 ) {
     loop {
@@ -112,7 +112,7 @@ fn run_listener(
                 let state = state.clone();
                 thread::spawn(move || {
                     if let Err(e) = handle_client_connection(stream, state) {
-                        tracing::debug!("[Runtime broker] Client connection ended: {}", e);
+                        tracing::debug!("[Surface share] Client connection ended: {}", e);
                     }
                 });
             }
@@ -123,7 +123,7 @@ fn run_listener(
                 if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     break;
                 }
-                tracing::warn!("[Runtime broker] Unix socket accept error: {}", e);
+                tracing::warn!("[Surface share] Unix socket accept error: {}", e);
                 thread::sleep(std::time::Duration::from_millis(100));
             }
         }
@@ -132,7 +132,7 @@ fn run_listener(
 
 fn handle_client_connection(
     mut stream: UnixStream,
-    state: SurfaceBrokerState,
+    state: SurfaceShareState,
 ) -> Result<(), std::io::Error> {
     stream.set_nonblocking(false)?;
 
@@ -242,7 +242,7 @@ fn parse_plane_arrays(
 }
 
 fn handle_register(
-    state: &SurfaceBrokerState,
+    state: &SurfaceShareState,
     request: &serde_json::Value,
     received_fds: &[RawFd],
 ) -> (serde_json::Value, Vec<RawFd>) {
@@ -320,7 +320,7 @@ fn handle_register(
     }) {
         Ok(()) => {
             tracing::debug!(
-                "[Runtime broker] register: surface '{}' for runtime '{}' ({} plane(s))",
+                "[Surface share] register: surface '{}' for runtime '{}' ({} plane(s))",
                 surface_id,
                 runtime_id,
                 received_fds.len(),
@@ -332,7 +332,7 @@ fn handle_register(
                 unsafe { libc::close(*fd) };
             }
             tracing::warn!(
-                "[Runtime broker] register: surface '{}' already exists",
+                "[Surface share] register: surface '{}' already exists",
                 surface_id
             );
             (serde_json::json!({"success": false}), Vec::new())
@@ -341,7 +341,7 @@ fn handle_register(
 }
 
 fn handle_lookup(
-    state: &SurfaceBrokerState,
+    state: &SurfaceShareState,
     request: &serde_json::Value,
 ) -> (serde_json::Value, Vec<RawFd>) {
     let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
@@ -393,7 +393,7 @@ fn handle_lookup(
 }
 
 fn handle_unregister(
-    state: &SurfaceBrokerState,
+    state: &SurfaceShareState,
     request: &serde_json::Value,
 ) -> (serde_json::Value, Vec<RawFd>) {
     let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
@@ -411,7 +411,7 @@ fn handle_unregister(
 }
 
 fn handle_check_in(
-    state: &SurfaceBrokerState,
+    state: &SurfaceShareState,
     request: &serde_json::Value,
     received_fds: &[RawFd],
 ) -> (serde_json::Value, Vec<RawFd>) {
@@ -499,12 +499,12 @@ unsafe impl Sync for UnixSocketSurfaceService {}
 mod tests {
     use super::*;
     use std::os::unix::io::FromRawFd;
-    use streamlib_broker_client::{connect_to_broker, send_request_with_fds};
+    use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
     fn make_memfd_with(contents: &[u8]) -> RawFd {
         use std::io::{Seek, SeekFrom, Write};
 
-        let name = std::ffi::CString::new("streamlib-runtime-broker-test").unwrap();
+        let name = std::ffi::CString::new("streamlib-runtime-surface-share-test").unwrap();
         let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
         assert!(fd >= 0, "memfd_create failed: {}", std::io::Error::last_os_error());
         let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
@@ -531,7 +531,7 @@ mod tests {
             .map(|d| d.as_nanos())
             .unwrap_or(0);
         p.push(format!(
-            "streamlib-runtime-broker-test-{}-{}.sock",
+            "streamlib-runtime-surface-share-test-{}-{}.sock",
             std::process::id(),
             nanos
         ));
@@ -540,16 +540,16 @@ mod tests {
 
     #[test]
     fn check_in_check_out_roundtrip_preserves_fd_content() {
-        let state = SurfaceBrokerState::new();
+        let state = SurfaceShareState::new();
         let socket_path = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
 
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let stream = connect_to_broker(&socket_path).expect("connect");
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
 
-        let pattern = b"streamlib-runtime-broker-test-fd-contents-0123456789";
+        let pattern = b"streamlib-runtime-surface-share-test-fd-contents-0123456789";
         let send_fd = make_memfd_with(pattern);
 
         let check_in_req = serde_json::json!({
@@ -600,13 +600,13 @@ mod tests {
 
     #[test]
     fn check_out_unknown_surface_id_returns_error_no_fd() {
-        let state = SurfaceBrokerState::new();
+        let state = SurfaceShareState::new();
         let socket_path = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let stream = connect_to_broker(&socket_path).expect("connect");
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
         let req = serde_json::json!({
             "op": "check_out",
             "surface_id": "never-registered",
@@ -626,13 +626,13 @@ mod tests {
     /// own size. This is the defining multi-plane DMA-BUF test.
     #[test]
     fn check_in_check_out_multi_fd_roundtrip() {
-        let state = SurfaceBrokerState::new();
+        let state = SurfaceShareState::new();
         let socket_path = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let stream = connect_to_broker(&socket_path).expect("connect");
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
 
         let pattern_y = b"plane-Y-bytes-A123456789";
         let pattern_uv = b"plane-UV-bytes-Z987654321";
@@ -712,19 +712,19 @@ mod tests {
         service.stop();
     }
 
-    /// The broker must refuse a check_in whose fd count exceeds the plane
+    /// The service must refuse a check_in whose fd count exceeds the plane
     /// cap instead of truncating silently. The check runs in the wire helper
     /// before the handler, so this exercises the shared back-pressure path
     /// every caller relies on.
     #[test]
     fn oversize_fd_vec_rejected() {
-        let state = SurfaceBrokerState::new();
+        let state = SurfaceShareState::new();
         let socket_path = tmp_socket_path();
         let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
         service.start().expect("service start");
         std::thread::sleep(std::time::Duration::from_millis(50));
 
-        let stream = connect_to_broker(&socket_path).expect("connect");
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
 
         // MAX_DMA_BUF_PLANES + 1 fds — one over the cap.
         let fds: Vec<RawFd> = (0..=MAX_DMA_BUF_PLANES)

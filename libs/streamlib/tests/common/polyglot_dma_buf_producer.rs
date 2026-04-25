@@ -13,7 +13,7 @@
 //! Vulkan import path in the polyglot consumers — NVIDIA's proprietary
 //! driver rejects memfd fds as `VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT`,
 //! so the integration test now has to feed a genuine DMA-BUF through the
-//! broker to exercise the subprocess's import path.
+//! surface-share service to exercise the subprocess's import path.
 //!
 //! Allowed to call `vkGetMemoryFdKHR` (the export path) because this is
 //! **host-side** test code — the subprocess-under-test never sees this

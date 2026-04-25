@@ -180,7 +180,7 @@ See [CLA.md](docs/license/CLA.md) for the Contributor License Agreement.
 streamlib/
 ├── libs/
 │   ├── streamlib/                # Core library
-│   ├── streamlib-broker-client/  # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
+│   ├── streamlib-surface-client/ # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
 │   ├── streamlib-cli/            # CLI (streamlib command)
 │   ├── streamlib-runtime/        # Standalone runtime binary
 │   └── streamlib-macros/         # Procedural macros
@@ -219,7 +219,7 @@ direnv allow
 ```
 
 This sets up:
-- StreamLib broker service (runs in background via launchd)
+- StreamLib runtime service (per-runtime surface-share socket; runs in background via launchd)
 - Development environment variables
 
 See `.envrc.example` for the environment variables used.

@@ -138,7 +138,14 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 .env("STREAMLIB_RUNTIME_ID", &runtime_id);
 
             #[cfg(target_os = "linux")]
-            command.env("STREAMLIB_BROKER_SOCKET", ctx.surface_socket_path());
+            {
+                let socket_path = ctx.surface_socket_path();
+                command.env("STREAMLIB_SURFACE_SOCKET", &socket_path);
+                // Legacy alias — retained for one release cycle so subprocesses
+                // still binding the pre-rename name keep working. See
+                // docs/migration/broker-to-surface-share.md for the removal plan.
+                command.env("STREAMLIB_BROKER_SOCKET", &socket_path);
+            }
 
             // Escalate IPC rides a dedicated `AF_UNIX` socketpair, not
             // fd1/fd2, so the subprocess's stdout/stderr can be captured

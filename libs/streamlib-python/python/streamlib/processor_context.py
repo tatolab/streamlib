@@ -179,20 +179,42 @@ def load_native_lib(lib_path):
     lib.slpn_gpu_surface_iosurface_ref.argtypes = [ctypes.c_void_p]
     lib.slpn_gpu_surface_iosurface_ref.restype = ctypes.c_void_p
 
-    # Broker
-    lib.slpn_broker_connect.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-    lib.slpn_broker_connect.restype = ctypes.c_void_p
-    lib.slpn_broker_disconnect.argtypes = [ctypes.c_void_p]
-    lib.slpn_broker_disconnect.restype = None
-    lib.slpn_broker_resolve_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-    lib.slpn_broker_resolve_surface.restype = ctypes.c_void_p
-    lib.slpn_broker_acquire_surface.argtypes = [
-        ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
-        ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
-    ]
-    lib.slpn_broker_acquire_surface.restype = ctypes.c_void_p
-    lib.slpn_broker_unregister_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
-    lib.slpn_broker_unregister_surface.restype = None
+    # Surface-share service FFI. Bind both the canonical `slpn_surface_*`
+    # names (preferred) and the legacy `slpn_broker_*` aliases (deprecated,
+    # retained for one release cycle). Any missing symbol on one side only
+    # is tolerated so older native libs still load.
+    def _bind(symbol_new: str, symbol_old: str, argtypes, restype):
+        for sym in (symbol_new, symbol_old):
+            fn = getattr(lib, sym, None)
+            if fn is None:
+                continue
+            fn.argtypes = argtypes
+            fn.restype = restype
+
+    _bind(
+        "slpn_surface_connect", "slpn_broker_connect",
+        [ctypes.c_char_p, ctypes.c_char_p], ctypes.c_void_p,
+    )
+    _bind(
+        "slpn_surface_disconnect", "slpn_broker_disconnect",
+        [ctypes.c_void_p], None,
+    )
+    _bind(
+        "slpn_surface_resolve_surface", "slpn_broker_resolve_surface",
+        [ctypes.c_void_p, ctypes.c_char_p], ctypes.c_void_p,
+    )
+    _bind(
+        "slpn_surface_acquire_surface", "slpn_broker_acquire_surface",
+        [
+            ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32,
+            ctypes.c_uint32, ctypes.c_char_p, ctypes.c_uint32,
+        ],
+        ctypes.c_void_p,
+    )
+    _bind(
+        "slpn_surface_unregister_surface", "slpn_broker_unregister_surface",
+        [ctypes.c_void_p, ctypes.c_char_p], None,
+    )
 
     return lib
 
@@ -363,19 +385,19 @@ class NativeGpuContextLimitedAccess:
     ``on_resume``.
     """
 
-    def __init__(self, lib, broker_ptr):
+    def __init__(self, lib, handle_ptr):
         self._lib = lib
-        self._broker_ptr = broker_ptr
+        self._handle_ptr = handle_ptr
 
     def resolve_surface(self, surface_id):
-        """Resolve a broker surface_id UUID to a GPU surface handle."""
-        if self._broker_ptr:
-            handle_ptr = self._lib.slpn_broker_resolve_surface(
-                self._broker_ptr,
+        """Resolve a surface-share pool UUID to a GPU surface handle."""
+        if self._handle_ptr:
+            handle_ptr = self._lib.slpn_surface_resolve_surface(
+                self._handle_ptr,
                 surface_id.encode("utf-8"),
             )
             if not handle_ptr:
-                raise RuntimeError(f"Broker failed to resolve surface: {surface_id}")
+                raise RuntimeError(f"Surface-share service failed to resolve surface: {surface_id}")
             return NativeGpuSurfaceHandle(self._lib, handle_ptr)
 
         # Fallback: treat surface_id as numeric IOSurface ID
@@ -395,8 +417,8 @@ class NativeGpuContextFullAccess(NativeGpuContextLimitedAccess):
 
     SURFACE_POOL_SIZE = 3
 
-    def __init__(self, lib, broker_ptr):
-        super().__init__(lib, broker_ptr)
+    def __init__(self, lib, handle_ptr):
+        super().__init__(lib, handle_ptr)
         self._output_pool = []  # list of (pool_id, handle_ptr)
         self._output_pool_index = 0
         self._output_pool_width = 0
@@ -415,17 +437,17 @@ class NativeGpuContextFullAccess(NativeGpuContextLimitedAccess):
 
         # First call (or after dimension change): pre-allocate pool
         if not self._output_pool:
-            if self._broker_ptr:
+            if self._handle_ptr:
                 for _ in range(self.SURFACE_POOL_SIZE):
                     pool_id_buf = (ctypes.c_char * 256)()
-                    handle_ptr = self._lib.slpn_broker_acquire_surface(
-                        self._broker_ptr,
+                    handle_ptr = self._lib.slpn_surface_acquire_surface(
+                        self._handle_ptr,
                         width, height, bytes_per_element,
                         pool_id_buf, 256,
                     )
                     if not handle_ptr:
                         raise RuntimeError(
-                            f"Broker failed to acquire surface: {width}x{height}"
+                            f"Surface-share service failed to acquire surface: {width}x{height}"
                         )
                     pool_id = pool_id_buf.value.decode("utf-8")
                     self._output_pool.append((pool_id, handle_ptr))
@@ -457,9 +479,9 @@ class NativeGpuContextFullAccess(NativeGpuContextLimitedAccess):
         for pool_id, handle_ptr in self._output_pool:
             if handle_ptr:
                 self._lib.slpn_gpu_surface_release(handle_ptr)
-            if self._broker_ptr:
-                self._lib.slpn_broker_unregister_surface(
-                    self._broker_ptr,
+            if self._handle_ptr:
+                self._lib.slpn_surface_unregister_surface(
+                    self._handle_ptr,
                     pool_id.encode("utf-8"),
                 )
         self._output_pool = []
@@ -489,22 +511,22 @@ class NativeProcessorState:
         lib,
         ctx_ptr,
         config: Optional[Dict[str, Any]],
-        broker_ptr=None,
+        handle_ptr=None,
         escalate_channel: "Optional[EscalateChannel]" = None,
         read_buf_bytes: int = DEFAULT_READ_BUF_BYTES,
     ) -> None:
         self._lib = lib
         self._ctx_ptr = ctx_ptr
         self._config = config or {}
-        self._broker_ptr = broker_ptr
+        self._handle_ptr = handle_ptr
         self._escalate_channel = escalate_channel
         self.inputs = NativeInputs(lib, ctx_ptr, read_buf_bytes=read_buf_bytes)
         self.outputs = NativeOutputs(lib, ctx_ptr)
         # One instance of each GPU view shared across per-call context
         # wrappers so pool state and handle lifetimes are stable across
         # lifecycle phases.
-        self._gpu_limited = NativeGpuContextLimitedAccess(lib, broker_ptr)
-        self._gpu_full = NativeGpuContextFullAccess(lib, broker_ptr)
+        self._gpu_limited = NativeGpuContextLimitedAccess(lib, handle_ptr)
+        self._gpu_full = NativeGpuContextFullAccess(lib, handle_ptr)
 
     @property
     def config(self) -> Dict[str, Any]:

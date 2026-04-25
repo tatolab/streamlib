@@ -56,7 +56,7 @@ export interface GpuSurface {
  * frames. Mirrors the Rust [`GpuContextLimitedAccess`] surface.
  */
 export interface GpuContextLimitedAccess {
-  /** Resolve a broker pool_id to a GPU surface handle. */
+  /** Resolve a surface-share pool_id to a GPU surface handle. */
   resolveSurface(poolId: string): GpuSurface;
 }
 
@@ -65,7 +65,7 @@ export interface GpuContextLimitedAccess {
  * Mirrors the Rust [`GpuContextFullAccess`] surface.
  */
 export interface GpuContextFullAccess extends GpuContextLimitedAccess {
-  /** Create a new IOSurface, register with broker, return [poolId, surface]. */
+  /** Create a new IOSurface, register with the surface-share service, return [poolId, surface]. */
   createSurface(width: number, height: number, format: string): { poolId: string; surface: GpuSurface };
 }
 

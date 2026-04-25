@@ -331,11 +331,11 @@ impl VulkanPixelBuffer {
                 fds.len()
             )));
         }
-        if fds.len() > streamlib_broker_client::MAX_DMA_BUF_PLANES {
+        if fds.len() > streamlib_surface_client::MAX_DMA_BUF_PLANES {
             return Err(StreamError::Configuration(format!(
                 "DMA-BUF import: plane count {} exceeds MAX_DMA_BUF_PLANES ({})",
                 fds.len(),
-                streamlib_broker_client::MAX_DMA_BUF_PLANES
+                streamlib_surface_client::MAX_DMA_BUF_PLANES
             )));
         }
 
@@ -796,7 +796,7 @@ mod tests {
     }
 
     /// Oversize vec rejection: we refuse to import a pixel buffer with
-    /// more planes than the broker's `MAX_DMA_BUF_PLANES` cap (4 today).
+    /// more planes than the surface-share `MAX_DMA_BUF_PLANES` cap (4 today).
     /// Covers the Rust half of the consistency the wire helpers already
     /// enforce on sends/receives.
     #[test]
@@ -813,7 +813,7 @@ mod tests {
         // are fine — we expect the length check to fire before any
         // syscall touches them.
         let fds: Vec<std::os::unix::io::RawFd> =
-            (0..=streamlib_broker_client::MAX_DMA_BUF_PLANES as i32)
+            (0..=streamlib_surface_client::MAX_DMA_BUF_PLANES as i32)
                 .map(|_| -1i32)
                 .collect();
         let sizes: Vec<vk::DeviceSize> = vec![1024; fds.len()];

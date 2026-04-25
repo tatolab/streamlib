@@ -72,7 +72,7 @@ Legend:
 - **F** — FullAccess. Creates Vulkan/Metal objects or allocates GPU
   memory.
 - **Split** — has a fast path (pool hit / cache hit → Sandbox) and a
-  slow path (pool miss, broker XPC, growth → FullAccess). Must be
+  slow path (pool miss, surface-share XPC, growth → FullAccess). Must be
   decomposed into a Sandbox method that never allocates and an
   escalated slow path.
 
@@ -107,7 +107,7 @@ whatever submission validates.
 | Method | Cap | Notes |
 |---|---|---|
 | `acquire_pixel_buffer(w, h, format)` | Split | Pool hit (ring slot available) = Sandbox. Pool miss or first call for a new (w,h,format) = FullAccess (pre-allocates `POOL_PRE_ALLOCATE_COUNT=4` buffers; may grow to `POOL_MAX_BUFFER_COUNT=64`). See §2 for the split shape. |
-| `get_pixel_buffer(id)` | Split | Local cache hit = Sandbox. Broker (`SurfaceStore`) miss = FullAccess (XPC call; may trigger GPU memory registration). |
+| `get_pixel_buffer(id)` | Split | Local cache hit = Sandbox. Surface-share (`SurfaceStore`) miss = FullAccess (XPC call; may trigger GPU memory registration). |
 | `resolve_videoframe_buffer(frame)` | Split | Thin wrapper around `get_pixel_buffer`. |
 
 ### Textures
@@ -142,7 +142,7 @@ whatever submission validates.
 |---|---|---|
 | `set_surface_store()` / `clear_surface_store()` (crate-private) | F | Internal; only called from runtime start/stop. |
 | `surface_store()` | S | Option accessor. |
-| `check_in_surface(buf)` (macOS) | F | XPC call + broker registration. |
+| `check_in_surface(buf)` (macOS) | F | XPC call + surface-share registration. |
 | `check_out_surface(id)` (macOS) | Split | Cache hit = Sandbox; first XPC = FullAccess. |
 
 ### Platform escape hatches
@@ -576,7 +576,7 @@ Promise).
   is fine for resource creation).
 - Direct DMA-BUF FD passing on Linux for cross-process textures —
   handled by the existing `SurfaceStore` on macOS; Linux cross-
-  process paths land with the broker work that's downstream of this
+  process paths land with the surface-share work that's downstream of this
   umbrella.
 
 ---

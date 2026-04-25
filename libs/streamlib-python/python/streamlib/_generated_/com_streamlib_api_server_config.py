@@ -29,12 +29,12 @@ class ApiServerConfig:
 
     log_path: 'Optional[str]'
     """
-    Log file path for broker registration
+    Log file path for surface-share registration
     """
 
     name: 'Optional[str]'
     """
-    Runtime name for broker registration (auto-generated if not provided)
+    Runtime name for surface-share registration (auto-generated if not provided)
     """
 
 

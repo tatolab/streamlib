@@ -62,7 +62,7 @@ blocked by it.
   `streamlib-*-native`.
   - **Import-side carve-out:** on Linux, native libs *do* call
     `VkImportMemoryFdInfoKHR` + `vkBindBufferMemory` + `vkMapMemory` on
-    an fd the broker (host allocation) already handed them — shipped in
+    an fd the surface-share service (host allocation) already handed them — shipped in
     #420. This mirrors macOS's `IOSurfaceLookupFromMachPort` in the
     existing XPC shim. It's *consumer-only* by construction (no
     exportable memory ever originates in the subprocess).

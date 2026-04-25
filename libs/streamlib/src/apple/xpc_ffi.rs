@@ -101,7 +101,7 @@ extern "C" {
     /// Create a connection to a Mach service.
     ///
     /// Parameters:
-    /// - name: The Mach service name (e.g., "com.tatolab.streamlib.broker")
+    /// - name: The Mach service name (e.g., "com.tatolab.streamlib.surface-share service")
     /// - target_queue: Dispatch queue for handler callbacks (null for default)
     /// - flags: Connection flags (e.g., XPC_CONNECTION_MACH_SERVICE_PRIVILEGED)
     pub fn xpc_connection_create_mach_service(

@@ -33,10 +33,10 @@ pub struct EscalateResponseErr {
 #[serde(deny_unknown_fields)]
 pub struct EscalateResponseOk {
     /// Opaque handle returned by the host. For acquire_pixel_buffer this is
-    /// the PixelBufferPoolId the host registered with its pixel-buffer pool and
-    /// broker SurfaceStore. For acquire_texture this is a host-side UUID
-    /// keying the EscalateHandleRegistry's texture slot. For release_handle
-    /// this echoes the released id.
+    /// the PixelBufferPoolId the host registered with its pixel-buffer pool
+    /// and SurfaceStore. For acquire_texture this is a host-side UUID keying
+    /// the EscalateHandleRegistry's texture slot. For release_handle this
+    /// echoes the released id.
     #[serde(rename = "handle_id")]
     pub handle_id: String,
 

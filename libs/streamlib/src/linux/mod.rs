@@ -5,7 +5,7 @@
 
 pub mod audio_clock;
 pub mod processors;
-pub mod surface_broker;
+pub mod surface_share;
 pub mod thread_priority;
 
 pub use audio_clock::LinuxTimerFdAudioClock;

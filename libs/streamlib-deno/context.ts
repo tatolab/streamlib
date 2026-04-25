@@ -97,20 +97,20 @@ export class NativeProcessorState {
 
   private lib: NativeLib;
   private ctxPtr: Deno.PointerObject;
-  private brokerPtr: Deno.PointerObject | null;
+  private surfaceHandlePtr: Deno.PointerObject | null;
 
   constructor(
     lib: NativeLib,
     ctxPtr: Deno.PointerObject,
     config: Record<string, unknown>,
-    brokerPtr: Deno.PointerObject | null = null,
+    surfaceHandlePtr: Deno.PointerObject | null = null,
     escalate: EscalateChannel | null = null,
     readBufBytes: number = DEFAULT_READ_BUF_BYTES,
   ) {
     this.lib = lib;
     this.ctxPtr = ctxPtr;
     this.config = config;
-    this.brokerPtr = brokerPtr;
+    this.surfaceHandlePtr = surfaceHandlePtr;
     this.inputs = new NativeInputPorts(lib, ctxPtr, readBufBytes);
     this.outputs = new NativeOutputPorts(lib, ctxPtr);
     this.escalate = escalate;
@@ -169,12 +169,12 @@ export class NativeProcessorState {
 
   /** Construct a full-access GPU view (allocations + resolution). */
   gpuFullAccess(): GpuContextFullAccess {
-    return new NativeGpuContextFullAccess(this.lib, this.brokerPtr);
+    return new NativeGpuContextFullAccess(this.lib, this.surfaceHandlePtr);
   }
 
   /** Construct a limited-access GPU view (resolution only). */
   gpuLimitedAccess(): GpuContextLimitedAccess {
-    return new NativeGpuContextLimitedAccess(this.lib, this.brokerPtr);
+    return new NativeGpuContextLimitedAccess(this.lib, this.surfaceHandlePtr);
   }
 }
 
@@ -379,29 +379,29 @@ class NativeOutputPorts implements OutputPorts {
  */
 class NativeGpuContextLimitedAccess implements GpuContextLimitedAccess {
   protected lib: NativeLib;
-  protected brokerPtr: Deno.PointerObject | null;
+  protected surfaceHandlePtr: Deno.PointerObject | null;
 
-  constructor(lib: NativeLib, brokerPtr: Deno.PointerObject | null) {
+  constructor(lib: NativeLib, surfaceHandlePtr: Deno.PointerObject | null) {
     this.lib = lib;
-    this.brokerPtr = brokerPtr;
+    this.surfaceHandlePtr = surfaceHandlePtr;
   }
 
   resolveSurface(poolId: string): GpuSurface {
-    if (this.brokerPtr) {
-      // Broker-backed resolution: pool_id → XPC lookup → IOSurface
+    if (this.surfaceHandlePtr) {
+      // Surface-share-backed resolution: pool_id → XPC lookup → IOSurface
       const poolIdBuf = cString(poolId);
-      const handlePtr = this.lib.symbols.sldn_broker_resolve_surface(
-        this.brokerPtr,
+      const handlePtr = (this.lib.symbols.sldn_surface_resolve_surface ?? this.lib.symbols.sldn_broker_resolve_surface)!(
+        this.surfaceHandlePtr,
         poolIdBuf,
       );
       if (handlePtr === null) {
-        throw new Error(`Broker failed to resolve surface: ${poolId}`);
+        throw new Error(`Surface-share service failed to resolve surface: ${poolId}`);
       }
       const surfaceId = this.lib.symbols.sldn_gpu_surface_get_id(handlePtr);
       return new NativeGpuSurface(this.lib, handlePtr, surfaceId);
     }
 
-    // Fallback: treat poolId as a numeric IOSurface ID (no broker)
+    // Fallback: treat poolId as a numeric IOSurface ID (no surface-share service)
     const iosurfaceId = parseInt(poolId, 10);
     const handlePtr = this.lib.symbols.sldn_gpu_surface_lookup(iosurfaceId);
     if (handlePtr === null) {
@@ -423,12 +423,12 @@ class NativeGpuContextFullAccess extends NativeGpuContextLimitedAccess
   ): { poolId: string; surface: GpuSurface } {
     const bytesPerElement = 4; // BGRA
 
-    if (this.brokerPtr) {
-      // Broker-backed: create IOSurface + register with broker
+    if (this.surfaceHandlePtr) {
+      // Surface-share-backed: create IOSurface + register with service
       const poolIdBuf = new Uint8Array(256);
       const poolIdBufPtr = Deno.UnsafePointer.of(poolIdBuf);
-      const handlePtr = this.lib.symbols.sldn_broker_acquire_surface(
-        this.brokerPtr,
+      const handlePtr = (this.lib.symbols.sldn_surface_acquire_surface ?? this.lib.symbols.sldn_broker_acquire_surface)!(
+        this.surfaceHandlePtr,
         width,
         height,
         bytesPerElement,
@@ -436,7 +436,7 @@ class NativeGpuContextFullAccess extends NativeGpuContextLimitedAccess
         256,
       );
       if (handlePtr === null) {
-        throw new Error(`Broker failed to acquire surface: ${width}x${height}`);
+        throw new Error(`Surface-share service failed to acquire surface: ${width}x${height}`);
       }
       const nullIdx = poolIdBuf.indexOf(0);
       const poolId = new TextDecoder().decode(
@@ -449,7 +449,7 @@ class NativeGpuContextFullAccess extends NativeGpuContextLimitedAccess
       };
     }
 
-    // Fallback: create IOSurface without broker registration
+    // Fallback: create IOSurface without surface-share registration
     const handlePtr = this.lib.symbols.sldn_gpu_surface_create(
       width,
       height,

@@ -85,7 +85,7 @@ struct PixelBufferRingPool {
 /// Shared pixel buffer pool manager.
 ///
 /// Manages ring pools keyed by (width, height, format).
-/// Pre-allocates buffers on pool creation and registers them with the broker.
+/// Pre-allocates buffers on pool creation and registers them with the surface-share service.
 /// Buffers are held permanently for the runtime's lifetime.
 struct PixelBufferPoolManager {
     pools: Mutex<HashMap<PixelBufferPoolKey, PixelBufferRingPool>>,
@@ -109,7 +109,7 @@ impl PixelBufferPoolManager {
     /// Acquire a buffer from the pool.
     ///
     /// If this is a new pool, pre-allocates POOL_PRE_ALLOCATE_COUNT buffers
-    /// and registers them with the broker (if surface_store is available).
+    /// and registers them with the surface-share service (if surface_store is available).
     /// Returns the next available buffer from the ring, skipping any in use.
     fn acquire(
         &self,
@@ -183,7 +183,7 @@ impl PixelBufferPoolManager {
                             pool_id
                         );
 
-                        // Register with broker if available
+                        // Register with the surface-share service if available
                         if let Some(store) = surface_store {
                             if let Err(e) = store.register_buffer(pool_id.as_str(), &buffer) {
                                 tracing::warn!(
@@ -193,7 +193,7 @@ impl PixelBufferPoolManager {
                                 );
                             } else {
                                 tracing::debug!(
-                                    "PixelBufferPoolManager: registered buffer {} with broker",
+                                    "PixelBufferPoolManager: registered buffer {} with the surface-share service",
                                     pool_id
                                 );
                                 registered_count += 1;
@@ -221,7 +221,7 @@ impl PixelBufferPoolManager {
             }
 
             tracing::info!(
-                "PixelBufferPoolManager: pre-allocated {} buffers, registered {} with broker",
+                "PixelBufferPoolManager: pre-allocated {} buffers, registered {} with the surface-share service",
                 buffers.len(),
                 registered_count
             );
@@ -283,7 +283,7 @@ impl PixelBufferPoolManager {
             for _ in 0..expand_count {
                 match ring_pool.pool.acquire() {
                     Ok((pool_id, buffer)) => {
-                        // Register with broker if available
+                        // Register with the surface-share service if available
                         if let Some(store) = surface_store {
                             if let Err(e) = store.register_buffer(pool_id.as_str(), &buffer) {
                                 tracing::warn!(
@@ -483,7 +483,7 @@ impl GpuContext {
     /// and pre-allocates buffers, subsequent calls reuse it. Returns (id, buffer) where
     /// id can be used with `get_pixel_buffer()` to retrieve the same buffer.
     ///
-    /// If SurfaceStore is initialized, pre-allocated buffers are registered with the broker.
+    /// If SurfaceStore is initialized, pre-allocated buffers are registered with the surface-share service.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
@@ -504,7 +504,7 @@ impl GpuContext {
 
     /// Get a pixel buffer by its UUID.
     ///
-    /// First checks local cache, then falls back to broker lookup for cross-process sharing.
+    /// First checks local cache, then falls back to surface-share service lookup for cross-process sharing.
     /// Returns the buffer if found, or an error if not found anywhere.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
         // Check local cache first
@@ -516,9 +516,9 @@ impl GpuContext {
             return Ok(buffer);
         }
 
-        // Cache miss - try broker lookup
+        // Cache miss - try surface-share service lookup
         tracing::debug!(
-            "GpuContext::get_pixel_buffer: cache miss for '{}', trying broker",
+            "GpuContext::get_pixel_buffer: cache miss for '{}', trying surface-share service",
             pool_id
         );
 
@@ -565,7 +565,7 @@ impl GpuContext {
             }
         }
 
-        // Path 2: cross-process DMA-BUF VkImage import via broker
+        // Path 2: cross-process DMA-BUF VkImage import via surface-share service
         {
             let surface_store = self.surface_store.lock().unwrap();
             if let Some(store) = surface_store.as_ref() {
@@ -577,7 +577,7 @@ impl GpuContext {
 
         // Path 3: pixel buffer fallback — resolve buffer, wrap as texture for sampling
         // This path is for cross-process consumers where the producer only
-        // registered a pixel buffer (not a texture) with the broker.
+        // registered a pixel buffer (not a texture) with the surface-share service.
         Err(StreamError::GpuError(format!(
             "No texture or pixel buffer found for surface_id '{}'",
             frame.surface_id
@@ -794,7 +794,7 @@ impl GpuContext {
         self.surface_store.lock().unwrap().clone()
     }
 
-    /// Check in a pixel buffer to the broker, returning a surface ID.
+    /// Check in a pixel buffer to the surface-share service, returning a surface ID.
     ///
     /// The surface ID can be shared with other processes (e.g., Python subprocesses)
     /// which can then call `check_out_surface` to get the same IOSurface.
@@ -813,7 +813,7 @@ impl GpuContext {
 
     /// Check out a surface by ID, returning the pixel buffer.
     ///
-    /// Returns from local cache if available, otherwise fetches from broker.
+    /// Returns from local cache if available, otherwise fetches from the surface-share service.
     /// The first checkout for a given ID incurs XPC overhead (~100-200µs),
     /// subsequent checkouts are cache hits (~10-50ns).
     #[cfg(target_os = "macos")]
@@ -1297,7 +1297,7 @@ impl GpuContextFullAccess {
         self.inner.surface_store()
     }
 
-    /// Check in a pixel buffer to the broker.
+    /// Check in a pixel buffer to the surface-share service.
     pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
         self.inner.check_in_surface(pixel_buffer)
     }
@@ -1373,7 +1373,7 @@ mod tests {
             }
         };
 
-        // Cache miss returns error (no texture registered, no broker)
+        // Cache miss returns error (no texture registered, no surface-share service)
         let frame = crate::_generated_::Videoframe {
             surface_id: "nonexistent-surface".to_string(),
             width: 640,

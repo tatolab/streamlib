@@ -37,7 +37,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use streamlib::core::runtime::StreamRuntime;
-use streamlib_broker_client::{connect_to_broker, send_request_with_fds};
+use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
 #[path = "common/polyglot_dma_buf_producer.rs"]
 mod polyglot_dma_buf_producer;
@@ -242,7 +242,7 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         }
     };
 
-    let host_stream = connect_to_broker(&socket_path).expect("host connect");
+    let host_stream = connect_to_surface_share_socket(&socket_path).expect("host connect");
     let check_in_req = serde_json::json!({
         "op": "check_in",
         "runtime_id": runtime_id,

@@ -34,7 +34,7 @@ use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 use std::path::PathBuf;
 
 use streamlib::core::runtime::StreamRuntime;
-use streamlib_broker_client::{connect_to_broker, send_request_with_fds};
+use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
 fn locate_native_lib(basename: &str) -> Option<PathBuf> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
@@ -84,7 +84,7 @@ fn check_in_multi_plane(
     let fd_y = make_memfd_with("multi-plane-test-y", plane_y);
     let fd_uv = make_memfd_with("multi-plane-test-uv", plane_uv);
 
-    let stream = connect_to_broker(socket_path).expect("host connect");
+    let stream = connect_to_surface_share_socket(socket_path).expect("host connect");
     let req = serde_json::json!({
         "op": "check_in",
         "runtime_id": runtime_id,
@@ -240,7 +240,7 @@ fn run_shim_test(lib_path: PathBuf, prefix: &str, flavor: ConnectFlavor) {
     unsafe { broker_disconnect(broker) };
 
     // Best-effort release on the broker.
-    let stream = connect_to_broker(&socket_path).expect("host reconnect for release");
+    let stream = connect_to_surface_share_socket(&socket_path).expect("host reconnect for release");
     let release_req = serde_json::json!({
         "op": "release",
         "surface_id": surface_id,
@@ -358,7 +358,7 @@ fn rust_surface_store_resolve_surface_multi_plane() {
     // synthesize the check_in instead of going through
     // `SurfaceStore::check_in`). This exercises the SAME wire the
     // polyglot shims consume.
-    let host_stream = connect_to_broker(&socket_path).expect("host connect");
+    let host_stream = connect_to_surface_share_socket(&socket_path).expect("host connect");
     let check_in_req = serde_json::json!({
         "op": "check_in",
         "runtime_id": runtime_id,
@@ -428,7 +428,7 @@ fn rust_surface_store_resolve_surface_multi_plane() {
     store.disconnect().ok();
 
     // Best-effort release.
-    let stream = connect_to_broker(&socket_path).expect("reconnect for release");
+    let stream = connect_to_surface_share_socket(&socket_path).expect("reconnect for release");
     let _ = send_request_with_fds(
         &stream,
         &serde_json::json!({

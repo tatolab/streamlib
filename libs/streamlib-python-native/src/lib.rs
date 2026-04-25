@@ -776,8 +776,8 @@ mod gpu_surface {
 mod gpu_surface {
     //! Linux GPU surface handle backed by a DMA-BUF file descriptor.
     //!
-    //! The handle is produced by [`super::broker_client::slpn_broker_resolve_surface`]
-    //! (after a broker `check_out` over `SCM_RIGHTS`) and consumed by the
+    //! The handle is produced by [`super::surface_client::slpn_surface_resolve_surface`]
+    //! (after a handle `check_out` over `SCM_RIGHTS`) and consumed by the
     //! `slpn_gpu_surface_*` FFI symbols — same shape as the macOS IOSurface
     //! variant so Python's `ctypes` bindings don't branch by platform.
     //!
@@ -792,7 +792,7 @@ mod gpu_surface {
 
     use vulkanalia::vk::{self, Handle as _};
 
-    use super::broker_vulkan_linux::BrokerVulkanDevice;
+    use super::surface_share_vulkan_linux::SurfaceShareVulkanDevice;
 
     /// Surface backend used for the currently-locked mapping. Reported via
     /// [`slpn_gpu_surface_backend`] so tests can assert the import took the
@@ -824,10 +824,10 @@ mod gpu_surface {
         /// mmaps a specific plane on demand.
         pub plane_mapped_ptrs: Vec<*mut u8>,
         pub is_locked: bool,
-        /// Vulkan device attached by [`super::broker_client::slpn_broker_resolve_surface`].
-        /// `None` means the broker could not create a Vulkan device and lock
+        /// Vulkan device attached by [`super::surface_client::slpn_surface_resolve_surface`].
+        /// `None` means the service could not create a Vulkan device and lock
         /// will fail cleanly.
-        pub vulkan_device: Option<Arc<BrokerVulkanDevice>>,
+        pub vulkan_device: Option<Arc<SurfaceShareVulkanDevice>>,
         /// Imported `vk::Buffer` — valid only while `is_locked`.
         pub vulkan_buffer: vk::Buffer,
         /// Imported `vk::DeviceMemory` — valid only while `is_locked`.
@@ -884,7 +884,7 @@ mod gpu_surface {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_gpu_surface_lookup(_iosurface_id: u32) -> *mut SurfaceHandle {
-        tracing::error!("GPU surface lookup by IOSurface id is macOS-only; use broker check_out");
+        tracing::error!("GPU surface lookup by IOSurface id is macOS-only; use handle check_out");
         std::ptr::null_mut()
     }
 
@@ -1124,11 +1124,11 @@ mod gpu_surface {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_gpu_surface_get_id(handle: *const SurfaceHandle) -> u32 {
-        // Linux surface IDs are broker UUIDs (strings), not u32 IOSurfaceIDs.
+        // Linux surface IDs are handle UUIDs (strings), not u32 IOSurfaceIDs.
         // Return the fd as a best-effort numeric token so Python code that
         // unconditionally calls this doesn't get a u32 collision with a real
         // IOSurface id. Callers that need the string surface_id should keep
-        // the broker pool_id they already passed to resolve_surface.
+        // the handle pool_id they already passed to resolve_surface.
         unsafe { handle.as_ref() }
             .and_then(|h| h.fds.first().copied())
             .map(|fd| fd as u32)
@@ -1227,11 +1227,11 @@ mod gpu_surface {
 }
 
 // ============================================================================
-// C ABI — Broker XPC client (macOS surface resolution)
+// C ABI — Surface-share XPC client (macOS surface resolution)
 // ============================================================================
 
 #[cfg(target_os = "macos")]
-mod broker_client {
+mod surface_client {
     use std::collections::HashMap;
     use std::ffi::{c_char, c_void, CStr, CString};
 
@@ -1333,20 +1333,20 @@ mod broker_client {
         bytes_per_row: u32,
     }
 
-    /// Opaque handle to a broker XPC connection.
-    pub struct BrokerHandle {
+    /// Opaque handle to a handle XPC connection.
+    pub struct SurfaceShareHandle {
         connection: XpcConnectionT,
         runtime_id: String,
         resolve_cache: HashMap<String, CachedSurface>,
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_connect(
+    pub unsafe extern "C" fn slpn_surface_connect(
         xpc_service_name: *const c_char,
         runtime_id: *const c_char,
-    ) -> *mut BrokerHandle {
+    ) -> *mut SurfaceShareHandle {
         if xpc_service_name.is_null() {
-            tracing::error!("broker_connect: null service name");
+            tracing::error!("surface_connect: null service name");
             return std::ptr::null_mut();
         }
 
@@ -1362,7 +1362,7 @@ mod broker_client {
         if connection.is_null() {
             let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
             tracing::error!(
-                "broker_connect: failed to create XPC connection to '{}'",
+                "surface_connect: failed to create XPC connection to '{}'",
                 name
             );
             return std::ptr::null_mut();
@@ -1390,11 +1390,11 @@ mod broker_client {
 
         let name = CStr::from_ptr(xpc_service_name).to_string_lossy();
         tracing::error!(
-            "broker_connect: connected to '{}' with runtime_id='{}'",
+            "surface_connect: connected to '{}' with runtime_id='{}'",
             name, rid
         );
 
-        Box::into_raw(Box::new(BrokerHandle {
+        Box::into_raw(Box::new(SurfaceShareHandle {
             connection,
             runtime_id: rid,
             resolve_cache: HashMap::new(),
@@ -1402,9 +1402,9 @@ mod broker_client {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_disconnect(broker: *mut BrokerHandle) {
-        if !broker.is_null() {
-            let handle = Box::from_raw(broker);
+    pub unsafe extern "C" fn slpn_surface_disconnect(handle: *mut SurfaceShareHandle) {
+        if !handle.is_null() {
+            let handle = Box::from_raw(handle);
             for cached in handle.resolve_cache.values() {
                 IOSurfaceDecrementUseCount(cached.surface_ref);
                 CFRelease(cached.surface_ref);
@@ -1413,16 +1413,16 @@ mod broker_client {
         }
     }
 
-    /// Resolve a broker pool_id to an IOSurface handle via XPC lookup.
+    /// Resolve a handle pool_id to an IOSurface handle via XPC lookup.
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_resolve_surface(
-        broker: *mut BrokerHandle,
+    pub unsafe extern "C" fn slpn_surface_resolve_surface(
+        handle: *mut SurfaceShareHandle,
         pool_id: *const c_char,
     ) -> *mut SurfaceHandle {
-        let broker = match broker.as_mut() {
+        let handle = match handle.as_mut() {
             Some(b) => b,
             None => {
-                tracing::error!("broker_resolve_surface: null broker handle");
+                tracing::error!("surface_resolve_surface: null handle");
                 return std::ptr::null_mut();
             }
         };
@@ -1430,13 +1430,13 @@ mod broker_client {
         let pool_id_str = match c_str_to_str(pool_id) {
             Some(s) => s,
             None => {
-                tracing::error!("broker_resolve_surface: null pool_id");
+                tracing::error!("surface_resolve_surface: null pool_id");
                 return std::ptr::null_mut();
             }
         };
 
         // Check resolve cache
-        if let Some(cached) = broker.resolve_cache.get(pool_id_str) {
+        if let Some(cached) = handle.resolve_cache.get(pool_id_str) {
             CFRetain(cached.surface_ref);
             IOSurfaceIncrementUseCount(cached.surface_ref);
             return Box::into_raw(Box::new(SurfaceHandle {
@@ -1450,10 +1450,10 @@ mod broker_client {
             }));
         }
 
-        // Cache miss — XPC lookup to broker
+        // Cache miss — XPC lookup to handle
         let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
         if request.is_null() {
-            tracing::error!("broker_resolve_surface: failed to create XPC request");
+            tracing::error!("surface_resolve_surface: failed to create XPC request");
             return std::ptr::null_mut();
         }
 
@@ -1465,7 +1465,7 @@ mod broker_client {
         let sid_value = CString::new(pool_id_str).unwrap();
         xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
 
-        let reply = xpc_connection_send_message_with_reply_sync(broker.connection, request);
+        let reply = xpc_connection_send_message_with_reply_sync(handle.connection, request);
         xpc_release(request);
 
         if reply.is_null() || xpc_is_error(reply) {
@@ -1473,7 +1473,7 @@ mod broker_client {
                 xpc_release(reply);
             }
             tracing::error!(
-                "broker_resolve_surface: XPC lookup failed for '{}'",
+                "surface_resolve_surface: XPC lookup failed for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1485,7 +1485,7 @@ mod broker_client {
         if !error_ptr.is_null() {
             let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
             tracing::error!(
-                "broker_resolve_surface: broker error for '{}': {}",
+                "surface_resolve_surface: handle error for '{}': {}",
                 pool_id_str, error_msg
             );
             xpc_release(reply);
@@ -1499,7 +1499,7 @@ mod broker_client {
 
         if mach_port == 0 {
             tracing::error!(
-                "broker_resolve_surface: invalid mach port for '{}'",
+                "surface_resolve_surface: invalid mach port for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1514,7 +1514,7 @@ mod broker_client {
 
         if surface_ref.is_null() {
             tracing::error!(
-                "broker_resolve_surface: IOSurfaceLookupFromMachPort failed for '{}'",
+                "surface_resolve_surface: IOSurfaceLookupFromMachPort failed for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -1529,14 +1529,14 @@ mod broker_client {
         let bytes_per_row = IOSurfaceGetBytesPerRow(surface_ref) as u32;
 
         // Evict entire cache if it exceeds 128 entries
-        if broker.resolve_cache.len() >= 128 {
-            for (_key, cached) in broker.resolve_cache.drain() {
+        if handle.resolve_cache.len() >= 128 {
+            for (_key, cached) in handle.resolve_cache.drain() {
                 IOSurfaceDecrementUseCount(cached.surface_ref);
                 CFRelease(cached.surface_ref);
             }
         }
 
-        broker.resolve_cache.insert(
+        handle.resolve_cache.insert(
             pool_id_str.to_string(),
             CachedSurface {
                 surface_ref,
@@ -1562,20 +1562,20 @@ mod broker_client {
         }))
     }
 
-    /// Create a new IOSurface, register it with the broker, and return a handle.
+    /// Create a new IOSurface, register it with the handle, and return a handle.
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_acquire_surface(
-        broker: *mut BrokerHandle,
+    pub unsafe extern "C" fn slpn_surface_acquire_surface(
+        handle: *mut SurfaceShareHandle,
         width: u32,
         height: u32,
         bytes_per_element: u32,
         out_pool_id: *mut c_char,
         pool_id_buf_len: u32,
     ) -> *mut SurfaceHandle {
-        let broker = match broker.as_mut() {
+        let handle = match handle.as_mut() {
             Some(b) => b,
             None => {
-                tracing::error!("broker_acquire_surface: null broker handle");
+                tracing::error!("surface_acquire_surface: null handle");
                 return std::ptr::null_mut();
             }
         };
@@ -1592,7 +1592,7 @@ mod broker_client {
         // Create mach port for the IOSurface
         let mach_port = IOSurfaceCreateMachPort(surface_handle.surface_ref);
         if mach_port == 0 {
-            tracing::error!("broker_acquire_surface: IOSurfaceCreateMachPort failed");
+            tracing::error!("surface_acquire_surface: IOSurfaceCreateMachPort failed");
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
         }
@@ -1605,10 +1605,10 @@ mod broker_client {
             .as_nanos();
         let pool_id = format!("python-{}-{}", surface_id, ts);
 
-        // Register with broker via XPC
+        // Register with handle via XPC
         let request = xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0);
         if request.is_null() {
-            tracing::error!("broker_acquire_surface: failed to create XPC request");
+            tracing::error!("surface_acquire_surface: failed to create XPC request");
             let task = mach_task_self();
             mach_port_deallocate(task, mach_port);
             let _ = Box::from_raw(surface_handle_ptr);
@@ -1624,13 +1624,13 @@ mod broker_client {
         xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
 
         let rid_key = CString::new("runtime_id").unwrap();
-        let rid_value = CString::new(broker.runtime_id.as_str()).unwrap();
+        let rid_value = CString::new(handle.runtime_id.as_str()).unwrap();
         xpc_dictionary_set_string(request, rid_key.as_ptr(), rid_value.as_ptr());
 
         let port_key = CString::new("mach_port").unwrap();
         xpc_dictionary_set_mach_send(request, port_key.as_ptr(), mach_port);
 
-        let reply = xpc_connection_send_message_with_reply_sync(broker.connection, request);
+        let reply = xpc_connection_send_message_with_reply_sync(handle.connection, request);
         xpc_release(request);
 
         // Deallocate our copy of the mach port
@@ -1641,7 +1641,7 @@ mod broker_client {
             if !reply.is_null() {
                 xpc_release(reply);
             }
-            tracing::error!("broker_acquire_surface: XPC register failed");
+            tracing::error!("surface_acquire_surface: XPC register failed");
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
         }
@@ -1651,7 +1651,7 @@ mod broker_client {
         let error_ptr = xpc_dictionary_get_string(reply, error_key.as_ptr());
         if !error_ptr.is_null() {
             let error_msg = CStr::from_ptr(error_ptr).to_string_lossy();
-            tracing::error!("broker_acquire_surface: broker error: {}", error_msg);
+            tracing::error!("surface_acquire_surface: handle error: {}", error_msg);
             xpc_release(reply);
             let _ = Box::from_raw(surface_handle_ptr);
             return std::ptr::null_mut();
@@ -1670,13 +1670,13 @@ mod broker_client {
         surface_handle_ptr
     }
 
-    /// Unregister a surface from the broker (fire-and-forget).
+    /// Unregister a surface from the handle (fire-and-forget).
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_unregister_surface(
-        broker: *mut BrokerHandle,
+    pub unsafe extern "C" fn slpn_surface_unregister_surface(
+        handle: *mut SurfaceShareHandle,
         pool_id: *const c_char,
     ) {
-        let broker = match broker.as_mut() {
+        let handle = match handle.as_mut() {
             Some(b) => b,
             None => return,
         };
@@ -1700,11 +1700,11 @@ mod broker_client {
         xpc_dictionary_set_string(request, sid_key.as_ptr(), sid_value.as_ptr());
 
         let rid_key = CString::new("runtime_id").unwrap();
-        let rid_value = CString::new(broker.runtime_id.as_str()).unwrap();
+        let rid_value = CString::new(handle.runtime_id.as_str()).unwrap();
         xpc_dictionary_set_string(request, rid_key.as_ptr(), rid_value.as_ptr());
 
-        // Fire and forget — broker unregister doesn't send a reply
-        xpc_connection_send_message(broker.connection, request);
+        // Fire and forget — handle unregister doesn't send a reply
+        xpc_connection_send_message(handle.connection, request);
         xpc_release(request);
     }
 
@@ -1714,23 +1714,68 @@ mod broker_client {
         }
         CStr::from_ptr(ptr).to_str().ok()
     }
+
+    // Back-compat aliases for the legacy `slpn_broker_*` FFI names.
+    // Every alias forwards to its canonical `slpn_surface_*` counterpart; the
+    // symbol ships for one release cycle so Python/Deno apps pinned to the old
+    // name keep working. Rust callers (tests, examples) see a `#[deprecated]`
+    // warning. See `docs/migration/broker-to-surface-share.md` for the removal
+    // plan.
+
+    #[deprecated(note = "renamed to `slpn_surface_connect`; `slpn_broker_connect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_connect(xpc_service_name: *const c_char,
+        runtime_id: *const c_char) -> *mut SurfaceShareHandle {
+        unsafe { slpn_surface_connect(xpc_service_name, runtime_id) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_disconnect`; `slpn_broker_disconnect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_disconnect(handle: *mut SurfaceShareHandle) {
+        unsafe { slpn_surface_disconnect(handle) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_resolve_surface`; `slpn_broker_resolve_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_resolve_surface(handle: *mut SurfaceShareHandle,
+        pool_id: *const c_char) -> *mut SurfaceHandle {
+        unsafe { slpn_surface_resolve_surface(handle, pool_id) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_acquire_surface`; `slpn_broker_acquire_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_acquire_surface(handle: *mut SurfaceShareHandle,
+        width: u32,
+        height: u32,
+        bytes_per_element: u32,
+        out_pool_id: *mut c_char,
+        pool_id_buf_len: u32) -> *mut SurfaceHandle {
+        unsafe { slpn_surface_acquire_surface(handle, width, height, bytes_per_element, out_pool_id, pool_id_buf_len) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_unregister_surface`; `slpn_broker_unregister_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_unregister_surface(handle: *mut SurfaceShareHandle,
+        pool_id: *const c_char) {
+        unsafe { slpn_surface_unregister_surface(handle, pool_id) }
+    }
 }
 
 #[cfg(target_os = "linux")]
-mod broker_vulkan_linux {
+mod surface_share_vulkan_linux {
     //! Minimal Vulkan device used by the polyglot consumer to import DMA-BUF
-    //! fds handed out by the broker (issue #420).
+    //! fds handed out by the handle (issue #420).
     //!
     //! Consumer-only per the subprocess-import-only safety posture: we load
     //! libvulkan.so via `libloading`, create a bare instance + logical device
     //! enabling only `VK_KHR_external_memory` + `VK_KHR_external_memory_fd` +
     //! `VK_EXT_external_memory_dma_buf`, and expose a single
-    //! [`BrokerVulkanDevice::import_dma_buf_fd`] method. Export paths
+    //! [`SurfaceShareVulkanDevice::import_dma_buf_fd`] method. Export paths
     //! (`vkGetMemoryFdKHR`) are intentionally absent — allocation is the
     //! host's job via escalate IPC.
     //!
-    //! One instance+device per [`super::broker_client::BrokerHandle`], lazily
-    //! created on first [`super::broker_client::slpn_broker_resolve_surface`]
+    //! One instance+device per [`super::surface_client::SurfaceShareHandle`], lazily
+    //! created on first [`super::surface_client::slpn_surface_resolve_surface`]
     //! and torn down with the handle.
     use std::ffi::{c_char, CStr};
     use std::os::unix::io::RawFd;
@@ -1740,8 +1785,8 @@ mod broker_vulkan_linux {
     use vulkanalia::prelude::v1_1::*;
     use vulkanalia::vk;
 
-    /// Minimal per-broker Vulkan device used only for DMA-BUF import.
-    pub struct BrokerVulkanDevice {
+    /// Minimal per-service Vulkan device used only for DMA-BUF import.
+    pub struct SurfaceShareVulkanDevice {
         _entry: vulkanalia::Entry,
         instance: vulkanalia::Instance,
         device: vulkanalia::Device,
@@ -1750,8 +1795,8 @@ mod broker_vulkan_linux {
 
     // Vulkan handles are thread-safe; vulkanalia wrappers don't auto-impl
     // these because they wrap function pointers via raw loaders.
-    unsafe impl Send for BrokerVulkanDevice {}
-    unsafe impl Sync for BrokerVulkanDevice {}
+    unsafe impl Send for SurfaceShareVulkanDevice {}
+    unsafe impl Sync for SurfaceShareVulkanDevice {}
 
     /// A successfully-imported DMA-BUF, persistently mapped.
     pub struct ImportedBuffer {
@@ -1760,8 +1805,8 @@ mod broker_vulkan_linux {
         pub mapped_ptr: *mut u8,
     }
 
-    impl BrokerVulkanDevice {
-        /// Lazily create the broker's Vulkan device. Returns `Err` with a
+    impl SurfaceShareVulkanDevice {
+        /// Lazily create the service's Vulkan device. Returns `Err` with a
         /// human-readable reason when Vulkan is unavailable or a required
         /// extension is missing — caller is expected to null out the
         /// resolve_surface result and log the reason.
@@ -1790,7 +1835,7 @@ mod broker_vulkan_linux {
                     let memory_properties = unsafe {
                         instance.get_physical_device_memory_properties(physical_device)
                     };
-                    Ok(Arc::new(BrokerVulkanDevice {
+                    Ok(Arc::new(SurfaceShareVulkanDevice {
                         _entry: entry,
                         instance,
                         device,
@@ -1991,7 +2036,7 @@ mod broker_vulkan_linux {
         }
     }
 
-    impl Drop for BrokerVulkanDevice {
+    impl Drop for SurfaceShareVulkanDevice {
         fn drop(&mut self) {
             unsafe {
                 let _ = self.device.device_wait_idle();
@@ -2003,26 +2048,26 @@ mod broker_vulkan_linux {
 }
 
 #[cfg(target_os = "linux")]
-mod broker_client {
-    //! Linux broker consumer client.
+mod surface_client {
+    //! Linux handle consumer client.
     //!
-    //! Mirrors the macOS XPC shim's FFI surface (same `slpn_broker_*` symbols,
+    //! Mirrors the macOS XPC shim's FFI surface (same `slpn_surface_*` symbols,
     //! same arg shapes) but speaks the Unix-socket + SCM_RIGHTS wire protocol
-    //! that the runtime's per-process surface broker listens on. Consumer-only
+    //! that the runtime's per-process surface handle listens on. Consumer-only
     //! per the subprocess-import-only safety posture —
     //! allocation always goes through the host via #325 escalate IPC.
     //!
     //! Lifecycle:
-    //!   - `slpn_broker_connect(socket_path, runtime_id)` stores config only;
+    //!   - `slpn_surface_connect(socket_path, runtime_id)` stores config only;
     //!     the Unix socket is lazily opened on the first op (per the research
     //!     doc's "fail at first use" decision). Subprocesses that never touch
-    //!     GPU surfaces never need the broker up.
-    //!   - `slpn_broker_resolve_surface(broker, pool_id)` sends a `check_out`
+    //!     GPU surfaces never need the handle up.
+    //!   - `slpn_surface_resolve_surface(handle, pool_id)` sends a `check_out`
     //!     op, receives a DMA-BUF fd via SCM_RIGHTS, caches the fd keyed by
     //!     pool_id, returns a [`SurfaceHandle`] with its own fd dup.
-    //!   - `slpn_broker_unregister_surface(broker, pool_id)` evicts the cache
+    //!   - `slpn_surface_unregister_surface(handle, pool_id)` evicts the cache
     //!     and sends a `release` op.
-    //!   - `slpn_broker_acquire_surface(...)` returns null with a clear error
+    //!   - `slpn_surface_acquire_surface(...)` returns null with a clear error
     //!     — allocation is host-only.
     use std::collections::HashMap;
     use std::ffi::{c_char, CStr};
@@ -2030,7 +2075,7 @@ mod broker_client {
     use std::os::unix::net::UnixStream;
     use std::sync::{Arc, Mutex};
 
-    use super::broker_vulkan_linux::BrokerVulkanDevice;
+    use super::surface_share_vulkan_linux::SurfaceShareVulkanDevice;
     use super::gpu_surface::{SurfaceHandle, SURFACE_BACKEND_NONE};
 
     use vulkanalia::vk::{self, Handle as _};
@@ -2058,19 +2103,19 @@ mod broker_client {
         }
     }
 
-    /// Opaque broker handle returned to Python as `*mut BrokerHandle`.
-    pub struct BrokerHandle {
+    /// Opaque handle handle returned to Python as `*mut SurfaceShareHandle`.
+    pub struct SurfaceShareHandle {
         socket_path: String,
         runtime_id: String,
         connection: Mutex<Option<UnixStream>>,
         resolve_cache: Mutex<HashMap<String, CachedSurface>>,
         /// Lazily-created per-handle Vulkan device for DMA-BUF import (#420).
-        /// Populated on first [`slpn_broker_resolve_surface`] call; dropped
+        /// Populated on first [`slpn_surface_resolve_surface`] call; dropped
         /// with the handle.
-        vulkan_device: Mutex<Option<Arc<BrokerVulkanDevice>>>,
+        vulkan_device: Mutex<Option<Arc<SurfaceShareVulkanDevice>>>,
     }
 
-    impl BrokerHandle {
+    impl SurfaceShareHandle {
         /// Return a guard over the (possibly lazily-opened) socket connection.
         fn lazy_connect(
             &self,
@@ -2084,16 +2129,16 @@ mod broker_client {
             Ok(guard)
         }
 
-        /// Return the per-broker Vulkan device, creating it on first use.
+        /// Return the per-handle Vulkan device, creating it on first use.
         /// Returns `None` (with a logged reason) if Vulkan is unavailable —
         /// resolve_surface then fails cleanly rather than handing back a
         /// SurfaceHandle whose lock would fail later.
-        fn get_or_init_vulkan_device(&self) -> Option<Arc<BrokerVulkanDevice>> {
+        fn get_or_init_vulkan_device(&self) -> Option<Arc<SurfaceShareVulkanDevice>> {
             let mut guard = self.vulkan_device.lock().expect("poisoned");
             if let Some(d) = guard.as_ref() {
                 return Some(Arc::clone(d));
             }
-            match BrokerVulkanDevice::try_new() {
+            match SurfaceShareVulkanDevice::try_new() {
                 Ok(d) => {
                     let cloned = Arc::clone(&d);
                     *guard = Some(d);
@@ -2101,8 +2146,8 @@ mod broker_client {
                 }
                 Err(e) => {
                     tracing::error!(
-                        "broker: failed to create Vulkan device for DMA-BUF import: {}. \
-                         resolve_surface will fail — the subprocess cannot map broker-published \
+                        "handle: failed to create Vulkan device for DMA-BUF import: {}. \
+                         resolve_surface will fail — the subprocess cannot map surface-share-published \
                          surfaces without a Vulkan-capable driver.",
                         e
                     );
@@ -2113,11 +2158,11 @@ mod broker_client {
     }
 
     // =========================================================================
-    // Wire helpers come from the shared `streamlib-broker-client` crate so the
-    // broker server and every polyglot cdylib speak a single-sourced protocol.
+    // Wire helpers come from the shared `streamlib-surface-client` crate so the
+    // handle server and every polyglot cdylib speak a single-sourced protocol.
     // Aliased as `wire` here to preserve the original call-site shape.
     // =========================================================================
-    use streamlib_broker_client as wire;
+    use streamlib_surface_client as wire;
 
     fn c_str_to_string(ptr: *const c_char) -> Option<String> {
         if ptr.is_null() {
@@ -2129,11 +2174,11 @@ mod broker_client {
             .map(|s| s.to_string())
     }
 
-    /// Derive a fallback bytes-per-row for a given format string. The broker
+    /// Derive a fallback bytes-per-row for a given format string. The handle
     /// wire format emits `format!("{:?}", pixel_buffer.format())` which is the
     /// Debug rendering of the `PixelFormat` enum variant name (e.g.
     /// `"Bgra32"`). Returns `bytes_per_pixel` to compute the default row
-    /// stride; real driver-reported stride is a follow-up (broker's lookup
+    /// stride; real driver-reported stride is a follow-up (handle's lookup
     /// response does not carry it today).
     fn bytes_per_pixel_from_format(format_str: &str) -> u32 {
         match format_str {
@@ -2147,14 +2192,14 @@ mod broker_client {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_connect(
+    pub unsafe extern "C" fn slpn_surface_connect(
         socket_path: *const c_char,
         runtime_id: *const c_char,
-    ) -> *mut BrokerHandle {
+    ) -> *mut SurfaceShareHandle {
         let socket_path = match c_str_to_string(socket_path) {
             Some(s) if !s.is_empty() => s,
             _ => {
-                tracing::error!("broker_connect (linux): null or empty socket path");
+                tracing::error!("surface_connect (linux): null or empty socket path");
                 return std::ptr::null_mut();
             }
         };
@@ -2163,14 +2208,14 @@ mod broker_client {
 
         // Intentional: do NOT open the socket yet. Per the research doc,
         // lazy-connect + fail-at-first-use decouples subprocess lifecycle
-        // from broker lifecycle.
+        // from handle lifecycle.
         tracing::error!(
-            "broker_connect (linux): registered socket_path='{}' runtime_id='{}' \
+            "surface_connect (linux): registered socket_path='{}' runtime_id='{}' \
              (lazy; will connect on first resolve_surface)",
             socket_path, runtime_id
         );
 
-        Box::into_raw(Box::new(BrokerHandle {
+        Box::into_raw(Box::new(SurfaceShareHandle {
             socket_path,
             runtime_id,
             connection: Mutex::new(None),
@@ -2180,38 +2225,38 @@ mod broker_client {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_disconnect(broker: *mut BrokerHandle) {
-        if !broker.is_null() {
-            let _ = unsafe { Box::from_raw(broker) };
+    pub unsafe extern "C" fn slpn_surface_disconnect(handle: *mut SurfaceShareHandle) {
+        if !handle.is_null() {
+            let _ = unsafe { Box::from_raw(handle) };
             // Drop impls close sockets and all cached fds.
         }
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_resolve_surface(
-        broker: *mut BrokerHandle,
+    pub unsafe extern "C" fn slpn_surface_resolve_surface(
+        handle: *mut SurfaceShareHandle,
         pool_id: *const c_char,
     ) -> *mut SurfaceHandle {
-        let broker = match unsafe { broker.as_ref() } {
+        let handle = match unsafe { handle.as_ref() } {
             Some(b) => b,
             None => {
-                tracing::error!("broker_resolve_surface (linux): null broker handle");
+                tracing::error!("surface_resolve_surface (linux): null handle");
                 return std::ptr::null_mut();
             }
         };
         let pool_id_str = match c_str_to_string(pool_id) {
             Some(s) if !s.is_empty() => s,
             _ => {
-                tracing::error!("broker_resolve_surface (linux): null or empty pool_id");
+                tracing::error!("surface_resolve_surface (linux): null or empty pool_id");
                 return std::ptr::null_mut();
             }
         };
 
-        // Lazy-create the per-broker Vulkan device before either path returns
-        // a SurfaceHandle. Every handle carries an Arc<BrokerVulkanDevice> so
-        // [`slpn_gpu_surface_lock`] can import without plumbing the broker
+        // Lazy-create the per-handle Vulkan device before either path returns
+        // a SurfaceHandle. Every handle carries an Arc<SurfaceShareVulkanDevice> so
+        // [`slpn_gpu_surface_lock`] can import without plumbing the handle
         // pointer through the FFI surface.
-        let vulkan_device = match broker.get_or_init_vulkan_device() {
+        let vulkan_device = match handle.get_or_init_vulkan_device() {
             Some(d) => d,
             None => return std::ptr::null_mut(),
         };
@@ -2219,7 +2264,7 @@ mod broker_client {
         // Cache hit — dup each stored plane fd so the returned SurfaceHandle
         // owns an independent set of fds.
         {
-            let cache = broker.resolve_cache.lock().expect("poisoned");
+            let cache = handle.resolve_cache.lock().expect("poisoned");
             if let Some(cached) = cache.get(&pool_id_str) {
                 let mut dup_fds: Vec<RawFd> = Vec::with_capacity(cached.fds.len());
                 let mut dup_ok = true;
@@ -2227,7 +2272,7 @@ mod broker_client {
                     let dup = unsafe { libc::dup(*fd) };
                     if dup < 0 {
                         tracing::error!(
-                            "broker_resolve_surface: dup cached fd failed for '{}': {}",
+                            "surface_resolve_surface: dup cached fd failed for '{}': {}",
                             pool_id_str,
                             std::io::Error::last_os_error()
                         );
@@ -2263,14 +2308,15 @@ mod broker_client {
         }
 
         // Cache miss — connect lazily, send check_out, receive fd + metadata.
-        let guard = match broker.lazy_connect() {
+        let guard = match handle.lazy_connect() {
             Ok(g) => g,
             Err(e) => {
                 tracing::error!(
-                    "broker_resolve_surface: connect to '{}' failed: {}. \
+                    "surface_resolve_surface: connect to '{}' failed: {}. \
                      The parent StreamRuntime owns this socket; check the runtime logs \
-                     and confirm STREAMLIB_BROKER_SOCKET points at a live runtime.",
-                    broker.socket_path, e
+                     and confirm STREAMLIB_SURFACE_SOCKET (or legacy \
+                     STREAMLIB_BROKER_SOCKET) points at a live runtime.",
+                    handle.socket_path, e
                 );
                 return std::ptr::null_mut();
             }
@@ -2290,7 +2336,7 @@ mod broker_client {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(
-                    "broker_resolve_surface: check_out for '{}' failed: {}",
+                    "surface_resolve_surface: check_out for '{}' failed: {}",
                     pool_id_str, e
                 );
                 return std::ptr::null_mut();
@@ -2298,7 +2344,7 @@ mod broker_client {
         };
         if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
             tracing::error!(
-                "broker_resolve_surface: broker error for '{}': {}",
+                "surface_resolve_surface: handle error for '{}': {}",
                 pool_id_str, err
             );
             for fd in &received_fds {
@@ -2309,7 +2355,7 @@ mod broker_client {
 
         if received_fds.is_empty() {
             tracing::error!(
-                "broker_resolve_surface: no DMA-BUF fd for '{}'",
+                "surface_resolve_surface: no DMA-BUF fd for '{}'",
                 pool_id_str
             );
             return std::ptr::null_mut();
@@ -2325,7 +2371,7 @@ mod broker_client {
         let bytes_per_row = width.saturating_mul(bpp);
 
         // Pull plane sizes/offsets from the response. A zero size means
-        // "unknown" — the broker did not have per-plane layout at check-in
+        // "unknown" — the handle did not have per-plane layout at check-in
         // time (e.g. legacy single-plane callers that don't emit
         // `plane_sizes`). Substitute the width*bytes_per_row*height
         // fallback so the Vulkan import path still has a byte count to
@@ -2365,10 +2411,10 @@ mod broker_client {
             cache_fds.push(dup);
         }
         if cache_dup_ok {
-            let mut cache = broker.resolve_cache.lock().expect("poisoned");
+            let mut cache = handle.resolve_cache.lock().expect("poisoned");
             if cache.len() >= MAX_RESOLVE_CACHE {
                 tracing::error!(
-                    "broker resolve cache exceeded {} entries, dropping all cached fds",
+                    "handle resolve cache exceeded {} entries, dropping all cached fds",
                     MAX_RESOLVE_CACHE
                 );
                 cache.clear();
@@ -2417,8 +2463,8 @@ mod broker_client {
     /// consumer-only so RHI invariants (NVIDIA DMA-BUF pool discipline, VMA
     /// export pools, queue-submit mutexing) cover every allocation.
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_acquire_surface(
-        _broker: *mut BrokerHandle,
+    pub unsafe extern "C" fn slpn_surface_acquire_surface(
+        _handle: *mut SurfaceShareHandle,
         _width: u32,
         _height: u32,
         _bytes_per_element: u32,
@@ -2426,7 +2472,7 @@ mod broker_client {
         _pool_id_buf_len: u32,
     ) -> *mut SurfaceHandle {
         tracing::error!(
-            "broker_acquire_surface: not supported on Linux; subprocess allocation must \
+            "surface_acquire_surface: not supported on Linux; subprocess allocation must \
              escalate to the host (acquire_pixel_buffer / acquire_texture over the stdio IPC) — \
              the subprocess then calls resolve_surface with the returned handle_id."
         );
@@ -2434,11 +2480,11 @@ mod broker_client {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_unregister_surface(
-        broker: *mut BrokerHandle,
+    pub unsafe extern "C" fn slpn_surface_unregister_surface(
+        handle: *mut SurfaceShareHandle,
         pool_id: *const c_char,
     ) {
-        let broker = match unsafe { broker.as_ref() } {
+        let handle = match unsafe { handle.as_ref() } {
             Some(b) => b,
             None => return,
         };
@@ -2449,12 +2495,12 @@ mod broker_client {
 
         // Evict the cached fd (its Drop closes the fd).
         {
-            let mut cache = broker.resolve_cache.lock().expect("poisoned");
+            let mut cache = handle.resolve_cache.lock().expect("poisoned");
             let _ = cache.remove(&pool_id_str);
         }
 
         // Best-effort release on the wire.
-        let guard = match broker.lazy_connect() {
+        let guard = match handle.lazy_connect() {
             Ok(g) => g,
             Err(_) => return,
         };
@@ -2462,41 +2508,86 @@ mod broker_client {
             let request = serde_json::json!({
                 "op": "release",
                 "surface_id": pool_id_str,
-                "runtime_id": broker.runtime_id,
+                "runtime_id": handle.runtime_id,
             });
             let _ = wire::send_request_with_fds(stream, &request, &[], 0);
         }
     }
 
+
+    // Back-compat aliases for the legacy `slpn_broker_*` FFI names.
+    // Every alias forwards to its canonical `slpn_surface_*` counterpart; the
+    // symbol ships for one release cycle so Python/Deno apps pinned to the old
+    // name keep working. Rust callers (tests, examples) see a `#[deprecated]`
+    // warning. See `docs/migration/broker-to-surface-share.md` for the removal
+    // plan.
+
+    #[deprecated(note = "renamed to `slpn_surface_connect`; `slpn_broker_connect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_connect(socket_path: *const c_char,
+        runtime_id: *const c_char) -> *mut SurfaceShareHandle {
+        unsafe { slpn_surface_connect(socket_path, runtime_id) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_disconnect`; `slpn_broker_disconnect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_disconnect(handle: *mut SurfaceShareHandle) {
+        unsafe { slpn_surface_disconnect(handle) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_resolve_surface`; `slpn_broker_resolve_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_resolve_surface(handle: *mut SurfaceShareHandle,
+        pool_id: *const c_char) -> *mut SurfaceHandle {
+        unsafe { slpn_surface_resolve_surface(handle, pool_id) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_acquire_surface`; `slpn_broker_acquire_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_acquire_surface(_handle: *mut SurfaceShareHandle,
+        _width: u32,
+        _height: u32,
+        _bytes_per_element: u32,
+        _out_pool_id: *mut c_char,
+        _pool_id_buf_len: u32) -> *mut SurfaceHandle {
+        unsafe { slpn_surface_acquire_surface(_handle, _width, _height, _bytes_per_element, _out_pool_id, _pool_id_buf_len) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_unregister_surface`; `slpn_broker_unregister_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_unregister_surface(handle: *mut SurfaceShareHandle,
+        pool_id: *const c_char) {
+        unsafe { slpn_surface_unregister_surface(handle, pool_id) }
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-mod broker_client {
+mod surface_client {
     use std::ffi::{c_char, c_void};
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_connect(
+    pub unsafe extern "C" fn slpn_surface_connect(
         _xpc_service_name: *const c_char,
         _runtime_id: *const c_char,
     ) -> *mut c_void {
-        tracing::error!("Broker operations not supported on this platform");
+        tracing::error!("Surface-share operations not supported on this platform");
         std::ptr::null_mut()
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_disconnect(_broker: *mut c_void) {}
+    pub unsafe extern "C" fn slpn_surface_disconnect(_handle: *mut c_void) {}
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_resolve_surface(
-        _broker: *mut c_void,
+    pub unsafe extern "C" fn slpn_surface_resolve_surface(
+        _handle: *mut c_void,
         _pool_id: *const c_char,
     ) -> *mut c_void {
         std::ptr::null_mut()
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_acquire_surface(
-        _broker: *mut c_void,
+    pub unsafe extern "C" fn slpn_surface_acquire_surface(
+        _handle: *mut c_void,
         _width: u32,
         _height: u32,
         _bytes_per_element: u32,
@@ -2507,10 +2598,55 @@ mod broker_client {
     }
 
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_broker_unregister_surface(
-        _broker: *mut c_void,
+    pub unsafe extern "C" fn slpn_surface_unregister_surface(
+        _handle: *mut c_void,
         _pool_id: *const c_char,
     ) {
+    }
+
+    // Back-compat aliases for the legacy `slpn_broker_*` FFI names.
+    // Every alias forwards to its canonical `slpn_surface_*` counterpart; the
+    // symbol ships for one release cycle so Python/Deno apps pinned to the old
+    // name keep working. Rust callers (tests, examples) see a `#[deprecated]`
+    // warning. See `docs/migration/broker-to-surface-share.md` for the removal
+    // plan.
+
+    #[deprecated(note = "renamed to `slpn_surface_connect`; `slpn_broker_connect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_connect(_xpc_service_name: *const c_char,
+        _runtime_id: *const c_char) -> *mut c_void {
+        unsafe { slpn_surface_connect(_xpc_service_name, _runtime_id) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_disconnect`; `slpn_broker_disconnect` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_disconnect(_handle: *mut c_void) {
+        unsafe { slpn_surface_disconnect(_handle) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_resolve_surface`; `slpn_broker_resolve_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_resolve_surface(_handle: *mut c_void,
+        _pool_id: *const c_char) -> *mut c_void {
+        unsafe { slpn_surface_resolve_surface(_handle, _pool_id) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_acquire_surface`; `slpn_broker_acquire_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_acquire_surface(_handle: *mut c_void,
+        _width: u32,
+        _height: u32,
+        _bytes_per_element: u32,
+        _out_pool_id: *mut c_char,
+        _pool_id_buf_len: u32) -> *mut c_void {
+        unsafe { slpn_surface_acquire_surface(_handle, _width, _height, _bytes_per_element, _out_pool_id, _pool_id_buf_len) }
+    }
+
+    #[deprecated(note = "renamed to `slpn_surface_unregister_surface`; `slpn_broker_unregister_surface` is kept for one release cycle — see docs/migration/broker-to-surface-share.md")]
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_broker_unregister_surface(_handle: *mut c_void,
+        _pool_id: *const c_char) {
+        unsafe { slpn_surface_unregister_surface(_handle, _pool_id) }
     }
 }
 

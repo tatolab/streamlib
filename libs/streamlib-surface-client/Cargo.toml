@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 [package]
-name = "streamlib-broker-client"
-description = "Consumer-side wire helpers for the StreamLib broker's Unix-socket + SCM_RIGHTS protocol"
+name = "streamlib-surface-client"
+description = "Consumer-side wire helpers for the StreamLib surface-sharing Unix-socket + SCM_RIGHTS protocol"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -11,7 +11,7 @@ license-file.workspace = true
 repository.workspace = true
 
 [lib]
-name = "streamlib_broker_client"
+name = "streamlib_surface_client"
 path = "src/lib.rs"
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -20,9 +20,9 @@ properties:
 optionalProperties:
   name:
     metadata:
-      description: "Runtime name for broker registration (auto-generated if not provided)"
+      description: "Runtime name for surface-share registration (auto-generated if not provided)"
     type: string
   log_path:
     metadata:
-      description: "Log file path for broker registration"
+      description: "Log file path for surface-share registration"
     type: string

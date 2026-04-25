@@ -844,7 +844,7 @@ fn capture_thread_loop(
                         camera = camera_name,
                         ring_index = i,
                         error = %e,
-                        "failed to register ring texture with broker — cross-process GPU sharing unavailable, same-process still works",
+                        "failed to register ring texture with the surface-share service — cross-process GPU sharing unavailable, same-process still works",
                     );
                 }
             }
@@ -1305,7 +1305,7 @@ fn capture_thread_loop(
         let ring_image = ring_images[ring_index];
         let ring_image_view = ring_image_views[ring_index];
 
-        // Acquire pixel buffer for cross-process IPC (HOST_VISIBLE, exported via broker)
+        // Acquire pixel buffer for cross-process IPC (HOST_VISIBLE, exported via surface-share service)
         let (pool_id, pooled_buffer) =
             match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32) {
                 Ok(result) => result,
@@ -1640,8 +1640,8 @@ fn capture_thread_loop(
         // ---- Step 6: Publish frame via IPC ----
         // Use pixel buffer pool_id as surface_id — this is the universal key:
         // - Same-process: texture cache resolves ring texture (registered above)
-        // - Cross-process GPU: broker has ring texture DMA-BUF fd (registered at startup)
-        // - Cross-process CPU: broker has pixel buffer DMA-BUF fd (registered by acquire)
+        // - Cross-process GPU: surface-share service has ring texture DMA-BUF fd (registered at startup)
+        // - Cross-process CPU: surface-share service has pixel buffer DMA-BUF fd (registered by acquire)
         // - PNG sampling: resolves pixel buffer for CPU readback
         let surface_id = pool_id.to_string();
         let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;

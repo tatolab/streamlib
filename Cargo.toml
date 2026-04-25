@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "xtask",                    # Development tasks (cargo xtask <command>)
     "libs/streamlib",           # All-in-one: core, apple (feature-gated)
-    "libs/streamlib-broker-client", # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
+    "libs/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
     "libs/streamlib-cli",       # Command-line interface for StreamLib runtime
     "libs/streamlib-runtime",   # Standalone runtime binary (spawned by CLI)
     "libs/streamlib-codegen-shared", # Execution types shared between streamlib and streamlib-macros
