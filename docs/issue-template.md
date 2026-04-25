@@ -90,6 +90,16 @@ also", "context from #N", etc.).
 7. **Cross-cutting concerns are labels, not milestones.** Linux-specific
    work goes in the relevant deliverable milestone with a `linux` label.
    "Linux support" is not a deliverable; "Pipeline Color & Resolution" is.
+8. **`polyglot`-labeled issues must answer: are Python AND Deno both
+   covered?** The default is yes — pipeline-level work (new processor +
+   scenario binary, new escalate op end-to-end, new FD-passing story)
+   ships both runtimes together or files paired tickets that block on
+   each other and land in the same milestone. The only legitimate split
+   is *schema-only / language-specific by construction* (e.g. a Python
+   ctypes ABI bug that doesn't exist in the Deno FFI binding); say so
+   explicitly in the issue body. "Python first, Deno deferred" is the
+   failure mode this rule exists to prevent — see #468 and
+   `.claude/workflows/polyglot.md`.
 
 ## What this means for CI
 
