@@ -187,7 +187,15 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
 
 
 def _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state=None):
-    """Destroy native context and disconnect surface-share handle."""
+    """Destroy native context and disconnect surface-share handle exactly once.
+
+    The FFI calls (`slpn_surface_disconnect`, `slpn_context_destroy`) take the
+    pointer by value and run `Box::from_raw` internally — calling them twice on
+    the same pointer is a use-after-free that segfaults on the second call once
+    the heap allocator's metadata is touched (#469). Callers must invoke this
+    exactly once per (ctx_ptr, handle_ptr) pair; the `main()` loop guarantees
+    this via a single `finally` block.
+    """
     if state is not None:
         state.release_pool()
     if native_lib and native_handle_ptr:
@@ -422,10 +430,7 @@ def main():
                                 except Exception as e:
                                     log.error("teardown() error", error=str(e))
                             bridge_send_message(stdout, {"rpc": "done"})
-                            _cleanup_native(
-                                native_lib, native_ctx_ptr, native_handle_ptr, state,
-                            )
-                            sys.exit(0)
+                            return
                         elif lifecycle_cmd == "stop":
                             running = False
                             bridge_send_message(stdout, {"rpc": "stopped"})
@@ -455,10 +460,7 @@ def main():
                                 except Exception as e:
                                     log.error("teardown() error", error=str(e))
                             bridge_send_message(stdout, {"rpc": "done"})
-                            _cleanup_native(
-                                native_lib, native_ctx_ptr, native_handle_ptr, state,
-                            )
-                            sys.exit(0)
+                            return
                         elif lifecycle_cmd == "stop":
                             running = False
                             bridge_send_message(stdout, {"rpc": "stopped"})
@@ -479,8 +481,6 @@ def main():
                 except Exception as e:
                     traceback.print_exc(file=sys.stderr)
                 bridge_send_message(stdout, {"rpc": "done"})
-                if native_lib and native_ctx_ptr:
-                    _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state)
                 break
 
             elif cmd == "stop":
@@ -528,15 +528,14 @@ def main():
         log.info("stdin closed, shutting down")
     except Exception as e:
         log.error("Fatal error", error=str(e), traceback=traceback.format_exc())
+        # finally runs cleanup; exit code is set by sys.exit raising SystemExit
+        sys.exit(1)
+    finally:
+        # Single cleanup site — the FFI free is not idempotent (#469).
         if native_lib and native_ctx_ptr:
             _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state)
+        log.info("Subprocess runner exiting")
         log.shutdown()
-        sys.exit(1)
-
-    _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state)
-
-    log.info("Subprocess runner exiting")
-    log.shutdown()
 
 
 if __name__ == "__main__":
