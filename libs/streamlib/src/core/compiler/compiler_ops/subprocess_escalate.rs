@@ -650,16 +650,13 @@ mod tests {
     }
 
     #[test]
-    fn log_op_is_tagged_escalate_request_so_bridge_does_not_forward_to_lifecycle() {
-        // The bridge classifies frames by the `rpc` tag, not by the handler's
-        // reply. Log ops are fire-and-forget — `handle_escalate_op` returns
-        // `None`, which would otherwise be indistinguishable from "this wasn't
-        // an escalate request at all" and would re-route every log message to
-        // the lifecycle queue, tripping the setup/teardown waiters.
-        //
-        // This test locks the contract: a log frame must carry
-        // `rpc == "escalate_request"`, must parse as `EscalateRequest::Log`,
-        // and `process_bridge_message` must return `None` (no reply written).
+    fn log_frame_parses_as_escalate_request_log_variant() {
+        // Parser-shape assertion: the wire-format `log` frame must carry
+        // `rpc == "escalate_request"` and decode as `EscalateRequest::Log`.
+        // This locks the JTD discriminator tag — the actual "bridge does not
+        // forward log frames to the lifecycle channel" contract is locked by
+        // `subprocess_bridge::tests::log_frame_does_not_leak_to_lifecycle_channel`,
+        // which drives a real reader_loop over a socketpair.
         let log_frame = serde_json::json!({
             "rpc": "escalate_request",
             "op": "log",

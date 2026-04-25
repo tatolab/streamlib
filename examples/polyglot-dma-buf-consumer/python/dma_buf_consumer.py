@@ -57,7 +57,7 @@ class DmaBufConsumer:
             handle = ctx.gpu_limited_access.resolve_surface(surface_id)
             handle.lock(read_only=True)
             try:
-                base = handle._lib.slpn_gpu_surface_base_address(handle._handle_ptr)
+                base = handle.base_address
                 if not base:
                     raise RuntimeError("base address null after lock")
                 self._first_byte = int(ctypes.c_uint8.from_address(base).value)

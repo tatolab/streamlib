@@ -310,12 +310,23 @@ class NativeGpuSurfaceHandle:
             self._handle_ptr, 1 if read_only else 0
         )
 
+    @property
+    def base_address(self):
+        """Raw base address of the locked surface memory (untyped int).
+
+        Returns ``0`` when the surface is not locked or the native side
+        reported a null pointer. Callers construct their own typed views
+        (numpy, ``ctypes.c_uint8.from_address``, etc.) on top of this so
+        no-numpy consumers don't pay the numpy dep.
+        """
+        return int(self._lib.slpn_gpu_surface_base_address(self._handle_ptr) or 0)
+
     def as_numpy(self):
         """Create numpy array VIEW into locked surface memory (zero-copy)."""
         import ctypes
         import numpy as np
 
-        base = self._lib.slpn_gpu_surface_base_address(self._handle_ptr)
+        base = self.base_address
         if not base:
             raise RuntimeError("IOSurface base address is null (not locked?)")
         buf = (ctypes.c_uint8 * (self.bytes_per_row * self.height)).from_address(base)
