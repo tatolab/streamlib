@@ -28,7 +28,16 @@ format.
    and must be regenerated via `cargo xtask generate-schemas`. All
    three runtimes (Rust, Python, Deno) must be rebuilt from the new
    schema in the same commit.
-3. **Which FD-passing story applies on Linux?** See the
+3. **Are Python AND Deno both covered?** Default answer: yes. Pipeline-
+   level work (new processor + scenario binary, new escalate op end-
+   to-end, new FD-passing story) ships in both runtimes together or
+   files paired tickets that block on each other and land in the same
+   milestone. "Python first, Deno deferred" is the failure mode this
+   workflow exists to prevent — see #468. The only legitimate split is
+   *schema-only / language-specific by construction* (e.g. a Python
+   ctypes ABI bug that doesn't exist in Deno's FFI binding); say so
+   explicitly in the issue body, don't just leave Deno off the list.
+4. **Which FD-passing story applies on Linux?** See the
    *Polyglot SDK Realignment* milestone's research issue —
    pool-IDs-over-JSON only works when the subprocess can resolve the
    pool locally. DMA-BUF FD passing is required for anything where the
@@ -72,6 +81,12 @@ blocked by it.
 - **Keep the three runtimes in sync.** Schema change → regenerate for
   all three → commit all three. PRs that update only one language are
   a merge hazard.
+- **Pipeline-level E2E covers Python AND Deno together.** A polyglot
+  ticket that ships a new processor + scenario binary in one runtime
+  must either (a) include the same processor + scenario in the other
+  runtime in the same PR, or (b) be paired with a sibling ticket that
+  blocks on this one and lands in the same milestone. Don't accept a
+  bare "Deno deferred" line — see #468.
 
 ## PR body additions
 
@@ -80,6 +95,7 @@ blocked by it.
 
 - **Runtimes affected**: rust | python | deno | all
 - **Schema regenerated**: yes | n/a
+- **Python and Deno both covered?** yes | paired ticket #N | schema-only / language-specific by construction (justify)
 - **E2E tests run**:
   - [ ] Host-Rust: <test name + result>
   - [ ] Python subprocess: <test name + result>
