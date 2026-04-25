@@ -33,22 +33,46 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// Stream a runtime's on-disk log file
+    /// Stream a runtime's on-disk JSONL log file in pretty format.
     Logs {
-        /// Runtime name or ID to stream logs from
-        #[arg(long = "runtime", short = 'r')]
-        runtime: String,
+        /// Runtime ID to read logs for. Omit when using `--list`.
+        #[arg(value_name = "RUNTIME_ID", required_unless_present = "list")]
+        runtime_id: Option<String>,
 
-        /// Follow log output (like tail -f)
+        /// Enumerate available runtime log files instead of streaming one.
+        #[arg(long, conflicts_with_all = ["runtime_id", "follow"])]
+        list: bool,
+
+        /// Follow the log file as new records land (like `tail -F`).
         #[arg(short = 'f', long)]
         follow: bool,
 
-        /// Number of lines to show (default: 100)
-        #[arg(short = 'n', long, default_value = "100")]
-        lines: usize,
+        /// Filter by processor ID.
+        #[arg(long, value_name = "ID")]
+        processor: Option<String>,
 
-        /// Show logs since duration (e.g., "5m", "1h", "30s")
+        /// Filter by pipeline ID.
+        #[arg(long, value_name = "ID")]
+        pipeline: Option<String>,
+
+        /// Show only RHI operations (records with `rhi_op` set).
         #[arg(long)]
+        rhi: bool,
+
+        /// Filter by minimum severity level.
+        #[arg(long, value_name = "LEVEL", value_parser = ["trace", "debug", "info", "warn", "error"])]
+        level: Option<String>,
+
+        /// Filter by source runtime.
+        #[arg(long, value_name = "SOURCE", value_parser = ["rust", "python", "deno"])]
+        source: Option<String>,
+
+        /// Show only intercepted records (captured stdout/stderr/print/console.log).
+        #[arg(long = "intercepted-only")]
+        intercepted_only: bool,
+
+        /// (Orchestrator-only) Show logs since a duration ago. Not supported in offline mode.
+        #[arg(long, value_name = "DURATION")]
         since: Option<String>,
     },
 
@@ -168,11 +192,31 @@ async fn async_main(cli: Cli) -> Result<()> {
             commands::pack::pack(&dir, output.as_deref())?;
         }
         Some(Commands::Logs {
-            runtime,
+            runtime_id,
+            list,
             follow,
-            lines,
+            processor,
+            pipeline,
+            rhi,
+            level,
+            source,
+            intercepted_only,
             since,
-        }) => commands::logs::stream(&runtime, follow, lines, since.as_deref()).await?,
+        }) => {
+            commands::logs::run(commands::logs::LogsArgs {
+                runtime_id: runtime_id.as_deref(),
+                list,
+                follow,
+                processor: processor.as_deref(),
+                pipeline: pipeline.as_deref(),
+                rhi,
+                level: level.as_deref(),
+                source: source.as_deref(),
+                intercepted_only,
+                since: since.as_deref(),
+            })
+            .await?
+        }
         Some(Commands::Run {
             graph_file,
             name,

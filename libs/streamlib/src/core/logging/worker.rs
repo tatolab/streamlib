@@ -306,16 +306,19 @@ fn write_one(
 
     if let Some(sink) = stdout_sink.as_mut() {
         pretty_buf.clear();
-        format_pretty(record, runtime_id, source, pretty_buf);
+        format_event_pretty(&event, pretty_buf);
         let _ = sink.write_all(pretty_buf.as_bytes());
         // Line-buffered: one flush per record so humans tail it live.
         let _ = sink.flush();
     }
 }
 
-fn format_pretty(record: &LogRecord, runtime_id: &str, source: Source, out: &mut String) {
+/// Format one [`RuntimeLogEvent`] in the human-readable layout used by the
+/// runtime's stdout mirror. `streamlib-cli logs` reuses this so the
+/// replayed JSONL output is byte-for-byte identical to the live tail.
+pub fn format_event_pretty(event: &RuntimeLogEvent, out: &mut String) {
     use std::fmt::Write;
-    let level = match record.level {
+    let level = match event.level {
         LogLevel::Trace => "TRACE",
         LogLevel::Debug => "DEBUG",
         LogLevel::Info => " INFO",
@@ -325,23 +328,23 @@ fn format_pretty(record: &LogRecord, runtime_id: &str, source: Source, out: &mut
     let _ = write!(
         out,
         "{} [{:>5}] [{}/{}] {} — {}",
-        format_ns_timestamp(record.host_ts),
+        format_ns_timestamp(event.host_ts),
         level,
-        runtime_id,
-        source.as_str(),
-        record.target,
-        record.message,
+        event.runtime_id,
+        event.source.as_str(),
+        event.target,
+        event.message,
     );
-    if let Some(p) = &record.pipeline_id {
+    if let Some(p) = &event.pipeline_id {
         let _ = write!(out, " pipeline_id={}", p);
     }
-    if let Some(p) = &record.processor_id {
+    if let Some(p) = &event.processor_id {
         let _ = write!(out, " processor_id={}", p);
     }
-    if let Some(r) = &record.rhi_op {
+    if let Some(r) = &event.rhi_op {
         let _ = write!(out, " rhi_op={}", r);
     }
-    for (k, v) in &record.attrs {
+    for (k, v) in &event.attrs {
         let _ = write!(out, " {}={}", k, v);
     }
     out.push('\n');

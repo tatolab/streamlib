@@ -53,3 +53,7 @@ dirs = "6.0"
 
 # ZIP archive creation
 zip = "2.2"
+
+[dev-dependencies]
+tempfile = "3.14"  # Temporary directories for logs subcommand tests
+tokio = { workspace = true, features = ["full"] }
