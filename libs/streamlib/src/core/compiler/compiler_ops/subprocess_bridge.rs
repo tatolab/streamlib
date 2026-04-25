@@ -270,33 +270,49 @@ fn reader_loop(
             }
         };
 
-        if let Some(response) = process_bridge_message(&sandbox, &registry, &msg) {
-            // Escalate request handled inline. Write response with the
-            // shared writer lock.
-            let send_result: Result<()> = {
-                let mut writer = match writer.lock() {
-                    Ok(g) => g,
-                    Err(_) => {
-                        tracing::warn!(
-                            "[{}] bridge reader saw poisoned writer mutex",
-                            processor_id
-                        );
-                        break;
-                    }
+        // Classify the frame on the rpc tag, not the handler's reply
+        // shape: fire-and-forget escalate ops (e.g. log) consume the
+        // message but produce no response, so a `None` from
+        // `process_bridge_message` cannot be used as the "this wasn't
+        // an escalate request" signal — that would silently re-route
+        // every log message to the lifecycle queue and trip the
+        // setup/teardown waiters.
+        let is_escalate_request = msg
+            .get("rpc")
+            .and_then(|v| v.as_str())
+            == Some(super::subprocess_escalate::ESCALATE_REQUEST_RPC);
+
+        if is_escalate_request {
+            if let Some(response) = process_bridge_message(&sandbox, &registry, &msg) {
+                // Escalate request handled inline. Write response with the
+                // shared writer lock.
+                let send_result: Result<()> = {
+                    let mut writer = match writer.lock() {
+                        Ok(g) => g,
+                        Err(_) => {
+                            tracing::warn!(
+                                "[{}] bridge reader saw poisoned writer mutex",
+                                processor_id
+                            );
+                            break;
+                        }
+                    };
+                    write_frame(&mut *writer, &response)
                 };
-                write_frame(&mut *writer, &response)
-            };
-            if let Err(e) = send_result {
-                tracing::warn!(
-                    "[{}] bridge reader failed to write escalate response: {}",
-                    processor_id,
-                    e
-                );
-                if let Ok(mut dead) = dead.lock() {
-                    *dead = true;
+                if let Err(e) = send_result {
+                    tracing::warn!(
+                        "[{}] bridge reader failed to write escalate response: {}",
+                        processor_id,
+                        e
+                    );
+                    if let Ok(mut dead) = dead.lock() {
+                        *dead = true;
+                    }
+                    break;
                 }
-                break;
             }
+            // Fire-and-forget ops (log) leave nothing to write. Either way,
+            // never forward escalate traffic to the lifecycle channel.
             continue;
         }
 
