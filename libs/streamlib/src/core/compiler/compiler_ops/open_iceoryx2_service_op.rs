@@ -189,6 +189,16 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 // Internal helpers
 // ============================================================================
 
+/// Notify (Event) service name paired 1:1 with a destination's pub/sub service.
+///
+/// The shape mirrors the existing destination-centric pub/sub naming
+/// (`streamlib/<dest_proc_id>`) — every upstream Notifier feeding a destination
+/// signals the same Listener, giving the destination's runner a single fd to
+/// wait on regardless of fan-in. Subprocess SDKs derive this name the same way.
+fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
+    format!("streamlib/{}/notify", dest_proc_id)
+}
+
 fn get_processor_pair(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
@@ -229,6 +239,7 @@ fn open_iceoryx2_pubsub(
     // Service name is destination-centric: all upstream processors publish to the same service
     // This allows multiple inputs to a single processor to share one subscriber
     let service_name = format!("streamlib/{}", dest_proc_id);
+    let notify_service_name = notify_service_name_for(dest_proc_id);
 
     tracing::debug!(
         "Opening iceoryx2 service '{}' for connection {} -> {}",
@@ -264,25 +275,33 @@ fn open_iceoryx2_pubsub(
         output_schema
     );
 
-    // Create iceoryx2 Service, Publisher, and Subscriber using the Node
+    // Create iceoryx2 Service (pub/sub) and paired Notify service (event/fd-wake).
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let service = iceoryx2_node.open_or_create_service(&service_name)?;
+    let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
     let publisher = service.create_publisher(max_payload_bytes_for_schema(&output_schema))?;
+    let notifier = notify_service.create_notifier()?;
     tracing::debug!(
-        "Created iceoryx2 Publisher for '{}' -> service '{}'",
+        "Created iceoryx2 Publisher+Notifier for '{}' -> service '{}'",
         source_proc_id,
         service_name
     );
 
-    // Configure source OutputWriter with port mapping and publisher
+    // Configure source OutputWriter with port mapping, publisher, and notifier.
     {
         let source_guard = source_processor.lock();
         if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
-            output_writer.add_connection(source_port, &output_schema, dest_port, publisher);
+            output_writer.add_connection(
+                source_port,
+                &output_schema,
+                dest_port,
+                publisher,
+                notifier,
+            );
             tracing::debug!(
-                "Configured OutputWriter port '{}' -> '{}' with Publisher",
+                "Configured OutputWriter port '{}' -> '{}' with Publisher+Notifier",
                 source_port,
                 dest_port
             );
@@ -302,8 +321,8 @@ fn open_iceoryx2_pubsub(
                 input_mailboxes.add_port(dest_port, 1, Default::default());
             }
 
-            // Only set subscriber if this is the first connection to this destination
-            // All subsequent connections reuse the same subscriber
+            // Only set subscriber+listener if this is the first connection to this destination
+            // All subsequent connections reuse the same pair (max_listeners=1 enforces this).
             if !input_mailboxes.has_subscriber() {
                 let subscriber = service.create_subscriber()?;
                 input_mailboxes.set_subscriber(subscriber);
@@ -317,6 +336,15 @@ fn open_iceoryx2_pubsub(
                     "Reusing existing Subscriber for '{}' (adding port '{}')",
                     dest_proc_id,
                     dest_port
+                );
+            }
+            if !input_mailboxes.has_listener() {
+                let listener = notify_service.create_listener()?;
+                input_mailboxes.set_listener(listener);
+                tracing::debug!(
+                    "Created iceoryx2 Listener for '{}' on notify service '{}'",
+                    dest_proc_id,
+                    notify_service_name
                 );
             }
         }
@@ -350,15 +378,17 @@ fn open_iceoryx2_subprocess_to_subprocess(
     runtime_ctx: &Arc<RuntimeContext>,
 ) -> Result<()> {
     let service_name = format!("streamlib/{}", dest_proc_id);
+    let notify_service_name = notify_service_name_for(dest_proc_id);
 
     tracing::debug!(
         "Opening iceoryx2 service '{}' for subprocess-to-subprocess connection",
         service_name
     );
 
-    // Ensure the service exists (both subprocesses will open it independently)
+    // Ensure both services exist (both subprocesses will open them independently).
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let _service = iceoryx2_node.open_or_create_service(&service_name)?;
+    let _notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     let output_schema = {
         let source_proc_type = graph
@@ -392,6 +422,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 "name": source_port,
                 "dest_port": dest_port,
                 "dest_service_name": service_name,
+                "dest_notify_service_name": notify_service_name,
                 "schema_name": output_schema,
                 "max_payload_bytes": max_payload,
             }));
@@ -405,6 +436,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                     "name": source_port,
                     "dest_port": dest_port,
                     "dest_service_name": service_name,
+                    "dest_notify_service_name": notify_service_name,
                     "schema_name": output_schema,
                     "max_payload_bytes": max_payload,
                 }));
@@ -422,6 +454,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
             deno_host.input_port_wiring.push(serde_json::json!({
                 "name": dest_port,
                 "service_name": service_name,
+                "notify_service_name": notify_service_name,
                 "read_mode": "skip_to_latest",
                 "max_payload_bytes": max_payload,
             }));
@@ -434,6 +467,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 .push(serde_json::json!({
                     "name": dest_port,
                     "service_name": service_name,
+                    "notify_service_name": notify_service_name,
                     "read_mode": "skip_to_latest",
                     "max_payload_bytes": max_payload,
                 }));
@@ -469,6 +503,7 @@ fn open_iceoryx2_subprocess_to_rust(
     runtime_ctx: &Arc<RuntimeContext>,
 ) -> Result<()> {
     let service_name = format!("streamlib/{}", dest_proc_id);
+    let notify_service_name = notify_service_name_for(dest_proc_id);
 
     tracing::debug!(
         "Opening iceoryx2 service '{}' for subprocess({}) -> rust({}) connection",
@@ -479,8 +514,9 @@ fn open_iceoryx2_subprocess_to_rust(
 
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let service = iceoryx2_node.open_or_create_service(&service_name)?;
+    let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
-    // Source is subprocess - it creates its own publisher. No Rust-side source wiring.
+    // Source is subprocess - it creates its own publisher and notifier via FFI.
     // Store output wiring info on the subprocess processor so it can publish via FFI.
     {
         // Look up schema for the output port from the registry
@@ -514,6 +550,7 @@ fn open_iceoryx2_subprocess_to_rust(
                 "name": source_port,
                 "dest_port": dest_port,
                 "dest_service_name": service_name,
+                "dest_notify_service_name": notify_service_name,
                 "schema_name": output_schema,
                 "max_payload_bytes": max_payload,
             }));
@@ -531,6 +568,7 @@ fn open_iceoryx2_subprocess_to_rust(
                     "name": source_port,
                     "dest_port": dest_port,
                     "dest_service_name": service_name,
+                    "dest_notify_service_name": notify_service_name,
                     "schema_name": output_schema,
                     "max_payload_bytes": max_payload,
                 }));
@@ -556,6 +594,15 @@ fn open_iceoryx2_subprocess_to_rust(
                     "Created iceoryx2 Subscriber for '{}' on service '{}' (source is subprocess)",
                     dest_proc_id,
                     service_name
+                );
+            }
+            if !input_mailboxes.has_listener() {
+                let listener = notify_service.create_listener()?;
+                input_mailboxes.set_listener(listener);
+                tracing::debug!(
+                    "Created iceoryx2 Listener for '{}' on notify service '{}' (source is subprocess)",
+                    dest_proc_id,
+                    notify_service_name
                 );
             }
         }
@@ -590,6 +637,7 @@ fn open_iceoryx2_rust_to_subprocess(
     runtime_ctx: &Arc<RuntimeContext>,
 ) -> Result<()> {
     let service_name = format!("streamlib/{}", dest_proc_id);
+    let notify_service_name = notify_service_name_for(dest_proc_id);
 
     tracing::debug!(
         "Opening iceoryx2 service '{}' for rust({}) -> subprocess({}) connection",
@@ -620,25 +668,33 @@ fn open_iceoryx2_rust_to_subprocess(
 
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let service = iceoryx2_node.open_or_create_service(&service_name)?;
+    let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
     let max_payload = max_payload_bytes_for_schema(&output_schema);
     let publisher = service.create_publisher(max_payload)?;
+    let notifier = notify_service.create_notifier()?;
 
-    // Configure source OutputWriter with port mapping and publisher
+    // Configure source OutputWriter with port mapping, publisher, and notifier.
     {
         let source_guard = source_processor.lock();
         if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
-            output_writer.add_connection(source_port, &output_schema, dest_port, publisher);
+            output_writer.add_connection(
+                source_port,
+                &output_schema,
+                dest_port,
+                publisher,
+                notifier,
+            );
             tracing::debug!(
-                "Configured OutputWriter port '{}' -> '{}' with Publisher (dest is subprocess)",
+                "Configured OutputWriter port '{}' -> '{}' with Publisher+Notifier (dest is subprocess)",
                 source_port,
                 dest_port
             );
         }
     }
 
-    // Dest is subprocess - it creates its own subscriber. No Rust-side dest wiring.
+    // Dest is subprocess - it creates its own subscriber+listener. No Rust-side dest wiring.
     // Store input wiring info on the subprocess processor so it can subscribe via FFI.
     {
         let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
@@ -650,6 +706,7 @@ fn open_iceoryx2_rust_to_subprocess(
             deno_host.input_port_wiring.push(serde_json::json!({
                 "name": dest_port,
                 "service_name": service_name,
+                "notify_service_name": notify_service_name,
                 "read_mode": "skip_to_latest",
                 "max_payload_bytes": max_payload,
             }));
@@ -668,6 +725,7 @@ fn open_iceoryx2_rust_to_subprocess(
                 .push(serde_json::json!({
                     "name": dest_port,
                     "service_name": service_name,
+                    "notify_service_name": notify_service_name,
                     "read_mode": "skip_to_latest",
                     "max_payload_bytes": max_payload,
                 }));

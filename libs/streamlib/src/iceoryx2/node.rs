@@ -6,6 +6,8 @@
 use std::sync::Arc;
 
 use iceoryx2::node::Node;
+use iceoryx2::port::listener::Listener;
+use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
@@ -53,6 +55,34 @@ impl Iceoryx2Node {
             })?;
 
         Ok(Iceoryx2EventService { inner: service })
+    }
+
+    /// Open or create an iceoryx2 Event service for fd-multiplexed wakeups.
+    ///
+    /// Pairs 1:1 with a destination's pub/sub service (`streamlib/<dest>`) — N upstream
+    /// `Notifier`s fan in to one `Listener` whose file descriptor a runner can wait on
+    /// via epoll/select instead of busy-polling. Distinct from [`Iceoryx2EventService`]
+    /// which is a typed pub/sub for runtime events.
+    pub fn open_or_create_notify_service(
+        &self,
+        service_name: &str,
+    ) -> Result<Iceoryx2NotifyService> {
+        let node = self.inner.lock();
+        let service_name: ServiceName = service_name.try_into().map_err(|e| {
+            StreamError::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
+        })?;
+
+        let service = node
+            .service_builder(&service_name)
+            .event()
+            .max_notifiers(16)
+            .max_listeners(1)
+            .open_or_create()
+            .map_err(|e| {
+                StreamError::Runtime(format!("Failed to open/create notify service: {:?}", e))
+            })?;
+
+        Ok(Iceoryx2NotifyService { inner: service })
     }
 
     /// Open or create a publish-subscribe service for `[u8]` slices.
@@ -111,6 +141,33 @@ impl Iceoryx2Service {
             .buffer_size(16)
             .create()
             .map_err(|e| StreamError::Runtime(format!("Failed to create subscriber: {:?}", e)))
+    }
+}
+
+/// Handle to an iceoryx2 Event service used for fd-multiplexed wakeups.
+///
+/// Distinct from [`Iceoryx2EventService`] (which is a typed pub/sub for runtime events).
+/// This wraps iceoryx2's `MessagingPattern::Event` — `Notifier::notify()` causes any
+/// `Listener` on the same service to become readable on its underlying fd.
+pub struct Iceoryx2NotifyService {
+    inner: iceoryx2::service::port_factory::event::PortFactory<ipc::Service>,
+}
+
+impl Iceoryx2NotifyService {
+    /// Create a notifier for this service.
+    pub fn create_notifier(&self) -> Result<Notifier<ipc::Service>> {
+        self.inner
+            .notifier_builder()
+            .create()
+            .map_err(|e| StreamError::Runtime(format!("Failed to create notifier: {:?}", e)))
+    }
+
+    /// Create a listener for this service.
+    pub fn create_listener(&self) -> Result<Listener<ipc::Service>> {
+        self.inner
+            .listener_builder()
+            .create()
+            .map_err(|e| StreamError::Runtime(format!("Failed to create listener: {:?}", e)))
     }
 }
 

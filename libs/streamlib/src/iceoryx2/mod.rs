@@ -12,7 +12,7 @@ mod read_mode;
 
 pub use input::InputMailboxes;
 pub use mailbox::PortMailbox;
-pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2Service};
+pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service};
 pub use output::OutputWriter;
 pub use payload::{
     EventPayload, FrameHeader, FramePayload, PortKey, SchemaName, TopicKey, FRAME_HEADER_SIZE,

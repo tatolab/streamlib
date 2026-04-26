@@ -211,6 +211,7 @@ async function main(): Promise<void> {
   let fullCtx: NativeRuntimeContextFullAccess | null = null;
   let limitedCtx: NativeRuntimeContextLimitedAccess | null = null;
   let running = false;
+  let notifyServiceName = "";
 
   // Command loop
   try {
@@ -234,6 +235,7 @@ async function main(): Promise<void> {
             inputs?: {
               name: string;
               service_name: string;
+              notify_service_name?: string;
               read_mode?: string;
               max_payload_bytes?: number;
             }[];
@@ -241,6 +243,7 @@ async function main(): Promise<void> {
               name: string;
               dest_port: string;
               dest_service_name: string;
+              dest_notify_service_name?: string;
               schema_name: string;
               max_payload_bytes?: number;
             }[];
@@ -270,14 +273,35 @@ async function main(): Promise<void> {
             lib.symbols.sldn_input_set_read_mode(ctxPtr, cString(input.name), modeInt);
           }
 
+          // All inputs share one destination-paired Notify service. Subscribe
+          // once via the first non-empty notify_service_name; the FFI is
+          // idempotent so duplicates would be harmless. Stored at outer scope
+          // so the `run` handler knows whether to call sldn_event_wait.
+          notifyServiceName = (inputPorts
+            .map((i) => i.notify_service_name)
+            .find((n) => n && n.length > 0)) ?? "";
+          if (notifyServiceName) {
+            const result = lib.symbols.sldn_event_subscribe(
+              ctxPtr,
+              cString(notifyServiceName),
+            );
+            if (result !== 0) {
+              log.warn("Failed to subscribe to notify service", {
+                service: notifyServiceName,
+              });
+            }
+          }
+
           // Create publishers for output iceoryx2 services
           const outputPorts = ports.outputs ?? [];
           for (const output of outputPorts) {
+            const destNotify = output.dest_notify_service_name ?? "";
             log.info("Publishing to output", {
               port: output.name,
               dest_port: output.dest_port,
               service: output.dest_service_name,
               schema: output.schema_name,
+              notify_service: destNotify || null,
             });
             const result = lib.symbols.sldn_output_publish(
               ctxPtr,
@@ -286,6 +310,7 @@ async function main(): Promise<void> {
               cString(output.dest_port),
               cString(output.schema_name),
               BigInt(output.max_payload_bytes ?? 65536),
+              cString(destNotify),
             );
             if (result !== 0) {
               log.error("Failed to create publisher", {
@@ -431,7 +456,12 @@ async function main(): Promise<void> {
             const reactiveProc = processor as ReactiveProcessor;
             let pollCount = 0;
             let dataCount = 0;
-            // Poll iceoryx2 via FFI, call process() on data
+            // Bounded wait so a closed stdin / shutdown stays responsive even
+            // if no upstream notify ever arrives.
+            const WAIT_TIMEOUT_MS = 100;
+            // Poll iceoryx2 via FFI, call process() on data; otherwise wait
+            // on the destination's listener fd via a nonblocking FFI call so
+            // the JS event loop stays responsive.
             while (running) {
               const hasData = lib.symbols.sldn_input_poll(ctxPtr);
               pollCount++;
@@ -452,8 +482,14 @@ async function main(): Promise<void> {
                     frames_so_far: dataCount,
                   });
                 }
-                // No data, yield to event loop briefly
-                await new Promise((resolve) => setTimeout(resolve, 1));
+                // No data — wait for notify or timeout. sldn_event_wait is
+                // dispatched to a worker thread (nonblocking: true), so this
+                // doesn't block the JS event loop.
+                if (notifyServiceName) {
+                  await lib.symbols.sldn_event_wait(ctxPtr, WAIT_TIMEOUT_MS);
+                } else {
+                  await new Promise((resolve) => setTimeout(resolve, WAIT_TIMEOUT_MS));
+                }
               }
             }
           } else if (executionMode === "continuous") {

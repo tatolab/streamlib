@@ -43,12 +43,24 @@ const symbols = {
 
   // Output
   sldn_output_publish: {
-    parameters: ["pointer", "buffer", "buffer", "buffer", "buffer", "usize"] as const,
+    parameters: ["pointer", "buffer", "buffer", "buffer", "buffer", "usize", "buffer"] as const,
     result: "i32" as const,
   },
   sldn_output_write: {
     parameters: ["pointer", "buffer", "pointer", "u32", "i64"] as const,
     result: "i32" as const,
+  },
+
+  // Event service (fd-multiplexed wakeups). sldn_event_wait is nonblocking
+  // so the JS event loop can stay responsive while we wait in a worker thread.
+  sldn_event_subscribe: {
+    parameters: ["pointer", "buffer"] as const,
+    result: "i32" as const,
+  },
+  sldn_event_wait: {
+    parameters: ["pointer", "u32"] as const,
+    result: "i32" as const,
+    nonblocking: true,
   },
 
   // GPU Surface

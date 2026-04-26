@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
 
+use iceoryx2::port::listener::Listener;
+use iceoryx2::port::notifier::Notifier;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
@@ -35,6 +37,9 @@ pub struct PythonNativeContext {
     publishers: HashMap<String, PublisherState>,
     /// Per-port read mode (port_name → READ_MODE_*). Default is SkipToLatest.
     port_read_modes: HashMap<String, i32>,
+    /// Single Listener for this processor's destination-paired Notify service.
+    /// All inputs share this listener (destination-centric service shape).
+    notify_listener: Option<Listener<ipc::Service>>,
 }
 
 struct SubscriberState {
@@ -47,6 +52,9 @@ struct PublisherState {
     publisher: Publisher<ipc::Service, [u8], ()>,
     schema_name: String,
     dest_port: String,
+    /// Notifier into the destination's paired Event service. Some when the
+    /// destination wired a notify_service_name; None for legacy callers.
+    notifier: Option<Notifier<ipc::Service>>,
 }
 
 impl PythonNativeContext {
@@ -58,6 +66,7 @@ impl PythonNativeContext {
             subscribers: HashMap::new(),
             publishers: HashMap::new(),
             port_read_modes: HashMap::new(),
+            notify_listener: None,
         })
     }
 }
@@ -320,9 +329,14 @@ pub unsafe extern "C" fn slpn_input_read(
 // C ABI — Output (publish + write)
 // ============================================================================
 
-/// Create a publisher for an iceoryx2 service.
+/// Create a publisher for an iceoryx2 service, plus an optional notifier into
+/// the destination's paired Event service.
 ///
 /// `dest_port` is the destination processor's input port name, used in FramePayload routing.
+/// `notify_service_name` may be the empty string or null to skip notifier setup
+/// (legacy / no-notify path). When non-empty, `slpn_output_write` will call
+/// `notify()` after every successful `send()`.
+///
 /// Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_output_publish(
@@ -332,6 +346,7 @@ pub unsafe extern "C" fn slpn_output_publish(
     dest_port: *const c_char,
     schema_name: *const c_char,
     max_payload_bytes: usize,
+    notify_service_name: *const c_char,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_mut() } {
         Some(c) => c,
@@ -394,12 +409,52 @@ pub unsafe extern "C" fn slpn_output_publish(
         }
     };
 
+    let notifier = match unsafe { c_str_to_str(notify_service_name) } {
+        Some(name) if !name.is_empty() => match ServiceName::new(name) {
+            Ok(notify_name_iox) => match ctx
+                .node
+                .service_builder(&notify_name_iox)
+                .event()
+                .max_notifiers(16)
+                .max_listeners(1)
+                .open_or_create()
+            {
+                Ok(notify_service) => match notify_service.notifier_builder().create() {
+                    Ok(n) => Some(n),
+                    Err(e) => {
+                        tracing::warn!(
+                            "[slpn:{}] Failed to create notifier for '{}': {:?}",
+                            ctx.processor_id, name, e
+                        );
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "[slpn:{}] Failed to open notify service '{}': {:?}",
+                        ctx.processor_id, name, e
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "[slpn:{}] Invalid notify service name '{}': {}",
+                    ctx.processor_id, name, e
+                );
+                None
+            }
+        },
+        _ => None,
+    };
+
     ctx.publishers.insert(
         port_name.to_string(),
         PublisherState {
             publisher,
             schema_name: schema.to_string(),
             dest_port: dest_port_str.to_string(),
+            notifier,
         },
     );
 
@@ -468,6 +523,121 @@ pub unsafe extern "C" fn slpn_output_write(
         return -1;
     }
 
+    if let Some(notifier) = state.notifier.as_ref()
+        && let Err(e) = notifier.notify()
+    {
+        tracing::trace!(
+            "[slpn:{}] notify() failed for port '{}': {:?}",
+            ctx.processor_id, port_name, e
+        );
+    }
+
+    0
+}
+
+// ============================================================================
+// C ABI — Event service (Notifier/Listener for fd-multiplexed wakeups)
+// ============================================================================
+
+/// Subscribe to the destination's paired iceoryx2 Event service.
+///
+/// Creates a Listener whose fd Python can `select` on alongside stdin. Idempotent
+/// per ctx — first call wins; subsequent calls are no-ops since each processor
+/// only ever has one destination-paired Event service. Returns 0 on success,
+/// -1 on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn slpn_event_subscribe(
+    ctx: *mut PythonNativeContext,
+    notify_service_name: *const c_char,
+) -> i32 {
+    let ctx = match unsafe { ctx.as_mut() } {
+        Some(c) => c,
+        None => return -1,
+    };
+    if ctx.notify_listener.is_some() {
+        return 0;
+    }
+    let name = match unsafe { c_str_to_str(notify_service_name) } {
+        Some(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let name_iox = match ServiceName::new(name) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::error!(
+                "[slpn:{}] Invalid notify service name '{}': {}",
+                ctx.processor_id, name, e
+            );
+            return -1;
+        }
+    };
+    let service = match ctx
+        .node
+        .service_builder(&name_iox)
+        .event()
+        .max_notifiers(16)
+        .max_listeners(1)
+        .open_or_create()
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(
+                "[slpn:{}] Failed to open notify service '{}': {:?}",
+                ctx.processor_id, name, e
+            );
+            return -1;
+        }
+    };
+    let listener = match service.listener_builder().create() {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(
+                "[slpn:{}] Failed to create listener for '{}': {:?}",
+                ctx.processor_id, name, e
+            );
+            return -1;
+        }
+    };
+    ctx.notify_listener = Some(listener);
+    0
+}
+
+/// Returns the underlying listener fd for `select`/`poll`, or -1 if not subscribed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn slpn_event_listener_fd(ctx: *mut PythonNativeContext) -> i32 {
+    let ctx = match unsafe { ctx.as_mut() } {
+        Some(c) => c,
+        None => return -1,
+    };
+    match ctx.notify_listener.as_ref() {
+        // SAFETY: native_handle() is unsafe per iceoryx2-bb-posix because the
+        // returned int must not outlive the Listener. We hand it to Python
+        // which uses it transiently inside select(); the Listener stays alive
+        // for the lifetime of the context.
+        Some(l) => unsafe { l.file_descriptor().native_handle() },
+        None => -1,
+    }
+}
+
+/// Drain pending event-IDs so the listener fd transitions back to not-readable.
+///
+/// Call after `select` reports the fd readable, before the next `select`.
+/// Returns 0 on success, -1 if no listener is subscribed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn slpn_event_drain(ctx: *mut PythonNativeContext) -> i32 {
+    let ctx = match unsafe { ctx.as_mut() } {
+        Some(c) => c,
+        None => return -1,
+    };
+    let Some(listener) = ctx.notify_listener.as_ref() else {
+        return -1;
+    };
+    if let Err(e) = listener.try_wait_all(|_id| {}) {
+        tracing::trace!(
+            "[slpn:{}] event drain try_wait_all failed: {:?}",
+            ctx.processor_id, e
+        );
+    }
     0
 }
 
