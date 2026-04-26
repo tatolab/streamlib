@@ -121,11 +121,20 @@ export interface SurfaceAccessGuard<V> extends Disposable {
   readonly surfaceId: bigint;
 }
 
-/** Public ABI for a Deno streamlib surface adapter. */
+/** Public ABI for a Deno streamlib surface adapter.
+ *
+ * Two acquisition flavors mirror the Rust trait:
+ * - `acquireRead` / `acquireWrite` block until the timeline semaphore
+ *   wait completes.
+ * - `tryAcquireRead` / `tryAcquireWrite` return `null` immediately
+ *   when the surface is contended; never block. Right shape for
+ *   processor-graph nodes that must not stall their thread runner.
+ */
 export interface SurfaceAdapter<RView = ReadView, WView = WriteView> {
   acquireRead(surface: StreamlibSurface): SurfaceAccessGuard<RView>;
   acquireWrite(surface: StreamlibSurface): SurfaceAccessGuard<WView>;
-  traitVersion(): number;
+  tryAcquireRead(surface: StreamlibSurface): SurfaceAccessGuard<RView> | null;
+  tryAcquireWrite(surface: StreamlibSurface): SurfaceAccessGuard<WView> | null;
 }
 
 /**

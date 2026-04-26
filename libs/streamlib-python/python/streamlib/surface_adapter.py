@@ -141,6 +141,16 @@ class SurfaceAdapter(Protocol):
 
     and never types the word "semaphore". The adapter handles all
     timeline-semaphore signaling on `__enter__` / `__exit__`.
+
+    Two acquisition flavors mirror the Rust trait:
+
+    - Blocking `acquire_read` / `acquire_write` — the context manager
+      blocks on `__enter__` until the timeline semaphore wait
+      completes (and, for write, until any contended reader/writer
+      releases).
+    - Non-blocking `try_acquire_read` / `try_acquire_write` — return
+      `None` immediately if the surface is contended; never block.
+      Right shape for processor-graph nodes that must not stall.
     """
 
     def acquire_read(self, surface: StreamlibSurface) -> "Iterator[object]":
@@ -149,5 +159,14 @@ class SurfaceAdapter(Protocol):
     def acquire_write(self, surface: StreamlibSurface) -> "Iterator[object]":
         """Return a context manager handing out a write view."""
 
-    def trait_version(self) -> int:
-        """ABI major version this adapter was compiled against."""
+    def try_acquire_read(
+        self, surface: StreamlibSurface
+    ) -> "Iterator[object] | None":
+        """Return a context manager handing out a read view, or None if
+        a writer currently holds the surface."""
+
+    def try_acquire_write(
+        self, surface: StreamlibSurface
+    ) -> "Iterator[object] | None":
+        """Return a context manager handing out a write view, or None
+        if any reader or another writer currently holds the surface."""

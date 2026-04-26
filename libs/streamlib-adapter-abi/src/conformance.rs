@@ -15,8 +15,10 @@
 //! ```
 //!
 //! The fixture covers acquire/release ordering, double-acquire-write
-//! rejection, concurrent-read permission, scope-drop counter
-//! emission, and trait_version reporting.
+//! rejection, concurrent-read permission, `try_acquire_*` returning
+//! `Ok(None)` on contention, scope-drop counter emission, and
+//! `Send + Sync` smoke under multiple reader threads. See
+//! [`run_conformance`] for the explicit coverage list.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
