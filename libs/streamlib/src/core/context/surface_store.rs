@@ -1069,6 +1069,21 @@ impl SurfaceStore {
         // Export the DMA-BUF fd from the texture
         let fd = texture.inner.export_dma_buf_fd()?;
 
+        // Carry the DRM format modifier and per-plane row pitch so the
+        // consumer-side EGL or Vulkan import can pass them via
+        // EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT and EGL_DMA_BUF_PLANE{N}_PITCH_EXT
+        // (or VkImageDrmFormatModifierExplicitCreateInfoEXT). Zero modifier
+        // means LINEAR / not applicable; render-target consumers must refuse
+        // such surfaces because LINEAR DMA-BUFs are sampler-only on NVIDIA
+        // (see docs/learnings/nvidia-egl-dmabuf-render-target.md).
+        let drm_format_modifier = texture.inner.chosen_drm_format_modifier();
+        let plane_layout = texture
+            .inner
+            .dma_buf_plane_layout()
+            .unwrap_or_else(|_| vec![(0, 0)]);
+        let plane_offsets: Vec<u64> = plane_layout.iter().map(|(o, _)| *o).collect();
+        let plane_strides: Vec<u64> = plane_layout.iter().map(|(_, s)| *s).collect();
+
         let request = serde_json::json!({
             "op": "register",
             "surface_id": surface_id,
@@ -1077,6 +1092,9 @@ impl SurfaceStore {
             "height": texture.height(),
             "format": format!("{:?}", texture.format()),
             "resource_type": "texture",
+            "plane_offsets": plane_offsets,
+            "plane_strides": plane_strides,
+            "drm_format_modifier": drm_format_modifier,
         });
 
         let connection = self.inner.connection.lock();
