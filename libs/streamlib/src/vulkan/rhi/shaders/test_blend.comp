@@ -1,0 +1,66 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+// Test shader for the multi-input compute-kernel RHI: reads INPUT_COUNT
+// storage buffers, writes their per-element sum into an output storage
+// buffer. Compiled by build.rs into 4 SPIR-V variants (1, 2, 4, 8 inputs)
+// via `-DINPUT_COUNT=N`, used by parameterized tests in
+// `vulkan_compute_kernel.rs` to validate descriptor-set construction and
+// dispatch correctness across binding counts.
+
+#version 450
+
+#ifndef INPUT_COUNT
+#error "Define INPUT_COUNT to 1, 2, 4, or 8 via -DINPUT_COUNT=<n>"
+#endif
+
+layout(local_size_x = 64) in;
+
+#if INPUT_COUNT >= 1
+layout(set = 0, binding = 0) readonly buffer In0 { uint data[]; } in0;
+#endif
+#if INPUT_COUNT >= 2
+layout(set = 0, binding = 1) readonly buffer In1 { uint data[]; } in1;
+#endif
+#if INPUT_COUNT >= 4
+layout(set = 0, binding = 2) readonly buffer In2 { uint data[]; } in2;
+layout(set = 0, binding = 3) readonly buffer In3 { uint data[]; } in3;
+#endif
+#if INPUT_COUNT >= 8
+layout(set = 0, binding = 4) readonly buffer In4 { uint data[]; } in4;
+layout(set = 0, binding = 5) readonly buffer In5 { uint data[]; } in5;
+layout(set = 0, binding = 6) readonly buffer In6 { uint data[]; } in6;
+layout(set = 0, binding = 7) readonly buffer In7 { uint data[]; } in7;
+#endif
+
+// Output binding always sits one slot past the largest possible input
+// (binding 8) so all four variants share an identical output-binding index.
+layout(set = 0, binding = 8) writeonly buffer Out { uint data[]; } out_buf;
+
+layout(push_constant) uniform PushConstants {
+    uint element_count;
+} pc;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= pc.element_count) return;
+
+    uint sum = 0;
+#if INPUT_COUNT >= 1
+    sum += in0.data[i];
+#endif
+#if INPUT_COUNT >= 2
+    sum += in1.data[i];
+#endif
+#if INPUT_COUNT >= 4
+    sum += in2.data[i];
+    sum += in3.data[i];
+#endif
+#if INPUT_COUNT >= 8
+    sum += in4.data[i];
+    sum += in5.data[i];
+    sum += in6.data[i];
+    sum += in7.data[i];
+#endif
+    out_buf.data[i] = sum;
+}
