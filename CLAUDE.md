@@ -299,6 +299,17 @@ let texture = ctx.gpu.acquire_texture(&desc)?;
 
 **Exception:** Platform display processors (`linux/processors/display.rs`) may access the underlying Vulkan device handle from GpuContext for swapchain and rendering pipeline setup (this is platform-specific rendering, like Metal rendering on macOS). But they MUST acquire all textures and buffers through GpuContext pools, never allocate GPU memory directly.
 
+#### Compute kernels — single canonical abstraction
+
+All GPU compute work goes through `VulkanComputeKernel` plus the public
+`ComputeKernelDescriptor` / `ComputeBindingSpec` types in `core::rhi`.
+**Never hand-roll a descriptor set, descriptor pool, command buffer,
+fence, or pipeline layout for a compute shader.** Add new kernels by
+declaring their bindings as data and calling `GpuContext::create_compute_kernel`.
+SPIR-V reflection (via `rspirv-reflect`) validates the declared layout
+against the shader at construction. See @docs/architecture/compute-kernel.md
+for the full recipe.
+
 
 ### Custom Commands
 

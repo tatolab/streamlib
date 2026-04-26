@@ -779,6 +779,31 @@ impl GpuContext {
         self.command_queue().create_command_buffer()
     }
 
+    /// Create a compute kernel from a SPIR-V shader and a binding declaration.
+    ///
+    /// Reflects the SPIR-V at creation time and validates that the declared
+    /// bindings match the shader; mismatches are reported with a clear error
+    /// message rather than producing undefined GPU behavior at first dispatch.
+    /// Returned kernel is held and dispatched via its own `set_*` / `dispatch`
+    /// methods — one kernel handle per processor pipeline stage is the expected
+    /// usage.
+    #[cfg(target_os = "linux")]
+    pub fn create_compute_kernel(
+        &self,
+        descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        tracing::debug!(
+            rhi_op = "create_compute_kernel",
+            label = descriptor.label,
+            bindings = descriptor.bindings.len(),
+            push_constant_size = descriptor.push_constant_size,
+            "GpuContext::create_compute_kernel"
+        );
+        let vulkan_device = &self.device.inner;
+        let kernel = crate::vulkan::rhi::VulkanComputeKernel::new(vulkan_device, descriptor)?;
+        Ok(Arc::new(kernel))
+    }
+
     /// Initialize GPU context for the current platform.
     pub fn init_for_platform() -> Result<Self> {
         #[cfg(target_os = "macos")]
@@ -1344,6 +1369,15 @@ impl GpuContextFullAccess {
     /// Create a command buffer from the shared queue.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
         self.inner.create_command_buffer()
+    }
+
+    /// Create a compute kernel from a SPIR-V shader and a binding declaration.
+    #[cfg(target_os = "linux")]
+    pub fn create_compute_kernel(
+        &self,
+        descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.inner.create_compute_kernel(descriptor)
     }
 
     /// Get the underlying Metal device (macOS only).

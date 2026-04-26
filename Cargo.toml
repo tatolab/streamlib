@@ -96,6 +96,9 @@ libc = "0.2.177"
 vulkanalia = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1", features = ["libloading", "provisional", "window"] }
 vulkanalia-vma = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982d32d293e5425753d595978776ee4fa4ded3a1" }
 
+# SPIR-V reflection for descriptor-set-layout validation in the compute-kernel RHI.
+rspirv-reflect = "0.9.0"
+
 # Shader compilation
 # TODO: Add when implementing HLSL shader compilation:
 #   - hassle-rs (DXC wrapper for HLSL → SPIR-V)

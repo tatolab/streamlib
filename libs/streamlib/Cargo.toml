@@ -139,6 +139,7 @@ opus = "0.3"  # Opus audio codec encoder/decoder
 vulkanalia = { workspace = true }
 vulkanalia-vma = { workspace = true }
 vulkan-video = { path = "../vulkan-video" }
+rspirv-reflect = { workspace = true }
 libc.workspace = true
 v4l = "0.14"  # V4L2 camera capture (Video for Linux 2)
 opus = "0.3"  # Opus audio codec encoder/decoder
@@ -159,6 +160,7 @@ rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provi
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 tempfile = "3.14"  # Temporary directories for config tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
+png = "0.17"  # PNG decoding for shader-output fixture comparisons
 
 [[bench]]
 name = "logging"
