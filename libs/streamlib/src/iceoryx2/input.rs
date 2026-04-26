@@ -6,6 +6,7 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 
+use iceoryx2::port::listener::Listener;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
@@ -50,6 +51,32 @@ impl SendableSubscriber {
     }
 }
 
+/// Thread-local listener wrapper. Mirrors [`SendableSubscriber`] — the
+/// [`Listener`] is set once on the processor's execution thread and accessed
+/// only from that thread thereafter.
+struct SendableListener(UnsafeCell<Option<Listener<ipc::Service>>>);
+
+// SAFETY: same single-thread-after-set discipline as SendableSubscriber.
+unsafe impl Send for SendableListener {}
+
+impl SendableListener {
+    fn new() -> Self {
+        Self(UnsafeCell::new(None))
+    }
+
+    fn set(&self, listener: Listener<ipc::Service>) {
+        // SAFETY: Only called from the processor's execution thread after spawn
+        unsafe {
+            *self.0.get() = Some(listener);
+        }
+    }
+
+    fn get(&self) -> Option<&Listener<ipc::Service>> {
+        // SAFETY: Only called from the processor's execution thread
+        unsafe { (*self.0.get()).as_ref() }
+    }
+}
+
 /// Per-port configuration: mailbox and read mode.
 struct PortConfig {
     mailbox: PortMailbox,
@@ -66,6 +93,7 @@ struct PortConfig {
 pub struct InputMailboxes {
     ports: HashMap<String, PortConfig>,
     subscriber: SendableSubscriber,
+    listener: SendableListener,
 }
 
 impl InputMailboxes {
@@ -74,6 +102,7 @@ impl InputMailboxes {
         Self {
             ports: HashMap::new(),
             subscriber: SendableSubscriber::new(),
+            listener: SendableListener::new(),
         }
     }
 
@@ -109,6 +138,47 @@ impl InputMailboxes {
     /// Note: This should only be called from the processor's execution thread.
     pub fn set_subscriber(&self, subscriber: Subscriber<ipc::Service, [u8], ()>) {
         self.subscriber.set(subscriber);
+    }
+
+    /// Check if a listener has already been configured.
+    pub fn has_listener(&self) -> bool {
+        self.listener.get().is_some()
+    }
+
+    /// Set the iceoryx2 Listener for fd-multiplexed wakeups.
+    ///
+    /// Note: This should only be called from the processor's execution thread.
+    pub fn set_listener(&self, listener: Listener<ipc::Service>) {
+        self.listener.set(listener);
+    }
+
+    /// Returns the underlying listener fd if a listener has been configured.
+    ///
+    /// The fd is owned by the [`Listener`] — callers must NOT `close()` it and
+    /// MUST stop using it before [`InputMailboxes`] is dropped. Suitable for
+    /// registering with `epoll_ctl(EPOLL_CTL_ADD)` or `select` from the
+    /// processor's execution thread.
+    pub fn listener_fd(&self) -> Option<i32> {
+        // SAFETY: native_handle() is unsafe per iceoryx2-bb-posix because storing
+        // the value across the Listener's lifetime would dangle. We return the
+        // raw int and document that callers must drop usage before the Listener
+        // is dropped, mirroring the FileDescriptor lifetime contract.
+        self.listener
+            .get()
+            .map(|l| unsafe { l.file_descriptor().native_handle() })
+    }
+
+    /// Drain any pending event-IDs from the listener so the fd transitions
+    /// back to the not-readable state. No-op when no listener is configured.
+    ///
+    /// Call this after `epoll_wait` reports the fd readable, before the next
+    /// `epoll_wait`, otherwise the wait returns immediately on the same event.
+    pub fn drain_listener(&self) {
+        if let Some(listener) = self.listener.get() {
+            if let Err(e) = listener.try_wait_all(|_event_id| {}) {
+                tracing::trace!("InputMailboxes: drain_listener try_wait_all failed: {:?}", e);
+            }
+        }
     }
 
     /// Receive all pending payloads from the iceoryx2 Subscriber and route them to mailboxes.
@@ -254,5 +324,77 @@ impl InputMailboxes {
 impl Default for InputMailboxes {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_suffix(tag: &str) -> String {
+        format!(
+            "test/input/{}/{}/{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    /// Driving the iceoryx2 Event service end-to-end: notify must transition
+    /// the Listener fd to readable within a short bounded window so an epoll
+    /// or select wait wakes promptly.
+    #[test]
+    fn listener_fd_is_valid_and_readable_after_notify() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let name = unique_suffix("notify");
+
+        let svc = node
+            .service_builder(&ServiceName::new(&name).unwrap())
+            .event()
+            .max_notifiers(2)
+            .max_listeners(1)
+            .open_or_create()
+            .unwrap();
+        let notifier = svc.notifier_builder().create().unwrap();
+        let listener = svc.listener_builder().create().unwrap();
+
+        let mailboxes = InputMailboxes::new();
+        mailboxes.set_listener(listener);
+        let fd = mailboxes
+            .listener_fd()
+            .expect("listener_fd should be set after set_listener");
+        assert!(fd >= 0, "listener fd should be a valid posix fd, got {fd}");
+
+        // Pre-flight: not readable.
+        assert!(!poll_readable(fd, 0));
+
+        notifier.notify().unwrap();
+
+        // Bounded wait: the issue requires the fd to report readable within
+        // 50 ms. Using a 50 ms poll matches that contract.
+        assert!(
+            poll_readable(fd, 50),
+            "listener fd should be readable within 50 ms of notify()"
+        );
+
+        // After draining, the fd transitions back to not-readable so the
+        // next wait blocks again instead of spinning.
+        mailboxes.drain_listener();
+        assert!(!poll_readable(fd, 0));
+    }
+
+    fn poll_readable(fd: i32, timeout_ms: i32) -> bool {
+        let mut pfd = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: fd is a valid POSIX fd for the lifetime of this call;
+        // pfd is on the stack and not aliased.
+        let n = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+        n > 0 && (pfd.revents & libc::POLLIN) != 0
     }
 }

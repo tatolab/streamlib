@@ -120,17 +120,37 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
         mode_int = 0 if read_mode == "skip_to_latest" else 1
         lib.slpn_input_set_read_mode(ctx_ptr, port_name.encode("utf-8"), mode_int)
 
+    # All inputs share one destination-paired Notify service. Pick the first
+    # non-empty notify_service_name and subscribe (slpn_event_subscribe is
+    # idempotent so repeating it is harmless).
+    notify_service_name = next(
+        (inp.get("notify_service_name", "") for inp in inputs
+         if inp.get("notify_service_name")),
+        "",
+    )
+    if notify_service_name:
+        result = lib.slpn_event_subscribe(
+            ctx_ptr, notify_service_name.encode("utf-8"),
+        )
+        if result != 0:
+            log.warn(
+                "Failed to subscribe to notify service",
+                service=notify_service_name,
+            )
+
     # Create publishers for output iceoryx2 services
     for out in ports.get("outputs", []):
         port_name = out["name"]
         dest_port = out["dest_port"]
         dest_service = out["dest_service_name"]
         schema_name = out.get("schema_name", "")
+        dest_notify_service = out.get("dest_notify_service_name", "")
         log.info(
             "Publishing to output",
             port=port_name,
             dest=dest_port,
             service=dest_service,
+            notify_service=dest_notify_service or None,
         )
         result = lib.slpn_output_publish(
             ctx_ptr,
@@ -139,6 +159,7 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             dest_port.encode("utf-8"),
             schema_name.encode("utf-8"),
             out.get("max_payload_bytes", 65536),
+            dest_notify_service.encode("utf-8"),
         )
         if result != 0:
             log.error("Failed to create publisher", service=dest_service)
@@ -400,6 +421,18 @@ def main():
                 log.info("Entering execution loop", mode=execution_mode)
 
                 if execution_mode == "reactive":
+                    # Try the destination's listener fd; -1 means no notify
+                    # service was wired (Rust source absent or older host) —
+                    # we fall back to a coarse sleep so the loop still
+                    # progresses without burning idle CPU.
+                    listener_fd = native_lib.slpn_event_listener_fd(native_ctx_ptr)
+                    stdin_fd = stdin.fileno()
+                    select_fds = [stdin_fd]
+                    if listener_fd >= 0:
+                        select_fds.append(listener_fd)
+                    # Cap the wait so a closed stdin / shutdown command latency
+                    # stays bounded even if no notify ever arrives.
+                    SELECT_TIMEOUT_S = 0.1
                     while running:
                         has_data = native_lib.slpn_input_poll(native_ctx_ptr)
                         if has_data == 1:
@@ -416,7 +449,9 @@ def main():
                             except Exception as e:
                                 log.error("process() error", error=str(e))
                         else:
-                            time.sleep(0.001)  # 1ms yield
+                            ready, _, _ = select.select(select_fds, [], [], SELECT_TIMEOUT_S)
+                            if listener_fd >= 0 and listener_fd in ready:
+                                native_lib.slpn_event_drain(native_ctx_ptr)
 
                         lifecycle_cmd = _handle_stdin_during_run(
                             stdin, stdout, processor, full_ctx, limited_ctx,

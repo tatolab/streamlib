@@ -12,7 +12,10 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
+use std::time::Duration;
 
+use iceoryx2::port::listener::Listener;
+use iceoryx2::port::notifier::Notifier;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
@@ -35,6 +38,8 @@ pub struct DenoNativeContext {
     publishers: HashMap<String, PublisherState>,
     /// Per-port read mode (port_name → READ_MODE_*). Default is SkipToLatest.
     port_read_modes: HashMap<String, i32>,
+    /// Single Listener for this processor's destination-paired Notify service.
+    notify_listener: Option<Listener<ipc::Service>>,
 }
 
 struct SubscriberState {
@@ -47,6 +52,8 @@ struct PublisherState {
     publisher: Publisher<ipc::Service, [u8], ()>,
     schema_name: String,
     dest_port: String,
+    /// Notifier into the destination's paired Event service. Some when wired.
+    notifier: Option<Notifier<ipc::Service>>,
 }
 
 impl DenoNativeContext {
@@ -58,6 +65,7 @@ impl DenoNativeContext {
             subscribers: HashMap::new(),
             publishers: HashMap::new(),
             port_read_modes: HashMap::new(),
+            notify_listener: None,
         })
     }
 }
@@ -320,9 +328,13 @@ pub unsafe extern "C" fn sldn_input_read(
 // C ABI — Output (publish + write)
 // ============================================================================
 
-/// Create a publisher for an iceoryx2 service.
+/// Create a publisher for an iceoryx2 service, plus an optional notifier into
+/// the destination's paired Event service.
 ///
 /// `dest_port` is the destination processor's input port name, used in FramePayload routing.
+/// `notify_service_name` may be the empty string or null to skip notifier setup.
+/// When non-empty, `sldn_output_write` will call `notify()` after every successful `send()`.
+///
 /// Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sldn_output_publish(
@@ -332,6 +344,7 @@ pub unsafe extern "C" fn sldn_output_publish(
     dest_port: *const c_char,
     schema_name: *const c_char,
     max_payload_bytes: usize,
+    notify_service_name: *const c_char,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_mut() } {
         Some(c) => c,
@@ -394,12 +407,52 @@ pub unsafe extern "C" fn sldn_output_publish(
         }
     };
 
+    let notifier = match unsafe { c_str_to_str(notify_service_name) } {
+        Some(name) if !name.is_empty() => match ServiceName::new(name) {
+            Ok(notify_name_iox) => match ctx
+                .node
+                .service_builder(&notify_name_iox)
+                .event()
+                .max_notifiers(16)
+                .max_listeners(1)
+                .open_or_create()
+            {
+                Ok(notify_service) => match notify_service.notifier_builder().create() {
+                    Ok(n) => Some(n),
+                    Err(e) => {
+                        tracing::warn!(
+                            "[sldn:{}] Failed to create notifier for '{}': {:?}",
+                            ctx.processor_id, name, e
+                        );
+                        None
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "[sldn:{}] Failed to open notify service '{}': {:?}",
+                        ctx.processor_id, name, e
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "[sldn:{}] Invalid notify service name '{}': {}",
+                    ctx.processor_id, name, e
+                );
+                None
+            }
+        },
+        _ => None,
+    };
+
     ctx.publishers.insert(
         port_name.to_string(),
         PublisherState {
             publisher,
             schema_name: schema.to_string(),
             dest_port: dest_port_str.to_string(),
+            notifier,
         },
     );
 
@@ -468,7 +521,117 @@ pub unsafe extern "C" fn sldn_output_write(
         return -1;
     }
 
+    if let Some(notifier) = state.notifier.as_ref()
+        && let Err(e) = notifier.notify()
+    {
+        tracing::trace!(
+            "[sldn:{}] notify() failed for port '{}': {:?}",
+            ctx.processor_id, port_name, e
+        );
+    }
+
     0
+}
+
+// ============================================================================
+// C ABI — Event service (Notifier/Listener for fd-multiplexed wakeups)
+// ============================================================================
+
+/// Subscribe to the destination's paired iceoryx2 Event service.
+///
+/// Idempotent — first call wins. Returns 0 on success, -1 on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sldn_event_subscribe(
+    ctx: *mut DenoNativeContext,
+    notify_service_name: *const c_char,
+) -> i32 {
+    let ctx = match unsafe { ctx.as_mut() } {
+        Some(c) => c,
+        None => return -1,
+    };
+    if ctx.notify_listener.is_some() {
+        return 0;
+    }
+    let name = match unsafe { c_str_to_str(notify_service_name) } {
+        Some(s) if !s.is_empty() => s,
+        _ => return -1,
+    };
+    let name_iox = match ServiceName::new(name) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::error!(
+                "[sldn:{}] Invalid notify service name '{}': {}",
+                ctx.processor_id, name, e
+            );
+            return -1;
+        }
+    };
+    let service = match ctx
+        .node
+        .service_builder(&name_iox)
+        .event()
+        .max_notifiers(16)
+        .max_listeners(1)
+        .open_or_create()
+    {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(
+                "[sldn:{}] Failed to open notify service '{}': {:?}",
+                ctx.processor_id, name, e
+            );
+            return -1;
+        }
+    };
+    let listener = match service.listener_builder().create() {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(
+                "[sldn:{}] Failed to create listener for '{}': {:?}",
+                ctx.processor_id, name, e
+            );
+            return -1;
+        }
+    };
+    ctx.notify_listener = Some(listener);
+    0
+}
+
+/// Block until a notify arrives or the timeout elapses.
+///
+/// Returns 1 if notified, 0 on timeout, -1 on error / no listener. Designed to
+/// be invoked through Deno's `nonblocking: true` FFI option so the JS event
+/// loop can stay responsive during the wait.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sldn_event_wait(
+    ctx: *mut DenoNativeContext,
+    timeout_ms: u32,
+) -> i32 {
+    let ctx = match unsafe { ctx.as_mut() } {
+        Some(c) => c,
+        None => return -1,
+    };
+    let Some(listener) = ctx.notify_listener.as_ref() else {
+        return -1;
+    };
+    let mut woke = false;
+    if let Err(e) = listener.timed_wait_all(
+        |_id| {
+            woke = true;
+        },
+        Duration::from_millis(timeout_ms as u64),
+    ) {
+        tracing::trace!(
+            "[sldn:{}] timed_wait_all failed: {:?}",
+            ctx.processor_id, e
+        );
+        return -1;
+    }
+    if woke {
+        1
+    } else {
+        0
+    }
 }
 
 // ============================================================================

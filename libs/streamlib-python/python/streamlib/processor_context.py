@@ -147,6 +147,7 @@ def load_native_lib(lib_path):
     lib.slpn_output_publish.argtypes = [
         ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
         ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
+        ctypes.c_char_p,  # notify_service_name (may be empty/null)
     ]
     lib.slpn_output_publish.restype = ctypes.c_int32
     lib.slpn_output_write.argtypes = [
@@ -154,6 +155,14 @@ def load_native_lib(lib_path):
         ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int64,
     ]
     lib.slpn_output_write.restype = ctypes.c_int32
+
+    # Event service (fd-multiplexed wakeups)
+    lib.slpn_event_subscribe.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.slpn_event_subscribe.restype = ctypes.c_int32
+    lib.slpn_event_listener_fd.argtypes = [ctypes.c_void_p]
+    lib.slpn_event_listener_fd.restype = ctypes.c_int32
+    lib.slpn_event_drain.argtypes = [ctypes.c_void_p]
+    lib.slpn_event_drain.restype = ctypes.c_int32
 
     # GPU Surface
     lib.slpn_gpu_surface_lookup.argtypes = [ctypes.c_uint32]
