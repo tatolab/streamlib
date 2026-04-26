@@ -148,9 +148,4 @@ impl<'h> SubprocessCrashHarness<'h> {
         }
     }
 
-    /// Spawn the child and return it without killing — for tests that
-    /// want to drive the kill manually.
-    pub fn spawn_only(mut self) -> io::Result<Child> {
-        self.command.spawn()
-    }
 }

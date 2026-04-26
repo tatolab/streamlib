@@ -43,9 +43,10 @@ pub struct MockView {
 pub struct MockAdapter {
     counters: Mutex<AccessCounters>,
     serial: AtomicU64,
-    /// Whether the next read acquire should fail with
-    /// [`AdapterError::SurfaceNotFound`]. Used by conformance tests.
-    pub fail_with_not_found: AtomicU64,
+    /// Whether the next acquire should fail with
+    /// [`AdapterError::SurfaceNotFound`]. Used by conformance tests
+    /// via [`Self::set_fail_with_not_found`].
+    fail_with_not_found: AtomicU64,
 }
 
 impl Default for MockAdapter {
@@ -61,6 +62,15 @@ impl Default for MockAdapter {
 impl MockAdapter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Toggle the "next acquire returns `SurfaceNotFound`" mode.
+    ///
+    /// Test-only knob — real adapters never need this, it exists so
+    /// the conformance suite can confirm the error path is wired up.
+    pub fn set_fail_with_not_found(&self, fail: bool) {
+        self.fail_with_not_found
+            .store(if fail { 1 } else { 0 }, Ordering::Release);
     }
 
     /// Snapshot of acquire/release counters for assertions.
@@ -152,6 +162,59 @@ impl SurfaceAdapter for MockAdapter {
                 acquire_serial: serial,
             },
         ))
+    }
+
+    fn try_acquire_read<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<ReadGuard<'g, Self>>, AdapterError> {
+        if self.fail_with_not_found.load(Ordering::Acquire) != 0 {
+            return Err(AdapterError::SurfaceNotFound {
+                surface_id: surface.id,
+            });
+        }
+        let mut c = self.counters.lock().expect("mock adapter mutex poisoned");
+        if c.write_held {
+            // Non-blocking: contention is Ok(None), not an error.
+            return Ok(None);
+        }
+        c.read_holders += 1;
+        c.acquires_read += 1;
+        let serial = self.serial.fetch_add(1, Ordering::AcqRel);
+        Ok(Some(ReadGuard::new(
+            self,
+            surface.id,
+            MockView {
+                surface_id: surface.id,
+                acquire_serial: serial,
+            },
+        )))
+    }
+
+    fn try_acquire_write<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<WriteGuard<'g, Self>>, AdapterError> {
+        if self.fail_with_not_found.load(Ordering::Acquire) != 0 {
+            return Err(AdapterError::SurfaceNotFound {
+                surface_id: surface.id,
+            });
+        }
+        let mut c = self.counters.lock().expect("mock adapter mutex poisoned");
+        if c.write_held || c.read_holders > 0 {
+            return Ok(None);
+        }
+        c.write_held = true;
+        c.acquires_write += 1;
+        let serial = self.serial.fetch_add(1, Ordering::AcqRel);
+        Ok(Some(WriteGuard::new(
+            self,
+            surface.id,
+            MockView {
+                surface_id: surface.id,
+                acquire_serial: serial,
+            },
+        )))
     }
 
     fn end_read_access(&self, _surface_id: SurfaceId) {

@@ -73,20 +73,32 @@ def test_surface_transport_handle_layout():
 
 
 def test_surface_sync_state_layout():
-    assert _SurfaceSyncStateC.timeline_semaphore.offset == 0
-    assert _SurfaceSyncStateC.last_acquire_value.offset == 8
-    assert _SurfaceSyncStateC.last_release_value.offset == 16
-    assert _SurfaceSyncStateC.current_image_layout.offset == 24
-    assert _SurfaceSyncStateC._pad.offset == 28
-    assert ctypes.sizeof(_SurfaceSyncStateC) == 32
+    # timeline_semaphore_handle: u64 @ 0
+    # timeline_semaphore_sync_fd: i32 @ 8
+    # _pad_a: u32 @ 12
+    # last_acquire_value: u64 @ 16
+    # last_release_value: u64 @ 24
+    # current_image_layout: i32 @ 32
+    # _pad_b: u32 @ 36
+    # _reserved: [u8; 16] @ 40
+    # total: 56, align 8
+    assert _SurfaceSyncStateC.timeline_semaphore_handle.offset == 0
+    assert _SurfaceSyncStateC.timeline_semaphore_sync_fd.offset == 8
+    assert _SurfaceSyncStateC._pad_a.offset == 12
+    assert _SurfaceSyncStateC.last_acquire_value.offset == 16
+    assert _SurfaceSyncStateC.last_release_value.offset == 24
+    assert _SurfaceSyncStateC.current_image_layout.offset == 32
+    assert _SurfaceSyncStateC._pad_b.offset == 36
+    assert _SurfaceSyncStateC._reserved.offset == 40
+    assert ctypes.sizeof(_SurfaceSyncStateC) == 56
     assert ctypes.alignment(_SurfaceSyncStateC) == 8
 
 
 def test_streamlib_surface_layout():
     """Locks the Rust `#[repr(C)] StreamlibSurface` layout."""
     # id: u64 @ 0; width: u32 @ 8; height: u32 @ 12; format: u32 @ 16;
-    # usage: u32 @ 20; transport: SurfaceTransportHandle @ 24;
-    # sync: SurfaceSyncState @ 120; total 152, align 8.
+    # usage: u32 @ 20; transport: SurfaceTransportHandle (96) @ 24;
+    # sync: SurfaceSyncState (56) @ 120; total 176, align 8.
     assert _StreamlibSurfaceC.id.offset == 0
     assert _StreamlibSurfaceC.width.offset == 8
     assert _StreamlibSurfaceC.height.offset == 12
@@ -94,7 +106,7 @@ def test_streamlib_surface_layout():
     assert _StreamlibSurfaceC.usage.offset == 20
     assert _StreamlibSurfaceC.transport.offset == 24
     assert _StreamlibSurfaceC.sync.offset == 120
-    assert ctypes.sizeof(_StreamlibSurfaceC) == 152
+    assert ctypes.sizeof(_StreamlibSurfaceC) == 176
     assert ctypes.alignment(_StreamlibSurfaceC) == 8
 
 

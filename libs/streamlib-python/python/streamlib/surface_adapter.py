@@ -75,14 +75,22 @@ class _SurfaceTransportHandleC(ctypes.Structure):
 
 
 class _SurfaceSyncStateC(ctypes.Structure):
-    """Mirror of Rust `SurfaceSyncState`."""
+    """Mirror of Rust `SurfaceSyncState`.
+
+    Subprocess adapters wait/signal via the imported `SYNC_FD`
+    (`vkImportSemaphoreFdKHR`) — they cannot dereference
+    `timeline_semaphore_handle` (a host-side `VkSemaphore`).
+    """
 
     _fields_ = [
-        ("timeline_semaphore", ctypes.c_uint64),
+        ("timeline_semaphore_handle", ctypes.c_uint64),
+        ("timeline_semaphore_sync_fd", ctypes.c_int32),
+        ("_pad_a", ctypes.c_uint32),
         ("last_acquire_value", ctypes.c_uint64),
         ("last_release_value", ctypes.c_uint64),
         ("current_image_layout", ctypes.c_int32),
-        ("_pad", ctypes.c_uint32),
+        ("_pad_b", ctypes.c_uint32),
+        ("_reserved", ctypes.c_uint8 * 16),
     ]
 
 

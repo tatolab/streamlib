@@ -63,19 +63,22 @@ export const SurfaceLayout = {
   },
   /** SurfaceSyncState */
   SyncState: {
-    Size: 32,
+    Size: 56,
     Align: 8,
     Offsets: {
-      timelineSemaphore: 0,
-      lastAcquireValue: 8,
-      lastReleaseValue: 16,
-      currentImageLayout: 24,
-      pad: 28,
+      timelineSemaphoreHandle: 0,
+      timelineSemaphoreSyncFd: 8,
+      padA: 12,
+      lastAcquireValue: 16,
+      lastReleaseValue: 24,
+      currentImageLayout: 32,
+      padB: 36,
+      reserved: 40,
     },
   },
   /** StreamlibSurface (top-level) */
   Surface: {
-    Size: 152,
+    Size: 176,
     Align: 8,
     Offsets: {
       id: 0,

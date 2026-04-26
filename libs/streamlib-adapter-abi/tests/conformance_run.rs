@@ -35,9 +35,7 @@ fn mock_adapter_passes_conformance_suite() {
 #[test]
 fn mock_adapter_surface_not_found_path() {
     let adapter = MockAdapter::new();
-    adapter
-        .fail_with_not_found
-        .store(1, std::sync::atomic::Ordering::Release);
+    adapter.set_fail_with_not_found(true);
     let s = empty_surface(42);
     match adapter.acquire_read(&s) {
         Err(streamlib_adapter_abi::AdapterError::SurfaceNotFound { surface_id }) => {
@@ -45,4 +43,28 @@ fn mock_adapter_surface_not_found_path() {
         }
         other => panic!("expected SurfaceNotFound, got {other:?}"),
     }
+}
+
+#[test]
+fn mock_adapter_try_acquire_returns_none_on_contention() {
+    let adapter = MockAdapter::new();
+    let s = empty_surface(7);
+    let writer = adapter
+        .acquire_write(&s)
+        .expect("first writer must succeed");
+    let try_again = adapter
+        .try_acquire_write(&s)
+        .expect("try_acquire_write must not error on contention");
+    assert!(
+        try_again.is_none(),
+        "try_acquire_write must return None while another writer holds the surface"
+    );
+    drop(writer);
+    let after_release = adapter
+        .try_acquire_write(&s)
+        .expect("try_acquire_write after release must not error");
+    assert!(
+        after_release.is_some(),
+        "try_acquire_write must succeed once the surface is free"
+    );
 }

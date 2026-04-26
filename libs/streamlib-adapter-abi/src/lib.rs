@@ -20,8 +20,8 @@ mod subprocess_crash;
 pub mod testing;
 
 pub use adapter::{
-    CpuReadable, CpuWritable, GlWritable, SurfaceAdapter, VkImageHandle, VkImageLayoutValue,
-    VulkanWritable, STREAMLIB_ADAPTER_ABI_VERSION,
+    CpuReadable, CpuWritable, GlWritable, SurfaceAdapter, VkImageHandle, VkImageInfo,
+    VkImageLayoutValue, VulkanImageInfoExt, VulkanWritable, STREAMLIB_ADAPTER_ABI_VERSION,
 };
 pub use error::AdapterError;
 pub use guard::{ReadGuard, WriteGuard};

@@ -9,9 +9,17 @@ use crate::surface::{StreamlibSurface, SurfaceId};
 
 /// Major version of the surface-adapter ABI.
 ///
-/// The runtime refuses adapters whose [`SurfaceAdapter::trait_version`]
-/// reports a different major. Adding methods to the trait is a minor
-/// (non-breaking) change; renaming/removing one is a major.
+/// Bumped on a breaking trait change (renamed/removed method, changed
+/// signature, changed `#[repr(C)]` field of any associated type).
+/// Adding new methods is non-breaking and does NOT bump.
+///
+/// Rust's vtable layout already enforces in-process compatibility at
+/// compile time — a mismatched `streamlib-adapter-abi` rlib version
+/// can't link into the runtime in the first place. This constant is
+/// load-bearing only at the cdylib boundary, where it'll be checked
+/// from a `#[repr(C)] AdapterDeclaration` shape (mirroring
+/// `streamlib-plugin-abi`'s `PluginDeclaration`) when dynamic adapter
+/// loading lands.
 pub const STREAMLIB_ADAPTER_ABI_VERSION: u32 = 1;
 
 /// Public ABI for a streamlib surface adapter.
@@ -22,6 +30,18 @@ pub const STREAMLIB_ADAPTER_ABI_VERSION: u32 = 1;
 /// access through [`Self::acquire_read`] / [`Self::acquire_write`] —
 /// synchronization (timeline semaphores, layout transitions) happens
 /// inside the scope and never appears in the customer's API.
+///
+/// Two acquisition flavors are provided:
+///
+/// - Blocking [`Self::acquire_read`] / [`Self::acquire_write`] —
+///   waits on the acquire-side timeline semaphore (and, for write,
+///   for any contended reader/writer to release). Right shape for
+///   batch / one-shot consumers.
+/// - Non-blocking [`Self::try_acquire_read`] / [`Self::try_acquire_write`] —
+///   returns `Ok(None)` immediately if the surface is contended,
+///   never blocks the caller. Right shape for processor-graph nodes
+///   that must not stall their thread runner while waiting on a
+///   downstream consumer to finish.
 ///
 /// The trait is `Send + Sync`. Concrete adapters typically wrap
 /// interior-mutable state behind a `Mutex` or `RwLock` so the trait's
@@ -38,7 +58,7 @@ pub trait SurfaceAdapter: Send + Sync {
     where
         Self: 'g;
 
-    /// Acquire scoped read access to `surface`.
+    /// Acquire scoped read access to `surface`, blocking until ready.
     ///
     /// Returns a [`ReadGuard`] whose `Drop` releases the access. Several
     /// concurrent readers are permitted; a writer is exclusive.
@@ -48,20 +68,35 @@ pub trait SurfaceAdapter: Send + Sync {
         surface: &StreamlibSurface,
     ) -> Result<ReadGuard<'g, Self>, AdapterError>;
 
-    /// Acquire scoped exclusive write access to `surface`.
+    /// Acquire scoped exclusive write access to `surface`, blocking until ready.
     #[allow(clippy::missing_errors_doc)]
     fn acquire_write<'g>(
         &'g self,
         surface: &StreamlibSurface,
     ) -> Result<WriteGuard<'g, Self>, AdapterError>;
 
-    /// ABI version this adapter was compiled against.
+    /// Try to acquire read access without blocking.
     ///
-    /// Defaults to [`STREAMLIB_ADAPTER_ABI_VERSION`] — the runtime
-    /// refuses adapters whose major doesn't match.
-    fn trait_version(&self) -> u32 {
-        STREAMLIB_ADAPTER_ABI_VERSION
-    }
+    /// Returns `Ok(Some(guard))` on success, `Ok(None)` if a writer
+    /// currently holds the surface (no error — caller decides whether
+    /// to back off, retry, or skip the frame), or `Err(...)` on a
+    /// genuine adapter failure.
+    #[allow(clippy::missing_errors_doc)]
+    fn try_acquire_read<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<ReadGuard<'g, Self>>, AdapterError>;
+
+    /// Try to acquire exclusive write access without blocking.
+    ///
+    /// Returns `Ok(Some(guard))` on success, `Ok(None)` if any reader
+    /// or another writer currently holds the surface, or `Err(...)`
+    /// on a genuine adapter failure.
+    #[allow(clippy::missing_errors_doc)]
+    fn try_acquire_write<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<WriteGuard<'g, Self>>, AdapterError>;
 
     /// Sealed: signal the release-side timeline semaphore for a read.
     ///
@@ -97,18 +132,71 @@ pub struct VkImageLayoutValue(pub i32);
 
 /// Capability marker for views that expose a Vulkan `VkImage`.
 ///
-/// Outer adapters that compose on Vulkan (Skia, custom RHIs) constrain
-/// their inner adapter via `for<'g> Inner::WriteView<'g>: VulkanWritable`
-/// — the inner view is consumed by the outer adapter only. Customers
-/// of the outer adapter never see the inner view.
+/// Outer adapters that compose on Vulkan (custom RHIs, basic
+/// Vulkan-on-Vulkan composition) constrain their inner adapter via
+/// `for<'g> Inner::WriteView<'g>: VulkanWritable`. This marker is
+/// minimal — image handle plus current layout — covering callers that
+/// only need to issue Vulkan commands against the image.
 ///
-/// The [`Self::vk_image_layout`] accessor is a deliberate escape hatch
-/// for the Skia adapter: Skia's `GrVkImageInfo` requires the current
-/// layout to build a backend context. Customers of `SurfaceAdapter`
-/// itself never see it.
+/// Frameworks that need a richer description of the underlying
+/// `VkImage` (Skia's `GrVkImageInfo`, debug snapshots, serialization)
+/// should also require [`VulkanImageInfoExt`] on the inner view.
 pub trait VulkanWritable {
     fn vk_image(&self) -> VkImageHandle;
     fn vk_image_layout(&self) -> VkImageLayoutValue;
+}
+
+/// Extended Vulkan image metadata required for compositing into
+/// frameworks that need full `VkImage` description.
+///
+/// Skia's `GrVkImageInfo`, vulkano's `Image`, and similar APIs need
+/// the memory binding plus tiling / format / usage / sample-count /
+/// queue-family details to wrap an externally-allocated image. This
+/// trait exposes a single `#[repr(C)] VkImageInfo` struct carrying
+/// all of them, with reserved bytes for additive ABI extensions
+/// before the next major bump.
+///
+/// Implement this on a view in addition to [`VulkanWritable`] when
+/// the adapter has the full information; outer adapters that only
+/// need the image handle keep the simpler `VulkanWritable` bound.
+pub trait VulkanImageInfoExt: VulkanWritable {
+    fn vk_image_info(&self) -> VkImageInfo;
+}
+
+/// Vulkan image description carried by [`VulkanImageInfoExt`].
+///
+/// Field types intentionally use raw integers (the underlying Vulkan
+/// enums and bitmasks are all `u32` / `i32` / `u64` per the spec) so
+/// this crate remains binding-agnostic.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct VkImageInfo {
+    /// `VkFormat` enumerant. `i32` per spec.
+    pub format: i32,
+    /// `VkImageTiling` enumerant. `i32` per spec.
+    pub tiling: i32,
+    /// `VkImageUsageFlags` bitmask.
+    pub usage_flags: u32,
+    /// `VkSampleCountFlagBits` bitmask (1 = `VK_SAMPLE_COUNT_1_BIT`).
+    pub sample_count: u32,
+    /// Number of mip levels.
+    pub level_count: u32,
+    /// Owning `VkQueue` family index.
+    pub queue_family: u32,
+    /// Opaque `VkDeviceMemory` handle.
+    pub memory_handle: u64,
+    /// Byte offset of the image within `memory_handle`.
+    pub memory_offset: u64,
+    /// Byte size of the image's region within `memory_handle`.
+    pub memory_size: u64,
+    /// `VkMemoryPropertyFlags` bitmask of the backing allocation.
+    pub memory_property_flags: u32,
+    /// 1 if the image was allocated `VK_IMAGE_CREATE_PROTECTED_BIT`.
+    pub protected: u32,
+    /// Opaque `VkSamplerYcbcrConversion` handle, or 0 if unused.
+    pub ycbcr_conversion: u64,
+    /// Reserved bytes for additive ABI extensions. MUST be zeroed.
+    pub _reserved: [u8; 16],
 }
 
 /// Capability marker for views that expose an OpenGL texture id.

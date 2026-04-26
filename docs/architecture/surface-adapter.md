@@ -68,33 +68,59 @@ with adapter.acquire_write(surface) as view:
 }  // [Symbol.dispose] runs here
 ```
 
+### Blocking vs. non-blocking acquire
+
+The Rust trait exposes both flavors:
+
+- `acquire_read` / `acquire_write` — blocks until the timeline
+  semaphore wait completes (and, for write, until any contended
+  reader/writer releases). Right shape for batch consumers.
+- `try_acquire_read` / `try_acquire_write` — returns
+  `Ok(None)` immediately when the surface is contended, never blocks.
+  Right shape for streamlib processor-graph nodes that must not stall
+  their thread runner waiting for a downstream consumer.
+
+The conformance suite exercises both — passing it means an adapter
+implements them correctly.
+
 ## Composition via capability markers
 
-Outer adapters compose on inner adapters via marker traits. Skia, for
-example, builds on Vulkan: it needs the inner adapter's view to expose
-a `VkImage`. The Skia adapter constrains the inner type via the
-`VulkanWritable` marker:
+Outer adapters compose on inner adapters via marker traits. The basic
+`VulkanWritable` covers callers that only need to issue Vulkan
+commands against the image:
+
+```rust
+pub trait VulkanWritable {
+    fn vk_image(&self) -> VkImageHandle;
+    fn vk_image_layout(&self) -> VkImageLayoutValue;
+}
+```
+
+`vk_image_layout()` is a deliberate escape hatch — many Vulkan-on-Vulkan
+compositions need the current layout to insert layout-transition
+barriers. Customers of `SurfaceAdapter` itself never see it; only
+adapter authors composing on Vulkan do.
+
+Frameworks that need a richer description of the underlying `VkImage`
+(Skia's `GrVkImageInfo`, debug snapshotting, serialization) require the
+extended marker `VulkanImageInfoExt`, which returns a `#[repr(C)]
+VkImageInfo` struct carrying format / tiling / usage / sample-count /
+level-count / queue-family / memory-binding / ycbcr-conversion plus
+reserved bytes for additive ABI extensions:
 
 ```rust
 impl<Inner> SurfaceAdapter for SkiaAdapter<Inner>
 where
     Inner: SurfaceAdapter,
-    for<'g> Inner::WriteView<'g>: VulkanWritable,
+    for<'g> Inner::WriteView<'g>: VulkanImageInfoExt,
 {
     type WriteView<'g> = SkiaWriteView<'g, Inner>;
-    // ... uses inner.view().vk_image() to build a GrVkImageInfo ...
+    // inner.view().vk_image_info() fills the entire GrVkImageInfo.
 }
 ```
 
 The customer of `SkiaAdapter` only ever sees `SkSurface`. The inner
 view is a private detail of the outer adapter.
-
-`VulkanWritable::vk_image_layout()` is a deliberate escape hatch: Skia's
-`GrVkImageInfo` requires the current image layout to build a backend
-context. Customers of `SurfaceAdapter` itself never see it — only
-adapter authors composing on Vulkan do. The escape hatch is "surfaced
-and discussed" rather than "smuggled in" per the engine-model rules
-in CLAUDE.md.
 
 Other capability markers:
 - `GlWritable` — view exposes `gl_texture_id() -> u32`.
@@ -119,9 +145,11 @@ Polyglot subprocesses (Python, Deno) hold an `OwnedFd`-bound
 `StreamlibSurface`. When the subprocess exits cleanly, `Drop` runs
 the `streamlib-surface-client::release_surface` request. When the
 subprocess crashes mid-write, the kernel closes the inherited fd; the
-host's surface-share watchdog (planned, see follow-up issue) observes
+host's surface-share watchdog (tracked in
+[#520](https://github.com/tatolab/streamlib/issues/520)) observes
 `EPOLLHUP` on the per-subprocess Unix socket and decrements the
-backing's refcount.
+backing's refcount. Until #520 lands, host-side cleanup of crashed
+subprocesses is manual.
 
 Subprocess Python/Deno code MUST NOT create its own `VkDevice` —
 dual `VkDevice` on NVIDIA Linux SIGSEGVs (see
@@ -132,13 +160,18 @@ that's the only legal Vulkan allocation path on the subprocess side.
 
 ## ABI version gate
 
-`STREAMLIB_ADAPTER_ABI_VERSION` (currently `1`) is reported by every
-adapter's default `trait_version()` method. The runtime refuses an
-adapter whose major doesn't match — `AdapterError::IncompatibleAdapter`
-surfaces the mismatch with both versions named.
+`STREAMLIB_ADAPTER_ABI_VERSION` (currently `1`) is the major-version
+constant. Adding methods to the trait is non-breaking and does NOT
+bump it; renaming or removing a method, or changing an existing
+signature or `#[repr(C)]` field, is a major bump.
 
-Adding methods to the trait is a non-breaking minor change. Renaming
-or removing a method, or changing an existing signature, is a major.
+The trait does not carry a `trait_version()` method — Rust's vtable
+layout already enforces in-process compatibility at compile time. A
+mismatched `streamlib-adapter-abi` rlib version cannot link into the
+runtime in the first place. The constant becomes load-bearing only
+at the cdylib boundary, where it'll be checked from a `#[repr(C)]
+AdapterDeclaration` shape (mirroring `streamlib-plugin-abi`'s
+`PluginDeclaration`) when dynamic adapter loading lands.
 
 ## Where the code lives
 

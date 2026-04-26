@@ -37,15 +37,6 @@ pub enum AdapterError {
     #[error("sync timeout after {duration:?}")]
     SyncTimeout { duration: Duration },
 
-    /// The adapter's reported ABI version is not compatible with the runtime.
-    #[error(
-        "adapter ABI v{trait_version} incompatible with runtime v{runtime_version}"
-    )]
-    IncompatibleAdapter {
-        trait_version: u32,
-        runtime_version: u32,
-    },
-
     /// The host-side backing for this surface was destroyed (refcount → 0).
     #[error("backing for surface {surface_id} was destroyed")]
     BackingDestroyed { surface_id: SurfaceId },

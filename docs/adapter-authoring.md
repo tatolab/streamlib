@@ -30,15 +30,22 @@ an `SkSurface`. Views are short-lived, scope-bound, and parameterized
 by the guard's lifetime via GATs:
 
 ```rust
-struct VulkanReadView<'g> {
+struct VulkanWriteView<'g> {
     image: VkImageHandle,
     layout: VkImageLayoutValue,
+    info: VkImageInfo,
     _marker: std::marker::PhantomData<&'g ()>,
 }
 
 impl VulkanWritable for VulkanWriteView<'_> {
     fn vk_image(&self) -> VkImageHandle { self.image }
     fn vk_image_layout(&self) -> VkImageLayoutValue { self.layout }
+}
+
+// Implement the extended marker so outer adapters that need full
+// VkImage description (Skia, debug snapshotters) can compose on top.
+impl VulkanImageInfoExt for VulkanWriteView<'_> {
+    fn vk_image_info(&self) -> VkImageInfo { self.info }
 }
 ```
 
@@ -60,8 +67,9 @@ impl SurfaceAdapter for MyAdapter {
         &'g self,
         surface: &StreamlibSurface,
     ) -> Result<ReadGuard<'g, Self>, AdapterError> {
-        // 1. Refuse if a writer holds the surface.
-        // 2. Wait on the acquire-side timeline-semaphore value.
+        // 1. Refuse if a writer holds the surface (WriteContended).
+        // 2. Wait on the acquire-side timeline-semaphore value
+        //    (blocking — caller asked for blocking acquire).
         // 3. Transition the image layout if needed.
         // 4. Build the view and return it inside a ReadGuard.
         Ok(ReadGuard::new(self, surface.id, view))
@@ -71,11 +79,28 @@ impl SurfaceAdapter for MyAdapter {
         &'g self,
         surface: &StreamlibSurface,
     ) -> Result<WriteGuard<'g, Self>, AdapterError> {
-        // 1. Refuse if any reader or another writer holds the surface
-        //    (return AdapterError::WriteContended).
-        // 2. Wait on the acquire-side timeline-semaphore value.
-        // 3. Transition the image layout if needed.
+        // Same shape; exclusive — fail with WriteContended if any
+        // reader or another writer holds the surface.
         Ok(WriteGuard::new(self, surface.id, view))
+    }
+
+    fn try_acquire_read<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<ReadGuard<'g, Self>>, AdapterError> {
+        // Same as acquire_read, but if a writer holds the surface
+        // return Ok(None) instead of WriteContended (or blocking).
+        // Used by processor-graph nodes that must not stall their
+        // thread runner.
+        Ok(Some(ReadGuard::new(self, surface.id, view)))
+    }
+
+    fn try_acquire_write<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<WriteGuard<'g, Self>>, AdapterError> {
+        // Same as acquire_write, but contention returns Ok(None).
+        Ok(Some(WriteGuard::new(self, surface.id, view)))
     }
 
     fn end_read_access(&self, surface_id: SurfaceId) {
@@ -109,14 +134,23 @@ fn my_adapter_passes_conformance() {
 ```
 
 The fixture exercises:
-1. `trait_version()` reports the right ABI major.
-2. Single `acquire_read` / drop pairs leave no holders behind.
-3. Single `acquire_write` / drop pairs leave no holders behind.
-4. Two concurrent reads are permitted.
-5. Write contends with a live read (returns `WriteContended`).
-6. Write contends with a live write (returns `WriteContended`).
-7. Multiple-reader threads acquire/release in parallel without
+1. Single `acquire_read` / drop pairs leave no holders behind.
+2. Single `acquire_write` / drop pairs leave no holders behind.
+3. Two concurrent reads are permitted.
+4. Write contends with a live read (returns `WriteContended`).
+5. Write contends with a live write (returns `WriteContended`).
+6. `try_acquire_read` returns `Ok(None)` (not an error) while a
+   writer is held; `Ok(Some(_))` once released.
+7. `try_acquire_write` returns `Ok(None)` while a reader is held.
+8. Multiple-reader threads acquire/release in parallel without
    panicking — `Send + Sync` smoke test.
+
+What the fixture does NOT exercise: real GPU work crossing the scope
+(timeline values monotonically advance under load, layout transitions
+succeed, parallel reads under frame-rate budget). `MockAdapter` does
+no GPU work, so a clean conformance run is a *necessary* but not
+*sufficient* gate. Vulkan/OpenGL/Skia adapters should add their own
+adapter-specific tests on top.
 
 ## Subprocess crash safety
 
@@ -138,12 +172,13 @@ let outcome = SubprocessCrashHarness::new(cmd)
 ```
 
 The host-side surface-share watchdog wired to `EPOLLHUP` on the
-per-subprocess socket is a separate piece (see follow-up issue) —
-your adapter's crash test should demonstrate it integrates
-correctly with that watchdog when both are wired up. Until the
-watchdog ships, write a self-contained crash test that exercises
-your adapter's own state machine using a pipe-based observer (as
-the harness self-test does).
+per-subprocess socket is tracked in
+[#520](https://github.com/tatolab/streamlib/issues/520). Once it
+ships, your adapter's crash test should demonstrate it integrates
+correctly. Until then, write a self-contained crash test that
+exercises your adapter's own state machine using a pipe-based
+observer (as the harness self-test in
+`libs/streamlib-adapter-abi/tests/subprocess_crash.rs` does).
 
 ## Polyglot considerations
 
@@ -167,14 +202,27 @@ in the same commit.
 
 ## Stability contract
 
-`STREAMLIB_ADAPTER_ABI_VERSION` is the runtime gate. As of `1`:
+`STREAMLIB_ADAPTER_ABI_VERSION` is the major version, currently `1`.
+Bumps only on a breaking change. The trait does not carry a
+`trait_version()` method — Rust vtable layouts already enforce
+in-process compatibility at compile time; the constant becomes
+load-bearing at the cdylib boundary when dynamic adapter loading
+lands (planned via the same `#[repr(C)] AdapterDeclaration` shape
+`streamlib-plugin-abi` uses).
 
-- Adding new methods to `SurfaceAdapter` is non-breaking.
-- Adding new variants to `AdapterError` is non-breaking (callers must
-  not match exhaustively against it without `_`).
-- Adding new fields to `StreamlibSurface`'s `pub(crate)` substructures
-  is non-breaking — only the public field offsets are layout-locked.
-- Renaming or removing any of the above is a major bump.
+Non-breaking changes (do NOT bump the major):
+- Adding new methods to `SurfaceAdapter`.
+- Adding new variants to `AdapterError`. (Callers must not match
+  exhaustively without `_`.)
+- Filling reserved bytes in `SurfaceSyncState` / `VkImageInfo` with
+  named fields. The reserved zones are explicitly there for this.
+
+Breaking changes (do bump):
+- Renaming or removing a method or trait.
+- Changing an existing method signature.
+- Changing the `#[repr(C)]` layout of `StreamlibSurface`,
+  `SurfaceTransportHandle`, `SurfaceSyncState`, or `VkImageInfo`
+  (offsets, sizes, alignment).
 
 When the major bumps, the polyglot mirrors update in lockstep — Python
 `STREAMLIB_ADAPTER_ABI_VERSION` and Deno `STREAMLIB_ADAPTER_ABI_VERSION`

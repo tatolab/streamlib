@@ -90,25 +90,39 @@ impl SurfaceTransportHandle {
     }
 }
 
-/// Adapter-internal: timeline-semaphore counters and current image layout.
+/// Adapter-internal: timeline-semaphore handles, counters, and the
+/// current image layout.
 ///
 /// The release-side semaphore value advances inside `acquire_*` /
 /// `end_*_access` (sealed adapter methods called by guard `Drop`).
 /// Customers never touch these fields.
+///
+/// Subprocess adapters cannot dereference `timeline_semaphore_handle`
+/// directly — it's a host-side `VkSemaphore`. They import
+/// `timeline_semaphore_sync_fd` via `vkImportSemaphoreFdKHR` to wait
+/// or signal on the same timeline. Host-Rust adapters typically use
+/// the handle and ignore the fd.
+///
+/// `_reserved` is 16 bytes of zeroed space for additive ABI extensions
+/// before the next major bump (additional fds, opaque per-vendor sync
+/// state, etc.).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SurfaceSyncState {
-    /// Opaque host-side handle to the timeline semaphore. Adapter authors
-    /// resolve this against the host's surface-share state.
-    pub(crate) timeline_semaphore: u64,
+    /// Opaque host-side `VkSemaphore` handle.
+    pub(crate) timeline_semaphore_handle: u64,
+    /// Sync-fd exported via `vkGetSemaphoreFdKHR`; -1 when unset.
+    pub(crate) timeline_semaphore_sync_fd: i32,
+    pub(crate) _pad_a: u32,
     /// Last acquire-side wait value the host signaled.
     pub(crate) last_acquire_value: u64,
     /// Last release-side signal value the host saw.
     pub(crate) last_release_value: u64,
     /// Current `VkImageLayout` (i32 per Vulkan spec).
     pub(crate) current_image_layout: i32,
-    /// Padding so total size is a multiple of 8.
-    pub(crate) _pad: u32,
+    pub(crate) _pad_b: u32,
+    /// Reserved bytes for additive ABI extensions. MUST be zeroed.
+    pub(crate) _reserved: [u8; 16],
 }
 
 /// Stable, customer-visible descriptor for a shared GPU surface.
@@ -218,12 +232,27 @@ mod tests {
 
     #[test]
     fn surface_sync_state_layout() {
-        assert_eq!(offset_of!(SurfaceSyncState, timeline_semaphore), 0);
-        assert_eq!(offset_of!(SurfaceSyncState, last_acquire_value), 8);
-        assert_eq!(offset_of!(SurfaceSyncState, last_release_value), 16);
-        assert_eq!(offset_of!(SurfaceSyncState, current_image_layout), 24);
-        assert_eq!(offset_of!(SurfaceSyncState, _pad), 28);
-        assert_eq!(size_of::<SurfaceSyncState>(), 32);
+        // timeline_semaphore_handle: u64 @ 0
+        // timeline_semaphore_sync_fd: i32 @ 8
+        // _pad_a: u32 @ 12
+        // last_acquire_value: u64 @ 16
+        // last_release_value: u64 @ 24
+        // current_image_layout: i32 @ 32
+        // _pad_b: u32 @ 36
+        // _reserved: [u8; 16] @ 40
+        // total: 56 bytes, align 8
+        assert_eq!(offset_of!(SurfaceSyncState, timeline_semaphore_handle), 0);
+        assert_eq!(
+            offset_of!(SurfaceSyncState, timeline_semaphore_sync_fd),
+            8
+        );
+        assert_eq!(offset_of!(SurfaceSyncState, _pad_a), 12);
+        assert_eq!(offset_of!(SurfaceSyncState, last_acquire_value), 16);
+        assert_eq!(offset_of!(SurfaceSyncState, last_release_value), 24);
+        assert_eq!(offset_of!(SurfaceSyncState, current_image_layout), 32);
+        assert_eq!(offset_of!(SurfaceSyncState, _pad_b), 36);
+        assert_eq!(offset_of!(SurfaceSyncState, _reserved), 40);
+        assert_eq!(size_of::<SurfaceSyncState>(), 56);
         assert_eq!(align_of::<SurfaceSyncState>(), 8);
     }
 
@@ -234,8 +263,9 @@ mod tests {
         // height: u32 @ 12
         // format: u32 @ 16
         // usage: u32 @ 20
-        // transport: SurfaceTransportHandle @ 24 (already 8-aligned)
-        // sync: SurfaceSyncState @ 120
+        // transport: SurfaceTransportHandle (96 B, align 8) @ 24
+        // sync: SurfaceSyncState (56 B, align 8) @ 120
+        // total: 176 bytes, align 8
         assert_eq!(offset_of!(StreamlibSurface, id), 0);
         assert_eq!(offset_of!(StreamlibSurface, width), 8);
         assert_eq!(offset_of!(StreamlibSurface, height), 12);
@@ -243,7 +273,7 @@ mod tests {
         assert_eq!(offset_of!(StreamlibSurface, usage), 20);
         assert_eq!(offset_of!(StreamlibSurface, transport), 24);
         assert_eq!(offset_of!(StreamlibSurface, sync), 120);
-        assert_eq!(size_of::<StreamlibSurface>(), 152);
+        assert_eq!(size_of::<StreamlibSurface>(), 176);
         assert_eq!(align_of::<StreamlibSurface>(), 8);
     }
 }
