@@ -16,6 +16,8 @@ use std::io;
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
+type PostSpawnHook<'h> = Box<dyn FnOnce(&Child) -> io::Result<()> + 'h>;
+
 /// When the harness should SIGKILL the child relative to its lifecycle.
 #[derive(Debug, Clone, Copy)]
 pub enum CrashTiming {
@@ -52,7 +54,7 @@ pub struct SubprocessCrashHarness<'h> {
     /// delay. Used by callers to close their parent-side copy of any
     /// fds the child inherited (so kernel-FD-cleanup can fire on
     /// SIGKILL) or to set up host-side observers.
-    post_spawn: Option<Box<dyn FnOnce(&Child) -> io::Result<()> + 'h>>,
+    post_spawn: Option<PostSpawnHook<'h>>,
 }
 
 impl<'h> SubprocessCrashHarness<'h> {
