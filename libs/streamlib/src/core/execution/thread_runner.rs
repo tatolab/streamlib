@@ -150,6 +150,10 @@ fn run_reactive_mode(
     // Listener fd (any upstream Notifier::notify() wakes the loop) and the
     // shutdown eventfd (compiler signals teardown). epoll_wait blocks
     // indefinitely — idle CPU is truly zero until one of those fds fires.
+    //
+    // Processors with no Rust-side listener fd (subprocess host, audio-only,
+    // etc.) fall through to the channel-poll sleep loop so process() still
+    // ticks at NO_WAITER_FALLBACK_SLEEP cadence — same shape they had before.
     let listener_fd = {
         let mut guard = processor.lock();
         guard
@@ -158,20 +162,20 @@ fn run_reactive_mode(
     };
 
     #[cfg(target_os = "linux")]
-    let waiter = match ReactiveLoopFdWaiter::new(listener_fd, shutdown_eventfd) {
-        Ok(w) => Some(w),
-        Err(e) => {
-            tracing::warn!(
-                "[{}] Reactive epoll setup failed, falling back to channel-poll loop: {}",
-                id,
-                e
-            );
-            None
-        }
+    let waiter = match listener_fd {
+        Some(fd) => match ReactiveLoopFdWaiter::new(fd, shutdown_eventfd) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                tracing::warn!(
+                    "[{}] Reactive epoll setup failed, falling back to channel-poll loop: {}",
+                    id,
+                    e
+                );
+                None
+            }
+        },
+        None => None,
     };
-
-    #[cfg(not(target_os = "linux"))]
-    let waiter: Option<ReactiveLoopFdWaiter> = None;
 
     let mut was_paused = false;
 
@@ -205,6 +209,7 @@ fn run_reactive_mode(
 
         // Block until an upstream notify, a shutdown signal, or (only in
         // the no-waiter fallback) the next channel-poll tick.
+        #[cfg(target_os = "linux")]
         match waiter.as_ref() {
             Some(w) => match w.wait() {
                 ReactiveLoopWakeOutcome::Notified => {
@@ -224,6 +229,8 @@ fn run_reactive_mode(
             },
             None => std::thread::sleep(NO_WAITER_FALLBACK_SLEEP),
         }
+        #[cfg(not(target_os = "linux"))]
+        std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
 
         {
             let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
@@ -253,9 +260,8 @@ enum ReactiveLoopWakeOutcome {
 #[cfg(target_os = "linux")]
 const SHUTDOWN_EVENTFD_TAG: u64 = u64::MAX;
 
-/// Linux-only: epoll fd watching the iceoryx2 listener fd plus the shutdown
-/// eventfd, used by the reactive runner. Non-Linux constructor returns
-/// `Unsupported` so the runner falls back to channel-poll sleep.
+/// Linux-only: epoll fd watching the iceoryx2 listener fd plus an optional
+/// shutdown eventfd, used by the reactive runner.
 #[cfg(target_os = "linux")]
 struct ReactiveLoopFdWaiter {
     epoll_fd: i32,
@@ -267,10 +273,7 @@ struct ReactiveLoopFdWaiter {
 
 #[cfg(target_os = "linux")]
 impl ReactiveLoopFdWaiter {
-    fn new(
-        listener_fd: Option<i32>,
-        shutdown_eventfd: Option<OwnedFd>,
-    ) -> std::io::Result<Self> {
+    fn new(listener_fd: i32, shutdown_eventfd: Option<OwnedFd>) -> std::io::Result<Self> {
         use std::os::fd::AsRawFd;
 
         // SAFETY: epoll_create1 returns -1 on failure; checked below.
@@ -295,12 +298,10 @@ impl ReactiveLoopFdWaiter {
             }
         };
 
-        if let Some(fd) = listener_fd {
-            if let Err(e) = register(fd, 0) {
-                // SAFETY: epoll_fd is owned and unused after this point.
-                unsafe { libc::close(epoll_fd) };
-                return Err(e);
-            }
+        if let Err(e) = register(listener_fd, 0) {
+            // SAFETY: epoll_fd is owned and unused after this point.
+            unsafe { libc::close(epoll_fd) };
+            return Err(e);
         }
         if let Some(ref efd) = shutdown_eventfd {
             if let Err(e) = register(efd.as_raw_fd(), SHUTDOWN_EVENTFD_TAG) {
@@ -355,16 +356,6 @@ impl Drop for ReactiveLoopFdWaiter {
         // OwnedFd field drops after this; epoll_ctl(EPOLL_CTL_DEL) isn't
         // required because closing the epoll fd releases its registrations.
         unsafe { libc::close(self.epoll_fd) };
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-struct ReactiveLoopFdWaiter;
-
-#[cfg(not(target_os = "linux"))]
-impl ReactiveLoopFdWaiter {
-    fn wait(&self) -> ReactiveLoopWakeOutcome {
-        ReactiveLoopWakeOutcome::Error
     }
 }
 
@@ -528,8 +519,8 @@ mod tests {
         // only while listener stays alive (listener outlives the waiter
         // thread because we join it before this function returns).
         let listener_fd = unsafe { listener.file_descriptor().native_handle() };
-        let waiter =
-            ReactiveLoopFdWaiter::new(Some(listener_fd), Some(make_eventfd())).expect("epoll setup");
+        let waiter = ReactiveLoopFdWaiter::new(listener_fd, Some(make_eventfd()))
+            .expect("epoll setup");
 
         // Move the waiter to a worker thread, then fire notify() from this
         // thread. The worker reports the outcome and elapsed time back via
@@ -593,7 +584,7 @@ mod tests {
         let shutdown_eventfd = make_eventfd();
         let shutdown_raw = shutdown_eventfd.as_raw_fd();
 
-        let waiter = ReactiveLoopFdWaiter::new(Some(listener_fd), Some(shutdown_eventfd))
+        let waiter = ReactiveLoopFdWaiter::new(listener_fd, Some(shutdown_eventfd))
             .expect("epoll setup");
 
         let (tx, rx) = std::sync::mpsc::channel();
