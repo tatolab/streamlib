@@ -264,9 +264,10 @@ impl Compiler {
                         if let Some(state) = node.get::<StateComponent>() {
                             *state.0.lock() = ProcessorState::Stopping;
                         }
-                        // Send shutdown signal
+                        // Send shutdown signal — eventfd wakes reactive
+                        // mode's epoll, channel send wakes continuous/manual.
                         if let Some(channel) = node.get::<ShutdownChannelComponent>() {
-                            let _ = channel.sender.send(());
+                            channel.signal_shutdown();
                         }
                         // Extract thread and subprocess handles
                         let th = node.remove::<ThreadHandleComponent>();

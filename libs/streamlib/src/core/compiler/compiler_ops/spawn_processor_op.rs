@@ -3,6 +3,9 @@
 
 use std::sync::Arc;
 
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
+
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::scheduling::{scheduling_strategy_for_processor, SchedulingStrategy};
@@ -325,7 +328,7 @@ fn spawn_dedicated_thread(
             );
 
             // === PHASE 3: Extract components for setup and loop ===
-            let (state_arc, shutdown_rx, pause_gate_inner, exec_config) = {
+            let (state_arc, shutdown_rx, shutdown_eventfd, pause_gate_inner, exec_config) = {
                 let mut graph = graph_arc_clone.write();
                 let node = match graph.traversal_mut().v(&proc_id_clone).first_mut() {
                     Some(n) => n,
@@ -343,14 +346,23 @@ fn spawn_dedicated_thread(
                     }
                 };
 
-                let shutdown_rx = match node.get_mut::<ShutdownChannelComponent>() {
-                    Some(channel) => match channel.take_receiver() {
-                        Some(rx) => rx,
-                        None => {
-                            tracing::error!("[{}] Shutdown receiver already taken", proc_id_clone);
-                            return;
-                        }
-                    },
+                let (shutdown_rx, shutdown_eventfd) = match node
+                    .get_mut::<ShutdownChannelComponent>()
+                {
+                    Some(channel) => {
+                        let rx = match channel.take_receiver() {
+                            Some(rx) => rx,
+                            None => {
+                                tracing::error!(
+                                    "[{}] Shutdown receiver already taken",
+                                    proc_id_clone
+                                );
+                                return;
+                            }
+                        };
+                        let eventfd = clone_shutdown_eventfd(channel, &proc_id_clone);
+                        (rx, eventfd)
+                    }
                     None => {
                         tracing::error!("[{}] No ShutdownChannelComponent", proc_id_clone);
                         return;
@@ -367,7 +379,13 @@ fn spawn_dedicated_thread(
 
                 let exec_config = processor_arc_clone.lock().execution_config();
 
-                (state, shutdown_rx, pause_gate_inner, exec_config)
+                (
+                    state,
+                    shutdown_rx,
+                    shutdown_eventfd,
+                    pause_gate_inner,
+                    exec_config,
+                )
             }; // Lock released here
 
             // === PHASE 4: Setup (serialized across processors) ===
@@ -422,6 +440,7 @@ fn spawn_dedicated_thread(
                 proc_id_clone,
                 processor_arc_clone,
                 shutdown_rx,
+                shutdown_eventfd,
                 state_arc,
                 pause_gate_inner,
                 exec_config,
@@ -444,4 +463,31 @@ fn spawn_dedicated_thread(
     }
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn clone_shutdown_eventfd(
+    channel: &ShutdownChannelComponent,
+    proc_id: &ProcessorUniqueId,
+) -> Option<OwnedFd> {
+    match channel.try_clone_shutdown_eventfd() {
+        Ok(fd) => Some(fd),
+        Err(e) => {
+            tracing::warn!(
+                "[{}] Failed to clone shutdown eventfd, reactive runner will fall back \
+                 to channel-only shutdown: {}",
+                proc_id,
+                e
+            );
+            None
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn clone_shutdown_eventfd(
+    _channel: &ShutdownChannelComponent,
+    _proc_id: &ProcessorUniqueId,
+) -> Option<OwnedFd> {
+    None
 }
