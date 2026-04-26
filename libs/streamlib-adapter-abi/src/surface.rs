@@ -177,7 +177,7 @@ mod tests {
     //!
     //! These numbers are copied verbatim into the Python ctypes mirror
     //! (`libs/streamlib-python/python/streamlib/surface_adapter.py`) and
-    //! the Deno UnsafePointerView reader (`libs/streamlib-deno/types/
+    //! the Deno UnsafePointerView reader (`libs/streamlib-deno/
     //! surface_adapter.ts`). When this file changes, both polyglot
     //! mirrors must be updated in the same commit; their twin tests
     //! lock the same offsets from the other side.
