@@ -192,6 +192,19 @@ fn handle_client_connection(
         // knows whose surfaces to release on disconnect. Pure consumers
         // (check_out only) carry no runtime_id; a runtime that registers and
         // crashes is exactly the leak the watchdog cleans up.
+        //
+        // Invariant: one runtime_id per connection for the connection's
+        // lifetime. Subprocesses inherit STREAMLIB_RUNTIME_ID once at spawn
+        // and never multiplex sibling runtimes over a single socket. If
+        // that ever changes, the watchdog must move to a per-request scope
+        // (or per-surface ownership tag) — first-latched-then-frozen drops
+        // sibling runtimes' surfaces on the floor.
+        //
+        // The empty-string and `"unknown"` filter rejects the default
+        // sentinels every wire handler falls back to when no runtime_id
+        // is provided (`unwrap_or("unknown")` in `handle_register` /
+        // `handle_unregister` / `handle_check_in`). Keep these filters in
+        // sync if the handler defaults change.
         if observed_runtime_id.is_none() {
             let candidate = request
                 .get("runtime_id")
