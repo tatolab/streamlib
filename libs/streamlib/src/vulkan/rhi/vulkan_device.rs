@@ -16,6 +16,8 @@ use vma::Alloc as _;
 use crate::core::rhi::TextureDescriptor;
 use crate::core::{Result, StreamError};
 
+#[cfg(target_os = "linux")]
+use super::drm_modifier_probe::{self, DrmModifierTable};
 use super::{VulkanCommandQueue, VulkanTexture};
 
 /// Vulkan GPU device.
@@ -56,6 +58,15 @@ pub struct VulkanDevice {
     /// VMA pool for DMA-BUF exportable DEVICE_LOCAL images (textures for IPC).
     #[cfg(target_os = "linux")]
     dma_buf_image_pool: Option<vma::Pool>,
+    /// VMA pool for DMA-BUF exportable images created with
+    /// `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` and a render-target-capable
+    /// DRM modifier from [`Self::drm_modifier_table`]. Separate from
+    /// [`Self::dma_buf_image_pool`] because the memory type index for tiled
+    /// DRM-modifier images may differ from the OPTIMAL pool's, and because
+    /// callers should never get a sampler-only LINEAR image when they asked
+    /// for an RT-capable one.
+    #[cfg(target_os = "linux")]
+    dma_buf_image_pool_tiled: Option<vma::Pool>,
     /// Backing storage for the buffer pool's VkExportMemoryAllocateInfo. VMA stores
     /// a raw pointer to this struct via pMemoryAllocateNext, so we must keep it
     /// alive for the pool's entire lifetime.
@@ -64,6 +75,15 @@ pub struct VulkanDevice {
     /// Backing storage for the image pool's VkExportMemoryAllocateInfo.
     #[cfg(target_os = "linux")]
     _dma_buf_image_export_info: Option<Box<vk::ExportMemoryAllocateInfo>>,
+    /// Backing storage for the tiled image pool's VkExportMemoryAllocateInfo.
+    #[cfg(target_os = "linux")]
+    _dma_buf_image_tiled_export_info: Option<Box<vk::ExportMemoryAllocateInfo>>,
+    /// Render-target-capable DRM modifiers per format from the EGL probe at
+    /// device init. Empty when libEGL is unavailable or the probe failed.
+    /// Callers consult this before requesting
+    /// [`VulkanTexture::new_render_target_dma_buf`].
+    #[cfg(target_os = "linux")]
+    drm_modifier_table: Arc<DrmModifierTable>,
     /// Tracks DMA-BUF import-path allocations (raw vkAllocateMemory for import only).
     live_allocation_count: AtomicUsize,
     /// Per-queue mutex for thread-safe queue submission (Vulkan spec requirement).
@@ -646,27 +666,60 @@ impl VulkanDevice {
                 .map_err(|e| StreamError::GpuError(format!("Failed to create VMA allocator: {e}")))?,
         );
 
+        // Run the EGL probe BEFORE creating pools — the tiled pool needs the
+        // modifier list. Probe failure (no libEGL, no display, extension
+        // missing) is non-fatal: the table stays empty and the tiled pool
+        // is skipped, which makes render-target DMA-BUF allocations refuse
+        // with an error rather than silently picking a sampler-only modifier.
+        // See `docs/learnings/nvidia-egl-dmabuf-render-target.md`.
+        #[cfg(target_os = "linux")]
+        let drm_modifier_table = match drm_modifier_probe::probe_default_display() {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                tracing::warn!(
+                    "EGL DRM modifier probe failed: {e} — render-target DMA-BUF \
+                     pool will be unavailable; only sampler-only / linear DMA-BUF \
+                     allocations will succeed"
+                );
+                Arc::new(DrmModifierTable::empty())
+            }
+        };
+
         // Build DMA-BUF export pools on Linux when external memory is supported.
+        // The tiled pool is built only when the EGL probe found at least one
+        // RT-capable modifier for BGRA — that's the probe shape.
         #[cfg(target_os = "linux")]
         let (
             dma_buf_buffer_pool,
             dma_buf_image_pool,
+            dma_buf_image_pool_tiled,
             dma_buf_buffer_export_info,
             dma_buf_image_export_info,
+            dma_buf_image_tiled_export_info,
         ) = if supports_external_memory {
-            match Self::create_dma_buf_pools(&allocator) {
-                Ok((bp, ip, bi, ii)) => (Some(bp), Some(ip), Some(bi), Some(ii)),
+            // BGRA8_UNORM in Vulkan = ARGB8888 in DRM.
+            let bgra_modifiers = drm_modifier_table
+                .rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
+            match Self::create_dma_buf_pools(
+                &allocator,
+                &device,
+                &memory_properties,
+                bgra_modifiers,
+            ) {
+                Ok((bp, ip, tp, bi, ii, ti)) => {
+                    (Some(bp), Some(ip), tp, Some(bi), Some(ii), ti)
+                }
                 Err(e) => {
                     tracing::warn!(
                         "DMA-BUF export pools could not be created — falling back to \
                          default pool for exportable allocations (may fail on NVIDIA \
                          after swapchain creation): {e}"
                     );
-                    (None, None, None, None)
+                    (None, None, None, None, None, None)
                 }
             }
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None, None)
         };
 
         tracing::info!(
@@ -709,9 +762,15 @@ impl VulkanDevice {
             #[cfg(target_os = "linux")]
             dma_buf_image_pool,
             #[cfg(target_os = "linux")]
+            dma_buf_image_pool_tiled,
+            #[cfg(target_os = "linux")]
             _dma_buf_buffer_export_info: dma_buf_buffer_export_info,
             #[cfg(target_os = "linux")]
             _dma_buf_image_export_info: dma_buf_image_export_info,
+            #[cfg(target_os = "linux")]
+            _dma_buf_image_tiled_export_info: dma_buf_image_tiled_export_info,
+            #[cfg(target_os = "linux")]
+            drm_modifier_table,
             live_allocation_count: AtomicUsize::new(0),
             graphics_queue_mutex: Mutex::new(()),
             transfer_queue_mutex: Mutex::new(()),
@@ -722,6 +781,78 @@ impl VulkanDevice {
         })
     }
 
+}
+
+/// Pick a DEVICE_LOCAL memory type for a tiled DMA-BUF VkImage.
+///
+/// VMA's `find_memory_type_index_for_image_info` cannot probe images with
+/// `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` (it asserts on the missing
+/// plane aspect for multi-plane modifiers), so we create a real probe
+/// image, query its memory requirements, and find a matching DEVICE_LOCAL
+/// type ourselves. The probe image is destroyed before the function returns.
+#[cfg(target_os = "linux")]
+fn probe_tiled_dma_buf_memory_type(
+    device: &vulkanalia::Device,
+    memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    tiled_modifiers: &[u64],
+) -> Result<u32> {
+    let mut probe_modifier_info = vk::ImageDrmFormatModifierListCreateInfoEXT::builder()
+        .drm_format_modifiers(tiled_modifiers);
+    let mut probe_external_info = vk::ExternalMemoryImageCreateInfo::builder()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+    let probe_image_info = vk::ImageCreateInfo::builder()
+        .image_type(vk::ImageType::_2D)
+        .format(vk::Format::B8G8R8A8_UNORM)
+        .extent(vk::Extent3D { width: 64, height: 64, depth: 1 })
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::_1)
+        .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+        .usage(
+            vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST,
+        )
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .push_next(&mut probe_modifier_info)
+        .push_next(&mut probe_external_info);
+
+    let probe_image = unsafe { device.create_image(&probe_image_info, None) }
+        .map_err(|e| {
+            StreamError::GpuError(format!(
+                "tiled-DMA-BUF probe vkCreateImage failed: {e}"
+            ))
+        })?;
+
+    let mem_reqs = unsafe { device.get_image_memory_requirements(probe_image) };
+    unsafe { device.destroy_image(probe_image, None) };
+
+    // First DEVICE_LOCAL type that satisfies memory_type_bits, preferring
+    // one without HOST_VISIBLE (main VRAM heap) on discrete GPUs.
+    for pass in 0..2 {
+        for i in 0..memory_properties.memory_type_count {
+            if (mem_reqs.memory_type_bits & (1 << i)) == 0 {
+                continue;
+            }
+            let flags = memory_properties.memory_types[i as usize].property_flags;
+            if !flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL) {
+                continue;
+            }
+            if pass == 0 && flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE) {
+                continue;
+            }
+            return Ok(i);
+        }
+    }
+    Err(StreamError::GpuError(format!(
+        "no DEVICE_LOCAL memory type accepts tiled DMA-BUF probe image (memory_type_bits=0x{:x})",
+        mem_reqs.memory_type_bits
+    )))
+}
+
+impl VulkanDevice {
     /// Build VMA pools dedicated to DMA-BUF exportable allocations.
     ///
     /// Each pool is pinned to a memory type that supports the relevant property
@@ -729,14 +860,26 @@ impl VulkanDevice {
     /// pMemoryAllocateNext. The export info structs are heap-boxed and returned
     /// alongside the pools — the caller must keep them alive for the pool's
     /// lifetime (VMA stores raw pointers to them).
+    ///
+    /// The third pool (tiled) is conditional on `tiled_modifiers` being
+    /// non-empty — we need at least one render-target-capable DRM modifier to
+    /// create the probe image. When the EGL probe returned no modifiers (no
+    /// libEGL, no display, extension missing) the tiled pool is `None` and
+    /// callers fall back to refusing render-target allocations.
     #[cfg(target_os = "linux")]
+    #[allow(clippy::too_many_arguments)]
     fn create_dma_buf_pools(
         allocator: &Arc<vma::Allocator>,
+        device: &vulkanalia::Device,
+        memory_properties: &vk::PhysicalDeviceMemoryProperties,
+        tiled_modifiers: &[u64],
     ) -> Result<(
         vma::Pool,
         vma::Pool,
+        Option<vma::Pool>,
         Box<vk::ExportMemoryAllocateInfo>,
         Box<vk::ExportMemoryAllocateInfo>,
+        Option<Box<vk::ExportMemoryAllocateInfo>>,
     )> {
         // ── Find memory type for HOST_VISIBLE DMA-BUF exportable buffers ──
         // The probe must mirror the real buffer create info used by
@@ -846,13 +989,70 @@ impl VulkanDevice {
             .create_pool(&image_pool_options)
             .map_err(|e| StreamError::GpuError(format!("create DMA-BUF image pool: {e}")))?;
 
+        // ── Tiled (DRM_FORMAT_MODIFIER) image pool ────────────────────────
+        // Only created when the EGL probe returned at least one
+        // render-target-capable modifier. VMA's
+        // `find_memory_type_index_for_image_info` asserts on
+        // `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` (it can't infer the plane
+        // aspect for multi-plane modifiers), so we probe via raw
+        // `vkCreateImage` + `vkGetImageMemoryRequirements` and pick a
+        // DEVICE_LOCAL type ourselves. The probe image is destroyed before
+        // the pool is created — VMA only needs the memory type index.
+        let (tiled_pool, tiled_export_info) = if tiled_modifiers.is_empty() {
+            (None, None)
+        } else {
+            match probe_tiled_dma_buf_memory_type(device, memory_properties, tiled_modifiers) {
+                Ok(tiled_mem_type_idx) => {
+                    let mut tiled_export_info = Box::new(
+                        vk::ExportMemoryAllocateInfo::builder()
+                            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+                            .build(),
+                    );
+                    let mut tiled_pool_options = vma::PoolOptions::default();
+                    tiled_pool_options = tiled_pool_options.push_next(tiled_export_info.as_mut());
+                    tiled_pool_options.memory_type_index = tiled_mem_type_idx;
+                    match allocator.create_pool(&tiled_pool_options) {
+                        Ok(tiled_pool) => {
+                            tracing::info!(
+                                "DMA-BUF VMA tiled image pool created — mem_type={}, modifiers_probed={}",
+                                tiled_mem_type_idx,
+                                tiled_modifiers.len(),
+                            );
+                            (Some(tiled_pool), Some(tiled_export_info))
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "DMA-BUF VMA tiled image pool creation failed (mem_type={}): {e} — render-target DMA-BUF allocations will be unavailable",
+                                tiled_mem_type_idx,
+                            );
+                            (None, None)
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Tiled DMA-BUF memory-type probe failed: {e} — render-target DMA-BUF allocations will be unavailable",
+                    );
+                    (None, None)
+                }
+            }
+        };
+
         tracing::info!(
-            "DMA-BUF VMA pools created — buffer mem_type={}, image mem_type={}",
+            "DMA-BUF VMA pools created — buffer mem_type={}, image mem_type={}, tiled={}",
             buffer_mem_type_idx,
-            image_mem_type_idx
+            image_mem_type_idx,
+            tiled_pool.is_some(),
         );
 
-        Ok((buffer_pool, image_pool, buffer_export_info, image_export_info))
+        Ok((
+            buffer_pool,
+            image_pool,
+            tiled_pool,
+            buffer_export_info,
+            image_export_info,
+            tiled_export_info,
+        ))
     }
 
     /// Find a memory type that satisfies both the type filter and required properties.
@@ -1295,6 +1495,28 @@ impl VulkanDevice {
         self.dma_buf_image_pool.as_ref()
     }
 
+    /// Get the VMA pool for DMA-BUF exportable images created with
+    /// `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`.
+    ///
+    /// Returns `None` when the EGL probe didn't find any RT-capable modifier
+    /// (no libEGL, no display, extension missing, or driver doesn't expose
+    /// `external_only=FALSE` modifiers for BGRA). Callers must refuse the
+    /// allocation in that case rather than fall back to LINEAR — LINEAR is
+    /// sampler-only on NVIDIA.
+    #[cfg(target_os = "linux")]
+    pub fn dma_buf_image_pool_tiled(&self) -> Option<&vma::Pool> {
+        self.dma_buf_image_pool_tiled.as_ref()
+    }
+
+    /// Render-target-capable DRM format modifiers, by DRM FOURCC, from the
+    /// EGL probe at device init. Empty when the probe failed. Callers
+    /// pass [`DrmModifierTable::rt_modifiers`] into
+    /// [`VulkanTexture::new_render_target_dma_buf`].
+    #[cfg(target_os = "linux")]
+    pub fn drm_modifier_table(&self) -> &Arc<DrmModifierTable> {
+        &self.drm_modifier_table
+    }
+
     /// Free device memory allocated via raw vkAllocateMemory (import path only).
     ///
     /// VMA-managed allocations are freed via [`vma::Allocator::destroy_image`] or
@@ -1351,6 +1573,7 @@ impl Drop for VulkanDevice {
         {
             drop(self.dma_buf_buffer_pool.take());
             drop(self.dma_buf_image_pool.take());
+            drop(self.dma_buf_image_pool_tiled.take());
         }
 
         drop(self.allocator.take());
@@ -1359,6 +1582,7 @@ impl Drop for VulkanDevice {
         {
             drop(self._dma_buf_buffer_export_info.take());
             drop(self._dma_buf_image_export_info.take());
+            drop(self._dma_buf_image_tiled_export_info.take());
         }
 
         unsafe {

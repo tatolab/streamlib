@@ -15,6 +15,30 @@ use crate::core::{Result, StreamError};
 
 use super::VulkanDevice;
 
+#[cfg(target_os = "linux")]
+use super::drm_modifier_probe::fourcc;
+
+/// Map a `TextureFormat` to the DRM FOURCC the EGL probe uses to look up
+/// render-target-capable modifiers. Returns `None` for formats that aren't
+/// part of the cross-language surface ABI (the ones the modifier probe
+/// doesn't interrogate).
+#[cfg(target_os = "linux")]
+fn texture_format_to_fourcc(format: TextureFormat) -> Option<u32> {
+    match format {
+        // BGRA8_UNORM in Vulkan = ARGB8888 in DRM (channel order matches once
+        // little-endian byte layout is taken into account).
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
+            Some(fourcc::DRM_FORMAT_ARGB8888)
+        }
+        // RGBA8_UNORM in Vulkan = ABGR8888 in DRM.
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => {
+            Some(fourcc::DRM_FORMAT_ABGR8888)
+        }
+        TextureFormat::Nv12 => Some(fourcc::DRM_FORMAT_NV12),
+        TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => None,
+    }
+}
+
 /// Convert RHI TextureFormat to Vulkan format.
 fn texture_format_to_vk(format: TextureFormat) -> vk::Format {
     match format {
@@ -79,6 +103,14 @@ pub struct VulkanTexture {
     /// Whether this texture was imported from a DMA-BUF fd (uses imported_memory path).
     #[cfg(target_os = "linux")]
     imported_from_dma_buf: bool,
+    /// DRM format modifier the driver picked for this image. Zero means
+    /// `DRM_FORMAT_MOD_LINEAR` or "not applicable" (image was not created
+    /// with [`vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT`]). Render-target
+    /// adapters propagate this through `SurfaceTransportHandle` so the
+    /// consumer's EGL import can pass it via
+    /// `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT`.
+    #[cfg(target_os = "linux")]
+    chosen_drm_format_modifier: u64,
     width: u32,
     height: u32,
     format: TextureFormat,
@@ -159,6 +191,8 @@ impl VulkanTexture {
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            chosen_drm_format_modifier: 0,
             width: desc.width,
             height: desc.height,
             format: desc.format,
@@ -216,6 +250,143 @@ impl VulkanTexture {
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            chosen_drm_format_modifier: 0,
+            width: desc.width,
+            height: desc.height,
+            format: desc.format,
+        })
+    }
+
+    /// Create a render-target-capable DMA-BUF exportable texture using
+    /// `VK_EXT_image_drm_format_modifier`.
+    ///
+    /// `modifier_candidates` MUST come from
+    /// [`crate::vulkan::rhi::drm_modifier_probe::DrmModifierTable::rt_modifiers`]
+    /// — every entry has `external_only=FALSE` per the EGL probe, so the
+    /// exported FD can be imported on the consumer side as a
+    /// `GL_TEXTURE_2D` and bound as an FBO color attachment. The driver
+    /// picks one modifier from the list at allocation time; the choice is
+    /// available via [`Self::chosen_drm_format_modifier`] after
+    /// construction.
+    ///
+    /// Empty `modifier_candidates` ⇒ `Err` — there is no fallback to
+    /// linear at this entry point because linear DMA-BUFs are sampler-only
+    /// on NVIDIA Linux (see
+    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`). Callers that
+    /// want a linear allocation should use [`Self::new`].
+    #[cfg(target_os = "linux")]
+    pub fn new_render_target_dma_buf(
+        vulkan_device: &Arc<VulkanDevice>,
+        desc: &TextureDescriptor,
+        modifier_candidates: &[u64],
+    ) -> Result<Self> {
+        if modifier_candidates.is_empty() {
+            return Err(StreamError::GpuError(
+                "new_render_target_dma_buf: empty modifier list — EGL did not advertise an external_only=FALSE modifier for this format. Linear DMA-BUF is sampler-only on NVIDIA; refusing to allocate.".into(),
+            ));
+        }
+
+        let vk_format = texture_format_to_vk(desc.format);
+        let usage_flags = texture_usages_to_vk(desc.usage);
+
+        // VK_EXT_image_drm_format_modifier requires the modifier list to
+        // outlive the ImageCreateInfo. Hold the slice in a local — the
+        // builder borrows from it via the pNext chain pointer, and the
+        // chain is consumed by create_image before this function returns.
+        let mut modifier_list_info = vk::ImageDrmFormatModifierListCreateInfoEXT::builder()
+            .drm_format_modifiers(modifier_candidates);
+
+        let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk_format)
+            .extent(vk::Extent3D {
+                width: desc.width,
+                height: desc.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(usage_flags)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut modifier_list_info)
+            .push_next(&mut external_image_info);
+
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+
+        // Prefer the dedicated tiled DMA-BUF image pool; fall back to the
+        // default allocator (still with the export-info pNext chain) only
+        // when external memory isn't supported. The fallback path may fail
+        // on NVIDIA after swapchain creation — caller is expected to have
+        // pre-warmed the pool to avoid that.
+        let (image, allocation) = if let Some(pool) =
+            vulkan_device.dma_buf_image_pool_tiled()
+        {
+            unsafe { pool.create_image(image_info, &alloc_opts) }
+        } else {
+            let allocator = vulkan_device.allocator();
+            unsafe { allocator.create_image(image_info, &alloc_opts) }
+        }
+        .map_err(|e| {
+            StreamError::GpuError(format!(
+                "Failed to create render-target DMA-BUF image (modifiers={:?}): {e}",
+                modifier_candidates
+            ))
+        })?;
+
+        // Read back which modifier the driver actually chose.
+        let chosen = {
+            use vulkanalia::vk::ExtImageDrmFormatModifierExtensionDeviceCommands;
+            let mut props = vk::ImageDrmFormatModifierPropertiesEXT::default();
+            let device = vulkan_device.device();
+            unsafe { device.get_image_drm_format_modifier_properties_ext(image, &mut props) }
+                .map_err(|e| {
+                    // Image leaks on this branch — the allocator owns it. We
+                    // destroy it explicitly so the caller doesn't need to.
+                    unsafe { vulkan_device.allocator().destroy_image(image, allocation) };
+                    StreamError::GpuError(format!(
+                        "vkGetImageDrmFormatModifierPropertiesEXT failed: {e}"
+                    ))
+                })?;
+            props.drm_format_modifier
+        };
+
+        if !modifier_candidates.contains(&chosen) {
+            unsafe { vulkan_device.allocator().destroy_image(image, allocation) };
+            return Err(StreamError::GpuError(format!(
+                "Driver picked modifier 0x{:016x} that wasn't in our candidate list {:?} — VUID violation",
+                chosen, modifier_candidates
+            )));
+        }
+
+        tracing::info!(
+            "VulkanTexture render-target DMA-BUF: {}x{} {:?} → modifier 0x{:016x}",
+            desc.width,
+            desc.height,
+            desc.format,
+            chosen
+        );
+
+        Ok(Self {
+            vulkan_device: Some(Arc::clone(vulkan_device)),
+            image: Some(image),
+            allocation: Some(allocation),
+            imported_memory: None,
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
+            imported_from_iosurface: false,
+            imported_from_dma_buf: false,
+            chosen_drm_format_modifier: chosen,
             width: desc.width,
             height: desc.height,
             format: desc.format,
@@ -316,6 +487,8 @@ impl VulkanTexture {
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            chosen_drm_format_modifier: 0,
             width: 0,
             height: 0,
             format: TextureFormat::Rgba8Unorm,
@@ -385,6 +558,83 @@ impl VulkanTexture {
 
 #[cfg(target_os = "linux")]
 impl VulkanTexture {
+    /// DRM format modifier the driver picked at allocation time.
+    ///
+    /// Zero for textures created via [`Self::new`] / [`Self::new_device_local`]
+    /// or imported via [`Self::from_dma_buf_fd`] — those paths do not go
+    /// through `VK_EXT_image_drm_format_modifier`. Render-target textures
+    /// allocated via [`Self::new_render_target_dma_buf`] return the modifier
+    /// the driver chose from the candidate list.
+    pub fn chosen_drm_format_modifier(&self) -> u64 {
+        self.chosen_drm_format_modifier
+    }
+
+    /// Per-plane DMA-BUF layout for this texture, in plane index order.
+    ///
+    /// Each entry is `(offset_bytes, row_pitch_bytes)` from
+    /// `vkGetImageSubresourceLayout` — the values consumer-side EGL imports
+    /// must pass in `EGL_DMA_BUF_PLANE{N}_OFFSET_EXT` /
+    /// `EGL_DMA_BUF_PLANE{N}_PITCH_EXT`.
+    ///
+    /// For single-plane formats (BGRA/RGBA) returns one entry. NV12 returns
+    /// two (Y plane, then UV). Returns `Err` for textures without a backing
+    /// image or when the format's plane count isn't supported by this RHI
+    /// build.
+    pub fn dma_buf_plane_layout(&self) -> Result<Vec<(u64, u64)>> {
+        let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
+            StreamError::GpuError("dma_buf_plane_layout: no VulkanDevice".into())
+        })?;
+        let image = self.image.ok_or_else(|| {
+            StreamError::GpuError("dma_buf_plane_layout: no image".into())
+        })?;
+
+        let plane_count = match self.format {
+            TextureFormat::Nv12 => 2,
+            _ => 1,
+        };
+
+        let mut planes = Vec::with_capacity(plane_count);
+        for plane_idx in 0..plane_count {
+            // For DRM_FORMAT_MODIFIER_EXT images use the MEMORY_PLANE aspect;
+            // for OPTIMAL/LINEAR images use COLOR (or PLANE_0/_1 for NV12).
+            let aspect_mask = if self.chosen_drm_format_modifier != 0 {
+                match plane_idx {
+                    0 => vk::ImageAspectFlags::MEMORY_PLANE_0_EXT,
+                    1 => vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
+                    2 => vk::ImageAspectFlags::MEMORY_PLANE_2_EXT,
+                    3 => vk::ImageAspectFlags::MEMORY_PLANE_3_EXT,
+                    _ => return Err(StreamError::GpuError(format!(
+                        "dma_buf_plane_layout: plane index {plane_idx} out of range"
+                    ))),
+                }
+            } else if matches!(self.format, TextureFormat::Nv12) {
+                match plane_idx {
+                    0 => vk::ImageAspectFlags::PLANE_0,
+                    1 => vk::ImageAspectFlags::PLANE_1,
+                    _ => return Err(StreamError::GpuError(format!(
+                        "dma_buf_plane_layout: NV12 plane {plane_idx} out of range"
+                    ))),
+                }
+            } else {
+                vk::ImageAspectFlags::COLOR
+            };
+
+            let subres = vk::ImageSubresource::builder()
+                .aspect_mask(aspect_mask)
+                .mip_level(0)
+                .array_layer(0)
+                .build();
+            let layout = unsafe {
+                vk_dev
+                    .device()
+                    .get_image_subresource_layout(image, &subres)
+            };
+            planes.push((layout.offset, layout.row_pitch));
+        }
+
+        Ok(planes)
+    }
+
     /// Export the texture's memory as a DMA-BUF file descriptor.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         if let Some(&fd) = self.cached_dma_buf_fd.get() {
@@ -493,6 +743,7 @@ impl VulkanTexture {
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: true,
+            chosen_drm_format_modifier: 0,
             width,
             height,
             format,
@@ -514,6 +765,8 @@ impl Clone for VulkanTexture {
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            chosen_drm_format_modifier: 0,
             width: self.width,
             height: self.height,
             format: self.format,
@@ -898,6 +1151,107 @@ mod tests {
         assert_eq!(view1, view2, "image_view() should return the same cached view");
 
         println!("Lazy image view: created and cached successfully");
+    }
+
+    /// Round-trip test for the render-target DMA-BUF path:
+    /// 1. Pull RT-capable modifiers for ARGB8888 from the device's EGL probe.
+    /// 2. Skip if none — vivid CI / headless boxes have no modifiers.
+    /// 3. Allocate a 1920x1080 BGRA render-target VkImage with the candidate list.
+    /// 4. Assert the driver-chosen modifier is in the candidate list.
+    /// 5. Export the DMA-BUF fd and read back the per-plane layout.
+    /// 6. Assert plane[0].row_pitch >= 1920 * 4 (BGRA stride is at least
+    ///    pixel-tight, possibly aligned up by tiling).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_render_target_dma_buf_round_trip() {
+        use crate::vulkan::rhi::drm_modifier_probe::fourcc;
+
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                println!("Skipping — no Vulkan device: {e}");
+                return;
+            }
+        };
+        let table = device.drm_modifier_table();
+        let modifiers = table.rt_modifiers(fourcc::DRM_FORMAT_ARGB8888);
+        if modifiers.is_empty() {
+            println!("Skipping — EGL probe returned no RT-capable modifiers for ARGB8888");
+            return;
+        }
+        if device.dma_buf_image_pool_tiled().is_none() {
+            println!("Skipping — tiled DMA-BUF pool not created");
+            return;
+        }
+
+        let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm).with_usage(
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+        );
+        let texture = VulkanTexture::new_render_target_dma_buf(&device, &desc, modifiers)
+            .expect("RT DMA-BUF allocation must succeed when modifiers exist");
+
+        assert!(texture.image().is_some());
+        let chosen = texture.chosen_drm_format_modifier();
+        assert!(
+            modifiers.contains(&chosen),
+            "driver picked modifier 0x{:016x} not in candidate list {:?}",
+            chosen,
+            modifiers
+        );
+        // Modifier 0 is DRM_FORMAT_MOD_LINEAR; the EGL probe's RT-capable
+        // list is supposed to be tiled-only.
+        assert_ne!(
+            chosen, 0,
+            "RT-capable modifier must not be DRM_FORMAT_MOD_LINEAR"
+        );
+
+        let layout = texture
+            .dma_buf_plane_layout()
+            .expect("plane layout must be queryable");
+        assert_eq!(layout.len(), 1, "BGRA is single-plane");
+        let (offset, row_pitch) = layout[0];
+        assert!(
+            row_pitch >= 1920 * 4,
+            "row_pitch {row_pitch} must be at least pixel-tight 1920*4"
+        );
+        println!(
+            "RT DMA-BUF: chosen modifier=0x{:016x}, plane[0]: offset={}, row_pitch={}",
+            chosen, offset, row_pitch
+        );
+
+        let fd = texture
+            .export_dma_buf_fd()
+            .expect("DMA-BUF export must succeed");
+        assert!(fd >= 0, "DMA-BUF fd must be non-negative");
+    }
+
+    /// `new_render_target_dma_buf` with an empty modifier list must fail
+    /// loudly rather than silently fall back to LINEAR (which is sampler-
+    /// only on NVIDIA — see docs/learnings/nvidia-egl-dmabuf-render-target.md).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_render_target_dma_buf_empty_modifiers_rejected() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                println!("Skipping — no Vulkan device: {e}");
+                return;
+            }
+        };
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm)
+            .with_usage(TextureUsages::RENDER_ATTACHMENT);
+        let result = VulkanTexture::new_render_target_dma_buf(&device, &desc, &[]);
+        let err = match result {
+            Ok(_) => panic!("empty modifier list must reject, but allocation succeeded"),
+            Err(e) => e,
+        };
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("empty modifier list") || msg.contains("EGL"),
+            "error must explain the missing-EGL-modifier root cause: {msg}"
+        );
     }
 
     #[test]
