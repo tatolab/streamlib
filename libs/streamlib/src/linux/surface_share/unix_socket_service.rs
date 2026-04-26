@@ -11,7 +11,7 @@
 //! for multi-plane DMA-BUFs (e.g. NV12 with separate Y and UV allocations).
 
 use std::io::Read;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -109,10 +109,34 @@ fn run_listener(
 
         match listener.accept() {
             Ok((stream, _addr)) => {
+                // SO_PEERCRED tells us the connecting process's pid. Connections
+                // from the host runtime's own process are diagnostic / test
+                // harnesses publishing surfaces over the wire — they intentionally
+                // disconnect after registering, and the surfaces must persist for
+                // subprocess consumers. The watchdog must skip these and only fire
+                // on out-of-process subprocess connections.
+                let is_subprocess_peer = is_out_of_process_peer(&stream);
                 let state = state.clone();
                 thread::spawn(move || {
-                    if let Err(e) = handle_client_connection(stream, state) {
+                    let mut connection_runtime_id: Option<String> = None;
+                    let conn_result = handle_client_connection(
+                        stream,
+                        state.clone(),
+                        &mut connection_runtime_id,
+                    );
+                    if let Err(e) = conn_result {
                         tracing::debug!("[Surface share] Client connection ended: {}", e);
+                    }
+                    // EPOLLHUP-equivalent watchdog: when the kernel closes the
+                    // socket (typical on subprocess SIGKILL), the per-connection
+                    // read loop above exits with `UnexpectedEof`. Release every
+                    // surface this client registered so a crashed subprocess
+                    // doesn't leak the backing. Same-process connections (host
+                    // runtime publishing to its own service) skip the watchdog
+                    // — those surfaces are intentionally long-lived.
+                    if let Some(runtime_id) = connection_runtime_id.filter(|_| is_subprocess_peer)
+                    {
+                        cleanup_runtime_surfaces(&state, &runtime_id);
                     }
                 });
             }
@@ -133,6 +157,7 @@ fn run_listener(
 fn handle_client_connection(
     mut stream: UnixStream,
     state: SurfaceShareState,
+    observed_runtime_id: &mut Option<String>,
 ) -> Result<(), std::io::Error> {
     stream.set_nonblocking(false)?;
 
@@ -162,6 +187,33 @@ fn handle_client_connection(
         })?;
 
         let op = request.get("op").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Latch the first non-default runtime_id we observe so the watchdog
+        // knows whose surfaces to release on disconnect. Pure consumers
+        // (check_out only) carry no runtime_id; a runtime that registers and
+        // crashes is exactly the leak the watchdog cleans up.
+        //
+        // Invariant: one runtime_id per connection for the connection's
+        // lifetime. Subprocesses inherit STREAMLIB_RUNTIME_ID once at spawn
+        // and never multiplex sibling runtimes over a single socket. If
+        // that ever changes, the watchdog must move to a per-request scope
+        // (or per-surface ownership tag) — first-latched-then-frozen drops
+        // sibling runtimes' surfaces on the floor.
+        //
+        // The empty-string and `"unknown"` filter rejects the default
+        // sentinels every wire handler falls back to when no runtime_id
+        // is provided (`unwrap_or("unknown")` in `handle_register` /
+        // `handle_unregister` / `handle_check_in`). Keep these filters in
+        // sync if the handler defaults change.
+        if observed_runtime_id.is_none() {
+            let candidate = request
+                .get("runtime_id")
+                .and_then(|v| v.as_str())
+                .filter(|rid| !rid.is_empty() && *rid != "unknown");
+            if let Some(rid) = candidate {
+                *observed_runtime_id = Some(rid.to_string());
+            }
+        }
 
         let (response, reply_fds) = match op {
             "register" => handle_register(&state, &request, &received_fds),
@@ -492,6 +544,52 @@ fn handle_check_in(
     (serde_json::json!({"surface_id": surface_id}), Vec::new())
 }
 
+/// True if the peer of `stream` is a different process than the host
+/// running this service — i.e. a polyglot subprocess. Linux `SO_PEERCRED`
+/// returns the connecting process's pid; comparing against `getpid()` lets
+/// the watchdog distinguish "subprocess crashed mid-flight" from "host
+/// runtime opened a same-process diagnostic connection." On query failure
+/// we conservatively classify the peer as a subprocess so the watchdog
+/// does not silently skip a real cleanup.
+fn is_out_of_process_peer(stream: &UnixStream) -> bool {
+    let mut ucred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut ucred as *mut libc::ucred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if ret != 0 {
+        return true;
+    }
+    let host_pid = unsafe { libc::getpid() };
+    ucred.pid != host_pid
+}
+
+/// Release every surface registered by `runtime_id`. Called when a client
+/// connection drops (kernel-side equivalent of EPOLLHUP — typical when a
+/// polyglot subprocess SIGKILLs mid-flight). Idempotent: any surface the
+/// subprocess already released cleanly is simply absent from the table, and
+/// `release_surface` returns `false`.
+fn cleanup_runtime_surfaces(state: &SurfaceShareState, runtime_id: &str) {
+    let surface_ids = state.surface_ids_by_runtime(runtime_id);
+    if surface_ids.is_empty() {
+        return;
+    }
+    tracing::info!(
+        "[Surface share] Watchdog: releasing {} surface(s) registered by '{}' after disconnect",
+        surface_ids.len(),
+        runtime_id,
+    );
+    for surface_id in surface_ids {
+        let _ = state.release_surface(&surface_id, runtime_id);
+    }
+}
+
 unsafe impl Send for UnixSocketSurfaceService {}
 unsafe impl Sync for UnixSocketSurfaceService {}
 
@@ -710,6 +808,119 @@ mod tests {
 
         drop(stream);
         service.stop();
+    }
+
+    /// Same-process wire connections (the host runtime opening a diagnostic
+    /// connection to its own surface-share socket — used by tests like
+    /// `polyglot_linux_check_out` to publish surfaces) must NOT trigger the
+    /// watchdog. SO_PEERCRED reports the same pid, so the disconnect
+    /// classification rejects it as a subprocess and cleanup is skipped.
+    /// Wire-level coverage of the actual subprocess-crash path lives in the
+    /// `surface_share_subprocess_crash` integration test.
+    #[test]
+    fn same_process_disconnect_does_not_trigger_watchdog() {
+        let state = SurfaceShareState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+        let runtime_id = "host-publishes-then-disconnects";
+        let send_fd = make_memfd_with(b"host-published-fixture");
+        let (resp, _) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": "check_in",
+                "runtime_id": runtime_id,
+                "width": 16,
+                "height": 16,
+                "format": "Bgra32",
+                "resource_type": "pixel_buffer",
+            }),
+            &[send_fd],
+            0,
+        )
+        .expect("check_in request");
+        unsafe { libc::close(send_fd) };
+        let surface_id = resp
+            .get("surface_id")
+            .and_then(|v| v.as_str())
+            .expect("surface_id")
+            .to_string();
+        assert_eq!(state.surface_ids_by_runtime(runtime_id).len(), 1);
+
+        drop(stream);
+
+        // Give the per-connection thread plenty of time to observe EOF and,
+        // if the watchdog were to misfire, run cleanup. The surface MUST
+        // survive: same-process publishers intentionally disconnect.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            state.surface_ids_by_runtime(runtime_id),
+            vec![surface_id],
+            "same-process disconnect must not release host-published surfaces",
+        );
+
+        service.stop();
+    }
+
+    /// Watchdog primitive (pure-function): given a state populated with
+    /// surfaces under multiple runtime_ids, `cleanup_runtime_surfaces`
+    /// releases only the targeted runtime's surfaces and is idempotent on
+    /// second call.
+    #[test]
+    fn cleanup_runtime_surfaces_is_scoped_and_idempotent() {
+        let state = SurfaceShareState::new();
+        // Use real memfds so release_surface's libc::close calls operate on
+        // valid fds (no fd-table corruption from -1 sentinels).
+        let mk = |label: &str| -> Vec<RawFd> {
+            let name = std::ffi::CString::new(label).unwrap();
+            let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
+            assert!(fd >= 0);
+            vec![fd]
+        };
+        for (sid, rid, label) in [
+            ("victim-1", "victim-runtime", "v1"),
+            ("victim-2", "victim-runtime", "v2"),
+            ("survivor", "survivor-runtime", "s"),
+        ] {
+            state
+                .register_surface(SurfaceRegistration {
+                    surface_id: sid,
+                    runtime_id: rid,
+                    dma_buf_fds: mk(label),
+                    plane_sizes: vec![0],
+                    plane_offsets: vec![0],
+                    width: 1,
+                    height: 1,
+                    format: "Bgra32",
+                    resource_type: "pixel_buffer",
+                })
+                .expect("register");
+        }
+
+        cleanup_runtime_surfaces(&state, "victim-runtime");
+        assert!(state.surface_ids_by_runtime("victim-runtime").is_empty());
+        assert_eq!(
+            state.surface_ids_by_runtime("survivor-runtime"),
+            vec!["survivor".to_string()]
+        );
+
+        // Idempotent second call: nothing left for the victim, survivor
+        // unaffected. Nothing panics.
+        cleanup_runtime_surfaces(&state, "victim-runtime");
+        assert_eq!(
+            state.surface_ids_by_runtime("survivor-runtime"),
+            vec!["survivor".to_string()]
+        );
+
+        // Cleanup of a runtime with no registrations is a no-op.
+        cleanup_runtime_surfaces(&state, "never-registered");
+        assert_eq!(
+            state.surface_ids_by_runtime("survivor-runtime"),
+            vec!["survivor".to_string()]
+        );
     }
 
     /// The service must refuse a check_in whose fd count exceeds the plane

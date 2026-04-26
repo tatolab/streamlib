@@ -162,6 +162,14 @@ pub use linux::{
     LinuxDisplayProcessor as DisplayProcessor,
 };
 
+/// Per-runtime surface-share service primitives. Exposed for adapter
+/// integration tests and 3rd-party tooling that needs to drive the
+/// service in isolation; production callers go through [`StreamRuntime`].
+#[cfg(target_os = "linux")]
+pub mod linux_surface_share {
+    pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+}
+
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 
