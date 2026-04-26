@@ -16,6 +16,7 @@ pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceory
 pub use output::OutputWriter;
 pub use payload::{
     EventPayload, FrameHeader, FramePayload, PortKey, SchemaName, TopicKey, FRAME_HEADER_SIZE,
-    MAX_EVENT_PAYLOAD_SIZE, MAX_PAYLOAD_SIZE, MAX_SCHEMA_NAME_SIZE, MAX_TOPIC_KEY_SIZE,
+    MAX_EVENT_PAYLOAD_SIZE, MAX_FANIN_PER_DESTINATION, MAX_PAYLOAD_SIZE, MAX_SCHEMA_NAME_SIZE,
+    MAX_TOPIC_KEY_SIZE,
 };
 pub use read_mode::ReadMode;

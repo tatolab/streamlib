@@ -18,6 +18,7 @@ use crate::core::graph::{
 };
 use crate::core::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
 use crate::core::ProcessorUniqueId;
+use crate::iceoryx2::MAX_FANIN_PER_DESTINATION;
 
 use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
 use super::spawn_python_native_subprocess_op::PythonNativeSubprocessHostProcessor;
@@ -99,6 +100,8 @@ pub fn open_iceoryx2_service(
     let (source_proc_id, source_port) =
         (from_port.processor_id.clone(), from_port.port_name.clone());
     let (dest_proc_id, dest_port) = (to_port.processor_id.clone(), to_port.port_name.clone());
+
+    reject_overcap_destination_fanin(graph, &dest_proc_id)?;
 
     let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
     let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
@@ -197,6 +200,35 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 /// wait on regardless of fan-in. Subprocess SDKs derive this name the same way.
 fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
     format!("streamlib/{}/notify", dest_proc_id)
+}
+
+/// Reject wiring that would push a destination's fan-in past
+/// [`MAX_FANIN_PER_DESTINATION`].
+///
+/// The new link is already in the graph by the time this runs, so the
+/// incoming-edge count IS the post-wiring fan-in. Without this check the
+/// (cap+1)th wiring fails inside iceoryx2's `notifier_builder().create()` /
+/// `publisher_builder().create()` — opaque, non-actionable, deep inside the
+/// FFI. Rejecting here surfaces a configuration error naming the destination.
+fn reject_overcap_destination_fanin(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+) -> Result<()> {
+    let fanin = graph
+        .traversal_mut()
+        .v(dest_proc_id)
+        .in_e()
+        .iter()
+        .count();
+    if fanin > MAX_FANIN_PER_DESTINATION {
+        return Err(StreamError::Configuration(format!(
+            "destination processor '{}' would have {} upstream sources, \
+             exceeding the per-destination iceoryx2 fan-in cap of {} \
+             (max_publishers / max_notifiers).",
+            dest_proc_id, fanin, MAX_FANIN_PER_DESTINATION,
+        )));
+    }
+    Ok(())
 }
 
 fn get_processor_pair(
@@ -752,4 +784,86 @@ fn open_iceoryx2_rust_to_subprocess(
         link_id
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
+    use crate::core::processors::ProcessorSpec;
+
+    fn add_mock_output_only(graph: &mut Graph) -> String {
+        graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                "com.streamlib.test.mock_output_only_processor",
+                serde_json::Value::Null,
+            ))
+            .first()
+            .expect("mock_output_only_processor must be in the registry")
+            .id
+            .to_string()
+    }
+
+    fn add_mock_input_only(graph: &mut Graph) -> String {
+        graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                "com.streamlib.test.mock_input_only_processor",
+                serde_json::Value::Null,
+            ))
+            .first()
+            .expect("mock_input_only_processor must be in the registry")
+            .id
+            .to_string()
+    }
+
+    #[test]
+    fn rejects_destination_with_overcap_fanin() {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_input_only(&mut graph);
+
+        // Wire MAX_FANIN_PER_DESTINATION + 1 distinct upstream sources into the
+        // same destination port. petgraph permits parallel edges, so all share
+        // the destination's `in1`.
+        for _ in 0..=MAX_FANIN_PER_DESTINATION {
+            let src_id = add_mock_output_only(&mut graph);
+            graph.traversal_mut().add_e(
+                OutputLinkPortRef::new(&src_id, "out1"),
+                InputLinkPortRef::new(&dest_id, "in1"),
+            );
+        }
+
+        let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
+        let err = reject_overcap_destination_fanin(&mut graph, &dest_uid)
+            .expect_err("fan-in cap+1 must be rejected");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(dest_id.as_str()),
+            "error must name the destination ('{dest_id}'); got: {msg}"
+        );
+        assert!(
+            msg.contains(&MAX_FANIN_PER_DESTINATION.to_string()),
+            "error must name the cap ('{MAX_FANIN_PER_DESTINATION}'); got: {msg}"
+        );
+    }
+
+    #[test]
+    fn accepts_destination_at_fanin_cap() {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_input_only(&mut graph);
+
+        for _ in 0..MAX_FANIN_PER_DESTINATION {
+            let src_id = add_mock_output_only(&mut graph);
+            graph.traversal_mut().add_e(
+                OutputLinkPortRef::new(&src_id, "out1"),
+                InputLinkPortRef::new(&dest_id, "in1"),
+            );
+        }
+
+        let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
+        reject_overcap_destination_fanin(&mut graph, &dest_uid)
+            .expect("fan-in == cap must succeed");
+    }
 }

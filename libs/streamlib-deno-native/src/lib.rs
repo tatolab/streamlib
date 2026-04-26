@@ -19,7 +19,7 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
-use streamlib_ipc_types::{FrameHeader, FRAME_HEADER_SIZE};
+use streamlib_ipc_types::{FrameHeader, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
 
 // ============================================================================
 // Context
@@ -149,7 +149,7 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         .node
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
-        .max_publishers(16)
+        .max_publishers(MAX_FANIN_PER_DESTINATION)
         .subscriber_max_buffer_size(16)
         .open_or_create()
     {
@@ -382,7 +382,7 @@ pub unsafe extern "C" fn sldn_output_publish(
         .node
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
-        .max_publishers(16)
+        .max_publishers(MAX_FANIN_PER_DESTINATION)
         .subscriber_max_buffer_size(16)
         .open_or_create()
     {
@@ -413,7 +413,7 @@ pub unsafe extern "C" fn sldn_output_publish(
                 .node
                 .service_builder(&notify_name_iox)
                 .event()
-                .max_notifiers(16)
+                .max_notifiers(MAX_FANIN_PER_DESTINATION)
                 .max_listeners(1)
                 .open_or_create()
             {
@@ -570,7 +570,7 @@ pub unsafe extern "C" fn sldn_event_subscribe(
         .node
         .service_builder(&name_iox)
         .event()
-        .max_notifiers(16)
+        .max_notifiers(MAX_FANIN_PER_DESTINATION)
         .max_listeners(1)
         .open_or_create()
     {
