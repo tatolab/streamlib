@@ -752,7 +752,13 @@ impl GpuContext {
         &self.texture_pool
     }
 
-    /// Acquire a texture from the pool.
+    /// Acquire a pooled texture for in-process GPU work.
+    ///
+    /// Uses `VK_IMAGE_TILING_OPTIMAL` and is **not** safe to share with
+    /// another process as a render target on NVIDIA Linux — the resulting
+    /// DMA-BUF (if exported) is sampler-only there. For cross-process
+    /// surfaces a consumer adapter will render INTO, use
+    /// [`Self::acquire_render_target_dma_buf_image`] (Linux) instead.
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         tracing::debug!(
             rhi_op = "acquire_texture",
@@ -792,8 +798,16 @@ impl GpuContext {
     /// Errors when the EGL probe didn't find an RT-capable modifier for
     /// `format` — there is no silent fallback to LINEAR (sampler-only on
     /// NVIDIA — see `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
-    /// Callers that want a CPU-readable linear allocation should use
-    /// [`Self::acquire_pixel_buffer`] instead.
+    ///
+    /// Picking the right acquire method:
+    /// - **In-process texture for sampling/compute**: use
+    ///   [`Self::acquire_texture`] (`VK_IMAGE_TILING_OPTIMAL`, no
+    ///   DMA-BUF export pressure).
+    /// - **CPU-readable buffer (mmap/PNG sample/MMAP fallback)**: use
+    ///   [`Self::acquire_pixel_buffer`] (`VkBuffer`, linear).
+    /// - **Cross-process surface a consumer adapter renders into**:
+    ///   this method (tiled DRM modifier, DMA-BUF exportable, FBO-completable
+    ///   on the consumer side).
     #[cfg(target_os = "linux")]
     pub fn acquire_render_target_dma_buf_image(
         &self,
@@ -1336,7 +1350,13 @@ impl GpuContextLimitedAccess {
         self.inner.camera_timeline_semaphore()
     }
 
-    /// Acquire a texture from a pre-reserved pool (Split: fast path).
+    /// Acquire a pooled texture from a pre-reserved pool (Split: fast path).
+    ///
+    /// `VK_IMAGE_TILING_OPTIMAL`, in-process use only. For cross-process
+    /// render targets, see [`GpuContextFullAccess::acquire_render_target_dma_buf_image`]
+    /// (Linux) — Sandbox callers don't have a render-target alloc path
+    /// because allocating a new RT-capable image is a privileged op
+    /// that goes through escalate.
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         self.inner.acquire_texture(desc)
     }
@@ -1495,7 +1515,10 @@ impl GpuContextFullAccess {
         self.inner.texture_pool()
     }
 
-    /// Acquire a texture from the pool.
+    /// Acquire a pooled texture for in-process GPU work
+    /// (`VK_IMAGE_TILING_OPTIMAL`). For cross-process render targets the
+    /// host adapter layer wants on Linux, see
+    /// [`Self::acquire_render_target_dma_buf_image`].
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         self.inner.acquire_texture(desc)
     }
