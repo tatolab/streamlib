@@ -11,7 +11,7 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use super::{EventPayload, FRAME_HEADER_SIZE};
+use super::{EventPayload, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
 use crate::core::error::{Result, StreamError};
 
 /// Thread-safe wrapper for iceoryx2 Node.
@@ -75,7 +75,7 @@ impl Iceoryx2Node {
         let service = node
             .service_builder(&service_name)
             .event()
-            .max_notifiers(16)
+            .max_notifiers(MAX_FANIN_PER_DESTINATION)
             .max_listeners(1)
             .open_or_create()
             .map_err(|e| {
@@ -97,7 +97,7 @@ impl Iceoryx2Node {
         let service = node
             .service_builder(&service_name)
             .publish_subscribe::<[u8]>()
-            .max_publishers(16)
+            .max_publishers(MAX_FANIN_PER_DESTINATION)
             .subscriber_max_buffer_size(16)
             .open_or_create()
             .map_err(|e| StreamError::Runtime(format!("Failed to open/create service: {:?}", e)))?;
@@ -202,5 +202,49 @@ impl Iceoryx2EventService {
             .map_err(|e| {
                 StreamError::Runtime(format!("Failed to create event subscriber: {:?}", e))
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unique_service_name(tag: &str) -> String {
+        format!(
+            "test/node/{}/{}/{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    /// `open_or_create_notify_service` must honor [`MAX_FANIN_PER_DESTINATION`]
+    /// in lockstep with the constant — exactly that many notifiers can be
+    /// created, and the (cap+1)th must fail. Catches drift if either the
+    /// service-builder cap or the constant is changed without the other.
+    #[test]
+    fn notify_service_max_notifiers_matches_const() {
+        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let service = node
+            .open_or_create_notify_service(&unique_service_name("notify_cap"))
+            .expect("open notify service");
+
+        let mut notifiers = Vec::with_capacity(MAX_FANIN_PER_DESTINATION);
+        for i in 0..MAX_FANIN_PER_DESTINATION {
+            notifiers.push(
+                service
+                    .create_notifier()
+                    .unwrap_or_else(|e| panic!("notifier {i} (under cap) must succeed: {e:?}")),
+            );
+        }
+        assert!(
+            service.create_notifier().is_err(),
+            "creating notifier {} must fail — service-builder cap drifted from MAX_FANIN_PER_DESTINATION ({})",
+            MAX_FANIN_PER_DESTINATION + 1,
+            MAX_FANIN_PER_DESTINATION,
+        );
     }
 }

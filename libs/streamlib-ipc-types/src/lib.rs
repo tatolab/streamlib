@@ -11,6 +11,15 @@ pub const MAX_PORT_KEY_SIZE: usize = 64;
 pub const MAX_EVENT_PAYLOAD_SIZE: usize = 8192;
 pub const MAX_TOPIC_KEY_SIZE: usize = 128;
 
+/// Maximum number of upstream sources that can fan in to one destination processor.
+///
+/// Sized in lockstep across the per-destination iceoryx2 pub/sub service
+/// (`max_publishers`) and its paired Notify service (`max_notifiers`) so both fail
+/// at the same fan-in. The graph compiler validates this at compile time so that
+/// overcap wiring surfaces as a named-destination configuration error instead of
+/// an opaque iceoryx2 "failed to create notifier/publisher" deep inside the FFI.
+pub const MAX_FANIN_PER_DESTINATION: usize = 16;
+
 /// Size of the frame header in the `[u8]` slice wire format.
 pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE + MAX_SCHEMA_NAME_SIZE + 8 + 4; // 204 bytes
 
