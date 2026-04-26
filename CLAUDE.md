@@ -49,6 +49,36 @@ Past models repeatedly created parallel abstractions without reading existing co
 
 Minor helpers within a single module, bug-fix-scoped private functions, and extensions to existing traits generally do not require this process — but still search first and default to the smallest change that works.
 
+### Production-grade by default
+
+StreamLib is an engine, not an application. The "ship the smallest thing that works, refactor when needed" defaults that suit application codebases are wrong-shaped here. Engine work biases toward production-grade by default; lighter alternatives are scope-cuts that need a reason, not the starting point.
+
+The principles:
+
+- **Core systems have many consumers.** Every adapter, platform, codec, and customer that hits a core trait will hit the same shape forever. Get it right at birth — the cost of breaking it later is multiplied across every downstream caller.
+- **Type-system enforcement beats convention.** A typestate, a marker trait, or a `!Clone` privileged type costs the same to write as a comment saying "don't" — and pushes the wrong way out of the easy path at compile time. **Make the right way easy and the wrong way hard.** "Hard" — not "impossible". Some escape hatches are legitimate (raw-handle accessors for power users, unsafe extension points for 3rd-party adapters). When you find you need an escape hatch, surface it and discuss before adding it — don't smuggle one in to make a tricky case compile.
+- **Bias toward supporting use-case classes, not single examples.** Real-time engines (Unreal, Bevy, Granite) serve classes — render targets, compute, video decode, audio, IPC. When designing or extending a core system, ask "what shape supports the *class* of use case this system is responsible for?", not "what's the smallest thing that makes the example in front of me work?".
+- **Observability is a design-time concern, not a retrofit.** `tracing::instrument` + metric hooks at trait birth is one line per method; added later it's a refactor across every implementor. Put hooks in when the trait is born.
+- **Concrete consumers are known requirements.** A future consumer is *hypothetical* only when unattested. A filed issue in the same milestone, a documented use case, an in-tree caller in a sibling file — these are *known*, and must be designed for now. The system-prompt's "don't design for hypothetical futures" rule still applies; it does *not* license under-shipping for known concrete futures.
+
+What this means concretely when designing or extending a core system (RHI, IPC, processor model, public ABI, surface adapters, escalate ops):
+
+- Comprehensive error taxonomy at trait birth — named `enum` variants with actionable context, no `()` errors, no panic-on-internal-bug.
+- `tracing` instrumentation on every public entrypoint.
+- ABI version constants on every cross-process / cross-crate / cross-language boundary.
+- Conformance / contract tests as first-class artifacts whenever a trait will have multiple implementors (in-tree or 3rd-party).
+- Layout regression tests for every `#[repr(C)]` type that crosses a language boundary, in every language that mirrors it.
+- Documentation per the autocomplete-focused doc rules below — terse, but every public type has one.
+
+What stays the same as the system-prompt defaults:
+
+- Don't fabricate consumers. "What if someone wants X" is hypothetical until X is filed, documented, or in-tree.
+- Don't add validation for impossibilities. Type-system invariants don't need runtime checks.
+- Don't keep half-finished implementations or `todo!()` in library code.
+- Don't introduce abstractions that solve no problem the engine is responsible for ("just in case") — but DO introduce abstractions that solve the *class* of problem a core system addresses, when the class is documented.
+
+When presenting design choices for engine work, recommend the production-grade option as **the right way** by default. Only present a lighter alternative when there's a specific reason to scope-cut (out-of-band time pressure, a research-gated unknown, etc.) — and call out the scope-cut explicitly so the user can confirm.
+
 ### Other Guardrails
 
 1. **No silent DRY refactors.** Duplicate code across unrelated call sites is fine. Extracting a helper is fine IF it replaces real duplication in a core system AND the extraction is mentioned in the PR. Don't refactor out of aesthetic preference alone.
@@ -60,6 +90,7 @@ Minor helpers within a single module, bug-fix-scoped private functions, and exte
    - Simple in-method fixes: allowed.
    - Rewriting a file or large section: summarize the plan first.
    - Adding new public API or changing existing signatures: get approval.
+   - **Engine-core changes** (RHI, IPC wire format, processor model, public ABI crates, escalate ops): a written plan is required, not optional. The plan covers trait shape, error taxonomy, observability hooks, polyglot mirrors, and tests, before any code lands.
 
 ### Work Tracking
 
@@ -369,6 +400,10 @@ make sense if the surrounding files were renamed or restructured.
 - @docs/learnings/nvidia-dma-buf-after-swapchain.md — `VK_ERROR_OUT_OF_DEVICE_MEMORY`
   from `vmaCreateImage`/`vkAllocateMemory` on NVIDIA Linux when a swapchain
   has been created. NOT real OOM.
+- @docs/learnings/nvidia-egl-dmabuf-render-target.md — Linear DMA-BUFs on
+  NVIDIA Linux are sampler-only (EGL `external_only=TRUE`); FBO color
+  attachments require a tiled DRM modifier from `eglQueryDmaBufModifiersEXT`.
+  Read before importing a DMA-BUF as a GL render target.
 - @docs/learnings/vma-export-pools.md — Mixing DMA-BUF exportable and
   non-exportable VMA allocations. Read before adding/changing
   `pTypeExternalMemoryHandleTypes` or any export memory configuration.
