@@ -144,12 +144,12 @@ runtime error.
 Polyglot subprocesses (Python, Deno) hold an `OwnedFd`-bound
 `StreamlibSurface`. When the subprocess exits cleanly, `Drop` runs
 the `streamlib-surface-client::release_surface` request. When the
-subprocess crashes mid-write, the kernel closes the inherited fd; the
-host's surface-share watchdog (tracked in
-[#520](https://github.com/tatolab/streamlib/issues/520)) observes
-`EPOLLHUP` on the per-subprocess Unix socket and decrements the
-backing's refcount. Until #520 lands, host-side cleanup of crashed
-subprocesses is manual.
+subprocess crashes mid-write, the kernel closes the per-subprocess
+Unix socket; the host's surface-share watchdog observes the
+disconnect (kernel-side equivalent of `EPOLLHUP`) and releases every
+surface registered under that subprocess's `runtime_id`. The
+double-release case is idempotent — a polite `release` followed by a
+crash leaves nothing for the watchdog to do.
 
 Subprocess Python/Deno code MUST NOT create its own `VkDevice` —
 dual `VkDevice` on NVIDIA Linux SIGSEGVs (see

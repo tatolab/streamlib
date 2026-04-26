@@ -133,6 +133,18 @@ impl SurfaceShareState {
     pub fn get_surfaces(&self) -> Vec<SurfaceMetadata> {
         self.inner.surfaces.read().values().cloned().collect()
     }
+
+    /// Surface ids registered by `runtime_id`. Used by the EPOLLHUP watchdog
+    /// to find what to release when a subprocess connection drops.
+    pub fn surface_ids_by_runtime(&self, runtime_id: &str) -> Vec<String> {
+        self.inner
+            .surfaces
+            .read()
+            .values()
+            .filter(|m| m.runtime_id == runtime_id)
+            .map(|m| m.surface_id.clone())
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -181,28 +193,73 @@ mod tests {
         assert_eq!(rejected, vec![-1], "rejected fds returned to caller");
     }
 
+    /// The watchdog uses `surface_ids_by_runtime` to discover what to
+    /// release when a subprocess connection drops. The query must group by
+    /// `runtime_id` precisely — surfaces from sibling runtimes must not
+    /// appear in the result, or one crash would clean up another runtime's
+    /// state.
+    #[test]
+    fn surface_ids_by_runtime_groups_by_owner() {
+        let state = SurfaceShareState::new();
+        state
+            .register_surface(reg("a-1", "runtime-A", "pixel_buffer"))
+            .expect("a-1");
+        state
+            .register_surface(reg("a-2", "runtime-A", "pixel_buffer"))
+            .expect("a-2");
+        state
+            .register_surface(reg("b-1", "runtime-B", "pixel_buffer"))
+            .expect("b-1");
+
+        let mut for_a = state.surface_ids_by_runtime("runtime-A");
+        for_a.sort();
+        assert_eq!(for_a, vec!["a-1".to_string(), "a-2".to_string()]);
+
+        let for_b = state.surface_ids_by_runtime("runtime-B");
+        assert_eq!(for_b, vec!["b-1".to_string()]);
+
+        assert!(state.surface_ids_by_runtime("runtime-C").is_empty());
+
+        // After release, the owner's set shrinks and others are unaffected.
+        assert!(state.release_surface("a-1", "runtime-A"));
+        let mut for_a_after = state.surface_ids_by_runtime("runtime-A");
+        for_a_after.sort();
+        assert_eq!(for_a_after, vec!["a-2".to_string()]);
+        assert_eq!(
+            state.surface_ids_by_runtime("runtime-B"),
+            vec!["b-1".to_string()]
+        );
+    }
+
     /// Releasing a surface registered with multiple plane fds must close
     /// every fd — the state is the last owner of the table's fd dups and
-    /// leaking any plane would leak the whole DMA-BUF.
+    /// leaking any plane would leak the whole DMA-BUF. Verified via pipes:
+    /// register hands the write end to the table, and after release the
+    /// read end yields EOF on the next `read`. EOF is sticky and tied to
+    /// the pipe's underlying kernel object, so unlike `fcntl(F_GETFD)` on
+    /// a raw fd number, the assertion does not race against parallel
+    /// threads recycling fd-table slots.
     #[test]
     fn release_surface_closes_every_plane_fd() {
         let state = SurfaceShareState::new();
-        // Pair of real, independently-owned memfds so libc::close actually
-        // observable succeeds / fails per fd.
-        let plane_fds: Vec<RawFd> = (0..3)
-            .map(|i| {
-                let name = std::ffi::CString::new(format!("release-plane-{}", i)).unwrap();
-                let fd = unsafe { libc::memfd_create(name.as_ptr(), 0) };
-                assert!(fd >= 0, "memfd {}: {}", i, std::io::Error::last_os_error());
-                fd
-            })
-            .collect();
+
+        // Three pipes; we keep the read ends, hand the write ends to the
+        // table.
+        let mut read_fds: Vec<RawFd> = Vec::with_capacity(3);
+        let mut write_fds: Vec<RawFd> = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let mut fds = [0i32; 2];
+            let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+            assert_eq!(rc, 0, "pipe: {}", std::io::Error::last_os_error());
+            read_fds.push(fds[0]);
+            write_fds.push(fds[1]);
+        }
 
         state
             .register_surface(SurfaceRegistration {
                 surface_id: "multi",
                 runtime_id: "rt",
-                dma_buf_fds: plane_fds.clone(),
+                dma_buf_fds: write_fds,
                 plane_sizes: vec![8192, 2048, 2048],
                 plane_offsets: vec![0, 0, 0],
                 width: 640,
@@ -214,17 +271,20 @@ mod tests {
 
         assert!(state.release_surface("multi", "rt"));
 
-        // Each fd should be closed now. fcntl(F_GETFD) on a closed fd
-        // returns -1 with EBADF.
-        for fd in &plane_fds {
-            let ret = unsafe { libc::fcntl(*fd, libc::F_GETFD) };
+        // With the write ends closed, every read end now yields EOF (0
+        // bytes) on the next read — the kernel signals that no more data
+        // is coming and the pipe will never refill.
+        for fd in &read_fds {
+            let mut buf = [0u8; 1];
+            let n = unsafe {
+                libc::read(*fd, buf.as_mut_ptr() as *mut libc::c_void, 1)
+            };
             assert_eq!(
-                ret, -1,
-                "plane fd {} should be closed after release_surface",
+                n, 0,
+                "pipe read end {} should yield EOF after write end was closed by release_surface",
                 fd
             );
-            let errno = std::io::Error::last_os_error().raw_os_error();
-            assert_eq!(errno, Some(libc::EBADF));
+            unsafe { libc::close(*fd) };
         }
     }
 }

@@ -161,6 +161,8 @@ serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interferenc
 tempfile = "3.14"  # Temporary directories for config tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
 png = "0.17"  # PNG decoding for shader-output fixture comparisons
+# SubprocessCrashHarness for the EPOLLHUP watchdog integration test (#520)
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 
 [[bench]]
 name = "logging"
@@ -171,6 +173,13 @@ name = "log_emit_1000"
 path = "tests/bin/log_emit_1000.rs"
 # Strace-backed no-syscalls test child. Built under `cargo test` via
 # the path dep; not needed for normal builds.
+
+[[bin]]
+name = "surface_share_crash_helper"
+path = "tests/bin/surface_share_crash_helper.rs"
+# Subprocess fixture for the EPOLLHUP watchdog integration test
+# (libs/streamlib/tests/surface_share_subprocess_crash.rs). Linux only.
+required-features = []
 
 # Build dependencies for protobuf compilation (surface-share service gRPC)
 [target.'cfg(target_os = "macos")'.build-dependencies]
