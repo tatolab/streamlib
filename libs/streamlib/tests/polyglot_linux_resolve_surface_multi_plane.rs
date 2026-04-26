@@ -94,6 +94,8 @@ fn check_in_multi_plane(
         "resource_type": "pixel_buffer",
         "plane_sizes": [plane_y.len() as u64, plane_uv.len() as u64],
         "plane_offsets": [0u64, 0u64],
+        "plane_strides": [64u64, 64u64],
+        "drm_format_modifier": 0u64,
     });
     let (resp, resp_fds) =
         send_request_with_fds(&stream, &req, &[fd_y, fd_uv], 0).expect("host check_in");
@@ -368,6 +370,8 @@ fn rust_surface_store_resolve_surface_multi_plane() {
         "resource_type": "pixel_buffer",
         "plane_sizes": [plane_y.len() as u64, plane_uv.len() as u64],
         "plane_offsets": [0u64, 0u64],
+        "plane_strides": [64u64, 64u64],
+        "drm_format_modifier": 0u64,
     });
     let (resp, _) = send_request_with_fds(&host_stream, &check_in_req, &[fd_y, fd_uv], 0)
         .expect("host check_in");
