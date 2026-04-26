@@ -128,7 +128,8 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         // which case render-target adapters will fail loudly with a clear
         // message at acquire time rather than silently fall back to
         // sampler-only LINEAR.
-        if let Err(e) = gpu_context
+        if let Err(e) = ctx
+            .gpu_full_access()
             .pre_warm_render_target_dma_buf_pool(crate::core::rhi::TextureFormat::Bgra8Unorm)
         {
             tracing::warn!(

@@ -8,7 +8,42 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest = EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle;
+export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle;
+
+export interface EscalateRequestAcquireImage {
+  op: "acquire_image";
+
+  /**
+   * Texture format identifier. Lowercase snake-case names: bgra8_unorm,
+   * bgra8_unorm_srgb, rgba8_unorm, rgba8_unorm_srgb. The host
+   * backs this with a render-target-capable VkImage allocated via
+   * VK_EXT_image_drm_format_modifier and a tiled DRM modifier picked from the
+   * EGL `external_only=FALSE` list — the resulting DMA-BUF can be imported by
+   * the consumer as a GL_TEXTURE_2D color attachment. Returns an error when
+   * the EGL probe didn't find an RT-capable modifier for `format` (no fallback
+   * to LINEAR — sampler-only on NVIDIA, see docs/learnings/nvidia-egl-dmabuf-
+   * render-target.md).
+   * Internal host primitive — surface adapters (streamlib-adapter-vulkan /
+   * -opengl / -skia) use this on customers' behalf; customers never invoke
+   * acquire_image directly.
+   */
+  format: string;
+
+  /**
+   * Pixel height of the image.
+   */
+  height: number;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Pixel width of the image.
+   */
+  width: number;
+}
 
 export interface EscalateRequestAcquirePixelBuffer {
   op: "acquire_pixel_buffer";

@@ -1341,30 +1341,6 @@ impl GpuContextLimitedAccess {
         self.inner.acquire_texture(desc)
     }
 
-    /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —
-    /// host-only adapter primitive, customers never see this directly).
-    /// See [`GpuContext::acquire_render_target_dma_buf_image`].
-    #[cfg(target_os = "linux")]
-    pub fn acquire_render_target_dma_buf_image(
-        &self,
-        width: u32,
-        height: u32,
-        format: TextureFormat,
-    ) -> Result<StreamTexture> {
-        self.inner
-            .acquire_render_target_dma_buf_image(width, height, format)
-    }
-
-    /// Pre-warm the tiled DMA-BUF VMA pool. See
-    /// [`GpuContext::pre_warm_render_target_dma_buf_pool`].
-    #[cfg(target_os = "linux")]
-    pub fn pre_warm_render_target_dma_buf_pool(
-        &self,
-        format: TextureFormat,
-    ) -> Result<()> {
-        self.inner.pre_warm_render_target_dma_buf_pool(format)
-    }
-
     /// Get the shared command queue.
     ///
     /// Submitting recorded command buffers from `process()` is safe: the
@@ -1430,6 +1406,30 @@ impl GpuContextFullAccess {
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
         self.inner.acquire_pixel_buffer(width, height, format)
+    }
+
+    /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —
+    /// host-only adapter primitive, customers never see this directly).
+    /// See [`GpuContext::acquire_render_target_dma_buf_image`].
+    #[cfg(target_os = "linux")]
+    pub fn acquire_render_target_dma_buf_image(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<StreamTexture> {
+        self.inner
+            .acquire_render_target_dma_buf_image(width, height, format)
+    }
+
+    /// Pre-warm the tiled DMA-BUF VMA pool. See
+    /// [`GpuContext::pre_warm_render_target_dma_buf_pool`].
+    #[cfg(target_os = "linux")]
+    pub fn pre_warm_render_target_dma_buf_pool(
+        &self,
+        format: TextureFormat,
+    ) -> Result<()> {
+        self.inner.pre_warm_render_target_dma_buf_pool(format)
     }
 
     /// Get a pixel buffer by its pool id.
