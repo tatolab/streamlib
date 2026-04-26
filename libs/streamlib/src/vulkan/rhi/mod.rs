@@ -37,5 +37,8 @@ pub use vulkan_compute_kernel::VulkanComputeKernel;
 mod vulkan_format_converter;
 pub use vulkan_format_converter::VulkanFormatConverter;
 
+#[cfg(target_os = "linux")]
+pub mod drm_modifier_probe;
+
 #[cfg(all(test, target_os = "linux"))]
 mod vulkan_swapchain_alloc_repro_test;

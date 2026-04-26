@@ -247,11 +247,9 @@ fn handle_client_connection(
     }
 }
 
-/// Extract `plane_sizes` and `plane_offsets` from a JSON request body.
-/// Returns `(plane_sizes, plane_offsets)` where each vec's length matches
-/// `expected_plane_count`, falling back to `[0]` and `[0]` when the peer
-/// sent no arrays (single-plane back-compat) or when a provided array has a
-/// different length than the fd set.
+/// Extract `plane_sizes`, `plane_offsets`, and `plane_strides` from a JSON
+/// request body. Returns vecs whose length matches `expected_plane_count`,
+/// falling back to `[0]` for single-plane registrations that omit the arrays.
 ///
 /// Returning `None` is an explicit wire-protocol violation (mismatched
 /// arrays, negative values); the handler should error out instead of
@@ -259,7 +257,7 @@ fn handle_client_connection(
 fn parse_plane_arrays(
     request: &serde_json::Value,
     expected_plane_count: usize,
-) -> Option<(Vec<u64>, Vec<u64>)> {
+) -> Option<(Vec<u64>, Vec<u64>, Vec<u64>)> {
     let parse_arr = |key: &str| -> Option<Option<Vec<u64>>> {
         match request.get(key) {
             None => Some(None),
@@ -275,22 +273,19 @@ fn parse_plane_arrays(
         }
     };
 
-    let sizes_opt = parse_arr("plane_sizes")?;
-    let offsets_opt = parse_arr("plane_offsets")?;
+    let resolve = |opt: Option<Vec<u64>>| -> Option<Vec<u64>> {
+        match opt {
+            Some(v) if v.len() == expected_plane_count => Some(v),
+            Some(_) => None,
+            None if expected_plane_count <= 1 => Some(vec![0u64; expected_plane_count.max(1)]),
+            None => None,
+        }
+    };
 
-    let sizes = match sizes_opt {
-        Some(v) if v.len() == expected_plane_count => v,
-        Some(_) => return None,
-        None if expected_plane_count <= 1 => vec![0u64; expected_plane_count.max(1)],
-        None => return None,
-    };
-    let offsets = match offsets_opt {
-        Some(v) if v.len() == expected_plane_count => v,
-        Some(_) => return None,
-        None if expected_plane_count <= 1 => vec![0u64; expected_plane_count.max(1)],
-        None => return None,
-    };
-    Some((sizes, offsets))
+    let sizes = resolve(parse_arr("plane_sizes")?)?;
+    let offsets = resolve(parse_arr("plane_offsets")?)?;
+    let strides = resolve(parse_arr("plane_strides")?)?;
+    Some((sizes, offsets, strides))
 }
 
 fn handle_register(
@@ -326,15 +321,22 @@ fn handle_register(
         );
     }
 
-    let (plane_sizes, plane_offsets) = match parse_plane_arrays(request, received_fds.len()) {
-        Some(arrays) => arrays,
-        None => {
-            return (
-                serde_json::json!({"error": "plane_sizes/plane_offsets length mismatch"}),
-                Vec::new(),
-            )
-        }
-    };
+    let (plane_sizes, plane_offsets, plane_strides) =
+        match parse_plane_arrays(request, received_fds.len()) {
+            Some(arrays) => arrays,
+            None => {
+                return (
+                    serde_json::json!({
+                        "error": "plane_sizes/plane_offsets/plane_strides length mismatch"
+                    }),
+                    Vec::new(),
+                )
+            }
+        };
+    let drm_format_modifier = request
+        .get("drm_format_modifier")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     let width = request.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let height = request.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -365,10 +367,12 @@ fn handle_register(
         dma_buf_fds: dup_fds,
         plane_sizes,
         plane_offsets,
+        plane_strides,
         width,
         height,
         format,
         resource_type,
+        drm_format_modifier,
     }) {
         Ok(()) => {
             tracing::debug!(
@@ -401,7 +405,7 @@ fn handle_lookup(
         None => return (serde_json::json!({"error": "missing surface_id"}), Vec::new()),
     };
 
-    let (plane_fds, plane_sizes, plane_offsets) = match state.get_surface_planes(surface_id) {
+    let checkout = match state.get_surface_planes(surface_id) {
         Some(planes) => planes,
         None => return (serde_json::json!({"error": "surface not found"}), Vec::new()),
     };
@@ -409,8 +413,8 @@ fn handle_lookup(
     // Dup each stored fd so the kernel-delivered fds in the peer's table are
     // independent of the table's own copies. On partial failure, close every
     // dup we already took.
-    let mut dup_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
-    for fd in &plane_fds {
+    let mut dup_fds: Vec<RawFd> = Vec::with_capacity(checkout.dma_buf_fds.len());
+    for fd in &checkout.dma_buf_fds {
         let dup = unsafe { libc::dup(*fd) };
         if dup < 0 {
             for d in &dup_fds {
@@ -437,8 +441,10 @@ fn handle_lookup(
             "height": height,
             "format": format,
             "resource_type": resource_type,
-            "plane_sizes": plane_sizes,
-            "plane_offsets": plane_offsets,
+            "plane_sizes": checkout.plane_sizes,
+            "plane_offsets": checkout.plane_offsets,
+            "plane_strides": checkout.plane_strides,
+            "drm_format_modifier": checkout.drm_format_modifier,
         }),
         dup_fds,
     )
@@ -490,15 +496,22 @@ fn handle_check_in(
         );
     }
 
-    let (plane_sizes, plane_offsets) = match parse_plane_arrays(request, received_fds.len()) {
-        Some(arrays) => arrays,
-        None => {
-            return (
-                serde_json::json!({"error": "plane_sizes/plane_offsets length mismatch"}),
-                Vec::new(),
-            )
-        }
-    };
+    let (plane_sizes, plane_offsets, plane_strides) =
+        match parse_plane_arrays(request, received_fds.len()) {
+            Some(arrays) => arrays,
+            None => {
+                return (
+                    serde_json::json!({
+                        "error": "plane_sizes/plane_offsets/plane_strides length mismatch"
+                    }),
+                    Vec::new(),
+                )
+            }
+        };
+    let drm_format_modifier = request
+        .get("drm_format_modifier")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     let width = request.get("width").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
     let height = request.get("height").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -531,10 +544,12 @@ fn handle_check_in(
         dma_buf_fds: dup_fds,
         plane_sizes,
         plane_offsets,
+        plane_strides,
         width,
         height,
         format,
         resource_type,
+        drm_format_modifier,
     }) {
         for fd in &leftover {
             unsafe { libc::close(*fd) };
@@ -746,6 +761,8 @@ mod tests {
             "resource_type": "pixel_buffer",
             "plane_sizes": [pattern_y.len() as u64, pattern_uv.len() as u64],
             "plane_offsets": [0u64, 0u64],
+            "plane_strides": [1920u64, 1920u64],
+            "drm_format_modifier": 0u64,
         });
         let (check_in_resp, check_in_fds) =
             send_request_with_fds(&stream, &check_in_req, &[fd_y, fd_uv], 0)
@@ -806,6 +823,88 @@ mod tests {
             0,
         );
 
+        drop(stream);
+        service.stop();
+    }
+
+    /// `drm_format_modifier` and `plane_strides` ride along through the
+    /// register/lookup path. The host adapter writes the modifier into the
+    /// `SurfaceTransportHandle` field defined in `streamlib-adapter-abi`; the
+    /// consumer reads it from the lookup response and passes it to
+    /// `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT` (or the Vulkan equivalent).
+    /// A round-trip through the wire is the test that locks the contract.
+    #[test]
+    fn drm_format_modifier_and_strides_round_trip() {
+        let state = SurfaceShareState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        let send_fd = make_memfd_with(b"rt-render-target-payload");
+        // An NVIDIA-tiled modifier from the live probe (one of the values
+        // documented in docs/learnings/nvidia-egl-dmabuf-render-target.md).
+        // The wire treats it opaquely — no need to validate the exact bits.
+        let chosen_modifier: u64 = 0x0300_0000_0060_6014;
+        let pitch: u64 = 1920 * 4;
+        let req = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "test-runtime",
+            "width": 1920,
+            "height": 1080,
+            "format": "Bgra8Unorm",
+            "resource_type": "texture",
+            "plane_sizes": [pitch * 1080],
+            "plane_offsets": [0u64],
+            "plane_strides": [pitch],
+            "drm_format_modifier": chosen_modifier,
+        });
+        let (resp, _) = send_request_with_fds(&stream, &req, &[send_fd], 0)
+            .expect("check_in request");
+        unsafe { libc::close(send_fd) };
+        let surface_id = resp
+            .get("surface_id")
+            .and_then(|v| v.as_str())
+            .expect("surface_id in response")
+            .to_string();
+
+        let lookup_req = serde_json::json!({
+            "op": "check_out",
+            "surface_id": surface_id,
+        });
+        let (lookup_resp, lookup_fds) =
+            send_request_with_fds(&stream, &lookup_req, &[], MAX_DMA_BUF_PLANES)
+                .expect("check_out request");
+        for fd in &lookup_fds {
+            unsafe { libc::close(*fd) };
+        }
+
+        assert_eq!(
+            lookup_resp.get("drm_format_modifier").and_then(|v| v.as_u64()),
+            Some(chosen_modifier),
+            "modifier round-trip: lookup must echo the registered value verbatim",
+        );
+        assert_eq!(
+            lookup_resp
+                .get("plane_strides")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|v| v.as_u64()).collect::<Vec<_>>()),
+            Some(vec![pitch]),
+            "plane_strides round-trip: lookup must echo registered values verbatim",
+        );
+
+        let _ = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": "release",
+                "surface_id": surface_id,
+                "runtime_id": "test-runtime",
+            }),
+            &[],
+            0,
+        );
         drop(stream);
         service.stop();
     }
@@ -892,10 +991,12 @@ mod tests {
                     dma_buf_fds: mk(label),
                     plane_sizes: vec![0],
                     plane_offsets: vec![0],
+                    plane_strides: vec![0],
                     width: 1,
                     height: 1,
                     format: "Bgra32",
                     resource_type: "pixel_buffer",
+                    drm_format_modifier: 0,
                 })
                 .expect("register");
         }

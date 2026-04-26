@@ -66,6 +66,39 @@ mapping:
             tokens return an error response.
         elements:
           type: string
+  acquire_image:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      width:
+        metadata:
+          description: "Pixel width of the image."
+        type: uint32
+      height:
+        metadata:
+          description: "Pixel height of the image."
+        type: uint32
+      format:
+        metadata:
+          description: >
+            Texture format identifier. Lowercase snake-case names:
+            bgra8_unorm, bgra8_unorm_srgb, rgba8_unorm, rgba8_unorm_srgb.
+            The host backs this with a render-target-capable VkImage
+            allocated via VK_EXT_image_drm_format_modifier and a tiled
+            DRM modifier picked from the EGL `external_only=FALSE` list
+            — the resulting DMA-BUF can be imported by the consumer as
+            a GL_TEXTURE_2D color attachment. Returns an error when the
+            EGL probe didn't find an RT-capable modifier for `format`
+            (no fallback to LINEAR — sampler-only on NVIDIA, see
+            docs/learnings/nvidia-egl-dmabuf-render-target.md).
+
+            Internal host primitive — surface adapters
+            (streamlib-adapter-vulkan / -opengl / -skia) use this on
+            customers' behalf; customers never invoke acquire_image
+            directly.
+        type: string
   release_handle:
     properties:
       request_id:

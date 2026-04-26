@@ -21,8 +21,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use crate::_generated_::com_streamlib_escalate_request::{
-    EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture, EscalateRequestLog,
-    EscalateRequestLogLevel, EscalateRequestLogSource, EscalateRequestReleaseHandle,
+    EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
+    EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
+    EscalateRequestReleaseHandle,
 };
 use crate::_generated_::com_streamlib_escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
@@ -50,6 +51,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
     match op {
         EscalateRequest::AcquirePixelBuffer(p) => Some(&p.request_id),
         EscalateRequest::AcquireTexture(p) => Some(&p.request_id),
+        EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
@@ -215,6 +217,65 @@ pub(crate) fn handle_escalate_op(
                 }),
             })
         }
+        EscalateRequest::AcquireImage(EscalateRequestAcquireImage {
+            request_id: _,
+            width,
+            height,
+            format,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                let parsed_format = match parse_texture_format(&format) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        return Some(EscalateResponse::Err(EscalateResponseErr {
+                            request_id: rid,
+                            message: e,
+                        }));
+                    }
+                };
+                // Render-target images carry their own usage signature —
+                // they can be sampled, copied, AND used as render attachments.
+                // The wire op deliberately does not take a usage list (that's
+                // an acquire_texture concern); here the host knows the exact
+                // set because the consumer is always a render-target adapter.
+                let acquired = sandbox.escalate(|full| {
+                    let texture = full.acquire_render_target_dma_buf_image(
+                        width,
+                        height,
+                        parsed_format,
+                    )?;
+                    let handle_id = assign_image_handle_id(full, &texture)?;
+                    Ok((handle_id, texture))
+                });
+                Some(match acquired {
+                    Ok((handle_id, _texture)) => EscalateResponse::Ok(EscalateResponseOk {
+                        request_id: rid,
+                        handle_id,
+                        width: Some(width),
+                        height: Some(height),
+                        format: Some(texture_format_to_wire(parsed_format).to_string()),
+                        usage: Some(vec![
+                            "render_attachment".to_string(),
+                            "texture_binding".to_string(),
+                            "copy_src".to_string(),
+                        ]),
+                    }),
+                    Err(e) => EscalateResponse::Err(EscalateResponseErr {
+                        request_id: rid,
+                        message: format!("acquire_image failed: {e}"),
+                    }),
+                })
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (width, height, format);
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "acquire_image is only available on Linux (DMA-BUF render-target path)".to_string(),
+                }))
+            }
+        }
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: _,
             handle_id,
@@ -335,6 +396,24 @@ fn assign_texture_handle_id(
         if let Some(store) = full.surface_store() {
             store.register_texture(&handle_id, texture.texture())?;
         }
+    }
+    Ok(handle_id)
+}
+
+/// Resolve the `handle_id` for a render-target DMA-BUF image.
+///
+/// On Linux, register the image's DMA-BUF (with the chosen DRM modifier and
+/// per-plane row pitches) with the surface-share service under a fresh UUID
+/// so the subprocess can `check_out` it; the surface-share registration
+/// carries the modifier and strides the consumer-side EGL import requires.
+#[cfg(target_os = "linux")]
+fn assign_image_handle_id(
+    full: &crate::core::context::GpuContextFullAccess,
+    texture: &crate::core::rhi::StreamTexture,
+) -> crate::core::error::Result<String> {
+    let handle_id = Uuid::new_v4().to_string();
+    if let Some(store) = full.surface_store() {
+        store.register_texture(&handle_id, texture)?;
     }
     Ok(handle_id)
 }

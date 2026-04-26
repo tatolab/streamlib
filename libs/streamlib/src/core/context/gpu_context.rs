@@ -752,7 +752,13 @@ impl GpuContext {
         &self.texture_pool
     }
 
-    /// Acquire a texture from the pool.
+    /// Acquire a pooled texture for in-process GPU work.
+    ///
+    /// Uses `VK_IMAGE_TILING_OPTIMAL` and is **not** safe to share with
+    /// another process as a render target on NVIDIA Linux — the resulting
+    /// DMA-BUF (if exported) is sampler-only there. For cross-process
+    /// surfaces a consumer adapter will render INTO, use
+    /// [`Self::acquire_render_target_dma_buf_image`] (Linux) instead.
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         tracing::debug!(
             rhi_op = "acquire_texture",
@@ -777,6 +783,129 @@ impl GpuContext {
     /// This is the recommended way to submit GPU work in processors.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
         self.command_queue().create_command_buffer()
+    }
+
+    /// Allocate a render-target-capable DMA-BUF VkImage backed by the device's
+    /// tiled-modifier VMA pool.
+    ///
+    /// The driver picks one of the EGL-advertised render-target modifiers
+    /// from [`VulkanDevice::drm_modifier_table`]. The resulting
+    /// `StreamTexture` carries the chosen modifier on its inner
+    /// [`VulkanTexture`] (see [`VulkanTexture::chosen_drm_format_modifier`]),
+    /// ready to be carried in a `SurfaceTransportHandle` when the host
+    /// surface-share service registers the surface.
+    ///
+    /// Errors when the EGL probe didn't find an RT-capable modifier for
+    /// `format` — there is no silent fallback to LINEAR (sampler-only on
+    /// NVIDIA — see `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+    ///
+    /// Picking the right acquire method:
+    /// - **In-process texture for sampling/compute**: use
+    ///   [`Self::acquire_texture`] (`VK_IMAGE_TILING_OPTIMAL`, no
+    ///   DMA-BUF export pressure).
+    /// - **CPU-readable buffer (mmap/PNG sample/MMAP fallback)**: use
+    ///   [`Self::acquire_pixel_buffer`] (`VkBuffer`, linear).
+    /// - **Cross-process surface a consumer adapter renders into**:
+    ///   this method (tiled DRM modifier, DMA-BUF exportable, FBO-completable
+    ///   on the consumer side).
+    #[cfg(target_os = "linux")]
+    pub fn acquire_render_target_dma_buf_image(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<StreamTexture> {
+        use crate::vulkan::rhi::drm_modifier_probe::fourcc;
+
+        tracing::debug!(
+            rhi_op = "acquire_render_target_dma_buf_image",
+            width,
+            height,
+            format = ?format,
+            "GpuContext::acquire_render_target_dma_buf_image"
+        );
+
+        let fourcc = match format {
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
+                fourcc::DRM_FORMAT_ARGB8888
+            }
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => {
+                fourcc::DRM_FORMAT_ABGR8888
+            }
+            TextureFormat::Nv12 => fourcc::DRM_FORMAT_NV12,
+            other => {
+                return Err(StreamError::GpuError(format!(
+                    "acquire_render_target_dma_buf_image: format {other:?} has no DRM FOURCC mapping"
+                )));
+            }
+        };
+
+        let vulkan_device = &self.device.inner;
+        let modifiers: Vec<u64> = vulkan_device
+            .drm_modifier_table()
+            .rt_modifiers(fourcc)
+            .to_vec();
+
+        if modifiers.is_empty() {
+            return Err(StreamError::GpuError(format!(
+                "acquire_render_target_dma_buf_image: no RT-capable DRM modifier for {format:?} (fourcc=0x{fourcc:08x}); EGL probe returned empty list"
+            )));
+        }
+
+        let desc = TextureDescriptor::new(width, height, format).with_usage(
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC,
+        );
+        let texture = crate::vulkan::rhi::VulkanTexture::new_render_target_dma_buf(
+            vulkan_device,
+            &desc,
+            &modifiers,
+        )?;
+        Ok(StreamTexture::from_vulkan(texture))
+    }
+
+    /// Pre-warm the tiled DMA-BUF VMA pool so the first VMA block lands
+    /// before the display swapchain creates the NVIDIA DMA-BUF cap pressure.
+    ///
+    /// Mirrors [`acquire_pixel_buffer`]'s pre-warm pattern in
+    /// `LinuxCameraProcessor::start()` — allocate a small probe image and
+    /// drop it. Subsequent allocations reuse the pool block.
+    ///
+    /// No-op (returns `Ok(())`) when the EGL probe has no RT modifiers for
+    /// `format` — there's nothing to pre-warm in that case.
+    #[cfg(target_os = "linux")]
+    pub fn pre_warm_render_target_dma_buf_pool(
+        &self,
+        format: TextureFormat,
+    ) -> Result<()> {
+        use crate::vulkan::rhi::drm_modifier_probe::fourcc;
+        let fourcc = match format {
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => {
+                fourcc::DRM_FORMAT_ARGB8888
+            }
+            TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => {
+                fourcc::DRM_FORMAT_ABGR8888
+            }
+            _ => return Ok(()),
+        };
+        let vulkan_device = &self.device.inner;
+        if vulkan_device
+            .drm_modifier_table()
+            .rt_modifiers(fourcc)
+            .is_empty()
+        {
+            tracing::info!(
+                "pre_warm_render_target_dma_buf_pool: skipping {format:?} — no RT modifiers"
+            );
+            return Ok(());
+        }
+        let probe = self.acquire_render_target_dma_buf_image(64, 64, format)?;
+        drop(probe);
+        tracing::info!(
+            "pre_warm_render_target_dma_buf_pool: {format:?} pool warmed"
+        );
+        Ok(())
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
@@ -1221,7 +1350,13 @@ impl GpuContextLimitedAccess {
         self.inner.camera_timeline_semaphore()
     }
 
-    /// Acquire a texture from a pre-reserved pool (Split: fast path).
+    /// Acquire a pooled texture from a pre-reserved pool (Split: fast path).
+    ///
+    /// `VK_IMAGE_TILING_OPTIMAL`, in-process use only. For cross-process
+    /// render targets, see [`GpuContextFullAccess::acquire_render_target_dma_buf_image`]
+    /// (Linux) — Sandbox callers don't have a render-target alloc path
+    /// because allocating a new RT-capable image is a privileged op
+    /// that goes through escalate.
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         self.inner.acquire_texture(desc)
     }
@@ -1293,6 +1428,30 @@ impl GpuContextFullAccess {
         self.inner.acquire_pixel_buffer(width, height, format)
     }
 
+    /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —
+    /// host-only adapter primitive, customers never see this directly).
+    /// See [`GpuContext::acquire_render_target_dma_buf_image`].
+    #[cfg(target_os = "linux")]
+    pub fn acquire_render_target_dma_buf_image(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<StreamTexture> {
+        self.inner
+            .acquire_render_target_dma_buf_image(width, height, format)
+    }
+
+    /// Pre-warm the tiled DMA-BUF VMA pool. See
+    /// [`GpuContext::pre_warm_render_target_dma_buf_pool`].
+    #[cfg(target_os = "linux")]
+    pub fn pre_warm_render_target_dma_buf_pool(
+        &self,
+        format: TextureFormat,
+    ) -> Result<()> {
+        self.inner.pre_warm_render_target_dma_buf_pool(format)
+    }
+
     /// Get a pixel buffer by its pool id.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
         self.inner.get_pixel_buffer(pool_id)
@@ -1356,7 +1515,10 @@ impl GpuContextFullAccess {
         self.inner.texture_pool()
     }
 
-    /// Acquire a texture from the pool.
+    /// Acquire a pooled texture for in-process GPU work
+    /// (`VK_IMAGE_TILING_OPTIMAL`). For cross-process render targets the
+    /// host adapter layer wants on Linux, see
+    /// [`Self::acquire_render_target_dma_buf_image`].
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         self.inner.acquire_texture(desc)
     }

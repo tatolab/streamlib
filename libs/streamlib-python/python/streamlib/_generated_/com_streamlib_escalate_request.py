@@ -23,6 +23,7 @@ class EscalateRequest:
     @classmethod
     def from_json_data(cls, data: Any) -> 'EscalateRequest':
         variants: Dict[str, Type[EscalateRequest]] = {
+            "acquire_image": EscalateRequestAcquireImage,
             "acquire_pixel_buffer": EscalateRequestAcquirePixelBuffer,
             "acquire_texture": EscalateRequestAcquireTexture,
             "log": EscalateRequestLog,
@@ -33,6 +34,57 @@ class EscalateRequest:
 
     def to_json_data(self) -> Any:
         pass
+
+@dataclass
+class EscalateRequestAcquireImage(EscalateRequest):
+    format: 'str'
+    """
+    Texture format identifier. Lowercase snake-case names: bgra8_unorm,
+    bgra8_unorm_srgb, rgba8_unorm, rgba8_unorm_srgb. The host backs this with a
+    render-target-capable VkImage allocated via VK_EXT_image_drm_format_modifier
+    and a tiled DRM modifier picked from the EGL `external_only=FALSE` list —
+    the resulting DMA-BUF can be imported by the consumer as a GL_TEXTURE_2D
+    color attachment. Returns an error when the EGL probe didn't find an RT-
+    capable modifier for `format` (no fallback to LINEAR — sampler-only on
+    NVIDIA, see docs/learnings/nvidia-egl-dmabuf-render-target.md).
+    Internal host primitive — surface adapters (streamlib-adapter-vulkan /
+    -opengl / -skia) use this on customers' behalf; customers never invoke
+    acquire_image directly.
+    """
+
+    height: 'int'
+    """
+    Pixel height of the image.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    width: 'int'
+    """
+    Pixel width of the image.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestAcquireImage':
+        return cls(
+            "acquire_image",
+            _from_json_data(str, data.get("format")),
+            _from_json_data(int, data.get("height")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(int, data.get("width")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "acquire_image" }
+        data["format"] = _to_json_data(self.format)
+        data["height"] = _to_json_data(self.height)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["width"] = _to_json_data(self.width)
+        return data
 
 @dataclass
 class EscalateRequestAcquirePixelBuffer(EscalateRequest):

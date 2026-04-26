@@ -24,10 +24,23 @@ pub struct SurfaceMetadata {
     pub dma_buf_fds: Vec<RawFd>,
     pub plane_sizes: Vec<u64>,
     pub plane_offsets: Vec<u64>,
+    /// Per-plane row pitch in bytes — what the consumer-side EGL or
+    /// Vulkan import passes via `EGL_DMA_BUF_PLANE{N}_PITCH_EXT` /
+    /// `VkSubresourceLayout::rowPitch`. One entry per plane fd; defaults
+    /// to a vec of zeros for legacy registrations that didn't supply it.
+    pub plane_strides: Vec<u64>,
     pub width: u32,
     pub height: u32,
     pub format: String,
     pub resource_type: String,
+    /// DRM format modifier of the underlying VkImage. Zero means
+    /// `DRM_FORMAT_MOD_LINEAR` (sampler-only on NVIDIA — see
+    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`) or "not set"
+    /// for legacy `VkBuffer`-backed surfaces (CPU-readable pixel buffers).
+    /// Render-target adapters MUST receive a non-zero modifier picked
+    /// from the EGL `external_only=FALSE` set; otherwise consumer-side
+    /// FBO completeness will fail on NVIDIA.
+    pub drm_format_modifier: u64,
     pub checkout_count: u64,
 }
 
@@ -43,6 +56,17 @@ struct Inner {
     surface_counter: AtomicU64,
 }
 
+/// Result of [`SurfaceShareState::get_surface_planes`] — everything a
+/// consumer needs to import the DMA-BUF as a Vulkan or EGL image.
+#[derive(Clone, Debug)]
+pub struct SurfacePlaneCheckout {
+    pub dma_buf_fds: Vec<RawFd>,
+    pub plane_sizes: Vec<u64>,
+    pub plane_offsets: Vec<u64>,
+    pub plane_strides: Vec<u64>,
+    pub drm_format_modifier: u64,
+}
+
 /// Arguments to [`SurfaceShareState::register_surface`]. Grouped so the
 /// signature stays legible as the per-plane fields grow.
 pub struct SurfaceRegistration<'a> {
@@ -51,10 +75,15 @@ pub struct SurfaceRegistration<'a> {
     pub dma_buf_fds: Vec<RawFd>,
     pub plane_sizes: Vec<u64>,
     pub plane_offsets: Vec<u64>,
+    /// Per-plane row pitch in bytes. Length must match `dma_buf_fds`.
+    pub plane_strides: Vec<u64>,
     pub width: u32,
     pub height: u32,
     pub format: &'a str,
     pub resource_type: &'a str,
+    /// DRM format modifier of the underlying VkImage. See
+    /// [`SurfaceMetadata::drm_format_modifier`].
+    pub drm_format_modifier: u64,
 }
 
 impl SurfaceShareState {
@@ -88,10 +117,12 @@ impl SurfaceShareState {
                 dma_buf_fds: reg.dma_buf_fds,
                 plane_sizes: reg.plane_sizes,
                 plane_offsets: reg.plane_offsets,
+                plane_strides: reg.plane_strides,
                 width: reg.width,
                 height: reg.height,
                 format: reg.format.to_string(),
                 resource_type: reg.resource_type.to_string(),
+                drm_format_modifier: reg.drm_format_modifier,
                 checkout_count: 0,
             },
         );
@@ -99,20 +130,23 @@ impl SurfaceShareState {
     }
 
     /// Return a clone of the surface's plane fd vec plus its plane-layout
-    /// arrays. The returned fds are the table's own — callers that hand them
-    /// out via SCM_RIGHTS must `dup` each fd first.
+    /// arrays and the underlying VkImage's DRM format modifier. The
+    /// returned fds are the table's own — callers that hand them out via
+    /// SCM_RIGHTS must `dup` each fd first.
     pub fn get_surface_planes(
         &self,
         surface_id: &str,
-    ) -> Option<(Vec<RawFd>, Vec<u64>, Vec<u64>)> {
+    ) -> Option<SurfacePlaneCheckout> {
         let mut surfaces = self.inner.surfaces.write();
         surfaces.get_mut(surface_id).map(|metadata| {
             metadata.checkout_count += 1;
-            (
-                metadata.dma_buf_fds.clone(),
-                metadata.plane_sizes.clone(),
-                metadata.plane_offsets.clone(),
-            )
+            SurfacePlaneCheckout {
+                dma_buf_fds: metadata.dma_buf_fds.clone(),
+                plane_sizes: metadata.plane_sizes.clone(),
+                plane_offsets: metadata.plane_offsets.clone(),
+                plane_strides: metadata.plane_strides.clone(),
+                drm_format_modifier: metadata.drm_format_modifier,
+            }
         })
     }
 
@@ -158,10 +192,12 @@ mod tests {
             dma_buf_fds: vec![-1],
             plane_sizes: vec![0],
             plane_offsets: vec![0],
+            plane_strides: vec![0],
             width: 1920,
             height: 1080,
             format: "Rgba8Unorm",
             resource_type,
+            drm_format_modifier: 0,
         }
     }
 
@@ -262,10 +298,12 @@ mod tests {
                 dma_buf_fds: write_fds,
                 plane_sizes: vec![8192, 2048, 2048],
                 plane_offsets: vec![0, 0, 0],
+                plane_strides: vec![64, 32, 32],
                 width: 640,
                 height: 480,
                 format: "Nv12VideoRange",
                 resource_type: "pixel_buffer",
+                drm_format_modifier: 0,
             })
             .expect("register multi-plane");
 

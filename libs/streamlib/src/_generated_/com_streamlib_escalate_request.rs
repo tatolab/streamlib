@@ -12,6 +12,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op")]
 pub enum EscalateRequest {
+    #[serde(rename = "acquire_image")]
+    AcquireImage(EscalateRequestAcquireImage),
+
     #[serde(rename = "acquire_pixel_buffer")]
     AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer),
 
@@ -23,6 +26,37 @@ pub enum EscalateRequest {
 
     #[serde(rename = "release_handle")]
     ReleaseHandle(EscalateRequestReleaseHandle),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestAcquireImage {
+    /// Texture format identifier. Lowercase snake-case names: bgra8_unorm,
+    /// bgra8_unorm_srgb, rgba8_unorm, rgba8_unorm_srgb. The host
+    /// backs this with a render-target-capable VkImage allocated via
+    /// VK_EXT_image_drm_format_modifier and a tiled DRM modifier picked
+    /// from the EGL `external_only=FALSE` list — the resulting DMA-BUF can
+    /// be imported by the consumer as a GL_TEXTURE_2D color attachment.
+    /// Returns an error when the EGL probe didn't find an RT-capable modifier
+    /// for `format` (no fallback to LINEAR — sampler-only on NVIDIA, see
+    /// docs/learnings/nvidia-egl-dmabuf-render-target.md).
+    /// Internal host primitive — surface adapters (streamlib-adapter-vulkan /
+    /// -opengl / -skia) use this on customers' behalf; customers never invoke
+    /// acquire_image directly.
+    #[serde(rename = "format")]
+    pub format: String,
+
+    /// Pixel height of the image.
+    #[serde(rename = "height")]
+    pub height: u32,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// Pixel width of the image.
+    #[serde(rename = "width")]
+    pub width: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
