@@ -12,8 +12,7 @@
 use std::marker::PhantomData;
 
 use streamlib_adapter_abi::{
-    CpuReadable, VkImageHandle, VkImageInfo, VkImageLayoutValue, VulkanImageInfoExt,
-    VulkanWritable,
+    VkImageHandle, VkImageInfo, VkImageLayoutValue, VulkanImageInfoExt, VulkanWritable,
 };
 use vulkanalia::vk;
 use vulkanalia::vk::Handle as _;
@@ -25,12 +24,6 @@ pub struct VulkanReadView<'g> {
     pub(crate) image: vk::Image,
     pub(crate) layout: vk::ImageLayout,
     pub(crate) info: VkImageInfo,
-    /// Optional CPU-side staging slice. Some adapter consumers (the
-    /// in-process round-trip tests, debug snapshotters) want a byte
-    /// view of the surface in addition to the `VkImage`. The adapter
-    /// fills this when the consumer asks for it; the default is
-    /// `None`.
-    pub(crate) cpu_bytes: Option<&'g [u8]>,
     pub(crate) _marker: PhantomData<&'g ()>,
 }
 
@@ -47,12 +40,6 @@ impl VulkanWritable for VulkanReadView<'_> {
 impl VulkanImageInfoExt for VulkanReadView<'_> {
     fn vk_image_info(&self) -> VkImageInfo {
         self.info
-    }
-}
-
-impl CpuReadable for VulkanReadView<'_> {
-    fn read_bytes(&self) -> &[u8] {
-        self.cpu_bytes.unwrap_or(&[])
     }
 }
 
@@ -80,4 +67,27 @@ impl VulkanImageInfoExt for VulkanWriteView<'_> {
     fn vk_image_info(&self) -> VkImageInfo {
         self.info
     }
+}
+
+// GPU surface views must not implement `CpuReadable`. Switching to the
+// `streamlib-adapter-cpu-readback` adapter is the contractual signal for
+// "I want CPU bytes" — see #514. Adding the impl back, even returning an
+// empty slice "for symmetry," would re-introduce the asymmetry that PR
+// #527 deliberately removed and would make every Vulkan consumer
+// silently appear CPU-readable.
+mod _assert_vulkan_read_view_not_cpu_readable {
+    use super::VulkanReadView;
+    use streamlib_adapter_abi::CpuReadable;
+
+    trait AmbiguousIfImpl<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+    #[allow(dead_code)]
+    struct Invalid;
+    impl<T: ?Sized + CpuReadable> AmbiguousIfImpl<Invalid> for T {}
+
+    const _: fn() = || {
+        let _ = <VulkanReadView<'static> as AmbiguousIfImpl<_>>::some_item;
+    };
 }
