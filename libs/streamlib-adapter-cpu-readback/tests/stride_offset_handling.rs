@@ -32,9 +32,10 @@ fn stride_is_tightly_packed_width_times_bpp() {
     // Pick a width that is NOT a power of 2 — common driver stride-
     // alignment requirements (256-byte rows, 64-pixel rows on NVIDIA)
     // would surface here if the staging buffer accidentally inherited
-    // them.
-    let width = 38u32;
-    let height = 6u32;
+    // them. Prime / odd dims are deliberate; this is a single-plane
+    // BGRA test and is not subject to NV12's even-dimension rule.
+    let width = 37u32;
+    let height = 5u32;
     let bpp = 4u32;
 
     let descriptor = fixture.register_surface(1, width, height);
@@ -68,14 +69,13 @@ fn unaligned_widths_round_trip_byte_exact() {
         }
     };
 
-    // Width = 18 (not aligned to 16/64). If the image-to-buffer copy is
-    // using the wrong row pitch on the buffer side, every other row will
-    // be shifted by the alignment delta and this byte-exact comparison
-    // will diverge. Surface dims are even because NV12 elsewhere
-    // requires it; using even dims here keeps the BGRA path consistent
-    // with the multi-plane round-trip's geometry assumptions.
-    let width = 18u32;
-    let height = 10u32;
+    // Width = 17 (prime, not aligned to 4/16/64). If the image-to-
+    // buffer copy is using the wrong row pitch on the buffer side,
+    // every other row will be shifted by the alignment delta and this
+    // byte-exact comparison will diverge. Single-plane BGRA: not
+    // subject to NV12's even-dimension rule.
+    let width = 17u32;
+    let height = 9u32;
     let descriptor = fixture.register_surface(1, width, height);
 
     // Prime: each pixel's value encodes (y * width + x) mod 256 in all
