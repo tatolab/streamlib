@@ -86,6 +86,7 @@ pub enum EscalateRequest {
     AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer),
     AcquireTexture(EscalateRequestAcquireTexture),
     Log(EscalateRequestLog),
+    ReleaseHandle(EscalateRequestReleaseHandle),
 }
 ```
 
