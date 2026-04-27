@@ -46,8 +46,10 @@ use crate::view::{
     CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
 };
 
-/// Default per-acquire timeline-wait timeout.
-const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
+/// Default per-acquire GPU-wait timeout. Bounds both the prior-work
+/// timeline-semaphore wait and the per-submit `vk::Fence` wait that
+/// observe the image↔buffer copies.
+const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Explicit GPU→CPU [`SurfaceAdapter`] implementation.
 ///
@@ -71,11 +73,14 @@ impl CpuReadbackSurfaceAdapter {
         Self {
             device,
             surfaces: Mutex::new(HashMap::new()),
-            acquire_timeout: DEFAULT_TIMELINE_WAIT,
+            acquire_timeout: DEFAULT_ACQUIRE_TIMEOUT,
         }
     }
 
-    /// Override the per-acquire timeline-wait timeout. Default 5 s.
+    /// Override the per-acquire GPU-wait timeout. Bounds both the
+    /// prior-work timeline-semaphore wait and the per-submit
+    /// `vk::Fence` wait that observe the image↔buffer copies. Default
+    /// 5 s.
     pub fn with_acquire_timeout(mut self, timeout: Duration) -> Self {
         self.acquire_timeout = timeout;
         self
