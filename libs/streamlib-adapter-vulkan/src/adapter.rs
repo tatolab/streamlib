@@ -446,7 +446,6 @@ impl SurfaceAdapter for VulkanSurfaceAdapter {
                 image,
                 layout,
                 info,
-                cpu_bytes: None,
                 _marker: PhantomData,
             },
         ))
@@ -505,7 +504,6 @@ impl SurfaceAdapter for VulkanSurfaceAdapter {
                 image,
                 layout,
                 info,
-                cpu_bytes: None,
                 _marker: PhantomData,
             },
         )))
