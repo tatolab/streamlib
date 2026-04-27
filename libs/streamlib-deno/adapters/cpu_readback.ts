@@ -44,6 +44,7 @@ import {
   type StreamlibSurface,
   type SurfaceFormat,
 } from "../surface_adapter.ts";
+import { getChannel } from "../escalate.ts";
 import type { EscalateChannel, EscalateResponseOk } from "../escalate.ts";
 
 export { STREAMLIB_ADAPTER_ABI_VERSION };
@@ -172,6 +173,18 @@ export class CpuReadbackContext {
   constructor(gpu: CpuReadbackGpuLimitedAccess, escalate: EscalateChannel) {
     this.gpu = gpu;
     this.escalate = escalate;
+  }
+
+  /**
+   * Build from a typed runtime context. Mirrors Python's
+   * `CpuReadbackContext.from_runtime`. Pulls the process-wide escalate
+   * channel singleton (installed by the subprocess runner) and pairs
+   * it with the runtime context's `gpuLimitedAccess`.
+   */
+  static fromRuntime(
+    ctx: { readonly gpuLimitedAccess: CpuReadbackGpuLimitedAccess },
+  ): CpuReadbackContext {
+    return new CpuReadbackContext(ctx.gpuLimitedAccess, getChannel());
   }
 
   async acquireRead(

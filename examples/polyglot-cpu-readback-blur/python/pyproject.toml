@@ -1,0 +1,20 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[project]
+name = "polyglot-cpu-readback-blur"
+version = "0.1.0"
+description = "Polyglot cpu-readback Gaussian blur — Python processor"
+requires-python = ">=3.10"
+dependencies = [
+    "iceoryx2>=0.8.1",
+    "msgpack>=1.0",
+    "numpy>=1.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

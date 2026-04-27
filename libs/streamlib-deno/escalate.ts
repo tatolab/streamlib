@@ -229,3 +229,28 @@ export class EscalateChannel {
     return `dn-${Date.now().toString(36)}-${this.counter}`;
   }
 }
+
+/**
+ * Process-wide escalate channel singleton — mirror of Python's
+ * `streamlib.escalate.channel()`. Subprocess runner installs it after
+ * wiring the bridge stdio pipes; processor code (and SDK helpers like
+ * `CpuReadbackContext.fromRuntime`) reach for it via `getChannel()`.
+ *
+ * Throws if the channel hasn't been installed — that only happens when
+ * processor code runs outside the normal subprocess_runner lifecycle
+ * (e.g. bare unit tests without a host).
+ */
+let _channelSingleton: EscalateChannel | null = null;
+
+export function installChannel(channel: EscalateChannel): void {
+  _channelSingleton = channel;
+}
+
+export function getChannel(): EscalateChannel {
+  if (_channelSingleton === null) {
+    throw new EscalateError(
+      "escalate channel not installed — getChannel() is only available inside the subprocess lifecycle",
+    );
+  }
+  return _channelSingleton;
+}
