@@ -100,13 +100,13 @@ impl CpuReadbackSurfaceAdapter {
         let width = registration.texture.width();
         let height = registration.texture.height();
         let bpp = registration.bytes_per_pixel;
-        if bpp == 0 {
-            return Err(AdapterError::SurfaceNotFound { surface_id: id });
-        }
 
         // Pick a PixelFormat for the staging buffer based on bpp. The
         // buffer is just bytes; the adapter never interprets it as a
-        // typed format.
+        // typed format. Multi-plane formats (NV12, YUV420p, …) need a
+        // separate plane-aware copy path and are out of scope for v1
+        // — reject explicitly with `UnsupportedFormat` so callers can
+        // branch.
         let staging_format = match bpp {
             4 => PixelFormat::Bgra32,
             other => {
@@ -114,7 +114,10 @@ impl CpuReadbackSurfaceAdapter {
                     bytes_per_pixel = other,
                     "cpu-readback adapter: unsupported bytes_per_pixel; rejecting"
                 );
-                return Err(AdapterError::SurfaceNotFound { surface_id: id });
+                return Err(AdapterError::UnsupportedFormat {
+                    surface_id: id,
+                    reason: format!("bytes_per_pixel = {other}, only 4 (BGRA8/RGBA8) supported in v1"),
+                });
             }
         };
 
@@ -281,6 +284,15 @@ impl CpuReadbackSurfaceAdapter {
     ///   - transitions `image` (`TRANSFER_SRC_OPTIMAL` → `GENERAL`)
     /// then blocks via `vkQueueWaitIdle` so the host bytes are
     /// observable.
+    ///
+    /// `vkQueueWaitIdle` is a **queue-wide** stall — every other
+    /// workload sharing this queue (encoder, decoder, camera) blocks
+    /// until the copy completes. That's correct for a v1
+    /// "GPU→CPU is the explicit slow exit" adapter, but the steady
+    /// state should switch to a per-submit fence + timeline wait so
+    /// only this surface's pipeline stalls. Tracked as part of the
+    /// adapter runtime-integration follow-up issues filed against
+    /// the Surface Adapter Architecture milestone.
     fn copy_image_to_buffer(
         &self,
         image: vk::Image,
