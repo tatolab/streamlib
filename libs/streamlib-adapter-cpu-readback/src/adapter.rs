@@ -125,15 +125,20 @@ impl CpuReadbackSurfaceAdapter {
             let pw = format.plane_width(width, plane_idx);
             let ph = format.plane_height(height, plane_idx);
             let pbpp = format.plane_bytes_per_pixel(plane_idx);
-            let staging_pixel_format = pixel_format_for_bpp(pbpp);
 
             // Allocate a *dedicated* HOST_VISIBLE linear staging buffer per
             // plane. Going through `GpuContext::acquire_pixel_buffer` would
             // draw from the shared (w,h,format) pool and cap at 4 surfaces
             // of identical dimensions — wrong shape for an adapter that
             // needs one buffer per registered surface plane.
+            //
+            // The `PixelFormat` argument to `VulkanPixelBuffer::new` is
+            // opaque metadata only — `bytes_per_pixel` drives the
+            // allocation size. We pass `Bgra32` uniformly so the
+            // staging buffer's recorded format isn't claiming a specific
+            // pixel layout (Y/UV/RGB) the adapter never interprets.
             let staging = Arc::new(
-                VulkanPixelBuffer::new(&self.device, pw, ph, pbpp, staging_pixel_format).map_err(
+                VulkanPixelBuffer::new(&self.device, pw, ph, pbpp, PixelFormat::Bgra32).map_err(
                     |e| AdapterError::IpcDisconnected {
                         reason: format!(
                             "VulkanPixelBuffer::new for cpu-readback staging plane {plane_idx}: {e}"
@@ -689,30 +694,6 @@ fn combined_aspect_mask(format: SurfaceFormat) -> vk::ImageAspectFlags {
     match format {
         SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => vk::ImageAspectFlags::COLOR,
         SurfaceFormat::Nv12 => vk::ImageAspectFlags::PLANE_0 | vk::ImageAspectFlags::PLANE_1,
-    }
-}
-
-/// Pick the [`PixelFormat`] enumerant for a HOST_VISIBLE staging
-/// `VulkanPixelBuffer` whose only role is "linear bytes the customer
-/// will memcpy out of / into". The buffer never gets sampled or rendered
-/// from, so the choice only governs allocation sizing — the bytes-per-
-/// pixel passed alongside is the load-bearing input.
-fn pixel_format_for_bpp(bpp: u32) -> PixelFormat {
-    match bpp {
-        // BGRA32 / RGBA32 are interchangeable for staging; both are 4 bpp.
-        4 => PixelFormat::Bgra32,
-        // NV12 UV plane is 2 bytes per texel — Uyvy422 is the closest
-        // 2-bpp enumerant in PixelFormat. Buffer is opaque bytes either
-        // way; the bpp parameter to VulkanPixelBuffer::new is what
-        // actually drives the allocation size.
-        2 => PixelFormat::Uyvy422,
-        // NV12 Y plane is 1 byte per texel.
-        1 => PixelFormat::Gray8,
-        // 16 bpp (Rgba64) etc. — fall back to Rgba32 for an oversized
-        // stage; this branch is currently unreachable for SurfaceFormat
-        // {Bgra8, Rgba8, Nv12} but documents the intent if the format
-        // set widens.
-        _ => PixelFormat::Bgra32,
     }
 }
 
