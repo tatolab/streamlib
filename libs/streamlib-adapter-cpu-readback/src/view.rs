@@ -141,9 +141,18 @@ impl<'g> CpuReadbackReadView<'g> {
 impl CpuReadable for CpuReadbackReadView<'_> {
     /// Returns the **primary plane**'s bytes (plane 0). For single-plane
     /// formats this is the entire image; for multi-plane formats (NV12)
-    /// it is the Y/luma plane. Use [`Self::plane`] to reach chroma planes.
+    /// it is the Y/luma plane. Use [`CpuReadable::plane_bytes`] to reach
+    /// chroma planes.
     fn read_bytes(&self) -> &[u8] {
         self.planes[0].bytes
+    }
+
+    fn plane_count(&self) -> u32 {
+        self.planes.len() as u32
+    }
+
+    fn plane_bytes(&self, index: u32) -> &[u8] {
+        self.planes[index as usize].bytes
     }
 }
 
@@ -197,16 +206,29 @@ impl<'g> CpuReadbackWriteView<'g> {
 }
 
 impl CpuReadable for CpuReadbackWriteView<'_> {
+    /// Returns the **primary plane**'s bytes (plane 0). Use
+    /// [`CpuReadable::plane_bytes`] to reach chroma planes.
     fn read_bytes(&self) -> &[u8] {
         self.planes[0].bytes
+    }
+
+    fn plane_count(&self) -> u32 {
+        self.planes.len() as u32
+    }
+
+    fn plane_bytes(&self, index: u32) -> &[u8] {
+        self.planes[index as usize].bytes
     }
 }
 
 impl CpuWritable for CpuReadbackWriteView<'_> {
     /// Returns mutable access to the **primary plane**'s bytes (plane 0).
-    /// For NV12 surfaces, callers wanting to write chroma must use
-    /// [`CpuReadbackWriteView::plane_mut`].
+    /// Use [`CpuWritable::plane_bytes_mut`] to reach chroma planes.
     fn write_bytes(&mut self) -> &mut [u8] {
         self.planes[0].bytes
+    }
+
+    fn plane_bytes_mut(&mut self, index: u32) -> &mut [u8] {
+        self.planes[index as usize].bytes
     }
 }

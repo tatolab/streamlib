@@ -204,12 +204,61 @@ pub trait GlWritable {
     fn gl_texture_id(&self) -> u32;
 }
 
-/// Capability marker for views that expose a CPU-readable byte slice.
+/// Capability marker for views that expose CPU-readable bytes.
+///
+/// Strict capability marker — only `streamlib-adapter-cpu-readback`
+/// implements this trait. Switching to that adapter is the contractual
+/// signal that the customer has opted into a host-side GPU→CPU copy;
+/// GPU adapters (`-vulkan`, `-opengl`, `-skia`) deliberately do not
+/// satisfy it (enforced at compile time via `assert_not_impl_all!`).
+///
+/// Plane-aware shape: trait-generic callers iterating bytes through
+/// `&dyn CpuReadable` should use [`Self::plane_count`] +
+/// [`Self::plane_bytes`] to cover every plane of multi-plane formats
+/// (NV12). [`Self::read_bytes`] returns plane 0 only — fine for
+/// single-plane formats (BGRA/RGBA), silently drops chroma on NV12.
 pub trait CpuReadable {
+    /// Bytes of plane 0. Plane-0-only by design; use
+    /// [`Self::plane_bytes`] for full multi-plane coverage.
     fn read_bytes(&self) -> &[u8];
+
+    /// Number of planes in this view. Defaults to 1; multi-plane impls
+    /// override.
+    fn plane_count(&self) -> u32 {
+        1
+    }
+
+    /// Bytes of plane `index`, row-major, tightly packed. Default impl
+    /// preserves single-plane semantics: index `0` returns
+    /// [`Self::read_bytes`] and any other index panics.
+    fn plane_bytes(&self, index: u32) -> &[u8] {
+        assert_eq!(
+            index, 0,
+            "plane_bytes: default impl only serves plane 0 (got {index})"
+        );
+        self.read_bytes()
+    }
 }
 
-/// Capability marker for views that expose a CPU-writable byte slice.
+/// Capability marker for views that expose CPU-writable bytes.
+///
+/// Strict capability marker — see [`CpuReadable`] for the architectural
+/// invariant. Plane-aware shape: trait-generic callers writing bytes
+/// through `&mut dyn CpuWritable` should use [`Self::plane_bytes_mut`]
+/// to cover every plane. [`Self::write_bytes`] is plane-0-only legacy.
 pub trait CpuWritable {
+    /// Mutable bytes of plane 0. Plane-0-only by design; use
+    /// [`Self::plane_bytes_mut`] for full multi-plane coverage.
     fn write_bytes(&mut self) -> &mut [u8];
+
+    /// Mutable bytes of plane `index`. Default impl preserves single-
+    /// plane semantics: index `0` returns [`Self::write_bytes`] and any
+    /// other index panics.
+    fn plane_bytes_mut(&mut self, index: u32) -> &mut [u8] {
+        assert_eq!(
+            index, 0,
+            "plane_bytes_mut: default impl only serves plane 0 (got {index})"
+        );
+        self.write_bytes()
+    }
 }
