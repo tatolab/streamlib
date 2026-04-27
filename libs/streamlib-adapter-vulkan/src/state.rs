@@ -1,0 +1,86 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! Per-surface adapter state. The adapter holds a registry of these
+//! keyed by [`streamlib_adapter_abi::SurfaceId`]; each entry tracks the
+//! host-allocated texture, the timeline semaphore the host advances on
+//! release, and the layout the next acquire transitions through.
+
+use std::sync::Arc;
+
+use streamlib::adapter_support::VulkanTimelineSemaphore;
+use streamlib::core::rhi::StreamTexture;
+use streamlib_adapter_abi::SurfaceId;
+use vulkanalia::vk;
+
+/// `VkImageLayout` enumerant. Stored as `i32` per the Vulkan spec.
+///
+/// Re-exported so the adapter's public API doesn't drag every consumer
+/// through a `vulkanalia` import. Convert to `vk::ImageLayout` via
+/// `vk::ImageLayout::from_raw(layout.0)`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct VulkanLayout(pub i32);
+
+impl VulkanLayout {
+    pub const UNDEFINED: Self = Self(vk::ImageLayout::UNDEFINED.as_raw());
+    pub const GENERAL: Self = Self(vk::ImageLayout::GENERAL.as_raw());
+    pub const COLOR_ATTACHMENT_OPTIMAL: Self =
+        Self(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw());
+    pub const SHADER_READ_ONLY_OPTIMAL: Self =
+        Self(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw());
+    pub const TRANSFER_SRC_OPTIMAL: Self =
+        Self(vk::ImageLayout::TRANSFER_SRC_OPTIMAL.as_raw());
+    pub const TRANSFER_DST_OPTIMAL: Self =
+        Self(vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw());
+
+    pub(crate) fn vk(self) -> vk::ImageLayout {
+        vk::ImageLayout::from_raw(self.0)
+    }
+}
+
+/// Inputs the host hands to [`crate::VulkanSurfaceAdapter::register_host_surface`].
+///
+/// The host is responsible for allocating the texture (via
+/// `GpuContext::acquire_render_target_dma_buf_image` or equivalent) and
+/// creating an exportable timeline semaphore (via
+/// [`VulkanTimelineSemaphore::new_exportable`]). The adapter then takes
+/// joint ownership and exposes scoped acquire/release for consumers.
+pub struct HostSurfaceRegistration {
+    pub texture: StreamTexture,
+    pub timeline: Arc<VulkanTimelineSemaphore>,
+    /// Initial layout the host left the image in after allocation. The
+    /// first `acquire_*` will transition from here. For freshly-allocated
+    /// images this is typically [`VulkanLayout::UNDEFINED`].
+    pub initial_layout: VulkanLayout,
+}
+
+/// Per-surface state held inside the adapter's `Mutex<HashMap<SurfaceId, _>>`.
+///
+/// All mutation goes through the adapter's lock so `acquire_*` /
+/// `end_*_access` stay sequenced — the trait's `&self` shape is satisfied
+/// by interior mutability. Counters are sized to whatever the underlying
+/// Vulkan timeline semaphore supports (u64); WriteContended is a fast
+/// pre-check before the timeline wait.
+pub(crate) struct SurfaceState {
+    #[allow(dead_code)] // kept for tracing / debug output, not read in hot paths
+    pub(crate) surface_id: SurfaceId,
+    pub(crate) texture: StreamTexture,
+    pub(crate) timeline: Arc<VulkanTimelineSemaphore>,
+    pub(crate) current_layout: VulkanLayout,
+    pub(crate) read_holders: u64,
+    pub(crate) write_held: bool,
+    /// Last value the host *waited on* before handing access out. Used
+    /// only for telemetry; the canonical wait value is recomputed every
+    /// acquire from `current_release_value`.
+    pub(crate) last_acquire_value: u64,
+    /// The value `signal_host` was last advanced to. The next acquire
+    /// waits on this value (so any prior writer's GPU work has drained)
+    /// and the next release advances it by one.
+    pub(crate) current_release_value: u64,
+}
+
+impl SurfaceState {
+    pub(crate) fn next_release_value(&self) -> u64 {
+        self.current_release_value + 1
+    }
+}

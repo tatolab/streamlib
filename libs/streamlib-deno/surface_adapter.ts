@@ -101,6 +101,32 @@ export interface StreamlibSurface {
   readonly usage: SurfaceUsage;
 }
 
+/**
+ * DMA-BUF transport handle — fds, plane layout, modifier — read out of a
+ * surface descriptor for adapter-internal import on the subprocess side.
+ *
+ * Customers never see this; only adapter implementations.
+ */
+export interface SurfaceTransportHandle {
+  readonly planeCount: number;
+  readonly dmaBufFds: readonly number[]; // length MAX_DMA_BUF_PLANES
+  readonly planeOffsets: readonly bigint[]; // length MAX_DMA_BUF_PLANES
+  readonly planeStrides: readonly bigint[]; // length MAX_DMA_BUF_PLANES
+  readonly drmFormatModifier: bigint;
+}
+
+/**
+ * Host-side timeline-semaphore + initial layout. Subprocess adapters
+ * import `timelineSemaphoreSyncFd` via `vkImportSemaphoreFdKHR`.
+ */
+export interface SurfaceSyncState {
+  readonly timelineSemaphoreHandle: bigint;
+  readonly timelineSemaphoreSyncFd: number;
+  readonly lastAcquireValue: bigint;
+  readonly lastReleaseValue: bigint;
+  readonly currentImageLayout: number;
+}
+
 /** Read-side view returned by `acquireRead`. Adapter-typed. */
 export type ReadView = unknown;
 
@@ -152,5 +178,53 @@ export function readStreamlibSurface(
     height: view.getUint32(o.height),
     format: view.getUint32(o.format) as SurfaceFormat,
     usage: view.getUint32(o.usage) as SurfaceUsage,
+  };
+}
+
+/**
+ * Read the embedded `SurfaceTransportHandle` out of a `StreamlibSurface`
+ * descriptor. Adapter implementations use this when they need DMA-BUF fds
+ * and the modifier to import the backing.
+ */
+export function readSurfaceTransportHandle(
+  view: Deno.UnsafePointerView,
+): SurfaceTransportHandle {
+  const base = SurfaceLayout.Surface.Offsets.transport;
+  const o = SurfaceLayout.TransportHandle.Offsets;
+  const fds: number[] = [];
+  const offs: bigint[] = [];
+  const strides: bigint[] = [];
+  for (let i = 0; i < MAX_DMA_BUF_PLANES; i++) {
+    fds.push(view.getInt32(base + o.dmaBufFds + i * 4));
+    offs.push(view.getBigUint64(base + o.planeOffsets + i * 8));
+    strides.push(view.getBigUint64(base + o.planeStrides + i * 8));
+  }
+  return {
+    planeCount: view.getUint32(base + o.planeCount),
+    dmaBufFds: fds,
+    planeOffsets: offs,
+    planeStrides: strides,
+    drmFormatModifier: view.getBigUint64(base + o.drmFormatModifier),
+  };
+}
+
+/**
+ * Read the embedded `SurfaceSyncState` out of a `StreamlibSurface`
+ * descriptor. Adapter implementations import the sync-fd to participate
+ * in the host-side timeline.
+ */
+export function readSurfaceSyncState(
+  view: Deno.UnsafePointerView,
+): SurfaceSyncState {
+  const base = SurfaceLayout.Surface.Offsets.sync;
+  const o = SurfaceLayout.SyncState.Offsets;
+  return {
+    timelineSemaphoreHandle: view.getBigUint64(
+      base + o.timelineSemaphoreHandle,
+    ),
+    timelineSemaphoreSyncFd: view.getInt32(base + o.timelineSemaphoreSyncFd),
+    lastAcquireValue: view.getBigUint64(base + o.lastAcquireValue),
+    lastReleaseValue: view.getBigUint64(base + o.lastReleaseValue),
+    currentImageLayout: view.getInt32(base + o.currentImageLayout),
   };
 }

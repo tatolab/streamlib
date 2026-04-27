@@ -1,0 +1,75 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-adapter-vulkan"
+description = "Vulkan-native StreamLib surface adapter (Linux). No-copy passthrough — exposes host-allocated VkImage to consumers that speak Vulkan natively. Canonical implementor of the VulkanWritable / VulkanImageInfoExt capability traits from streamlib-adapter-abi."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_adapter_vulkan"
+path = "src/lib.rs"
+
+[dependencies]
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+parking_lot = "0.12"
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib = { path = "../streamlib" }
+streamlib-surface-client = { path = "../streamlib-surface-client" }
+vulkanalia.workspace = true
+libc.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+serde = { workspace = true }
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+
+[[test]]
+name = "sync_correctness"
+path = "tests/sync_correctness.rs"
+
+[[test]]
+name = "write_excludes_read"
+path = "tests/write_excludes_read.rs"
+
+# Subprocess round-trip / crash tests — Linux only. They spawn the
+# `vulkan_adapter_subprocess_helper` test binary that lives below.
+[[test]]
+name = "round_trip_host_writes_subprocess_reads"
+path = "tests/round_trip_host_writes_subprocess_reads.rs"
+
+[[test]]
+name = "round_trip_subprocess_writes_host_reads"
+path = "tests/round_trip_subprocess_writes_host_reads.rs"
+
+[[test]]
+name = "concurrent_reads_two_subprocesses"
+path = "tests/concurrent_reads_two_subprocesses.rs"
+
+[[test]]
+name = "subprocess_crash_mid_write"
+path = "tests/subprocess_crash_mid_write.rs"
+
+# Subprocess test helper. Built as a normal binary by `cargo test` and
+# discovered at runtime via `env!("CARGO_BIN_EXE_…")`.
+[[bin]]
+name = "vulkan_adapter_subprocess_helper"
+path = "tests/bin/vulkan_adapter_subprocess_helper.rs"
+test = false
+
+[lints]
+workspace = true

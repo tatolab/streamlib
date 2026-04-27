@@ -435,6 +435,18 @@ impl VulkanDevice {
                     tracing::info!("VK_EXT_image_drm_format_modifier available");
                 }
 
+                // Required for cross-process timeline-semaphore handoff via
+                // sync-fd: the host exports with vkGetSemaphoreFdKHR and the
+                // subprocess imports with vkImportSemaphoreFdKHR. Without
+                // this extension, surface-adapter sync across the IPC seam
+                // cannot land. VK_KHR_external_semaphore is core since 1.1
+                // so only the fd-handle subset needs explicit opt-in.
+                let external_semaphore_fd_ext = c"VK_KHR_external_semaphore_fd";
+                if available_device_ext_names.contains(&external_semaphore_fd_ext) {
+                    device_extensions.push(external_semaphore_fd_ext.as_ptr());
+                    tracing::info!("VK_KHR_external_semaphore_fd available");
+                }
+
                 tracing::info!("Vulkan external memory extensions enabled");
             } else {
                 tracing::info!("Vulkan external memory extensions not available");

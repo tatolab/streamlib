@@ -5,6 +5,8 @@
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
+#[cfg(target_os = "linux")]
+use vulkanalia::vk::KhrExternalSemaphoreFdExtensionDeviceCommands;
 
 use crate::core::{Result, StreamError};
 
@@ -168,6 +170,234 @@ impl Drop for VulkanFence {
 unsafe impl Send for VulkanFence {}
 unsafe impl Sync for VulkanFence {}
 
+/// Vulkan **timeline** semaphore wrapper.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[allow(dead_code)]
+///
+/// Timeline semaphores carry a monotonically-increasing 64-bit counter.
+/// Submitters wait on a value and signal a higher value; the wait
+/// completes when the counter has reached or surpassed the requested
+/// value. This is the synchronization primitive used by surface
+/// adapters: each per-surface acquire/release pair advances the counter.
+///
+/// Created with `VkSemaphoreTypeCreateInfo` chained into the standard
+/// `VkSemaphoreCreateInfo`. Optionally created with
+/// `VkExportSemaphoreCreateInfo` so [`Self::export_opaque_fd`] can hand a
+/// file descriptor to a subprocess, which imports it via
+/// [`Self::from_imported_opaque_fd`] into its own `VkDevice`. The two
+/// processes then signal/wait the same timeline.
+pub struct VulkanTimelineSemaphore {
+    device: vulkanalia::Device,
+    semaphore: vk::Semaphore,
+    /// Whether the semaphore was created with VK_KHR_external_semaphore_fd
+    /// export support — i.e. [`Self::export_opaque_fd`] is callable.
+    exportable: bool,
+}
+
+#[cfg(target_os = "linux")]
+impl VulkanTimelineSemaphore {
+    /// Create an in-process timeline semaphore (no export).
+    ///
+    /// Pair with [`Self::wait`] / [`Self::signal_host`] / [`Self::signal_on_queue`]
+    /// for single-process work. Use [`Self::new_exportable`] when the
+    /// timeline must be shared with a subprocess via sync-fd.
+    pub fn new(device: &vulkanalia::Device, initial_value: u64) -> Result<Self> {
+        Self::create(device, initial_value, false)
+    }
+
+    /// Create an exportable timeline semaphore.
+    ///
+    /// `vkGetSemaphoreFdKHR` will hand a fresh OPAQUE_FD per
+    /// [`Self::export_opaque_fd`] call; ownership transfers to the caller
+    /// (close after use, or pass via SCM_RIGHTS).
+    pub fn new_exportable(device: &vulkanalia::Device, initial_value: u64) -> Result<Self> {
+        Self::create(device, initial_value, true)
+    }
+
+    fn create(
+        device: &vulkanalia::Device,
+        initial_value: u64,
+        exportable: bool,
+    ) -> Result<Self> {
+        let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
+            .semaphore_type(vk::SemaphoreType::TIMELINE)
+            .initial_value(initial_value)
+            .build();
+
+        let mut export_info = vk::ExportSemaphoreCreateInfo::builder()
+            .handle_types(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
+            .build();
+
+        let info = if exportable {
+            // Chain order: SemaphoreCreateInfo -> ExportSemaphoreCreateInfo -> SemaphoreTypeCreateInfo.
+            // p_next is set manually to avoid moving the local `type_info`
+            // into the builder's pNext (vulkanalia's builder takes &mut and
+            // would borrow `type_info`).
+            export_info.next = (&mut type_info as *mut _) as *mut std::ffi::c_void;
+            vk::SemaphoreCreateInfo::builder()
+                .push_next(&mut export_info)
+                .build()
+        } else {
+            vk::SemaphoreCreateInfo::builder()
+                .push_next(&mut type_info)
+                .build()
+        };
+
+        let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
+            StreamError::GpuError(format!(
+                "Failed to create timeline semaphore (exportable={exportable}): {e}"
+            ))
+        })?;
+
+        Ok(Self {
+            device: device.clone(),
+            semaphore,
+            exportable,
+        })
+    }
+
+    /// Import a timeline semaphore from an OPAQUE_FD handed in by the
+    /// host. Subprocess side of [`Self::export_opaque_fd`].
+    ///
+    /// `VK_SEMAPHORE_IMPORT_TEMPORARY_BIT` is NOT used: the imported
+    /// semaphore takes permanent payload ownership, matching how DMA-BUF
+    /// memory imports are bound for surface lifetime.
+    ///
+    /// On success the kernel fd ownership transfers to the Vulkan driver;
+    /// the caller MUST NOT close `fd` afterwards. On error the caller
+    /// retains ownership and is responsible for closing it.
+    pub fn from_imported_opaque_fd(
+        device: &vulkanalia::Device,
+        fd: std::os::unix::io::RawFd,
+    ) -> Result<Self> {
+        // The semaphore must already exist before import. Create it as a
+        // timeline semaphore with initial value 0; the import then
+        // replaces the payload with the host's timeline state.
+        let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
+            .semaphore_type(vk::SemaphoreType::TIMELINE)
+            .initial_value(0)
+            .build();
+        let info = vk::SemaphoreCreateInfo::builder()
+            .push_next(&mut type_info)
+            .build();
+        let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
+            StreamError::GpuError(format!(
+                "Failed to create receiving timeline semaphore for import: {e}"
+            ))
+        })?;
+
+        let import_info = vk::ImportSemaphoreFdInfoKHR::builder()
+            .semaphore(semaphore)
+            .flags(vk::SemaphoreImportFlags::empty())
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
+            .fd(fd)
+            .build();
+
+        let import_result = unsafe { device.import_semaphore_fd_khr(&import_info) };
+        if let Err(e) = import_result {
+            unsafe { device.destroy_semaphore(semaphore, None) };
+            return Err(StreamError::GpuError(format!(
+                "vkImportSemaphoreFdKHR failed: {e}"
+            )));
+        }
+
+        Ok(Self {
+            device: device.clone(),
+            semaphore,
+            exportable: false,
+        })
+    }
+
+    /// Export the semaphore as a fresh OPAQUE_FD suitable for SCM_RIGHTS
+    /// passing to a subprocess. Each call returns a NEW fd; callers own
+    /// the returned fd and must close it after use (or after the
+    /// subprocess has imported its own copy).
+    pub fn export_opaque_fd(&self) -> Result<std::os::unix::io::RawFd> {
+        if !self.exportable {
+            return Err(StreamError::GpuError(
+                "VulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
+            ));
+        }
+        let info = vk::SemaphoreGetFdInfoKHR::builder()
+            .semaphore(self.semaphore)
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
+            .build();
+        let fd = unsafe { self.device.get_semaphore_fd_khr(&info) }.map_err(|e| {
+            StreamError::GpuError(format!("vkGetSemaphoreFdKHR failed: {e}"))
+        })?;
+        Ok(fd)
+    }
+
+    /// Block until the timeline counter has reached or surpassed `value`.
+    ///
+    /// `timeout_ns` is the per-call timeout; pass `u64::MAX` for "no
+    /// timeout". Returns `Ok(())` on success and
+    /// [`StreamError::GpuError`] (containing the underlying VkResult) on
+    /// timeout or driver failure.
+    pub fn wait(&self, value: u64, timeout_ns: u64) -> Result<()> {
+        let semaphores = [self.semaphore];
+        let values = [value];
+        let info = vk::SemaphoreWaitInfo::builder()
+            .flags(vk::SemaphoreWaitFlags::empty())
+            .semaphores(&semaphores)
+            .values(&values)
+            .build();
+        unsafe { self.device.wait_semaphores(&info, timeout_ns) }
+            .map(|_| ())
+            .map_err(|e| {
+                StreamError::GpuError(format!(
+                    "vkWaitSemaphores(value={value}, timeout_ns={timeout_ns}): {e}"
+                ))
+            })
+    }
+
+    /// Host-side signal: advance the counter to `value` directly from
+    /// the CPU. Used when the producer has finished writing on the host
+    /// side and wants to release the surface to the next consumer.
+    ///
+    /// `value` MUST be greater than the current counter — Vulkan
+    /// disallows monotonic regressions on a timeline semaphore.
+    pub fn signal_host(&self, value: u64) -> Result<()> {
+        let info = vk::SemaphoreSignalInfo::builder()
+            .semaphore(self.semaphore)
+            .value(value)
+            .build();
+        unsafe { self.device.signal_semaphore(&info) }.map_err(|e| {
+            StreamError::GpuError(format!("vkSignalSemaphore(value={value}): {e}"))
+        })
+    }
+
+    /// Read the current timeline counter value via
+    /// `vkGetSemaphoreCounterValue`. Used by tests and progress reporting.
+    pub fn current_value(&self) -> Result<u64> {
+        unsafe { self.device.get_semaphore_counter_value(self.semaphore) }.map_err(|e| {
+            StreamError::GpuError(format!("vkGetSemaphoreCounterValue: {e}"))
+        })
+    }
+
+    /// Raw `vk::Semaphore` handle for inclusion in queue submit infos.
+    pub fn semaphore(&self) -> vk::Semaphore {
+        self.semaphore
+    }
+
+    /// Whether [`Self::export_opaque_fd`] can be called.
+    pub fn is_exportable(&self) -> bool {
+        self.exportable
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for VulkanTimelineSemaphore {
+    fn drop(&mut self) {
+        unsafe { self.device.destroy_semaphore(self.semaphore, None) };
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe impl Send for VulkanTimelineSemaphore {}
+#[cfg(target_os = "linux")]
+unsafe impl Sync for VulkanTimelineSemaphore {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +416,51 @@ mod tests {
         let semaphore = VulkanSemaphore::new(device.device());
         assert!(semaphore.is_ok(), "Semaphore creation should succeed");
         println!("Vulkan semaphore created successfully");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timeline_semaphore_host_signal_advances_counter() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping test - Vulkan not available");
+                return;
+            }
+        };
+        let sem = VulkanTimelineSemaphore::new(device.device(), 0)
+            .expect("create timeline semaphore");
+        assert_eq!(sem.current_value().unwrap(), 0);
+        sem.signal_host(7).expect("host signal");
+        assert_eq!(sem.current_value().unwrap(), 7);
+        // wait on a value already reached returns immediately.
+        sem.wait(7, 0).expect("wait on already-reached value");
+    }
+
+    /// `new_exportable` plus `export_opaque_fd` returns a valid kernel
+    /// fd. Sufficient to confirm `VK_KHR_external_semaphore_fd` is wired.
+    /// Cross-process import is exercised by the surface-adapter
+    /// integration tests in `streamlib-adapter-vulkan`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn timeline_semaphore_exports_valid_opaque_fd() {
+        let device = match VulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping test - Vulkan not available");
+                return;
+            }
+        };
+        let sem = match VulkanTimelineSemaphore::new_exportable(device.device(), 0) {
+            Ok(s) => s,
+            Err(_) => {
+                println!("Skipping — VK_KHR_external_semaphore_fd unavailable on this driver");
+                return;
+            }
+        };
+        let fd = sem.export_opaque_fd().expect("export_opaque_fd");
+        assert!(fd >= 0, "exported sync fd should be a valid kernel fd");
+        unsafe { libc::close(fd) };
     }
 
     #[test]

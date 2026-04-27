@@ -17,6 +17,9 @@ pub use vulkan_command_queue::VulkanCommandQueue;
 pub use vulkan_device::VulkanDevice;
 #[allow(unused_imports)]
 pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
+#[cfg(target_os = "linux")]
+#[allow(unused_imports)]
+pub use vulkan_sync::VulkanTimelineSemaphore;
 pub use vulkan_texture::VulkanTexture;
 
 mod vulkan_blitter;

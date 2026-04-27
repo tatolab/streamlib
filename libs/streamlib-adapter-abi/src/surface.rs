@@ -88,6 +88,45 @@ impl SurfaceTransportHandle {
             drm_format_modifier: 0,
         }
     }
+
+    /// Construct from the per-plane arrays. Called by the host side when
+    /// registering a backing with an adapter; the descriptor is then
+    /// passed to consumer adapters across IPC.
+    pub const fn new(
+        plane_count: u32,
+        dma_buf_fds: [i32; MAX_DMA_BUF_PLANES],
+        plane_offsets: [u64; MAX_DMA_BUF_PLANES],
+        plane_strides: [u64; MAX_DMA_BUF_PLANES],
+        drm_format_modifier: u64,
+    ) -> Self {
+        Self {
+            plane_count,
+            dma_buf_fds,
+            plane_offsets,
+            plane_strides,
+            drm_format_modifier,
+        }
+    }
+
+    pub const fn plane_count(&self) -> u32 {
+        self.plane_count
+    }
+
+    pub const fn dma_buf_fds(&self) -> &[i32; MAX_DMA_BUF_PLANES] {
+        &self.dma_buf_fds
+    }
+
+    pub const fn plane_offsets(&self) -> &[u64; MAX_DMA_BUF_PLANES] {
+        &self.plane_offsets
+    }
+
+    pub const fn plane_strides(&self) -> &[u64; MAX_DMA_BUF_PLANES] {
+        &self.plane_strides
+    }
+
+    pub const fn drm_format_modifier(&self) -> u64 {
+        self.drm_format_modifier
+    }
 }
 
 /// Adapter-internal: timeline-semaphore handles, counters, and the
@@ -123,6 +162,53 @@ pub struct SurfaceSyncState {
     pub(crate) _pad_b: u32,
     /// Reserved bytes for additive ABI extensions. MUST be zeroed.
     pub(crate) _reserved: [u8; 16],
+}
+
+impl SurfaceSyncState {
+    /// Construct from the host-side semaphore + sync-fd + initial layout.
+    ///
+    /// Subprocess consumer adapters never call this — they receive the
+    /// state in a [`StreamlibSurface`] over IPC and read fields via the
+    /// accessors below. Only the host-side surface-share registration
+    /// path constructs from raw values.
+    pub const fn new(
+        timeline_semaphore_handle: u64,
+        timeline_semaphore_sync_fd: i32,
+        last_acquire_value: u64,
+        last_release_value: u64,
+        current_image_layout: i32,
+    ) -> Self {
+        Self {
+            timeline_semaphore_handle,
+            timeline_semaphore_sync_fd,
+            _pad_a: 0,
+            last_acquire_value,
+            last_release_value,
+            current_image_layout,
+            _pad_b: 0,
+            _reserved: [0; 16],
+        }
+    }
+
+    pub const fn timeline_semaphore_handle(&self) -> u64 {
+        self.timeline_semaphore_handle
+    }
+
+    pub const fn timeline_semaphore_sync_fd(&self) -> i32 {
+        self.timeline_semaphore_sync_fd
+    }
+
+    pub const fn last_acquire_value(&self) -> u64 {
+        self.last_acquire_value
+    }
+
+    pub const fn last_release_value(&self) -> u64 {
+        self.last_release_value
+    }
+
+    pub const fn current_image_layout(&self) -> i32 {
+        self.current_image_layout
+    }
 }
 
 /// Stable, customer-visible descriptor for a shared GPU surface.
@@ -169,6 +255,26 @@ impl StreamlibSurface {
         }
     }
 
+    /// Adapter-facing: the DMA-BUF transport handle (fds, plane layout,
+    /// modifier).
+    ///
+    /// Customer code should not need this — it sees a framework-shaped
+    /// view through the adapter's `acquire_*` methods. Adapters reach
+    /// for it to import the backing on the consumer side
+    /// (`VkImportMemoryFdInfoKHR`, `eglCreateImageKHR`, …).
+    pub const fn transport(&self) -> &SurfaceTransportHandle {
+        &self.transport
+    }
+
+    /// Adapter-facing: the host-side timeline-semaphore + initial layout.
+    ///
+    /// Subprocess adapters import `timeline_semaphore_sync_fd` via
+    /// `vkImportSemaphoreFdKHR` and wait/signal the same timeline values
+    /// the host advances; the opaque `timeline_semaphore_handle` is
+    /// host-only and not dereferenceable in another address space.
+    pub const fn sync(&self) -> &SurfaceSyncState {
+        &self.sync
+    }
 }
 
 #[cfg(test)]
@@ -254,6 +360,46 @@ mod tests {
         assert_eq!(offset_of!(SurfaceSyncState, _reserved), 40);
         assert_eq!(size_of::<SurfaceSyncState>(), 56);
         assert_eq!(align_of::<SurfaceSyncState>(), 8);
+    }
+
+    /// Pub accessors return the values stored at construction. Locks the
+    /// "consumer adapter can read transport / sync state" contract — if
+    /// the accessors stop returning the field they refer to, every
+    /// subprocess adapter breaks at runtime.
+    #[test]
+    fn pub_accessors_round_trip_constructed_values() {
+        let transport = SurfaceTransportHandle::new(
+            2,
+            [10, 11, -1, -1],
+            [0, 4096, 0, 0],
+            [1920, 1920, 0, 0],
+            0x123_4567_89ab_cdef,
+        );
+        assert_eq!(transport.plane_count(), 2);
+        assert_eq!(transport.dma_buf_fds(), &[10, 11, -1, -1]);
+        assert_eq!(transport.plane_offsets(), &[0, 4096, 0, 0]);
+        assert_eq!(transport.plane_strides(), &[1920, 1920, 0, 0]);
+        assert_eq!(transport.drm_format_modifier(), 0x123_4567_89ab_cdef);
+
+        let sync = SurfaceSyncState::new(0xdead_beef, 42, 7, 5, 1);
+        assert_eq!(sync.timeline_semaphore_handle(), 0xdead_beef);
+        assert_eq!(sync.timeline_semaphore_sync_fd(), 42);
+        assert_eq!(sync.last_acquire_value(), 7);
+        assert_eq!(sync.last_release_value(), 5);
+        assert_eq!(sync.current_image_layout(), 1);
+
+        let surface = StreamlibSurface::new(
+            99,
+            1920,
+            1080,
+            SurfaceFormat::Bgra8,
+            SurfaceUsage::RENDER_TARGET,
+            transport,
+            sync,
+        );
+        assert_eq!(surface.id, 99);
+        assert_eq!(surface.transport().plane_count(), 2);
+        assert_eq!(surface.sync().timeline_semaphore_sync_fd(), 42);
     }
 
     #[test]
