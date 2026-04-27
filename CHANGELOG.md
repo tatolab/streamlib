@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.4.24](https://github.com/tatolab/streamlib/compare/v0.4.23...v0.4.24) (2026-04-27)
+
+
+### Features
+
+* **adapter-abi:** SurfaceAdapter trait + StreamlibSurface descriptor types ([#521](https://github.com/tatolab/streamlib/issues/521)) ([d25d77f](https://github.com/tatolab/streamlib/commit/d25d77f9fe71db1905a0bba4aae8a21e0a86e73d))
+* **adapter-cpu-readback:** explicit GPU→CPU surface adapter crate ([#514](https://github.com/tatolab/streamlib/issues/514)) ([#527](https://github.com/tatolab/streamlib/issues/527)) ([5796040](https://github.com/tatolab/streamlib/commit/5796040e8550ada540cdfaddd789817f5ad26873))
+* **adapter-cpu-readback:** NV12 + multi-plane format support ([#536](https://github.com/tatolab/streamlib/issues/536)) ([8df391a](https://github.com/tatolab/streamlib/commit/8df391a6fd922f10a6d77e5b23aa19aa2554d464))
+* **adapter-opengl:** OpenGL/EGL surface adapter crate (closes [#512](https://github.com/tatolab/streamlib/issues/512)) ([#526](https://github.com/tatolab/streamlib/issues/526)) ([6d1620e](https://github.com/tatolab/streamlib/commit/6d1620e3b3b093557f1c1d635490f81aeda32714))
+* **adapter-vulkan:** Vulkan-native surface adapter crate + cross-process timeline sync (closes [#511](https://github.com/tatolab/streamlib/issues/511)) ([#524](https://github.com/tatolab/streamlib/issues/524)) ([0d229d3](https://github.com/tatolab/streamlib/commit/0d229d3e92bd397ec440f8c4f2d7976f7210b53f))
+* **broker, rhi:** multi-FD SCM_RIGHTS + Rust-side multi-plane import (closes [#423](https://github.com/tatolab/streamlib/issues/423)) ([#462](https://github.com/tatolab/streamlib/issues/462)) ([aa6f0e7](https://github.com/tatolab/streamlib/commit/aa6f0e7c38e9bed571aab688097456c74810ed06))
+* **cli:** streamlib-cli logs reads JSONL with filters + --list (closes [#440](https://github.com/tatolab/streamlib/issues/440)) ([#470](https://github.com/tatolab/streamlib/issues/470)) ([0a3c1de](https://github.com/tatolab/streamlib/commit/0a3c1de3ae8f23a31915b4b3c33859bcde11a19d))
+* **polyglot:** event-driven wake for reactive runner loops (closes [#153](https://github.com/tatolab/streamlib/issues/153)) ([#488](https://github.com/tatolab/streamlib/issues/488)) ([4eef9c0](https://github.com/tatolab/streamlib/commit/4eef9c0b1724e695ebb78eb70442cdc002568c83))
+* **rhi:** host VkImage pool with DMA-BUF export and RT-capable DRM modifier ([#510](https://github.com/tatolab/streamlib/issues/510)) ([#523](https://github.com/tatolab/streamlib/issues/523)) ([6274713](https://github.com/tatolab/streamlib/commit/6274713b2adbe0d4599aa9a5942f077961a08f12))
+* **rhi:** multi-input Vulkan compute kernel + GpuContext dispatch helper (closes [#480](https://github.com/tatolab/streamlib/issues/480)) ([#495](https://github.com/tatolab/streamlib/issues/495)) ([2c69c66](https://github.com/tatolab/streamlib/commit/2c69c66eb06359984213c67e135b59f32c5ae760))
+* **surface-share:** EPOLLHUP watchdog for crashed-subprocess refcount cleanup ([#522](https://github.com/tatolab/streamlib/issues/522)) ([5bf3d9c](https://github.com/tatolab/streamlib/commit/5bf3d9cc953fbac08aa3de539d636b2fa2d1a794))
+
+
+### Bug Fixes
+
+* **polyglot-python-native:** one-shot cleanup via try/finally (closes [#469](https://github.com/tatolab/streamlib/issues/469)) ([#471](https://github.com/tatolab/streamlib/issues/471)) ([b72b04a](https://github.com/tatolab/streamlib/commit/b72b04a0de030c7841566562d2073d15aafbe338))
+* **polyglot:** wire halftone + grayscale examples to shipped escalate API (closes [#475](https://github.com/tatolab/streamlib/issues/475)) ([#478](https://github.com/tatolab/streamlib/issues/478)) ([5d17473](https://github.com/tatolab/streamlib/commit/5d1747339a059d8159156849c41821e25c52ecf8))
+
+
+### Performance
+
+* **adapter-cpu-readback:** per-submit fence wait instead of vkQueueWaitIdle ([#539](https://github.com/tatolab/streamlib/issues/539)) ([6786eb6](https://github.com/tatolab/streamlib/commit/6786eb674385e7cb3c9c6ecfbde76c770c99d712))
+* **thread-runner:** eventfd shutdown for truly-zero idle CPU ([#492](https://github.com/tatolab/streamlib/issues/492)) ([71cdeaf](https://github.com/tatolab/streamlib/commit/71cdeafc7705e0fb9d3d8ee20dd6a5122b2b50cb))
+
 ## [0.4.23](https://github.com/tatolab/streamlib/compare/v0.4.22...v0.4.23) (2026-04-24)
 
 
