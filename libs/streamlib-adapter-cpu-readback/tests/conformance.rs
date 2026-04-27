@@ -55,7 +55,7 @@ fn register_one(
                 texture,
                 timeline,
                 initial_image_layout: vk::ImageLayout::UNDEFINED.as_raw(),
-                bytes_per_pixel: 4,
+                format: SurfaceFormat::Bgra8,
             },
         )
         .expect("register_host_surface");

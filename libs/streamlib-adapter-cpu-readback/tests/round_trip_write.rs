@@ -34,7 +34,12 @@ fn round_trip_write_persists_modifications() {
             .ctx
             .acquire_write(&descriptor)
             .expect("acquire_write 1");
-        for chunk in guard.view_mut().bytes_mut().chunks_exact_mut(4) {
+        for chunk in guard
+            .view_mut()
+            .plane_mut(0)
+            .bytes_mut()
+            .chunks_exact_mut(4)
+        {
             chunk.copy_from_slice(&pattern_a);
         }
     }
@@ -46,20 +51,25 @@ fn round_trip_write_persists_modifications() {
             .ctx
             .acquire_write(&descriptor)
             .expect("acquire_write 2");
-        for chunk in guard.view().bytes().chunks_exact(4) {
+        for chunk in guard.view().plane(0).bytes().chunks_exact(4) {
             assert_eq!(
                 chunk, &pattern_a,
                 "second-acquire view should reflect first-release pattern"
             );
         }
-        for chunk in guard.view_mut().bytes_mut().chunks_exact_mut(4) {
+        for chunk in guard
+            .view_mut()
+            .plane_mut(0)
+            .bytes_mut()
+            .chunks_exact_mut(4)
+        {
             chunk.copy_from_slice(&pattern_b);
         }
     }
 
     // READ round: confirm pattern_b made it.
     let guard = fixture.ctx.acquire_read(&descriptor).expect("acquire_read");
-    for chunk in guard.view().bytes().chunks_exact(4) {
+    for chunk in guard.view().plane(0).bytes().chunks_exact(4) {
         assert_eq!(chunk, &pattern_b, "post-write read should observe pattern_b");
     }
 }
@@ -88,7 +98,12 @@ fn round_trip_write_partial_modification_leaves_rest_untouched() {
             .ctx
             .acquire_write(&descriptor)
             .expect("acquire_write prime");
-        for chunk in guard.view_mut().bytes_mut().chunks_exact_mut(4) {
+        for chunk in guard
+            .view_mut()
+            .plane_mut(0)
+            .bytes_mut()
+            .chunks_exact_mut(4)
+        {
             chunk.copy_from_slice(&base);
         }
     }
@@ -99,7 +114,7 @@ fn round_trip_write_partial_modification_leaves_rest_untouched() {
             .ctx
             .acquire_write(&descriptor)
             .expect("acquire_write edit");
-        let bytes = guard.view_mut().bytes_mut();
+        let bytes = guard.view_mut().plane_mut(0).bytes_mut();
         let row_bytes = (width as usize) * 4;
         for chunk in bytes[..row_bytes].chunks_exact_mut(4) {
             chunk.copy_from_slice(&edit);
@@ -108,7 +123,7 @@ fn round_trip_write_partial_modification_leaves_rest_untouched() {
 
     // Read: row 0 == edit, rows 1..H == base.
     let guard = fixture.ctx.acquire_read(&descriptor).expect("acquire_read");
-    let bytes = guard.view().bytes();
+    let bytes = guard.view().plane(0).bytes();
     let row_bytes = (width as usize) * 4;
     for chunk in bytes[..row_bytes].chunks_exact(4) {
         assert_eq!(chunk, &edit, "row 0 should hold edit pattern");

@@ -7,9 +7,12 @@
 //! let ctx = streamlib_adapter_cpu_readback::CpuReadbackContext::new(adapter);
 //! {
 //!     let mut guard = ctx.acquire_write(&surface)?;
-//!     // guard.view().bytes() / view_mut().bytes_mut() are the
-//!     // tightly-packed BGRA bytes; mutate freely. On guard drop the
-//!     // adapter flushes them back to the host VkImage.
+//!     // guard.view().plane(i).bytes() (read) /
+//!     // guard.view_mut().plane_mut(i).bytes_mut() (write) are the
+//!     // tightly-packed bytes for plane i. Single-plane formats
+//!     // (BGRA8/RGBA8) report plane_count() == 1; multi-plane (NV12)
+//!     // reports 2 (Y at 0, UV at 1). On guard drop the adapter
+//!     // flushes every plane back to the host VkImage.
 //! }
 //! ```
 
@@ -36,10 +39,11 @@ impl CpuReadbackContext {
         &self.adapter
     }
 
-    /// Blocking read acquire. The guard's view exposes the pixel bytes
-    /// as `&[u8]` (tightly packed, `width * height * bytes_per_pixel`).
-    /// The GPU→CPU copy is performed before this call returns; release
-    /// is a no-op flush plus timeline signal.
+    /// Blocking read acquire. The guard's view exposes per-plane byte
+    /// slices via `view.plane(i).bytes()` (tightly packed,
+    /// `plane_width * plane_height * plane_bytes_per_pixel`). The
+    /// GPU→CPU copy is performed before this call returns; release is a
+    /// no-op flush plus timeline signal.
     pub fn acquire_read<'a>(
         &'a self,
         surface: &StreamlibSurface,
@@ -47,10 +51,11 @@ impl CpuReadbackContext {
         self.adapter.acquire_read(surface)
     }
 
-    /// Blocking write acquire. The guard's view exposes the pixel bytes
-    /// as `&mut [u8]`. On guard drop, the modified bytes are flushed
-    /// back to the host `VkImage` via `vkCmdCopyBufferToImage` before
-    /// the timeline release-value signals.
+    /// Blocking write acquire. The guard's view exposes mutable per-
+    /// plane byte slices via `view_mut().plane_mut(i).bytes_mut()`. On
+    /// guard drop, every plane's modified bytes are flushed back to the
+    /// host `VkImage` via per-plane `vkCmdCopyBufferToImage` before the
+    /// timeline release-value signals.
     pub fn acquire_write<'a>(
         &'a self,
         surface: &StreamlibSurface,

@@ -43,6 +43,40 @@ def test_surface_format_is_4_bytes():
     assert int(SurfaceFormat.NV12) == 2
 
 
+def test_surface_format_plane_count_matches_rust():
+    """Locks parity with Rust `SurfaceFormat::plane_count`."""
+    assert SurfaceFormat.BGRA8.plane_count() == 1
+    assert SurfaceFormat.RGBA8.plane_count() == 1
+    assert SurfaceFormat.NV12.plane_count() == 2
+
+
+def test_surface_format_plane_geometry_matches_rust():
+    """NV12 chroma subsampling: Y at full resolution, UV at half."""
+    # BGRA: 1 plane, 4 bpp, full size.
+    assert SurfaceFormat.BGRA8.plane_bytes_per_pixel(0) == 4
+    assert SurfaceFormat.BGRA8.plane_width(64, 0) == 64
+    assert SurfaceFormat.BGRA8.plane_height(48, 0) == 48
+
+    # NV12 plane 0 (Y).
+    assert SurfaceFormat.NV12.plane_bytes_per_pixel(0) == 1
+    assert SurfaceFormat.NV12.plane_width(64, 0) == 64
+    assert SurfaceFormat.NV12.plane_height(48, 0) == 48
+
+    # NV12 plane 1 (UV interleaved, half resolution).
+    assert SurfaceFormat.NV12.plane_bytes_per_pixel(1) == 2
+    assert SurfaceFormat.NV12.plane_width(64, 1) == 32
+    assert SurfaceFormat.NV12.plane_height(48, 1) == 24
+
+
+def test_surface_format_plane_out_of_range_raises():
+    import pytest
+
+    with pytest.raises(IndexError):
+        SurfaceFormat.BGRA8.plane_bytes_per_pixel(1)
+    with pytest.raises(IndexError):
+        SurfaceFormat.NV12.plane_bytes_per_pixel(2)
+
+
 def test_surface_usage_flag_values():
     assert int(SurfaceUsage.RENDER_TARGET) == 1
     assert int(SurfaceUsage.SAMPLED) == 2

@@ -12,6 +12,7 @@ use std::sync::{Arc, OnceLock};
 
 use streamlib::adapter_support::VulkanTimelineSemaphore;
 use streamlib::core::context::GpuContext;
+use streamlib::core::error::StreamError;
 use streamlib::core::rhi::TextureFormat;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
@@ -57,8 +58,8 @@ impl HostFixture {
         Some(Self { gpu, adapter, ctx })
     }
 
-    /// Allocate a host `VkImage` + exportable timeline, register them
-    /// with the adapter under `surface_id`, and return a
+    /// Allocate a host BGRA8 `VkImage` + exportable timeline, register
+    /// them with the adapter under `surface_id`, and return a
     /// [`StreamlibSurface`] descriptor pointing at the registration.
     pub fn register_surface(
         &self,
@@ -66,13 +67,57 @@ impl HostFixture {
         width: u32,
         height: u32,
     ) -> StreamlibSurface {
+        self.register_surface_with_format(
+            surface_id,
+            width,
+            height,
+            SurfaceFormat::Bgra8,
+            TextureFormat::Bgra8Unorm,
+        )
+    }
+
+    /// General-purpose surface registration used by single- and multi-
+    /// plane tests. `surface_format` is the customer-facing pixel
+    /// format; `texture_format` is the RHI-level texture allocation
+    /// format. They must agree (e.g. `Nv12` ↔ `TextureFormat::Nv12`).
+    pub fn register_surface_with_format(
+        &self,
+        surface_id: SurfaceId,
+        width: u32,
+        height: u32,
+        surface_format: SurfaceFormat,
+        texture_format: TextureFormat,
+    ) -> StreamlibSurface {
+        self.try_register_surface_with_format(
+            surface_id,
+            width,
+            height,
+            surface_format,
+            texture_format,
+        )
+        .expect("register_surface_with_format")
+    }
+
+    /// Fallible variant. Returns `Err(StreamError)` when the host can't
+    /// allocate a render-target DMA-BUF in `texture_format` on this
+    /// driver — typically because the EGL probe didn't advertise an
+    /// RT-capable DRM modifier for the format. Multi-plane tests use
+    /// this so they can skip cleanly on drivers without NV12 RT modifier
+    /// support, instead of failing.
+    pub fn try_register_surface_with_format(
+        &self,
+        surface_id: SurfaceId,
+        width: u32,
+        height: u32,
+        surface_format: SurfaceFormat,
+        texture_format: TextureFormat,
+    ) -> Result<StreamlibSurface, StreamError> {
         let texture = self
             .gpu
-            .acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)
-            .expect("acquire_render_target_dma_buf_image");
+            .acquire_render_target_dma_buf_image(width, height, texture_format)?;
         let timeline = Arc::new(
             VulkanTimelineSemaphore::new(self.adapter.device().device(), 0)
-                .expect("create timeline"),
+                .map_err(|e| StreamError::GpuError(format!("create timeline: {e}")))?,
         );
         self.adapter
             .register_host_surface(
@@ -81,18 +126,18 @@ impl HostFixture {
                     texture,
                     timeline,
                     initial_image_layout: vk::ImageLayout::UNDEFINED.as_raw(),
-                    bytes_per_pixel: 4,
+                    format: surface_format,
                 },
             )
-            .expect("register_host_surface");
-        StreamlibSurface::new(
+            .map_err(|e| StreamError::GpuError(format!("register_host_surface: {e}")))?;
+        Ok(StreamlibSurface::new(
             surface_id,
             width,
             height,
-            SurfaceFormat::Bgra8,
+            surface_format,
             SurfaceUsage::CPU_READBACK,
             SurfaceTransportHandle::empty(),
             SurfaceSyncState::default(),
-        )
+        ))
     }
 }

@@ -11,13 +11,17 @@
 //! deliberately do not implement these — that asymmetry is the
 //! architectural enforcement of "switch adapter to opt into CPU".
 //!
-//! Implementation rides on `VulkanPixelBuffer` (a HOST_VISIBLE,
-//! HOST_COHERENT linear `VkBuffer`); each acquire issues a
-//! `vkCmdCopyImageToBuffer` from the host's `VkImage` into that staging
-//! buffer, blocks until the copy is observable on the host, and hands
-//! the customer a `&[u8]` view over the mapped bytes. On WRITE release,
-//! the staging bytes are flushed back via `vkCmdCopyBufferToImage`
-//! before the timeline release-value is signaled.
+//! Implementation rides on one [`streamlib::adapter_support::VulkanPixelBuffer`]
+//! (a HOST_VISIBLE, HOST_COHERENT linear `VkBuffer`) **per plane**.
+//! Single-plane formats (BGRA8/RGBA8) allocate one staging buffer;
+//! multi-plane formats (NV12) allocate one per logical plane (Y + UV).
+//! Each acquire issues a per-plane `vkCmdCopyImageToBuffer` from the
+//! host's `VkImage` (with the matching `VK_IMAGE_ASPECT_*_BIT` aspect)
+//! into the corresponding staging buffer, blocks until the copies are
+//! observable on the host, and hands the customer per-plane `&[u8]`
+//! views over the mapped bytes. On WRITE release, every plane's staging
+//! bytes are flushed back via per-plane `vkCmdCopyBufferToImage` before
+//! the timeline release-value is signaled.
 //!
 //! See `docs/architecture/surface-adapter.md` for the architecture
 //! brief.
@@ -32,4 +36,6 @@ mod view;
 pub use adapter::CpuReadbackSurfaceAdapter;
 pub use context::CpuReadbackContext;
 pub use state::HostSurfaceRegistration;
-pub use view::{CpuReadbackReadView, CpuReadbackWriteView};
+pub use view::{
+    CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
+};

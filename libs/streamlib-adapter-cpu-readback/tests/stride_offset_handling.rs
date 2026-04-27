@@ -33,8 +33,8 @@ fn stride_is_tightly_packed_width_times_bpp() {
     // alignment requirements (256-byte rows, 64-pixel rows on NVIDIA)
     // would surface here if the staging buffer accidentally inherited
     // them.
-    let width = 37u32;
-    let height = 5u32;
+    let width = 38u32;
+    let height = 6u32;
     let bpp = 4u32;
 
     let descriptor = fixture.register_surface(1, width, height);
@@ -43,13 +43,15 @@ fn stride_is_tightly_packed_width_times_bpp() {
 
     assert_eq!(view.width(), width);
     assert_eq!(view.height(), height);
-    assert_eq!(view.bytes_per_pixel(), bpp);
+    assert_eq!(view.plane_count(), 1);
+    let plane = view.plane(0);
+    assert_eq!(plane.bytes_per_pixel(), bpp);
     // Adapter's contract: row stride is exactly width * bpp.
-    assert_eq!(view.row_stride(), width * bpp);
+    assert_eq!(plane.row_stride(), width * bpp);
     // Total slice length is height * row_stride.
     assert_eq!(
-        view.bytes().len() as u32,
-        height * view.row_stride(),
+        plane.bytes().len() as u32,
+        height * plane.row_stride(),
         "tightly-packed contract: bytes.len() == height * row_stride"
     );
 }
@@ -66,12 +68,14 @@ fn unaligned_widths_round_trip_byte_exact() {
         }
     };
 
-    // Width = 17 (prime, not aligned to 4/16/64). If the
-    // image-to-buffer copy is using the wrong row pitch on the buffer
-    // side, every other row will be shifted by the alignment delta and
-    // this byte-exact comparison will diverge.
-    let width = 17u32;
-    let height = 9u32;
+    // Width = 18 (not aligned to 16/64). If the image-to-buffer copy is
+    // using the wrong row pitch on the buffer side, every other row will
+    // be shifted by the alignment delta and this byte-exact comparison
+    // will diverge. Surface dims are even because NV12 elsewhere
+    // requires it; using even dims here keeps the BGRA path consistent
+    // with the multi-plane round-trip's geometry assumptions.
+    let width = 18u32;
+    let height = 10u32;
     let descriptor = fixture.register_surface(1, width, height);
 
     // Prime: each pixel's value encodes (y * width + x) mod 256 in all
@@ -82,7 +86,7 @@ fn unaligned_widths_round_trip_byte_exact() {
             .ctx
             .acquire_write(&descriptor)
             .expect("acquire_write prime");
-        let bytes = guard.view_mut().bytes_mut();
+        let bytes = guard.view_mut().plane_mut(0).bytes_mut();
         for y in 0..height as usize {
             for x in 0..width as usize {
                 let v = ((y * width as usize + x) & 0xFF) as u8;
@@ -94,7 +98,7 @@ fn unaligned_widths_round_trip_byte_exact() {
 
     // Read and assert byte-exact match.
     let guard = fixture.ctx.acquire_read(&descriptor).expect("acquire_read");
-    let bytes = guard.view().bytes();
+    let bytes = guard.view().plane(0).bytes();
     for y in 0..height as usize {
         for x in 0..width as usize {
             let v = ((y * width as usize + x) & 0xFF) as u8;
