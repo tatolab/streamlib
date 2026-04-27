@@ -9,3 +9,7 @@ Each module under this package mirrors a Rust crate of the form
 shapes and convenience wrappers customer code uses against the
 subprocess-side native binding (``streamlib-python-native``).
 """
+
+from streamlib.adapters import opengl, vulkan
+
+__all__ = ["opengl", "vulkan"]

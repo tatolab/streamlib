@@ -1,0 +1,68 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-adapter-opengl"
+description = "OpenGL/EGL StreamLib surface adapter (Linux). Imports a host-allocated DMA-BUF VkImage as a render-target-capable GL_TEXTURE_2D via EGL_EXT_image_dma_buf_import_modifiers; canonical implementor of the GlWritable capability trait. Customer never sees DMA-BUF FDs, fourcc, plane offsets, strides, or DRM modifiers."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_adapter_opengl"
+path = "src/lib.rs"
+
+[dependencies]
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+parking_lot = "0.12"
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib = { path = "../streamlib" }
+streamlib-surface-client = { path = "../streamlib-surface-client" }
+khronos-egl = { version = "6.0", features = ["dynamic"] }
+gl = "0.14"
+libc.workspace = true
+libloading = "0.8"
+serde = { workspace = true }
+serde_json.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
+vulkanalia.workspace = true
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+
+[[test]]
+name = "fbo_completeness"
+path = "tests/fbo_completeness.rs"
+
+[[test]]
+name = "round_trip_render_to_surface"
+path = "tests/round_trip_render_to_surface.rs"
+
+[[test]]
+name = "sample_from_surface"
+path = "tests/sample_from_surface.rs"
+
+[[test]]
+name = "subprocess_crash_mid_write"
+path = "tests/subprocess_crash_mid_write.rs"
+
+# Subprocess test helper. Built as a normal binary by `cargo test` and
+# discovered at runtime via `env!("CARGO_BIN_EXE_…")`.
+[[bin]]
+name = "opengl_adapter_subprocess_helper"
+path = "tests/bin/opengl_adapter_subprocess_helper.rs"
+test = false
+
+[lints]
+workspace = true
