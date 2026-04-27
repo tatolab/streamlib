@@ -1,0 +1,65 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-adapter-cpu-readback"
+description = "Explicit GPU→CPU surface adapter (Linux). The single named, opt-in path for customers who need CPU memory access to a streamlib surface — returns numpy.ndarray (Python) / Uint8Array (Deno) / &[u8] (Rust) from a host-side vkCmdCopyImageToBuffer at acquire time. Sole implementor of the CpuReadable / CpuWritable capability traits from streamlib-adapter-abi; GPU adapters do not implement them, by design."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_adapter_cpu_readback"
+path = "src/lib.rs"
+
+[dependencies]
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+parking_lot = "0.12"
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib = { path = "../streamlib" }
+streamlib-surface-client = { path = "../streamlib-surface-client" }
+vulkanalia.workspace = true
+libc.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+serde = { workspace = true }
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+
+[[test]]
+name = "round_trip_read"
+path = "tests/round_trip_read.rs"
+
+[[test]]
+name = "round_trip_write"
+path = "tests/round_trip_write.rs"
+
+[[test]]
+name = "stride_offset_handling"
+path = "tests/stride_offset_handling.rs"
+
+[[test]]
+name = "subprocess_crash_mid_write"
+path = "tests/subprocess_crash_mid_write.rs"
+
+# Subprocess test helper. Built as a normal binary by `cargo test` and
+# discovered at runtime via `env!("CARGO_BIN_EXE_…")`.
+[[bin]]
+name = "cpu_readback_adapter_subprocess_helper"
+path = "tests/bin/cpu_readback_adapter_subprocess_helper.rs"
+test = false
+
+[lints]
+workspace = true

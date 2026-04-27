@@ -179,7 +179,7 @@ pub mod linux_surface_share {
 #[cfg(target_os = "linux")]
 pub mod adapter_support {
     pub use crate::vulkan::rhi::{
-        VulkanDevice, VulkanTexture, VulkanTimelineSemaphore,
+        VulkanDevice, VulkanPixelBuffer, VulkanTexture, VulkanTimelineSemaphore,
     };
 }
 
