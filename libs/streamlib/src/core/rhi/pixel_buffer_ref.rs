@@ -126,6 +126,21 @@ impl RhiPixelBufferRef {
         self.inner.as_ptr()
     }
 
+    /// Adapter-facing: the underlying [`crate::vulkan::rhi::VulkanPixelBuffer`].
+    ///
+    /// In-tree surface adapters (`streamlib-adapter-cpu-readback`, others
+    /// that need to issue `vkCmdCopyImageToBuffer` /
+    /// `vkCmdCopyBufferToImage` against a HOST_VISIBLE staging buffer)
+    /// need direct access to the `vk::Buffer` handle plus the mapped
+    /// pointer. Customers and non-adapter code must NOT call this — the
+    /// engine boundary rule in `CLAUDE.md` says the only crates allowed
+    /// to touch raw Vulkan types are the RHI itself and the in-tree
+    /// adapters. Mirror of [`crate::core::rhi::StreamTexture::vulkan_inner`].
+    #[cfg(target_os = "linux")]
+    pub fn vulkan_inner(&self) -> &std::sync::Arc<crate::vulkan::rhi::VulkanPixelBuffer> {
+        &self.inner
+    }
+
     /// Create an RhiPixelBufferRef from a raw IOSurfaceRef (macOS only).
     ///
     /// This is useful for cross-process frame sharing where the IOSurfaceRef

@@ -40,4 +40,15 @@ pub enum AdapterError {
     /// The host-side backing for this surface was destroyed (refcount → 0).
     #[error("backing for surface {surface_id} was destroyed")]
     BackingDestroyed { surface_id: SurfaceId },
+
+    /// The surface descriptor's pixel format / layout is not supported
+    /// by this adapter — distinct from [`Self::SurfaceNotFound`]
+    /// (which is a registry miss). `reason` names the specific limit
+    /// hit (e.g. `"bytes_per_pixel != 4"`, `"NV12 multi-plane"`,
+    /// `"non-color aspect"`).
+    #[error("surface {surface_id}: unsupported format ({reason})")]
+    UnsupportedFormat {
+        surface_id: SurfaceId,
+        reason: String,
+    },
 }

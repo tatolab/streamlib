@@ -10,6 +10,6 @@ shapes and convenience wrappers customer code uses against the
 subprocess-side native binding (``streamlib-python-native``).
 """
 
-from streamlib.adapters import opengl, vulkan
+from streamlib.adapters import cpu_readback, opengl, vulkan
 
-__all__ = ["opengl", "vulkan"]
+__all__ = ["cpu_readback", "opengl", "vulkan"]
