@@ -7,14 +7,17 @@
 //! On `acquire_*`:
 //!  1. Wait for prior GPU work to drain (timeline semaphore wait).
 //!  2. Transition the host's `VkImage` into `TRANSFER_SRC_OPTIMAL`.
-//!  3. `vkCmdCopyImageToBuffer` into the per-surface staging buffer.
+//!  3. `vkCmdCopyImageToBuffer` into the per-plane staging buffer(s).
+//!     For multi-plane formats (NV12) one region per plane is recorded
+//!     with the corresponding `VK_IMAGE_ASPECT_PLANE_{0,1,…}_BIT`.
 //!  4. Block on `vkQueueWaitIdle` so the bytes are observable from the
 //!     CPU side once the call returns.
-//!  5. Hand the customer a `&[u8]` view over the mapped staging buffer.
+//!  5. Hand the customer per-plane `&[u8]` views over the mapped staging
+//!     buffers.
 //!
 //! On WRITE guard `Drop`:
-//!  1. `vkCmdCopyBufferToImage` to flush CPU edits back into the host
-//!     `VkImage`.
+//!  1. `vkCmdCopyBufferToImage` per plane to flush CPU edits back into
+//!     the host `VkImage`.
 //!  2. Transition the image to `GENERAL` so the next consumer sees a
 //!     deterministic layout.
 //!  3. Signal the next timeline release-value.
@@ -31,14 +34,16 @@ use parking_lot::Mutex;
 use streamlib::adapter_support::{VulkanDevice, VulkanPixelBuffer, VulkanTimelineSemaphore};
 use streamlib::core::rhi::PixelFormat;
 use streamlib_adapter_abi::{
-    AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceId, WriteGuard,
+    AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, WriteGuard,
 };
 use tracing::instrument;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::state::{HostSurfaceRegistration, SurfaceState, VulkanLayout};
-use crate::view::{CpuReadbackReadView, CpuReadbackWriteView};
+use crate::state::{HostSurfaceRegistration, PlaneSlot, SurfaceState, VulkanLayout};
+use crate::view::{
+    CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
+};
 
 /// Default per-acquire timeline-wait timeout.
 const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
@@ -47,9 +52,9 @@ const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
 ///
 /// Construct with [`Self::new`] passing the host's [`VulkanDevice`].
 /// Register host-allocated surfaces with [`Self::register_host_surface`];
-/// each registration allocates a dedicated [`VulkanPixelBuffer`]
-/// (HOST_VISIBLE/HOST_COHERENT linear buffer, sized exactly to the
-/// surface's pixel footprint) used as the staging area for image↔buffer
+/// each registration allocates one dedicated [`VulkanPixelBuffer`] per
+/// plane (HOST_VISIBLE/HOST_COHERENT linear buffer, sized exactly to the
+/// plane's pixel footprint) used as the staging area for image↔buffer
 /// copies. Consumers acquire scoped access through the standard
 /// [`SurfaceAdapter::acquire_read`] / [`SurfaceAdapter::acquire_write`]
 /// API or via the [`crate::CpuReadbackContext`] convenience.
@@ -82,10 +87,10 @@ impl CpuReadbackSurfaceAdapter {
 
     /// Register a host-allocated surface with this adapter.
     ///
-    /// Allocates a dedicated `VulkanPixelBuffer` (HOST_VISIBLE,
-    /// HOST_COHERENT, linear) sized to
-    /// `width * height * bytes_per_pixel` to serve as the staging area
-    /// for image↔buffer copies on every acquire/release.
+    /// Allocates one dedicated `VulkanPixelBuffer` per plane (HOST_VISIBLE,
+    /// HOST_COHERENT, linear). Plane geometry is derived from
+    /// [`HostSurfaceRegistration::format`] via [`SurfaceFormat::plane_count`]
+    /// and [`SurfaceFormat::plane_byte_size`].
     #[instrument(level = "debug", skip(self, registration), fields(surface_id = id))]
     pub fn register_host_surface(
         &self,
@@ -99,55 +104,70 @@ impl CpuReadbackSurfaceAdapter {
 
         let width = registration.texture.width();
         let height = registration.texture.height();
-        let bpp = registration.bytes_per_pixel;
+        let format = registration.format;
 
-        // Pick a PixelFormat for the staging buffer based on bpp. The
-        // buffer is just bytes; the adapter never interprets it as a
-        // typed format. Multi-plane formats (NV12, YUV420p, …) need a
-        // separate plane-aware copy path and are out of scope for v1
-        // — reject explicitly with `UnsupportedFormat` so callers can
-        // branch.
-        let staging_format = match bpp {
-            4 => PixelFormat::Bgra32,
-            other => {
-                tracing::warn!(
-                    bytes_per_pixel = other,
-                    "cpu-readback adapter: unsupported bytes_per_pixel; rejecting"
-                );
-                return Err(AdapterError::UnsupportedFormat {
-                    surface_id: id,
-                    reason: format!("bytes_per_pixel = {other}, only 4 (BGRA8/RGBA8) supported in v1"),
-                });
-            }
-        };
+        // Validate dimensions are compatible with the format's chroma
+        // subsampling. NV12's UV plane is at half-resolution, so the
+        // surface must be even-sized to round-trip exactly. Odd sizes
+        // would silently lose the trailing column / row.
+        if format.plane_count() > 1 && (width % 2 != 0 || height % 2 != 0) {
+            return Err(AdapterError::UnsupportedFormat {
+                surface_id: id,
+                reason: format!(
+                    "{format:?} requires even surface dimensions for chroma subsampling, got {width}x{height}"
+                ),
+            });
+        }
 
-        // Allocate a *dedicated* HOST_VISIBLE linear staging buffer per
-        // surface. Going through `GpuContext::acquire_pixel_buffer`
-        // would draw from the shared (w,h,format) pool and cap at 4
-        // surfaces of identical dimensions — wrong shape for an
-        // adapter that needs one buffer per registered surface.
-        let staging = Arc::new(
-            VulkanPixelBuffer::new(&self.device, width, height, bpp, staging_format).map_err(|e| {
-                AdapterError::IpcDisconnected {
-                    reason: format!("VulkanPixelBuffer::new for cpu-readback staging: {e}"),
-                }
-            })?,
-        );
+        let plane_count = format.plane_count();
+        let mut planes = Vec::with_capacity(plane_count as usize);
+        for plane_idx in 0..plane_count {
+            let pw = format.plane_width(width, plane_idx);
+            let ph = format.plane_height(height, plane_idx);
+            let pbpp = format.plane_bytes_per_pixel(plane_idx);
+
+            // Allocate a *dedicated* HOST_VISIBLE linear staging buffer per
+            // plane. Going through `GpuContext::acquire_pixel_buffer` would
+            // draw from the shared (w,h,format) pool and cap at 4 surfaces
+            // of identical dimensions — wrong shape for an adapter that
+            // needs one buffer per registered surface plane.
+            //
+            // The `PixelFormat` argument to `VulkanPixelBuffer::new` is
+            // opaque metadata only — `bytes_per_pixel` drives the
+            // allocation size. We pass `Bgra32` uniformly so the
+            // staging buffer's recorded format isn't claiming a specific
+            // pixel layout (Y/UV/RGB) the adapter never interprets.
+            let staging = Arc::new(
+                VulkanPixelBuffer::new(&self.device, pw, ph, pbpp, PixelFormat::Bgra32).map_err(
+                    |e| AdapterError::IpcDisconnected {
+                        reason: format!(
+                            "VulkanPixelBuffer::new for cpu-readback staging plane {plane_idx}: {e}"
+                        ),
+                    },
+                )?,
+            );
+            planes.push(PlaneSlot {
+                staging,
+                width: pw,
+                height: ph,
+                bytes_per_pixel: pbpp,
+            });
+        }
 
         map.insert(
             id,
             SurfaceState {
                 surface_id: id,
                 texture: registration.texture,
-                staging,
+                planes,
                 timeline: registration.timeline,
                 current_layout: VulkanLayout(registration.initial_image_layout),
                 read_holders: 0,
                 write_held: false,
                 current_release_value: 0,
+                format,
                 width,
                 height,
-                bytes_per_pixel: bpp,
             },
         );
         Ok(())
@@ -164,7 +184,7 @@ impl CpuReadbackSurfaceAdapter {
     }
 
     /// Common acquire path: wait timeline, then issue
-    /// `vkCmdCopyImageToBuffer` into the per-surface staging buffer.
+    /// `vkCmdCopyImageToBuffer` into the per-plane staging buffers.
     /// Returns the snapshot needed to build a view, with state's
     /// `read_holders` / `write_held` already incremented.
     fn try_begin(
@@ -192,12 +212,21 @@ impl CpuReadbackSurfaceAdapter {
             .image()
             .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
         let from = state.current_layout;
-        let buffer = state.staging.buffer();
-        let mapped_ptr = state.staging.mapped_ptr();
-        let byte_size = state.buffer_byte_size();
+        let format = state.format;
         let width = state.width;
         let height = state.height;
-        let bpp = state.bytes_per_pixel;
+        let plane_snaps: Vec<PlaneAcquireSlot> = state
+            .planes
+            .iter()
+            .map(|p| PlaneAcquireSlot {
+                buffer: p.staging.buffer(),
+                mapped_ptr: p.staging.mapped_ptr(),
+                width: p.width,
+                height: p.height,
+                bytes_per_pixel: p.bytes_per_pixel,
+                byte_size: p.byte_size(),
+            })
+            .collect();
 
         if write {
             state.write_held = true;
@@ -210,12 +239,10 @@ impl CpuReadbackSurfaceAdapter {
             wait_value,
             image,
             from,
-            buffer,
-            mapped_ptr,
-            byte_size,
+            format,
             width,
             height,
-            bytes_per_pixel: bpp,
+            planes: plane_snaps,
         }))
     }
 
@@ -238,23 +265,26 @@ impl CpuReadbackSurfaceAdapter {
         }
 
         // Acquire-time logging — customers know they paid for this.
+        let total_bytes: u64 = snap.planes.iter().map(|p| p.byte_size).sum();
         tracing::info!(
             surface_id = surface_id,
             width = snap.width,
             height = snap.height,
-            bytes = snap.byte_size,
+            format = ?snap.format,
+            plane_count = snap.planes.len(),
+            bytes = total_bytes,
             mode = if write { "write" } else { "read" },
-            "cpu-readback: GPU→CPU copy of {}x{} surface, {} bytes",
+            "cpu-readback: GPU→CPU copy of {}x{} {:?} surface, {} bytes total ({} planes)",
             snap.width,
             snap.height,
-            snap.byte_size,
+            snap.format,
+            total_bytes,
+            snap.planes.len(),
         );
 
         // Issue: image (current layout) → TRANSFER_SRC_OPTIMAL → copy
         //        → image (TRANSFER_SRC_OPTIMAL → GENERAL).
-        if let Err(err) =
-            self.copy_image_to_buffer(snap.image, snap.from.vk(), snap.buffer, snap.width, snap.height)
-        {
+        if let Err(err) = self.copy_image_to_buffer(snap) {
             self.rollback(surface_id, write);
             return Err(err);
         }
@@ -279,9 +309,11 @@ impl CpuReadbackSurfaceAdapter {
     }
 
     /// Submit a one-shot command buffer that:
-    ///   - transitions `image` (`from` → `TRANSFER_SRC_OPTIMAL`)
-    ///   - `vkCmdCopyImageToBuffer` into `dst` (tightly packed)
-    ///   - transitions `image` (`TRANSFER_SRC_OPTIMAL` → `GENERAL`)
+    ///   - transitions the image (`from` → `TRANSFER_SRC_OPTIMAL`) using
+    ///     the format-correct aspect mask
+    ///   - `vkCmdCopyImageToBuffer` into the per-plane staging buffers
+    ///     (one region per plane with the corresponding aspect mask)
+    ///   - transitions the image (`TRANSFER_SRC_OPTIMAL` → `GENERAL`)
     /// then blocks via `vkQueueWaitIdle` so the host bytes are
     /// observable.
     ///
@@ -293,17 +325,11 @@ impl CpuReadbackSurfaceAdapter {
     /// only this surface's pipeline stalls. Tracked as part of the
     /// adapter runtime-integration follow-up issues filed against
     /// the Surface Adapter Architecture milestone.
-    fn copy_image_to_buffer(
-        &self,
-        image: vk::Image,
-        from: vk::ImageLayout,
-        dst: vk::Buffer,
-        width: u32,
-        height: u32,
-    ) -> Result<(), AdapterError> {
+    fn copy_image_to_buffer(&self, snap: &AcquireSnapshot) -> Result<(), AdapterError> {
         let device = self.device.device();
         let queue = self.device.queue();
         let qf = self.device.queue_family_index();
+        let combined_aspect = combined_aspect_mask(snap.format);
 
         let (pool, cmd) = create_one_shot_command_buffer(device, qf)?;
 
@@ -317,64 +343,83 @@ impl CpuReadbackSurfaceAdapter {
             });
         }
 
-        let pre_barrier = build_image_barrier(image, qf, from, vk::ImageLayout::TRANSFER_SRC_OPTIMAL);
+        let pre_barrier = build_image_barrier(
+            snap.image,
+            qf,
+            snap.from.vk(),
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            combined_aspect,
+        );
         let pre_barriers = [pre_barrier];
         let pre_dep = vk::DependencyInfo::builder()
             .image_memory_barriers(&pre_barriers)
             .build();
         unsafe { device.cmd_pipeline_barrier2(cmd, &pre_dep) };
 
-        let copy_region = vk::BufferImageCopy::builder()
-            .buffer_offset(0)
-            // Tight packing: row length = width pixels, image height = height rows.
-            .buffer_row_length(width)
-            .buffer_image_height(height)
-            .image_subresource(
-                vk::ImageSubresourceLayers::builder()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .mip_level(0)
-                    .base_array_layer(0)
-                    .layer_count(1)
-                    .build(),
-            )
-            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-            .image_extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .build();
-
-        unsafe {
-            device.cmd_copy_image_to_buffer(
-                cmd,
-                image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                dst,
-                &[copy_region],
-            )
-        };
+        // One copy per plane. NV12 issues two regions (Y → plane-0
+        // staging buffer with PLANE_0 aspect; UV → plane-1 staging buffer
+        // with PLANE_1 aspect). Single-plane formats issue one region
+        // with the COLOR aspect.
+        for (plane_idx, plane) in snap.planes.iter().enumerate() {
+            let aspect = plane_aspect_mask(snap.format, plane_idx as u32);
+            let copy_region = vk::BufferImageCopy::builder()
+                .buffer_offset(0)
+                // Tight packing: row length = plane width texels,
+                // image height = plane height rows.
+                .buffer_row_length(plane.width)
+                .buffer_image_height(plane.height)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::builder()
+                        .aspect_mask(aspect)
+                        .mip_level(0)
+                        .base_array_layer(0)
+                        .layer_count(1)
+                        .build(),
+                )
+                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+                .image_extent(vk::Extent3D {
+                    width: plane.width,
+                    height: plane.height,
+                    depth: 1,
+                })
+                .build();
+            unsafe {
+                device.cmd_copy_image_to_buffer(
+                    cmd,
+                    snap.image,
+                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                    plane.buffer,
+                    &[copy_region],
+                )
+            };
+        }
 
         // Image: TRANSFER_SRC_OPTIMAL → GENERAL (deterministic post-state).
-        // Buffer: TRANSFER_WRITE → HOST_READ so the unmapped bytes are
-        // host-coherent after the wait.
+        // Each per-plane staging VkBuffer: TRANSFER_WRITE → HOST_READ so
+        // the unmapped bytes are host-coherent after the wait.
         let post_barrier = build_image_barrier(
-            image,
+            snap.image,
             qf,
             vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             vk::ImageLayout::GENERAL,
+            combined_aspect,
         );
         let post_barriers = [post_barrier];
-        let host_buf_barrier = vk::BufferMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
-            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::HOST)
-            .dst_access_mask(vk::AccessFlags2::HOST_READ)
-            .buffer(dst)
-            .offset(0)
-            .size(vk::WHOLE_SIZE)
-            .build();
-        let post_buf_barriers = [host_buf_barrier];
+        let post_buf_barriers: Vec<vk::BufferMemoryBarrier2> = snap
+            .planes
+            .iter()
+            .map(|p| {
+                vk::BufferMemoryBarrier2::builder()
+                    .src_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
+                    .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::HOST)
+                    .dst_access_mask(vk::AccessFlags2::HOST_READ)
+                    .buffer(p.buffer)
+                    .offset(0)
+                    .size(vk::WHOLE_SIZE)
+                    .build()
+            })
+            .collect();
         let post_dep = vk::DependencyInfo::builder()
             .image_memory_barriers(&post_barriers)
             .buffer_memory_barriers(&post_buf_barriers)
@@ -415,19 +460,14 @@ impl CpuReadbackSurfaceAdapter {
     }
 
     /// Symmetric counterpart of [`Self::copy_image_to_buffer`] — flushes
-    /// `src` (linear buffer) into `image` and leaves the image in
-    /// `GENERAL`. Called from the WRITE guard's release path.
-    fn copy_buffer_to_image(
-        &self,
-        src: vk::Buffer,
-        image: vk::Image,
-        from: vk::ImageLayout,
-        width: u32,
-        height: u32,
-    ) -> Result<(), AdapterError> {
+    /// each plane's linear staging buffer back into the corresponding
+    /// image plane and leaves the image in `GENERAL`. Called from the
+    /// WRITE guard's release path.
+    fn copy_buffer_to_image(&self, snap: &FlushSnapshot) -> Result<(), AdapterError> {
         let device = self.device.device();
         let queue = self.device.queue();
         let qf = self.device.queue_family_index();
+        let combined_aspect = combined_aspect_mask(snap.format);
 
         let (pool, cmd) = create_one_shot_command_buffer(device, qf)?;
 
@@ -441,48 +481,57 @@ impl CpuReadbackSurfaceAdapter {
             });
         }
 
-        let pre_barrier = build_image_barrier(image, qf, from, vk::ImageLayout::TRANSFER_DST_OPTIMAL);
+        let pre_barrier = build_image_barrier(
+            snap.image,
+            qf,
+            snap.from.vk(),
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            combined_aspect,
+        );
         let pre_barriers = [pre_barrier];
         let pre_dep = vk::DependencyInfo::builder()
             .image_memory_barriers(&pre_barriers)
             .build();
         unsafe { device.cmd_pipeline_barrier2(cmd, &pre_dep) };
 
-        let copy_region = vk::BufferImageCopy::builder()
-            .buffer_offset(0)
-            .buffer_row_length(width)
-            .buffer_image_height(height)
-            .image_subresource(
-                vk::ImageSubresourceLayers::builder()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .mip_level(0)
-                    .base_array_layer(0)
-                    .layer_count(1)
-                    .build(),
-            )
-            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-            .image_extent(vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            })
-            .build();
-
-        unsafe {
-            device.cmd_copy_buffer_to_image(
-                cmd,
-                src,
-                image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[copy_region],
-            )
-        };
+        for (plane_idx, plane) in snap.planes.iter().enumerate() {
+            let aspect = plane_aspect_mask(snap.format, plane_idx as u32);
+            let copy_region = vk::BufferImageCopy::builder()
+                .buffer_offset(0)
+                .buffer_row_length(plane.width)
+                .buffer_image_height(plane.height)
+                .image_subresource(
+                    vk::ImageSubresourceLayers::builder()
+                        .aspect_mask(aspect)
+                        .mip_level(0)
+                        .base_array_layer(0)
+                        .layer_count(1)
+                        .build(),
+                )
+                .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+                .image_extent(vk::Extent3D {
+                    width: plane.width,
+                    height: plane.height,
+                    depth: 1,
+                })
+                .build();
+            unsafe {
+                device.cmd_copy_buffer_to_image(
+                    cmd,
+                    plane.buffer,
+                    snap.image,
+                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                    &[copy_region],
+                )
+            };
+        }
 
         let post_barrier = build_image_barrier(
-            image,
+            snap.image,
             qf,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             vk::ImageLayout::GENERAL,
+            combined_aspect,
         );
         let post_barriers = [post_barrier];
         let post_dep = vk::DependencyInfo::builder()
@@ -524,6 +573,17 @@ impl CpuReadbackSurfaceAdapter {
     }
 }
 
+/// Per-plane snapshot taken under the registry lock.
+#[derive(Clone, Copy)]
+struct PlaneAcquireSlot {
+    buffer: vk::Buffer,
+    mapped_ptr: *mut u8,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+    byte_size: u64,
+}
+
 /// Snapshot taken under the registry lock so the timeline wait + GPU
 /// copy can run unlocked. `read_holders` / `write_held` are already
 /// incremented; rollback paths decrement them on failure.
@@ -532,19 +592,27 @@ struct AcquireSnapshot {
     wait_value: u64,
     image: vk::Image,
     from: VulkanLayout,
-    buffer: vk::Buffer,
-    mapped_ptr: *mut u8,
-    byte_size: u64,
+    format: SurfaceFormat,
     width: u32,
     height: u32,
-    bytes_per_pixel: u32,
+    planes: Vec<PlaneAcquireSlot>,
 }
 
-// Safe: raw pointer points into a HOST_VISIBLE/HOST_COHERENT mapped
-// allocation that outlives the snapshot, and is only ever touched by
+// Safe: raw pointers point into HOST_VISIBLE/HOST_COHERENT mapped
+// allocations that outlive the snapshot, and are only ever touched by
 // the thread that owns the active acquire scope.
 unsafe impl Send for AcquireSnapshot {}
 unsafe impl Sync for AcquireSnapshot {}
+
+struct FlushSnapshot {
+    image: vk::Image,
+    from: VulkanLayout,
+    format: SurfaceFormat,
+    planes: Vec<PlaneAcquireSlot>,
+}
+
+unsafe impl Send for FlushSnapshot {}
+unsafe impl Sync for FlushSnapshot {}
 
 fn create_one_shot_command_buffer(
     device: &vulkanalia::Device,
@@ -583,6 +651,7 @@ fn build_image_barrier(
     qf: u32,
     from: vk::ImageLayout,
     to: vk::ImageLayout,
+    aspect_mask: vk::ImageAspectFlags,
 ) -> vk::ImageMemoryBarrier2 {
     vk::ImageMemoryBarrier2::builder()
         .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
@@ -596,7 +665,7 @@ fn build_image_barrier(
         .image(image)
         .subresource_range(
             vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .aspect_mask(aspect_mask)
                 .base_mip_level(0)
                 .level_count(1)
                 .base_array_layer(0)
@@ -604,6 +673,28 @@ fn build_image_barrier(
                 .build(),
         )
         .build()
+}
+
+/// Vulkan aspect mask for the given plane of a [`SurfaceFormat`], suitable
+/// for `VkImageSubresourceLayers` when issuing image↔buffer copies.
+fn plane_aspect_mask(format: SurfaceFormat, plane: u32) -> vk::ImageAspectFlags {
+    match (format, plane) {
+        (SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8, 0) => vk::ImageAspectFlags::COLOR,
+        (SurfaceFormat::Nv12, 0) => vk::ImageAspectFlags::PLANE_0,
+        (SurfaceFormat::Nv12, 1) => vk::ImageAspectFlags::PLANE_1,
+        _ => unreachable!("plane_aspect_mask: plane {plane} out of range for {format:?}"),
+    }
+}
+
+/// Aspect mask covering every plane of a [`SurfaceFormat`], for
+/// `VkImageMemoryBarrier::subresourceRange`. Vulkan requires the barrier
+/// to cover all aspects the image possesses; for multi-plane images that
+/// is `PLANE_0 | PLANE_1 | …`, not `COLOR`.
+fn combined_aspect_mask(format: SurfaceFormat) -> vk::ImageAspectFlags {
+    match format {
+        SurfaceFormat::Bgra8 | SurfaceFormat::Rgba8 => vk::ImageAspectFlags::COLOR,
+        SurfaceFormat::Nv12 => vk::ImageAspectFlags::PLANE_0 | vk::ImageAspectFlags::PLANE_1,
+    }
 }
 
 impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
@@ -624,19 +715,7 @@ impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
             }
         };
         self.finalize_acquire(surface.id, false, &snap)?;
-        Ok(ReadGuard::new(
-            self,
-            surface.id,
-            CpuReadbackReadView {
-                bytes: unsafe {
-                    std::slice::from_raw_parts(snap.mapped_ptr, snap.byte_size as usize)
-                },
-                width: snap.width,
-                height: snap.height,
-                bytes_per_pixel: snap.bytes_per_pixel,
-                _marker: PhantomData,
-            },
-        ))
+        Ok(ReadGuard::new(self, surface.id, build_read_view(&snap)))
     }
 
     fn acquire_write<'g>(
@@ -660,19 +739,7 @@ impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
             }
         };
         self.finalize_acquire(surface.id, true, &snap)?;
-        Ok(WriteGuard::new(
-            self,
-            surface.id,
-            CpuReadbackWriteView {
-                bytes: unsafe {
-                    std::slice::from_raw_parts_mut(snap.mapped_ptr, snap.byte_size as usize)
-                },
-                width: snap.width,
-                height: snap.height,
-                bytes_per_pixel: snap.bytes_per_pixel,
-                _marker: PhantomData,
-            },
-        ))
+        Ok(WriteGuard::new(self, surface.id, build_write_view(&snap)))
     }
 
     fn try_acquire_read<'g>(
@@ -684,19 +751,7 @@ impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
             None => return Ok(None),
         };
         self.finalize_acquire(surface.id, false, &snap)?;
-        Ok(Some(ReadGuard::new(
-            self,
-            surface.id,
-            CpuReadbackReadView {
-                bytes: unsafe {
-                    std::slice::from_raw_parts(snap.mapped_ptr, snap.byte_size as usize)
-                },
-                width: snap.width,
-                height: snap.height,
-                bytes_per_pixel: snap.bytes_per_pixel,
-                _marker: PhantomData,
-            },
-        )))
+        Ok(Some(ReadGuard::new(self, surface.id, build_read_view(&snap))))
     }
 
     fn try_acquire_write<'g>(
@@ -711,15 +766,7 @@ impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
         Ok(Some(WriteGuard::new(
             self,
             surface.id,
-            CpuReadbackWriteView {
-                bytes: unsafe {
-                    std::slice::from_raw_parts_mut(snap.mapped_ptr, snap.byte_size as usize)
-                },
-                width: snap.width,
-                height: snap.height,
-                bytes_per_pixel: snap.bytes_per_pixel,
-                _marker: PhantomData,
-            },
+            build_write_view(&snap),
         )))
     }
 
@@ -766,7 +813,6 @@ impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
                 }
             };
             debug_assert!(state.write_held, "write release without acquire");
-            let buffer = state.staging.buffer();
             let image = match state.texture.vulkan_inner().image() {
                 Some(i) => i,
                 None => {
@@ -775,25 +821,27 @@ impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
                     return;
                 }
             };
-            let from = state.current_layout;
-            let width = state.width;
-            let height = state.height;
+            let planes: Vec<PlaneAcquireSlot> = state
+                .planes
+                .iter()
+                .map(|p| PlaneAcquireSlot {
+                    buffer: p.staging.buffer(),
+                    mapped_ptr: p.staging.mapped_ptr(),
+                    width: p.width,
+                    height: p.height,
+                    bytes_per_pixel: p.bytes_per_pixel,
+                    byte_size: p.byte_size(),
+                })
+                .collect();
             FlushSnapshot {
-                buffer,
                 image,
-                from,
-                width,
-                height,
+                from: state.current_layout,
+                format: state.format,
+                planes,
             }
         };
 
-        if let Err(e) = self.copy_buffer_to_image(
-            snap.buffer,
-            snap.image,
-            snap.from.vk(),
-            snap.width,
-            snap.height,
-        ) {
+        if let Err(e) = self.copy_buffer_to_image(&snap) {
             tracing::error!(
                 ?surface_id,
                 error = %e,
@@ -826,11 +874,44 @@ impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
     }
 }
 
-struct FlushSnapshot {
-    buffer: vk::Buffer,
-    image: vk::Image,
-    from: VulkanLayout,
-    width: u32,
-    height: u32,
+fn build_read_view<'g>(snap: &AcquireSnapshot) -> CpuReadbackReadView<'g> {
+    let planes = snap
+        .planes
+        .iter()
+        .map(|p| CpuReadbackPlaneView {
+            bytes: unsafe { std::slice::from_raw_parts(p.mapped_ptr, p.byte_size as usize) },
+            width: p.width,
+            height: p.height,
+            bytes_per_pixel: p.bytes_per_pixel,
+            _marker: PhantomData,
+        })
+        .collect();
+    CpuReadbackReadView {
+        format: snap.format,
+        width: snap.width,
+        height: snap.height,
+        planes,
+    }
 }
 
+fn build_write_view<'g>(snap: &AcquireSnapshot) -> CpuReadbackWriteView<'g> {
+    let planes = snap
+        .planes
+        .iter()
+        .map(|p| CpuReadbackPlaneViewMut {
+            bytes: unsafe {
+                std::slice::from_raw_parts_mut(p.mapped_ptr, p.byte_size as usize)
+            },
+            width: p.width,
+            height: p.height,
+            bytes_per_pixel: p.bytes_per_pixel,
+            _marker: PhantomData,
+        })
+        .collect();
+    CpuReadbackWriteView {
+        format: snap.format,
+        width: snap.width,
+        height: snap.height,
+        planes,
+    }
+}

@@ -14,12 +14,16 @@
  * When this file changes, update both other mirrors in the same commit.
  */
 
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertThrows } from "@std/assert";
 import {
   AccessMode,
   MAX_DMA_BUF_PLANES,
   STREAMLIB_ADAPTER_ABI_VERSION,
   SurfaceFormat,
+  surfaceFormatPlaneBytesPerPixel,
+  surfaceFormatPlaneCount,
+  surfaceFormatPlaneHeight,
+  surfaceFormatPlaneWidth,
   SurfaceLayout,
   SurfaceUsage,
 } from "./surface_adapter.ts";
@@ -36,6 +40,40 @@ Deno.test("SurfaceFormat values match Rust #[repr(u32)] layout", () => {
   assertEquals(SurfaceFormat.Bgra8, 0);
   assertEquals(SurfaceFormat.Rgba8, 1);
   assertEquals(SurfaceFormat.Nv12, 2);
+});
+
+Deno.test("SurfaceFormat plane_count matches Rust", () => {
+  assertEquals(surfaceFormatPlaneCount(SurfaceFormat.Bgra8), 1);
+  assertEquals(surfaceFormatPlaneCount(SurfaceFormat.Rgba8), 1);
+  assertEquals(surfaceFormatPlaneCount(SurfaceFormat.Nv12), 2);
+});
+
+Deno.test("SurfaceFormat plane geometry matches Rust", () => {
+  // BGRA: 1 plane, 4 bpp, full size.
+  assertEquals(surfaceFormatPlaneBytesPerPixel(SurfaceFormat.Bgra8, 0), 4);
+  assertEquals(surfaceFormatPlaneWidth(SurfaceFormat.Bgra8, 64, 0), 64);
+  assertEquals(surfaceFormatPlaneHeight(SurfaceFormat.Bgra8, 48, 0), 48);
+
+  // NV12 plane 0 (Y) — full resolution, 1 byte per texel.
+  assertEquals(surfaceFormatPlaneBytesPerPixel(SurfaceFormat.Nv12, 0), 1);
+  assertEquals(surfaceFormatPlaneWidth(SurfaceFormat.Nv12, 64, 0), 64);
+  assertEquals(surfaceFormatPlaneHeight(SurfaceFormat.Nv12, 48, 0), 48);
+
+  // NV12 plane 1 (UV interleaved) — half resolution, 2 bytes per texel.
+  assertEquals(surfaceFormatPlaneBytesPerPixel(SurfaceFormat.Nv12, 1), 2);
+  assertEquals(surfaceFormatPlaneWidth(SurfaceFormat.Nv12, 64, 1), 32);
+  assertEquals(surfaceFormatPlaneHeight(SurfaceFormat.Nv12, 48, 1), 24);
+});
+
+Deno.test("SurfaceFormat plane out-of-range throws RangeError", () => {
+  assertThrows(
+    () => surfaceFormatPlaneBytesPerPixel(SurfaceFormat.Bgra8, 1),
+    RangeError,
+  );
+  assertThrows(
+    () => surfaceFormatPlaneBytesPerPixel(SurfaceFormat.Nv12, 2),
+    RangeError,
+  );
 });
 
 Deno.test("SurfaceUsage flag bits match Rust bitflags", () => {

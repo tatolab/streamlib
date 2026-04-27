@@ -52,8 +52,8 @@ fn panic_mid_write_releases_lock_for_next_acquire() {
             .ctx
             .acquire_write(&descriptor)
             .expect("acquire_write before panic");
-        // Touch the bytes so bytes_mut isn't optimized out.
-        guard.view_mut().bytes_mut()[0] = 0xAB;
+        // Touch the bytes so the write isn't optimized out.
+        guard.view_mut().plane_mut(0).bytes_mut()[0] = 0xAB;
         panic!("simulated customer panic mid-write");
     }));
     assert!(result.is_err(), "the closure must have panicked");
@@ -64,7 +64,7 @@ fn panic_mid_write_releases_lock_for_next_acquire() {
             .ctx
             .acquire_write(&descriptor)
             .expect("post-panic acquire_write must succeed");
-        assert_eq!(guard.view().bytes().len(), 32 * 32 * 4);
+        assert_eq!(guard.view().plane(0).bytes().len(), 32 * 32 * 4);
     }
     {
         let _g = fixture

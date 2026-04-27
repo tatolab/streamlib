@@ -41,6 +41,53 @@ class SurfaceFormat(enum.IntEnum):
     RGBA8 = 1
     NV12 = 2
 
+    def plane_count(self) -> int:
+        """Number of planes for this format. Mirrors Rust
+        `SurfaceFormat::plane_count`."""
+        if self in (SurfaceFormat.BGRA8, SurfaceFormat.RGBA8):
+            return 1
+        if self is SurfaceFormat.NV12:
+            return 2
+        raise ValueError(f"unknown SurfaceFormat: {self!r}")
+
+    def plane_bytes_per_pixel(self, plane: int) -> int:
+        """Bytes per texel of `plane`. NV12: Y=1, UV=2 (interleaved)."""
+        if self in (SurfaceFormat.BGRA8, SurfaceFormat.RGBA8) and plane == 0:
+            return 4
+        if self is SurfaceFormat.NV12 and plane == 0:
+            return 1
+        if self is SurfaceFormat.NV12 and plane == 1:
+            return 2
+        raise IndexError(
+            f"plane index {plane} out of range for SurfaceFormat {self!r}"
+        )
+
+    def plane_width(self, surface_width: int, plane: int) -> int:
+        """Plane width in texels at `surface_width`. NV12 UV plane is
+        half-width."""
+        if self in (SurfaceFormat.BGRA8, SurfaceFormat.RGBA8) and plane == 0:
+            return surface_width
+        if self is SurfaceFormat.NV12 and plane == 0:
+            return surface_width
+        if self is SurfaceFormat.NV12 and plane == 1:
+            return surface_width // 2
+        raise IndexError(
+            f"plane index {plane} out of range for SurfaceFormat {self!r}"
+        )
+
+    def plane_height(self, surface_height: int, plane: int) -> int:
+        """Plane height in texels at `surface_height`. NV12 UV plane is
+        half-height."""
+        if self in (SurfaceFormat.BGRA8, SurfaceFormat.RGBA8) and plane == 0:
+            return surface_height
+        if self is SurfaceFormat.NV12 and plane == 0:
+            return surface_height
+        if self is SurfaceFormat.NV12 and plane == 1:
+            return surface_height // 2
+        raise IndexError(
+            f"plane index {plane} out of range for SurfaceFormat {self!r}"
+        )
+
 
 class SurfaceUsage(enum.IntFlag):
     """Mirror of Rust `SurfaceUsage` (`bitflags!` `#[repr(transparent)] u32`)."""

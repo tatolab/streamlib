@@ -4,17 +4,19 @@
 /**
  * Explicit GPU→CPU surface adapter — Deno customer-facing API.
  *
- * Mirrors the Rust crate `streamlib-adapter-cpu-readback` (#514).
+ * Mirrors the Rust crate `streamlib-adapter-cpu-readback` (#514, #533).
  * The subprocess's actual GPU→CPU copy is performed by the host
- * adapter via `vkCmdCopyImageToBuffer` against a HOST_VISIBLE
- * staging buffer; this module declares the type shapes a Deno
- * customer programs against.
+ * adapter via per-plane `vkCmdCopyImageToBuffer` against per-plane
+ * HOST_VISIBLE staging buffers; this module declares the type shapes
+ * a Deno customer programs against.
  *
- *  - `CpuReadbackReadView` / `CpuReadbackWriteView` — typed views
- *    inside `acquireRead` / `acquireWrite` scopes. Both expose
- *    `bytes` as a tightly-packed `Uint8Array` (read-only on the
- *    read side, mutable on the write side). Length is exactly
- *    `width * height * bytesPerPixel`.
+ *  - `CpuReadbackPlaneView` / `CpuReadbackPlaneViewMut` — per-plane
+ *    byte slices (`Uint8Array`) and dimensions in plane texels. NV12
+ *    UV plane has half the surface width × half the surface height.
+ *  - `CpuReadbackReadView` / `CpuReadbackWriteView` — surface-level
+ *    metadata plus the array of plane views inside `acquireRead` /
+ *    `acquireWrite` scopes. `planeCount` reflects the surface's
+ *    `SurfaceFormat`: 1 for BGRA8/RGBA8, 2 for NV12.
  *  - `CpuReadbackContext` interface — runtime hands one out;
  *    customers use TC39 `using` blocks for scoped acquire/release.
  *
@@ -31,32 +33,58 @@ import {
   STREAMLIB_ADAPTER_ABI_VERSION,
   type StreamlibSurface,
   type SurfaceAccessGuard,
+  type SurfaceFormat,
 } from "../surface_adapter.ts";
 
 export { STREAMLIB_ADAPTER_ABI_VERSION };
+
+/** Read-only view of a single plane of an acquired surface. */
+export interface CpuReadbackPlaneView {
+  /** Plane width in texels. */
+  readonly width: number;
+  /** Plane height in texels. */
+  readonly height: number;
+  /** Bytes per texel of this plane (BGRA: 4, NV12 Y: 1, NV12 UV: 2). */
+  readonly bytesPerPixel: number;
+  /** Tightly-packed row stride in bytes (`width * bytesPerPixel`). */
+  readonly rowStride: number;
+  /** Read-only view of this plane's staging buffer. */
+  readonly bytes: Uint8Array;
+}
+
+/** Mutable view of a single plane of an acquired surface. */
+export interface CpuReadbackPlaneViewMut {
+  readonly width: number;
+  readonly height: number;
+  readonly bytesPerPixel: number;
+  readonly rowStride: number;
+  /** Mutable view of this plane's staging buffer. */
+  readonly bytes: Uint8Array;
+}
 
 /** Read-side view inside an `acquireRead` scope. */
 export interface CpuReadbackReadView {
   readonly width: number;
   readonly height: number;
-  readonly bytesPerPixel: number;
-  /** Tightly-packed row stride in bytes
-   * (`width * bytesPerPixel`). */
-  readonly rowStride: number;
-  /** Read-only view of the staging buffer. The GPU→CPU copy already
-   * happened at acquire time; reading is O(1). */
-  readonly bytes: Uint8Array;
+  readonly format: SurfaceFormat;
+  /** Number of planes (1 for BGRA/RGBA, 2 for NV12). */
+  readonly planeCount: number;
+  /** All planes in declaration order — for NV12, `[Y, UV]`. */
+  readonly planes: readonly CpuReadbackPlaneView[];
+  /** Borrow plane `index`. Throws `RangeError` on out-of-range. */
+  plane(index: number): CpuReadbackPlaneView;
 }
 
-/** Write-side view inside an `acquireWrite` scope. */
+/** Write-side view inside an `acquireWrite` scope. Edits to any
+ * plane's `bytes` are flushed back to the host `VkImage` via per-
+ * plane `vkCmdCopyBufferToImage` on guard drop. */
 export interface CpuReadbackWriteView {
   readonly width: number;
   readonly height: number;
-  readonly bytesPerPixel: number;
-  readonly rowStride: number;
-  /** Mutable view of the staging buffer. Edits are flushed back to
-   * the host `VkImage` via `vkCmdCopyBufferToImage` on guard drop. */
-  readonly bytes: Uint8Array;
+  readonly format: SurfaceFormat;
+  readonly planeCount: number;
+  readonly planes: readonly CpuReadbackPlaneViewMut[];
+  plane(index: number): CpuReadbackPlaneViewMut;
 }
 
 /** Public cpu-readback adapter contract. */

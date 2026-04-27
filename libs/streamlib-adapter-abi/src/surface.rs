@@ -22,6 +22,67 @@ pub enum SurfaceFormat {
     Nv12 = 2,
 }
 
+impl SurfaceFormat {
+    /// Number of planes for this format.
+    pub const fn plane_count(&self) -> u32 {
+        match self {
+            Self::Bgra8 | Self::Rgba8 => 1,
+            Self::Nv12 => 2,
+        }
+    }
+
+    /// Bytes per texel of `plane`. NV12: Y plane = 1, UV plane = 2 (interleaved Cb/Cr).
+    ///
+    /// Panics if `plane >= self.plane_count()`.
+    pub const fn plane_bytes_per_pixel(&self, plane: u32) -> u32 {
+        match (self, plane) {
+            (Self::Bgra8 | Self::Rgba8, 0) => 4,
+            (Self::Nv12, 0) => 1,
+            (Self::Nv12, 1) => 2,
+            _ => panic!("plane index out of range for SurfaceFormat"),
+        }
+    }
+
+    /// Plane width in texels at `surface_width`. NV12: Y = full width, UV = `surface_width / 2`.
+    ///
+    /// Panics if `plane >= self.plane_count()`.
+    pub const fn plane_width(&self, surface_width: u32, plane: u32) -> u32 {
+        match (self, plane) {
+            (Self::Bgra8 | Self::Rgba8, 0) => surface_width,
+            (Self::Nv12, 0) => surface_width,
+            (Self::Nv12, 1) => surface_width / 2,
+            _ => panic!("plane index out of range for SurfaceFormat"),
+        }
+    }
+
+    /// Plane height in texels at `surface_height`. NV12: Y = full height, UV = `surface_height / 2`.
+    ///
+    /// Panics if `plane >= self.plane_count()`.
+    pub const fn plane_height(&self, surface_height: u32, plane: u32) -> u32 {
+        match (self, plane) {
+            (Self::Bgra8 | Self::Rgba8, 0) => surface_height,
+            (Self::Nv12, 0) => surface_height,
+            (Self::Nv12, 1) => surface_height / 2,
+            _ => panic!("plane index out of range for SurfaceFormat"),
+        }
+    }
+
+    /// Tightly-packed plane size in bytes for a `surface_width x surface_height` surface.
+    ///
+    /// Panics if `plane >= self.plane_count()`.
+    pub const fn plane_byte_size(
+        &self,
+        surface_width: u32,
+        surface_height: u32,
+        plane: u32,
+    ) -> u64 {
+        let w = self.plane_width(surface_width, plane) as u64;
+        let h = self.plane_height(surface_height, plane) as u64;
+        let bpp = self.plane_bytes_per_pixel(plane) as u64;
+        w * h * bpp
+    }
+}
+
 bitflags! {
     /// What a surface may be used for.
     #[repr(transparent)]
@@ -295,6 +356,48 @@ mod tests {
     fn surface_format_is_u32() {
         assert_eq!(size_of::<SurfaceFormat>(), 4);
         assert_eq!(align_of::<SurfaceFormat>(), 4);
+    }
+
+    #[test]
+    fn surface_format_plane_count_matches_format_shape() {
+        assert_eq!(SurfaceFormat::Bgra8.plane_count(), 1);
+        assert_eq!(SurfaceFormat::Rgba8.plane_count(), 1);
+        assert_eq!(SurfaceFormat::Nv12.plane_count(), 2);
+    }
+
+    #[test]
+    fn surface_format_plane_geometry_for_bgra() {
+        // BGRA8: 1 plane, 4 bpp, full surface dimensions.
+        assert_eq!(SurfaceFormat::Bgra8.plane_bytes_per_pixel(0), 4);
+        assert_eq!(SurfaceFormat::Bgra8.plane_width(64, 0), 64);
+        assert_eq!(SurfaceFormat::Bgra8.plane_height(48, 0), 48);
+        assert_eq!(SurfaceFormat::Bgra8.plane_byte_size(64, 48, 0), 64 * 48 * 4);
+    }
+
+    #[test]
+    fn surface_format_plane_geometry_for_nv12() {
+        // NV12 plane 0 (Y): 1 bpp, full width × full height.
+        assert_eq!(SurfaceFormat::Nv12.plane_bytes_per_pixel(0), 1);
+        assert_eq!(SurfaceFormat::Nv12.plane_width(64, 0), 64);
+        assert_eq!(SurfaceFormat::Nv12.plane_height(48, 0), 48);
+        assert_eq!(SurfaceFormat::Nv12.plane_byte_size(64, 48, 0), 64 * 48);
+
+        // NV12 plane 1 (UV interleaved): 2 bpp, half width × half height.
+        assert_eq!(SurfaceFormat::Nv12.plane_bytes_per_pixel(1), 2);
+        assert_eq!(SurfaceFormat::Nv12.plane_width(64, 1), 32);
+        assert_eq!(SurfaceFormat::Nv12.plane_height(48, 1), 24);
+        assert_eq!(SurfaceFormat::Nv12.plane_byte_size(64, 48, 1), 32 * 24 * 2);
+
+        // Total NV12 footprint = 1.5× the surface pixel count (12 bpp average).
+        let total = SurfaceFormat::Nv12.plane_byte_size(64, 48, 0)
+            + SurfaceFormat::Nv12.plane_byte_size(64, 48, 1);
+        assert_eq!(total, 64 * 48 * 3 / 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "plane index out of range")]
+    fn surface_format_plane_out_of_range_panics() {
+        let _ = SurfaceFormat::Bgra8.plane_bytes_per_pixel(1);
     }
 
     #[test]

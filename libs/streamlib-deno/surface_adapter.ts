@@ -25,6 +25,92 @@ export const SurfaceFormat = {
 } as const;
 export type SurfaceFormat = (typeof SurfaceFormat)[keyof typeof SurfaceFormat];
 
+/**
+ * Number of planes for `format`. Mirrors Rust
+ * `SurfaceFormat::plane_count`.
+ */
+export function surfaceFormatPlaneCount(format: SurfaceFormat): number {
+  switch (format) {
+    case SurfaceFormat.Bgra8:
+    case SurfaceFormat.Rgba8:
+      return 1;
+    case SurfaceFormat.Nv12:
+      return 2;
+  }
+  throw new RangeError(`unknown SurfaceFormat: ${format}`);
+}
+
+/**
+ * Bytes per texel of `plane`. NV12: Y = 1, UV = 2 (interleaved).
+ *
+ * Throws `RangeError` if `plane >= surfaceFormatPlaneCount(format)`.
+ */
+export function surfaceFormatPlaneBytesPerPixel(
+  format: SurfaceFormat,
+  plane: number,
+): number {
+  if (plane === 0) {
+    if (format === SurfaceFormat.Bgra8 || format === SurfaceFormat.Rgba8) {
+      return 4;
+    }
+    if (format === SurfaceFormat.Nv12) return 1;
+  }
+  if (plane === 1 && format === SurfaceFormat.Nv12) return 2;
+  throw new RangeError(
+    `plane index ${plane} out of range for SurfaceFormat ${format}`,
+  );
+}
+
+/**
+ * Plane width in texels. NV12 UV plane is half-width.
+ */
+export function surfaceFormatPlaneWidth(
+  format: SurfaceFormat,
+  surfaceWidth: number,
+  plane: number,
+): number {
+  if (plane === 0) {
+    if (
+      format === SurfaceFormat.Bgra8 ||
+      format === SurfaceFormat.Rgba8 ||
+      format === SurfaceFormat.Nv12
+    ) {
+      return surfaceWidth;
+    }
+  }
+  if (plane === 1 && format === SurfaceFormat.Nv12) {
+    return Math.floor(surfaceWidth / 2);
+  }
+  throw new RangeError(
+    `plane index ${plane} out of range for SurfaceFormat ${format}`,
+  );
+}
+
+/**
+ * Plane height in texels. NV12 UV plane is half-height.
+ */
+export function surfaceFormatPlaneHeight(
+  format: SurfaceFormat,
+  surfaceHeight: number,
+  plane: number,
+): number {
+  if (plane === 0) {
+    if (
+      format === SurfaceFormat.Bgra8 ||
+      format === SurfaceFormat.Rgba8 ||
+      format === SurfaceFormat.Nv12
+    ) {
+      return surfaceHeight;
+    }
+  }
+  if (plane === 1 && format === SurfaceFormat.Nv12) {
+    return Math.floor(surfaceHeight / 2);
+  }
+  throw new RangeError(
+    `plane index ${plane} out of range for SurfaceFormat ${format}`,
+  );
+}
+
 /** Mirror of Rust `SurfaceUsage` bitflags. */
 export const SurfaceUsage = {
   RenderTarget: 1 << 0,

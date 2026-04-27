@@ -28,7 +28,7 @@ fn prime_with_pattern(
         .ctx
         .acquire_write(descriptor)
         .expect("prime: acquire_write");
-    let bytes = guard.view_mut().bytes_mut();
+    let bytes = guard.view_mut().plane_mut(0).bytes_mut();
     for chunk in bytes.chunks_exact_mut(4) {
         chunk.copy_from_slice(&pattern);
     }
@@ -52,12 +52,14 @@ fn round_trip_read_observes_host_pattern() {
     let view = guard.view();
     assert_eq!(view.width(), 32);
     assert_eq!(view.height(), 16);
-    assert_eq!(view.bytes_per_pixel(), 4);
-    assert_eq!(view.row_stride(), 32 * 4);
-    assert_eq!(view.bytes().len(), 32 * 16 * 4);
+    assert_eq!(view.plane_count(), 1);
+    let plane = view.plane(0);
+    assert_eq!(plane.bytes_per_pixel(), 4);
+    assert_eq!(plane.row_stride(), 32 * 4);
+    assert_eq!(plane.bytes().len(), 32 * 16 * 4);
     assert_eq!(view.read_bytes().len(), 32 * 16 * 4);
 
-    for (i, chunk) in view.bytes().chunks_exact(4).enumerate() {
+    for (i, chunk) in plane.bytes().chunks_exact(4).enumerate() {
         assert_eq!(chunk, &pattern, "pixel {i} mismatch: {chunk:02x?}");
     }
 }
@@ -86,7 +88,7 @@ fn round_trip_read_per_row_pattern_lands_unscrambled() {
             .ctx
             .acquire_write(&descriptor)
             .expect("acquire_write");
-        let bytes = guard.view_mut().bytes_mut();
+        let bytes = guard.view_mut().plane_mut(0).bytes_mut();
         for y in 0..height as usize {
             for x in 0..width as usize {
                 let byte = y as u8 + 0x10;
@@ -99,7 +101,7 @@ fn round_trip_read_per_row_pattern_lands_unscrambled() {
     // Read back and assert row N is full of [byte, …].
     let guard = fixture.ctx.acquire_read(&descriptor).expect("acquire_read");
     let view = guard.view();
-    let bytes = view.bytes();
+    let bytes = view.plane(0).bytes();
     for y in 0..height as usize {
         for x in 0..width as usize {
             let expected = y as u8 + 0x10;
