@@ -98,7 +98,9 @@ When presenting design choices for engine work, recommend the production-grade o
 
 **Picking up the next task:** invoke the `/amos:next` skill (or just say "continue" / "next task" / "what's next"). It finds the next ready issue in the focused milestone, pulls the issue body from GitHub, auto-loads any matching `.claude/workflows/<label>.md` for the issue's labels, and walks the execution protocol. To set the focused milestone, run `/amos:focus <title>` — `amos milestones` lists candidates.
 
-**Writing issues:** every new issue follows the template in @docs/issue-template.md — Description / Context / Exit criteria / Tests or validation / Related / AI Agent Notes. Cross-cutting concerns (linux, macos, polyglot, ci, frozen) are labels, not milestones. Test harnesses are their own issues. Dependency edges (`blocked by` / `blocks` / `parent`) are native GitHub relationships, not text. Use the `/amos-file` skill to draft new issues — it handles the template, milestone inference, and relationships in one pass.
+**Issues are goals, not specs.** An issue captures the *intent* of the work — the problem to solve, why it matters, and roughly how done looks. The specific exit-criteria checkboxes, file paths, suggested orderings, and AI Agent Notes inside an issue body are the best understanding *as of when the issue was filed*; they go stale fast as code lands, dependencies close, or the surrounding architecture shifts. **When you pick up a task, treat the issue as the goal but research current state before locking the plan.** Re-read the referenced files, check whether referenced code still exists in the shape claimed, verify whether listed follow-ups have already been filed, confirm whether flagged "defects" are still defects. Then announce a *fresh* task plan that supersedes the issue body where evidence has shifted — and update the issue body in place per the markdown-editing rules below (strike through stale items with reasoning, don't silently rewrite). Don't be dogmatic about checking off every original criterion if the world has moved; do hit the goal.
+
+**Writing issues:** every new issue follows the template in @docs/issue-template.md — Description / Context / Exit criteria / Tests or validation / Related / AI Agent Notes. **Keep issues low-resolution by default.** State the goal, the constraints, and what "done" looks like in broad strokes; do *not* try to capture every file path, exact test name, suggested implementation order, or detailed plan in the issue body. That high-resolution detail decays as code shifts, and a future agent picking up the issue will re-derive it anyway. The picker's job is to research current state and produce the implementation plan; the filer's job is to capture the goal cleanly. Cross-cutting concerns (linux, macos, polyglot, ci, frozen) are labels, not milestones. Test harnesses are their own issues. Dependency edges (`blocked by` / `blocks` / `parent`) are native GitHub relationships, not text. Use the `/amos-file` skill to draft new issues — it handles the template, milestone inference, and relationships in one pass.
 
 **Specialty workflows** live at `.claude/workflows/<label>.md`. Add a new one by dropping a file there and labeling relevant issues. `/amos:next` loads every matching file into context before starting work. Current workflows:
 - `.claude/workflows/ci.md` — for `ci`-labeled issues (negative test + green baseline evidence required)
@@ -348,6 +350,47 @@ for the full recipe.
 
 ---
 
+## Editing markdown documentation
+
+All markdown in this repo — CLAUDE.md, `docs/learnings/`,
+`docs/architecture/`, workflow files under `.claude/workflows/`,
+research docs — is **living documentation**. Future agents are
+encouraged to validate, update, critique, and prune as evidence
+shifts. Treat these files academically, not dogmatically: older
+content was true at the time it was written, and reality may have
+moved on.
+
+When editing any `*.md`:
+
+1. **Use Opus.** Markdown edits are research work — Sonnet or Haiku
+   may not hold enough context to weigh the trade-offs and
+   preserve nuance.
+2. **Show your work.** PR description / commit body must include
+   the evidence that drove the change: command output, file paths,
+   spec references, observations. "I think this is wrong" without
+   evidence is not enough.
+3. **Preserve disagreement, don't silently overwrite.** When you
+   supersede content, annotate it rather than removing it cleanly:
+
+   ```markdown
+   > ~~Original claim that X holds.~~ — Superseded YYYY-MM-DD by
+   > <evidence>. <One or two sentences on why the original is no
+   > longer right>.
+   ```
+
+   Outright deletion is allowed when content is provably wrong or
+   no longer relevant; in that case, leave a one-line marker in
+   the surrounding text ("section on X removed YYYY-MM-DD —
+   <reason>") so a future reader doesn't re-derive the same dead
+   end. Crossed-out content carries learnings of its own ("don't
+   go down this path; an agent tried it and it didn't work because
+   Y") — those are valuable and should be preserved.
+4. **Don't be dogmatic.** Re-derive conclusions when the stakes
+   are non-trivial. A doc that says "do X" is a hypothesis for
+   your current situation, not a command.
+
+These rules apply to every doc in this repo, including this one.
+
 ## Hard-won learnings (look these up when triggered)
 
 These docs capture surprising, non-obvious behavior — driver bugs,
@@ -356,7 +399,10 @@ condition matches what you're seeing.
 
 ### How to treat them
 
-Learnings are **notes from past-me to current-me** — a conversation
+Learnings follow the general
+[Editing markdown documentation](#editing-markdown-documentation)
+rules above; this subsection is a learnings-flavored restatement.
+They are **notes from past-me to current-me** — a conversation
 across sessions, not a spec. Treat them the way any engineer treats
 their own older notes: useful prior context, **not authority**.
 
@@ -367,11 +413,12 @@ their own older notes: useful prior context, **not authority**.
   missed, realize the problem was framed wrong, or find a simpler /
   better fix. Prefer the current understanding over the recorded one
   when they conflict.
-- **Edit freely.** A learning can be updated, rewritten, split, merged,
-  or deleted whenever you have evidence it's out of date, wrong,
-  incomplete, too narrow, too broad, or simply no longer relevant.
-  These edits don't need approval beyond the normal PR review — treat
-  them like any other doc change.
+- **Edit freely, preserve disagreement.** A learning can be updated,
+  rewritten, split, merged, or deleted whenever you have evidence
+  it's out of date, wrong, incomplete, too narrow, too broad, or
+  simply no longer relevant. When you do, follow the general rules
+  above — annotate superseded content, leave deletion markers
+  explaining why, preserve the dead-end as its own learning.
 - **Don't follow them blindly.** A learning telling you "do X" is a
   hypothesis for your current situation, not a command. Verify the
   trigger still matches, verify the prescribed fix still applies,
@@ -426,5 +473,14 @@ make sense if the surrounding files were renamed or restructured.
   buffers, publish drops) without `init()`. Read before writing any test
   that uses PUBSUB events (shutdown, reconfigure) outside a full
   `StreamRuntime`.
+- @docs/architecture/adapter-runtime-integration.md — Two IPC seams
+  (surface-share FD lookup, escalate IPC) already exist for handing
+  host-allocated adapter resources to subprocess customers. The doc
+  records which adapter rides which today and why. To the best of our
+  current knowledge GPU adapters (Vulkan / OpenGL / Skia) fit one-shot
+  FD passing and cpu-readback fits per-acquire escalate, but the
+  trade-offs may shift as new adapters arrive — verify against current
+  code before generalizing. Read before adding a new surface adapter
+  or wondering why one path was picked over another.
 
 Index: @docs/learnings/README.md
