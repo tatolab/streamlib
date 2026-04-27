@@ -10,8 +10,9 @@
 //!  3. `vkCmdCopyImageToBuffer` into the per-plane staging buffer(s).
 //!     For multi-plane formats (NV12) one region per plane is recorded
 //!     with the corresponding `VK_IMAGE_ASPECT_PLANE_{0,1,…}_BIT`.
-//!  4. Block on `vkQueueWaitIdle` so the bytes are observable from the
-//!     CPU side once the call returns.
+//!  4. Wait on a per-submit `vk::Fence` so the bytes are observable from
+//!     the CPU side once the call returns. The wait is targeted to this
+//!     submit only — no `vkQueueWaitIdle` queue-wide drain.
 //!  5. Hand the customer per-plane `&[u8]` views over the mapped staging
 //!     buffers.
 //!
@@ -45,8 +46,10 @@ use crate::view::{
     CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
 };
 
-/// Default per-acquire timeline-wait timeout.
-const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
+/// Default per-acquire GPU-wait timeout. Bounds both the prior-work
+/// timeline-semaphore wait and the per-submit `vk::Fence` wait that
+/// observe the image↔buffer copies.
+const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Explicit GPU→CPU [`SurfaceAdapter`] implementation.
 ///
@@ -70,11 +73,14 @@ impl CpuReadbackSurfaceAdapter {
         Self {
             device,
             surfaces: Mutex::new(HashMap::new()),
-            acquire_timeout: DEFAULT_TIMELINE_WAIT,
+            acquire_timeout: DEFAULT_ACQUIRE_TIMEOUT,
         }
     }
 
-    /// Override the per-acquire timeline-wait timeout. Default 5 s.
+    /// Override the per-acquire GPU-wait timeout. Bounds both the
+    /// prior-work timeline-semaphore wait and the per-submit
+    /// `vk::Fence` wait that observe the image↔buffer copies. Default
+    /// 5 s.
     pub fn with_acquire_timeout(mut self, timeout: Duration) -> Self {
         self.acquire_timeout = timeout;
         self
@@ -308,23 +314,13 @@ impl CpuReadbackSurfaceAdapter {
         }
     }
 
-    /// Submit a one-shot command buffer that:
-    ///   - transitions the image (`from` → `TRANSFER_SRC_OPTIMAL`) using
-    ///     the format-correct aspect mask
-    ///   - `vkCmdCopyImageToBuffer` into the per-plane staging buffers
-    ///     (one region per plane with the corresponding aspect mask)
-    ///   - transitions the image (`TRANSFER_SRC_OPTIMAL` → `GENERAL`)
-    /// then blocks via `vkQueueWaitIdle` so the host bytes are
-    /// observable.
-    ///
-    /// `vkQueueWaitIdle` is a **queue-wide** stall — every other
-    /// workload sharing this queue (encoder, decoder, camera) blocks
-    /// until the copy completes. That's correct for a v1
-    /// "GPU→CPU is the explicit slow exit" adapter, but the steady
-    /// state should switch to a per-submit fence + timeline wait so
-    /// only this surface's pipeline stalls. Tracked as part of the
-    /// adapter runtime-integration follow-up issues filed against
-    /// the Surface Adapter Architecture milestone.
+    /// Submit a one-shot command buffer that transitions the image to
+    /// `TRANSFER_SRC_OPTIMAL`, copies each plane into its staging
+    /// buffer, and transitions the image to `GENERAL`. Completion is
+    /// observed via a per-submit `vk::Fence` — the wait is targeted to
+    /// this submit only and composes correctly with concurrent activity
+    /// from other workloads sharing the queue (no `vkQueueWaitIdle`
+    /// drain).
     fn copy_image_to_buffer(&self, snap: &AcquireSnapshot) -> Result<(), AdapterError> {
         let device = self.device.device();
         let queue = self.device.queue();
@@ -433,36 +429,16 @@ impl CpuReadbackSurfaceAdapter {
             });
         }
 
-        let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
-            .command_buffer(cmd)
-            .build()];
-        let submit = vk::SubmitInfo2::builder()
-            .command_buffer_infos(&cmd_infos)
-            .build();
-        if let Err(e) =
-            unsafe { self.device.submit_to_queue(queue, &[submit], vk::Fence::null()) }
-        {
-            unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::IpcDisconnected {
-                reason: format!("submit_to_queue: {e}"),
-            });
-        }
-
-        if let Err(e) = unsafe { device.queue_wait_idle(queue) } {
-            unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::IpcDisconnected {
-                reason: format!("queue_wait_idle: {e}"),
-            });
-        }
-
+        let submit_result = self.submit_and_wait(queue, cmd);
         unsafe { device.destroy_command_pool(pool, None) };
-        Ok(())
+        submit_result
     }
 
     /// Symmetric counterpart of [`Self::copy_image_to_buffer`] — flushes
     /// each plane's linear staging buffer back into the corresponding
     /// image plane and leaves the image in `GENERAL`. Called from the
-    /// WRITE guard's release path.
+    /// WRITE guard's release path. Like the readback path, completion is
+    /// observed via a per-submit `vk::Fence`, not `vkQueueWaitIdle`.
     fn copy_buffer_to_image(&self, snap: &FlushSnapshot) -> Result<(), AdapterError> {
         let device = self.device.device();
         let queue = self.device.queue();
@@ -546,30 +522,63 @@ impl CpuReadbackSurfaceAdapter {
             });
         }
 
+        let submit_result = self.submit_and_wait(queue, cmd);
+        unsafe { device.destroy_command_pool(pool, None) };
+        submit_result
+    }
+
+    /// Submit `cmd` to `queue` with a per-call `vk::Fence` and wait for
+    /// it to signal. Bounded by [`Self::acquire_timeout`]; on timeout
+    /// returns [`AdapterError::SyncTimeout`].
+    ///
+    /// The fence is created unsignaled, attached to a single-submit
+    /// `VkSubmitInfo2`, and destroyed before this returns. Does NOT call
+    /// `vkQueueWaitIdle` — the wait is targeted to this submit only and
+    /// composes correctly with concurrent activity from other workloads
+    /// sharing the queue.
+    fn submit_and_wait(
+        &self,
+        queue: vk::Queue,
+        cmd: vk::CommandBuffer,
+    ) -> Result<(), AdapterError> {
+        let device = self.device.device();
+
+        let fence_info = vk::FenceCreateInfo::builder().build();
+        let fence = unsafe { device.create_fence(&fence_info, None) }.map_err(|e| {
+            AdapterError::IpcDisconnected {
+                reason: format!("create_fence: {e}"),
+            }
+        })?;
+
         let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
             .command_buffer(cmd)
             .build()];
         let submit = vk::SubmitInfo2::builder()
             .command_buffer_infos(&cmd_infos)
             .build();
-        if let Err(e) =
-            unsafe { self.device.submit_to_queue(queue, &[submit], vk::Fence::null()) }
-        {
-            unsafe { device.destroy_command_pool(pool, None) };
+        if let Err(e) = unsafe { self.device.submit_to_queue(queue, &[submit], fence) } {
+            unsafe { device.destroy_fence(fence, None) };
             return Err(AdapterError::IpcDisconnected {
                 reason: format!("submit_to_queue: {e}"),
             });
         }
 
-        if let Err(e) = unsafe { device.queue_wait_idle(queue) } {
-            unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::IpcDisconnected {
-                reason: format!("queue_wait_idle: {e}"),
-            });
-        }
+        let timeout_ns = self.acquire_timeout.as_nanos() as u64;
+        let wait_result = unsafe { device.wait_for_fences(&[fence], true, timeout_ns) };
+        unsafe { device.destroy_fence(fence, None) };
 
-        unsafe { device.destroy_command_pool(pool, None) };
-        Ok(())
+        match wait_result {
+            Ok(vk::SuccessCode::SUCCESS) => Ok(()),
+            Ok(vk::SuccessCode::TIMEOUT) => Err(AdapterError::SyncTimeout {
+                duration: self.acquire_timeout,
+            }),
+            Ok(other) => Err(AdapterError::IpcDisconnected {
+                reason: format!("wait_for_fences unexpected success: {other:?}"),
+            }),
+            Err(e) => Err(AdapterError::IpcDisconnected {
+                reason: format!("wait_for_fences: {e}"),
+            }),
+        }
     }
 }
 
