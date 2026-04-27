@@ -19,11 +19,13 @@
 
 import type {
   EscalateRequest,
+  EscalateRequestAcquireCpuReadback,
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
   EscalateRequestReleaseHandle,
 } from "./_generated_/com_streamlib_escalate_request.ts";
+import { EscalateRequestAcquireCpuReadbackMode } from "./_generated_/com_streamlib_escalate_request.ts";
 import type {
   EscalateResponse,
   EscalateResponseErr,
@@ -32,6 +34,7 @@ import type {
 
 export type {
   EscalateRequest,
+  EscalateRequestAcquireCpuReadback,
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
@@ -40,6 +43,7 @@ export type {
   EscalateResponseErr,
   EscalateResponseOk,
 };
+export { EscalateRequestAcquireCpuReadbackMode };
 
 /** Backwards-compat alias for the `ok` variant of [`EscalateResponse`]. */
 export type EscalateOkResponse = EscalateResponseOk;
@@ -55,6 +59,7 @@ export const ESCALATE_RESPONSE_RPC = "escalate_response";
  * `request_id` when serializing onto the wire.
  */
 export type EscalateOpPayload =
+  | Omit<EscalateRequestAcquireCpuReadback, "request_id">
   | Omit<EscalateRequestAcquirePixelBuffer, "request_id">
   | Omit<EscalateRequestAcquireTexture, "request_id">
   | Omit<EscalateRequestReleaseHandle, "request_id">;
@@ -108,6 +113,40 @@ export class EscalateChannel {
       height,
       format,
       usage: [...usage],
+    });
+  }
+
+  /**
+   * Request a host-side cpu-readback acquire of an already-registered
+   * surface. `surfaceId` is the host-assigned `u64`; we marshal it as
+   * a decimal string per the JTD wire format. `mode` is `"read"` or
+   * `"write"`.
+   *
+   * Returns the `ok`-payload, which includes `cpu_readback_planes` —
+   * a list of per-plane descriptors `{staging_surface_id, width,
+   * height, bytes_per_pixel}` the subprocess uses to `check_out` each
+   * plane's staging buffer from the surface-share service.
+   */
+  async acquireCpuReadback(
+    surfaceId: bigint | number,
+    mode: "read" | "write",
+  ): Promise<EscalateOkResponse> {
+    if (mode !== "read" && mode !== "write") {
+      throw new EscalateError(
+        `acquireCpuReadback: mode must be 'read' or 'write', got ${
+          JSON.stringify(mode)
+        }`,
+      );
+    }
+    const wireMode = mode === "read"
+      ? EscalateRequestAcquireCpuReadbackMode.Read
+      : EscalateRequestAcquireCpuReadbackMode.Write;
+    return this.request({
+      op: "acquire_cpu_readback",
+      surface_id: typeof surfaceId === "bigint"
+        ? surfaceId.toString()
+        : Math.trunc(surfaceId).toString(),
+      mode: wireMode,
     });
   }
 
