@@ -24,10 +24,12 @@ use crate::_generated_::com_streamlib_escalate_request::{
     EscalateRequestAcquireCpuReadback, EscalateRequestAcquireCpuReadbackMode,
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestReleaseHandle,
+    EscalateRequestReleaseHandle, EscalateRequestTryAcquireCpuReadback,
+    EscalateRequestTryAcquireCpuReadbackMode,
 };
 use crate::_generated_::com_streamlib_escalate_response::{
-    EscalateResponseErr, EscalateResponseOk, EscalateResponseOkCpuReadbackPlane,
+    EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
+    EscalateResponseOkCpuReadbackPlane,
 };
 use crate::_generated_::{EscalateRequest, EscalateResponse};
 use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
@@ -56,6 +58,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireTexture(p) => Some(&p.request_id),
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::AcquireCpuReadback(p) => Some(&p.request_id),
+        EscalateRequest::TryAcquireCpuReadback(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
@@ -380,6 +383,30 @@ pub(crate) fn handle_escalate_op(
                 }))
             }
         }
+        EscalateRequest::TryAcquireCpuReadback(EscalateRequestTryAcquireCpuReadback {
+            request_id: _,
+            surface_id,
+            mode,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_try_acquire_cpu_readback(
+                    sandbox,
+                    registry,
+                    rid,
+                    &surface_id,
+                    mode,
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (surface_id, mode);
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "try_acquire_cpu_readback is only available on Linux".to_string(),
+                }))
+            }
+        }
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: _,
             handle_id,
@@ -567,6 +594,76 @@ fn handle_acquire_cpu_readback(
     surface_id_str: &str,
     mode: EscalateRequestAcquireCpuReadbackMode,
 ) -> EscalateResponse {
+    let bridge_mode = match mode {
+        EscalateRequestAcquireCpuReadbackMode::Read => CpuReadbackAccessMode::Read,
+        EscalateRequestAcquireCpuReadbackMode::Write => CpuReadbackAccessMode::Write,
+    };
+    dispatch_cpu_readback(
+        sandbox,
+        registry,
+        rid,
+        surface_id_str,
+        "acquire_cpu_readback",
+        |bridge, surface_id| match bridge.acquire(surface_id, bridge_mode) {
+            Ok(a) => Ok(Some(a)),
+            Err(msg) => Err(msg),
+        },
+    )
+}
+
+/// Map a wire-format `try_acquire_cpu_readback` request through the
+/// registered [`CpuReadbackBridge`]. Behaviour matches
+/// [`handle_acquire_cpu_readback`] on success and on hard error
+/// (parse / no bridge / bridge error / surface-share check_in fail), but
+/// surfaces an [`EscalateResponse::Contended`] response when the bridge
+/// reports `Ok(None)` — i.e. a competing reader/writer is already
+/// holding the surface. Contention does NOT register any surface-share
+/// entries and does NOT insert a registry handle, so the subprocess has
+/// nothing to release on its end.
+#[cfg(target_os = "linux")]
+fn handle_try_acquire_cpu_readback(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    rid: String,
+    surface_id_str: &str,
+    mode: EscalateRequestTryAcquireCpuReadbackMode,
+) -> EscalateResponse {
+    let bridge_mode = match mode {
+        EscalateRequestTryAcquireCpuReadbackMode::Read => CpuReadbackAccessMode::Read,
+        EscalateRequestTryAcquireCpuReadbackMode::Write => CpuReadbackAccessMode::Write,
+    };
+    dispatch_cpu_readback(
+        sandbox,
+        registry,
+        rid,
+        surface_id_str,
+        "try_acquire_cpu_readback",
+        |bridge, surface_id| bridge.try_acquire(surface_id, bridge_mode),
+    )
+}
+
+/// Shared dispatch path for blocking and non-blocking cpu-readback
+/// acquires. `op_label` is the wire op name used in error messages so
+/// failures stay traceable to the request the customer issued.
+/// `bridge_call` returns:
+///   - `Ok(Some(_))` → produce an [`EscalateResponse::Ok`] with planes;
+///   - `Ok(None)`    → produce an [`EscalateResponse::Contended`];
+///   - `Err(msg)`    → produce an [`EscalateResponse::Err`].
+#[cfg(target_os = "linux")]
+fn dispatch_cpu_readback<F>(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    rid: String,
+    surface_id_str: &str,
+    op_label: &str,
+    bridge_call: F,
+) -> EscalateResponse
+where
+    F: FnOnce(
+        &dyn CpuReadbackBridge,
+        streamlib_adapter_abi::SurfaceId,
+    ) -> std::result::Result<Option<CpuReadbackAcquired>, String>,
+{
     use std::sync::Arc;
 
     use crate::core::rhi::{RhiPixelBuffer, RhiPixelBufferRef};
@@ -577,22 +674,17 @@ fn handle_acquire_cpu_readback(
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
                 message: format!(
-                    "acquire_cpu_readback: surface_id '{surface_id_str}' is not a u64 decimal: {e}"
+                    "{op_label}: surface_id '{surface_id_str}' is not a u64 decimal: {e}"
                 ),
             });
         }
     };
 
-    let bridge_mode = match mode {
-        EscalateRequestAcquireCpuReadbackMode::Read => CpuReadbackAccessMode::Read,
-        EscalateRequestAcquireCpuReadbackMode::Write => CpuReadbackAccessMode::Write,
-    };
-
     let bridge: Arc<dyn CpuReadbackBridge> = match sandbox.escalate(|full| {
         full.cpu_readback_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
-                "acquire_cpu_readback: no CpuReadbackBridge registered on GpuContext".into(),
-            )
+            crate::core::error::StreamError::Configuration(format!(
+                "{op_label}: no CpuReadbackBridge registered on GpuContext"
+            ))
         })
     }) {
         Ok(b) => b,
@@ -604,12 +696,17 @@ fn handle_acquire_cpu_readback(
         }
     };
 
-    let acquired = match bridge.acquire(surface_id, bridge_mode) {
-        Ok(a) => a,
+    let acquired = match bridge_call(bridge.as_ref(), surface_id) {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return EscalateResponse::Contended(EscalateResponseContended {
+                request_id: rid,
+            });
+        }
         Err(msg) => {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
-                message: format!("acquire_cpu_readback bridge.acquire failed: {msg}"),
+                message: format!("{op_label} bridge call failed: {msg}"),
             });
         }
     };
@@ -619,8 +716,9 @@ fn handle_acquire_cpu_readback(
         None => {
             return EscalateResponse::Err(EscalateResponseErr {
                 request_id: rid,
-                message: "acquire_cpu_readback: surface-share service not initialized on host"
-                    .into(),
+                message: format!(
+                    "{op_label}: surface-share service not initialized on host"
+                ),
             });
         }
     };
@@ -659,7 +757,7 @@ fn handle_acquire_cpu_readback(
                 return EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: format!(
-                        "acquire_cpu_readback: surface-share check_in failed for plane: {e}"
+                        "{op_label}: surface-share check_in failed for plane: {e}"
                     ),
                 });
             }
@@ -1182,12 +1280,218 @@ mod tests {
             EscalateResponse::Ok(_) => {
                 panic!("acquire_cpu_readback must fail when no bridge is registered")
             }
+            EscalateResponse::Contended(_) => {
+                panic!("blocking acquire_cpu_readback must never return Contended")
+            }
         }
         assert_eq!(
             registry.handle_count(),
             0,
             "no handle should be registered on the failure path"
         );
+    }
+
+    /// `TryAcquireCpuReadback` parse / no-bridge / contended dispatch
+    /// path. Mirrors the blocking-variant tests above, plus a stub
+    /// bridge that returns `Ok(None)` to exercise the new
+    /// [`EscalateResponse::Contended`] arm without requiring a real
+    /// host-side surface registration.
+    #[cfg(target_os = "linux")]
+    mod try_acquire_dispatch {
+        use super::super::*;
+        use super::EscalateHandleRegistry;
+        use std::sync::Arc;
+
+        use crate::core::context::{
+            CpuReadbackAccessMode, CpuReadbackAcquired, CpuReadbackBridge, GpuContext,
+            GpuContextLimitedAccess,
+        };
+        use streamlib_adapter_abi::SurfaceId;
+
+        struct AlwaysContendedBridge;
+        impl CpuReadbackBridge for AlwaysContendedBridge {
+            fn acquire(
+                &self,
+                _surface_id: SurfaceId,
+                _mode: CpuReadbackAccessMode,
+            ) -> std::result::Result<CpuReadbackAcquired, String> {
+                Err(
+                    "AlwaysContendedBridge does not implement blocking acquire"
+                        .to_string(),
+                )
+            }
+            fn try_acquire(
+                &self,
+                _surface_id: SurfaceId,
+                _mode: CpuReadbackAccessMode,
+            ) -> std::result::Result<Option<CpuReadbackAcquired>, String> {
+                Ok(None)
+            }
+        }
+
+        struct AlwaysErrBridge;
+        impl CpuReadbackBridge for AlwaysErrBridge {
+            fn acquire(
+                &self,
+                _surface_id: SurfaceId,
+                _mode: CpuReadbackAccessMode,
+            ) -> std::result::Result<CpuReadbackAcquired, String> {
+                Err("blocking path not exercised in this test".into())
+            }
+            fn try_acquire(
+                &self,
+                _surface_id: SurfaceId,
+                _mode: CpuReadbackAccessMode,
+            ) -> std::result::Result<Option<CpuReadbackAcquired>, String> {
+                Err("synthetic adapter failure for test".into())
+            }
+        }
+
+        fn make_sandbox_with_bridge(
+            bridge: Option<Arc<dyn CpuReadbackBridge>>,
+        ) -> Option<GpuContextLimitedAccess> {
+            let gpu = match GpuContext::init_for_platform_sync() {
+                Ok(g) => g,
+                Err(_) => return None,
+            };
+            if let Some(b) = bridge {
+                gpu.set_cpu_readback_bridge(b);
+            }
+            Some(GpuContextLimitedAccess::new(gpu))
+        }
+
+        /// Bridge `Ok(None)` → `EscalateResponse::Contended`. Registry
+        /// gains no handle, request_id round-trips.
+        #[test]
+        fn contended_response_when_bridge_returns_none() {
+            let Some(sandbox) = make_sandbox_with_bridge(Some(Arc::new(AlwaysContendedBridge))) else {
+                println!("contended_response_when_bridge_returns_none: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            let req = EscalateRequest::TryAcquireCpuReadback(
+                EscalateRequestTryAcquireCpuReadback {
+                    request_id: "req-try-contended".into(),
+                    surface_id: "1".into(),
+                    mode: EscalateRequestTryAcquireCpuReadbackMode::Write,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("try_acquire_cpu_readback always produces a response");
+            match response {
+                EscalateResponse::Contended(c) => {
+                    assert_eq!(c.request_id, "req-try-contended");
+                }
+                other => panic!(
+                    "expected Contended response, got {other:?}"
+                ),
+            }
+            assert_eq!(
+                registry.handle_count(),
+                0,
+                "contended response must not register any host-side handle"
+            );
+        }
+
+        /// Bridge `Err(_)` → `EscalateResponse::Err`, NOT
+        /// `Contended`. Hard adapter failures must remain
+        /// distinguishable from contention.
+        #[test]
+        fn err_response_when_bridge_returns_err() {
+            let Some(sandbox) = make_sandbox_with_bridge(Some(Arc::new(AlwaysErrBridge))) else {
+                println!("err_response_when_bridge_returns_err: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            let req = EscalateRequest::TryAcquireCpuReadback(
+                EscalateRequestTryAcquireCpuReadback {
+                    request_id: "req-try-err".into(),
+                    surface_id: "1".into(),
+                    mode: EscalateRequestTryAcquireCpuReadbackMode::Read,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("try_acquire_cpu_readback always produces a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-try-err");
+                    assert!(
+                        err.message.contains("synthetic adapter failure"),
+                        "expected synthetic-failure message, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err response, got {other:?}"),
+            }
+            assert_eq!(registry.handle_count(), 0);
+        }
+
+        /// `try_acquire_cpu_readback` with no bridge installed surfaces
+        /// the same Configuration error shape as the blocking variant.
+        #[test]
+        fn err_when_no_bridge_registered() {
+            let Some(sandbox) = make_sandbox_with_bridge(None) else {
+                println!("err_when_no_bridge_registered: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            let req = EscalateRequest::TryAcquireCpuReadback(
+                EscalateRequestTryAcquireCpuReadback {
+                    request_id: "req-try-no-bridge".into(),
+                    surface_id: "1".into(),
+                    mode: EscalateRequestTryAcquireCpuReadbackMode::Read,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("try_acquire_cpu_readback always produces a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-try-no-bridge");
+                    assert!(
+                        err.message.contains("CpuReadbackBridge"),
+                        "expected bridge-missing message, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err response, got {other:?}"),
+            }
+        }
+
+        /// `try_acquire_cpu_readback` with a malformed `surface_id`
+        /// must report a parse error keyed by the original request_id,
+        /// without ever hitting the bridge.
+        #[test]
+        fn err_when_surface_id_malformed() {
+            let Some(sandbox) = make_sandbox_with_bridge(Some(Arc::new(AlwaysContendedBridge))) else {
+                println!("err_when_surface_id_malformed: no GPU — skipping");
+                return;
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            let req = EscalateRequest::TryAcquireCpuReadback(
+                EscalateRequestTryAcquireCpuReadback {
+                    request_id: "req-try-bad-id".into(),
+                    surface_id: "abc".into(),
+                    mode: EscalateRequestTryAcquireCpuReadbackMode::Read,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("try_acquire_cpu_readback always produces a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-try-bad-id");
+                    assert!(
+                        err.message.contains("not a u64") || err.message.contains("invalid"),
+                        "expected parse-error, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err response, got {other:?}"),
+            }
+        }
     }
 
     /// `AcquireCpuReadback` with malformed `surface_id` must report a
@@ -1226,6 +1530,9 @@ mod tests {
                 );
             }
             EscalateResponse::Ok(_) => panic!("malformed surface_id must not succeed"),
+            EscalateResponse::Contended(_) => {
+                panic!("malformed surface_id must surface as Err, not Contended")
+            }
         }
     }
 
@@ -1266,6 +1573,9 @@ mod tests {
             EscalateResponse::Err(err) => {
                 panic!("acquire_pixel_buffer escalate failed: {}", err.message);
             }
+            EscalateResponse::Contended(_) => {
+                panic!("acquire_pixel_buffer must never return Contended")
+            }
         };
         assert_eq!(registry.handle_count(), 1);
 
@@ -1301,6 +1611,9 @@ mod tests {
             EscalateResponse::Err(err) => {
                 panic!("acquire_texture escalate failed: {}", err.message);
             }
+            EscalateResponse::Contended(_) => {
+                panic!("acquire_texture must never return Contended")
+            }
         };
         assert_eq!(registry.handle_count(), 2);
 
@@ -1316,6 +1629,7 @@ mod tests {
                 assert_eq!(ok.handle_id, texture_handle_id);
             }
             EscalateResponse::Err(err) => panic!("release_handle (texture) failed: {}", err.message),
+            EscalateResponse::Contended(_) => panic!("release_handle must never return Contended"),
         }
         assert_eq!(registry.handle_count(), 1);
 
@@ -1331,6 +1645,7 @@ mod tests {
                 assert_eq!(ok.handle_id, buffer_handle_id);
             }
             EscalateResponse::Err(err) => panic!("release_handle failed: {}", err.message),
+            EscalateResponse::Contended(_) => panic!("release_handle must never return Contended"),
         }
         assert_eq!(registry.handle_count(), 0);
 
@@ -1347,6 +1662,9 @@ mod tests {
                 assert!(err.message.contains("not found"));
             }
             EscalateResponse::Ok(_) => panic!("unknown handle should not succeed"),
+            EscalateResponse::Contended(_) => {
+                panic!("release_handle on unknown id must surface Err, not Contended")
+            }
         }
     }
 

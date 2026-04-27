@@ -29,6 +29,9 @@ pub enum EscalateRequest {
 
     #[serde(rename = "release_handle")]
     ReleaseHandle(EscalateRequestReleaseHandle),
+
+    #[serde(rename = "try_acquire_cpu_readback")]
+    TryAcquireCpuReadback(EscalateRequestTryAcquireCpuReadback),
 }
 
 /// Access mode for the acquire. `read` triggers a host-side
@@ -250,4 +253,46 @@ pub struct EscalateRequestReleaseHandle {
     /// Correlates request with response. UUID string.
     #[serde(rename = "request_id")]
     pub request_id: String,
+}
+
+/// Access mode for the acquire. Maps onto the cpu-readback adapter's
+/// `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
+/// image↔buffer copy semantics as `acquire_cpu_readback` on success, but
+/// the host returns a [`contended`] response instead of blocking when the
+/// surface is already write-held (or, for `write` mode, read-held). Subprocess
+/// customers use this to skip a frame instead of stalling their thread runner.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum EscalateRequestTryAcquireCpuReadbackMode {
+    #[serde(rename = "read")]
+    #[default]
+    Read,
+
+    #[serde(rename = "write")]
+    Write,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestTryAcquireCpuReadback {
+    /// Access mode for the acquire. Maps onto the cpu-readback adapter's
+    /// `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints —
+    /// same image↔buffer copy semantics as `acquire_cpu_readback` on success,
+    /// but the host returns a [`contended`] response instead of blocking when
+    /// the surface is already write-held (or, for `write` mode, read-held).
+    /// Subprocess customers use this to skip a frame instead of stalling their
+    /// thread runner.
+    #[serde(rename = "mode")]
+    pub mode: EscalateRequestTryAcquireCpuReadbackMode,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
+    /// a surface previously registered with the host's cpu-readback adapter via
+    /// `register_host_surface`. JTD has no native u64 — the wire form is the
+    /// decimal string representation, parsed back into u64 by the host before
+    /// dispatch.
+    #[serde(rename = "surface_id")]
+    pub surface_id: String,
 }

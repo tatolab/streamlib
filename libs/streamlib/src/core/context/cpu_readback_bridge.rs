@@ -68,4 +68,15 @@ pub trait CpuReadbackBridge: Send + Sync {
         surface_id: SurfaceId,
         mode: CpuReadbackAccessMode,
     ) -> Result<CpuReadbackAcquired, String>;
+
+    /// Non-blocking acquire. Returns `Ok(None)` if the surface is already
+    /// write-held (or, for `Write` mode, read-held); returns `Ok(Some(_))`
+    /// on success with the same shape as [`Self::acquire`]. Errors map
+    /// onto adapter failures (surface not registered, GPU submit failure)
+    /// — *not* contention.
+    fn try_acquire(
+        &self,
+        surface_id: SurfaceId,
+        mode: CpuReadbackAccessMode,
+    ) -> Result<Option<CpuReadbackAcquired>, String>;
 }

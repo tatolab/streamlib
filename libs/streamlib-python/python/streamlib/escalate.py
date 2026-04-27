@@ -119,7 +119,10 @@ class EscalateChannel:
         subprocess uses to ``check_out`` each plane's staging buffer
         from the surface-share service.
 
-        On failure raises :class:`EscalateError`.
+        On failure raises :class:`EscalateError`. Blocking — on
+        contention this call waits until the host's adapter can grant
+        access. Use :meth:`try_acquire_cpu_readback` to probe-and-skip
+        instead.
         """
         if mode not in ("read", "write"):
             raise ValueError(
@@ -133,6 +136,32 @@ class EscalateChannel:
             }
         )
 
+    def try_acquire_cpu_readback(
+        self, surface_id: int, mode: str
+    ) -> Optional[Dict[str, Any]]:
+        """Non-blocking variant of :meth:`acquire_cpu_readback`.
+
+        Returns the same ``ok``-payload dict as :meth:`acquire_cpu_readback`
+        on success. Returns ``None`` when the host's cpu-readback adapter
+        reports the surface as contended (already write-held, or, for
+        ``"write"`` mode, read-held); the subprocess gets no handle and
+        nothing to release. Raises :class:`EscalateError` for hard
+        failures (no bridge, surface not registered, malformed
+        ``surface_id``, GPU submit failure).
+        """
+        if mode not in ("read", "write"):
+            raise ValueError(
+                f"try_acquire_cpu_readback: mode must be 'read' or 'write', got {mode!r}"
+            )
+        return self.request(
+            {
+                "op": "try_acquire_cpu_readback",
+                "surface_id": str(int(surface_id)),
+                "mode": mode,
+            },
+            allow_contended=True,
+        )
+
     def release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Tell the host to drop its strong reference to ``handle_id``."""
         return self.request(
@@ -144,13 +173,24 @@ class EscalateChannel:
 
     # -------------------- core request/response --------------------
 
-    def request(self, op: Dict[str, Any]) -> Dict[str, Any]:
-        """Send an escalate request and block until the correlated response."""
+    def request(
+        self, op: Dict[str, Any], *, allow_contended: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """Send an escalate request and block until the correlated response.
+
+        When ``allow_contended`` is true, a ``"contended"`` response is
+        returned as ``None`` instead of raising. Used by
+        :meth:`try_acquire_cpu_readback` and any future ``try_*`` op that
+        opts into the contended-skip shape — every other op still treats
+        contention as a protocol violation (raises
+        :class:`EscalateError`) so a buggy host can't silently degrade
+        an op that was supposed to be blocking.
+        """
         request_id = str(uuid.uuid4())
         req = {"rpc": ESCALATE_REQUEST_RPC, "request_id": request_id, **op}
         with self._send_lock:
             bridge_send_message(self._stdout, req)
-            return self._await_response(request_id)
+            return self._await_response(request_id, allow_contended=allow_contended)
 
     def log_fire_and_forget(self, payload: Dict[str, Any]) -> None:
         """Send a fire-and-forget escalate op (currently `log`).
@@ -163,13 +203,22 @@ class EscalateChannel:
         req = {"rpc": ESCALATE_REQUEST_RPC, **payload}
         bridge_send_message(self._stdout, req)
 
-    def _await_response(self, request_id: str) -> Dict[str, Any]:
+    def _await_response(
+        self, request_id: str, *, allow_contended: bool = False
+    ) -> Optional[Dict[str, Any]]:
         while True:
             msg = bridge_read_message(self._stdin)
             rpc = msg.get("rpc", "")
             if rpc == ESCALATE_RESPONSE_RPC and msg.get("request_id") == request_id:
-                if msg.get("result") == "ok":
+                result = msg.get("result")
+                if result == "ok":
                     return msg
+                if result == "contended":
+                    if allow_contended:
+                        return None
+                    raise EscalateError(
+                        "escalate returned contended for an op that does not allow it"
+                    )
                 raise EscalateError(msg.get("message") or "escalate failed")
             # Any other message during our blocking read is a lifecycle
             # command (stop / teardown / on_pause / on_resume / update_config).

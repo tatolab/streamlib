@@ -10,11 +10,27 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "result")]
 pub enum EscalateResponse {
+    #[serde(rename = "contended")]
+    Contended(EscalateResponseContended),
+
     #[serde(rename = "err")]
     Err(EscalateResponseErr),
 
     #[serde(rename = "ok")]
     Ok(EscalateResponseOk),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateResponseContended {
+    /// Correlates response with request. Returned by
+    /// [`try_acquire_cpu_readback`] (and any future `try_*` op that opts
+    /// into the same shape) when the host's adapter would have blocked on
+    /// a competing reader/writer. The subprocess gets no handle, no planes,
+    /// and no surface-share registrations to release — `contended` is purely
+    /// advisory, the customer skips the frame and re-tries later.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

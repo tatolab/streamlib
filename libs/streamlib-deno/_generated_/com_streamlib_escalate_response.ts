@@ -8,7 +8,21 @@
 /**
  * Polyglot subprocess escalate-on-behalf response (host → subprocess)
  */
-export type EscalateResponse = EscalateResponseErr | EscalateResponseOk;
+export type EscalateResponse = EscalateResponseContended | EscalateResponseErr | EscalateResponseOk;
+
+export interface EscalateResponseContended {
+  result: "contended";
+
+  /**
+   * Correlates response with request. Returned by [`try_acquire_cpu_readback`]
+   * (and any future `try_*` op that opts into the same shape) when the host's
+   * adapter would have blocked on a competing reader/writer. The subprocess
+   * gets no handle, no planes, and no surface-share registrations to release —
+   * `contended` is purely advisory, the customer skips the frame and re-tries
+   * later.
+   */
+  request_id: string;
+}
 
 export interface EscalateResponseErr {
   result: "err";

@@ -29,6 +29,7 @@ class EscalateRequest:
             "acquire_texture": EscalateRequestAcquireTexture,
             "log": EscalateRequestLog,
             "release_handle": EscalateRequestReleaseHandle,
+            "try_acquire_cpu_readback": EscalateRequestTryAcquireCPUReadback,
         }
 
         return variants[data["op"]].from_json_data(data)
@@ -394,6 +395,68 @@ class EscalateRequestReleaseHandle(EscalateRequest):
         data = { "op": "release_handle" }
         data["handle_id"] = _to_json_data(self.handle_id)
         data["request_id"] = _to_json_data(self.request_id)
+        return data
+
+class EscalateRequestTryAcquireCPUReadbackMode(Enum):
+    """
+    Access mode for the acquire. Maps onto the cpu-readback adapter's
+    `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
+    image↔buffer copy semantics as `acquire_cpu_readback` on success, but
+    the host returns a [`contended`] response instead of blocking when the
+    surface is already write-held (or, for `write` mode, read-held). Subprocess
+    customers use this to skip a frame instead of stalling their thread runner.
+    """
+
+    READ = "read"
+    WRITE = "write"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestTryAcquireCPUReadbackMode':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestTryAcquireCPUReadback(EscalateRequest):
+    mode: 'EscalateRequestTryAcquireCPUReadbackMode'
+    """
+    Access mode for the acquire. Maps onto the cpu-readback adapter's
+    `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
+    image↔buffer copy semantics as `acquire_cpu_readback` on success, but
+    the host returns a [`contended`] response instead of blocking when the
+    surface is already write-held (or, for `write` mode, read-held). Subprocess
+    customers use this to skip a frame instead of stalling their thread runner.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    surface_id: 'str'
+    """
+    Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
+    a surface previously registered with the host's cpu-readback adapter via
+    `register_host_surface`. JTD has no native u64 — the wire form is the
+    decimal string representation, parsed back into u64 by the host before
+    dispatch.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestTryAcquireCPUReadback':
+        return cls(
+            "try_acquire_cpu_readback",
+            _from_json_data(EscalateRequestTryAcquireCPUReadbackMode, data.get("mode")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(str, data.get("surface_id")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "try_acquire_cpu_readback" }
+        data["mode"] = _to_json_data(self.mode)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["surface_id"] = _to_json_data(self.surface_id)
         return data
 
 def _from_json_data(cls: Any, data: Any) -> Any:

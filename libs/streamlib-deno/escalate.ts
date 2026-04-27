@@ -24,10 +24,15 @@ import type {
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
   EscalateRequestReleaseHandle,
+  EscalateRequestTryAcquireCpuReadback,
 } from "./_generated_/com_streamlib_escalate_request.ts";
-import { EscalateRequestAcquireCpuReadbackMode } from "./_generated_/com_streamlib_escalate_request.ts";
+import {
+  EscalateRequestAcquireCpuReadbackMode,
+  EscalateRequestTryAcquireCpuReadbackMode,
+} from "./_generated_/com_streamlib_escalate_request.ts";
 import type {
   EscalateResponse,
+  EscalateResponseContended,
   EscalateResponseErr,
   EscalateResponseOk,
 } from "./_generated_/com_streamlib_escalate_response.ts";
@@ -39,11 +44,16 @@ export type {
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
   EscalateRequestReleaseHandle,
+  EscalateRequestTryAcquireCpuReadback,
   EscalateResponse,
+  EscalateResponseContended,
   EscalateResponseErr,
   EscalateResponseOk,
 };
-export { EscalateRequestAcquireCpuReadbackMode };
+export {
+  EscalateRequestAcquireCpuReadbackMode,
+  EscalateRequestTryAcquireCpuReadbackMode,
+};
 
 /** Backwards-compat alias for the `ok` variant of [`EscalateResponse`]. */
 export type EscalateOkResponse = EscalateResponseOk;
@@ -62,13 +72,22 @@ export type EscalateOpPayload =
   | Omit<EscalateRequestAcquireCpuReadback, "request_id">
   | Omit<EscalateRequestAcquirePixelBuffer, "request_id">
   | Omit<EscalateRequestAcquireTexture, "request_id">
-  | Omit<EscalateRequestReleaseHandle, "request_id">;
+  | Omit<EscalateRequestReleaseHandle, "request_id">
+  | Omit<EscalateRequestTryAcquireCpuReadback, "request_id">;
 
 export class EscalateError extends Error {}
 
+/** Sentinel resolved value for an escalate request that opted into the
+ * contended-skip shape (e.g. `try_acquire_cpu_readback`) and that the
+ * host responded to with `result: "contended"`. The
+ * [`EscalateChannel.tryAcquireCpuReadback`] caller branches on
+ * `null` vs. an [`EscalateOkResponse`] payload. */
+export const ESCALATE_CONTENDED = null;
+
 type Pending = {
-  resolve: (value: EscalateOkResponse) => void;
+  resolve: (value: EscalateOkResponse | null) => void;
   reject: (err: Error) => void;
+  allowContended: boolean;
 };
 
 /**
@@ -90,12 +109,12 @@ export class EscalateChannel {
     height: number,
     format = "bgra",
   ): Promise<EscalateOkResponse> {
-    return this.request({
+    return await this.request({
       op: "acquire_pixel_buffer",
       width,
       height,
       format,
-    });
+    }) as EscalateOkResponse;
   }
 
   async acquireTexture(
@@ -107,13 +126,13 @@ export class EscalateChannel {
     if (usage.length === 0) {
       throw new EscalateError("acquireTexture: usage must not be empty");
     }
-    return this.request({
+    return await this.request({
       op: "acquire_texture",
       width,
       height,
       format,
       usage: [...usage],
-    });
+    }) as EscalateOkResponse;
   }
 
   /**
@@ -141,17 +160,52 @@ export class EscalateChannel {
     const wireMode = mode === "read"
       ? EscalateRequestAcquireCpuReadbackMode.Read
       : EscalateRequestAcquireCpuReadbackMode.Write;
-    return this.request({
+    return await this.request({
       op: "acquire_cpu_readback",
       surface_id: typeof surfaceId === "bigint"
         ? surfaceId.toString()
         : Math.trunc(surfaceId).toString(),
       mode: wireMode,
-    });
+    }) as EscalateOkResponse;
+  }
+
+  /**
+   * Non-blocking variant of [`acquireCpuReadback`]. Resolves to the
+   * same `ok`-payload on success. Resolves to `null` (the
+   * [`ESCALATE_CONTENDED`] sentinel) when the host's cpu-readback
+   * adapter reports the surface as contended. Rejects on hard errors
+   * (no bridge, surface not registered, malformed `surfaceId`, GPU
+   * submit failure).
+   */
+  async tryAcquireCpuReadback(
+    surfaceId: bigint | number,
+    mode: "read" | "write",
+  ): Promise<EscalateOkResponse | null> {
+    if (mode !== "read" && mode !== "write") {
+      throw new EscalateError(
+        `tryAcquireCpuReadback: mode must be 'read' or 'write', got ${
+          JSON.stringify(mode)
+        }`,
+      );
+    }
+    const wireMode = mode === "read"
+      ? EscalateRequestTryAcquireCpuReadbackMode.Read
+      : EscalateRequestTryAcquireCpuReadbackMode.Write;
+    return await this.request(
+      {
+        op: "try_acquire_cpu_readback",
+        surface_id: typeof surfaceId === "bigint"
+          ? surfaceId.toString()
+          : Math.trunc(surfaceId).toString(),
+        mode: wireMode,
+      },
+      { allowContended: true },
+    );
   }
 
   async releaseHandle(handleId: string): Promise<EscalateOkResponse> {
-    return this.request({ op: "release_handle", handle_id: handleId });
+    return await this.request({ op: "release_handle", handle_id: handleId }) as
+      EscalateOkResponse;
   }
 
   /**
@@ -169,16 +223,22 @@ export class EscalateChannel {
     await this.writer(msg);
   }
 
-  async request(op: EscalateOpPayload): Promise<EscalateOkResponse> {
+  async request(
+    op: EscalateOpPayload,
+    options: { allowContended?: boolean } = {},
+  ): Promise<EscalateOkResponse | null> {
+    const allowContended = options.allowContended === true;
     const requestId = this.nextRequestId();
     const msg = {
       rpc: ESCALATE_REQUEST_RPC,
       request_id: requestId,
       ...op,
     } as Record<string, unknown>;
-    const promise = new Promise<EscalateOkResponse>((resolve, reject) => {
-      this.pending.set(requestId, { resolve, reject });
-    });
+    const promise = new Promise<EscalateOkResponse | null>(
+      (resolve, reject) => {
+        this.pending.set(requestId, { resolve, reject, allowContended });
+      },
+    );
     try {
       await this.writer(msg);
     } catch (e) {
@@ -205,6 +265,16 @@ export class EscalateChannel {
     this.pending.delete(requestId);
     if (msg.result === "ok") {
       pending.resolve(msg as unknown as EscalateOkResponse);
+    } else if (msg.result === "contended") {
+      if (pending.allowContended) {
+        pending.resolve(ESCALATE_CONTENDED);
+      } else {
+        pending.reject(
+          new EscalateError(
+            "escalate returned contended for an op that does not allow it",
+          ),
+        );
+      }
     } else {
       const err = new EscalateError(
         (msg.message as string | undefined) ?? "escalate failed",

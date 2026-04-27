@@ -101,12 +101,20 @@ class _RecordedRequest:
 class _FakeEscalateChannel:
     """Stand-in for ``EscalateChannel``. Records every request and
     returns whichever responses the test queued for ``acquire_cpu_readback``
-    and ``release_handle`` ops."""
+    and ``release_handle`` ops.
+
+    ``try_acquire_response`` controls the non-blocking path: a dict
+    responds with that payload, ``None`` simulates a host-issued
+    ``contended`` response, and ``...`` (Ellipsis) defers to the
+    blocking-acquire payload (the common case where tests don't care
+    about the distinction).
+    """
 
     def __init__(
         self,
         acquire_response: Dict[str, Any],
         release_response: Optional[Dict[str, Any]] = None,
+        try_acquire_response: Any = ...,
     ):
         self._acquire_response = acquire_response
         self._release_response = release_response or {
@@ -114,6 +122,10 @@ class _FakeEscalateChannel:
             "request_id": "release",
             "handle_id": "fake-handle",
         }
+        if try_acquire_response is ...:
+            self._try_acquire_response: Optional[Dict[str, Any]] = acquire_response
+        else:
+            self._try_acquire_response = try_acquire_response
         self.requests: List[_RecordedRequest] = []
 
     def acquire_cpu_readback(
@@ -128,6 +140,19 @@ class _FakeEscalateChannel:
             )
         )
         return self._acquire_response
+
+    def try_acquire_cpu_readback(
+        self, surface_id: int, mode: str
+    ) -> Optional[Dict[str, Any]]:
+        self.requests.append(
+            _RecordedRequest(
+                op="try_acquire_cpu_readback",
+                surface_id=str(int(surface_id)),
+                mode=mode,
+                handle_id=None,
+            )
+        )
+        return self._try_acquire_response
 
     def release_handle(self, handle_id: str) -> Dict[str, Any]:
         self.requests.append(
@@ -352,3 +377,184 @@ def test_acquire_cpu_readback_rejects_invalid_mode_on_channel():
     channel = EscalateChannel.__new__(EscalateChannel)  # bypass __init__
     with pytest.raises(ValueError, match="must be 'read' or 'write'"):
         channel.acquire_cpu_readback(42, "read-only")
+
+
+# ---------------------------------------------------------------------------
+# try_acquire_* — non-blocking acquire (#544)
+# ---------------------------------------------------------------------------
+
+
+def test_try_acquire_write_yields_view_when_host_returns_ok():
+    """Happy path: host says ok, customer gets the same view as the
+    blocking acquire would have produced. release_handle still fires
+    on context exit."""
+    handle = _FakeStagingHandle(width=4, height=2, bytes_per_pixel=4)
+    gpu = _FakeGpuLimitedAccess({"stg-bgra-0": handle})
+    escalate = _FakeEscalateChannel(_bgra_acquire_response("try-h"))
+    ctx = CpuReadbackContext(gpu, escalate)
+
+    with ctx.try_acquire_write(surface=42) as view:
+        assert view is not None
+        assert isinstance(view, CpuReadbackWriteView)
+        assert view.plane_count == 1
+
+    # Wire op was the non-blocking one, then release_handle fires.
+    assert [r.op for r in escalate.requests] == [
+        "try_acquire_cpu_readback",
+        "release_handle",
+    ]
+    assert escalate.requests[0].mode == "write"
+    assert escalate.requests[1].handle_id == "try-h"
+    # Lifecycle: locked-for-write, unlocked-for-write, released.
+    assert handle.locks == [False]
+    assert handle.unlocks == [False]
+    assert handle.released is True
+
+
+def test_try_acquire_write_yields_none_when_host_returns_contended():
+    """Contended response: customer gets None inside the with-block,
+    no plane handles are resolved/locked, no release_handle fires
+    (host registered nothing to release)."""
+    handle = _FakeStagingHandle(width=4, height=2, bytes_per_pixel=4)
+    gpu = _FakeGpuLimitedAccess({"stg-bgra-0": handle})
+    escalate = _FakeEscalateChannel(
+        _bgra_acquire_response(),
+        try_acquire_response=None,  # simulate host-side contended
+    )
+    ctx = CpuReadbackContext(gpu, escalate)
+
+    with ctx.try_acquire_write(surface=42) as view:
+        assert view is None, "contended path must yield None"
+
+    # Only the try-acquire request should have fired — no release.
+    assert [r.op for r in escalate.requests] == ["try_acquire_cpu_readback"]
+    # No plane handle was resolved, locked, or released.
+    assert gpu.resolved == []
+    assert handle.locks == []
+    assert handle.unlocks == []
+    assert handle.released is False
+
+
+def test_try_acquire_read_uses_read_only_lock_on_ok_path():
+    handle = _FakeStagingHandle(width=4, height=2, bytes_per_pixel=4)
+    gpu = _FakeGpuLimitedAccess({"stg-bgra-0": handle})
+    escalate = _FakeEscalateChannel(_bgra_acquire_response("try-rh"))
+    ctx = CpuReadbackContext(gpu, escalate)
+
+    with ctx.try_acquire_read(surface=7) as view:
+        assert view is not None
+        assert isinstance(view, CpuReadbackReadView)
+
+    assert escalate.requests[0].op == "try_acquire_cpu_readback"
+    assert escalate.requests[0].mode == "read"
+    assert handle.locks == [True]
+    assert handle.unlocks == [True]
+
+
+def test_try_acquire_cpu_readback_rejects_invalid_mode_on_channel():
+    """`EscalateChannel.try_acquire_cpu_readback` validates mode
+    locally so a typo doesn't reach the wire."""
+    from streamlib.escalate import EscalateChannel
+
+    channel = EscalateChannel.__new__(EscalateChannel)  # bypass __init__
+    with pytest.raises(ValueError, match="must be 'read' or 'write'"):
+        channel.try_acquire_cpu_readback(42, "read-only")
+
+
+def test_escalate_channel_request_returns_none_for_contended_when_allowed():
+    """`EscalateChannel.request(allow_contended=True)` returns None on a
+    `result: contended` response. Asserts the channel-level shape that
+    `try_acquire_cpu_readback` relies on."""
+    import io
+    import json
+    from streamlib.escalate import EscalateChannel, ESCALATE_RESPONSE_RPC
+
+    class _StubStdout:
+        def __init__(self):
+            self.frames: List[bytes] = []
+
+        def write(self, b):
+            self.frames.append(bytes(b))
+            return len(b)
+
+        def flush(self):
+            pass
+
+    captured_stdout = _StubStdout()
+    response_payload = json.dumps(
+        {
+            "rpc": ESCALATE_RESPONSE_RPC,
+            "result": "contended",
+            "request_id": "PLACEHOLDER",
+        }
+    ).encode()
+
+    # Build a stdin frame (length-prefixed) the channel will read.
+    # The bridge encodes len as 4-byte big-endian followed by payload.
+    # We patch _await_response to surface a synthetic message rather
+    # than wiring up a full pipe.
+    channel = EscalateChannel.__new__(EscalateChannel)
+    channel._send_lock = __import__("threading").Lock()
+    channel._stdin = io.BytesIO()  # not actually read — we override _await_response
+    channel._stdout = captured_stdout
+    channel._deferred_lifecycle = []
+
+    captured_request_id: List[str] = []
+
+    def fake_await(request_id, *, allow_contended=False):
+        captured_request_id.append(request_id)
+        # Customer asked for try-op, host said contended.
+        msg = json.loads(response_payload.replace(b"PLACEHOLDER", request_id.encode()))
+        if msg.get("result") == "contended":
+            if allow_contended:
+                return None
+            raise AssertionError("contended without allow_contended")
+        raise AssertionError(f"unexpected result: {msg}")
+
+    channel._await_response = fake_await  # type: ignore[assignment]
+
+    result = channel.try_acquire_cpu_readback(42, "write")
+    assert result is None
+    assert captured_request_id, "request was sent"
+
+
+def test_escalate_channel_raises_when_contended_for_blocking_op():
+    """Receiving `result: contended` for an op that didn't pass
+    `allow_contended=True` must raise — protects against host bugs
+    silently degrading a blocking acquire."""
+    import io
+    import json
+    from streamlib.escalate import (
+        EscalateChannel,
+        EscalateError,
+        ESCALATE_RESPONSE_RPC,
+    )
+
+    channel = EscalateChannel.__new__(EscalateChannel)
+    channel._send_lock = __import__("threading").Lock()
+    channel._stdin = io.BytesIO()
+    channel._stdout = io.BytesIO()
+    channel._deferred_lifecycle = []
+
+    def fake_await(request_id, *, allow_contended=False):
+        msg = json.loads(
+            json.dumps(
+                {
+                    "rpc": ESCALATE_RESPONSE_RPC,
+                    "result": "contended",
+                    "request_id": request_id,
+                }
+            )
+        )
+        if msg.get("result") == "contended":
+            if allow_contended:
+                return None
+            raise EscalateError(
+                "escalate returned contended for an op that does not allow it"
+            )
+        return msg
+
+    channel._await_response = fake_await  # type: ignore[assignment]
+
+    with pytest.raises(EscalateError, match="does not allow"):
+        channel.acquire_cpu_readback(42, "write")

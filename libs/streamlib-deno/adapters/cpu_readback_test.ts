@@ -92,9 +92,22 @@ interface _RecordedRequest {
 class _FakeEscalate {
   readonly requests: _RecordedRequest[] = [];
 
+  /**
+   * @param acquireResponse - resolved value for `acquireCpuReadback`.
+   *   Also used as the default for `tryAcquireCpuReadback` when
+   *   `tryAcquireResponse` is omitted.
+   * @param acquireError - if set, `acquireCpuReadback` rejects with it.
+   * @param tryAcquireResponse - explicit override for the non-blocking
+   *   path: `null` simulates the host-issued contended response,
+   *   `undefined` defers to `acquireResponse`, an `EscalateOkResponse`
+   *   stands in for the success payload.
+   * @param tryAcquireError - if set, `tryAcquireCpuReadback` rejects.
+   */
   constructor(
     private readonly acquireResponse: EscalateOkResponse,
     private readonly acquireError?: Error,
+    private readonly tryAcquireResponse?: EscalateOkResponse | null,
+    private readonly tryAcquireError?: Error,
   ) {}
 
   async acquireCpuReadback(
@@ -108,6 +121,22 @@ class _FakeEscalate {
     });
     if (this.acquireError) throw this.acquireError;
     return await Promise.resolve(this.acquireResponse);
+  }
+
+  async tryAcquireCpuReadback(
+    surfaceId: bigint,
+    mode: "read" | "write",
+  ): Promise<EscalateOkResponse | null> {
+    this.requests.push({
+      op: "try_acquire_cpu_readback",
+      surfaceId: surfaceId.toString(),
+      mode,
+    });
+    if (this.tryAcquireError) throw this.tryAcquireError;
+    if (this.tryAcquireResponse === undefined) {
+      return await Promise.resolve(this.acquireResponse);
+    }
+    return await Promise.resolve(this.tryAcquireResponse);
   }
 
   async releaseHandle(handleId: string): Promise<EscalateOkResponse> {
@@ -364,3 +393,145 @@ Deno.test("acquireCpuReadback rejects invalid mode locally", async () => {
     "must be 'read' or 'write'",
   );
 });
+
+// ---------------------------------------------------------------------------
+// tryAcquire* — non-blocking acquire (#544)
+// ---------------------------------------------------------------------------
+
+Deno.test("tryAcquireWrite resolves to a guard on host ok response", async () => {
+  const handle = new _FakeStagingHandle(4, 2, 4);
+  const gpu = new _FakeGpu({ "stg-bgra-0": handle });
+  const escalate = new _FakeEscalate(bgraAcquireResponse("try-h"));
+  const ctx = new CpuReadbackContext(
+    gpu,
+    escalate as unknown as EscalateChannel,
+  );
+
+  {
+    await using guard = await ctx.tryAcquireWrite(42n);
+    if (guard === null) throw new Error("tryAcquireWrite must succeed here");
+    assertEquals(guard.handleId, "try-h");
+    assertEquals(guard.view.planeCount, 1);
+    guard.view.plane(0).bytes.fill(0xab);
+    assertEquals(handle.buffer[0], 0xab);
+  }
+
+  // Wire op was the non-blocking variant; release fires on dispose.
+  assertEquals(
+    escalate.requests.map((r) => r.op),
+    ["try_acquire_cpu_readback", "release_handle"],
+  );
+  assertEquals(escalate.requests[0].mode, "write");
+  assertEquals(escalate.requests[1].handleId, "try-h");
+  assertEquals(handle.locks, [false]);
+  assertEquals(handle.unlocks, [false]);
+  assertEquals(handle.released, true);
+});
+
+Deno.test("tryAcquireWrite resolves to null on host contended response", async () => {
+  const handle = new _FakeStagingHandle(4, 2, 4);
+  const gpu = new _FakeGpu({ "stg-bgra-0": handle });
+  const escalate = new _FakeEscalate(
+    bgraAcquireResponse(),
+    undefined,
+    null, // host-issued contended
+  );
+  const ctx = new CpuReadbackContext(
+    gpu,
+    escalate as unknown as EscalateChannel,
+  );
+
+  const guard = await ctx.tryAcquireWrite(42n);
+  assertEquals(guard, null);
+
+  // Only the try-acquire request fired. No plane lookup, no release.
+  assertEquals(
+    escalate.requests.map((r) => r.op),
+    ["try_acquire_cpu_readback"],
+  );
+  assertEquals(gpu.resolved, []);
+  assertEquals(handle.locks, []);
+  assertEquals(handle.released, false);
+});
+
+Deno.test("tryAcquireRead uses read-only lock on the ok path", async () => {
+  const handle = new _FakeStagingHandle(4, 2, 4);
+  const gpu = new _FakeGpu({ "stg-bgra-0": handle });
+  const escalate = new _FakeEscalate(bgraAcquireResponse("try-rh"));
+  const ctx = new CpuReadbackContext(
+    gpu,
+    escalate as unknown as EscalateChannel,
+  );
+
+  {
+    await using guard = await ctx.tryAcquireRead(7);
+    if (guard === null) throw new Error("tryAcquireRead must succeed here");
+    assertEquals(guard.view.planeCount, 1);
+  }
+
+  assertEquals(escalate.requests[0].op, "try_acquire_cpu_readback");
+  assertEquals(escalate.requests[0].mode, "read");
+  assertEquals(handle.locks, [true]);
+  assertEquals(handle.unlocks, [true]);
+});
+
+Deno.test("tryAcquireCpuReadback rejects invalid mode locally", async () => {
+  const channel = new EscalateChannel(() => Promise.resolve());
+  await assertRejects(
+    // deno-lint-ignore no-explicit-any
+    () => channel.tryAcquireCpuReadback(1n, "read-only" as any),
+    EscalateError,
+    "must be 'read' or 'write'",
+  );
+});
+
+Deno.test("EscalateChannel.tryAcquireCpuReadback marshals contended → null", async () => {
+  // Drive the real channel: writer captures the request, then we feed
+  // a synthetic `result: contended` response back in via handleIncoming.
+  let captured: Record<string, unknown> | null = null;
+  let channel: EscalateChannel | null = null;
+  const writer = (msg: Record<string, unknown>) => {
+    captured = msg;
+    queueMicrotask(() => {
+      channel!.handleIncoming({
+        rpc: "escalate_response",
+        result: "contended",
+        request_id: msg.request_id,
+      });
+    });
+    return Promise.resolve();
+  };
+  channel = new EscalateChannel(writer);
+  const result = await channel.tryAcquireCpuReadback(0xfeedn, "read");
+  assertEquals(result, null);
+  assertEquals(captured!.op, "try_acquire_cpu_readback");
+  assertEquals(captured!.surface_id, "65261");
+  assertEquals(captured!.mode, "read");
+});
+
+Deno.test(
+  "EscalateChannel rejects a contended response for an op that didn't allow it",
+  async () => {
+    let channel: EscalateChannel | null = null;
+    const writer = (msg: Record<string, unknown>) => {
+      queueMicrotask(() => {
+        channel!.handleIncoming({
+          rpc: "escalate_response",
+          result: "contended",
+          request_id: msg.request_id,
+        });
+      });
+      return Promise.resolve();
+    };
+    channel = new EscalateChannel(writer);
+
+    await assertRejects(
+      // The blocking `acquireCpuReadback` must NOT silently accept
+      // a contended response — it raises so a buggy host can't
+      // turn a should-have-blocked op into a no-op.
+      () => channel!.acquireCpuReadback(1n, "write"),
+      EscalateError,
+      "does not allow",
+    );
+  },
+);
