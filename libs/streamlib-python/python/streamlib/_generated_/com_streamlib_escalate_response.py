@@ -59,11 +59,52 @@ class EscalateResponseErr(EscalateResponse):
         return data
 
 @dataclass
+class EscalateResponseOkCPUReadbackPlane:
+    bytes_per_pixel: 'int'
+    """
+    Plane bytes-per-pixel. BGRA/RGBA: 4. NV12 plane 0 (Y): 1. NV12 plane 1 (UV
+    interleaved): 2.
+    """
+
+    height: 'int'
+    """
+    Plane height in texels.
+    """
+
+    staging_surface_id: 'str'
+    """
+    Surface-share UUID for this plane's staging buffer.
+    """
+
+    width: 'int'
+    """
+    Plane width in texels.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateResponseOkCPUReadbackPlane':
+        return cls(
+            _from_json_data(int, data.get("bytes_per_pixel")),
+            _from_json_data(int, data.get("height")),
+            _from_json_data(str, data.get("staging_surface_id")),
+            _from_json_data(int, data.get("width")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["bytes_per_pixel"] = _to_json_data(self.bytes_per_pixel)
+        data["height"] = _to_json_data(self.height)
+        data["staging_surface_id"] = _to_json_data(self.staging_surface_id)
+        data["width"] = _to_json_data(self.width)
+        return data
+
+@dataclass
 class EscalateResponseOk(EscalateResponse):
     handle_id: 'str'
     """
-    Opaque handle returned by the host. For acquire_pixel_buffer this is the
-    PixelBufferPoolId the host registered with its pixel-buffer pool and
+    Opaque handle returned by the host. For acquire_pixel_buffer this is
+    the PixelBufferPoolId the host registered with its pixel-buffer pool and
     SurfaceStore. For acquire_texture this is a host-side UUID keying the
     EscalateHandleRegistry's texture slot. For release_handle this echoes the
     released id.
@@ -72,6 +113,17 @@ class EscalateResponseOk(EscalateResponse):
     request_id: 'str'
     """
     Correlates response with request. Matches request_id in EscalateRequest.
+    """
+
+    cpu_readback_planes: 'Optional[List[EscalateResponseOkCPUReadbackPlane]]'
+    """
+    Per-plane staging-buffer descriptors set on `acquire_cpu_readback`
+    responses. Length equals `SurfaceFormat::plane_count` for the target surface
+    (1 for BGRA8/RGBA8, 2 for NV12). Each entry's `staging_surface_id` can be
+    `check_out`ed from the surface-share service to obtain a DMA-BUF FD over
+    the host-allocated staging `VulkanPixelBuffer` for that plane; mmap that
+    FD to read or write the plane's tightly-packed bytes (`width * height *
+    bytes_per_pixel` per plane).
     """
 
     format: 'Optional[str]'
@@ -87,13 +139,13 @@ class EscalateResponseOk(EscalateResponse):
 
     usage: 'Optional[List[str]]'
     """
-    Resolved usage tokens (set on acquire_texture responses).
+    Resolved usage tokens (set on acquire_texture responses). Array reflects the
+    exact flags the host honored.
     """
 
     width: 'Optional[int]'
     """
-    Width in pixels (set on acquire_pixel_buffer and acquire_texture
-    responses).
+    Width in pixels (set on acquire_pixel_buffer and acquire_texture responses).
     """
 
 
@@ -103,6 +155,7 @@ class EscalateResponseOk(EscalateResponse):
             "ok",
             _from_json_data(str, data.get("handle_id")),
             _from_json_data(str, data.get("request_id")),
+            _from_json_data(Optional[List[EscalateResponseOkCPUReadbackPlane]], data.get("cpu_readback_planes")),
             _from_json_data(Optional[str], data.get("format")),
             _from_json_data(Optional[int], data.get("height")),
             _from_json_data(Optional[List[str]], data.get("usage")),
@@ -113,6 +166,8 @@ class EscalateResponseOk(EscalateResponse):
         data = { "result": "ok" }
         data["handle_id"] = _to_json_data(self.handle_id)
         data["request_id"] = _to_json_data(self.request_id)
+        if self.cpu_readback_planes is not None:
+             data["cpu_readback_planes"] = _to_json_data(self.cpu_readback_planes)
         if self.format is not None:
              data["format"] = _to_json_data(self.format)
         if self.height is not None:

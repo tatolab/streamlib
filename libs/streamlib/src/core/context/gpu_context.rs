@@ -48,6 +48,8 @@ impl RhiBlitter for NoOpBlitter {
     fn clear_cache(&self) {}
 }
 
+#[cfg(target_os = "linux")]
+use super::cpu_readback_bridge::CpuReadbackBridge;
 use super::surface_store::SurfaceStore;
 use super::texture_pool::{
     PooledTextureHandle, TexturePool, TexturePoolConfig, TexturePoolDescriptor,
@@ -390,6 +392,12 @@ pub struct GpuContext {
     /// device. The compiler acquires this during Phase 4 of spawn_processor
     /// and releases it after waiting for the device to go idle.
     processor_setup_lock: Arc<Mutex<()>>,
+    /// Host-side bridge for the cpu-readback escalate op. Set by application
+    /// code that wires a `CpuReadbackSurfaceAdapter` into the runtime; left
+    /// unset on hosts that don't expose cpu-readback to subprocess customers
+    /// (the escalate handler responds with an `Err` in that case).
+    #[cfg(target_os = "linux")]
+    cpu_readback_bridge: Arc<Mutex<Option<Arc<dyn CpuReadbackBridge>>>>,
 }
 
 impl GpuContext {
@@ -408,6 +416,8 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
             processor_setup_lock: Arc::new(Mutex::new(())),
+            #[cfg(target_os = "linux")]
+            cpu_readback_bridge: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -426,6 +436,8 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
             processor_setup_lock: Arc::new(Mutex::new(())),
+            #[cfg(target_os = "linux")]
+            cpu_readback_bridge: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1040,6 +1052,25 @@ impl GpuContext {
         self.surface_store.lock().unwrap().clone()
     }
 
+    // =========================================================================
+    // CpuReadbackBridge — host-side dispatch for the cpu-readback escalate op
+    // =========================================================================
+
+    /// Register a [`CpuReadbackBridge`] implementation. The escalate handler
+    /// dispatches `acquire_cpu_readback` requests through this bridge; until
+    /// it is set, those requests fail with an "unsupported" error response.
+    /// Linux-only: the cpu-readback adapter is Linux-only.
+    #[cfg(target_os = "linux")]
+    pub fn set_cpu_readback_bridge(&self, bridge: Arc<dyn CpuReadbackBridge>) {
+        *self.cpu_readback_bridge.lock().unwrap() = Some(bridge);
+    }
+
+    /// Get the registered [`CpuReadbackBridge`], if any.
+    #[cfg(target_os = "linux")]
+    pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
+        self.cpu_readback_bridge.lock().unwrap().clone()
+    }
+
     /// Check in a pixel buffer to the surface-share service, returning a surface ID.
     ///
     /// The surface ID can be shared with other processes (e.g., Python subprocesses)
@@ -1593,6 +1624,13 @@ impl GpuContextFullAccess {
     /// Check out a surface by ID.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
         self.inner.check_out_surface(surface_id)
+    }
+
+    /// Get the registered cpu-readback bridge, if any. Reachable only inside
+    /// `escalate(|full| ...)` since it requires `FullAccess`.
+    #[cfg(target_os = "linux")]
+    pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
+        self.inner.cpu_readback_bridge()
     }
 }
 

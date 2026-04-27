@@ -51,6 +51,29 @@ use crate::view::{
 /// observe the image↔buffer copies.
 const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Per-plane staging-buffer view returned by
+/// [`CpuReadbackSurfaceAdapter::snapshot_plane_geometry`]. The `staging`
+/// `Arc` is cloned from the adapter's owned slot — keeping the buffer
+/// alive while a host bridge surface-share-checks-it-in does NOT extend
+/// its lifetime past surface unregister, but it does prevent the
+/// adapter's slot from being torn down underneath an in-flight bridge
+/// call.
+pub struct CpuReadbackStagingPlane {
+    pub staging: Arc<VulkanPixelBuffer>,
+    pub width: u32,
+    pub height: u32,
+    pub bytes_per_pixel: u32,
+}
+
+/// Snapshot of a registered surface's plane geometry. Used by the
+/// host-side bridge that wraps this adapter for the escalate-IPC seam.
+pub struct CpuReadbackSurfaceSnapshot {
+    pub width: u32,
+    pub height: u32,
+    pub format: SurfaceFormat,
+    pub planes: Vec<CpuReadbackStagingPlane>,
+}
+
 /// Explicit GPU→CPU [`SurfaceAdapter`] implementation.
 ///
 /// Construct with [`Self::new`] passing the host's [`VulkanDevice`].
@@ -189,19 +212,130 @@ impl CpuReadbackSurfaceAdapter {
         self.surfaces.lock().len()
     }
 
+    /// Blocking read acquire keyed by `SurfaceId` instead of a full
+    /// [`StreamlibSurface`] descriptor. The escalate-IPC dispatch path
+    /// uses this — the wire format only carries the id, and the
+    /// adapter's internal per-surface state already holds everything
+    /// the descriptor would supply (transport handles, sync state,
+    /// dimensions, format).
+    pub fn acquire_read_by_id<'g>(
+        &'g self,
+        surface_id: SurfaceId,
+    ) -> Result<ReadGuard<'g, Self>, AdapterError> {
+        let snap = match self.try_begin(surface_id, false)? {
+            Some(s) => s,
+            None => {
+                return Err(AdapterError::WriteContended {
+                    surface_id,
+                    holder: "writer".to_string(),
+                });
+            }
+        };
+        self.finalize_acquire(surface_id, false, &snap)?;
+        Ok(ReadGuard::new(self, surface_id, build_read_view(&snap)))
+    }
+
+    /// Blocking write acquire keyed by `SurfaceId`.
+    pub fn acquire_write_by_id<'g>(
+        &'g self,
+        surface_id: SurfaceId,
+    ) -> Result<WriteGuard<'g, Self>, AdapterError> {
+        let snap = match self.try_begin(surface_id, true)? {
+            Some(s) => s,
+            None => {
+                let map = self.surfaces.lock();
+                let holder = match map.get(&surface_id) {
+                    Some(s) if s.write_held => "writer".to_string(),
+                    Some(s) => format!("{} reader(s)", s.read_holders),
+                    None => "unknown".to_string(),
+                };
+                drop(map);
+                return Err(AdapterError::WriteContended {
+                    surface_id,
+                    holder,
+                });
+            }
+        };
+        self.finalize_acquire(surface_id, true, &snap)?;
+        Ok(WriteGuard::new(self, surface_id, build_write_view(&snap)))
+    }
+
+    /// Non-blocking read acquire keyed by `SurfaceId`.
+    pub fn try_acquire_read_by_id<'g>(
+        &'g self,
+        surface_id: SurfaceId,
+    ) -> Result<Option<ReadGuard<'g, Self>>, AdapterError> {
+        let snap = match self.try_begin(surface_id, false)? {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        self.finalize_acquire(surface_id, false, &snap)?;
+        Ok(Some(ReadGuard::new(
+            self,
+            surface_id,
+            build_read_view(&snap),
+        )))
+    }
+
+    /// Non-blocking write acquire keyed by `SurfaceId`.
+    pub fn try_acquire_write_by_id<'g>(
+        &'g self,
+        surface_id: SurfaceId,
+    ) -> Result<Option<WriteGuard<'g, Self>>, AdapterError> {
+        let snap = match self.try_begin(surface_id, true)? {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        self.finalize_acquire(surface_id, true, &snap)?;
+        Ok(Some(WriteGuard::new(
+            self,
+            surface_id,
+            build_write_view(&snap),
+        )))
+    }
+
+    /// Snapshot the per-plane staging buffers for `surface_id` plus
+    /// surface dimensions and format. Returns `None` if the surface is
+    /// not registered. Used by the [`CpuReadbackBridge`] impl in
+    /// subprocess-runtime glue to surface staging buffers via
+    /// surface-share without re-deriving plane geometry.
+    pub fn snapshot_plane_geometry(
+        &self,
+        surface_id: SurfaceId,
+    ) -> Option<CpuReadbackSurfaceSnapshot> {
+        let map = self.surfaces.lock();
+        let state = map.get(&surface_id)?;
+        let planes = state
+            .planes
+            .iter()
+            .map(|p| CpuReadbackStagingPlane {
+                staging: Arc::clone(&p.staging),
+                width: p.width,
+                height: p.height,
+                bytes_per_pixel: p.bytes_per_pixel,
+            })
+            .collect();
+        Some(CpuReadbackSurfaceSnapshot {
+            width: state.width,
+            height: state.height,
+            format: state.format,
+            planes,
+        })
+    }
+
     /// Common acquire path: wait timeline, then issue
     /// `vkCmdCopyImageToBuffer` into the per-plane staging buffers.
     /// Returns the snapshot needed to build a view, with state's
     /// `read_holders` / `write_held` already incremented.
     fn try_begin(
         &self,
-        surface: &StreamlibSurface,
+        surface_id: SurfaceId,
         write: bool,
     ) -> Result<Option<AcquireSnapshot>, AdapterError> {
         let mut map = self.surfaces.lock();
         let state = map
-            .get_mut(&surface.id)
-            .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
+            .get_mut(&surface_id)
+            .ok_or(AdapterError::SurfaceNotFound { surface_id })?;
 
         if state.write_held {
             return Ok(None);
@@ -216,7 +350,7 @@ impl CpuReadbackSurfaceAdapter {
             .texture
             .vulkan_inner()
             .image()
-            .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
+            .ok_or(AdapterError::SurfaceNotFound { surface_id })?;
         let from = state.current_layout;
         let format = state.format;
         let width = state.width;
@@ -714,69 +848,28 @@ impl SurfaceAdapter for CpuReadbackSurfaceAdapter {
         &'g self,
         surface: &StreamlibSurface,
     ) -> Result<ReadGuard<'g, Self>, AdapterError> {
-        let snap = match self.try_begin(surface, false)? {
-            Some(s) => s,
-            None => {
-                return Err(AdapterError::WriteContended {
-                    surface_id: surface.id,
-                    holder: "writer".to_string(),
-                });
-            }
-        };
-        self.finalize_acquire(surface.id, false, &snap)?;
-        Ok(ReadGuard::new(self, surface.id, build_read_view(&snap)))
+        self.acquire_read_by_id(surface.id)
     }
 
     fn acquire_write<'g>(
         &'g self,
         surface: &StreamlibSurface,
     ) -> Result<WriteGuard<'g, Self>, AdapterError> {
-        let snap = match self.try_begin(surface, true)? {
-            Some(s) => s,
-            None => {
-                let map = self.surfaces.lock();
-                let holder = match map.get(&surface.id) {
-                    Some(s) if s.write_held => "writer".to_string(),
-                    Some(s) => format!("{} reader(s)", s.read_holders),
-                    None => "unknown".to_string(),
-                };
-                drop(map);
-                return Err(AdapterError::WriteContended {
-                    surface_id: surface.id,
-                    holder,
-                });
-            }
-        };
-        self.finalize_acquire(surface.id, true, &snap)?;
-        Ok(WriteGuard::new(self, surface.id, build_write_view(&snap)))
+        self.acquire_write_by_id(surface.id)
     }
 
     fn try_acquire_read<'g>(
         &'g self,
         surface: &StreamlibSurface,
     ) -> Result<Option<ReadGuard<'g, Self>>, AdapterError> {
-        let snap = match self.try_begin(surface, false)? {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-        self.finalize_acquire(surface.id, false, &snap)?;
-        Ok(Some(ReadGuard::new(self, surface.id, build_read_view(&snap))))
+        self.try_acquire_read_by_id(surface.id)
     }
 
     fn try_acquire_write<'g>(
         &'g self,
         surface: &StreamlibSurface,
     ) -> Result<Option<WriteGuard<'g, Self>>, AdapterError> {
-        let snap = match self.try_begin(surface, true)? {
-            Some(s) => s,
-            None => return Ok(None),
-        };
-        self.finalize_acquire(surface.id, true, &snap)?;
-        Ok(Some(WriteGuard::new(
-            self,
-            surface.id,
-            build_write_view(&snap),
-        )))
+        self.try_acquire_write_by_id(surface.id)
     }
 
     fn end_read_access(&self, surface_id: SurfaceId) {

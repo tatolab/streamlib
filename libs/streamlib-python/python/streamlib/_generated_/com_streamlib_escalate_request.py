@@ -23,6 +23,7 @@ class EscalateRequest:
     @classmethod
     def from_json_data(cls, data: Any) -> 'EscalateRequest':
         variants: Dict[str, Type[EscalateRequest]] = {
+            "acquire_cpu_readback": EscalateRequestAcquireCPUReadback,
             "acquire_image": EscalateRequestAcquireImage,
             "acquire_pixel_buffer": EscalateRequestAcquirePixelBuffer,
             "acquire_texture": EscalateRequestAcquireTexture,
@@ -34,6 +35,66 @@ class EscalateRequest:
 
     def to_json_data(self) -> Any:
         pass
+
+class EscalateRequestAcquireCPUReadbackMode(Enum):
+    """
+    Access mode for the acquire. `read` triggers a host-side
+    `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
+    FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
+    the subprocess later calls `release_handle`. Maps onto the cpu-readback
+    adapter's `acquire_read` / `acquire_write` entrypoints.
+    """
+
+    READ = "read"
+    WRITE = "write"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestAcquireCPUReadbackMode':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestAcquireCPUReadback(EscalateRequest):
+    mode: 'EscalateRequestAcquireCPUReadbackMode'
+    """
+    Access mode for the acquire. `read` triggers a host-side
+    `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
+    FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
+    the subprocess later calls `release_handle`. Maps onto the cpu-readback
+    adapter's `acquire_read` / `acquire_write` entrypoints.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    surface_id: 'str'
+    """
+    Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
+    a surface previously registered with the host's cpu-readback adapter via
+    `register_host_surface`. JTD has no native u64 — the wire form is the
+    decimal string representation, parsed back into u64 by the host before
+    dispatch.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestAcquireCPUReadback':
+        return cls(
+            "acquire_cpu_readback",
+            _from_json_data(EscalateRequestAcquireCPUReadbackMode, data.get("mode")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(str, data.get("surface_id")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "acquire_cpu_readback" }
+        data["mode"] = _to_json_data(self.mode)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["surface_id"] = _to_json_data(self.surface_id)
+        return data
 
 @dataclass
 class EscalateRequestAcquireImage(EscalateRequest):
