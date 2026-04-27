@@ -647,21 +647,6 @@ impl StreamRuntime {
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
 
-        // Drain pre-start hooks now — after the GpuContext is live but
-        // before any processor setup runs. Adapter bridges register
-        // themselves here so processors that issue escalate ops in
-        // their first `process()` find the bridge already in place.
-        let hooks: Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>> = {
-            let mut guard = self.setup_hooks.lock();
-            std::mem::take(&mut *guard)
-        };
-        if !hooks.is_empty() {
-            tracing::info!("[start] Running {} setup hook(s)", hooks.len());
-            for hook in hooks {
-                hook(&gpu)?;
-            }
-        }
-
         // Initialize SurfaceStore for cross-process GPU surface sharing (macOS only)
         #[cfg(target_os = "macos")]
         {
@@ -713,6 +698,22 @@ impl StreamRuntime {
             })?;
             gpu.set_surface_store(surface_store);
             tracing::info!("[start] SurfaceStore initialized against runtime-internal broker");
+        }
+
+        // Drain pre-start hooks now — after the GpuContext is FULLY live
+        // (device + SurfaceStore) but before any processor setup runs.
+        // Adapter bridges and surface registrations happen here so
+        // processors that issue escalate ops or `resolve_surface` lookups
+        // in their first `process()` find everything already in place.
+        let hooks: Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>> = {
+            let mut guard = self.setup_hooks.lock();
+            std::mem::take(&mut *guard)
+        };
+        if !hooks.is_empty() {
+            tracing::info!("[start] Running {} setup hook(s)", hooks.len());
+            for hook in hooks {
+                hook(&gpu)?;
+            }
         }
 
         // Create shared timing context - clock starts now

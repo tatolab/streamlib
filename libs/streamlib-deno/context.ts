@@ -386,6 +386,12 @@ class NativeGpuContextLimitedAccess implements GpuContextLimitedAccess {
     this.surfaceHandlePtr = surfaceHandlePtr;
   }
 
+  /** Underlying cdylib FFI handle. Returned for in-tree adapter SDKs that
+   * need to call additional `sldn_*` ops without re-loading. */
+  get nativeLib(): NativeLib {
+    return this.lib;
+  }
+
   resolveSurface(poolId: string): GpuSurface {
     if (this.surfaceHandlePtr) {
       // Surface-share-backed resolution: pool_id → XPC lookup → IOSurface
@@ -472,13 +478,19 @@ class NativeGpuContextFullAccess extends NativeGpuContextLimitedAccess
  */
 class NativeGpuSurface implements GpuSurface {
   private lib: NativeLib;
-  private handlePtr: Deno.PointerObject;
+  private handlePtr: Deno.PointerObject | null;
   readonly surfaceId: number;
 
   constructor(lib: NativeLib, handlePtr: Deno.PointerObject, surfaceId: number) {
     this.lib = lib;
     this.handlePtr = handlePtr;
     this.surfaceId = surfaceId;
+  }
+
+  /** Adapter-internal: raw FFI handle pointer for in-tree adapter SDKs.
+   * Customer processors use `lock` / `asBuffer` instead. */
+  get nativeHandlePtr(): Deno.PointerObject | null {
+    return this.handlePtr;
   }
 
   get width(): number {
@@ -520,6 +532,9 @@ class NativeGpuSurface implements GpuSurface {
   }
 
   release(): void {
-    this.lib.symbols.sldn_gpu_surface_release(this.handlePtr);
+    if (this.handlePtr !== null) {
+      this.lib.symbols.sldn_gpu_surface_release(this.handlePtr);
+      this.handlePtr = null;
+    }
   }
 }

@@ -203,6 +203,42 @@ def load_native_lib(lib_path):
     lib.slpn_surface_unregister_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
     lib.slpn_surface_unregister_surface.restype = None
 
+    # OpenGL adapter runtime (#530, Linux). Uses the host adapter crate's
+    # EglRuntime + OpenGlSurfaceAdapter for EGL bring-up + DMA-BUF→GL
+    # import; this binding only exposes scoped acquire/release returning
+    # a `GL_TEXTURE_2D` id the customer's GL library renders into.
+    lib.slpn_opengl_runtime_new.argtypes = []
+    lib.slpn_opengl_runtime_new.restype = ctypes.c_void_p
+    lib.slpn_opengl_runtime_free.argtypes = [ctypes.c_void_p]
+    lib.slpn_opengl_runtime_free.restype = None
+    lib.slpn_opengl_register_surface.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p,
+    ]
+    lib.slpn_opengl_register_surface.restype = ctypes.c_int32
+    lib.slpn_opengl_unregister_surface.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint64,
+    ]
+    lib.slpn_opengl_unregister_surface.restype = ctypes.c_int32
+    for _op in ("acquire_write", "acquire_read"):
+        _fn = getattr(lib, f"slpn_opengl_{_op}")
+        _fn.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        _fn.restype = ctypes.c_uint32
+    for _op in ("release_write", "release_read"):
+        _fn = getattr(lib, f"slpn_opengl_{_op}")
+        _fn.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+        _fn.restype = ctypes.c_int32
+
+    # Per-plane surface-share accessors (#530). Required by the OpenGL
+    # adapter for `EGL_DMA_BUF_PLANE{N}_PITCH_EXT` import.
+    lib.slpn_gpu_surface_plane_stride.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    lib.slpn_gpu_surface_plane_stride.restype = ctypes.c_uint64
+    lib.slpn_gpu_surface_plane_offset.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    lib.slpn_gpu_surface_plane_offset.restype = ctypes.c_uint64
+    lib.slpn_gpu_surface_plane_fd.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    lib.slpn_gpu_surface_plane_fd.restype = ctypes.c_int32
+    lib.slpn_gpu_surface_drm_format_modifier.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_drm_format_modifier.restype = ctypes.c_uint64
+
     return lib
 
 
@@ -358,6 +394,26 @@ class NativeGpuSurfaceHandle:
         ref = self._lib.slpn_gpu_surface_iosurface_ref(self._handle_ptr)
         return ctypes.c_void_p(ref)
 
+    @property
+    def native_handle_ptr(self) -> int:
+        """Raw `*mut SurfaceHandle` pointer (untyped int) for adapter
+        crates that integrate with `streamlib-python-native`.
+
+        Reserved for in-tree adapter SDKs (e.g. `streamlib.adapters.opengl`)
+        that need to hand the underlying surface-share handle to a
+        cross-language adapter FFI op (e.g. `slpn_opengl_register_surface`).
+        Customer processors should use `lock` / `base_address` / numpy
+        accessors above instead.
+        """
+        return int(self._handle_ptr or 0)
+
+    @property
+    def native_lib(self):
+        """The cdylib handle this surface was resolved against. Used by
+        in-tree adapter SDKs to call additional `slpn_*` FFI ops without
+        re-loading the cdylib."""
+        return self._lib
+
     def release(self):
         """Release the C-side surface handle."""
         if self._pooled:
@@ -386,6 +442,17 @@ class NativeGpuContextLimitedAccess:
     def __init__(self, lib, handle_ptr):
         self._lib = lib
         self._handle_ptr = handle_ptr
+
+    @property
+    def native_lib(self):
+        """The cdylib handle this view's surfaces resolve against. Used
+        by in-tree adapter SDKs (e.g. ``streamlib.adapters.opengl``) to
+        call additional ``slpn_*`` FFI ops without re-loading the cdylib.
+
+        Customer processors should not need this — the view's
+        :meth:`resolve_surface` covers the common case.
+        """
+        return self._lib
 
     def resolve_surface(self, surface_id):
         """Resolve a surface-share pool UUID to a GPU surface handle."""

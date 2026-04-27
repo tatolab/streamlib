@@ -26,6 +26,9 @@ mod view;
 
 pub use adapter::OpenGlSurfaceAdapter;
 pub use context::OpenGlContext;
-pub use egl::{EglRuntime, EglRuntimeError, DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888};
+pub use egl::{
+    EglRuntime, EglRuntimeError, OwnedMakeCurrentGuard, DRM_FORMAT_ABGR8888,
+    DRM_FORMAT_ARGB8888,
+};
 pub use state::HostSurfaceRegistration;
 pub use view::{OpenGlReadView, OpenGlWriteView, GL_TEXTURE_2D};

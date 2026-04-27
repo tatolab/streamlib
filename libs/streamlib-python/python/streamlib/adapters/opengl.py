@@ -3,17 +3,23 @@
 
 """OpenGL/EGL surface adapter — Python customer-facing API.
 
-Mirrors the Rust crate ``streamlib-adapter-opengl`` (#512). The
-subprocess's actual EGL+GL handling lives in the runtime's native
-binding; this module provides:
+Mirrors the Rust crate ``streamlib-adapter-opengl`` (#512, #530). The
+subprocess's actual EGL+GL handling lives in `streamlib-python-native`
+(via the `slpn_opengl_*` FFI symbols, which delegate to the host
+adapter crate's `EglRuntime` and `OpenGlSurfaceAdapter`). This module
+provides:
 
   * Typed views the subprocess sees inside ``acquire_*`` scopes —
     ``OpenGLReadView`` / ``OpenGLWriteView`` exposing a single
     integer ``gl_texture_id`` and the constant ``target =
     GL_TEXTURE_2D``.
-  * An ``OpenGLContext`` Protocol the subprocess runtime implements —
-    customers call ``with ctx.acquire_write(surface) as view:`` and
-    bind ``view.gl_texture_id`` to their PyOpenGL / ModernGL stack.
+  * ``OpenGLContext`` — the concrete subprocess runtime. Customers
+    call ``with ctx.acquire_write(surface) as view:`` and bind
+    ``view.gl_texture_id`` to their PyOpenGL / ModernGL / raw
+    ctypes-against-libGLESv2 stack. The adapter's EGL context is
+    current on the calling thread for the lifetime of the acquire,
+    so any GL library that latches onto the current context "just
+    works."
 
 Customers never see DMA-BUF FDs, fourcc codes, plane offsets,
 strides, or DRM modifiers. Per the NVIDIA EGL DMA-BUF render-target
@@ -42,10 +48,12 @@ typical place is the subprocess processor's ``setup`` hook.
 
 from __future__ import annotations
 
+import ctypes
+import itertools
 import os
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from typing import Optional, Protocol, runtime_checkable
+from typing import Iterator, Optional, Protocol, runtime_checkable
 
 from streamlib.surface_adapter import (
     STREAMLIB_ADAPTER_ABI_VERSION,
@@ -58,6 +66,7 @@ __all__ = [
     "OpenGLReadView",
     "OpenGLWriteView",
     "OpenGLSurfaceAdapter",
+    "OpenGLContextProtocol",
     "OpenGLContext",
     "configure_pyopengl_for_streamlib_subprocess",
 ]
@@ -123,16 +132,10 @@ class OpenGLSurfaceAdapter(Protocol):
 
 
 @runtime_checkable
-class OpenGLContext(Protocol):
-    """Customer-facing handle the subprocess runtime hands out.
-
-    Equivalent shape to the Rust ``OpenGlContext`` — thin wrapper
-    over an ``OpenGLSurfaceAdapter`` so customer code can write::
-
-        with ctx.acquire_write(surface) as view:
-            do_gl_work(view.gl_texture_id)
-
-    The customer never types the words "DMA-BUF" or "modifier."
+class OpenGLContextProtocol(Protocol):
+    """Customer-facing handle the subprocess runtime hands out
+    (Protocol shape — :class:`OpenGLContext` below is the concrete
+    implementation).
     """
 
     def acquire_read(
@@ -164,5 +167,178 @@ def configure_pyopengl_for_streamlib_subprocess() -> None:
     os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
     os.environ.setdefault("PYOPENGL_CONTEXT_CHECKING", "False")
     os.environ.setdefault("PYOPENGL_ERROR_CHECKING", "False")
+
+
+# =============================================================================
+# Concrete OpenGLContext implementation (#530)
+# =============================================================================
+
+# Surface-id namespace inside this subprocess. Counted up by `from_runtime` —
+# the host's pool_id (string UUID) is mapped to a u64 the adapter uses
+# internally; customers never see the u64.
+_SURFACE_ID_COUNTER = itertools.count(start=1)
+
+
+class OpenGLContext:
+    """Subprocess-side OpenGL adapter runtime (#530).
+
+    Bring up the adapter's EGL display + GL context inside this
+    subprocess and expose scoped acquire/release that hands customers
+    a real ``GL_TEXTURE_2D`` id. The adapter's EGL context is current
+    on the calling thread for the lifetime of an ``acquire_*`` scope —
+    any GL library that latches onto the current EGL context (PyOpenGL
+    with ``PYOPENGL_PLATFORM=egl``, ModernGL, raw ctypes against
+    ``libGLESv2.so``, a Deno-FFI game-engine binding, etc.) will see
+    the texture id as live.
+
+    Construct via :meth:`from_runtime` — pass the typed runtime context
+    you receive in ``setup``/``process``. Single :class:`OpenGLContext`
+    per subprocess; :meth:`from_runtime` returns the cached instance on
+    repeat calls.
+
+    Acquire/release MUST happen on the same thread. The EGL spec
+    pins a context's "current" state to a thread; releasing on a
+    different thread leaks the context binding. Python processors
+    typically run on a single thread, so this is the natural shape.
+    """
+
+    _shared_instance: Optional["OpenGLContext"] = None
+
+    def __init__(self, gpu_limited_access) -> None:
+        # Reuse the cdylib the limited-access view has already loaded —
+        # `slpn_opengl_*` symbols are wired up alongside `slpn_surface_*`
+        # in `processor_context.load_native_lib`.
+        self._lib = gpu_limited_access.native_lib
+        self._gpu = gpu_limited_access
+        rt = self._lib.slpn_opengl_runtime_new()
+        if not rt:
+            raise RuntimeError(
+                "OpenGLContext: slpn_opengl_runtime_new returned NULL — the "
+                "subprocess could not bring up an EGL display + GL context. "
+                "Check that libEGL.so.1 is installed and the driver supports "
+                "EGL_EXT_image_dma_buf_import_modifiers."
+            )
+        self._rt = ctypes.c_void_p(rt)
+        # Map host pool_id (UUID) → local u64 surface_id.
+        self._surface_ids: dict[str, int] = {}
+        # Pin the resolved gpu surface handles for the runtime's lifetime so
+        # the underlying DMA-BUF FDs stay alive — the Rust adapter dups them
+        # via EGL on register, but holding the handle Python-side keeps the
+        # unlock/release contract consistent.
+        self._resolved_handles: dict[str, object] = {}
+
+    @classmethod
+    def from_runtime(cls, runtime_context) -> "OpenGLContext":
+        """Build (or fetch the cached) :class:`OpenGLContext` for this
+        subprocess.
+
+        The subprocess hosts at most one EGL display + GL context — calling
+        this twice with the same runtime returns the same instance.
+        """
+        if cls._shared_instance is None:
+            cls._shared_instance = cls(runtime_context.gpu_limited_access)
+        return cls._shared_instance
+
+    def _resolve_and_register(self, pool_id: str) -> int:
+        """Resolve `pool_id` via surface-share, register with the OpenGL
+        adapter, and return the local u64 surface_id. Idempotent — repeat
+        calls return the cached id."""
+        cached = self._surface_ids.get(pool_id)
+        if cached is not None:
+            return cached
+        handle = self._gpu.resolve_surface(pool_id)
+        # Adapter pulls the underlying *mut SurfaceHandle pointer out of the
+        # SDK's NativeGpuSurfaceHandle — see streamlib.gpu_surface for the
+        # shape. Public accessor on the SDK handle exposes the raw FFI
+        # pointer for adapter integration.
+        handle_ptr = handle.native_handle_ptr
+        if not handle_ptr:
+            raise RuntimeError(
+                f"OpenGLContext: resolve_surface('{pool_id}') returned a handle "
+                "with a null native pointer"
+            )
+        surface_id = next(_SURFACE_ID_COUNTER)
+        rc = self._lib.slpn_opengl_register_surface(
+            self._rt,
+            ctypes.c_uint64(surface_id),
+            ctypes.c_void_p(handle_ptr),
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"OpenGLContext: register_surface failed for pool_id "
+                f"'{pool_id}' (rc={rc}). Check the subprocess log for "
+                "EGL/DMA-BUF import errors — typically a wrong DRM modifier "
+                "or an unsupported pixel format."
+            )
+        self._surface_ids[pool_id] = surface_id
+        # Hold the SDK handle so its FDs stay alive for the runtime's life.
+        self._resolved_handles[pool_id] = handle
+        return surface_id
+
+    @staticmethod
+    def _surface_pool_id(surface) -> str:
+        """Extract the surface-share pool id (string UUID) from either a
+        `StreamlibSurface`-shaped object or a bare string."""
+        if isinstance(surface, str):
+            return surface
+        sid = getattr(surface, "id", None)
+        if sid is None:
+            raise TypeError(
+                f"OpenGLContext: expected StreamlibSurface or str pool_id, got {surface!r}"
+            )
+        return str(sid)
+
+    @contextmanager
+    def acquire_write(
+        self, surface
+    ) -> "Iterator[OpenGLWriteView]":
+        """Acquire write access. The adapter's EGL context is current on
+        the calling thread for the scope; ``view.gl_texture_id`` is a
+        ``GL_TEXTURE_2D`` valid in that context.
+
+        On scope exit the adapter drains GL (`glFinish`) so cross-API
+        consumers see the writes through the underlying DMA-BUF.
+        """
+        pool_id = self._surface_pool_id(surface)
+        surface_id = self._resolve_and_register(pool_id)
+        texture_id = int(
+            self._lib.slpn_opengl_acquire_write(self._rt, ctypes.c_uint64(surface_id))
+        )
+        if texture_id == 0:
+            raise RuntimeError(
+                f"OpenGLContext.acquire_write: slpn_opengl_acquire_write "
+                f"returned 0 for surface '{pool_id}' (contention or "
+                "EGL/GL failure — check the subprocess log)"
+            )
+        try:
+            yield OpenGLWriteView(gl_texture_id=texture_id)
+        finally:
+            self._lib.slpn_opengl_release_write(
+                self._rt, ctypes.c_uint64(surface_id)
+            )
+
+    @contextmanager
+    def acquire_read(
+        self, surface
+    ) -> "Iterator[OpenGLReadView]":
+        """Acquire read access — same shape as :meth:`acquire_write`,
+        but the resulting texture is sample-only (multiple readers may
+        coexist; no writer can be active)."""
+        pool_id = self._surface_pool_id(surface)
+        surface_id = self._resolve_and_register(pool_id)
+        texture_id = int(
+            self._lib.slpn_opengl_acquire_read(self._rt, ctypes.c_uint64(surface_id))
+        )
+        if texture_id == 0:
+            raise RuntimeError(
+                f"OpenGLContext.acquire_read: slpn_opengl_acquire_read "
+                f"returned 0 for surface '{pool_id}'"
+            )
+        try:
+            yield OpenGLReadView(gl_texture_id=texture_id)
+        finally:
+            self._lib.slpn_opengl_release_read(
+                self._rt, ctypes.c_uint64(surface_id)
+            )
 
 

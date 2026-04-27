@@ -51,6 +51,15 @@ export interface GpuSurface {
 
   /** Release the surface handle. */
   release(): void;
+
+  /**
+   * Raw `*mut SurfaceHandle` pointer (untyped) for in-tree adapter SDKs
+   * that integrate with `streamlib-deno-native` via additional `sldn_*`
+   * FFI ops (e.g. `sldn_opengl_register_surface`). Customer processors
+   * should use `lock` / `asBuffer` above instead. Returns `null` when
+   * the surface has been released.
+   */
+  readonly nativeHandlePtr: Deno.PointerObject | null;
 }
 
 /**
@@ -60,7 +69,23 @@ export interface GpuSurface {
 export interface GpuContextLimitedAccess {
   /** Resolve a surface-share pool_id to a GPU surface handle. */
   resolveSurface(poolId: string): GpuSurface;
+
+  /**
+   * The cdylib handle this view's surfaces resolve against. Used by
+   * in-tree adapter SDKs to call additional `sldn_*` FFI ops without
+   * re-loading the cdylib.
+   */
+  readonly nativeLib: NativeLibSymbols;
 }
+
+/**
+ * Structural type for the FFI symbols `streamlib-deno-native` exposes.
+ * Adapter SDKs can call `nativeLib.sldn_opengl_*` once `nativeLib` is in
+ * hand. The full type lives in `native.ts`; this lightweight subset
+ * keeps `types.ts` from importing the FFI surface directly.
+ */
+// deno-lint-ignore no-explicit-any
+export type NativeLibSymbols = { readonly symbols: any };
 
 /**
  * Privileged GPU capability — includes limited-access ops plus allocations.
