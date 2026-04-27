@@ -303,6 +303,22 @@ impl StreamTexture {
             metal_texture: None,
         }
     }
+
+    /// Adapter-facing: the underlying [`crate::vulkan::rhi::VulkanTexture`].
+    ///
+    /// In-tree surface adapters (`streamlib-adapter-vulkan`,
+    /// `-skia`, `-opengl`, `-cpu-readback`) need direct access to the
+    /// `VkImage` and DRM-modifier-bearing memory layout. Customers and
+    /// non-adapter code must NOT call this — the engine boundary rule
+    /// in `CLAUDE.md` says the only crates allowed to touch raw Vulkan
+    /// types are the RHI itself and the in-tree adapters.
+    #[cfg(any(
+        feature = "backend-vulkan",
+        all(target_os = "linux", not(feature = "backend-metal"))
+    ))]
+    pub fn vulkan_inner(&self) -> &Arc<crate::vulkan::rhi::VulkanTexture> {
+        &self.inner
+    }
 }
 
 impl std::fmt::Debug for StreamTexture {

@@ -671,6 +671,152 @@ impl VulkanTexture {
         Ok(fd)
     }
 
+    /// Subprocess-side import of a render-target DMA-BUF image.
+    ///
+    /// The host allocated the image via [`Self::new_render_target_dma_buf`]
+    /// with a tiled DRM modifier (LINEAR is sampler-only on NVIDIA). The
+    /// subprocess receives:
+    /// - `fds` — DMA-BUF file descriptors, one per plane.
+    /// - `plane_offsets` / `plane_strides` — exact layout the host's
+    ///   `vkGetImageSubresourceLayout` reported.
+    /// - `drm_format_modifier` — the modifier the host's driver chose;
+    ///   non-zero, must match an `external_only=FALSE` modifier on the
+    ///   subprocess's GPU.
+    ///
+    /// Builds a subprocess-local `VkImage` with
+    /// `VkImageDrmFormatModifierExplicitCreateInfoEXT` chained, imports
+    /// the DMA-BUF memory, and binds the image. Symmetric to the host
+    /// allocation; same modifier on both sides keeps the GPU memory
+    /// layout consistent.
+    ///
+    /// fd ownership: the subprocess transfers ownership to Vulkan on
+    /// success (the driver `dup`s internally and releases on
+    /// `vkFreeMemory`). On error the caller still owns `fds[0]`.
+    pub fn import_render_target_dma_buf(
+        vulkan_device: &Arc<VulkanDevice>,
+        fds: &[std::os::unix::io::RawFd],
+        plane_offsets: &[u64],
+        plane_strides: &[u64],
+        drm_format_modifier: u64,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        allocation_size: vk::DeviceSize,
+    ) -> Result<Self> {
+        if fds.is_empty() {
+            return Err(StreamError::GpuError(
+                "import_render_target_dma_buf: empty fd vec".into(),
+            ));
+        }
+        if plane_offsets.len() != fds.len() || plane_strides.len() != fds.len() {
+            return Err(StreamError::GpuError(format!(
+                "import_render_target_dma_buf: plane arrays length mismatch — fds={} offsets={} strides={}",
+                fds.len(),
+                plane_offsets.len(),
+                plane_strides.len()
+            )));
+        }
+        if drm_format_modifier == 0 {
+            return Err(StreamError::GpuError(
+                "import_render_target_dma_buf: zero (LINEAR) modifier — host should have allocated a tiled modifier; LINEAR DMA-BUFs are sampler-only on NVIDIA"
+                    .into(),
+            ));
+        }
+
+        let device = vulkan_device.device();
+        let vk_format = texture_format_to_vk(format);
+
+        let plane_layouts: Vec<vk::SubresourceLayout> = plane_offsets
+            .iter()
+            .zip(plane_strides.iter())
+            .map(|(off, stride)| vk::SubresourceLayout {
+                offset: *off,
+                size: 0,
+                row_pitch: *stride,
+                array_pitch: 0,
+                depth_pitch: 0,
+            })
+            .collect();
+
+        let mut explicit_modifier_info =
+            vk::ImageDrmFormatModifierExplicitCreateInfoEXT::builder()
+                .drm_format_modifier(drm_format_modifier)
+                .plane_layouts(&plane_layouts);
+
+        let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT);
+
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk_format)
+            .extent(vk::Extent3D { width, height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
+            .usage(
+                vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut explicit_modifier_info)
+            .push_next(&mut external_image_info);
+
+        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
+            StreamError::GpuError(format!(
+                "import_render_target_dma_buf: create_image failed (modifier=0x{:016x}): {e}",
+                drm_format_modifier
+            ))
+        })?;
+
+        let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
+        let alloc_size = allocation_size.max(mem_requirements.size);
+
+        // Use plane 0's fd for the import; multi-plane DRM modifiers
+        // bind separate memory per plane via VkBindImageMemoryInfo +
+        // VkBindImagePlaneMemoryInfo, which we'll wire when a multi-plane
+        // consumer surfaces. Single-plane covers BGRA / RGBA — the
+        // formats #510 publishes RT modifiers for today.
+        let memory = vulkan_device
+            .import_dma_buf_memory(
+                fds[0],
+                alloc_size,
+                mem_requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .map_err(|e| {
+                unsafe { device.destroy_image(image, None) };
+                e
+            })?;
+
+        unsafe { device.bind_image_memory(image, memory, 0) }
+            .map_err(|e| {
+                vulkan_device.free_imported_memory(memory);
+                unsafe { device.destroy_image(image, None) };
+                StreamError::GpuError(format!(
+                    "import_render_target_dma_buf: bind_image_memory failed: {e}"
+                ))
+            })?;
+
+        Ok(Self {
+            vulkan_device: Some(Arc::clone(vulkan_device)),
+            image: Some(image),
+            allocation: None,
+            imported_memory: Some(memory),
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
+            imported_from_iosurface: false,
+            imported_from_dma_buf: true,
+            chosen_drm_format_modifier: drm_format_modifier,
+            width,
+            height,
+            format,
+        })
+    }
+
     /// Import a texture from a DMA-BUF file descriptor.
     pub fn from_dma_buf_fd(
         vulkan_device: &Arc<VulkanDevice>,

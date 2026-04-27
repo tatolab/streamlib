@@ -50,6 +50,21 @@ pub struct GpuDevice {
 }
 
 impl GpuDevice {
+    /// Adapter-facing: the underlying [`crate::vulkan::rhi::VulkanDevice`].
+    ///
+    /// Available only on Linux / when the Vulkan backend is selected.
+    /// In-tree surface adapters reach for this when they need raw
+    /// queue / device handles. Non-adapter callers must NOT use it —
+    /// the engine boundary rule from `CLAUDE.md` reserves direct Vulkan
+    /// access to the RHI and its adapters.
+    #[cfg(any(
+        feature = "backend-vulkan",
+        all(target_os = "linux", not(feature = "backend-metal"))
+    ))]
+    pub fn vulkan_device(&self) -> &std::sync::Arc<crate::vulkan::rhi::VulkanDevice> {
+        &self.inner
+    }
+
     /// Create a new GPU device using the system default.
     pub fn new() -> Result<Self> {
         // Metal backend (default on macOS/iOS when Vulkan not requested)

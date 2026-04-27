@@ -170,6 +170,19 @@ pub mod linux_surface_share {
     pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 }
 
+/// RHI types that in-tree surface adapters (`streamlib-adapter-vulkan`,
+/// `-opengl`, `-skia`, `-cpu-readback`) need to reach. NOT a general
+/// public surface — every entry here is load-bearing for the adapter
+/// architecture. The Vulkan boundary rule from `CLAUDE.md` still holds:
+/// nothing outside an adapter or `vulkan/rhi/` may import from this
+/// module.
+#[cfg(target_os = "linux")]
+pub mod adapter_support {
+    pub use crate::vulkan::rhi::{
+        VulkanDevice, VulkanTexture, VulkanTimelineSemaphore,
+    };
+}
+
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
 

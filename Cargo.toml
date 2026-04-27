@@ -10,6 +10,7 @@ members = [
     "libs/streamlib-macros",    # Procedural macros for reducing boilerplate
     "libs/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
     "libs/streamlib-adapter-abi", # ABI-stable surface adapter contract (in-tree + 3rd-party adapters)
+    "libs/streamlib-adapter-vulkan", # Vulkan-native surface adapter — canonical implementor of VulkanWritable / VulkanImageInfoExt (Linux)
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
