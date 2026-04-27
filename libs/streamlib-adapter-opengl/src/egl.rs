@@ -140,13 +140,14 @@ impl EglRuntime {
             .map_err(|e| EglRuntimeError::Initialize(format!("query EGL extensions: {e}")))?;
         let ext_str = extensions.to_str().unwrap_or("");
         debug!(egl_extensions = ext_str, "EGL extensions");
-        for required in [
+        const REQUIRED_EGL_EXTENSIONS: &[&str] = &[
             "EGL_EXT_image_dma_buf_import",
             "EGL_EXT_image_dma_buf_import_modifiers",
             "EGL_KHR_image_base",
-        ] {
+        ];
+        for required in REQUIRED_EGL_EXTENSIONS {
             if !ext_has(ext_str, required) {
-                return Err(EglRuntimeError::MissingExtension(static_str(required)));
+                return Err(EglRuntimeError::MissingExtension(required));
             }
         }
 
@@ -373,22 +374,6 @@ fn resolve_proc<F>(
     // the spec-mandated signature for `name`. Mismatched ABI here is
     // a driver bug.
     Ok(unsafe { std::mem::transmute_copy::<extern "system" fn(), F>(&raw) })
-}
-
-/// Project a runtime &str into a 'static one for the error variant.
-/// Limited to the small fixed set of names this module checks, so
-/// the leak path is bounded; the simpler alternative (always-static
-/// `&str` in `MissingExtension`) buys us back the type at compile
-/// time.
-fn static_str(s: &str) -> &'static str {
-    match s {
-        "EGL_EXT_image_dma_buf_import" => "EGL_EXT_image_dma_buf_import",
-        "EGL_EXT_image_dma_buf_import_modifiers" => {
-            "EGL_EXT_image_dma_buf_import_modifiers"
-        }
-        "EGL_KHR_image_base" => "EGL_KHR_image_base",
-        _ => "<unknown>",
-    }
 }
 
 #[cfg(test)]

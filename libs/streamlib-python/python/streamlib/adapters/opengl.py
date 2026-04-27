@@ -50,7 +50,6 @@ from typing import Optional, Protocol, runtime_checkable
 from streamlib.surface_adapter import (
     STREAMLIB_ADAPTER_ABI_VERSION,
     StreamlibSurface,
-    SurfaceAdapter,
 )
 
 __all__ = [
@@ -167,6 +166,3 @@ def configure_pyopengl_for_streamlib_subprocess() -> None:
     os.environ.setdefault("PYOPENGL_ERROR_CHECKING", "False")
 
 
-# Make the SurfaceAdapter Protocol available as a type alias for
-# adapter authors who want to assert the broader contract.
-_ = SurfaceAdapter

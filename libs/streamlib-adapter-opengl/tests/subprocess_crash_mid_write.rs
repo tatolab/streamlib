@@ -24,7 +24,7 @@
 #[path = "common.rs"]
 mod common;
 
-use std::os::fd::{AsRawFd, IntoRawFd};
+use std::os::fd::IntoRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -166,10 +166,3 @@ fn subprocess_crash_mid_write_observed_by_harness() {
     );
 }
 
-// Silence unused-warning for AsRawFd — we use it implicitly via the
-// UnixStream types above. Kept as a top-level use for future
-// debugging hooks.
-#[allow(dead_code)]
-fn _force_use_as_raw_fd(s: &UnixStream) -> i32 {
-    s.as_raw_fd()
-}
