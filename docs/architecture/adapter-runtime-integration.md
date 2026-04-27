@@ -314,6 +314,51 @@ this design — the working hypothesis may not fit:
   different shape, this section needs updating. Marked as a
   trip-wire above.
 
+## Runtime wiring — `install_setup_hook`
+
+> Added 2026-04-27 (#529). All adapter integrations register their
+> host-side state through this single API.
+
+Every surface adapter's host-side wiring runs through
+[`StreamRuntime::install_setup_hook`][hook]. The hook fires exactly
+once per `start()`, after `GpuContext::init_for_platform_sync` has
+created the live `GpuContext` but before any processor's `setup()`
+runs — the window where adapter bridges and pre-allocated host
+surfaces have to be in place.
+
+[hook]: ../../libs/streamlib/src/core/runtime/runtime.rs
+
+The shape of what the hook does varies by seam:
+
+- **Surface-share seam** (Vulkan, OpenGL, Skia). The hook allocates
+  the host's `StreamTexture` (via
+  `gpu.acquire_render_target_dma_buf_image` for render-target-capable
+  DMA-BUF), registers it in surface-share with a known UUID via
+  `gpu.surface_store().register_texture(uuid, &texture)`, and stashes
+  any per-runtime sync state the adapter needs (timeline semaphores,
+  DRM modifier records). No bridge — every subprocess acquire is a
+  one-shot `check_out`.
+- **Escalate-IPC seam** (cpu-readback). The hook constructs the
+  `CpuReadbackSurfaceAdapter`, allocates + registers the host
+  surface(s) it serves, and registers a `CpuReadbackBridge`
+  implementation on the GpuContext via
+  `gpu.set_cpu_readback_bridge(...)`. The bridge is the dispatch
+  target the escalate handler reaches when a subprocess sends
+  `acquire_cpu_readback`.
+
+Reference implementation:
+`examples/polyglot-cpu-readback-blur/src/main.rs`. That example shows
+the cpu-readback case (which exercises the bridge path); the GPU
+adapters use the same hook but skip the `set_*_bridge` step.
+
+The hook is the canonical opt-in registration point. Future adapters
+that need pre-start GpuContext access should use it; adapters that
+need per-acquire host work should also expose a `set_*_bridge` setter
+on `GpuContext` mirroring `set_cpu_readback_bridge`. Application
+authors call `install_setup_hook` exactly once per adapter they want
+to expose to subprocesses — explicit, greppable, no ambient
+"Cargo-feature-pulls-everything-in" surprises.
+
 ## Implementation issues
 
 The subprocess runtimes for the three already-shipped adapters
