@@ -4,58 +4,99 @@ GitHub is the source of truth for work in this repo. Milestones group deliverabl
 
 This doc is the template every new issue should follow, and the contract agents (and humans) are expected to honor.
 
+## Keep issues low-resolution
+
+An issue captures the *goal* of a piece of work — the problem to
+solve, why it matters, and roughly how done looks. The high-resolution
+plan (specific file paths, exact test names, suggested implementation
+ordering, ruled-out approaches) decays as the surrounding code shifts,
+so capturing it in the issue body just creates staleness for the next
+agent to clean up. Resist the urge to be exhaustive.
+
+The picker's job is to research current state at pickup time and
+produce a fresh implementation plan; the filer's job is to capture
+the goal cleanly enough that a competent agent can pick it up cold
+and figure the rest out.
+
+What this means in practice:
+
+- **Description** is a short paragraph stating the goal, not a
+  pre-implementation plan.
+- **Context** explains *why* the work matters and what constraints
+  bound it. It does not summarize an investigation that the picker
+  could redo themselves.
+- **Exit criteria** are 2–4 high-level deliverables that define
+  "done," not a checklist of file edits.
+- **Tests / validation** describes the *shape* of validation needed
+  (unit test, E2E scenario, harness reference), not the exact test
+  function names.
+- **AI Agent Notes** are reserved for things the picker genuinely
+  cannot derive from current code (a hidden invariant, a ruled-out
+  approach with a reason). When in doubt, leave it as "None."
+- **Phrase claims as "to the best of our current knowledge"** when
+  the issue body must reference specific code or behavior. This
+  signals to the picker that the claim deserves verification.
+
+The picker is required (per CLAUDE.md → Work Tracking → "Issues are
+goals, not specs") to verify the issue body against current code
+before announcing a plan, and to update the body in place when
+something has gone stale. Plan for that loop; don't try to make the
+issue body authoritative forever.
+
 ## Template
 
 ```markdown
 ## Description
 
-One short paragraph, written for an AI agent with no prior context. Say *what*
-this issue delivers in plain terms. Avoid "as discussed in slack" — link or
-quote.
+One short paragraph stating the goal — *what* this issue delivers and
+roughly *how* done looks. Written for a future agent picking this up
+cold. No ruled-out approaches, no file paths, no implementation
+ordering.
 
 ## Context
 
-Why this matters. Architectural constraints, prior work, adjacent milestones,
-anything a reader needs to understand *before* deciding the scope is right.
+Why this matters and what constraints bound the work — adjacent
+milestones, prior work, the architectural commitment that makes this
+the right shape. Phrase specific claims as "to the best of our
+current knowledge" so the picker knows to verify.
 
 ## Exit criteria
 
-Concrete, checkable deliverables. An agent or reviewer should be able to
-tick each item and know the issue is done.
+2–4 high-level deliverables that define "done." Resist breaking
+each one down further; the picker will produce the detailed plan.
 
-- [ ] <deliverable 1>
-- [ ] <deliverable 2>
+- [ ] <high-level deliverable 1>
+- [ ] <high-level deliverable 2>
 
 ## Tests / validation
 
-What proves this works? Every non-trivial issue answers this section. Either:
+The *shape* of validation needed, not exact test names. Either:
 
-- **Inline test cases** — unit tests, integration tests, or E2E scenarios to
-  write as part of this issue. Each listed as a bullet so reviewers can check
-  them off:
-  - [ ] `<module>::<test_name>` — <what it exercises>
-  - [ ] E2E: <scenario description>
+- **Inline scope** — the kinds of tests this issue should add:
+  - [ ] Unit test(s) covering <what behavior>
+  - [ ] E2E scenario: <one-line description>
 
-- **OR** a reference to a test-harness issue: if the tests need scaffolding
-  that doesn't exist yet, file that scaffolding as its own issue and mark
-  this one blocked on it.
+- **OR** a reference to a test-harness issue:
   - Blocked by #N (test harness for <area>)
 
-The intent: once CI exists, a PR merging this issue is only reviewable if the
-listed tests pass. See `docs/testing.md` for which test types apply when.
+The picker fills in the specifics during plan-out.
 
 ## Related
 
 - Milestone: <name>
-- See also: #N
+- See also: #N (free-text context only — dependency edges go through
+  GitHub's `Blocked by` / `Blocks` / `Parent`, not text).
 
 <!-- amos:ai-notes-begin -->
 ## AI Agent Notes
 
-Agent-facing context that doesn't belong in the human-readable sections
-above — exact error strings, VUIDs, file paths, ruled-out approaches,
-hidden invariants. "None." is valid when there's nothing agent-specific
-to add; absence must be deliberate, not forgotten.
+None.
+
+(Or: things the picker genuinely cannot derive from current code — a
+hidden invariant, a ruled-out approach with reasoning, a non-obvious
+gotcha. Default to "None." — absence must be deliberate, not
+forgotten, but adding low-value content that will go stale is worse
+than leaving the section empty.)
 <!-- amos:ai-notes-end -->
 ```
 
@@ -70,27 +111,32 @@ also", "context from #N", etc.).
 1. **GitHub is the source of truth.** Every issue — description, exit
    criteria, tests, dependency edges, AI-agent notes — lives in the
    issue itself. Local plan files are deprecated; don't create new ones.
-2. **Every issue includes an AI Agent Notes section** (wrapped in the
+2. **Keep it low-resolution.** When in doubt, leave detail out. The
+   picker will research current state and produce the high-resolution
+   plan; specifics in the issue body just create staleness.
+3. **Every issue includes an AI Agent Notes section** (wrapped in the
    `<!-- amos:ai-notes-begin -->` / `<!-- amos:ai-notes-end -->` markers
-   so tooling can update it safely). The section can be "None." when
-   there's no agent-specific context, but it must be present.
-3. **Every issue has exit criteria.** No exit criteria = scope is unclear.
-   Push back and refine before starting work.
-4. **Every non-trivial issue has a Tests / validation section**, even if
+   so tooling can update it safely). Default to "None."; only add
+   content that's genuinely non-derivable from current code.
+4. **Every issue has exit criteria.** No exit criteria = scope is unclear.
+   Push back and refine before starting work. But keep the criteria
+   high-level — 2–4 items, not a 12-item checklist.
+5. **Every non-trivial issue has a Tests / validation section**, even if
    the answer is "no tests — pure doc change" (write that explicitly so
-   reviewers know it was considered, not forgotten).
-5. **Test harnesses are their own issues.** If validating an issue requires
+   reviewers know it was considered, not forgotten). Describe shape,
+   not specifics.
+6. **Test harnesses are their own issues.** If validating an issue requires
    building new test infrastructure, that infrastructure is its own issue
    with its own exit criteria (the harness exists and works) and its own
    test cases (the harness catches the scenarios it's supposed to catch).
-6. **Milestone assignment is required.** Every issue belongs to a milestone.
+7. **Milestone assignment is required.** Every issue belongs to a milestone.
    If it doesn't fit any existing milestone, either the milestone's scope
    is wrong or a new milestone is warranted — raise it before filing the
    issue.
-7. **Cross-cutting concerns are labels, not milestones.** Linux-specific
+8. **Cross-cutting concerns are labels, not milestones.** Linux-specific
    work goes in the relevant deliverable milestone with a `linux` label.
    "Linux support" is not a deliverable; "Pipeline Color & Resolution" is.
-8. **`polyglot`-labeled issues must answer: are Python AND Deno both
+9. **`polyglot`-labeled issues must answer: are Python AND Deno both
    covered?** The default is yes — pipeline-level work (new processor +
    scenario binary, new escalate op end-to-end, new FD-passing story)
    ships both runtimes together or files paired tickets that block on
@@ -104,44 +150,44 @@ also", "context from #N", etc.).
 ## What this means for CI
 
 Once CI is wired (see the *CI & Test Infrastructure* milestone), the
-"Tests / validation" section becomes the gate: the tests listed must pass
-in CI before an issue can be considered merge-ready. Test harnesses land
-first, tests land inside the issue that drives them, and the merge signal
-is automatic.
+"Tests / validation" section becomes the gate: the tests the picker
+ends up writing must pass in CI before the PR can merge. Test
+harnesses land first, tests land inside the issue that drives them,
+and the merge signal is automatic.
 
-## Example — a well-formed issue
+## Example — a well-formed (low-resolution) issue
 
 ```markdown
 ## Description
 
-Route `SimpleEncoder::queue_submit()` calls through `VulkanDevice`'s
-mutex-protected `submit_to_queue()` method so concurrent processor threads
-can't race on `vkQueueSubmit`. Fixes the release-build SIGSEGV seen when
-encoder and decoder submit from different threads.
+Route encoder/decoder Vulkan submissions through `VulkanDevice`'s
+mutex-protected submit path so concurrent processor threads can't
+race on `vkQueueSubmit`. Goal: release-build encode/decode pipeline
+runs without the cross-thread SIGSEGV currently observed.
 
 ## Context
 
-#273 added the per-queue mutex on `VulkanDevice`. This issue makes the
-encoder actually use it. Without this, the mutex exists but the encoder
-still submits directly via `ash::Device`, defeating the guard.
+The per-queue mutex exists on `VulkanDevice` but the codec processors
+appear to bypass it, defeating the guard. To the best of our current
+knowledge this is the cause of the release-build SIGSEGV seen when
+encoder and decoder submit from different threads — verify against
+current code at pickup, the structure may have shifted.
 
 ## Exit criteria
 
-- [ ] `SimpleEncoder::queue_submit` calls `VulkanDevice::submit_to_queue`
-- [ ] Same change applied to `SimpleDecoder::queue_submit`
-- [ ] Release build runs `vulkan-video-roundtrip h264 /dev/video2 30` without
-      SIGSEGV for ≥3 consecutive cold runs
+- [ ] Codec processors no longer submit to the queue outside the
+      RHI's mutex-protected path.
+- [ ] Release build runs the encoder/decoder roundtrip end-to-end
+      without crashing across multiple cold runs.
 
 ## Tests / validation
 
-- [ ] `vulkan_video::tests::concurrent_encode_decode_no_race` — new unit
-      test that spawns two threads submitting simultaneously and asserts
-      no double-submit
-- [ ] E2E: encoder/decoder scenario from docs/testing.md, release build,
-      30s duration × 3 cold runs — see the standardized E2E template
+- [ ] Unit test exercising concurrent submission across two threads
+      and asserting no race.
+- [ ] E2E: encoder/decoder roundtrip per `docs/testing.md`, release
+      build, multiple cold runs.
 
 ## Related
 
 - Milestone: Vulkan Video RHI Coupling
-- Blocked by: #273
 ```
