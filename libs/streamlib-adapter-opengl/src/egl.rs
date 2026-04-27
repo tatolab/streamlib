@@ -13,11 +13,12 @@
 //! way out so a different thread can take over on the next call.
 
 use std::ffi::{c_void, CStr, CString};
+use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::sync::Arc;
 
 use khronos_egl as egl;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, MutexGuard};
 use thiserror::Error;
 use tracing::{debug, instrument};
 
@@ -234,6 +235,20 @@ impl EglRuntime {
         })
     }
 
+    /// Owned-Arc variant of [`Self::lock_make_current`] returning a
+    /// `'static`, [`Send`] guard that anchors its own `Arc<EglRuntime>`.
+    ///
+    /// Required by the polyglot FFI bindings, where acquire and release
+    /// happen across separate FFI calls and the borrow-style guard's
+    /// lifetime can't span them. In-process Rust callers should prefer
+    /// [`Self::lock_make_current`] — its borrow-checked guard catches
+    /// scope mistakes at compile time.
+    pub fn arc_lock_make_current(
+        self: &Arc<Self>,
+    ) -> Result<OwnedMakeCurrentGuard, EglRuntimeError> {
+        OwnedMakeCurrentGuard::new(Arc::clone(self))
+    }
+
     /// Wrap `eglCreateImage(EGL_LINUX_DMA_BUF_EXT, …)` for the
     /// caller. Returns the imported [`khronos_egl::Image`]; destroy
     /// via [`Self::destroy_image`].
@@ -304,6 +319,65 @@ impl Drop for MakeCurrentGuard<'_> {
         let _ = self.runtime.egl.make_current(self.runtime.display, None, None, None);
     }
 }
+
+/// Owned-Arc make-current guard. `'static` and [`Send`]; anchors its
+/// own `Arc<EglRuntime>` so the guard can outlive any borrow of the
+/// runtime — required by the polyglot FFI bindings, where acquire and
+/// release happen across separate FFI calls.
+pub struct OwnedMakeCurrentGuard {
+    runtime: Arc<EglRuntime>,
+    lock: ManuallyDrop<MutexGuard<'static, ()>>,
+}
+
+impl OwnedMakeCurrentGuard {
+    fn new(runtime: Arc<EglRuntime>) -> Result<Self, EglRuntimeError> {
+        let lock_borrowed = runtime.make_current_lock.lock();
+        runtime
+            .egl
+            .make_current(
+                runtime.display,
+                None,
+                None,
+                Some(runtime.context),
+            )
+            .map_err(|e| EglRuntimeError::MakeCurrent(format!("acquire: {e}")))?;
+        // SAFETY: `lock_borrowed` borrows `runtime.make_current_lock`. We
+        // anchor an `Arc<EglRuntime>` inside the same struct, so the
+        // referent outlives the (lifetime-extended) guard. The guard is
+        // dropped before the Arc in our manual `Drop` impl, restoring
+        // the borrow ordering.
+        let lock = unsafe {
+            std::mem::transmute::<MutexGuard<'_, ()>, MutexGuard<'static, ()>>(lock_borrowed)
+        };
+        Ok(Self {
+            runtime,
+            lock: ManuallyDrop::new(lock),
+        })
+    }
+}
+
+impl Drop for OwnedMakeCurrentGuard {
+    fn drop(&mut self) {
+        let _ = self
+            .runtime
+            .egl
+            .make_current(self.runtime.display, None, None, None);
+        // SAFETY: the lock has not yet been dropped (we never call
+        // `ManuallyDrop::drop` outside this Drop impl). Drop it here to
+        // release the mutex before our Arc reference goes away.
+        unsafe { ManuallyDrop::drop(&mut self.lock) };
+    }
+}
+
+// SAFETY: `MutexGuard<'_, ()>` is `Send` only when the underlying
+// `Mutex<()>` is `Send + Sync` (parking_lot's mutex is). The
+// `Arc<EglRuntime>` is `Send` (we declared `EglRuntime: Send + Sync`
+// at the top of this module). EGL's `make_current` is per-thread —
+// the guard's invariant ("EGL context is current on the holder's
+// thread") ports across thread moves only if the holder
+// re-makes-current after move; in practice the FFI binds the guard to
+// the calling thread's life-cycle and never moves it.
+unsafe impl Send for OwnedMakeCurrentGuard {}
 
 /// Pick an EGL config that's renderable as OpenGL and supports
 /// pbuffer surfaces. We don't actually create a pbuffer (surfaceless
@@ -398,5 +472,32 @@ mod tests {
         assert_eq!(DRM_FORMAT_ABGR8888, 0x34_32_42_41);
         // "AR24" → [0x41, 0x52, 0x32, 0x34] → 0x34_32_52_41.
         assert_eq!(DRM_FORMAT_ARGB8888, 0x34_32_52_41);
+    }
+
+    /// `arc_lock_make_current` returns a `'static`-lifetime guard that
+    /// outlives any borrow of the [`EglRuntime`]. The polyglot FFI uses
+    /// this so `acquire_*` / `release_*` can hold the EGL mutex across
+    /// separate FFI calls. Drop releases the mutex (verified by
+    /// re-acquiring on the same thread).
+    #[test]
+    fn arc_lock_make_current_is_static_and_releases_on_drop() {
+        let runtime = match EglRuntime::new() {
+            Ok(r) => r,
+            Err(e) => {
+                println!("arc_lock_make_current: skipping — no EGL on this host: {e}");
+                return;
+            }
+        };
+        let guard1 = runtime.arc_lock_make_current().expect("first acquire");
+        // Concrete check on the lifetime: the guard must satisfy
+        // `'static + Send` so the FFI can stash it in a HashMap entry.
+        fn assert_static_send<T: Send + 'static>(_: &T) {}
+        assert_static_send(&guard1);
+        drop(guard1);
+        // After release the mutex is free — re-acquiring on the same
+        // thread must succeed without deadlocking.
+        let _guard2 = runtime
+            .arc_lock_make_current()
+            .expect("re-acquire after drop");
     }
 }

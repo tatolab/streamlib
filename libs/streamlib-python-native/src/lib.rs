@@ -978,6 +978,11 @@ mod gpu_surface {
         pub fds: Vec<RawFd>,
         pub plane_sizes: Vec<u64>,
         pub plane_offsets: Vec<u64>,
+        /// Per-plane row pitch in bytes, copied from the surface-share
+        /// lookup response. Required by EGL DMA-BUF import
+        /// (`EGL_DMA_BUF_PLANE{N}_PITCH_EXT`); the Vulkan import path
+        /// reads from `bytes_per_row` instead.
+        pub plane_strides: Vec<u64>,
         pub width: u32,
         pub height: u32,
         pub bytes_per_row: u32,
@@ -985,6 +990,16 @@ mod gpu_surface {
         /// kept cached so the Vulkan single-plane import path (`lock`) can
         /// continue to pass it without recomputing.
         pub size: u64,
+        /// DRM format modifier of the underlying host `VkImage`. Required
+        /// by EGL DMA-BUF import
+        /// (`EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT`); zero means
+        /// LINEAR / not applicable. Render-target consumers MUST refuse
+        /// LINEAR on NVIDIA — see
+        /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`.
+        pub drm_format_modifier: u64,
+        /// Format string from the wire response (e.g. `"Bgra8Unorm"`).
+        /// Used to derive a DRM_FORMAT_* fourcc for EGL import.
+        pub format: String,
         /// Host-mapped base address of plane 0, populated by `lock`. The
         /// multi-plane accessor reads from [`Self::plane_mapped_ptrs`].
         pub mapped_ptr: *mut u8,
@@ -1259,6 +1274,56 @@ mod gpu_surface {
     ) -> u64 {
         unsafe { handle.as_ref() }
             .and_then(|h| h.plane_sizes.get(plane_index as usize).copied())
+            .unwrap_or(0)
+    }
+
+    /// Per-plane row pitch in bytes. Required by EGL DMA-BUF import
+    /// (`EGL_DMA_BUF_PLANE{N}_PITCH_EXT`); the Vulkan import path reads
+    /// from `bytes_per_row` instead. Returns `0` on null handle / out
+    /// of range plane index.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_gpu_surface_plane_stride(
+        handle: *const SurfaceHandle,
+        plane_index: u32,
+    ) -> u64 {
+        unsafe { handle.as_ref() }
+            .and_then(|h| h.plane_strides.get(plane_index as usize).copied())
+            .unwrap_or(0)
+    }
+
+    /// Per-plane offset into its DMA-BUF fd. Returns `0` on null handle
+    /// / out of range plane index.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_gpu_surface_plane_offset(
+        handle: *const SurfaceHandle,
+        plane_index: u32,
+    ) -> u64 {
+        unsafe { handle.as_ref() }
+            .and_then(|h| h.plane_offsets.get(plane_index as usize).copied())
+            .unwrap_or(0)
+    }
+
+    /// Per-plane DMA-BUF file descriptor, or `-1` on null handle / out of
+    /// range plane index. The fd is owned by the [`SurfaceHandle`]; the
+    /// caller MUST `dup()` if they need an independent copy.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_gpu_surface_plane_fd(
+        handle: *const SurfaceHandle,
+        plane_index: u32,
+    ) -> i32 {
+        unsafe { handle.as_ref() }
+            .and_then(|h| h.fds.get(plane_index as usize).copied())
+            .unwrap_or(-1)
+    }
+
+    /// DRM format modifier of the underlying host `VkImage`. Required by
+    /// EGL DMA-BUF import; zero means LINEAR / not applicable.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_gpu_surface_drm_format_modifier(
+        handle: *const SurfaceHandle,
+    ) -> u64 {
+        unsafe { handle.as_ref() }
+            .map(|h| h.drm_format_modifier)
             .unwrap_or(0)
     }
 
@@ -2213,10 +2278,13 @@ mod surface_client {
         fds: Vec<RawFd>,
         plane_sizes: Vec<u64>,
         plane_offsets: Vec<u64>,
+        plane_strides: Vec<u64>,
         width: u32,
         height: u32,
         bytes_per_row: u32,
         size: u64,
+        drm_format_modifier: u64,
+        format: String,
     }
 
     impl Drop for CachedSurface {
@@ -2418,10 +2486,13 @@ mod surface_client {
                     fds: dup_fds,
                     plane_sizes: cached.plane_sizes.clone(),
                     plane_offsets: cached.plane_offsets.clone(),
+                    plane_strides: cached.plane_strides.clone(),
                     width: cached.width,
                     height: cached.height,
                     bytes_per_row: cached.bytes_per_row,
                     size: cached.size,
+                    drm_format_modifier: cached.drm_format_modifier,
+                    format: cached.format.clone(),
                     mapped_ptr: std::ptr::null_mut(),
                     plane_mapped_ptrs: vec![std::ptr::null_mut(); n_planes],
                     is_locked: false,
@@ -2521,6 +2592,20 @@ mod surface_client {
             .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
             .filter(|v: &Vec<u64>| v.len() == received_fds.len())
             .unwrap_or_else(|| vec![0u64; received_fds.len()]);
+        // `plane_strides` is the source-of-truth row pitch from the host's
+        // DRM-modifier-aware allocator. Falls back to width*bpp when the
+        // host omits it (legacy producers); EGL DMA-BUF import requires the
+        // real stride or the resulting GL_TEXTURE_2D will sample wrong.
+        let plane_strides: Vec<u64> = response
+            .get("plane_strides")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect())
+            .filter(|v: &Vec<u64>| v.len() == received_fds.len())
+            .unwrap_or_else(|| vec![bytes_per_row as u64; received_fds.len()]);
+        let drm_format_modifier = response
+            .get("drm_format_modifier")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         let size: u64 = plane_sizes.iter().copied().sum();
 
         // Cache: dup every plane for the cache's own copy so the returned
@@ -2550,10 +2635,13 @@ mod surface_client {
                     fds: cache_fds,
                     plane_sizes: plane_sizes.clone(),
                     plane_offsets: plane_offsets.clone(),
+                    plane_strides: plane_strides.clone(),
                     width,
                     height,
                     bytes_per_row,
                     size,
+                    drm_format_modifier,
+                    format: format_str.to_string(),
                 },
             );
         } else {
@@ -2567,10 +2655,13 @@ mod surface_client {
             fds: received_fds,
             plane_sizes,
             plane_offsets,
+            plane_strides,
             width,
             height,
             bytes_per_row,
             size,
+            drm_format_modifier,
+            format: format_str.to_string(),
             mapped_ptr: std::ptr::null_mut(),
             plane_mapped_ptrs: vec![std::ptr::null_mut(); n_planes],
             is_locked: false,
@@ -2685,6 +2776,426 @@ mod surface_client {
     ) {
     }
 
+}
+
+// ============================================================================
+// C ABI — OpenGL/EGL adapter runtime (#530, Linux)
+//
+// Brings up `streamlib-adapter-opengl::EglRuntime` + `OpenGlSurfaceAdapter`
+// inside the subprocess and exposes scoped acquire/release that returns the
+// imported `GL_TEXTURE_2D` id. Any GL library (PyOpenGL, ctypes against
+// `libGLESv2.so`, a game-engine binding, …) can use the texture as long as
+// it operates on whatever EGL context is current on the calling thread —
+// `slpn_opengl_acquire_*` makes the adapter's context current and
+// `slpn_opengl_release_*` releases it.
+// ============================================================================
+
+#[cfg(target_os = "linux")]
+mod opengl {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    use streamlib_adapter_abi::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
+    };
+    use streamlib_adapter_opengl::{
+        EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
+        OwnedMakeCurrentGuard, DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888,
+    };
+
+    use super::gpu_surface::SurfaceHandle;
+
+    /// Process-scoped OpenGL runtime: one EGL display + GL context + adapter
+    /// per subprocess. Created on first FFI call; held until the cdylib is
+    /// torn down. Multiple per-surface acquires can be in flight serially —
+    /// the adapter's make-current mutex serializes EGL/GL access.
+    pub struct OpenGlRuntimeHandle {
+        egl: Arc<EglRuntime>,
+        adapter: Arc<OpenGlSurfaceAdapter>,
+        held: Mutex<HashMap<u64, HeldAcquire>>,
+    }
+
+    enum HeldKind {
+        Read,
+        Write,
+    }
+
+    struct HeldAcquire {
+        kind: HeldKind,
+        texture_id: u32,
+        // SAFETY-relevant: drop this BEFORE calling `end_*_access` on the
+        // adapter — `end_*_access` re-locks the make-current mutex
+        // internally for `glFinish`, and the adapter's mutex is not
+        // reentrant. The release FFI op handles the ordering.
+        make_current: OwnedMakeCurrentGuard,
+    }
+
+    /// Initialize an `EglRuntime` + `OpenGlSurfaceAdapter`. Returns NULL
+    /// on failure (typically because `libEGL.so.1` is not installed or the
+    /// driver doesn't support `EGL_EXT_image_dma_buf_import_modifiers`).
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_runtime_new() -> *mut OpenGlRuntimeHandle {
+        let egl = match EglRuntime::new() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!(
+                    "slpn_opengl_runtime_new: EglRuntime::new failed: {}",
+                    e
+                );
+                return std::ptr::null_mut();
+            }
+        };
+        let adapter = Arc::new(OpenGlSurfaceAdapter::new(Arc::clone(&egl)));
+        Box::into_raw(Box::new(OpenGlRuntimeHandle {
+            egl,
+            adapter,
+            held: Mutex::new(HashMap::new()),
+        }))
+    }
+
+    /// Release the runtime's adapter, EGL context, and any pending acquire
+    /// guards (best-effort — pending acquires are released via the adapter's
+    /// `Drop`). Idempotent; null is a no-op.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_runtime_free(rt: *mut OpenGlRuntimeHandle) {
+        if !rt.is_null() {
+            let _ = unsafe { Box::from_raw(rt) };
+        }
+    }
+
+    /// Register a host surface with the OpenGL adapter, importing its
+    /// DMA-BUF FD as an `EGLImage` and binding to a fresh `GL_TEXTURE_2D`.
+    ///
+    /// `surface_id` must be unique across the runtime's lifetime —
+    /// duplicates return -1. The caller (Python wrapper) owns the
+    /// `surface_id` namespace.
+    ///
+    /// Reads DMA-BUF FD + plane metadata + DRM modifier from `gpu_handle`
+    /// (produced by `slpn_surface_resolve_surface`); the FD is dup'd
+    /// internally by EGL.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_register_surface(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+        gpu_handle: *const SurfaceHandle,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!("slpn_opengl_register_surface: null runtime");
+                return -1;
+            }
+        };
+        let gpu = match unsafe { gpu_handle.as_ref() } {
+            Some(g) => g,
+            None => {
+                tracing::error!("slpn_opengl_register_surface: null gpu_handle");
+                return -1;
+            }
+        };
+        let fd = match gpu.fds.first().copied() {
+            Some(f) if f >= 0 => f,
+            _ => {
+                tracing::error!(
+                    "slpn_opengl_register_surface: surface has no DMA-BUF fd"
+                );
+                return -1;
+            }
+        };
+        let drm_fourcc = match drm_fourcc_for_format(&gpu.format) {
+            Some(c) => c,
+            None => {
+                tracing::error!(
+                    "slpn_opengl_register_surface: unsupported format '{}'",
+                    gpu.format
+                );
+                return -1;
+            }
+        };
+        let stride = gpu
+            .plane_strides
+            .first()
+            .copied()
+            .filter(|s| *s > 0)
+            .unwrap_or(gpu.bytes_per_row as u64);
+        let offset = gpu.plane_offsets.first().copied().unwrap_or(0);
+        let registration = HostSurfaceRegistration {
+            dma_buf_fd: fd,
+            width: gpu.width,
+            height: gpu.height,
+            drm_fourcc,
+            drm_format_modifier: gpu.drm_format_modifier,
+            plane_offset: offset,
+            plane_stride: stride,
+        };
+        match rt.adapter.register_host_surface(surface_id, registration) {
+            Ok(()) => 0,
+            Err(e) => {
+                tracing::error!(
+                    "slpn_opengl_register_surface: register_host_surface failed: {:?}",
+                    e
+                );
+                -1
+            }
+        }
+    }
+
+    /// Drop a registered surface from the adapter (releases its EGLImage +
+    /// GL_TEXTURE_2D). Returns 0 on success, -1 if not registered.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_unregister_surface(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return -1,
+        };
+        if rt.adapter.unregister_host_surface(surface_id) {
+            0
+        } else {
+            -1
+        }
+    }
+
+    /// Acquire write access. Returns the imported `GL_TEXTURE_2D` id, or 0
+    /// on contention / failure (a 0 GL texture id is reserved by GL itself,
+    /// so it's a safe sentinel). Makes the adapter's EGL context current
+    /// on the calling thread for the lifetime of the acquire. Pair every
+    /// successful return with `slpn_opengl_release_write` from the SAME
+    /// thread.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_acquire_write(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+    ) -> u32 {
+        acquire_inner(rt, surface_id, HeldKind::Write)
+    }
+
+    /// Release write access acquired via [`slpn_opengl_acquire_write`].
+    /// Drains the GL command stream (`glFinish`) so cross-API consumers
+    /// see the writes. Returns 0 on success, -1 if no write was held.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_release_write(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        release_inner(rt, surface_id, HeldKind::Write)
+    }
+
+    /// Acquire read access. Returns the imported `GL_TEXTURE_2D` id, or 0
+    /// on contention / failure.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_acquire_read(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+    ) -> u32 {
+        acquire_inner(rt, surface_id, HeldKind::Read)
+    }
+
+    /// Release read access acquired via [`slpn_opengl_acquire_read`].
+    /// Returns 0 on success, -1 if no read was held.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_release_read(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        release_inner(rt, surface_id, HeldKind::Read)
+    }
+
+    fn acquire_inner(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+        kind: HeldKind,
+    ) -> u32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!("slpn_opengl_acquire_*: null runtime");
+                return 0;
+            }
+        };
+        let make_current = match rt.egl.arc_lock_make_current() {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::error!(
+                    "slpn_opengl_acquire_*: arc_lock_make_current: {}",
+                    e
+                );
+                return 0;
+            }
+        };
+        // The adapter only reads `surface.id` from its acquire path —
+        // transport/sync fields are unused for already-registered surfaces.
+        let surface = StreamlibSurface::new(
+            surface_id,
+            0,
+            0,
+            SurfaceFormat::Bgra8,
+            SurfaceUsage::RENDER_TARGET,
+            SurfaceTransportHandle::empty(),
+            SurfaceSyncState::default(),
+        );
+        let texture_id = match kind {
+            HeldKind::Write => match rt.adapter.acquire_write(&surface) {
+                Ok(g) => {
+                    let t = g.view().gl_texture_id();
+                    // Forget the WriteGuard so its Drop doesn't fire — we
+                    // call `end_write_access` manually on release.
+                    std::mem::forget(g);
+                    t
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "slpn_opengl_acquire_write: adapter.acquire_write: {:?}",
+                        e
+                    );
+                    return 0;
+                }
+            },
+            HeldKind::Read => match rt.adapter.acquire_read(&surface) {
+                Ok(g) => {
+                    let t = g.view().gl_texture_id();
+                    std::mem::forget(g);
+                    t
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "slpn_opengl_acquire_read: adapter.acquire_read: {:?}",
+                        e
+                    );
+                    return 0;
+                }
+            },
+        };
+        let mut held = rt.held.lock().expect("opengl held: poisoned");
+        held.insert(
+            surface_id,
+            HeldAcquire {
+                kind,
+                texture_id,
+                make_current,
+            },
+        );
+        texture_id
+    }
+
+    fn release_inner(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+        expected: HeldKind,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return -1,
+        };
+        let removed = {
+            let mut held = rt.held.lock().expect("opengl held: poisoned");
+            held.remove(&surface_id)
+        };
+        let held = match removed {
+            Some(h) => h,
+            None => {
+                tracing::error!(
+                    "slpn_opengl_release_*: no acquire held for surface_id {}",
+                    surface_id
+                );
+                return -1;
+            }
+        };
+        if !matches!((&held.kind, &expected), (HeldKind::Read, HeldKind::Read) | (HeldKind::Write, HeldKind::Write)) {
+            tracing::error!(
+                "slpn_opengl_release_*: surface_id {} held in different mode than \
+                 release call expected — releasing it anyway",
+                surface_id
+            );
+        }
+        // CRITICAL ordering: drop the make-current guard FIRST so the
+        // adapter's `end_*_access` can re-lock the EGL mutex internally.
+        // `parking_lot::Mutex` is not reentrant.
+        drop(held.make_current);
+        match held.kind {
+            HeldKind::Read => rt.adapter.end_read_access(surface_id),
+            HeldKind::Write => rt.adapter.end_write_access(surface_id),
+        }
+        let _ = held.texture_id; // capture so the field isn't read-warned
+        0
+    }
+
+    /// Map a host-side `TextureFormat` debug string to the matching DRM
+    /// fourcc. Mirrors the Vulkan→DRM byte-order convention: `Bgra8Unorm`
+    /// is bytes `[B, G, R, A]` in memory, which is `DRM_FORMAT_ARGB8888`.
+    fn drm_fourcc_for_format(format: &str) -> Option<u32> {
+        match format {
+            "Bgra8Unorm" | "Bgra8UnormSrgb" => Some(DRM_FORMAT_ARGB8888),
+            "Rgba8Unorm" | "Rgba8UnormSrgb" => Some(DRM_FORMAT_ABGR8888),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod opengl {
+    use std::ffi::c_void;
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_runtime_new() -> *mut c_void {
+        tracing::error!("slpn_opengl_*: OpenGL adapter runtime is Linux-only");
+        std::ptr::null_mut()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_runtime_free(_rt: *mut c_void) {}
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_register_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _gpu_handle: *const c_void,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_unregister_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_acquire_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> u32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_release_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_acquire_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> u32 {
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_opengl_release_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
 }
 
 // ============================================================================

@@ -126,6 +126,66 @@ const symbols = {
     parameters: ["pointer", "buffer"] as const,
     result: "void" as const,
   },
+
+  // Per-plane surface-share accessors (#530). The OpenGL adapter needs
+  // `plane_stride` (EGL_DMA_BUF_PLANE{N}_PITCH_EXT) and
+  // `drm_format_modifier` (EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT) for
+  // EGL DMA-BUF import. The base accessors above (`width`, `height`,
+  // `bytes_per_row`) are tightly-packed-CPU-mmap-shaped and don't carry
+  // the modifier-aware row pitch the host allocator chose.
+  sldn_gpu_surface_plane_stride: {
+    parameters: ["pointer", "u32"] as const,
+    result: "u64" as const,
+  },
+  sldn_gpu_surface_plane_offset: {
+    parameters: ["pointer", "u32"] as const,
+    result: "u64" as const,
+  },
+  sldn_gpu_surface_plane_fd: {
+    parameters: ["pointer", "u32"] as const,
+    result: "i32" as const,
+  },
+  sldn_gpu_surface_drm_format_modifier: {
+    parameters: ["pointer"] as const,
+    result: "u64" as const,
+  },
+
+  // OpenGL adapter runtime (#530, Linux). Brings up
+  // `streamlib-adapter-opengl::EglRuntime` + `OpenGlSurfaceAdapter`
+  // inside the subprocess; exposes scoped acquire/release returning a
+  // `GL_TEXTURE_2D` id the customer's GL stack renders into.
+  sldn_opengl_runtime_new: {
+    parameters: [] as const,
+    result: "pointer" as const,
+  },
+  sldn_opengl_runtime_free: {
+    parameters: ["pointer"] as const,
+    result: "void" as const,
+  },
+  sldn_opengl_register_surface: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_opengl_unregister_surface: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_opengl_acquire_write: {
+    parameters: ["pointer", "u64"] as const,
+    result: "u32" as const,
+  },
+  sldn_opengl_release_write: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_opengl_acquire_read: {
+    parameters: ["pointer", "u64"] as const,
+    result: "u32" as const,
+  },
+  sldn_opengl_release_read: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
 } as const;
 
 export type NativeLib = Deno.DynamicLibrary<typeof symbols>;

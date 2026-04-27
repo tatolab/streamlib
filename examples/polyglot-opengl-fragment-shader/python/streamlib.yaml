@@ -1,0 +1,15 @@
+package:
+  name: polyglot-opengl-fragment-shader
+  version: "0.1.0"
+  description: "Polyglot OpenGL adapter scenario (#530) — Python Mandelbrot fragment shader rendered into a host DMA-BUF surface"
+
+processors:
+  - name: com.tatolab.opengl_fragment_shader
+    version: "1.0.0"
+    description: "Acquires a host-pre-registered render-target DMA-BUF surface as a GL_TEXTURE_2D, renders a Mandelbrot fragment shader, releases"
+    runtime: python
+    execution: reactive
+    entrypoint: "opengl_fragment_shader:OpenGlFragmentShaderProcessor"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0
