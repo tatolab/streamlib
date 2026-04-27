@@ -314,6 +314,105 @@ this design — the working hypothesis may not fit:
   different shape, this section needs updating. Marked as a
   trip-wire above.
 
+## Runtime wiring — `install_setup_hook`
+
+> Added 2026-04-27 (#529). All adapter integrations register their
+> host-side state through this single API.
+
+Every surface adapter's host-side wiring runs through
+[`StreamRuntime::install_setup_hook`][hook]. The hook fires exactly
+once per `start()`, after `GpuContext::init_for_platform_sync` has
+created the live `GpuContext` but before any processor's `setup()`
+runs — the window where adapter bridges and pre-allocated host
+surfaces have to be in place.
+
+[hook]: ../../libs/streamlib/src/core/runtime/runtime.rs
+
+The shape of what the hook does varies by seam:
+
+- **Surface-share seam** (Vulkan, OpenGL, Skia). The hook allocates
+  the host's `StreamTexture` (via
+  `gpu.acquire_render_target_dma_buf_image` for render-target-capable
+  DMA-BUF), registers it in surface-share with a known UUID via
+  `gpu.surface_store().register_texture(uuid, &texture)`, and stashes
+  any per-runtime sync state the adapter needs (timeline semaphores,
+  DRM modifier records). No bridge — every subprocess acquire is a
+  one-shot `check_out`.
+- **Escalate-IPC seam** (cpu-readback). The hook constructs the
+  `CpuReadbackSurfaceAdapter`, allocates + registers the host
+  surface(s) it serves, and registers a `CpuReadbackBridge`
+  implementation on the GpuContext via
+  `gpu.set_cpu_readback_bridge(...)`. The bridge is the dispatch
+  target the escalate handler reaches when a subprocess sends
+  `acquire_cpu_readback`.
+
+Reference implementation:
+`examples/polyglot-cpu-readback-blur/src/main.rs`. That example shows
+the cpu-readback case (which exercises the bridge path); the GPU
+adapters use the same hook but skip the `set_*_bridge` step.
+
+The hook is the canonical opt-in registration point. Future adapters
+that need pre-start GpuContext access should use it; adapters that
+need per-acquire host work should also expose a `set_*_bridge` setter
+on `GpuContext` mirroring `set_cpu_readback_bridge`. Application
+authors call `install_setup_hook` exactly once per adapter they want
+to expose to subprocesses.
+
+### Trade-off — explicit registration vs. Cargo-feature ambient availability
+
+The pre-#529 mental model was implicit: a Cargo feature like
+`streamlib/adapter-cpu-readback` would compile the adapter in and
+the runtime would discover it ambiently (via `inventory` registration
+or similar). That's not how this works anymore. With
+`install_setup_hook` the model is:
+
+1. Add the adapter crate as a Cargo dep.
+2. Call `runtime.install_setup_hook(...)` exactly once at app
+   startup, doing the adapter's required pre-start work (allocate
+   host surfaces, register in surface-share, set bridge if needed).
+
+The cost: one extra line of wiring per adapter at the application's
+`main.rs`. Compile-time presence is no longer enough — you have to
+explicitly hand the adapter the resources it manages. Embedded /
+headless deployments that just want "everything that compiled in to
+be available" pay a real, if small, ergonomic cost here.
+
+What we get for that cost (and why it was the right call):
+
+- **Explicit and greppable.** `git grep install_setup_hook` tells
+  you exactly which adapters this runtime exposes to subprocesses
+  and what host surfaces it pre-allocates. No ambient surprises
+  ("wait, why is cpu-readback available, I didn't enable it?").
+- **Lifetime control.** The hook captures the adapter `Arc`, so the
+  application owns when the adapter is destroyed. A Cargo feature
+  can't express lifetime — it'd either leak per-process state for
+  the whole binary's life, or hand-roll a separate teardown path.
+- **Per-runtime configuration.** Multiple `StreamRuntime` instances
+  in the same process can wire different adapter sets, or wire the
+  same adapter against different surface dimensions / DRM modifiers
+  / quality knobs. Cargo features are per-binary; this is per-runtime.
+- **No magic about required setup.** Every adapter has *some*
+  pre-start work — at minimum allocating one or more host surfaces
+  and registering them. A Cargo feature flag can't do that work; it
+  can only flip a compile-time bit. The hook makes the work the
+  application has to do for that adapter visible at the call site,
+  next to the surface-allocation arguments.
+- **Type safety on bridge wiring.** `gpu.set_cpu_readback_bridge(...)`
+  takes a typed `Arc<dyn CpuReadbackBridge>` — wrong-type bridges
+  are a compile error. A feature-flag-driven registration would
+  funnel everything through a generic registry and lose that.
+
+When this trade-off becomes painful and what to do about it: if
+applications start writing the same five-line adapter setup
+boilerplate over and over, the right answer is a per-adapter
+`install_default` convenience helper (e.g.
+`streamlib_adapter_cpu_readback::install_default(&runtime, surface_size)`)
+that internally calls `install_setup_hook` with sensible defaults.
+The convenience helper is opt-in and additive; the underlying
+explicit API stays as the escape hatch. Don't replace explicit
+registration with implicit feature-flag discovery — the auditability
+property is load-bearing.
+
 ## Implementation issues
 
 The subprocess runtimes for the three already-shipped adapters

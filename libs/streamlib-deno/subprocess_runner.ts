@@ -23,7 +23,7 @@ import {
   NativeRuntimeContextFullAccess,
   NativeRuntimeContextLimitedAccess,
 } from "./context.ts";
-import { EscalateChannel } from "./escalate.ts";
+import { EscalateChannel, installChannel } from "./escalate.ts";
 import {
   closeLibcHandle,
   readFrame as readEscalateFrame,
@@ -130,6 +130,10 @@ async function main(): Promise<void> {
   // read site (outer loop + run-phase concurrent reader). Constructed
   // BEFORE installing logging so `log.install` has a channel to drain to.
   const escalateChannel = new EscalateChannel(bridgeSendJson);
+  // Process-wide singleton so SDK helpers (e.g. `CpuReadbackContext`)
+  // can reach the channel without it being threaded through every
+  // call site. Mirrors the Python SDK's `install_channel`.
+  installChannel(escalateChannel);
 
   // Install unified logging: writer task + console / Deno.stdout/stderr
   // interceptors. After this point, `console.*` and `Deno.stdout.write`

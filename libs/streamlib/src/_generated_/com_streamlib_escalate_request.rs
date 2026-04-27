@@ -12,6 +12,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op")]
 pub enum EscalateRequest {
+    #[serde(rename = "acquire_cpu_readback")]
+    AcquireCpuReadback(EscalateRequestAcquireCpuReadback),
+
     #[serde(rename = "acquire_image")]
     AcquireImage(EscalateRequestAcquireImage),
 
@@ -26,6 +29,45 @@ pub enum EscalateRequest {
 
     #[serde(rename = "release_handle")]
     ReleaseHandle(EscalateRequestReleaseHandle),
+}
+
+/// Access mode for the acquire. `read` triggers a host-side
+/// `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
+/// FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
+/// the subprocess later calls `release_handle`. Maps onto the cpu-readback
+/// adapter's `acquire_read` / `acquire_write` entrypoints.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum EscalateRequestAcquireCpuReadbackMode {
+    #[serde(rename = "read")]
+    #[default]
+    Read,
+
+    #[serde(rename = "write")]
+    Write,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestAcquireCpuReadback {
+    /// Access mode for the acquire. `read` triggers a host-side
+    /// `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-
+    /// buffer FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush
+    /// back when the subprocess later calls `release_handle`. Maps onto the
+    /// cpu-readback adapter's `acquire_read` / `acquire_write` entrypoints.
+    #[serde(rename = "mode")]
+    pub mode: EscalateRequestAcquireCpuReadbackMode,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
+    /// a surface previously registered with the host's cpu-readback adapter via
+    /// `register_host_surface`. JTD has no native u64 — the wire form is the
+    /// decimal string representation, parsed back into u64 by the host before
+    /// dispatch.
+    #[serde(rename = "surface_id")]
+    pub surface_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

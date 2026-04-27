@@ -148,6 +148,9 @@ winit = "0.30"  # Window creation and event loop for display processor
 raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 # Wire-format helpers for the per-runtime surface-sharing socket
 streamlib-surface-client = { path = "../streamlib-surface-client" }
+# Surface adapter ABI types referenced by the host-side CpuReadbackBridge
+# trait (linux-only; the cpu-readback adapter is linux-only).
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
@@ -161,8 +164,6 @@ serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interferenc
 tempfile = "3.14"  # Temporary directories for config tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
 png = "0.17"  # PNG decoding for shader-output fixture comparisons
-# SubprocessCrashHarness for the EPOLLHUP watchdog integration test (#520)
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 
 [[bench]]
 name = "logging"

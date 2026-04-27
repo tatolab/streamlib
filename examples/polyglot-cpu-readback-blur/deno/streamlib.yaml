@@ -1,0 +1,15 @@
+package:
+  name: polyglot-cpu-readback-blur-deno
+  version: "0.1.0"
+  description: "Polyglot cpu-readback adapter blur (#529) — Deno twin with hand-rolled separable Gaussian"
+
+processors:
+  - name: com.tatolab.cpu_readback_blur_deno
+    version: "1.0.0"
+    description: "Acquires a host-pre-registered cpu-readback surface, applies a separable Gaussian blur, releases"
+    runtime: deno
+    execution: reactive
+    entrypoint: "cpu_readback_blur.ts:default"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0

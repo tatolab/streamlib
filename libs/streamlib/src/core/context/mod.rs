@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod audio_clock;
+#[cfg(target_os = "linux")]
+mod cpu_readback_bridge;
 mod gpu_context;
 mod runtime_context;
 mod surface_store;
@@ -11,6 +13,10 @@ mod time_context;
 pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
     SoftwareAudioClock,
+};
+#[cfg(target_os = "linux")]
+pub use cpu_readback_bridge::{
+    CpuReadbackAccessMode, CpuReadbackAcquired, CpuReadbackBridge, CpuReadbackPlane,
 };
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 pub use runtime_context::{

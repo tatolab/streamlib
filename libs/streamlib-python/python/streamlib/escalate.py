@@ -105,6 +105,34 @@ class EscalateChannel:
             }
         )
 
+    def acquire_cpu_readback(
+        self, surface_id: int, mode: str
+    ) -> Dict[str, Any]:
+        """Request a host-side cpu-readback acquire of an already-registered
+        surface. ``surface_id`` is the host-assigned ``u64`` (we marshal it
+        as decimal string per the JTD wire format). ``mode`` is ``"read"``
+        or ``"write"``.
+
+        Returns the ``ok``-payload dict, which includes
+        ``cpu_readback_planes`` — a list of per-plane descriptors
+        ``{staging_surface_id, width, height, bytes_per_pixel}`` the
+        subprocess uses to ``check_out`` each plane's staging buffer
+        from the surface-share service.
+
+        On failure raises :class:`EscalateError`.
+        """
+        if mode not in ("read", "write"):
+            raise ValueError(
+                f"acquire_cpu_readback: mode must be 'read' or 'write', got {mode!r}"
+            )
+        return self.request(
+            {
+                "op": "acquire_cpu_readback",
+                "surface_id": str(int(surface_id)),
+                "mode": mode,
+            }
+        )
+
     def release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Tell the host to drop its strong reference to ``handle_id``."""
         return self.request(

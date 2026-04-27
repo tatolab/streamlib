@@ -8,7 +8,46 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle;
+export type EscalateRequest = EscalateRequestAcquireCpuReadback | EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle;
+
+/**
+ * Access mode for the acquire. `read` triggers a host-side
+ * `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
+ * FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
+ * the subprocess later calls `release_handle`. Maps onto the cpu-readback
+ * adapter's `acquire_read` / `acquire_write` entrypoints.
+ */
+export enum EscalateRequestAcquireCpuReadbackMode {
+  Read = "read",
+  Write = "write",
+}
+
+export interface EscalateRequestAcquireCpuReadback {
+  op: "acquire_cpu_readback";
+
+  /**
+   * Access mode for the acquire. `read` triggers a host-side
+   * `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
+   * FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
+   * the subprocess later calls `release_handle`. Maps onto the cpu-readback
+   * adapter's `acquire_read` / `acquire_write` entrypoints.
+   */
+  mode: EscalateRequestAcquireCpuReadbackMode;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
+   * a surface previously registered with the host's cpu-readback adapter via
+   * `register_host_surface`. JTD has no native u64 — the wire form is the
+   * decimal string representation, parsed back into u64 by the host before
+   * dispatch.
+   */
+  surface_id: string;
+}
 
 export interface EscalateRequestAcquireImage {
   op: "acquire_image";

@@ -123,6 +123,13 @@ pub struct StreamRuntime {
     /// `fdatasync`s the log file.
     #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
     _logging_guard: crate::core::logging::StreamlibLoggingGuard,
+    /// Engine-extension hooks invoked exactly once during [`Self::start`],
+    /// after the [`GpuContext`] is initialized and before any
+    /// processor's `setup()` runs. Used to register host-side bridges
+    /// (e.g. [`crate::core::context::CpuReadbackBridge`]) whose
+    /// construction needs the live GpuContext but whose registration
+    /// must precede the first `process()` call. Drained on each `start()`.
+    setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
 }
 
 impl StreamRuntime {
@@ -224,7 +231,25 @@ impl StreamRuntime {
             surface_socket_path,
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
+            setup_hooks: Arc::new(Mutex::new(Vec::new())),
         }))
+    }
+
+    /// Register a one-shot hook to run during [`Self::start`], after the
+    /// [`GpuContext`] is initialized and before any processor's
+    /// `setup()` runs. The hook receives the live `Arc<GpuContext>`,
+    /// giving caller code a window to register engine extensions —
+    /// today the canonical use is wiring a
+    /// [`crate::core::context::CpuReadbackBridge`] via
+    /// [`crate::core::context::GpuContext::set_cpu_readback_bridge`]
+    /// before subprocess processors fire their first
+    /// `acquire_cpu_readback`. Hooks fire FIFO; a hook returning `Err`
+    /// aborts `start()` with the same error.
+    pub fn install_setup_hook<F>(&self, hook: F)
+    where
+        F: FnOnce(&GpuContext) -> Result<()> + Send + 'static,
+    {
+        self.setup_hooks.lock().push(Box::new(hook));
     }
 
     /// Path of the per-runtime surface-sharing Unix socket.
@@ -621,6 +646,21 @@ impl StreamRuntime {
         tracing::info!("[start] Initializing GPU context...");
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
+
+        // Drain pre-start hooks now — after the GpuContext is live but
+        // before any processor setup runs. Adapter bridges register
+        // themselves here so processors that issue escalate ops in
+        // their first `process()` find the bridge already in place.
+        let hooks: Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>> = {
+            let mut guard = self.setup_hooks.lock();
+            std::mem::take(&mut *guard)
+        };
+        if !hooks.is_empty() {
+            tracing::info!("[start] Running {} setup hook(s)", hooks.len());
+            for hook in hooks {
+                hook(&gpu)?;
+            }
+        }
 
         // Initialize SurfaceStore for cross-process GPU surface sharing (macOS only)
         #[cfg(target_os = "macos")]
