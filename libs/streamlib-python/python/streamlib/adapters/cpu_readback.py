@@ -280,23 +280,45 @@ class CpuReadbackContext:
         with self._acquire(surface, mode="write", writable=True) as view:
             yield view  # type: ignore[misc]
 
-    def try_acquire_read(self, surface):
-        """Non-blocking read acquire is not yet wired through escalate
-        IPC. Falls back to blocking ``acquire_read`` for now; a future
-        change can add a dedicated escalate op (today the wire format
-        is request/response and the host blocks on the bridge call)."""
-        return self.acquire_read(surface)
+    @contextmanager
+    def try_acquire_read(self, surface) -> "Iterator[Optional[CpuReadbackReadView]]":
+        """Non-blocking read acquire. Yields a [`CpuReadbackReadView`] on
+        success or ``None`` on contention (another writer holds the
+        surface). Customers should pattern: ::
 
-    def try_acquire_write(self, surface):
-        """See :meth:`try_acquire_read`."""
-        return self.acquire_write(surface)
+            with ctx.try_acquire_read(surface) as view:
+                if view is None:
+                    return  # skip this frame
+                ...
+        """
+        with self._acquire(surface, mode="read", writable=False, blocking=False) as view:
+            yield view  # type: ignore[misc]
+
+    @contextmanager
+    def try_acquire_write(self, surface) -> "Iterator[Optional[CpuReadbackWriteView]]":
+        """Non-blocking write acquire. Yields a [`CpuReadbackWriteView`]
+        on success or ``None`` on contention. See :meth:`try_acquire_read`
+        for the pattern."""
+        with self._acquire(surface, mode="write", writable=True, blocking=False) as view:
+            yield view  # type: ignore[misc]
 
     @contextmanager
     def _acquire(
-        self, surface, mode: str, writable: bool
+        self, surface, mode: str, writable: bool, blocking: bool = True,
     ) -> "Iterator[object]":
         surface_id = _surface_id_from(surface)
-        response = self._escalate.acquire_cpu_readback(surface_id, mode)
+        if blocking:
+            response = self._escalate.acquire_cpu_readback(surface_id, mode)
+        else:
+            response = self._escalate.try_acquire_cpu_readback(surface_id, mode)
+        if response is None:
+            # Contended: host registered nothing, customer has nothing
+            # to release. Yield None so `with` callers can skip the
+            # frame without distinguishing "host-said-no" from
+            # "happy-path acquire" via exception-handling.
+            yield None
+            return
+
         handle_id = response["handle_id"]
 
         try:

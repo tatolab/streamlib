@@ -8,7 +8,7 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest = EscalateRequestAcquireCpuReadback | EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle;
+export type EscalateRequest = EscalateRequestAcquireCpuReadback | EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle | EscalateRequestTryAcquireCpuReadback;
 
 /**
  * Access mode for the acquire. `read` triggers a host-side
@@ -242,4 +242,45 @@ export interface EscalateRequestReleaseHandle {
    * Correlates request with response. UUID string.
    */
   request_id: string;
+}
+
+/**
+ * Access mode for the acquire. Maps onto the cpu-readback adapter's
+ * `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
+ * image↔buffer copy semantics as `acquire_cpu_readback` on success, but the
+ * host returns a [`contended`] response instead of blocking when the surface
+ * is already write-held (or, for `write` mode, read-held). Subprocess customers
+ * use this to skip a frame instead of stalling their thread runner.
+ */
+export enum EscalateRequestTryAcquireCpuReadbackMode {
+  Read = "read",
+  Write = "write",
+}
+
+export interface EscalateRequestTryAcquireCpuReadback {
+  op: "try_acquire_cpu_readback";
+
+  /**
+   * Access mode for the acquire. Maps onto the cpu-readback adapter's
+   * `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
+   * image↔buffer copy semantics as `acquire_cpu_readback` on success, but
+   * the host returns a [`contended`] response instead of blocking when the
+   * surface is already write-held (or, for `write` mode, read-held). Subprocess
+   * customers use this to skip a frame instead of stalling their thread runner.
+   */
+  mode: EscalateRequestTryAcquireCpuReadbackMode;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
+   * a surface previously registered with the host's cpu-readback adapter via
+   * `register_host_surface`. JTD has no native u64 — the wire form is the
+   * decimal string representation, parsed back into u64 by the host before
+   * dispatch.
+   */
+  surface_id: string;
 }

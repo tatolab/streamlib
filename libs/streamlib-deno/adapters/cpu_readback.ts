@@ -203,20 +203,44 @@ export class CpuReadbackContext {
     )) as CpuReadbackAccessGuard<CpuReadbackWriteView>;
   }
 
-  /** Non-blocking variant. Today the wire format is request/response,
-   * so the host blocks on the bridge call; callers fall back to
-   * `acquireRead` here. A future change can add a dedicated
-   * try-acquire escalate op. */
+  /** Non-blocking variant. Resolves to the same scoped guard on
+   * success or `null` when the host's adapter reports the surface as
+   * contended. Customers pattern: ::
+   *
+   *     await using guard = await ctx.tryAcquireRead(surface);
+   *     if (guard === null) return;  // skip this frame
+   *     // use guard.view as if it came from acquireRead.
+   *
+   * `await using` on `null` is a no-op (the runtime treats `null`
+   * as a non-disposable), so the skip branch needs no extra cleanup.
+   */
   async tryAcquireRead(
     surface: StreamlibSurface | bigint | number,
-  ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView>> {
-    return await this.acquireRead(surface);
+  ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView> | null> {
+    return (await this._tryAcquire(surface, "read", false)) as
+      | CpuReadbackAccessGuard<CpuReadbackReadView>
+      | null;
   }
 
   async tryAcquireWrite(
     surface: StreamlibSurface | bigint | number,
-  ): Promise<CpuReadbackAccessGuard<CpuReadbackWriteView>> {
-    return await this.acquireWrite(surface);
+  ): Promise<CpuReadbackAccessGuard<CpuReadbackWriteView> | null> {
+    return (await this._tryAcquire(surface, "write", true)) as
+      | CpuReadbackAccessGuard<CpuReadbackWriteView>
+      | null;
+  }
+
+  private async _tryAcquire(
+    surface: StreamlibSurface | bigint | number,
+    mode: "read" | "write",
+    writable: boolean,
+  ): Promise<
+    CpuReadbackAccessGuard<CpuReadbackReadView | CpuReadbackWriteView> | null
+  > {
+    const surfaceId = _surfaceIdFrom(surface);
+    const response = await this.escalate.tryAcquireCpuReadback(surfaceId, mode);
+    if (response === null) return null;
+    return await this._buildGuardFromResponse(response, writable);
   }
 
   private async _acquire(
@@ -226,6 +250,13 @@ export class CpuReadbackContext {
   ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView | CpuReadbackWriteView>> {
     const surfaceId = _surfaceIdFrom(surface);
     const response = await this.escalate.acquireCpuReadback(surfaceId, mode);
+    return await this._buildGuardFromResponse(response, writable);
+  }
+
+  private async _buildGuardFromResponse(
+    response: EscalateResponseOk,
+    writable: boolean,
+  ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView | CpuReadbackWriteView>> {
     const handleId = response.handle_id;
 
     let view: CpuReadbackReadView | CpuReadbackWriteView;

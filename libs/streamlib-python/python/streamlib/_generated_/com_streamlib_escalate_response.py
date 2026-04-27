@@ -22,6 +22,7 @@ class EscalateResponse:
     @classmethod
     def from_json_data(cls, data: Any) -> 'EscalateResponse':
         variants: Dict[str, Type[EscalateResponse]] = {
+            "contended": EscalateResponseContended,
             "err": EscalateResponseErr,
             "ok": EscalateResponseOk,
         }
@@ -30,6 +31,31 @@ class EscalateResponse:
 
     def to_json_data(self) -> Any:
         pass
+
+@dataclass
+class EscalateResponseContended(EscalateResponse):
+    request_id: 'str'
+    """
+    Correlates response with request. Returned by [`try_acquire_cpu_readback`]
+    (and any future `try_*` op that opts into the same shape) when the host's
+    adapter would have blocked on a competing reader/writer. The subprocess
+    gets no handle, no planes, and no surface-share registrations to release —
+    `contended` is purely advisory, the customer skips the frame and re-tries
+    later.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateResponseContended':
+        return cls(
+            "contended",
+            _from_json_data(str, data.get("request_id")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "result": "contended" }
+        data["request_id"] = _to_json_data(self.request_id)
+        return data
 
 @dataclass
 class EscalateResponseErr(EscalateResponse):
