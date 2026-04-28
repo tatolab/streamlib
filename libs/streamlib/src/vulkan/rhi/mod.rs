@@ -22,7 +22,10 @@ mod consumer_vulkan_sync;
 #[cfg(target_os = "linux")]
 mod consumer_vulkan_texture;
 
-pub use device_capability::{ConsumerMarker, DevicePrivilege, HostMarker, VulkanRhiDevice};
+pub use device_capability::{
+    ConsumerMarker, DevicePrivilege, HostMarker, VulkanRhiDevice, VulkanTextureLike,
+    VulkanTimelineSemaphoreLike,
+};
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
 pub use vulkan_device::HostVulkanDevice;

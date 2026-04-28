@@ -132,3 +132,12 @@ impl Drop for ConsumerVulkanTimelineSemaphore {
 
 unsafe impl Send for ConsumerVulkanTimelineSemaphore {}
 unsafe impl Sync for ConsumerVulkanTimelineSemaphore {}
+
+impl super::VulkanTimelineSemaphoreLike for ConsumerVulkanTimelineSemaphore {
+    fn wait(&self, value: u64, timeout_ns: u64) -> Result<()> {
+        ConsumerVulkanTimelineSemaphore::wait(self, value, timeout_ns)
+    }
+    fn signal_host(&self, value: u64) -> Result<()> {
+        ConsumerVulkanTimelineSemaphore::signal_host(self, value)
+    }
+}

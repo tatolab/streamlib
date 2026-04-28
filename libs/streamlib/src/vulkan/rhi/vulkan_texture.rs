@@ -974,6 +974,22 @@ impl Drop for HostVulkanTexture {
 unsafe impl Send for HostVulkanTexture {}
 unsafe impl Sync for HostVulkanTexture {}
 
+impl super::VulkanTextureLike for HostVulkanTexture {
+    fn image(&self) -> Option<vk::Image> {
+        HostVulkanTexture::image(self)
+    }
+    fn chosen_drm_format_modifier(&self) -> u64 {
+        #[cfg(target_os = "linux")]
+        {
+            HostVulkanTexture::chosen_drm_format_modifier(self)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            0
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

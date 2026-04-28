@@ -190,7 +190,8 @@ pub mod adapter_support {
         ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer,
         ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, DevicePrivilege, HostMarker,
         HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTexture,
-        HostVulkanTimelineSemaphore, VulkanRhiDevice,
+        HostVulkanTimelineSemaphore, VulkanRhiDevice, VulkanTextureLike,
+        VulkanTimelineSemaphoreLike,
     };
 }
 

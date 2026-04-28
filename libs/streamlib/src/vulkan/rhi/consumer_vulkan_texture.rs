@@ -345,3 +345,12 @@ impl Drop for ConsumerVulkanTexture {
 
 unsafe impl Send for ConsumerVulkanTexture {}
 unsafe impl Sync for ConsumerVulkanTexture {}
+
+impl super::VulkanTextureLike for ConsumerVulkanTexture {
+    fn image(&self) -> Option<vk::Image> {
+        Some(ConsumerVulkanTexture::image(self))
+    }
+    fn chosen_drm_format_modifier(&self) -> u64 {
+        ConsumerVulkanTexture::chosen_drm_format_modifier(self)
+    }
+}

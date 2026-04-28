@@ -1,12 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `VulkanSurfaceAdapter` — host-side `SurfaceAdapter` implementation
-//! that hands a host-allocated `VkImage` to consumers as a Vulkan-typed
-//! [`crate::VulkanReadView`] / [`crate::VulkanWriteView`].
+//! `VulkanSurfaceAdapter<D>` — Vulkan-typed `SurfaceAdapter`.
+//!
+//! Generic over the device flavor: `D = HostVulkanDevice` for host-side
+//! adapter use (allocate + register), `D = ConsumerVulkanDevice` for
+//! cdylib subprocess use (import + register). The four trait methods on
+//! `VulkanRhiDevice` (`device()`, `queue()`, `queue_family_index()`,
+//! `submit_to_queue()`) are everything the adapter needs from the
+//! device; the timeline semaphore type is picked up via
+//! `D::Privilege::TimelineSemaphore` and abstracted behind
+//! `VulkanTimelineSemaphoreLike` so the same wait + signal calls work
+//! against either flavor.
 //!
 //! The adapter:
-//! - Owns a registry of host-registered surfaces keyed by [`SurfaceId`].
+//! - Owns a registry of registered surfaces keyed by [`SurfaceId`].
 //! - Waits on the timeline semaphore at the start of every acquire so
 //!   prior GPU work has drained.
 //! - Issues a layout transition into the consumer's expected layout
@@ -19,8 +27,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
-use streamlib::core::rhi::StreamTexture;
+use streamlib::adapter_support::{
+    DevicePrivilege, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
+};
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
     SurfaceRegistration, VkImageInfo, WriteGuard,
@@ -36,24 +45,20 @@ use crate::view::{VulkanReadView, VulkanWriteView};
 /// an `AdapterError::SyncTimeout` rather than wedging the consumer.
 const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
 
-/// Vulkan-native [`SurfaceAdapter`] implementation.
-///
-/// Construct with [`Self::new`] passing the host's [`HostVulkanDevice`].
-/// Register host-allocated surfaces with [`Self::register_host_surface`];
-/// consumers acquire scoped access through the standard
-/// [`SurfaceAdapter::acquire_read`] / [`SurfaceAdapter::acquire_write`]
-/// API or via the [`crate::VulkanContext`] convenience.
-pub struct VulkanSurfaceAdapter {
-    device: Arc<HostVulkanDevice>,
-    surfaces: Registry<SurfaceState>,
+/// Vulkan-native [`SurfaceAdapter`] implementation. Generic over the
+/// device flavor — instantiate as `VulkanSurfaceAdapter<HostVulkanDevice>`
+/// host-side or `VulkanSurfaceAdapter<ConsumerVulkanDevice>` cdylib-side.
+pub struct VulkanSurfaceAdapter<D: VulkanRhiDevice> {
+    device: Arc<D>,
+    surfaces: Registry<SurfaceState<D::Privilege>>,
     /// Per-acquire timeline wait timeout. Adjustable via
     /// [`Self::with_acquire_timeout`].
     acquire_timeout: Duration,
 }
 
-impl VulkanSurfaceAdapter {
+impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     /// Construct an empty adapter bound to `device`.
-    pub fn new(device: Arc<HostVulkanDevice>) -> Self {
+    pub fn new(device: Arc<D>) -> Self {
         Self {
             device,
             surfaces: Registry::new(),
@@ -69,11 +74,11 @@ impl VulkanSurfaceAdapter {
 
     /// Returns the underlying device for callers (test harnesses, the
     /// `VulkanContext`, raw-handle escape hatches) that need it.
-    pub fn device(&self) -> &Arc<HostVulkanDevice> {
+    pub fn device(&self) -> &Arc<D> {
         &self.device
     }
 
-    /// Register a host-allocated surface with this adapter.
+    /// Register an allocated (or imported) surface with this adapter.
     ///
     /// `id` is assigned by the host (typically from the surface-share
     /// service); it MUST be unique across the adapter's lifetime.
@@ -81,7 +86,7 @@ impl VulkanSurfaceAdapter {
     pub fn register_host_surface(
         &self,
         id: SurfaceId,
-        registration: HostSurfaceRegistration,
+        registration: HostSurfaceRegistration<D::Privilege>,
     ) -> Result<(), AdapterError> {
         let inserted = self.surfaces.register(
             id,
@@ -103,7 +108,7 @@ impl VulkanSurfaceAdapter {
     }
 
     /// Drop a registered surface. Pending guards keep the underlying
-    /// `Arc<HostVulkanTimelineSemaphore>` alive; the next acquire returns
+    /// `Arc<TimelineSemaphore>` alive; the next acquire returns
     /// [`AdapterError::SurfaceNotFound`].
     pub fn unregister_host_surface(&self, id: SurfaceId) -> bool {
         self.surfaces.unregister(id).is_some()
@@ -115,11 +120,12 @@ impl VulkanSurfaceAdapter {
         self.surfaces.len()
     }
 
-    fn make_image_info(&self, texture: &StreamTexture) -> VkImageInfo {
+    fn make_image_info(&self, image: vk::Image) -> VkImageInfo {
         // Best-effort image info — fields the adapter doesn't track
         // (memory binding, ycbcr conversion) stay zeroed. Skia and other
-        // VkImageInfoExt consumers can extend this once
-        // HostVulkanTexture exposes more accessors.
+        // VkImageInfoExt consumers can extend this once the adapter
+        // tracks more per-surface state.
+        let _ = image; // future-proof: consumers will read this once filled
         VkImageInfo {
             format: 0,
             tiling: vk::ImageTiling::OPTIMAL.as_raw(),
@@ -129,9 +135,7 @@ impl VulkanSurfaceAdapter {
             queue_family: self.device.queue_family_index(),
             memory_handle: 0,
             memory_offset: 0,
-            memory_size: ((texture.width() as u64)
-                * (texture.height() as u64)
-                * (texture.format().bytes_per_pixel() as u64)),
+            memory_size: 0,
             memory_property_flags: 0,
             protected: 0,
             ycbcr_conversion: 0,
@@ -261,14 +265,13 @@ impl VulkanSurfaceAdapter {
     fn try_begin_read(
         &self,
         surface: &StreamlibSurface,
-    ) -> Result<Option<ReadAcquired>, AdapterError> {
+    ) -> Result<Option<ReadAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
         self.surfaces.try_begin_read(id, |state| {
             let timeline = Arc::clone(&state.timeline);
             let wait_value = state.current_release_value;
             let image = state
                 .texture
-                .vulkan_inner()
                 .image()
                 .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
             let from = state.current_layout;
@@ -278,7 +281,7 @@ impl VulkanSurfaceAdapter {
                 wait_value,
                 image,
                 from,
-                info: self.make_image_info(&state.texture),
+                info: self.make_image_info(image),
             })
         })
     }
@@ -286,14 +289,13 @@ impl VulkanSurfaceAdapter {
     fn try_begin_write(
         &self,
         surface: &StreamlibSurface,
-    ) -> Result<Option<WriteAcquired>, AdapterError> {
+    ) -> Result<Option<WriteAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
         self.surfaces.try_begin_write(id, |state| {
             let timeline = Arc::clone(&state.timeline);
             let wait_value = state.current_release_value;
             let image = state
                 .texture
-                .vulkan_inner()
                 .image()
                 .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
             let from = state.current_layout;
@@ -303,7 +305,7 @@ impl VulkanSurfaceAdapter {
                 wait_value,
                 image,
                 from,
-                info: self.make_image_info(&state.texture),
+                info: self.make_image_info(image),
             })
         })
     }
@@ -312,7 +314,7 @@ impl VulkanSurfaceAdapter {
     fn finalize_read(
         &self,
         surface_id: SurfaceId,
-        acquired: ReadAcquired,
+        acquired: ReadAcquired<D::Privilege>,
     ) -> Result<vk::ImageLayout, AdapterError> {
         if acquired
             .timeline
@@ -340,7 +342,7 @@ impl VulkanSurfaceAdapter {
     fn finalize_write(
         &self,
         surface_id: SurfaceId,
-        acquired: WriteAcquired,
+        acquired: WriteAcquired<D::Privilege>,
     ) -> Result<vk::ImageLayout, AdapterError> {
         if acquired
             .timeline
@@ -372,23 +374,23 @@ impl VulkanSurfaceAdapter {
 /// Snapshot taken under the registry lock so the timeline wait + layout
 /// transition can run unlocked. `read_holders` / `write_held` are
 /// already incremented; rollback paths decrement them on failure.
-struct ReadAcquired {
-    timeline: Arc<HostVulkanTimelineSemaphore>,
+struct ReadAcquired<P: DevicePrivilege> {
+    timeline: Arc<P::TimelineSemaphore>,
     wait_value: u64,
     image: vk::Image,
     from: VulkanLayout,
     info: VkImageInfo,
 }
 
-struct WriteAcquired {
-    timeline: Arc<HostVulkanTimelineSemaphore>,
+struct WriteAcquired<P: DevicePrivilege> {
+    timeline: Arc<P::TimelineSemaphore>,
     wait_value: u64,
     image: vk::Image,
     from: VulkanLayout,
     info: VkImageInfo,
 }
 
-impl SurfaceAdapter for VulkanSurfaceAdapter {
+impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
     type ReadView<'g> = VulkanReadView<'g>;
     type WriteView<'g> = VulkanWriteView<'g>;
 
@@ -497,16 +499,17 @@ impl SurfaceAdapter for VulkanSurfaceAdapter {
     fn end_read_access(&self, surface_id: SurfaceId) {
         // Inner Option: `None` means "not the last reader, skip signal".
         // Outer Option: `None` means "surface raced an unregister".
-        let signal = self.surfaces.with_mut(surface_id, |state| {
-            debug_assert!(state.read_holders > 0, "read release without acquire");
-            state.dec_read_holders();
-            if state.read_holders > 0 {
-                return None;
-            }
-            let next = state.next_release_value();
-            state.current_release_value = next;
-            Some((Arc::clone(&state.timeline), next))
-        });
+        let signal: Option<Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)>> =
+            self.surfaces.with_mut(surface_id, |state| {
+                debug_assert!(state.read_holders > 0, "read release without acquire");
+                state.dec_read_holders();
+                if state.read_holders > 0 {
+                    return None;
+                }
+                let next = state.next_release_value();
+                state.current_release_value = next;
+                Some((Arc::clone(&state.timeline), next))
+            });
         let signal = match signal {
             Some(s) => s,
             None => {
@@ -525,13 +528,14 @@ impl SurfaceAdapter for VulkanSurfaceAdapter {
     }
 
     fn end_write_access(&self, surface_id: SurfaceId) {
-        let signal = self.surfaces.with_mut(surface_id, |state| {
-            debug_assert!(state.write_held, "write release without acquire");
-            state.set_write_held(false);
-            let next = state.next_release_value();
-            state.current_release_value = next;
-            (Arc::clone(&state.timeline), next)
-        });
+        let signal: Option<(Arc<<D::Privilege as DevicePrivilege>::TimelineSemaphore>, u64)> =
+            self.surfaces.with_mut(surface_id, |state| {
+                debug_assert!(state.write_held, "write release without acquire");
+                state.set_write_held(false);
+                let next = state.next_release_value();
+                state.current_release_value = next;
+                (Arc::clone(&state.timeline), next)
+            });
         let (timeline, value) = match signal {
             Some(s) => s,
             None => {
@@ -547,3 +551,4 @@ impl SurfaceAdapter for VulkanSurfaceAdapter {
         }
     }
 }
+

@@ -398,6 +398,16 @@ unsafe impl Send for HostVulkanTimelineSemaphore {}
 #[cfg(target_os = "linux")]
 unsafe impl Sync for HostVulkanTimelineSemaphore {}
 
+#[cfg(target_os = "linux")]
+impl super::VulkanTimelineSemaphoreLike for HostVulkanTimelineSemaphore {
+    fn wait(&self, value: u64, timeout_ns: u64) -> crate::core::Result<()> {
+        HostVulkanTimelineSemaphore::wait(self, value, timeout_ns)
+    }
+    fn signal_host(&self, value: u64) -> crate::core::Result<()> {
+        HostVulkanTimelineSemaphore::signal_host(self, value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

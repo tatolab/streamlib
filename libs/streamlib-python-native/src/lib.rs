@@ -3317,7 +3317,7 @@ mod vulkan {
     use std::sync::{Arc, Mutex};
 
     use streamlib::adapter_support::{
-        HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
+        HostMarker, HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
     };
     use streamlib::core::rhi::TextureFormat;
     use streamlib_adapter_abi::{
@@ -3335,7 +3335,7 @@ mod vulkan {
     /// `VulkanSurfaceAdapter` per subprocess; held for the cdylib's life.
     pub struct VulkanRuntimeHandle {
         device: Arc<HostVulkanDevice>,
-        adapter: Arc<VulkanSurfaceAdapter>,
+        adapter: Arc<VulkanSurfaceAdapter<HostVulkanDevice>>,
         /// Per-surface book-keeping. The actual texture + timeline are
         /// owned by the adapter (transferred into `HostSurfaceRegistration`);
         /// we keep only the raw `vk::Image` handle so
@@ -3553,8 +3553,8 @@ mod vulkan {
         // (not `texture.clone()` — Clone is a hollow no-image stub) into
         // the registration so the adapter owns the imported VkImage's
         // lifetime end-to-end.
-        let registration = HostSurfaceRegistration {
-            texture: streamlib::core::rhi::StreamTexture::from_vulkan(texture),
+        let registration = HostSurfaceRegistration::<HostMarker> {
+            texture: Arc::new(texture),
             timeline,
             initial_layout: VulkanLayout::UNDEFINED,
         };

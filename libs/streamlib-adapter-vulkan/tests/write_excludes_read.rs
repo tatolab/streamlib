@@ -49,9 +49,10 @@ fn live_write_guard_blocks_acquire_read_until_dropped() {
     let ctx = VulkanContext::new(Arc::clone(&adapter));
 
     let surface_id: SurfaceId = 7;
-    let texture = gpu
+    let stream_tex = gpu
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
+    let texture = stream_tex.vulkan_inner().clone();
     let timeline = Arc::new(
         HostVulkanTimelineSemaphore::new(adapter.device().device(), 0).expect("timeline"),
     );

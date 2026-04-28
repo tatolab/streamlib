@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
-use streamlib::adapter_support::HostVulkanTimelineSemaphore;
+use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::{StreamTexture, TextureFormat};
 use streamlib_adapter_abi::{
@@ -33,8 +33,8 @@ pub fn try_init_gpu() -> Option<GpuContext> {
 
 pub struct HostFixture {
     pub gpu: GpuContext,
-    pub adapter: Arc<VulkanSurfaceAdapter>,
-    pub ctx: VulkanContext,
+    pub adapter: Arc<VulkanSurfaceAdapter<HostVulkanDevice>>,
+    pub ctx: VulkanContext<HostVulkanDevice>,
 }
 
 impl HostFixture {
@@ -65,7 +65,7 @@ impl HostFixture {
             .register_host_surface(
                 surface_id,
                 HostSurfaceRegistration {
-                    texture: texture.clone(),
+                    texture: texture.vulkan_inner().clone(),
                     timeline: Arc::clone(&timeline),
                     initial_layout: VulkanLayout::UNDEFINED,
                 },

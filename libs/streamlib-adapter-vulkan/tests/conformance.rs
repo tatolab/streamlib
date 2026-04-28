@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use streamlib::adapter_support::HostVulkanTimelineSemaphore;
+use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
@@ -35,13 +35,14 @@ fn try_init_gpu() -> Option<GpuContext> {
 }
 
 fn register_one(
-    adapter: &VulkanSurfaceAdapter,
+    adapter: &VulkanSurfaceAdapter<HostVulkanDevice>,
     gpu: &GpuContext,
     id: SurfaceId,
 ) -> StreamlibSurface {
-    let texture = gpu
+    let stream_tex = gpu
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
+    let texture = stream_tex.vulkan_inner().clone();
     let timeline = Arc::new(
         HostVulkanTimelineSemaphore::new(adapter.device().device(), 0).expect("timeline"),
     );
@@ -67,7 +68,7 @@ fn register_one(
 }
 
 struct ConformanceFactory<'a> {
-    adapter: &'a VulkanSurfaceAdapter,
+    adapter: &'a VulkanSurfaceAdapter<HostVulkanDevice>,
     gpu: &'a GpuContext,
 }
 

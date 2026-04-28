@@ -3070,7 +3070,7 @@ mod vulkan {
     use std::sync::{Arc, Mutex};
 
     use streamlib::adapter_support::{
-        HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
+        HostMarker, HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
     };
     use streamlib::core::rhi::TextureFormat;
     use streamlib_adapter_abi::{
@@ -3086,7 +3086,7 @@ mod vulkan {
 
     pub struct VulkanRuntimeHandle {
         device: Arc<HostVulkanDevice>,
-        adapter: Arc<VulkanSurfaceAdapter>,
+        adapter: Arc<VulkanSurfaceAdapter<HostVulkanDevice>>,
         registered: Mutex<HashMap<u64, RegisteredSurface>>,
     }
 
@@ -3258,8 +3258,8 @@ mod vulkan {
             }
         };
 
-        let registration = HostSurfaceRegistration {
-            texture: streamlib::core::rhi::StreamTexture::from_vulkan(texture),
+        let registration = HostSurfaceRegistration::<HostMarker> {
+            texture: Arc::new(texture),
             timeline,
             initial_layout: VulkanLayout::UNDEFINED,
         };
