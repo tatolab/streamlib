@@ -23,79 +23,19 @@ class EscalateRequest:
     @classmethod
     def from_json_data(cls, data: Any) -> 'EscalateRequest':
         variants: Dict[str, Type[EscalateRequest]] = {
-            "acquire_cpu_readback": EscalateRequestAcquireCPUReadback,
             "acquire_image": EscalateRequestAcquireImage,
             "acquire_pixel_buffer": EscalateRequestAcquirePixelBuffer,
             "acquire_texture": EscalateRequestAcquireTexture,
             "log": EscalateRequestLog,
             "release_handle": EscalateRequestReleaseHandle,
-            "try_acquire_cpu_readback": EscalateRequestTryAcquireCPUReadback,
+            "run_cpu_readback_copy": EscalateRequestRunCPUReadbackCopy,
+            "try_run_cpu_readback_copy": EscalateRequestTryRunCPUReadbackCopy,
         }
 
         return variants[data["op"]].from_json_data(data)
 
     def to_json_data(self) -> Any:
         pass
-
-class EscalateRequestAcquireCPUReadbackMode(Enum):
-    """
-    Access mode for the acquire. `read` triggers a host-side
-    `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
-    FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
-    the subprocess later calls `release_handle`. Maps onto the cpu-readback
-    adapter's `acquire_read` / `acquire_write` entrypoints.
-    """
-
-    READ = "read"
-    WRITE = "write"
-    @classmethod
-    def from_json_data(cls, data: Any) -> 'EscalateRequestAcquireCPUReadbackMode':
-        return cls(data)
-
-    def to_json_data(self) -> Any:
-        return self.value
-
-@dataclass
-class EscalateRequestAcquireCPUReadback(EscalateRequest):
-    mode: 'EscalateRequestAcquireCPUReadbackMode'
-    """
-    Access mode for the acquire. `read` triggers a host-side
-    `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
-    FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
-    the subprocess later calls `release_handle`. Maps onto the cpu-readback
-    adapter's `acquire_read` / `acquire_write` entrypoints.
-    """
-
-    request_id: 'str'
-    """
-    Correlates request with response. UUID string.
-    """
-
-    surface_id: 'str'
-    """
-    Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
-    a surface previously registered with the host's cpu-readback adapter via
-    `register_host_surface`. JTD has no native u64 — the wire form is the
-    decimal string representation, parsed back into u64 by the host before
-    dispatch.
-    """
-
-
-    @classmethod
-    def from_json_data(cls, data: Any) -> 'EscalateRequestAcquireCPUReadback':
-        return cls(
-            "acquire_cpu_readback",
-            _from_json_data(EscalateRequestAcquireCPUReadbackMode, data.get("mode")),
-            _from_json_data(str, data.get("request_id")),
-            _from_json_data(str, data.get("surface_id")),
-        )
-
-    def to_json_data(self) -> Any:
-        data = { "op": "acquire_cpu_readback" }
-        data["mode"] = _to_json_data(self.mode)
-        data["request_id"] = _to_json_data(self.request_id)
-        data["surface_id"] = _to_json_data(self.surface_id)
-        return data
 
 @dataclass
 class EscalateRequestAcquireImage(EscalateRequest):
@@ -397,35 +337,37 @@ class EscalateRequestReleaseHandle(EscalateRequest):
         data["request_id"] = _to_json_data(self.request_id)
         return data
 
-class EscalateRequestTryAcquireCPUReadbackMode(Enum):
+class EscalateRequestRunCPUReadbackCopyDirection(Enum):
     """
-    Access mode for the acquire. Maps onto the cpu-readback adapter's
-    `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
-    image↔buffer copy semantics as `acquire_cpu_readback` on success, but
-    the host returns a [`contended`] response instead of blocking when the
-    surface is already write-held (or, for `write` mode, read-held). Subprocess
-    customers use this to skip a frame instead of stalling their thread runner.
+    Which copy direction to run on the host. `image_to_buffer` runs
+    `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
+    `buffer_to_image` runs the reverse at write release. The host signals a new
+    value on the surface's timeline at end-of-submit; the subprocess waits on
+    the timeline (through its imported `ConsumerVulkanTimelineSemaphore`) before
+    reading or releasing. No FDs travel on the wire — only the timeline value
+    the host signaled.
     """
 
-    READ = "read"
-    WRITE = "write"
+    BUFFER_TO_IMAGE = "buffer_to_image"
+    IMAGE_TO_BUFFER = "image_to_buffer"
     @classmethod
-    def from_json_data(cls, data: Any) -> 'EscalateRequestTryAcquireCPUReadbackMode':
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunCPUReadbackCopyDirection':
         return cls(data)
 
     def to_json_data(self) -> Any:
         return self.value
 
 @dataclass
-class EscalateRequestTryAcquireCPUReadback(EscalateRequest):
-    mode: 'EscalateRequestTryAcquireCPUReadbackMode'
+class EscalateRequestRunCPUReadbackCopy(EscalateRequest):
+    direction: 'EscalateRequestRunCPUReadbackCopyDirection'
     """
-    Access mode for the acquire. Maps onto the cpu-readback adapter's
-    `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
-    image↔buffer copy semantics as `acquire_cpu_readback` on success, but
-    the host returns a [`contended`] response instead of blocking when the
-    surface is already write-held (or, for `write` mode, read-held). Subprocess
-    customers use this to skip a frame instead of stalling their thread runner.
+    Which copy direction to run on the host. `image_to_buffer` runs
+    `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
+    `buffer_to_image` runs the reverse at write release. The host signals a new
+    value on the surface's timeline at end-of-submit; the subprocess waits on
+    the timeline (through its imported `ConsumerVulkanTimelineSemaphore`) before
+    reading or releasing. No FDs travel on the wire — only the timeline value
+    the host signaled.
     """
 
     request_id: 'str'
@@ -435,26 +377,80 @@ class EscalateRequestTryAcquireCPUReadback(EscalateRequest):
 
     surface_id: 'str'
     """
-    Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
-    a surface previously registered with the host's cpu-readback adapter via
-    `register_host_surface`. JTD has no native u64 — the wire form is the
-    decimal string representation, parsed back into u64 by the host before
-    dispatch.
+    Host-assigned surface id (the u64 carried by `StreamlibSurface::id`)
+    of a surface previously registered with the host's cpu-readback adapter
+    and whose staging buffer + timeline were registered with the surface-
+    share service via `register_pixel_buffer_with_timeline`. The subprocess
+    imported them once at registration time through `streamlib-consumer-rhi`'s
+    `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`. JTD has no
+    native u64 — the wire form is the decimal string representation, parsed back
+    into u64 by the host before dispatch.
     """
 
 
     @classmethod
-    def from_json_data(cls, data: Any) -> 'EscalateRequestTryAcquireCPUReadback':
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunCPUReadbackCopy':
         return cls(
-            "try_acquire_cpu_readback",
-            _from_json_data(EscalateRequestTryAcquireCPUReadbackMode, data.get("mode")),
+            "run_cpu_readback_copy",
+            _from_json_data(EscalateRequestRunCPUReadbackCopyDirection, data.get("direction")),
             _from_json_data(str, data.get("request_id")),
             _from_json_data(str, data.get("surface_id")),
         )
 
     def to_json_data(self) -> Any:
-        data = { "op": "try_acquire_cpu_readback" }
-        data["mode"] = _to_json_data(self.mode)
+        data = { "op": "run_cpu_readback_copy" }
+        data["direction"] = _to_json_data(self.direction)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["surface_id"] = _to_json_data(self.surface_id)
+        return data
+
+class EscalateRequestTryRunCPUReadbackCopyDirection(Enum):
+    """
+    Same shape as `run_cpu_readback_copy.direction`.
+    """
+
+    BUFFER_TO_IMAGE = "buffer_to_image"
+    IMAGE_TO_BUFFER = "image_to_buffer"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestTryRunCPUReadbackCopyDirection':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestTryRunCPUReadbackCopy(EscalateRequest):
+    direction: 'EscalateRequestTryRunCPUReadbackCopyDirection'
+    """
+    Same shape as `run_cpu_readback_copy.direction`.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    surface_id: 'str'
+    """
+    Same shape as `run_cpu_readback_copy.surface_id`. The host returns a
+    [`contended`] response (no timeline value, no copy executed) when its
+    registry would have blocked instead of performing the copy. Subprocess
+    customers use this to skip a frame instead of stalling their thread runner.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestTryRunCPUReadbackCopy':
+        return cls(
+            "try_run_cpu_readback_copy",
+            _from_json_data(EscalateRequestTryRunCPUReadbackCopyDirection, data.get("direction")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(str, data.get("surface_id")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "try_run_cpu_readback_copy" }
+        data["direction"] = _to_json_data(self.direction)
         data["request_id"] = _to_json_data(self.request_id)
         data["surface_id"] = _to_json_data(self.surface_id)
         return data

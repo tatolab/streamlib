@@ -8,46 +8,7 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest = EscalateRequestAcquireCpuReadback | EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle | EscalateRequestTryAcquireCpuReadback;
-
-/**
- * Access mode for the acquire. `read` triggers a host-side
- * `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
- * FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
- * the subprocess later calls `release_handle`. Maps onto the cpu-readback
- * adapter's `acquire_read` / `acquire_write` entrypoints.
- */
-export enum EscalateRequestAcquireCpuReadbackMode {
-  Read = "read",
-  Write = "write",
-}
-
-export interface EscalateRequestAcquireCpuReadback {
-  op: "acquire_cpu_readback";
-
-  /**
-   * Access mode for the acquire. `read` triggers a host-side
-   * `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
-   * FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
-   * the subprocess later calls `release_handle`. Maps onto the cpu-readback
-   * adapter's `acquire_read` / `acquire_write` entrypoints.
-   */
-  mode: EscalateRequestAcquireCpuReadbackMode;
-
-  /**
-   * Correlates request with response. UUID string.
-   */
-  request_id: string;
-
-  /**
-   * Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
-   * a surface previously registered with the host's cpu-readback adapter via
-   * `register_host_surface`. JTD has no native u64 — the wire form is the
-   * decimal string representation, parsed back into u64 by the host before
-   * dispatch.
-   */
-  surface_id: string;
-}
+export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle | EscalateRequestRunCpuReadbackCopy | EscalateRequestTryRunCpuReadbackCopy;
 
 export interface EscalateRequestAcquireImage {
   op: "acquire_image";
@@ -245,30 +206,32 @@ export interface EscalateRequestReleaseHandle {
 }
 
 /**
- * Access mode for the acquire. Maps onto the cpu-readback adapter's
- * `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
- * image↔buffer copy semantics as `acquire_cpu_readback` on success, but the
- * host returns a [`contended`] response instead of blocking when the surface
- * is already write-held (or, for `write` mode, read-held). Subprocess customers
- * use this to skip a frame instead of stalling their thread runner.
+ * Which copy direction to run on the host. `image_to_buffer` runs
+ * `vkCmdCopyImageToBuffer` (image → staging) at acquire time; `buffer_to_image`
+ * runs the reverse at write release. The host signals a new value on the
+ * surface's timeline at end-of-submit; the subprocess waits on the timeline
+ * (through its imported `ConsumerVulkanTimelineSemaphore`) before reading
+ * or releasing. No FDs travel on the wire — only the timeline value the host
+ * signaled.
  */
-export enum EscalateRequestTryAcquireCpuReadbackMode {
-  Read = "read",
-  Write = "write",
+export enum EscalateRequestRunCpuReadbackCopyDirection {
+  BufferToImage = "buffer_to_image",
+  ImageToBuffer = "image_to_buffer",
 }
 
-export interface EscalateRequestTryAcquireCpuReadback {
-  op: "try_acquire_cpu_readback";
+export interface EscalateRequestRunCpuReadbackCopy {
+  op: "run_cpu_readback_copy";
 
   /**
-   * Access mode for the acquire. Maps onto the cpu-readback adapter's
-   * `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
-   * image↔buffer copy semantics as `acquire_cpu_readback` on success, but
-   * the host returns a [`contended`] response instead of blocking when the
-   * surface is already write-held (or, for `write` mode, read-held). Subprocess
-   * customers use this to skip a frame instead of stalling their thread runner.
+   * Which copy direction to run on the host. `image_to_buffer` runs
+   * `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
+   * `buffer_to_image` runs the reverse at write release. The host signals a
+   * new value on the surface's timeline at end-of-submit; the subprocess waits
+   * on the timeline (through its imported `ConsumerVulkanTimelineSemaphore`)
+   * before reading or releasing. No FDs travel on the wire — only the timeline
+   * value the host signaled.
    */
-  mode: EscalateRequestTryAcquireCpuReadbackMode;
+  direction: EscalateRequestRunCpuReadbackCopyDirection;
 
   /**
    * Correlates request with response. UUID string.
@@ -276,11 +239,44 @@ export interface EscalateRequestTryAcquireCpuReadback {
   request_id: string;
 
   /**
-   * Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
-   * a surface previously registered with the host's cpu-readback adapter via
-   * `register_host_surface`. JTD has no native u64 — the wire form is the
-   * decimal string representation, parsed back into u64 by the host before
-   * dispatch.
+   * Host-assigned surface id (the u64 carried by `StreamlibSurface::id`)
+   * of a surface previously registered with the host's cpu-readback adapter
+   * and whose staging buffer + timeline were registered with the surface-
+   * share service via `register_pixel_buffer_with_timeline`. The subprocess
+   * imported them once at registration time through `streamlib-consumer-rhi`'s
+   * `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`. JTD has
+   * no native u64 — the wire form is the decimal string representation, parsed
+   * back into u64 by the host before dispatch.
+   */
+  surface_id: string;
+}
+
+/**
+ * Same shape as `run_cpu_readback_copy.direction`.
+ */
+export enum EscalateRequestTryRunCpuReadbackCopyDirection {
+  BufferToImage = "buffer_to_image",
+  ImageToBuffer = "image_to_buffer",
+}
+
+export interface EscalateRequestTryRunCpuReadbackCopy {
+  op: "try_run_cpu_readback_copy";
+
+  /**
+   * Same shape as `run_cpu_readback_copy.direction`.
+   */
+  direction: EscalateRequestTryRunCpuReadbackCopyDirection;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Same shape as `run_cpu_readback_copy.surface_id`. The host returns a
+   * [`contended`] response (no timeline value, no copy executed) when its
+   * registry would have blocked instead of performing the copy. Subprocess
+   * customers use this to skip a frame instead of stalling their thread runner.
    */
   surface_id: string;
 }

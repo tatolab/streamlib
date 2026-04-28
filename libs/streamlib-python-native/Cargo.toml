@@ -50,6 +50,14 @@ streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
 # boundary is type-system enforced by what `streamlib-consumer-rhi`
 # exposes vs. what it doesn't.
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+# Subprocess-side cpu-readback runtime (#562). Same shape as
+# adapter-vulkan / adapter-opengl: the adapter is generic over device
+# flavor, and this cdylib instantiates it against the consumer-side
+# VkDevice + ConsumerVulkanPixelBuffer / ConsumerVulkanTimelineSemaphore.
+# Per-acquire `vkCmdCopyImageToBuffer` runs host-side and is triggered
+# via a thin `run_cpu_readback_copy` escalate IPC; the consumer waits
+# on the imported timeline through the carve-out.
+streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback" }
 
 
 [lints]

@@ -71,11 +71,17 @@ pub trait DevicePrivilege: private::Sealed + 'static + Send + Sync {
     type TimelineSemaphore: VulkanTimelineSemaphoreLike + Send + Sync + 'static;
     /// Concrete texture type for this privilege flavor.
     type Texture: VulkanTextureLike + Send + Sync + 'static;
+    /// Concrete HOST_VISIBLE staging-buffer type for this privilege
+    /// flavor. Adapters that need CPU-mapped per-plane staging
+    /// (cpu-readback) hold `Arc<P::PixelBuffer>` and read its mapped
+    /// pointer through [`VulkanPixelBufferLike`].
+    type PixelBuffer: VulkanPixelBufferLike + Send + Sync + 'static;
 }
 
 impl DevicePrivilege for ConsumerMarker {
     type TimelineSemaphore = super::ConsumerVulkanTimelineSemaphore;
     type Texture = super::ConsumerVulkanTexture;
+    type PixelBuffer = super::ConsumerVulkanPixelBuffer;
 }
 
 /// Operations the surface adapter needs from a timeline semaphore.
@@ -88,6 +94,42 @@ pub trait VulkanTimelineSemaphoreLike {
     fn wait(&self, value: u64, timeout_ns: u64) -> Result<()>;
     /// Host-side signal: advance the counter to `value`.
     fn signal_host(&self, value: u64) -> Result<()>;
+    /// Raw `vk::Semaphore` handle for inclusion in
+    /// `VkSubmitInfo2::pSignalSemaphoreInfos` /
+    /// `pWaitSemaphoreInfos`. Surfaces that need to schedule
+    /// timeline-coupled work on a queue (cpu-readback's host trigger,
+    /// vulkan adapter's submit-with-signal flows) reach the raw handle
+    /// through this method so they don't need to know the concrete
+    /// privilege flavor.
+    fn semaphore(&self) -> vk::Semaphore;
+}
+
+/// Operations the surface adapter needs from a HOST_VISIBLE staging
+/// `VkBuffer`. Both [`crate::ConsumerVulkanPixelBuffer`] and
+/// `streamlib::vulkan::rhi::HostVulkanPixelBuffer` implement this —
+/// cpu-readback adapter code holds `Arc<P::PixelBuffer>` and reads
+/// the `vk::Buffer` handle plus the mapped pointer through this
+/// trait without caring whether it's host or consumer.
+///
+/// On the host side the underlying buffer is allocated through
+/// [`HostVulkanPixelBuffer::new`] (HOST_VISIBLE / HOST_COHERENT linear
+/// `VkBuffer` exported as a DMA-BUF). On the consumer side it is
+/// imported from the host's exported FD via
+/// [`crate::ConsumerVulkanPixelBuffer::from_dma_buf_fd`]. Both expose
+/// the same `vk::Buffer` + mapped-pointer + plane-size shape.
+pub trait VulkanPixelBufferLike {
+    /// `vk::Buffer` handle for plane 0.
+    fn buffer(&self) -> vk::Buffer;
+    /// Persistently mapped CPU pointer for plane 0.
+    fn mapped_ptr(&self) -> *mut u8;
+    /// Plane 0 size in bytes.
+    fn size(&self) -> vk::DeviceSize;
+    /// Buffer width in pixels.
+    fn width(&self) -> u32;
+    /// Buffer height in pixels.
+    fn height(&self) -> u32;
+    /// Bytes per pixel.
+    fn bytes_per_pixel(&self) -> u32;
 }
 
 /// Operations the surface adapter needs from a Vulkan-flavored

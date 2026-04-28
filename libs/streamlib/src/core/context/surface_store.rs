@@ -1161,6 +1161,117 @@ impl SurfaceStore {
         Ok(())
     }
 
+    /// Register a host-allocated multi-plane pixel buffer with the
+    /// surface-share service under an explicit `surface_id`, optionally
+    /// shipping the host's exportable timeline semaphore alongside as an
+    /// OPAQUE_FD.
+    ///
+    /// Distinct from [`Self::register_buffer`] (single-plane, no
+    /// timeline) and [`Self::register_texture`] (image, with optional
+    /// timeline). This is the cpu-readback adapter's registration path:
+    /// the host pre-allocates one HOST_VISIBLE / HOST_COHERENT linear
+    /// staging `VkBuffer` per plane and an exportable timeline; the
+    /// subprocess `check_out`s the bundle once at registration time and
+    /// imports each plane via [`streamlib_consumer_rhi::ConsumerVulkanPixelBuffer::from_dma_buf_fds`]
+    /// + the timeline via [`streamlib_consumer_rhi::ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`].
+    ///
+    /// Per-acquire IPC after registration is a thin trigger that
+    /// signals a new timeline value on the same shared timeline; no
+    /// further FD passing is needed.
+    #[cfg(target_os = "linux")]
+    pub fn register_pixel_buffer_with_timeline(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &RhiPixelBuffer,
+        timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    ) -> Result<()> {
+        use crate::core::rhi::RhiPixelBufferExport;
+
+        // Per-plane DMA-BUF FDs (single-plane buffers return a one-element vec).
+        let planes = pixel_buffer.export_plane_handles()?;
+        let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
+        let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
+        let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
+        for handle in planes {
+            let crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } = handle;
+            plane_fds.push(fd);
+            plane_sizes.push(size as u64);
+            plane_offsets.push(0);
+        }
+
+        // Optionally export the timeline as an OPAQUE_FD. Same
+        // SCM_RIGHTS-trailing-FD shape `register_texture` uses so the
+        // surface-share daemon's existing `has_sync_fd` parsing applies
+        // unchanged.
+        let sync_fd: Option<std::os::unix::io::RawFd> = match timeline {
+            Some(t) => match t.export_opaque_fd() {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    for fd in &plane_fds {
+                        unsafe { libc::close(*fd) };
+                    }
+                    return Err(StreamError::Configuration(format!(
+                        "register_pixel_buffer_with_timeline: failed to export timeline opaque fd: {}",
+                        e
+                    )));
+                }
+            },
+            None => None,
+        };
+
+        let request = serde_json::json!({
+            "op": "register",
+            "surface_id": surface_id,
+            "runtime_id": self.inner.runtime_id,
+            "width": pixel_buffer.width,
+            "height": pixel_buffer.height,
+            "format": format!("{:?}", pixel_buffer.format()),
+            "resource_type": "pixel_buffer",
+            "plane_sizes": plane_sizes,
+            "plane_offsets": plane_offsets,
+            "has_sync_fd": sync_fd.is_some(),
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+        })?;
+
+        let mut fds: Vec<std::os::unix::io::RawFd> = plane_fds.clone();
+        if let Some(s) = sync_fd {
+            fds.push(s);
+        }
+        let send_result =
+            streamlib_surface_client::send_request_with_fds(stream, &request, &fds, 0);
+        for f in &fds {
+            unsafe { libc::close(*f) };
+        }
+        let (response, response_fds) = send_result.map_err(|e| {
+            StreamError::Configuration(format!(
+                "Unix socket register_pixel_buffer_with_timeline failed: {}",
+                e
+            ))
+        })?;
+        for f in &response_fds {
+            unsafe { libc::close(*f) };
+        }
+
+        if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
+            return Err(StreamError::Configuration(format!(
+                "register_pixel_buffer_with_timeline: {}",
+                error
+            )));
+        }
+
+        tracing::debug!(
+            "SurfaceStore: Registered pixel buffer '{}' ({} plane(s), sync_fd={})",
+            surface_id,
+            plane_sizes.len(),
+            timeline.is_some(),
+        );
+        Ok(())
+    }
+
     /// Lookup a buffer from the surface-share service via Unix socket.
     ///
     /// Checks the host-local cache first so producers that `check_in`'d the

@@ -43,6 +43,12 @@ streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
 # Consumer-side RHI carve-out — see streamlib-python-native/Cargo.toml
 # for the type-system-boundary rationale.
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+# Subprocess-side cpu-readback runtime (#562). Same shape as the python
+# native — adapter generic over device flavor, instantiated here
+# against ConsumerVulkanDevice. Per-acquire `vkCmdCopyImageToBuffer`
+# runs host-side, triggered via the `run_cpu_readback_copy` escalate
+# IPC; the consumer waits on the imported timeline through the carve-out.
+streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback" }
 
 
 [lints]

@@ -29,15 +29,14 @@
 #![cfg(target_os = "linux")]
 
 mod adapter;
-mod bridge;
 mod context;
 mod state;
 mod view;
 
 pub use adapter::{
-    CpuReadbackStagingPlane, CpuReadbackSurfaceAdapter, CpuReadbackSurfaceSnapshot,
+    CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, CpuReadbackTriggerContext,
+    InProcessCpuReadbackCopyTrigger, TriggerPlane,
 };
-pub use bridge::CpuReadbackBridgeImpl;
 pub use context::CpuReadbackContext;
 pub use state::HostSurfaceRegistration;
 pub use view::{

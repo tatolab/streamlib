@@ -1,17 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Polyglot cpu-readback adapter scenario (#529).
+//! Polyglot cpu-readback adapter scenario (#562, Path E single-pattern).
 //!
 //! End-to-end gate for the cpu-readback subprocess runtime: the host
-//! pre-registers ONE cpu-readback surface and uploads a known input
-//! pattern; a Python or Deno polyglot processor opens the surface
-//! through `CpuReadbackContext.acquire_write`, applies a Gaussian blur
-//! (cv2 in Python, hand-rolled separable kernel in Deno), and on
-//! release the host-side adapter flushes CPU→GPU. After the runtime
-//! stops, this binary reads the surface back through the adapter and
-//! writes the result to a PNG. Reading that PNG with the Read tool is
-//! the visual gate — the output must show the blurred input pattern.
+//! pre-allocates the source `VkImage`, one HOST_VISIBLE staging
+//! `VkBuffer`, and an exportable timeline semaphore; registers the
+//! staging buffer + timeline with the surface-share service so the
+//! subprocess can import them through `streamlib-consumer-rhi`'s
+//! `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`;
+//! and uploads a known input pattern. A Python or Deno polyglot
+//! processor opens the surface through `CpuReadbackContext.acquire_write`,
+//! applies a Gaussian blur (cv2 in Python, hand-rolled separable
+//! kernel in Deno), and on release the host-side adapter flushes
+//! CPU→GPU. After the runtime stops, this binary reads the surface
+//! back through the adapter and writes the result to a PNG. Reading
+//! that PNG with the Read tool is the visual gate — the output must
+//! show the blurred input pattern.
 //!
 //! Pipeline shape:
 //!
@@ -42,14 +47,19 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib::host_rhi::HostVulkanTimelineSemaphore;
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::TextureFormat;
+use streamlib::core::context::{
+    CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext,
+};
+use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::host_rhi::{
+    HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
+};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
-use streamlib_adapter_abi::{SurfaceFormat, SurfaceId};
+use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat, SurfaceId};
 use streamlib_adapter_cpu_readback::{
-    CpuReadbackBridgeImpl, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
+    CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
+    InProcessCpuReadbackCopyTrigger,
 };
 
 /// Single host surface id used throughout this scenario. The polyglot
@@ -60,6 +70,8 @@ const SCENARIO_SURFACE_ID: SurfaceId = 1;
 /// keep the run fast; large enough that a Gaussian blur is visually
 /// obvious in the output PNG.
 const SURFACE_SIZE: u32 = 256;
+
+type HostAdapter = CpuReadbackSurfaceAdapter<streamlib::host_rhi::HostVulkanDevice>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeKind {
@@ -118,7 +130,7 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("=== Polyglot cpu-readback adapter scenario (#529) ===");
+    println!("=== Polyglot cpu-readback adapter scenario (#562) ===");
     println!("Runtime:     {}", runtime_kind.as_str());
     println!(
         "Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (id {SCENARIO_SURFACE_ID})"
@@ -132,20 +144,36 @@ fn main() -> Result<()> {
     // Slot the setup hook will populate with the cpu-readback adapter
     // it constructs — main.rs reuses this Arc post-stop to read the
     // surface back for the output PNG.
-    let adapter_slot: Arc<Mutex<Option<Arc<CpuReadbackSurfaceAdapter>>>> =
+    let adapter_slot: Arc<Mutex<Option<Arc<HostAdapter>>>> =
         Arc::new(Mutex::new(None));
 
     {
         let adapter_slot = Arc::clone(&adapter_slot);
         runtime.install_setup_hook(move |gpu| {
-            let adapter = Arc::new(CpuReadbackSurfaceAdapter::new(Arc::clone(
-                gpu.device().vulkan_device(),
-            )));
-            register_host_surface(&adapter, gpu)?;
+            let host_device = Arc::clone(gpu.device().vulkan_device());
+            let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(
+                Arc::clone(&host_device),
+            ))
+                as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
+            let adapter: Arc<HostAdapter> = Arc::new(
+                CpuReadbackSurfaceAdapter::new(Arc::clone(&host_device), trigger),
+            );
+
+            register_host_surface(&adapter, gpu).map_err(|e| {
+                StreamError::Configuration(format!(
+                    "register_host_surface: {e}"
+                ))
+            })?;
+
             upload_input_pattern(&adapter)?;
-            gpu.set_cpu_readback_bridge(Arc::new(CpuReadbackBridgeImpl::new(
-                Arc::clone(&adapter),
-            )));
+
+            // Wire the cpu-readback bridge so subprocess
+            // `run_cpu_readback_copy` IPCs route through this host
+            // adapter's bridge entrypoints.
+            gpu.set_cpu_readback_bridge(Arc::new(BridgeImpl {
+                adapter: Arc::clone(&adapter),
+            }));
+
             *adapter_slot.lock().unwrap() = Some(adapter);
             println!("✓ cpu-readback adapter registered, surface uploaded, bridge installed");
             Ok(())
@@ -250,46 +278,140 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Allocate a render-target-capable DMA-BUF VkImage and an exportable
-/// timeline semaphore, then register the pair with the cpu-readback
+/// Bridge between the host runtime's `set_cpu_readback_bridge` and
+/// the cpu-readback adapter's per-surface dispatch. Lives in this
+/// example because `streamlib-adapter-cpu-readback` cannot depend on
+/// `streamlib` (post-#562 — the bridge trait lives in `streamlib`).
+struct BridgeImpl {
+    adapter: Arc<HostAdapter>,
+}
+
+impl CpuReadbackBridge for BridgeImpl {
+    fn run_copy(
+        &self,
+        surface_id: SurfaceId,
+        direction: CpuReadbackCopyDirection,
+    ) -> std::result::Result<u64, String> {
+        match direction {
+            CpuReadbackCopyDirection::ImageToBuffer => self
+                .adapter
+                .run_bridge_copy_image_to_buffer(surface_id)
+                .map_err(|e| format!("{e:?}")),
+            CpuReadbackCopyDirection::BufferToImage => self
+                .adapter
+                .run_bridge_copy_buffer_to_image(surface_id)
+                .map_err(|e| format!("{e:?}")),
+        }
+    }
+
+    fn try_run_copy(
+        &self,
+        surface_id: SurfaceId,
+        direction: CpuReadbackCopyDirection,
+    ) -> std::result::Result<Option<u64>, String> {
+        // v1: try-variant collapses to blocking on the bridge side —
+        // the adapter's `run_bridge_copy_*` does not currently expose
+        // a non-blocking flavor. Returning the blocking result is
+        // safe because the bridge holds no per-surface lock; the
+        // subprocess's adapter does its own contention tracking.
+        Ok(Some(
+            self.run_copy(surface_id, direction)?,
+        ))
+    }
+}
+
+/// Allocate the source `VkImage` (render-target-capable DMA-BUF), one
+/// HOST_VISIBLE staging `VkBuffer`, and an exportable timeline; register
+/// the staging buffer + timeline with the surface-share service so the
+/// subprocess can import them; then register the surface with the host
 /// adapter under [`SCENARIO_SURFACE_ID`].
 fn register_host_surface(
-    adapter: &Arc<CpuReadbackSurfaceAdapter>,
+    adapter: &Arc<HostAdapter>,
     gpu: &GpuContext,
-) -> Result<()> {
-    let texture = gpu.acquire_render_target_dma_buf_image(
+) -> std::result::Result<(), String> {
+    let host_device = adapter.device();
+
+    // 1. Allocate the source render-target DMA-BUF VkImage.
+    let stream_texture = gpu
+        .acquire_render_target_dma_buf_image(
+            SURFACE_SIZE,
+            SURFACE_SIZE,
+            TextureFormat::Bgra8Unorm,
+        )
+        .map_err(|e| format!("acquire_render_target_dma_buf_image: {e}"))?;
+    let texture_arc = Arc::clone(stream_texture.vulkan_inner());
+
+    // 2. Allocate the HOST_VISIBLE staging buffer (BGRA8 = 1 plane).
+    let staging = HostVulkanPixelBuffer::new(
+        host_device,
         SURFACE_SIZE,
         SURFACE_SIZE,
-        TextureFormat::Bgra8Unorm,
-    )?;
+        4,
+        PixelFormat::Bgra32,
+    )
+    .map_err(|e| format!("HostVulkanPixelBuffer::new: {e}"))?;
+    let staging_arc = Arc::new(staging);
+    let staging_rhi =
+        RhiPixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&staging_arc));
+
+    // 3. Allocate the exportable timeline semaphore.
     let timeline = Arc::new(
-        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0).map_err(|e| {
-            StreamError::Configuration(format!("create timeline semaphore: {e}"))
-        })?,
+        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+            .map_err(|e| format!("HostVulkanTimelineSemaphore::new_exportable: {e}"))?,
     );
+
+    // 4. Register staging + timeline with the surface-share service so
+    //    the subprocess can `check_out` the FDs in one shot.
+    let surface_store = gpu
+        .surface_store()
+        .ok_or_else(|| "GpuContext has no surface_store".to_string())?;
+    surface_store
+        .register_pixel_buffer_with_timeline(
+            &SCENARIO_SURFACE_ID.to_string(),
+            &staging_rhi,
+            Some(timeline.as_ref()),
+        )
+        .map_err(|e| format!("register_pixel_buffer_with_timeline: {e}"))?;
+
+    // 5. Register the surface with the host adapter.
     adapter
         .register_host_surface(
             SCENARIO_SURFACE_ID,
-            HostSurfaceRegistration {
-                texture,
+            HostSurfaceRegistration::<HostMarker> {
+                texture: Some(texture_arc),
+                staging_planes: vec![staging_arc],
                 timeline,
                 initial_image_layout: vulkanalia::vk::ImageLayout::UNDEFINED.as_raw(),
                 format: SurfaceFormat::Bgra8,
+                width: SURFACE_SIZE,
+                height: SURFACE_SIZE,
             },
         )
-        .map_err(|e| {
-            StreamError::Configuration(format!("register_host_surface: {e}"))
-        })?;
+        .map_err(|e| format!("register_host_surface: {e:?}"))?;
     Ok(())
 }
 
 /// Pre-populate the cpu-readback surface with a known input pattern —
 /// vertical color bands so the Gaussian blur's smoothing is obvious in
-/// the output PNG. Uses the adapter's `acquire_write_by_id` API; the
-/// guard's Drop runs the CPU→GPU sync.
-fn upload_input_pattern(adapter: &Arc<CpuReadbackSurfaceAdapter>) -> Result<()> {
-    let mut guard = adapter.acquire_write_by_id(SCENARIO_SURFACE_ID).map_err(|e| {
-        StreamError::Configuration(format!("upload_input_pattern acquire: {e}"))
+/// the output PNG. Uses the adapter's blocking acquire path; the guard's
+/// Drop runs the CPU→GPU sync.
+fn upload_input_pattern(adapter: &Arc<HostAdapter>) -> Result<()> {
+    use streamlib_adapter_abi::{
+        SurfaceAdapter, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
+    };
+
+    let surface = StreamlibSurface::new(
+        SCENARIO_SURFACE_ID,
+        SURFACE_SIZE,
+        SURFACE_SIZE,
+        SurfaceFormat::Bgra8,
+        SurfaceUsage::CPU_READBACK,
+        SurfaceTransportHandle::empty(),
+        SurfaceSyncState::default(),
+    );
+
+    let mut guard = adapter.acquire_write(&surface).map_err(|e| {
+        StreamError::Configuration(format!("upload_input_pattern acquire: {e:?}"))
     })?;
 
     {
@@ -329,8 +451,6 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::io::Write;
 
     let path = std::env::temp_dir().join("cpu-readback-blur-trigger.bgra");
-    // 4x4 BGRA × 3 frames = 192 bytes of zeros. Just enough bytes for
-    // BgraFileSource to consume `frame_count=3` × `width*height*4`.
     let mut f = File::create(&path).map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(&[0u8; 4 * 4 * 4 * 3])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
@@ -342,15 +462,28 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
 /// `output`. The reader of this PNG is the visual gate that decides
 /// whether the polyglot subprocess actually applied the blur.
 fn write_output_png(
-    adapter: &Arc<CpuReadbackSurfaceAdapter>,
+    adapter: &Arc<HostAdapter>,
     output: &std::path::Path,
 ) -> Result<()> {
     use std::fs::File;
     use std::io::BufWriter;
+    use streamlib_adapter_abi::{
+        SurfaceAdapter, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
+    };
 
-    let guard = adapter.acquire_read_by_id(SCENARIO_SURFACE_ID).map_err(|e| {
+    let surface = StreamlibSurface::new(
+        SCENARIO_SURFACE_ID,
+        SURFACE_SIZE,
+        SURFACE_SIZE,
+        SurfaceFormat::Bgra8,
+        SurfaceUsage::CPU_READBACK,
+        SurfaceTransportHandle::empty(),
+        SurfaceSyncState::default(),
+    );
+
+    let guard = adapter.acquire_read(&surface).map_err(|e| {
         StreamError::Configuration(format!(
-            "acquire_read_by_id for output PNG: {e}"
+            "acquire_read for output PNG: {e:?}"
         ))
     })?;
 

@@ -58,7 +58,7 @@ struct HelperResponse {
 }
 
 fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
-    eprintln!("[helper] FATAL: {msg}");
+    tracing::error!(error = %msg, "[helper] FATAL");
     if let Some(s) = socket {
         let resp = HelperResponse {
             ok: false,
@@ -238,7 +238,7 @@ fn run() -> ExitCode {
 
     let body = serde_json::to_vec(&response).unwrap_or_default();
     if let Err(e) = streamlib_surface_client::send_message_with_fds(&socket, &body, &[]) {
-        eprintln!("[helper] send response: {e}");
+        tracing::error!(error = %e, "[helper] send response failed");
         return ExitCode::from(2);
     }
     ExitCode::SUCCESS
@@ -510,5 +510,11 @@ fn subprocess_readback_image(
 }
 
 fn main() -> ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
     run()
 }

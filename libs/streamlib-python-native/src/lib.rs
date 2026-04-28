@@ -4162,6 +4162,811 @@ mod vulkan_compute_dispatch {
     }
 }
 
+// ============================================================================
+// C ABI — cpu-readback adapter runtime (#562, Linux)
+//
+// Subprocess-side runtime for the cpu-readback adapter. Mirrors the
+// vulkan / opengl runtimes one level above: the adapter is generic over
+// device flavor, this cdylib instantiates it against `ConsumerVulkanDevice`
+// from the carve-out, and per-acquire `vkCmdCopyImageToBuffer` runs
+// host-side via a thin `run_cpu_readback_copy` escalate IPC. The
+// subprocess waits on the imported timeline through the carve-out.
+// ============================================================================
+
+#[cfg(target_os = "linux")]
+mod cpu_readback {
+    use std::collections::HashMap;
+    use std::ffi::c_void;
+    use std::os::unix::io::RawFd;
+    use std::sync::{Arc, Mutex};
+
+    use streamlib_adapter_abi::{
+        AdapterError, StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
+    };
+    use streamlib_adapter_cpu_readback::{
+        CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, CpuReadbackTriggerContext,
+        HostSurfaceRegistration,
+    };
+    use streamlib_consumer_rhi::{
+        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer,
+        ConsumerVulkanTimelineSemaphore, PixelFormat,
+    };
+
+    use super::gpu_surface::SurfaceHandle;
+
+    /// Maximum planes a cpu-readback view exposes. NV12 is the widest
+    /// supported format today (2 planes); 4 leaves headroom for future
+    /// formats without breaking the FFI struct layout.
+    pub const SLPN_CPU_READBACK_MAX_PLANES: usize = 4;
+
+    /// Direction wire constants matched by the Python / Deno SDKs.
+    pub const SLPN_CPU_READBACK_DIRECTION_IMAGE_TO_BUFFER: u32 = 0;
+    pub const SLPN_CPU_READBACK_DIRECTION_BUFFER_TO_IMAGE: u32 = 1;
+
+    /// `acquire_*` return values.
+    pub const SLPN_CPU_READBACK_OK: i32 = 0;
+    pub const SLPN_CPU_READBACK_ERR: i32 = -1;
+    pub const SLPN_CPU_READBACK_CONTENDED: i32 = 1;
+
+    /// Per-plane geometry returned to the SDK on acquire. `mapped_ptr`
+    /// aliases the imported staging `VkBuffer`'s host-visible mapping
+    /// and is valid until the matching `_release_*` call.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct SlpnCpuReadbackPlane {
+        pub mapped_ptr: *mut u8,
+        pub width: u32,
+        pub height: u32,
+        pub bytes_per_pixel: u32,
+        pub byte_size: u64,
+    }
+
+    /// View handed back on `_acquire_*`. `planes[0..plane_count]` is
+    /// populated; entries beyond `plane_count` are zeroed.
+    #[repr(C)]
+    pub struct SlpnCpuReadbackView {
+        pub width: u32,
+        pub height: u32,
+        /// Mirrors `streamlib_adapter_abi::SurfaceFormat as u32`
+        /// (Bgra8 = 0, Rgba8 = 1, Nv12 = 2).
+        pub format: u32,
+        pub plane_count: u32,
+        pub planes: [SlpnCpuReadbackPlane; SLPN_CPU_READBACK_MAX_PLANES],
+    }
+
+    /// Callback Python / Deno register at runtime construction time.
+    /// The cdylib invokes it on every acquire (image_to_buffer) and
+    /// every write release (buffer_to_image). The callback MUST send
+    /// a `run_cpu_readback_copy` escalate IPC with `surface_id` and
+    /// `direction`, block until the host responds, and return the
+    /// host's `timeline_value`.
+    ///
+    /// Returns the `timeline_value` (a positive `u64`) on success.
+    /// Returns `0` on failure — the host adapter starts every surface's
+    /// timeline at 0 and only ever signals values >= 1, so 0 is an
+    /// unused-by-construction sentinel. `user_data` is the opaque
+    /// pointer the SDK passed at registration.
+    pub type SlpnCpuReadbackTriggerCallback = unsafe extern "C" fn(
+        user_data: *mut c_void,
+        surface_id: u64,
+        direction: u32,
+    ) -> u64;
+
+    /// Subprocess trigger that delegates `run_copy_*` to a callback the
+    /// SDK registered. The callback wraps the SDK's escalate-IPC client.
+    /// Construction is deferred — the runtime is created with no
+    /// callback (every acquire fails), and the SDK installs one via
+    /// `slpn_cpu_readback_set_trigger_callback` once its escalate
+    /// channel is open.
+    pub struct EscalateCpuReadbackCopyTrigger {
+        callback: Mutex<Option<RegisteredCallback>>,
+    }
+
+    struct RegisteredCallback {
+        callback: SlpnCpuReadbackTriggerCallback,
+        /// Opaque pointer threaded back into the callback. The SDK is
+        /// responsible for keeping the referent alive for the runtime's
+        /// lifetime; the cdylib never dereferences it.
+        user_data: usize,
+    }
+
+    impl EscalateCpuReadbackCopyTrigger {
+        pub fn new() -> Self {
+            Self {
+                callback: Mutex::new(None),
+            }
+        }
+
+        pub fn install(
+            &self,
+            callback: SlpnCpuReadbackTriggerCallback,
+            user_data: *mut c_void,
+        ) {
+            *self.callback.lock().expect("trigger callback poisoned") = Some(RegisteredCallback {
+                callback,
+                user_data: user_data as usize,
+            });
+        }
+
+        fn dispatch(&self, surface_id: u64, direction: u32) -> Result<u64, AdapterError> {
+            let registered = self.callback.lock().expect("trigger callback poisoned");
+            let entry = registered.as_ref().ok_or_else(|| AdapterError::IpcDisconnected {
+                reason:
+                    "cpu-readback trigger callback not installed; SDK must call \
+                     slpn_cpu_readback_set_trigger_callback before any acquire"
+                        .into(),
+            })?;
+            let value = unsafe {
+                (entry.callback)(
+                    entry.user_data as *mut c_void,
+                    surface_id,
+                    direction,
+                )
+            };
+            if value == 0 {
+                return Err(AdapterError::IpcDisconnected {
+                    reason: format!(
+                        "cpu-readback trigger callback returned 0 (sentinel for failure) for surface_id={surface_id} direction={direction}"
+                    ),
+                });
+            }
+            Ok(value)
+        }
+    }
+
+    impl CpuReadbackCopyTrigger<ConsumerMarker> for EscalateCpuReadbackCopyTrigger {
+        fn run_copy_image_to_buffer(
+            &self,
+            ctx: &CpuReadbackTriggerContext<'_, ConsumerMarker>,
+        ) -> Result<u64, AdapterError> {
+            self.dispatch(ctx.surface_id, SLPN_CPU_READBACK_DIRECTION_IMAGE_TO_BUFFER)
+        }
+
+        fn run_copy_buffer_to_image(
+            &self,
+            ctx: &CpuReadbackTriggerContext<'_, ConsumerMarker>,
+        ) -> Result<u64, AdapterError> {
+            self.dispatch(ctx.surface_id, SLPN_CPU_READBACK_DIRECTION_BUFFER_TO_IMAGE)
+        }
+    }
+
+    pub struct CpuReadbackRuntimeHandle {
+        device: Arc<ConsumerVulkanDevice>,
+        adapter: Arc<CpuReadbackSurfaceAdapter<ConsumerVulkanDevice>>,
+        trigger: Arc<EscalateCpuReadbackCopyTrigger>,
+        /// Per-surface plane geometry snapshot. Populated at register
+        /// time so `acquire_*` doesn't need to chase per-plane info
+        /// through the adapter's view types.
+        registered: Mutex<HashMap<u64, RegisteredSurface>>,
+    }
+
+    struct RegisteredSurface {
+        format: SurfaceFormat,
+        width: u32,
+        height: u32,
+        plane_count: u32,
+        plane_mapped_ptrs: Vec<*mut u8>,
+        plane_widths: Vec<u32>,
+        plane_heights: Vec<u32>,
+        plane_bytes_per_pixel: Vec<u32>,
+        plane_byte_sizes: Vec<u64>,
+    }
+
+    /// Bring up `ConsumerVulkanDevice` + `CpuReadbackSurfaceAdapter`
+    /// against an empty trigger. The SDK MUST register a trigger
+    /// callback via `slpn_cpu_readback_set_trigger_callback` before
+    /// the first acquire; until then every acquire returns -1.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_runtime_new() -> *mut CpuReadbackRuntimeHandle {
+        let device = match ConsumerVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cpu_readback_runtime_new: ConsumerVulkanDevice::new failed: {}",
+                    e
+                );
+                return std::ptr::null_mut();
+            }
+        };
+        let trigger = Arc::new(EscalateCpuReadbackCopyTrigger::new());
+        let adapter = Arc::new(CpuReadbackSurfaceAdapter::new(
+            Arc::clone(&device),
+            Arc::clone(&trigger) as Arc<dyn CpuReadbackCopyTrigger<ConsumerMarker>>,
+        ));
+        Box::into_raw(Box::new(CpuReadbackRuntimeHandle {
+            device,
+            adapter,
+            trigger,
+            registered: Mutex::new(HashMap::new()),
+        }))
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_runtime_free(rt: *mut CpuReadbackRuntimeHandle) {
+        if !rt.is_null() {
+            let _ = unsafe { Box::from_raw(rt) };
+        }
+    }
+
+    /// Install the trigger callback. Replaces any prior callback. Pass
+    /// a null callback pointer is undefined — callers must always pass
+    /// a real C-callable. `user_data` is opaque and may be null; the
+    /// cdylib threads it back through every call without dereferencing.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_set_trigger_callback(
+        rt: *mut CpuReadbackRuntimeHandle,
+        callback: SlpnCpuReadbackTriggerCallback,
+        user_data: *mut c_void,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        rt.trigger.install(callback, user_data);
+        SLPN_CPU_READBACK_OK
+    }
+
+    fn surface_format_from_u32(value: u32) -> Option<SurfaceFormat> {
+        match value {
+            0 => Some(SurfaceFormat::Bgra8),
+            1 => Some(SurfaceFormat::Rgba8),
+            2 => Some(SurfaceFormat::Nv12),
+            _ => None,
+        }
+    }
+
+    fn pixel_format_for_plane(format: SurfaceFormat, plane: u32) -> PixelFormat {
+        match (format, plane) {
+            (SurfaceFormat::Bgra8, 0) => PixelFormat::Bgra32,
+            (SurfaceFormat::Rgba8, 0) => PixelFormat::Rgba32,
+            // NV12 plane 0 = Y (single channel), plane 1 = UV
+            // (interleaved). The consumer-side import only uses the
+            // PixelFormat for buffer metadata; the adapter's per-plane
+            // geometry is what drives copies.
+            (SurfaceFormat::Nv12, 0) => PixelFormat::Gray8,
+            (SurfaceFormat::Nv12, 1) => PixelFormat::Gray8,
+            _ => PixelFormat::Unknown,
+        }
+    }
+
+    /// Register a host cpu-readback surface — imports each per-plane
+    /// DMA-BUF FD as its own [`ConsumerVulkanPixelBuffer`], imports the
+    /// host's exportable timeline via OPAQUE_FD, and hands the
+    /// resulting [`HostSurfaceRegistration`] to the adapter.
+    ///
+    /// `surface_format` is the [`SurfaceFormat`] u32 wire token (0 =
+    /// Bgra8, 1 = Rgba8, 2 = Nv12) — the SDK knows what the host
+    /// allocated, so it passes it explicitly rather than parsing the
+    /// surface-share format string.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_register_surface(
+        rt: *mut CpuReadbackRuntimeHandle,
+        surface_id: u64,
+        gpu_handle: *mut SurfaceHandle,
+        surface_format: u32,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!("slpn_cpu_readback_register_surface: null runtime");
+                return SLPN_CPU_READBACK_ERR;
+            }
+        };
+        let gpu = match unsafe { gpu_handle.as_mut() } {
+            Some(g) => g,
+            None => {
+                tracing::error!("slpn_cpu_readback_register_surface: null gpu_handle");
+                return SLPN_CPU_READBACK_ERR;
+            }
+        };
+        let format = match surface_format_from_u32(surface_format) {
+            Some(f) => f,
+            None => {
+                tracing::error!(
+                    "slpn_cpu_readback_register_surface: unknown surface_format={}",
+                    surface_format
+                );
+                return SLPN_CPU_READBACK_ERR;
+            }
+        };
+        let plane_count = format.plane_count() as usize;
+        if gpu.fds.len() != plane_count {
+            tracing::error!(
+                "slpn_cpu_readback_register_surface: format {:?} requires {} plane(s); gpu_handle has {} fd(s)",
+                format,
+                plane_count,
+                gpu.fds.len()
+            );
+            return SLPN_CPU_READBACK_ERR;
+        }
+        let surface_width = gpu.width;
+        let surface_height = gpu.height;
+
+        // Import each plane as its own ConsumerVulkanPixelBuffer.
+        // `from_dma_buf_fd` `dup`s the fd internally; the SurfaceHandle
+        // keeps its originals so the SDK can re-import for a sibling
+        // adapter (e.g. peeking the same surface via Vulkan).
+        let mut staging_planes: Vec<Arc<ConsumerVulkanPixelBuffer>> =
+            Vec::with_capacity(plane_count);
+        for plane_idx in 0..plane_count {
+            let plane_idx_u32 = plane_idx as u32;
+            let plane_width = format.plane_width(surface_width, plane_idx_u32);
+            let plane_height = format.plane_height(surface_height, plane_idx_u32);
+            let plane_bpp = format.plane_bytes_per_pixel(plane_idx_u32);
+            let plane_size = gpu
+                .plane_sizes
+                .get(plane_idx)
+                .copied()
+                .filter(|s| *s > 0)
+                .unwrap_or_else(|| {
+                    (plane_width as u64) * (plane_height as u64) * (plane_bpp as u64)
+                });
+            let pixel_format = pixel_format_for_plane(format, plane_idx_u32);
+            let pb = match ConsumerVulkanPixelBuffer::from_dma_buf_fd(
+                &rt.device,
+                gpu.fds[plane_idx],
+                plane_width,
+                plane_height,
+                plane_bpp,
+                pixel_format,
+                plane_size,
+            ) {
+                Ok(b) => Arc::new(b),
+                Err(e) => {
+                    tracing::error!(
+                        "slpn_cpu_readback_register_surface: import plane {} fd={}: {}",
+                        plane_idx,
+                        gpu.fds[plane_idx],
+                        e
+                    );
+                    return SLPN_CPU_READBACK_ERR;
+                }
+            };
+            staging_planes.push(pb);
+        }
+
+        // Import the timeline semaphore. Required for every cpu-
+        // readback surface — the host triggers signal it on every copy.
+        let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
+            Some(fd) => fd,
+            None => {
+                tracing::error!(
+                    "slpn_cpu_readback_register_surface: surface '{}' has no sync_fd — \
+                     the host must register it via SurfaceStore::register_pixel_buffer_with_timeline \
+                     with an exportable HostVulkanTimelineSemaphore.",
+                    surface_id
+                );
+                return SLPN_CPU_READBACK_ERR;
+            }
+        };
+        let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &rt.device,
+            raw_sync_fd,
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                gpu.sync_fd = Some(raw_sync_fd);
+                tracing::error!(
+                    "slpn_cpu_readback_register_surface: from_imported_opaque_fd: {}",
+                    e
+                );
+                return SLPN_CPU_READBACK_ERR;
+            }
+        };
+
+        // Snapshot per-plane geometry + mapped pointers BEFORE the
+        // staging_planes Vec is moved into the registration.
+        let mut plane_mapped_ptrs = Vec::with_capacity(plane_count);
+        let mut plane_widths = Vec::with_capacity(plane_count);
+        let mut plane_heights = Vec::with_capacity(plane_count);
+        let mut plane_bytes_per_pixel = Vec::with_capacity(plane_count);
+        let mut plane_byte_sizes = Vec::with_capacity(plane_count);
+        for (idx, pb) in staging_planes.iter().enumerate() {
+            let w = format.plane_width(surface_width, idx as u32);
+            let h = format.plane_height(surface_height, idx as u32);
+            let bpp = format.plane_bytes_per_pixel(idx as u32);
+            plane_mapped_ptrs.push(pb.mapped_ptr());
+            plane_widths.push(w);
+            plane_heights.push(h);
+            plane_bytes_per_pixel.push(bpp);
+            plane_byte_sizes.push((w as u64) * (h as u64) * (bpp as u64));
+        }
+
+        let registration = HostSurfaceRegistration::<ConsumerMarker> {
+            // Consumer-flavor cpu-readback surfaces don't import the
+            // host's source VkImage — the host runs the copy on its
+            // own VkDevice and signals the shared timeline; the
+            // consumer only sees the staging buffers.
+            texture: None,
+            staging_planes,
+            timeline,
+            initial_image_layout: vulkanalia::vk::ImageLayout::GENERAL.as_raw(),
+            format,
+            width: surface_width,
+            height: surface_height,
+        };
+
+        if let Err(e) = rt.adapter.register_host_surface(surface_id, registration) {
+            tracing::error!(
+                "slpn_cpu_readback_register_surface: register_host_surface({}): {:?}",
+                surface_id,
+                e
+            );
+            return SLPN_CPU_READBACK_ERR;
+        }
+
+        rt.registered
+            .lock()
+            .expect("slpn_cpu_readback registered: poisoned")
+            .insert(
+                surface_id,
+                RegisteredSurface {
+                    format,
+                    width: surface_width,
+                    height: surface_height,
+                    plane_count: plane_count as u32,
+                    plane_mapped_ptrs,
+                    plane_widths,
+                    plane_heights,
+                    plane_bytes_per_pixel,
+                    plane_byte_sizes,
+                },
+            );
+        SLPN_CPU_READBACK_OK
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_unregister_surface(
+        rt: *mut CpuReadbackRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let removed = rt
+            .registered
+            .lock()
+            .expect("slpn_cpu_readback registered: poisoned")
+            .remove(&surface_id);
+        if removed.is_none() {
+            return SLPN_CPU_READBACK_ERR;
+        }
+        if rt.adapter.unregister_host_surface(surface_id) {
+            SLPN_CPU_READBACK_OK
+        } else {
+            SLPN_CPU_READBACK_ERR
+        }
+    }
+
+    fn populate_view(
+        rt: &CpuReadbackRuntimeHandle,
+        surface_id: u64,
+        out: &mut SlpnCpuReadbackView,
+    ) -> i32 {
+        let registered = rt
+            .registered
+            .lock()
+            .expect("slpn_cpu_readback registered: poisoned");
+        let entry = match registered.get(&surface_id) {
+            Some(e) => e,
+            None => {
+                tracing::error!(
+                    "slpn_cpu_readback acquire: surface_id {} not registered",
+                    surface_id
+                );
+                return SLPN_CPU_READBACK_ERR;
+            }
+        };
+        out.width = entry.width;
+        out.height = entry.height;
+        out.format = entry.format as u32;
+        out.plane_count = entry.plane_count;
+        out.planes = [SlpnCpuReadbackPlane {
+            mapped_ptr: std::ptr::null_mut(),
+            width: 0,
+            height: 0,
+            bytes_per_pixel: 0,
+            byte_size: 0,
+        }; SLPN_CPU_READBACK_MAX_PLANES];
+        for idx in 0..(entry.plane_count as usize).min(SLPN_CPU_READBACK_MAX_PLANES) {
+            out.planes[idx] = SlpnCpuReadbackPlane {
+                mapped_ptr: entry.plane_mapped_ptrs[idx],
+                width: entry.plane_widths[idx],
+                height: entry.plane_heights[idx],
+                bytes_per_pixel: entry.plane_bytes_per_pixel[idx],
+                byte_size: entry.plane_byte_sizes[idx],
+            };
+        }
+        SLPN_CPU_READBACK_OK
+    }
+
+    fn make_descriptor(surface_id: u64) -> StreamlibSurface {
+        StreamlibSurface::new(
+            surface_id,
+            0,
+            0,
+            SurfaceFormat::Bgra8,
+            SurfaceUsage::CPU_READBACK,
+            SurfaceTransportHandle::empty(),
+            SurfaceSyncState::default(),
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_acquire_read(
+        rt: *mut CpuReadbackRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SlpnCpuReadbackView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let surface = make_descriptor(surface_id);
+        match rt.adapter.acquire_read(&surface) {
+            Ok(g) => {
+                std::mem::forget(g);
+                populate_view(rt, surface_id, out)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cpu_readback_acquire_read({}): {:?}",
+                    surface_id,
+                    e
+                );
+                SLPN_CPU_READBACK_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_acquire_write(
+        rt: *mut CpuReadbackRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SlpnCpuReadbackView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let surface = make_descriptor(surface_id);
+        match rt.adapter.acquire_write(&surface) {
+            Ok(g) => {
+                std::mem::forget(g);
+                populate_view(rt, surface_id, out)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cpu_readback_acquire_write({}): {:?}",
+                    surface_id,
+                    e
+                );
+                SLPN_CPU_READBACK_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_try_acquire_read(
+        rt: *mut CpuReadbackRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SlpnCpuReadbackView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let surface = make_descriptor(surface_id);
+        match rt.adapter.try_acquire_read(&surface) {
+            Ok(Some(g)) => {
+                std::mem::forget(g);
+                populate_view(rt, surface_id, out)
+            }
+            Ok(None) => SLPN_CPU_READBACK_CONTENDED,
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cpu_readback_try_acquire_read({}): {:?}",
+                    surface_id,
+                    e
+                );
+                SLPN_CPU_READBACK_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_try_acquire_write(
+        rt: *mut CpuReadbackRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SlpnCpuReadbackView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        let surface = make_descriptor(surface_id);
+        match rt.adapter.try_acquire_write(&surface) {
+            Ok(Some(g)) => {
+                std::mem::forget(g);
+                populate_view(rt, surface_id, out)
+            }
+            Ok(None) => SLPN_CPU_READBACK_CONTENDED,
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cpu_readback_try_acquire_write({}): {:?}",
+                    surface_id,
+                    e
+                );
+                SLPN_CPU_READBACK_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_release_read(
+        rt: *mut CpuReadbackRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        rt.adapter.end_read_access(surface_id);
+        SLPN_CPU_READBACK_OK
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_release_write(
+        rt: *mut CpuReadbackRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CPU_READBACK_ERR,
+        };
+        rt.adapter.end_write_access(surface_id);
+        SLPN_CPU_READBACK_OK
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod cpu_readback {
+    use std::ffi::c_void;
+
+    pub const SLPN_CPU_READBACK_MAX_PLANES: usize = 4;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct SlpnCpuReadbackPlane {
+        pub mapped_ptr: *mut u8,
+        pub width: u32,
+        pub height: u32,
+        pub bytes_per_pixel: u32,
+        pub byte_size: u64,
+    }
+
+    #[repr(C)]
+    pub struct SlpnCpuReadbackView {
+        pub width: u32,
+        pub height: u32,
+        pub format: u32,
+        pub plane_count: u32,
+        pub planes: [SlpnCpuReadbackPlane; SLPN_CPU_READBACK_MAX_PLANES],
+    }
+
+    pub type SlpnCpuReadbackTriggerCallback = unsafe extern "C" fn(
+        user_data: *mut c_void,
+        surface_id: u64,
+        direction: u32,
+    ) -> u64;
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_runtime_new() -> *mut c_void {
+        tracing::error!("slpn_cpu_readback_*: cpu-readback adapter runtime is Linux-only");
+        std::ptr::null_mut()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_runtime_free(_rt: *mut c_void) {}
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_set_trigger_callback(
+        _rt: *mut c_void,
+        _callback: SlpnCpuReadbackTriggerCallback,
+        _user_data: *mut c_void,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_register_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _gpu_handle: *mut c_void,
+        _surface_format: u32,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_unregister_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_acquire_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SlpnCpuReadbackView,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_acquire_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SlpnCpuReadbackView,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_try_acquire_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SlpnCpuReadbackView,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_try_acquire_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SlpnCpuReadbackView,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_release_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cpu_readback_release_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 mod vulkan {
     use std::ffi::c_void;

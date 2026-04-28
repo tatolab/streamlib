@@ -47,27 +47,6 @@ pub struct EscalateResponseErr {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateResponseOkCpuReadbackPlane {
-    /// Plane bytes-per-pixel. BGRA/RGBA: 4. NV12 plane 0 (Y): 1. NV12 plane 1
-    /// (UV interleaved): 2.
-    #[serde(rename = "bytes_per_pixel")]
-    pub bytes_per_pixel: u32,
-
-    /// Plane height in texels.
-    #[serde(rename = "height")]
-    pub height: u32,
-
-    /// Surface-share UUID for this plane's staging buffer.
-    #[serde(rename = "staging_surface_id")]
-    pub staging_surface_id: String,
-
-    /// Plane width in texels.
-    #[serde(rename = "width")]
-    pub width: u32,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct EscalateResponseOk {
     /// Opaque handle returned by the host. For acquire_pixel_buffer this is
     /// the PixelBufferPoolId the host registered with its pixel-buffer pool and
@@ -81,18 +60,6 @@ pub struct EscalateResponseOk {
     #[serde(rename = "request_id")]
     pub request_id: String,
 
-    /// Per-plane staging-buffer descriptors set on `acquire_cpu_readback`
-    /// responses. Length equals `SurfaceFormat::plane_count` for the
-    /// target surface (1 for BGRA8/RGBA8, 2 for NV12). Each entry's
-    /// `staging_surface_id` can be `check_out`ed from the surface-share
-    /// service to obtain a DMA-BUF FD over the host-allocated staging
-    /// `HostVulkanPixelBuffer` for that plane; mmap that FD to read or write the
-    /// plane's tightly-packed bytes (`width * height * bytes_per_pixel` per
-    /// plane).
-    #[serde(rename = "cpu_readback_planes")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cpu_readback_planes: Option<Vec<EscalateResponseOkCpuReadbackPlane>>,
-
     /// Resolved pixel or texture format identifier.
     #[serde(rename = "format")]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -103,6 +70,17 @@ pub struct EscalateResponseOk {
     #[serde(rename = "height")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
+
+    /// Decimal-string-encoded u64 timeline value the host signaled on
+    /// the surface's shared timeline semaphore at end-of-submit. Set on
+    /// `run_cpu_readback_copy` and `try_run_cpu_readback_copy` responses.
+    /// The subprocess waits on its imported `ConsumerVulkanTimelineSemaphore`
+    /// for this value before reading or writing the staging buffer mapped at
+    /// registration time. JTD has no native u64 — wire form is decimal-string,
+    /// parsed back to u64 on the subprocess side.
+    #[serde(rename = "timeline_value")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline_value: Option<String>,
 
     /// Resolved usage tokens (set on acquire_texture responses). Array reflects
     /// the exact flags the host honored.

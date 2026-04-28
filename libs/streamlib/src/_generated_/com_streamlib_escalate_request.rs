@@ -12,9 +12,6 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op")]
 pub enum EscalateRequest {
-    #[serde(rename = "acquire_cpu_readback")]
-    AcquireCpuReadback(EscalateRequestAcquireCpuReadback),
-
     #[serde(rename = "acquire_image")]
     AcquireImage(EscalateRequestAcquireImage),
 
@@ -30,47 +27,11 @@ pub enum EscalateRequest {
     #[serde(rename = "release_handle")]
     ReleaseHandle(EscalateRequestReleaseHandle),
 
-    #[serde(rename = "try_acquire_cpu_readback")]
-    TryAcquireCpuReadback(EscalateRequestTryAcquireCpuReadback),
-}
+    #[serde(rename = "run_cpu_readback_copy")]
+    RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy),
 
-/// Access mode for the acquire. `read` triggers a host-side
-/// `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-buffer
-/// FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush back when
-/// the subprocess later calls `release_handle`. Maps onto the cpu-readback
-/// adapter's `acquire_read` / `acquire_write` entrypoints.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestAcquireCpuReadbackMode {
-    #[serde(rename = "read")]
-    #[default]
-    Read,
-
-    #[serde(rename = "write")]
-    Write,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct EscalateRequestAcquireCpuReadback {
-    /// Access mode for the acquire. `read` triggers a host-side
-    /// `vkCmdCopyImageToBuffer` and hands the subprocess read-only staging-
-    /// buffer FDs; `write` does the same plus a `vkCmdCopyBufferToImage` flush
-    /// back when the subprocess later calls `release_handle`. Maps onto the
-    /// cpu-readback adapter's `acquire_read` / `acquire_write` entrypoints.
-    #[serde(rename = "mode")]
-    pub mode: EscalateRequestAcquireCpuReadbackMode,
-
-    /// Correlates request with response. UUID string.
-    #[serde(rename = "request_id")]
-    pub request_id: String,
-
-    /// Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
-    /// a surface previously registered with the host's cpu-readback adapter via
-    /// `register_host_surface`. JTD has no native u64 — the wire form is the
-    /// decimal string representation, parsed back into u64 by the host before
-    /// dispatch.
-    #[serde(rename = "surface_id")]
-    pub surface_id: String,
+    #[serde(rename = "try_run_cpu_readback_copy")]
+    TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -255,44 +216,79 @@ pub struct EscalateRequestReleaseHandle {
     pub request_id: String,
 }
 
-/// Access mode for the acquire. Maps onto the cpu-readback adapter's
-/// `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints — same
-/// image↔buffer copy semantics as `acquire_cpu_readback` on success, but
-/// the host returns a [`contended`] response instead of blocking when the
-/// surface is already write-held (or, for `write` mode, read-held). Subprocess
-/// customers use this to skip a frame instead of stalling their thread runner.
+/// Which copy direction to run on the host. `image_to_buffer` runs
+/// `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
+/// `buffer_to_image` runs the reverse at write release. The host signals a new
+/// value on the surface's timeline at end-of-submit; the subprocess waits on
+/// the timeline (through its imported `ConsumerVulkanTimelineSemaphore`) before
+/// reading or releasing. No FDs travel on the wire — only the timeline value
+/// the host signaled.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestTryAcquireCpuReadbackMode {
-    #[serde(rename = "read")]
+pub enum EscalateRequestRunCpuReadbackCopyDirection {
+    #[serde(rename = "buffer_to_image")]
     #[default]
-    Read,
+    BufferToImage,
 
-    #[serde(rename = "write")]
-    Write,
+    #[serde(rename = "image_to_buffer")]
+    ImageToBuffer,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestTryAcquireCpuReadback {
-    /// Access mode for the acquire. Maps onto the cpu-readback adapter's
-    /// `try_acquire_read_by_id` / `try_acquire_write_by_id` entrypoints —
-    /// same image↔buffer copy semantics as `acquire_cpu_readback` on success,
-    /// but the host returns a [`contended`] response instead of blocking when
-    /// the surface is already write-held (or, for `write` mode, read-held).
-    /// Subprocess customers use this to skip a frame instead of stalling their
-    /// thread runner.
-    #[serde(rename = "mode")]
-    pub mode: EscalateRequestTryAcquireCpuReadbackMode,
+pub struct EscalateRequestRunCpuReadbackCopy {
+    /// Which copy direction to run on the host. `image_to_buffer` runs
+    /// `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
+    /// `buffer_to_image` runs the reverse at write release. The host
+    /// signals a new value on the surface's timeline at end-of-submit;
+    /// the subprocess waits on the timeline (through its imported
+    /// `ConsumerVulkanTimelineSemaphore`) before reading or releasing. No FDs
+    /// travel on the wire — only the timeline value the host signaled.
+    #[serde(rename = "direction")]
+    pub direction: EscalateRequestRunCpuReadbackCopyDirection,
 
     /// Correlates request with response. UUID string.
     #[serde(rename = "request_id")]
     pub request_id: String,
 
-    /// Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of
-    /// a surface previously registered with the host's cpu-readback adapter via
-    /// `register_host_surface`. JTD has no native u64 — the wire form is the
-    /// decimal string representation, parsed back into u64 by the host before
-    /// dispatch.
+    /// Host-assigned surface id (the u64 carried by `StreamlibSurface::id`)
+    /// of a surface previously registered with the host's cpu-readback adapter
+    /// and whose staging buffer + timeline were registered with the surface-
+    /// share service via `register_pixel_buffer_with_timeline`. The subprocess
+    /// imported them once at registration time through `streamlib-consumer-
+    /// rhi`'s `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`.
+    /// JTD has no native u64 — the wire form is the decimal string
+    /// representation, parsed back into u64 by the host before dispatch.
+    #[serde(rename = "surface_id")]
+    pub surface_id: String,
+}
+
+/// Same shape as `run_cpu_readback_copy.direction`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum EscalateRequestTryRunCpuReadbackCopyDirection {
+    #[serde(rename = "buffer_to_image")]
+    #[default]
+    BufferToImage,
+
+    #[serde(rename = "image_to_buffer")]
+    ImageToBuffer,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestTryRunCpuReadbackCopy {
+    /// Same shape as `run_cpu_readback_copy.direction`.
+    #[serde(rename = "direction")]
+    pub direction: EscalateRequestTryRunCpuReadbackCopyDirection,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// Same shape as `run_cpu_readback_copy.surface_id`. The host returns a
+    /// [`contended`] response (no timeline value, no copy executed) when its
+    /// registry would have blocked instead of performing the copy. Subprocess
+    /// customers use this to skip a frame instead of stalling their thread
+    /// runner.
     #[serde(rename = "surface_id")]
     pub surface_id: String,
 }

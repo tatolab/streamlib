@@ -41,8 +41,8 @@ pub use vulkan_texture::HostVulkanTexture;
 #[allow(unused_imports)]
 pub use streamlib_consumer_rhi::{
     ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, ConsumerVulkanTexture,
-    ConsumerVulkanTimelineSemaphore, DevicePrivilege, VulkanRhiDevice, VulkanTextureLike,
-    VulkanTimelineSemaphoreLike,
+    ConsumerVulkanTimelineSemaphore, DevicePrivilege, VulkanPixelBufferLike, VulkanRhiDevice,
+    VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 
 mod vulkan_blitter;

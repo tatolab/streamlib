@@ -12,6 +12,12 @@
 
 fn main() {
     // Placeholder — wired up in `subprocess_crash_mid_write.rs`.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
     let role = std::env::args().nth(1).unwrap_or_else(|| "noop".into());
-    eprintln!("cpu-readback subprocess helper started: role={role}");
+    tracing::info!(%role, "cpu-readback subprocess helper started");
 }

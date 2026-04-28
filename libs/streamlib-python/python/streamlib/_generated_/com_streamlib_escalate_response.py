@@ -85,47 +85,6 @@ class EscalateResponseErr(EscalateResponse):
         return data
 
 @dataclass
-class EscalateResponseOkCPUReadbackPlane:
-    bytes_per_pixel: 'int'
-    """
-    Plane bytes-per-pixel. BGRA/RGBA: 4. NV12 plane 0 (Y): 1. NV12 plane 1 (UV
-    interleaved): 2.
-    """
-
-    height: 'int'
-    """
-    Plane height in texels.
-    """
-
-    staging_surface_id: 'str'
-    """
-    Surface-share UUID for this plane's staging buffer.
-    """
-
-    width: 'int'
-    """
-    Plane width in texels.
-    """
-
-
-    @classmethod
-    def from_json_data(cls, data: Any) -> 'EscalateResponseOkCPUReadbackPlane':
-        return cls(
-            _from_json_data(int, data.get("bytes_per_pixel")),
-            _from_json_data(int, data.get("height")),
-            _from_json_data(str, data.get("staging_surface_id")),
-            _from_json_data(int, data.get("width")),
-        )
-
-    def to_json_data(self) -> Any:
-        data: Dict[str, Any] = {}
-        data["bytes_per_pixel"] = _to_json_data(self.bytes_per_pixel)
-        data["height"] = _to_json_data(self.height)
-        data["staging_surface_id"] = _to_json_data(self.staging_surface_id)
-        data["width"] = _to_json_data(self.width)
-        return data
-
-@dataclass
 class EscalateResponseOk(EscalateResponse):
     handle_id: 'str'
     """
@@ -141,17 +100,6 @@ class EscalateResponseOk(EscalateResponse):
     Correlates response with request. Matches request_id in EscalateRequest.
     """
 
-    cpu_readback_planes: 'Optional[List[EscalateResponseOkCPUReadbackPlane]]'
-    """
-    Per-plane staging-buffer descriptors set on `acquire_cpu_readback`
-    responses. Length equals `SurfaceFormat::plane_count` for the target surface
-    (1 for BGRA8/RGBA8, 2 for NV12). Each entry's `staging_surface_id` can be
-    `check_out`ed from the surface-share service to obtain a DMA-BUF FD over
-    the host-allocated staging `VulkanPixelBuffer` for that plane; mmap that
-    FD to read or write the plane's tightly-packed bytes (`width * height *
-    bytes_per_pixel` per plane).
-    """
-
     format: 'Optional[str]'
     """
     Resolved pixel or texture format identifier.
@@ -161,6 +109,17 @@ class EscalateResponseOk(EscalateResponse):
     """
     Height in pixels (set on acquire_pixel_buffer and acquire_texture
     responses).
+    """
+
+    timeline_value: 'Optional[str]'
+    """
+    Decimal-string-encoded u64 timeline value the host signaled on the surface's
+    shared timeline semaphore at end-of-submit. Set on `run_cpu_readback_copy`
+    and `try_run_cpu_readback_copy` responses. The subprocess waits on its
+    imported `ConsumerVulkanTimelineSemaphore` for this value before reading or
+    writing the staging buffer mapped at registration time. JTD has no native
+    u64 — wire form is decimal-string, parsed back to u64 on the subprocess
+    side.
     """
 
     usage: 'Optional[List[str]]'
@@ -181,9 +140,9 @@ class EscalateResponseOk(EscalateResponse):
             "ok",
             _from_json_data(str, data.get("handle_id")),
             _from_json_data(str, data.get("request_id")),
-            _from_json_data(Optional[List[EscalateResponseOkCPUReadbackPlane]], data.get("cpu_readback_planes")),
             _from_json_data(Optional[str], data.get("format")),
             _from_json_data(Optional[int], data.get("height")),
+            _from_json_data(Optional[str], data.get("timeline_value")),
             _from_json_data(Optional[List[str]], data.get("usage")),
             _from_json_data(Optional[int], data.get("width")),
         )
@@ -192,12 +151,12 @@ class EscalateResponseOk(EscalateResponse):
         data = { "result": "ok" }
         data["handle_id"] = _to_json_data(self.handle_id)
         data["request_id"] = _to_json_data(self.request_id)
-        if self.cpu_readback_planes is not None:
-             data["cpu_readback_planes"] = _to_json_data(self.cpu_readback_planes)
         if self.format is not None:
              data["format"] = _to_json_data(self.format)
         if self.height is not None:
              data["height"] = _to_json_data(self.height)
+        if self.timeline_value is not None:
+             data["timeline_value"] = _to_json_data(self.timeline_value)
         if self.usage is not None:
              data["usage"] = _to_json_data(self.usage)
         if self.width is not None:

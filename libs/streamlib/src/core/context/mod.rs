@@ -15,9 +15,7 @@ pub use audio_clock::{
     SoftwareAudioClock,
 };
 #[cfg(target_os = "linux")]
-pub use cpu_readback_bridge::{
-    CpuReadbackAccessMode, CpuReadbackAcquired, CpuReadbackBridge, CpuReadbackPlane,
-};
+pub use cpu_readback_bridge::{CpuReadbackBridge, CpuReadbackCopyDirection};
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 pub use runtime_context::{
     RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
