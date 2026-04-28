@@ -16,7 +16,6 @@ path = "src/lib.rs"
 
 [dependencies]
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
-parking_lot = "0.12"
 thiserror.workspace = true
 tracing.workspace = true
 
