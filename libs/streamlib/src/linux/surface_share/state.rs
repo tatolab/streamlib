@@ -41,6 +41,15 @@ pub struct SurfaceMetadata {
     /// from the EGL `external_only=FALSE` set; otherwise consumer-side
     /// FBO completeness will fail on NVIDIA.
     pub drm_format_modifier: u64,
+    /// Optional OPAQUE_FD timeline-semaphore handle owned by the table.
+    /// Set when the host registers the surface with an exportable
+    /// `VulkanTimelineSemaphore` (#531). `check_out` / `lookup` `dup`s it
+    /// alongside the DMA-BUF plane fds so the subprocess Vulkan adapter
+    /// can call `VulkanTimelineSemaphore::from_imported_opaque_fd` and
+    /// reuse the host adapter's timeline-wait + signal path. `None` for
+    /// surfaces that don't need explicit Vulkan sync (the OpenGL adapter
+    /// path, CPU-readback, legacy `VkBuffer` pixel buffers).
+    pub sync_fd: Option<RawFd>,
     pub checkout_count: u64,
 }
 
@@ -65,6 +74,11 @@ pub struct SurfacePlaneCheckout {
     pub plane_offsets: Vec<u64>,
     pub plane_strides: Vec<u64>,
     pub drm_format_modifier: u64,
+    /// Optional OPAQUE_FD for the surface's exportable timeline semaphore.
+    /// `None` for surfaces registered without one. The table-owned fd is
+    /// returned as-is; callers that hand it out via SCM_RIGHTS must `dup`
+    /// it first, just like the DMA-BUF plane fds.
+    pub sync_fd: Option<RawFd>,
 }
 
 /// Arguments to [`SurfaceShareState::register_surface`]. Grouped so the
@@ -84,6 +98,11 @@ pub struct SurfaceRegistration<'a> {
     /// DRM format modifier of the underlying VkImage. See
     /// [`SurfaceMetadata::drm_format_modifier`].
     pub drm_format_modifier: u64,
+    /// Optional OPAQUE_FD timeline-semaphore handle exported by the host
+    /// (`VulkanTimelineSemaphore::export_opaque_fd`). The table takes
+    /// ownership on success and closes it on `release_surface`. `None`
+    /// for adapters that don't need explicit Vulkan sync.
+    pub sync_fd: Option<RawFd>,
 }
 
 impl SurfaceShareState {
@@ -93,18 +112,19 @@ impl SurfaceShareState {
 
     /// Insert a surface into the table.
     ///
-    /// On rejection (duplicate surface_id), ownership of `dma_buf_fds` is
-    /// returned to the caller so it can decide whether to close them or hand
-    /// them to the next attempt. On success, the table owns the fds and
-    /// closes each on [`Self::release_surface`].
+    /// On rejection (duplicate surface_id), ownership of `dma_buf_fds` AND
+    /// the optional `sync_fd` is returned to the caller (the latter as the
+    /// `Err` tuple's second slot) so it can decide whether to close them or
+    /// hand them to the next attempt. On success, the table owns every fd
+    /// passed in and closes them on [`Self::release_surface`].
     pub fn register_surface(
         &self,
         reg: SurfaceRegistration<'_>,
-    ) -> Result<(), Vec<RawFd>> {
+    ) -> Result<(), (Vec<RawFd>, Option<RawFd>)> {
         let mut surfaces = self.inner.surfaces.write();
 
         if surfaces.contains_key(reg.surface_id) {
-            return Err(reg.dma_buf_fds);
+            return Err((reg.dma_buf_fds, reg.sync_fd));
         }
 
         self.inner.surface_counter.fetch_add(1, Ordering::Relaxed);
@@ -123,6 +143,7 @@ impl SurfaceShareState {
                 format: reg.format.to_string(),
                 resource_type: reg.resource_type.to_string(),
                 drm_format_modifier: reg.drm_format_modifier,
+                sync_fd: reg.sync_fd,
                 checkout_count: 0,
             },
         );
@@ -130,9 +151,10 @@ impl SurfaceShareState {
     }
 
     /// Return a clone of the surface's plane fd vec plus its plane-layout
-    /// arrays and the underlying VkImage's DRM format modifier. The
-    /// returned fds are the table's own — callers that hand them out via
-    /// SCM_RIGHTS must `dup` each fd first.
+    /// arrays, the underlying VkImage's DRM format modifier, and (if
+    /// registered) the timeline-semaphore OPAQUE_FD. The returned fds are
+    /// the table's own — callers that hand them out via SCM_RIGHTS must
+    /// `dup` each fd first.
     pub fn get_surface_planes(
         &self,
         surface_id: &str,
@@ -146,6 +168,7 @@ impl SurfaceShareState {
                 plane_offsets: metadata.plane_offsets.clone(),
                 plane_strides: metadata.plane_strides.clone(),
                 drm_format_modifier: metadata.drm_format_modifier,
+                sync_fd: metadata.sync_fd,
             }
         })
     }
@@ -156,6 +179,9 @@ impl SurfaceShareState {
             if metadata.runtime_id == runtime_id {
                 for fd in &metadata.dma_buf_fds {
                     unsafe { libc::close(*fd) };
+                }
+                if let Some(sync_fd) = metadata.sync_fd {
+                    unsafe { libc::close(sync_fd) };
                 }
                 surfaces.remove(surface_id);
                 return true;
@@ -198,6 +224,7 @@ mod tests {
             format: "Rgba8Unorm",
             resource_type,
             drm_format_modifier: 0,
+            sync_fd: None,
         }
     }
 
@@ -223,10 +250,11 @@ mod tests {
     fn duplicate_surface_id_rejected() {
         let state = SurfaceShareState::new();
         assert!(state.register_surface(reg("dup", "rt", "texture")).is_ok());
-        let rejected = state
+        let (rejected_planes, rejected_sync) = state
             .register_surface(reg("dup", "rt", "texture"))
             .expect_err("duplicate must be rejected");
-        assert_eq!(rejected, vec![-1], "rejected fds returned to caller");
+        assert_eq!(rejected_planes, vec![-1], "rejected plane fds returned to caller");
+        assert_eq!(rejected_sync, None, "no sync fd was registered, none returned");
     }
 
     /// The watchdog uses `surface_ids_by_runtime` to discover what to
@@ -304,6 +332,7 @@ mod tests {
                 format: "Nv12VideoRange",
                 resource_type: "pixel_buffer",
                 drm_format_modifier: 0,
+                sync_fd: None,
             })
             .expect("register multi-plane");
 

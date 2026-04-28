@@ -186,6 +186,62 @@ const symbols = {
     parameters: ["pointer", "u64"] as const,
     result: "i32" as const,
   },
+
+  // Vulkan adapter runtime (#531, Linux). Same shape as `sldn_opengl_*`
+  // but wraps `streamlib_adapter_vulkan::VulkanSurfaceAdapter` against a
+  // subprocess-local `VulkanDevice` from the RHI.  Acquire returns the
+  // imported `VkImage` + layout via an out-pointer struct (the symbol
+  // matches `streamlib_deno_native::vulkan::SldnVulkanView`).
+  sldn_vulkan_runtime_new: {
+    parameters: [] as const,
+    result: "pointer" as const,
+  },
+  sldn_vulkan_runtime_free: {
+    parameters: ["pointer"] as const,
+    result: "void" as const,
+  },
+  sldn_vulkan_register_surface: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_vulkan_unregister_surface: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_vulkan_acquire_write: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_vulkan_release_write: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_vulkan_acquire_read: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_vulkan_release_read: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_vulkan_raw_handles: {
+    parameters: ["pointer", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_vulkan_dispatch_compute: {
+    parameters: [
+      "pointer",  // rt
+      "u64",      // surface_id
+      "pointer",  // spv_ptr
+      "usize",    // spv_len
+      "pointer",  // push_constants_ptr
+      "u32",      // push_constants_size
+      "u32",      // group_count_x
+      "u32",      // group_count_y
+      "u32",      // group_count_z
+    ] as const,
+    result: "i32" as const,
+  },
 } as const;
 
 export type NativeLib = Deno.DynamicLibrary<typeof symbols>;

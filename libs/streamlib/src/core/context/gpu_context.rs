@@ -867,7 +867,15 @@ impl GpuContext {
         let desc = TextureDescriptor::new(width, height, format).with_usage(
             TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_SRC,
+                | TextureUsages::COPY_SRC
+                // STORAGE_BINDING is on by default so subprocess Vulkan
+                // adapters can bind the imported VkImage as a storage
+                // image for compute writes (#531). Render-target +
+                // sample-only adapters (OpenGL fragment shader, Skia)
+                // still work — STORAGE is additive and tiled modifiers
+                // for these formats reliably support it on every driver
+                // streamlib runs on.
+                | TextureUsages::STORAGE_BINDING,
         );
         let texture = crate::vulkan::rhi::VulkanTexture::new_render_target_dma_buf(
             vulkan_device,

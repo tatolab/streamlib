@@ -27,5 +27,5 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
     connect_to_surface_share_socket, recv_message_with_fds, send_message_with_fds,
-    send_request_with_fds, MAX_DMA_BUF_PLANES,
+    send_request_with_fds, MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS,
 };

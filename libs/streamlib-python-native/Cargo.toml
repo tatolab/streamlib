@@ -36,6 +36,14 @@ vulkanalia = { workspace = true }
 # bring-up or DMA-BUF → GL_TEXTURE_2D import.
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl" }
+# Subprocess-side Vulkan runtime (#531). Reuses the host adapter crate's
+# `VulkanSurfaceAdapter` against a subprocess-local `VulkanDevice` from the
+# RHI: same timeline-wait, same layout-transition, same acquire/release
+# state machine. The dual-VkDevice crash on NVIDIA does not apply because
+# this VkDevice is created before any other in-process Vulkan device has
+# active GPU work — see `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
+streamlib = { path = "../streamlib" }
 
 
 [lints]

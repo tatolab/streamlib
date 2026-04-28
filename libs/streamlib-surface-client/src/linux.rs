@@ -15,6 +15,13 @@ use std::path::Path;
 /// they cost an fd table entry.
 pub const MAX_DMA_BUF_PLANES: usize = 4;
 
+/// Total SCM_RIGHTS fd budget for a single surface-share message:
+/// [`MAX_DMA_BUF_PLANES`] + 1 trailing slot for an optional timeline-semaphore
+/// OPAQUE_FD (host → subprocess Vulkan-adapter sync handoff, #531). Wire
+/// helpers validate against this ceiling; senders that aren't passing a sync
+/// FD simply leave the slot unused.
+pub const MAX_SCM_RIGHTS_FDS: usize = MAX_DMA_BUF_PLANES + 1;
+
 /// Connect to the per-runtime surface-share Unix socket.
 pub fn connect_to_surface_share_socket(socket_path: &Path) -> std::io::Result<UnixStream> {
     UnixStream::connect(socket_path)
@@ -39,13 +46,13 @@ pub fn send_message_with_fds(
     data: &[u8],
     fds: &[RawFd],
 ) -> std::io::Result<()> {
-    if fds.len() > MAX_DMA_BUF_PLANES {
+    if fds.len() > MAX_SCM_RIGHTS_FDS {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!(
-                "SCM_RIGHTS fd count {} exceeds MAX_DMA_BUF_PLANES={}",
+                "SCM_RIGHTS fd count {} exceeds MAX_SCM_RIGHTS_FDS={}",
                 fds.len(),
-                MAX_DMA_BUF_PLANES
+                MAX_SCM_RIGHTS_FDS
             ),
         ));
     }
@@ -469,8 +476,9 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
-    /// Sending `MAX_DMA_BUF_PLANES + 1` fds returns an error and performs no
-    /// syscall — caller-owned fds are not closed under our feet.
+    /// Sending `MAX_SCM_RIGHTS_FDS + 1` fds returns an error and performs no
+    /// syscall — caller-owned fds are not closed under our feet. The wire
+    /// budget is `MAX_DMA_BUF_PLANES` plane fds + 1 optional sync-fd slot.
     #[test]
     fn send_rejects_oversize_fd_vec_without_closing_caller_fds() {
         let socket_path = tmp_socket_path("oversize");
@@ -478,7 +486,7 @@ mod tests {
         let client = UnixStream::connect(&socket_path).expect("connect");
         let _accepted = listener.accept().expect("accept");
 
-        let fds: Vec<RawFd> = (0..=MAX_DMA_BUF_PLANES)
+        let fds: Vec<RawFd> = (0..=MAX_SCM_RIGHTS_FDS)
             .map(|i| make_memfd_with(format!("plane-{}", i).as_bytes()))
             .collect();
         let err = send_message_with_fds(&client, b"payload", &fds).expect_err("must reject");
