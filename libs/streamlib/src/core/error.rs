@@ -79,3 +79,15 @@ pub enum StreamError {
 }
 
 pub type Result<T> = std::result::Result<T, StreamError>;
+
+#[cfg(target_os = "linux")]
+impl From<streamlib_consumer_rhi::ConsumerRhiError> for StreamError {
+    fn from(e: streamlib_consumer_rhi::ConsumerRhiError) -> Self {
+        match e {
+            streamlib_consumer_rhi::ConsumerRhiError::Gpu(s) => StreamError::GpuError(s),
+            streamlib_consumer_rhi::ConsumerRhiError::Configuration(s) => {
+                StreamError::Configuration(s)
+            }
+        }
+    }
+}

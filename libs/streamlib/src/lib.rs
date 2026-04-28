@@ -170,28 +170,29 @@ pub mod linux_surface_share {
     pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 }
 
-/// RHI types that in-tree surface adapters (`streamlib-adapter-vulkan`,
-/// `-opengl`, `-skia`, `-cpu-readback`) and the polyglot cdylibs need
-/// to reach. NOT a general public surface — every entry here is
-/// load-bearing for the adapter architecture. The Vulkan boundary rule
-/// from `CLAUDE.md` still holds: nothing outside an adapter or
-/// `vulkan/rhi/` may import from this module.
+/// Public surface for the host-side Vulkan RHI types that
+/// `streamlib-adapter-cpu-readback` (legitimately host-side per
+/// `docs/architecture/adapter-runtime-integration.md`), the in-tree
+/// surface adapter tests, and host-side application code need to
+/// name. The module is intentionally narrow: it exposes the `Host*`
+/// flavor of each RHI primitive plus [`HostMarker`], nothing more.
 ///
-/// Both the `Host*` and `Consumer*` flavors are surfaced here so
-/// adapter crates can be generic over `D: VulkanRhiDevice`. The
-/// follow-up `streamlib-consumer-rhi` crate will pull the `Consumer*`
-/// half into a dep that cdylibs can take *without* the rest of
-/// `streamlib`, type-system-enforcing the FullAccess capability
-/// boundary; until then this transitional re-export keeps the
-/// workspace compiling.
+/// Subprocess cdylibs MUST NOT depend on `streamlib` at runtime —
+/// they get the trait machinery + `Consumer*` flavor from
+/// `streamlib-consumer-rhi`, and the FullAccess capability boundary
+/// is enforced by Cargo (this module is unreachable from a dep graph
+/// that excludes `streamlib`).
+///
+/// The previous `streamlib::adapter_support` module which re-exported
+/// both `Host*` and `Consumer*` was deleted as part of #560 — its
+/// transitional shape collapsed both flavors into one place; the
+/// type-system-enforced boundary needs the consumer flavor in a
+/// separate crate.
 #[cfg(target_os = "linux")]
-pub mod adapter_support {
+pub mod host_rhi {
     pub use crate::vulkan::rhi::{
-        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer,
-        ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, DevicePrivilege, HostMarker,
-        HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTexture,
-        HostVulkanTimelineSemaphore, VulkanRhiDevice, VulkanTextureLike,
-        VulkanTimelineSemaphoreLike,
+        HostMarker, HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTexture,
+        HostVulkanTimelineSemaphore,
     };
 }
 

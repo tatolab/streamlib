@@ -5,11 +5,11 @@
 //! subprocess (cdylib) use.
 //!
 //! The consumer-side device deliberately *does not* duplicate
-//! [`crate::vulkan::rhi::HostVulkanDevice`]. Where the host device owns
-//! the privileged state — VMA allocator + DMA-BUF export pools, DRM
-//! modifier probe, transfer / encode / decode / compute queues, the
-//! per-queue submit-mutex matrix, swapchain extensions — the consumer
-//! device holds only what the carve-out in
+//! `streamlib::vulkan::rhi::HostVulkanDevice`. Where the host device
+//! owns the privileged state — VMA allocator + DMA-BUF export pools,
+//! DRM modifier probe, transfer / encode / decode / compute queues,
+//! the per-queue submit-mutex matrix, swapchain extensions — the
+//! consumer device holds only what the carve-out in
 //! `docs/architecture/subprocess-rhi-parity.md` permits:
 //!
 //! - DMA-BUF FD import (`vkAllocateMemory` with `VkImportMemoryFdInfoKHR`).
@@ -20,7 +20,7 @@
 //! - `vkMapMemory` / `vkUnmapMemory` on imported memory.
 //! - `vkWaitSemaphores` / `vkSignalSemaphore` on imported timeline
 //!   semaphores (lives on
-//!   [`crate::vulkan::rhi::ConsumerVulkanTimelineSemaphore`]).
+//!   [`crate::ConsumerVulkanTimelineSemaphore`]).
 //!
 //! Crucially, this struct is constructed via [`Self::new`], which spins
 //! up its *own* `VkInstance` + `VkDevice`. It does **not** share the
@@ -41,9 +41,7 @@ use vulkanalia::loader::{LibloadingLoader, LIBRARY};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::{Result, StreamError};
-
-use super::{ConsumerMarker, VulkanRhiDevice};
+use crate::{ConsumerMarker, ConsumerRhiError, Result, VulkanRhiDevice};
 
 /// Consumer-only Vulkan device — see module docs.
 pub struct ConsumerVulkanDevice {
@@ -77,14 +75,14 @@ impl ConsumerVulkanDevice {
     /// `VK_KHR_external_semaphore_fd`, plus the Vulkan 1.3 sync-2 and
     /// timeline-semaphore features. Every requested device extension
     /// is *required* — failure surfaces as
-    /// [`StreamError::GpuError`] rather than a silent capability
+    /// [`ConsumerRhiError::Gpu`] rather than a silent capability
     /// downgrade, so cdylib code never tries to import a render-target
     /// modifier on a driver that doesn't expose the extension.
     pub fn new() -> Result<Self> {
         let loader = unsafe { LibloadingLoader::new(LIBRARY) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to load Vulkan library: {e}")))?;
+            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan library: {e}")))?;
         let entry = unsafe { vulkanalia::Entry::new(loader) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to load Vulkan entry: {e}")))?;
+            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan entry: {e}")))?;
 
         // Instance — minimal: just enough to enumerate physical devices.
         // No surface extensions; the consumer doesn't render to a window.
@@ -101,13 +99,13 @@ impl ConsumerVulkanDevice {
             .build();
 
         let instance = unsafe { entry.create_instance(&instance_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create Vulkan instance: {e}")))?;
+            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create Vulkan instance: {e}")))?;
 
         // Physical device — prefer DISCRETE_GPU, fall back to first available.
         let physical_devices = unsafe { instance.enumerate_physical_devices() }
-            .map_err(|e| StreamError::GpuError(format!("Failed to enumerate physical devices: {e}")))?;
+            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to enumerate physical devices: {e}")))?;
         if physical_devices.is_empty() {
-            return Err(StreamError::GpuError("No Vulkan physical devices found".into()));
+            return Err(ConsumerRhiError::Gpu("No Vulkan physical devices found".into()));
         }
         let physical_device = physical_devices
             .iter()
@@ -132,7 +130,7 @@ impl ConsumerVulkanDevice {
             .enumerate()
             .find(|(_, props)| props.queue_flags.contains(vk::QueueFlags::GRAPHICS))
             .map(|(idx, _)| idx as u32)
-            .ok_or_else(|| StreamError::GpuError("No graphics queue family on consumer device".into()))?;
+            .ok_or_else(|| ConsumerRhiError::Gpu("No graphics queue family on consumer device".into()))?;
 
         // Required device extensions. All four are mandatory on the
         // carve-out path — refusing to construct the device on a driver
@@ -140,7 +138,7 @@ impl ConsumerVulkanDevice {
         let available_device_ext_names: Vec<&CStr> = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)
-                .map_err(|e| StreamError::GpuError(format!("enumerate_device_extension_properties: {e}")))?
+                .map_err(|e| ConsumerRhiError::Gpu(format!("enumerate_device_extension_properties: {e}")))?
         }
         .iter()
         .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
@@ -156,7 +154,7 @@ impl ConsumerVulkanDevice {
         let mut device_extensions: Vec<*const c_char> = Vec::with_capacity(REQUIRED.len());
         for ext in REQUIRED {
             if !available_device_ext_names.contains(ext) {
-                return Err(StreamError::GpuError(format!(
+                return Err(ConsumerRhiError::Gpu(format!(
                     "ConsumerVulkanDevice: required extension {} not available on this driver",
                     ext.to_string_lossy()
                 )));
@@ -200,7 +198,7 @@ impl ConsumerVulkanDevice {
             .build();
 
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create consumer logical device: {e}")))?;
+            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to create consumer logical device: {e}")))?;
 
         let queue = unsafe { device.get_device_queue(queue_family_index, 0) };
         let memory_properties =
@@ -301,7 +299,7 @@ impl ConsumerVulkanDevice {
                 return Ok(i);
             }
         }
-        Err(StreamError::GpuError(format!(
+        Err(ConsumerRhiError::Gpu(format!(
             "ConsumerVulkanDevice: no suitable memory type (filter=0x{:x}, required={:?})",
             type_filter, required_properties
         )))
@@ -336,7 +334,7 @@ impl ConsumerVulkanDevice {
             .build();
 
         let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            ConsumerRhiError::Gpu(format!(
                 "ConsumerVulkanDevice: import_dma_buf_memory failed: {e}"
             ))
         })?;
@@ -370,7 +368,7 @@ impl ConsumerVulkanDevice {
                 .map_memory(memory, 0, size, vk::MemoryMapFlags::empty())
         }
         .map_err(|e| {
-            StreamError::GpuError(format!(
+            ConsumerRhiError::Gpu(format!(
                 "ConsumerVulkanDevice: map_imported_memory failed: {e}"
             ))
         })?;
@@ -397,7 +395,7 @@ impl ConsumerVulkanDevice {
         let _lock = self.queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { self.device.queue_submit2(queue, submits, fence) }
             .map(|_| ())
-            .map_err(|e| StreamError::GpuError(format!("queue_submit2 failed: {e}")))
+            .map_err(|e| ConsumerRhiError::Gpu(format!("queue_submit2 failed: {e}")))
     }
 
     /// Current number of live DMA-BUF imports through this device.
@@ -410,6 +408,14 @@ impl ConsumerVulkanDevice {
 
 impl VulkanRhiDevice for ConsumerVulkanDevice {
     type Privilege = ConsumerMarker;
+
+    fn instance(&self) -> &vulkanalia::Instance {
+        &self.instance
+    }
+
+    fn physical_device(&self) -> vk::PhysicalDevice {
+        self.physical_device
+    }
 
     fn device(&self) -> &vulkanalia::Device {
         &self.device

@@ -9,10 +9,33 @@
 
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
-use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
+/// Locate the `vulkan_adapter_subprocess_helper` binary built by the
+/// `streamlib-adapter-vulkan-helpers` dev-dependency. Cargo doesn't
+/// surface `CARGO_BIN_EXE_<name>` for cross-package binaries, so we
+/// resolve it relative to the test binary's own location: tests run
+/// from `<target>/<profile>/deps/<test>` and helper bins live at
+/// `<target>/<profile>/<bin>`.
+pub fn vulkan_adapter_subprocess_helper_path() -> PathBuf {
+    let exe = std::env::current_exe().expect("test exe");
+    let profile_dir = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("test exe parent");
+    let helper = profile_dir.join("vulkan_adapter_subprocess_helper");
+    assert!(
+        helper.exists(),
+        "vulkan_adapter_subprocess_helper not found at {} — \
+         is `streamlib-adapter-vulkan-helpers` listed in dev-dependencies?",
+        helper.display()
+    );
+    helper
+}
+
+use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::{StreamTexture, TextureFormat};
 use streamlib_adapter_abi::{
@@ -112,7 +135,7 @@ pub fn spawn_helper(role: &str) -> (Child, UnixStream) {
         libc::fcntl(child_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
     }
 
-    let bin_path = env!("CARGO_BIN_EXE_vulkan_adapter_subprocess_helper");
+    let bin_path = vulkan_adapter_subprocess_helper_path();
     let mut cmd = Command::new(bin_path);
     cmd.arg(role)
         .env("STREAMLIB_HELPER_SOCKET_FD", child_fd.to_string())

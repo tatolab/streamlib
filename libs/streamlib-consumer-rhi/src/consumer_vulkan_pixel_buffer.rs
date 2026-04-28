@@ -5,19 +5,16 @@
 //! HOST_VISIBLE DMA-BUF as a `VkBuffer` and exposes a CPU-mapped
 //! pointer for staging upload / readback.
 //!
-//! Mirrors [`crate::vulkan::rhi::ConsumerVulkanTexture`] for buffer
-//! handles. Single-plane and multi-plane import constructors only —
-//! no allocation, no DMA-BUF export.
+//! Mirrors [`crate::ConsumerVulkanTexture`] for buffer handles.
+//! Single-plane and multi-plane import constructors only — no
+//! allocation, no DMA-BUF export.
 
 use std::sync::Arc;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::PixelFormat;
-use crate::core::{Result, StreamError};
-
-use super::ConsumerVulkanDevice;
+use crate::{ConsumerRhiError, ConsumerVulkanDevice, PixelFormat, Result};
 
 /// One imported plane: buffer + memory + mapped pointer + size.
 struct ConsumerImportedPlane {
@@ -83,19 +80,19 @@ impl ConsumerVulkanPixelBuffer {
         format: PixelFormat,
     ) -> Result<Self> {
         if fds.is_empty() {
-            return Err(StreamError::Configuration(
+            return Err(ConsumerRhiError::Configuration(
                 "ConsumerVulkanPixelBuffer: fd vec must be non-empty".into(),
             ));
         }
         if fds.len() != plane_sizes.len() {
-            return Err(StreamError::Configuration(format!(
+            return Err(ConsumerRhiError::Configuration(format!(
                 "ConsumerVulkanPixelBuffer: plane_sizes length ({}) must match fds length ({})",
                 plane_sizes.len(),
                 fds.len()
             )));
         }
         if fds.len() > streamlib_surface_client::MAX_DMA_BUF_PLANES {
-            return Err(StreamError::Configuration(format!(
+            return Err(ConsumerRhiError::Configuration(format!(
                 "ConsumerVulkanPixelBuffer: plane count {} exceeds MAX_DMA_BUF_PLANES ({})",
                 fds.len(),
                 streamlib_surface_client::MAX_DMA_BUF_PLANES
@@ -116,7 +113,7 @@ impl ConsumerVulkanPixelBuffer {
                 for plane in imported.into_iter() {
                     teardown_plane(vulkan_device, plane);
                 }
-                return Err(StreamError::Configuration(format!(
+                return Err(ConsumerRhiError::Configuration(format!(
                     "ConsumerVulkanPixelBuffer: plane {} size=0 cannot be derived from width*height",
                     idx
                 )));
@@ -237,7 +234,7 @@ fn import_single_plane(
         .build();
 
     let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
-        StreamError::GpuError(format!(
+        ConsumerRhiError::Gpu(format!(
             "ConsumerVulkanPixelBuffer: create_buffer failed: {e}"
         ))
     })?;
@@ -260,7 +257,7 @@ fn import_single_plane(
     unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
         vulkan_device.free_imported_memory(memory);
         unsafe { device.destroy_buffer(buffer, None) };
-        StreamError::GpuError(format!(
+        ConsumerRhiError::Gpu(format!(
             "ConsumerVulkanPixelBuffer: bind_buffer_memory failed: {e}"
         ))
     })?;

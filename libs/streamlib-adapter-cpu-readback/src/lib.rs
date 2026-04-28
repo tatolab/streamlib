@@ -11,7 +11,7 @@
 //! deliberately do not implement these — that asymmetry is the
 //! architectural enforcement of "switch adapter to opt into CPU".
 //!
-//! Implementation rides on one [`streamlib::adapter_support::HostVulkanPixelBuffer`]
+//! Implementation rides on one [`streamlib::host_rhi::HostVulkanPixelBuffer`]
 //! (a HOST_VISIBLE, HOST_COHERENT linear `VkBuffer`) **per plane**.
 //! Single-plane formats (BGRA8/RGBA8) allocate one staging buffer;
 //! multi-plane formats (NV12) allocate one per logical plane (Y + UV).

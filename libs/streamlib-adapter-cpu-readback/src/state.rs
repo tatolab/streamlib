@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use streamlib::adapter_support::{HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
+use streamlib::host_rhi::{HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::StreamTexture;
 use streamlib_adapter_abi::{SurfaceFormat, SurfaceId, SurfaceRegistration};
 use vulkanalia::vk;

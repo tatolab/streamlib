@@ -5,10 +5,10 @@
 //! exportable timeline semaphore via OPAQUE_FD and exposes the wait /
 //! signal-from-host / counter-read operations.
 //!
-//! Mirrors [`crate::vulkan::rhi::ConsumerVulkanTexture`] for sync
-//! primitives. There is no `new` / `new_exportable` constructor: the
-//! consumer never originates a timeline semaphore — it only imports
-//! one the host already created.
+//! Mirrors [`crate::ConsumerVulkanTexture`] for sync primitives.
+//! There is no `new` / `new_exportable` constructor: the consumer
+//! never originates a timeline semaphore — it only imports one the
+//! host already created.
 
 use std::sync::Arc;
 
@@ -16,9 +16,7 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrExternalSemaphoreFdExtensionDeviceCommands;
 
-use crate::core::{Result, StreamError};
-
-use super::ConsumerVulkanDevice;
+use crate::{ConsumerRhiError, ConsumerVulkanDevice, Result, VulkanTimelineSemaphoreLike};
 
 /// Consumer-side timeline semaphore. See module docs.
 pub struct ConsumerVulkanTimelineSemaphore {
@@ -51,7 +49,7 @@ impl ConsumerVulkanTimelineSemaphore {
             .push_next(&mut type_info)
             .build();
         let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            ConsumerRhiError::Gpu(format!(
                 "ConsumerVulkanTimelineSemaphore: create_semaphore failed: {e}"
             ))
         })?;
@@ -65,7 +63,7 @@ impl ConsumerVulkanTimelineSemaphore {
 
         if let Err(e) = unsafe { device.import_semaphore_fd_khr(&import_info) } {
             unsafe { device.destroy_semaphore(semaphore, None) };
-            return Err(StreamError::GpuError(format!(
+            return Err(ConsumerRhiError::Gpu(format!(
                 "ConsumerVulkanTimelineSemaphore: import_semaphore_fd_khr failed: {e}"
             )));
         }
@@ -89,7 +87,7 @@ impl ConsumerVulkanTimelineSemaphore {
         unsafe { self.vulkan_device.device().wait_semaphores(&info, timeout_ns) }
             .map(|_| ())
             .map_err(|e| {
-                StreamError::GpuError(format!(
+                ConsumerRhiError::Gpu(format!(
                     "wait_semaphores(value={value}, timeout_ns={timeout_ns}): {e}"
                 ))
             })
@@ -103,14 +101,14 @@ impl ConsumerVulkanTimelineSemaphore {
             .value(value)
             .build();
         unsafe { self.vulkan_device.device().signal_semaphore(&info) }.map_err(|e| {
-            StreamError::GpuError(format!("signal_semaphore(value={value}): {e}"))
+            ConsumerRhiError::Gpu(format!("signal_semaphore(value={value}): {e}"))
         })
     }
 
     /// Read the timeline counter via `vkGetSemaphoreCounterValue`.
     pub fn current_value(&self) -> Result<u64> {
         unsafe { self.vulkan_device.device().get_semaphore_counter_value(self.semaphore) }.map_err(
-            |e| StreamError::GpuError(format!("get_semaphore_counter_value: {e}")),
+            |e| ConsumerRhiError::Gpu(format!("get_semaphore_counter_value: {e}")),
         )
     }
 
@@ -133,7 +131,7 @@ impl Drop for ConsumerVulkanTimelineSemaphore {
 unsafe impl Send for ConsumerVulkanTimelineSemaphore {}
 unsafe impl Sync for ConsumerVulkanTimelineSemaphore {}
 
-impl super::VulkanTimelineSemaphoreLike for ConsumerVulkanTimelineSemaphore {
+impl VulkanTimelineSemaphoreLike for ConsumerVulkanTimelineSemaphore {
     fn wait(&self, value: u64, timeout_ns: u64) -> Result<()> {
         ConsumerVulkanTimelineSemaphore::wait(self, value, timeout_ns)
     }

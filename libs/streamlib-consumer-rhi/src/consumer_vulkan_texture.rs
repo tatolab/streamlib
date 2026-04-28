@@ -5,8 +5,9 @@
 //! into the consumer's `VkDevice` and exposes the resulting `VkImage`.
 //!
 //! Surface adapters running inside a cdylib hand subprocess customers
-//! a [`crate::core::rhi::StreamTexture`] backed by one of these. The
-//! type carries only the carve-out methods: import constructors, raw
+//! one of these directly through the
+//! [`crate::DevicePrivilege::Texture`] associated type. The type
+//! carries only the carve-out methods: import constructors, raw
 //! accessors, lazy image-view creation. There is no allocation path
 //! and no DMA-BUF export — the host owns those.
 
@@ -15,10 +16,10 @@ use std::sync::{Arc, OnceLock};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{TextureFormat, TextureUsages};
-use crate::core::{Result, StreamError};
-
-use super::ConsumerVulkanDevice;
+use crate::{
+    ConsumerRhiError, ConsumerVulkanDevice, Result, TextureFormat, TextureUsages,
+    VulkanTextureLike,
+};
 
 /// Convert RHI [`TextureFormat`] to the matching `vk::Format`.
 fn texture_format_to_vk(format: TextureFormat) -> vk::Format {
@@ -34,6 +35,7 @@ fn texture_format_to_vk(format: TextureFormat) -> vk::Format {
 }
 
 /// Convert RHI [`TextureUsages`] to Vulkan usage flags.
+#[allow(dead_code)] // Reserved for caller-supplied usage on future import constructors.
 fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
     let mut flags = vk::ImageUsageFlags::empty();
     if usage.contains(TextureUsages::COPY_SRC) {
@@ -99,12 +101,12 @@ impl ConsumerVulkanTexture {
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
         if fds.is_empty() {
-            return Err(StreamError::GpuError(
+            return Err(ConsumerRhiError::Gpu(
                 "ConsumerVulkanTexture::import_render_target_dma_buf: empty fd vec".into(),
             ));
         }
         if plane_offsets.len() != fds.len() || plane_strides.len() != fds.len() {
-            return Err(StreamError::GpuError(format!(
+            return Err(ConsumerRhiError::Gpu(format!(
                 "import_render_target_dma_buf: plane arrays length mismatch — fds={} offsets={} strides={}",
                 fds.len(),
                 plane_offsets.len(),
@@ -112,7 +114,7 @@ impl ConsumerVulkanTexture {
             )));
         }
         if drm_format_modifier == 0 {
-            return Err(StreamError::GpuError(
+            return Err(ConsumerRhiError::Gpu(
                 "import_render_target_dma_buf: zero (LINEAR) modifier — host should have allocated a tiled modifier; LINEAR DMA-BUFs are sampler-only on NVIDIA".into(),
             ));
         }
@@ -159,7 +161,7 @@ impl ConsumerVulkanTexture {
             .push_next(&mut external_image_info);
 
         let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            ConsumerRhiError::Gpu(format!(
                 "import_render_target_dma_buf: create_image failed (modifier=0x{:016x}): {e}",
                 drm_format_modifier
             ))
@@ -187,7 +189,7 @@ impl ConsumerVulkanTexture {
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
             vulkan_device.free_imported_memory(memory);
             unsafe { device.destroy_image(image, None) };
-            StreamError::GpuError(format!(
+            ConsumerRhiError::Gpu(format!(
                 "import_render_target_dma_buf: bind_image_memory failed: {e}"
             ))
         })?;
@@ -238,7 +240,7 @@ impl ConsumerVulkanTexture {
             .build();
 
         let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            ConsumerRhiError::Gpu(format!(
                 "ConsumerVulkanTexture::from_dma_buf_fd: create_image failed: {e}"
             ))
         })?;
@@ -261,7 +263,7 @@ impl ConsumerVulkanTexture {
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
             vulkan_device.free_imported_memory(memory);
             unsafe { device.destroy_image(image, None) };
-            StreamError::GpuError(format!(
+            ConsumerRhiError::Gpu(format!(
                 "ConsumerVulkanTexture::from_dma_buf_fd: bind_image_memory failed: {e}"
             ))
         })?;
@@ -327,7 +329,7 @@ impl ConsumerVulkanTexture {
             )
             .build();
         let view = unsafe { self.vulkan_device.device().create_image_view(&view_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("create_image_view failed: {e}")))?;
+            .map_err(|e| ConsumerRhiError::Gpu(format!("create_image_view failed: {e}")))?;
         let _ = self.cached_image_view.set(view);
         Ok(*self.cached_image_view.get().unwrap())
     }
@@ -346,7 +348,7 @@ impl Drop for ConsumerVulkanTexture {
 unsafe impl Send for ConsumerVulkanTexture {}
 unsafe impl Sync for ConsumerVulkanTexture {}
 
-impl super::VulkanTextureLike for ConsumerVulkanTexture {
+impl VulkanTextureLike for ConsumerVulkanTexture {
     fn image(&self) -> Option<vk::Image> {
         Some(ConsumerVulkanTexture::image(self))
     }
@@ -359,7 +361,7 @@ impl super::VulkanTextureLike for ConsumerVulkanTexture {
     fn height(&self) -> u32 {
         ConsumerVulkanTexture::height(self)
     }
-    fn format(&self) -> crate::core::rhi::TextureFormat {
+    fn format(&self) -> TextureFormat {
         ConsumerVulkanTexture::format(self)
     }
 }

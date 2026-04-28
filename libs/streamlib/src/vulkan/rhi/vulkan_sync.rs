@@ -400,11 +400,13 @@ unsafe impl Sync for HostVulkanTimelineSemaphore {}
 
 #[cfg(target_os = "linux")]
 impl super::VulkanTimelineSemaphoreLike for HostVulkanTimelineSemaphore {
-    fn wait(&self, value: u64, timeout_ns: u64) -> crate::core::Result<()> {
+    fn wait(&self, value: u64, timeout_ns: u64) -> streamlib_consumer_rhi::Result<()> {
         HostVulkanTimelineSemaphore::wait(self, value, timeout_ns)
+            .map_err(|e| streamlib_consumer_rhi::ConsumerRhiError::Gpu(e.to_string()))
     }
-    fn signal_host(&self, value: u64) -> crate::core::Result<()> {
+    fn signal_host(&self, value: u64) -> streamlib_consumer_rhi::Result<()> {
         HostVulkanTimelineSemaphore::signal_host(self, value)
+            .map_err(|e| streamlib_consumer_rhi::ConsumerRhiError::Gpu(e.to_string()))
     }
 }
 

@@ -126,7 +126,7 @@ let _SHARED_INSTANCE: VulkanContext | null = null;
 
 /** Subprocess-side Vulkan adapter runtime (#531, Linux).
  *
- * Brings up `streamlib::adapter_support::VulkanDevice` +
+ * Brings up `streamlib_consumer_rhi::ConsumerVulkanDevice` +
  * `streamlib_adapter_vulkan::VulkanSurfaceAdapter` inside this
  * subprocess and exposes scoped acquire/release that hands customers a
  * real `VkImage` handle plus the layout the adapter transitioned to.

@@ -34,7 +34,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
+use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::TextureFormat;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};

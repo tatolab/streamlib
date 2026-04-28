@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use streamlib_adapter_abi::{SurfaceFormat, SurfaceId};
 
-use crate::adapter_support::HostVulkanPixelBuffer;
+use crate::vulkan::rhi::HostVulkanPixelBuffer;
 
 /// Wire-format access mode mirrored from the escalate schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

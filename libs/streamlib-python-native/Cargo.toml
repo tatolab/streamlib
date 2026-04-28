@@ -37,13 +37,19 @@ vulkanalia = { workspace = true }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl" }
 # Subprocess-side Vulkan runtime (#531). Reuses the host adapter crate's
-# `VulkanSurfaceAdapter` against a subprocess-local `VulkanDevice` from the
-# RHI: same timeline-wait, same layout-transition, same acquire/release
-# state machine. The dual-VkDevice crash on NVIDIA does not apply because
-# this VkDevice is created before any other in-process Vulkan device has
-# active GPU work — see `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+# `VulkanSurfaceAdapter` against a subprocess-local `ConsumerVulkanDevice`
+# from the consumer RHI carve-out: same timeline-wait, same layout-transition,
+# same acquire/release state machine. The dual-VkDevice crash on NVIDIA does
+# not apply because this VkDevice is created before any other in-process
+# Vulkan device has active GPU work — see
+# `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
 streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
-streamlib = { path = "../streamlib" }
+# Consumer-side RHI carve-out — `ConsumerVulkanDevice`,
+# `ConsumerVulkanTexture`, the `VulkanRhiDevice` trait, etc. The cdylib
+# does NOT depend on `streamlib` (full crate); the FullAccess capability
+# boundary is type-system enforced by what `streamlib-consumer-rhi`
+# exposes vs. what it doesn't.
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 
 
 [lints]

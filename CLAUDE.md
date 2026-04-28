@@ -304,12 +304,17 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
-**NOTHING outside the RHI (`vulkan/rhi/`) may touch Vulkan APIs directly.** No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through the RHI. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it. CI check #555 enforces.)
+**NOTHING outside the RHI may touch Vulkan APIs directly.** "The RHI" here means `libs/streamlib/src/vulkan/rhi/` (host-side) and `libs/streamlib-consumer-rhi/` (consumer-side carve-out, #560) — together they own every `vulkanalia` call in the workspace. No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through one of those two crates. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it. CI check #555 enforces.)
 
 The RHI is the **single gateway** to all GPU operations on Linux. Like Unreal Engine's RHI, it gives the runtime absolute control and traceability over every GPU resource.
 
+The RHI is split across **two crates** along a privilege axis:
+- **`streamlib::vulkan::rhi`** (in `libs/streamlib/src/vulkan/rhi/`) — the host-side RHI. Owns `HostVulkanDevice` (allocator + queue matrix + swapchain extensions), `HostVulkanTexture`, `HostVulkanPixelBuffer`, `HostVulkanTimelineSemaphore`, `VulkanComputeKernel`, the modifier probe, etc.
+- **`streamlib-consumer-rhi`** (in `libs/streamlib-consumer-rhi/`, #560) — the consumer-side carve-out. Owns `ConsumerVulkanDevice`, `ConsumerVulkanTexture`, `ConsumerVulkanPixelBuffer`, `ConsumerVulkanTimelineSemaphore` plus the `VulkanRhiDevice` / `DevicePrivilege` / `VulkanTextureLike` / `VulkanTimelineSemaphoreLike` trait machinery surface adapters use to abstract over the device flavor. Subprocess cdylibs (`streamlib-python-native`, `streamlib-deno-native`) depend on `streamlib-consumer-rhi`, NOT the full `streamlib`, so the FullAccess capability boundary is enforced by the type system: a cdylib's dep graph excludes `streamlib` and therefore physically cannot reach `HostVulkanDevice` etc.
+
 #### The boundary:
-- **`vulkan/rhi/`** (VulkanDevice, VulkanTexture, VulkanPixelBuffer, VulkanVideoEncoder, etc.) — MAY call Vulkan APIs. All GPU memory allocation goes through VulkanDevice via `vulkanalia-vma`.
+- **`vulkan/rhi/`** (HostVulkanDevice, HostVulkanTexture, HostVulkanPixelBuffer, VulkanVideoEncoder, etc.) — MAY call Vulkan APIs. All GPU memory allocation goes through HostVulkanDevice via `vulkanalia-vma`.
+- **`streamlib-consumer-rhi`** (ConsumerVulkanDevice and friends) — MAY call Vulkan APIs, restricted to the import-side carve-out from `docs/architecture/subprocess-rhi-parity.md`: DMA-BUF FD import + bind + map, layout transitions on imported handles, sync wait/signal on imported timeline semaphores. No allocator, no kernel construction, no swapchain.
 - **`core/context/`** (GpuContext, TexturePool, PixelBufferPoolManager) — wraps the RHI with pooling, caps, and lifecycle management. This is what processors see.
 - **Processors** (`core/processors/`, `linux/processors/`, `apple/processors/`) — ONLY interact with GpuContext. They acquire/release resources from managed pools. They NEVER import from `vulkanalia`, `vk`, or `vulkan/rhi/` directly.
 

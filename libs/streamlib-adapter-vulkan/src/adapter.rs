@@ -27,7 +27,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use streamlib::adapter_support::{
+use streamlib_consumer_rhi::{
     DevicePrivilege, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 use streamlib_adapter_abi::{

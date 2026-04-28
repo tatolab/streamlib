@@ -99,7 +99,7 @@ fn host_writes_subprocess_reads_round_trip() {
 }
 
 fn host_clear_image(
-    device: &Arc<streamlib::adapter_support::HostVulkanDevice>,
+    device: &Arc<streamlib::host_rhi::HostVulkanDevice>,
     image: vk::Image,
     color: [f32; 4],
 ) {

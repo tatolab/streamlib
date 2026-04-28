@@ -54,7 +54,7 @@ fn subprocess_crash_mid_write_does_not_break_host_adapter() {
         let flags = libc::fcntl(child_fd, libc::F_GETFD);
         libc::fcntl(child_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
     }
-    let bin_path = env!("CARGO_BIN_EXE_vulkan_adapter_subprocess_helper");
+    let bin_path = common::vulkan_adapter_subprocess_helper_path();
     let mut cmd = Command::new(bin_path);
     cmd.arg("crash-mid-write")
         .env("STREAMLIB_HELPER_SOCKET_FD", child_fd.to_string());

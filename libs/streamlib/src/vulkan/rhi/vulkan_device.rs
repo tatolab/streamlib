@@ -1321,6 +1321,14 @@ impl vulkan_video::RhiQueueSubmitter for HostVulkanDevice {
 impl VulkanRhiDevice for HostVulkanDevice {
     type Privilege = HostMarker;
 
+    fn instance(&self) -> &vulkanalia::Instance {
+        &self.instance
+    }
+
+    fn physical_device(&self) -> vk::PhysicalDevice {
+        self.physical_device
+    }
+
     fn device(&self) -> &vulkanalia::Device {
         &self.device
     }
@@ -1338,8 +1346,9 @@ impl VulkanRhiDevice for HostVulkanDevice {
         queue: vk::Queue,
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
-    ) -> Result<()> {
+    ) -> streamlib_consumer_rhi::Result<()> {
         unsafe { HostVulkanDevice::submit_to_queue(self, queue, submits, fence) }
+            .map_err(|e| streamlib_consumer_rhi::ConsumerRhiError::Gpu(e.to_string()))
     }
 }
 

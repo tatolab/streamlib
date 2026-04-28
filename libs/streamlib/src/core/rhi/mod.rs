@@ -16,7 +16,6 @@ mod gl_interop;
 mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;
-mod pixel_format;
 mod texture;
 mod texture_cache;
 
@@ -35,8 +34,10 @@ pub use pixel_buffer_pool::{PixelBufferDescriptor, PixelBufferPoolId};
 // Note: RhiPixelBufferPool is intentionally not exported - use GpuContext::acquire_pixel_buffer()
 pub(crate) use pixel_buffer_pool::RhiPixelBufferPool;
 pub use pixel_buffer_ref::RhiPixelBufferRef;
-pub use pixel_format::PixelFormat;
-pub use texture::{
-    NativeTextureHandle, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages,
-};
+// PixelFormat / TextureFormat / TextureUsages are defined in the
+// `streamlib-consumer-rhi` crate so subprocess-shape dep graphs can
+// reach them without pulling streamlib. Re-exported here for in-tree
+// call sites (`crate::core::rhi::PixelFormat` keeps working).
+pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages};
+pub use texture::{NativeTextureHandle, StreamTexture, TextureDescriptor};
 pub use texture_cache::{RhiTextureCache, RhiTextureView};

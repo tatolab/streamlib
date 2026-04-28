@@ -8,8 +8,12 @@
 //! The `acquire_*` API on [`crate::VulkanContext`] is the path of least
 //! resistance and handles sync + layout transitions; this is the "you
 //! own the footguns from here" surface.
+//!
+//! Generic over the device flavor — works against either
+//! `HostVulkanDevice` (host-side) or `ConsumerVulkanDevice`
+//! (subprocess) via the [`VulkanRhiDevice`] trait.
 
-use streamlib::adapter_support::HostVulkanDevice;
+use streamlib_consumer_rhi::VulkanRhiDevice;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -41,13 +45,13 @@ pub struct RawVulkanHandles {
     pub api_version: u32,
 }
 
-/// Snapshot the underlying `HostVulkanDevice`'s raw handles.
+/// Snapshot the underlying device's raw handles.
 ///
 /// The handles are valid for the lifetime of the device; the customer
 /// MUST NOT outlive the runtime that owns it. There is intentionally
 /// no destructor or refcount handed back — this is the documented
 /// power-user surface that says *"you own the consequences"*.
-pub fn raw_handles(device: &HostVulkanDevice) -> RawVulkanHandles {
+pub fn raw_handles<D: VulkanRhiDevice>(device: &D) -> RawVulkanHandles {
     RawVulkanHandles {
         vk_instance: device.instance().handle().as_raw() as u64,
         vk_physical_device: device.physical_device().as_raw() as u64,
