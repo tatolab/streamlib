@@ -70,11 +70,32 @@ blocked by it.
   `IOSurfaceCreate`, no Metal heap allocation inside
   `streamlib-*-native`.
   - **Import-side carve-out:** on Linux, native libs *do* call
-    `VkImportMemoryFdInfoKHR` + `vkBindBufferMemory` + `vkMapMemory` on
-    an fd the surface-share service (host allocation) already handed them — shipped in
+    `VkImportMemoryFdInfoKHR` + `vkBindBufferMemory` + `vkMapMemory`
+    (and the tiled-image equivalent via
+    `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`) on an fd the surface-
+    share service (host allocation) already handed them — shipped in
     #420. This mirrors macOS's `IOSurfaceLookupFromMachPort` in the
     existing XPC shim. It's *consumer-only* by construction (no
     exportable memory ever originates in the subprocess).
+- **Don't ship per-language Vulkan implementations of host RHI patterns.**
+  The bug-fix-fan-out story matters more than the IPC-roundtrip cost.
+  Compute-kernel dispatch, layout transitions beyond the trivial
+  single-shot, queue submission, fence management, and pipeline
+  construction all live host-side and reach subprocesses through one of
+  two seams: surface-share (one-shot resource handoff) or escalate IPC
+  (per-call privileged work). See
+  [`docs/architecture/subprocess-rhi-parity.md`](../../docs/architecture/subprocess-rhi-parity.md)
+  for the full per-pattern bucketing and trip-wires.
+  - **Compute dispatch escalates** via `RegisterComputeKernel` +
+    `RunComputeKernel` ops (#550) driving the host's
+    [`VulkanComputeKernel`](../../docs/architecture/compute-kernel.md).
+    To the best of our current knowledge, the right shape is
+    register-once-dispatch-many — matches Vulkan / WebGPU / CUDA / Metal
+    / Unreal RHI conventions; verify the consumer at pickup.
+  - **The consumer-side RHI surface lives in `streamlib-consumer-rhi`**
+    (#552 — the standalone crate that replaces `streamlib::adapter_support`).
+    cdylibs depend on this crate, NOT the full `streamlib`, so the
+    `FullAccess` capability boundary is type-system enforced.
 - **Don't bypass typed ctx.** Python/Deno SDKs must propagate
   `RuntimeContextFullAccess`/`RuntimeContextLimitedAccess` to processor
   lifecycle methods exactly like Rust.

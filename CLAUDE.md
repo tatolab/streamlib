@@ -304,19 +304,19 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
-**NOTHING outside the RHI (`vulkan/rhi/`) may touch Vulkan APIs directly.** No processor, utility, codec wrapper, or any other code may call `ash::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through the RHI. This is non-negotiable.
+**NOTHING outside the RHI (`vulkan/rhi/`) may touch Vulkan APIs directly.** No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through the RHI. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it. CI check #555 enforces.)
 
 The RHI is the **single gateway** to all GPU operations on Linux. Like Unreal Engine's RHI, it gives the runtime absolute control and traceability over every GPU resource.
 
 #### The boundary:
 - **`vulkan/rhi/`** (VulkanDevice, VulkanTexture, VulkanPixelBuffer, VulkanVideoEncoder, etc.) — MAY call Vulkan APIs. All GPU memory allocation goes through VulkanDevice via `vulkanalia-vma`.
 - **`core/context/`** (GpuContext, TexturePool, PixelBufferPoolManager) — wraps the RHI with pooling, caps, and lifecycle management. This is what processors see.
-- **Processors** (`core/processors/`, `linux/processors/`, `apple/processors/`) — ONLY interact with GpuContext. They acquire/release resources from managed pools. They NEVER import from `ash`, `vk`, or `vulkan/rhi/` directly.
+- **Processors** (`core/processors/`, `linux/processors/`, `apple/processors/`) — ONLY interact with GpuContext. They acquire/release resources from managed pools. They NEVER import from `vulkanalia`, `vk`, or `vulkan/rhi/` directly.
 
 #### Violations of this rule:
 ```rust
 // ❌ WRONG — processor importing Vulkan types
-use ash::vk;
+use vulkanalia::vk;
 use crate::vulkan::rhi::VulkanDevice;
 
 // ❌ WRONG — processor doing raw allocation
@@ -482,5 +482,16 @@ make sense if the surrounding files were renamed or restructured.
   trade-offs may shift as new adapters arrive — verify against current
   code before generalizing. Read before adding a new surface adapter
   or wondering why one path was picked over another.
+- @docs/architecture/subprocess-rhi-parity.md — Companion to
+  adapter-runtime-integration. Where adapter-runtime is "*how* a
+  subprocess obtains an adapter context", this is "*which* RHI
+  patterns the subprocess re-implements once it has one." To the best
+  of our current knowledge the answer is "only the import-side
+  carve-out — everything else escalates"; the doc buckets each
+  pattern (compute dispatch, queue mutex, frames-in-flight, modifier
+  probe, validation, dual-VkDevice) and lists trip-wires that would
+  shift the bucketing. Read before adding subprocess-side Vulkan code
+  beyond `vkImportMemoryFdInfoKHR` + `vkBindBufferMemory` +
+  `vkMapMemory`.
 
 Index: @docs/learnings/README.md
