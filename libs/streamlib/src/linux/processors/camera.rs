@@ -839,7 +839,11 @@ fn capture_thread_loop(
         {
             let surface_store = gpu_context.surface_store();
             if let Some(store) = surface_store {
-                if let Err(e) = store.register_texture(&texture_id, &stream_texture) {
+                // Camera ring textures don't carry a host-exported timeline:
+                // legacy DMA-BUF consumers (`polyglot-dma-buf-consumer`) read
+                // pixels via CPU mapping, not Vulkan compute, so explicit
+                // cross-process timeline sync is unused.
+                if let Err(e) = store.register_texture(&texture_id, &stream_texture, None) {
                     tracing::warn!(
                         camera = camera_name,
                         ring_index = i,

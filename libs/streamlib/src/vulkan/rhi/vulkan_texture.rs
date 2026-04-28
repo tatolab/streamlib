@@ -758,7 +758,12 @@ impl VulkanTexture {
                 vk::ImageUsageFlags::TRANSFER_SRC
                     | vk::ImageUsageFlags::TRANSFER_DST
                     | vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                    | vk::ImageUsageFlags::COLOR_ATTACHMENT
+                    // STORAGE for subprocess compute shaders that bind
+                    // the imported VkImage as a storage image (#531).
+                    // Must match the host's `acquire_render_target_dma_buf_image`
+                    // usage flags or the cross-process import fails.
+                    | vk::ImageUsageFlags::STORAGE,
             )
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)

@@ -1,28 +1,32 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Polyglot OpenGL adapter scenario (#530).
+//! Polyglot Vulkan adapter scenario (#531).
 //!
-//! End-to-end gate for the subprocess `OpenGLContext` runtime: the host
-//! pre-allocates ONE render-target-capable DMA-BUF surface and registers
-//! it with surface-share under a known UUID. A Python or Deno polyglot
-//! processor opens the surface through `OpenGLContext.acquire_write`,
-//! compiles a fragment shader (Mandelbrot in Python, plasma waves in
-//! Deno), binds an FBO to the imported `GL_TEXTURE_2D`, draws a
-//! fullscreen quad, releases — the adapter's `glFinish` on release
-//! ensures cross-API consumers see the writes through the underlying
-//! DMA-BUF. After the runtime stops, this binary reads the surface
-//! back via Vulkan and writes a PNG; reading that PNG with the Read
-//! tool is the visual gate.
+//! End-to-end gate for the subprocess `VulkanContext` runtime: the host
+//! pre-allocates ONE render-target-capable DMA-BUF surface AND an
+//! exportable `VulkanTimelineSemaphore`, registers both with surface-share
+//! under a known UUID. A Python or Deno polyglot processor opens the
+//! surface through `VulkanContext.acquire_write` (which imports the
+//! DMA-BUF as a `VkImage` in the subprocess and imports the timeline via
+//! `from_imported_opaque_fd`), dispatches the Mandelbrot compute shader,
+//! and releases — the host adapter advances the timeline so the host's
+//! pre-stop readback sees the writes. This binary then reads the surface
+//! back via Vulkan and writes a PNG; reading the PNG with the Read tool
+//! is the visual gate.
+//!
+//! The compute shader (`shaders/mandelbrot.comp`) is compiled to SPIR-V
+//! at build time via `build.rs`, embedded as bytes here, and shipped to
+//! the polyglot processor via the processor config as a hex string.
 //!
 //! Build the Python `.slpkg` first:
-//!   cargo run -p streamlib-cli -- pack examples/polyglot-opengl-fragment-shader/python
+//!   cargo run -p streamlib-cli -- pack examples/polyglot-vulkan-compute/python
 //!
 //! Run:
-//!   cargo run -p polyglot-opengl-fragment-shader-scenario -- \
-//!       --runtime=python --output=/tmp/opengl-mandelbrot.png
-//!   cargo run -p polyglot-opengl-fragment-shader-scenario -- \
-//!       --runtime=deno   --output=/tmp/opengl-plasma.png
+//!   cargo run -p polyglot-vulkan-compute-scenario -- \
+//!       --runtime=python --output=/tmp/vulkan-mandelbrot-py.png
+//!   cargo run -p polyglot-vulkan-compute-scenario -- \
+//!       --runtime=deno   --output=/tmp/vulkan-mandelbrot-deno.png
 
 #![cfg(target_os = "linux")]
 
@@ -30,19 +34,25 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib::adapter_support::VulkanDevice;
+use streamlib::adapter_support::{VulkanDevice, VulkanTimelineSemaphore};
 use streamlib::core::rhi::TextureFormat;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
+/// Compiled SPIR-V for the Mandelbrot compute shader. Built by
+/// `build.rs` from `shaders/mandelbrot.comp`. Shipped to the polyglot
+/// processor as a hex-encoded string in the processor config.
+const MANDELBROT_SPV: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/mandelbrot.spv"));
+
 /// UUID the host registers the render-target surface under. The
 /// polyglot processor reads it from its config and passes it to
-/// `OpenGLContext.acquire_write`.
-const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-0000000005c0";
+/// `VulkanContext.acquire_write`.
+const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-0000000005c1";
 
-/// Side length of the surface. Square keeps Mandelbrot/plasma math
-/// straightforward; 512 is large enough to be visually obvious and
-/// small enough that the scenario runs in a couple seconds.
+/// Side length of the surface. Square keeps the kernel's group-count
+/// math straightforward; 512 is large enough to be visually obvious
+/// and small enough that the scenario runs in a couple seconds.
 const SURFACE_SIZE: u32 = 512;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -71,8 +81,8 @@ impl RuntimeKind {
 
     fn processor_name(self) -> &'static str {
         match self {
-            Self::Python => "com.tatolab.opengl_fragment_shader",
-            Self::Deno => "com.tatolab.opengl_fragment_shader_deno",
+            Self::Python => "com.tatolab.vulkan_compute",
+            Self::Deno => "com.tatolab.vulkan_compute_deno",
         }
     }
 }
@@ -81,7 +91,7 @@ fn main() -> Result<()> {
     let args = std::env::args().skip(1);
 
     let mut runtime_kind = RuntimeKind::Python;
-    let mut output_png = PathBuf::from("/tmp/opengl-fragment-shader.png");
+    let mut output_png = PathBuf::from("/tmp/vulkan-mandelbrot.png");
 
     for a in args {
         if let Some(value) = a.strip_prefix("--runtime=") {
@@ -92,40 +102,51 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("=== Polyglot OpenGL adapter fragment-shader scenario (#530) ===");
+    println!("=== Polyglot Vulkan adapter compute scenario (#531) ===");
     println!("Runtime:     {}", runtime_kind.as_str());
     println!(
         "Surface:     {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})"
     );
+    println!("SPIR-V:      {} bytes", MANDELBROT_SPV.len());
     println!("Output PNG:  {}", output_png.display());
     println!();
 
     let runtime = StreamRuntime::new()?;
 
-    // Slots the setup hook populates with the host StreamTexture and
-    // the underlying VulkanDevice so main.rs can read the surface back
-    // post-stop and write the output PNG. We can't keep the
-    // `&GpuContext` borrow past the hook, so we Arc-clone the bits we
-    // need.
     let texture_slot: Arc<
         Mutex<Option<streamlib::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
     let device_slot: Arc<Mutex<Option<Arc<VulkanDevice>>>> =
         Arc::new(Mutex::new(None));
+    let timeline_slot: Arc<Mutex<Option<Arc<VulkanTimelineSemaphore>>>> =
+        Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
         let device_slot = Arc::clone(&device_slot);
+        let timeline_slot = Arc::clone(&timeline_slot);
         runtime.install_setup_hook(move |gpu| {
             let texture = gpu.acquire_render_target_dma_buf_image(
                 SURFACE_SIZE,
                 SURFACE_SIZE,
-                TextureFormat::Bgra8Unorm,
+                TextureFormat::Rgba8Unorm,
             )?;
-            // Register with surface-share so the subprocess can look
-            // it up via `gpu_limited_access.resolve_surface`. The
-            // adapter's `OpenGlSurfaceAdapter` then imports the
-            // resulting DMA-BUF FD as an EGLImage + GL_TEXTURE_2D.
+            let host_device = Arc::clone(gpu.device().vulkan_device());
+            // The Vulkan adapter on the host needs a per-surface
+            // exportable timeline. The host signals it after the
+            // subprocess release; the subprocess waits on it before
+            // every acquire.
+            let timeline = Arc::new(
+                VulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+                    .map_err(|e| {
+                        StreamError::Configuration(format!(
+                            "VulkanTimelineSemaphore::new_exportable: {e}"
+                        ))
+                    })?,
+            );
+            // Surface-share registration carries BOTH the DMA-BUF FD
+            // and the timeline OPAQUE_FD so the subprocess can wire up
+            // the host adapter's `register_host_surface` directly.
             let store = gpu.surface_store().ok_or_else(|| {
                 StreamError::Configuration(
                     "surface_store unavailable — host runtime built without \
@@ -133,36 +154,36 @@ fn main() -> Result<()> {
                         .into(),
                 )
             })?;
-            // OpenGL adapter doesn't need an explicit Vulkan timeline:
-            // `glFinish` on release plus DMA-BUF kernel-fence semantics
-            // carry visibility for the host's pre-stop readback.
             store
-                .register_texture(SCENARIO_SURFACE_UUID, &texture, None)
+                .register_texture(
+                    SCENARIO_SURFACE_UUID,
+                    &texture,
+                    Some(timeline.as_ref()),
+                )
                 .map_err(|e| {
                     StreamError::Configuration(format!(
                         "register_texture: {e}"
                     ))
                 })?;
             *texture_slot.lock().unwrap() = Some(texture);
-            *device_slot.lock().unwrap() =
-                Some(Arc::clone(gpu.device().vulkan_device()));
+            *device_slot.lock().unwrap() = Some(host_device);
+            *timeline_slot.lock().unwrap() = Some(timeline);
             println!(
-                "✓ render-target DMA-BUF surface registered as '{}'",
+                "✓ render-target DMA-BUF + timeline registered as '{}'",
                 SCENARIO_SURFACE_UUID
             );
             Ok(())
         });
     }
 
-    // Load the polyglot package.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     match runtime_kind {
         RuntimeKind::Python => {
             let slpkg_path = manifest_dir
-                .join("python/polyglot-opengl-fragment-shader-0.1.0.slpkg");
+                .join("python/polyglot-vulkan-compute-0.1.0.slpkg");
             if !slpkg_path.exists() {
                 return Err(StreamError::Configuration(format!(
-                    "Package not found: {}\nRun: cargo run -p streamlib-cli -- pack examples/polyglot-opengl-fragment-shader/python",
+                    "Package not found: {}\nRun: cargo run -p streamlib-cli -- pack examples/polyglot-vulkan-compute/python",
                     slpkg_path.display()
                 )));
             }
@@ -180,10 +201,10 @@ fn main() -> Result<()> {
         }
     }
 
-    // Trigger source: BgraFileSource emits a few `Videoframe`s so the
-    // polyglot processor's `process()` is invoked. The processor
-    // ignores frame contents — it works on the pre-registered host
-    // surface, not the trigger frame's pixel buffer.
+    // Trigger source: a few BGRA frames so the polyglot processor's
+    // `process()` is invoked. Frame contents are ignored — the processor
+    // works on the pre-registered host surface, not the trigger frame's
+    // pixel buffer.
     let fixture_path = write_trigger_fixture()
         .map_err(StreamError::Configuration)?;
 
@@ -205,39 +226,40 @@ fn main() -> Result<()> {
     ))?;
     println!("+ BgraFileSource: {source}");
 
-    let shader_config = serde_json::json!({
-        "opengl_surface_uuid": SCENARIO_SURFACE_UUID,
+    let spv_hex = bytes_to_hex(MANDELBROT_SPV);
+    let variant: u32 = match runtime_kind {
+        RuntimeKind::Python => 0,
+        RuntimeKind::Deno => 1,
+    };
+    let compute_config = serde_json::json!({
+        "vulkan_surface_uuid": SCENARIO_SURFACE_UUID,
         "width": SURFACE_SIZE,
         "height": SURFACE_SIZE,
+        "max_iter": 256,
+        "variant": variant,
+        "shader_spv_hex": spv_hex,
     });
-    let shader = runtime.add_processor(ProcessorSpec::new(
+    let compute = runtime.add_processor(ProcessorSpec::new(
         runtime_kind.processor_name(),
-        shader_config,
+        compute_config,
     ))?;
-    println!("+ Fragment shader: {shader}");
+    println!("+ Vulkan compute processor: {compute}");
 
     runtime.connect(
         OutputLinkPortRef::new(&source, "video"),
-        InputLinkPortRef::new(&shader, "video_in"),
+        InputLinkPortRef::new(&compute, "video_in"),
     )?;
     println!(
-        "\nPipeline: BgraFileSource → {} fragment-shader\n",
+        "\nPipeline: BgraFileSource → {} vulkan-compute\n",
         runtime_kind.as_str()
     );
 
     println!("Starting pipeline...");
     runtime.start()?;
-
-    // Give the polyglot processor time to receive a trigger frame and
-    // complete the GL acquire/draw/release cycle. The Python/Deno
-    // processors guard against re-rendering on subsequent frames so the
-    // PNG stays clean.
     std::thread::sleep(Duration::from_secs(4));
-
     println!("Stopping pipeline...");
     runtime.stop()?;
 
-    // Read the surface back via Vulkan and write the output PNG.
     println!("\nReading host surface back via Vulkan...");
     let texture = texture_slot
         .lock()
@@ -252,9 +274,7 @@ fn main() -> Result<()> {
         .lock()
         .unwrap()
         .clone()
-        .ok_or_else(|| {
-            StreamError::Runtime("device slot is empty".into())
-        })?;
+        .ok_or_else(|| StreamError::Runtime("device slot is empty".into()))?;
     let bgra = vulkan_readback(&device, &texture);
     write_png(&bgra, SURFACE_SIZE, SURFACE_SIZE, &output_png)?;
     println!("✓ Output PNG written: {}", output_png.display());
@@ -262,14 +282,19 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Write a tiny BGRA fixture file. BgraFileSource reads it
-/// frame-by-frame; the resulting `Videoframe`s are the trigger that
-/// drives the polyglot processor's `process()` call.
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
 fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::fs::File;
     use std::io::Write;
 
-    let path = std::env::temp_dir().join("opengl-fragment-shader-trigger.bgra");
+    let path = std::env::temp_dir().join("vulkan-compute-trigger.bgra");
     let mut f = File::create(&path)
         .map_err(|e| format!("create {}: {e}", path.display()))?;
     f.write_all(&[0u8; 4 * 4 * 4 * 3])
@@ -277,12 +302,10 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Read pixels from the host `StreamTexture` back into a CPU buffer
-/// for verification. Returns BGRA8 bytes, `width*height*4` size.
-///
-/// Uses a transient HOST_VISIBLE staging buffer + `vkCmdCopyImageToBuffer`
-/// + queue wait — the canonical Vulkan readback shape, parallel to the
-/// `host_readback` helper in `streamlib-adapter-opengl/tests/common.rs`.
+/// Read pixels from the host `StreamTexture` back into a CPU buffer for
+/// PNG verification. Mirrors the helper in
+/// `examples/polyglot-opengl-fragment-shader` — transient HOST_VISIBLE
+/// staging buffer + `vkCmdCopyImageToBuffer` + `queue_wait_idle`.
 fn vulkan_readback(
     device: &Arc<VulkanDevice>,
     texture: &streamlib::core::rhi::StreamTexture,
@@ -369,9 +392,8 @@ fn vulkan_readback(
     }
     .expect("begin_command_buffer");
 
-    // The OpenGL adapter leaves the image in GENERAL layout (it never
-    // transitions out). Move to TRANSFER_SRC_OPTIMAL for the copy, then
-    // back to GENERAL.
+    // The compute dispatch left the image in GENERAL — transition to
+    // TRANSFER_SRC_OPTIMAL for the copy, then back to GENERAL.
     let to_src = vk::ImageMemoryBarrier2::builder()
         .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
         .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
@@ -459,7 +481,6 @@ fn vulkan_readback(
     out
 }
 
-/// Encode BGRA bytes as RGBA PNG (channel-swap on the fly).
 fn write_png(
     bgra: &[u8],
     width: u32,
@@ -469,13 +490,11 @@ fn write_png(
     use std::fs::File;
     use std::io::BufWriter;
 
-    let mut rgba = vec![0u8; bgra.len()];
-    for (src, dst) in bgra.chunks_exact(4).zip(rgba.chunks_exact_mut(4)) {
-        dst[0] = src[2];
-        dst[1] = src[1];
-        dst[2] = src[0];
-        dst[3] = src[3];
-    }
+    // Surface is allocated as `Rgba8Unorm` end-to-end (host allocator,
+    // subprocess storage-image view, shader's `rgba8` qualifier all
+    // match), so the readback bytes are already RGBA — no channel
+    // swap needed for PNG encoding.
+    let rgba = bgra.to_vec();
 
     let file = File::create(output).map_err(|e| {
         StreamError::Configuration(format!(

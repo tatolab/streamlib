@@ -35,6 +35,11 @@ vulkanalia = { workspace = true }
 # bring-up or DMA-BUF → GL_TEXTURE_2D import.
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl" }
+# Subprocess-side Vulkan runtime (#531). Same shape as streamlib-python-native
+# — wraps the host `VulkanSurfaceAdapter` so subprocess code never
+# re-implements layout-transition / timeline-wait / queue-mutex semantics.
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
+streamlib = { path = "../streamlib" }
 
 
 [lints]

@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::thread;
 
 use streamlib_surface_client::{
-    recv_message_with_fds, send_message_with_fds, MAX_DMA_BUF_PLANES,
+    recv_message_with_fds, send_message_with_fds, MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS,
 };
 
 use super::state::{SurfaceShareState, SurfaceRegistration};
@@ -180,7 +180,7 @@ fn handle_client_connection(
         }
 
         let (json_bytes, received_fds) =
-            recv_message_with_fds(&stream, msg_len, MAX_DMA_BUF_PLANES)?;
+            recv_message_with_fds(&stream, msg_len, MAX_SCM_RIGHTS_FDS)?;
 
         let request: serde_json::Value = serde_json::from_slice(&json_bytes).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("Invalid JSON: {}", e))
@@ -303,26 +303,51 @@ fn handle_register(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
-    if received_fds.is_empty() {
+    // Peel off the optional trailing sync-FD (#531). The host signals its
+    // presence via the JSON `has_sync_fd: true` flag; the FD itself sits
+    // last in the SCM_RIGHTS list, after every DMA-BUF plane FD.
+    let has_sync_fd = request
+        .get("has_sync_fd")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let plane_count = if has_sync_fd {
+        received_fds.len().saturating_sub(1)
+    } else {
+        received_fds.len()
+    };
+    let plane_fds: &[RawFd] = &received_fds[..plane_count];
+    let sync_src_fd: Option<RawFd> = if has_sync_fd {
+        received_fds.get(plane_count).copied()
+    } else {
+        None
+    };
+
+    if plane_fds.is_empty() {
         return (
             serde_json::json!({"error": "missing DMA-BUF fd(s)"}),
             Vec::new(),
         );
     }
-    if received_fds.len() > MAX_DMA_BUF_PLANES {
+    if plane_fds.len() > MAX_DMA_BUF_PLANES {
         return (
             serde_json::json!({
                 "error": format!(
                     "too many plane fds: {} > MAX_DMA_BUF_PLANES ({})",
-                    received_fds.len(), MAX_DMA_BUF_PLANES
+                    plane_fds.len(), MAX_DMA_BUF_PLANES
                 )
             }),
             Vec::new(),
         );
     }
+    if has_sync_fd && sync_src_fd.is_none() {
+        return (
+            serde_json::json!({"error": "has_sync_fd=true but no trailing sync FD attached"}),
+            Vec::new(),
+        );
+    }
 
     let (plane_sizes, plane_offsets, plane_strides) =
-        match parse_plane_arrays(request, received_fds.len()) {
+        match parse_plane_arrays(request, plane_fds.len()) {
             Some(arrays) => arrays,
             None => {
                 return (
@@ -346,11 +371,11 @@ fn handle_register(
         .and_then(|v| v.as_str())
         .unwrap_or("pixel_buffer");
 
-    let mut dup_fds: Vec<RawFd> = Vec::with_capacity(received_fds.len());
-    for fd in received_fds {
+    let mut dup_plane_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
+    for fd in plane_fds {
         let dup_fd = unsafe { libc::dup(*fd) };
         if dup_fd < 0 {
-            for d in &dup_fds {
+            for d in &dup_plane_fds {
                 unsafe { libc::close(*d) };
             }
             return (
@@ -358,13 +383,30 @@ fn handle_register(
                 Vec::new(),
             );
         }
-        dup_fds.push(dup_fd);
+        dup_plane_fds.push(dup_fd);
     }
+
+    let dup_sync_fd: Option<RawFd> = match sync_src_fd {
+        Some(src) => {
+            let dup = unsafe { libc::dup(src) };
+            if dup < 0 {
+                for d in &dup_plane_fds {
+                    unsafe { libc::close(*d) };
+                }
+                return (
+                    serde_json::json!({"error": "failed to dup sync FD"}),
+                    Vec::new(),
+                );
+            }
+            Some(dup)
+        }
+        None => None,
+    };
 
     match state.register_surface(SurfaceRegistration {
         surface_id,
         runtime_id,
-        dma_buf_fds: dup_fds,
+        dma_buf_fds: dup_plane_fds,
         plane_sizes,
         plane_offsets,
         plane_strides,
@@ -373,19 +415,24 @@ fn handle_register(
         format,
         resource_type,
         drm_format_modifier,
+        sync_fd: dup_sync_fd,
     }) {
         Ok(()) => {
             tracing::debug!(
-                "[Surface share] register: surface '{}' for runtime '{}' ({} plane(s))",
+                "[Surface share] register: surface '{}' for runtime '{}' ({} plane(s), sync_fd={})",
                 surface_id,
                 runtime_id,
-                received_fds.len(),
+                plane_fds.len(),
+                has_sync_fd,
             );
             (serde_json::json!({"success": true}), Vec::new())
         }
-        Err(leftover) => {
-            for fd in &leftover {
+        Err((leftover_planes, leftover_sync)) => {
+            for fd in &leftover_planes {
                 unsafe { libc::close(*fd) };
+            }
+            if let Some(fd) = leftover_sync {
+                unsafe { libc::close(fd) };
             }
             tracing::warn!(
                 "[Surface share] register: surface '{}' already exists",
@@ -413,7 +460,7 @@ fn handle_lookup(
     // Dup each stored fd so the kernel-delivered fds in the peer's table are
     // independent of the table's own copies. On partial failure, close every
     // dup we already took.
-    let mut dup_fds: Vec<RawFd> = Vec::with_capacity(checkout.dma_buf_fds.len());
+    let mut dup_fds: Vec<RawFd> = Vec::with_capacity(checkout.dma_buf_fds.len() + 1);
     for fd in &checkout.dma_buf_fds {
         let dup = unsafe { libc::dup(*fd) };
         if dup < 0 {
@@ -422,6 +469,25 @@ fn handle_lookup(
             }
             return (
                 serde_json::json!({"error": "failed to dup DMA-BUF fd"}),
+                Vec::new(),
+            );
+        }
+        dup_fds.push(dup);
+    }
+
+    // Append a dup of the timeline-semaphore OPAQUE_FD when the surface
+    // was registered with one (#531). Subprocess clients detect its
+    // presence via `has_sync_fd` in the response JSON and peel the
+    // trailing FD off the SCM_RIGHTS list.
+    let has_sync_fd = checkout.sync_fd.is_some();
+    if let Some(src_sync) = checkout.sync_fd {
+        let dup = unsafe { libc::dup(src_sync) };
+        if dup < 0 {
+            for d in &dup_fds {
+                unsafe { libc::close(*d) };
+            }
+            return (
+                serde_json::json!({"error": "failed to dup sync FD"}),
                 Vec::new(),
             );
         }
@@ -445,6 +511,7 @@ fn handle_lookup(
             "plane_offsets": checkout.plane_offsets,
             "plane_strides": checkout.plane_strides,
             "drm_format_modifier": checkout.drm_format_modifier,
+            "has_sync_fd": has_sync_fd,
         }),
         dup_fds,
     )
@@ -538,7 +605,7 @@ fn handle_check_in(
         dup_fds.push(dup);
     }
 
-    if let Err(leftover) = state.register_surface(SurfaceRegistration {
+    if let Err((leftover_planes, leftover_sync)) = state.register_surface(SurfaceRegistration {
         surface_id: &surface_id,
         runtime_id,
         dma_buf_fds: dup_fds,
@@ -550,9 +617,17 @@ fn handle_check_in(
         format,
         resource_type,
         drm_format_modifier,
+        // check_in is the subprocess-registers-pixel-buffer path used by
+        // CPU-readback / legacy DMA-BUF consumers. None of those need
+        // explicit Vulkan timeline sync — the wire format reserves the
+        // option for the host-registers-render-target-texture path.
+        sync_fd: None,
     }) {
-        for fd in &leftover {
+        for fd in &leftover_planes {
             unsafe { libc::close(*fd) };
+        }
+        if let Some(fd) = leftover_sync {
+            unsafe { libc::close(fd) };
         }
     }
 
@@ -997,6 +1072,7 @@ mod tests {
                     format: "Bgra32",
                     resource_type: "pixel_buffer",
                     drm_format_modifier: 0,
+                    sync_fd: None,
                 })
                 .expect("register");
         }

@@ -1060,14 +1060,41 @@ impl SurfaceStore {
     }
 
     /// Register a texture with the surface-share service via Unix socket.
+    ///
+    /// `timeline` — when `Some`, the host's exportable timeline semaphore is
+    /// exported as an OPAQUE_FD and shipped alongside the DMA-BUF FD. The
+    /// surface-share service stores the FD; subprocess Vulkan adapters
+    /// `check_out` it via [`streamlib_adapter_vulkan::VulkanSurfaceAdapter`]
+    /// and import it through `VulkanTimelineSemaphore::from_imported_opaque_fd`,
+    /// reusing the host adapter's timeline-wait + signal path (#531). `None`
+    /// for adapters that don't need explicit Vulkan sync (OpenGL — its
+    /// `glFinish` + DMA-BUF kernel-fence semantics carry visibility).
     #[cfg(target_os = "linux")]
     pub fn register_texture(
         &self,
         surface_id: &str,
         texture: &crate::core::rhi::StreamTexture,
+        timeline: Option<&crate::vulkan::rhi::VulkanTimelineSemaphore>,
     ) -> Result<()> {
         // Export the DMA-BUF fd from the texture
         let fd = texture.inner.export_dma_buf_fd()?;
+
+        // Optionally export the timeline-semaphore as an OPAQUE_FD. The host
+        // retains ownership of the semaphore object; this fd is duplicated by
+        // the kernel during SCM_RIGHTS and we close our copy after send.
+        let sync_fd: Option<std::os::unix::io::RawFd> = match timeline {
+            Some(t) => match t.export_opaque_fd() {
+                Ok(f) => Some(f),
+                Err(e) => {
+                    unsafe { libc::close(fd) };
+                    return Err(StreamError::Configuration(format!(
+                        "register_texture: failed to export timeline opaque fd: {}",
+                        e
+                    )));
+                }
+            },
+            None => None,
+        };
 
         // Carry the DRM format modifier and per-plane row pitch so the
         // consumer-side EGL or Vulkan import can pass them via
@@ -1095,6 +1122,7 @@ impl SurfaceStore {
             "plane_offsets": plane_offsets,
             "plane_strides": plane_strides,
             "drm_format_modifier": drm_format_modifier,
+            "has_sync_fd": sync_fd.is_some(),
         });
 
         let connection = self.inner.connection.lock();
@@ -1102,9 +1130,15 @@ impl SurfaceStore {
             StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
+        let mut fds: Vec<std::os::unix::io::RawFd> = vec![fd];
+        if let Some(s) = sync_fd {
+            fds.push(s);
+        }
         let send_result =
-            streamlib_surface_client::send_request_with_fds(stream, &request, &[fd], 0);
-        unsafe { libc::close(fd) };
+            streamlib_surface_client::send_request_with_fds(stream, &request, &fds, 0);
+        for f in &fds {
+            unsafe { libc::close(*f) };
+        }
         let (response, response_fds) = send_result.map_err(|e| {
             StreamError::Configuration(format!("Unix socket register_texture failed: {}", e))
         })?;
@@ -1119,7 +1153,11 @@ impl SurfaceStore {
             )));
         }
 
-        tracing::debug!("SurfaceStore: Registered texture '{}'", surface_id);
+        tracing::debug!(
+            "SurfaceStore: Registered texture '{}' (sync_fd={})",
+            surface_id,
+            timeline.is_some(),
+        );
         Ok(())
     }
 
@@ -1367,6 +1405,7 @@ impl SurfaceStore {
         &self,
         _surface_id: &str,
         _texture: &crate::core::rhi::StreamTexture,
+        _timeline: Option<&()>,
     ) -> Result<()> {
         Err(StreamError::NotSupported(
             "Texture registration not supported on this platform".into(),

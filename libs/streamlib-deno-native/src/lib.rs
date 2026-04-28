@@ -954,6 +954,15 @@ mod gpu_surface {
         /// per plane, keyed by plane index; single-plane surfaces carry a
         /// one-element vec. Mirrors the Python-native twin.
         pub fds: Vec<RawFd>,
+        /// Optional OPAQUE_FD timeline-semaphore handle the host attached
+        /// when registering the surface (#531). Routed into the Vulkan
+        /// adapter's `VulkanTimelineSemaphore::from_imported_opaque_fd` so
+        /// the subprocess reuses the host adapter's timeline-wait + signal
+        /// path. `None` for surfaces without explicit Vulkan sync (OpenGL
+        /// adapter, CPU-readback, legacy DMA-BUF consumer flows). The fd is
+        /// closed when the handle is dropped, unless the import has taken
+        /// ownership.
+        pub sync_fd: Option<RawFd>,
         pub plane_sizes: Vec<u64>,
         pub plane_offsets: Vec<u64>,
         /// Per-plane row pitch in bytes (source-of-truth from the host's
@@ -1020,6 +1029,15 @@ mod gpu_surface {
             for fd in &self.fds {
                 if *fd >= 0 {
                     unsafe { libc::close(*fd) };
+                }
+            }
+            // Close the sync FD if the Vulkan adapter import didn't take
+            // ownership. The adapter's `register_surface` takes the fd by
+            // value via `take_sync_fd` so a successful import zeros out
+            // this slot before drop runs.
+            if let Some(fd) = self.sync_fd {
+                if fd >= 0 {
+                    unsafe { libc::close(fd) };
                 }
             }
         }
@@ -2134,6 +2152,10 @@ mod surface_client {
         size: u64,
         drm_format_modifier: u64,
         format: String,
+        /// Optional OPAQUE_FD timeline-semaphore handle the host attached at
+        /// register time. Stored so cache hits can hand a fresh dup to each
+        /// new `SurfaceHandle`; closed with the cache entry.
+        sync_fd: Option<RawFd>,
     }
 
     impl Drop for CachedSurface {
@@ -2141,6 +2163,11 @@ mod surface_client {
             for fd in &self.fds {
                 if *fd >= 0 {
                     unsafe { libc::close(*fd) };
+                }
+            }
+            if let Some(fd) = self.sync_fd {
+                if fd >= 0 {
+                    unsafe { libc::close(fd) };
                 }
             }
         }
@@ -2313,9 +2340,28 @@ mod surface_client {
                     }
                     return std::ptr::null_mut();
                 }
+                let cached_sync_dup: Option<RawFd> = match cached.sync_fd {
+                    Some(src) => {
+                        let dup = unsafe { libc::dup(src) };
+                        if dup < 0 {
+                            tracing::error!(
+                                "surface_resolve_surface: dup cached sync_fd failed for '{}': {}",
+                                pool_id_str,
+                                std::io::Error::last_os_error()
+                            );
+                            for fd in &dup_fds {
+                                unsafe { libc::close(*fd) };
+                            }
+                            return std::ptr::null_mut();
+                        }
+                        Some(dup)
+                    }
+                    None => None,
+                };
                 let n_planes = dup_fds.len();
                 return Box::into_raw(Box::new(SurfaceHandle {
                     fds: dup_fds,
+                    sync_fd: cached_sync_dup,
                     plane_sizes: cached.plane_sizes.clone(),
                     plane_offsets: cached.plane_offsets.clone(),
                     plane_strides: cached.plane_strides.clone(),
@@ -2358,7 +2404,7 @@ mod surface_client {
             stream,
             &request,
             &[],
-            wire::MAX_DMA_BUF_PLANES,
+            wire::MAX_SCM_RIGHTS_FDS,
         ) {
             Ok(r) => r,
             Err(e) => {
@@ -2385,6 +2431,33 @@ mod surface_client {
                 "surface_resolve_surface: no DMA-BUF fd for '{}'",
                 pool_id_str
             );
+            return std::ptr::null_mut();
+        }
+
+        // Peel off the optional trailing sync-FD (#531) — same wire shape
+        // as the Python-native twin.
+        let has_sync_fd = response
+            .get("has_sync_fd")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let (received_fds, sync_fd): (Vec<RawFd>, Option<RawFd>) = if has_sync_fd
+            && !received_fds.is_empty()
+        {
+            let mut all = received_fds;
+            let sync = all.pop();
+            (all, sync)
+        } else {
+            (received_fds, None)
+        };
+
+        if received_fds.is_empty() {
+            tracing::error!(
+                "surface_resolve_surface: no plane fds for '{}' after peeling sync_fd",
+                pool_id_str
+            );
+            if let Some(s) = sync_fd {
+                unsafe { libc::close(s) };
+            }
             return std::ptr::null_mut();
         }
 
@@ -2444,6 +2517,18 @@ mod surface_client {
             }
             cache_fds.push(dup);
         }
+        let cache_sync_fd: Option<RawFd> = match sync_fd {
+            Some(src) if cache_dup_ok => {
+                let dup = unsafe { libc::dup(src) };
+                if dup < 0 {
+                    cache_dup_ok = false;
+                    None
+                } else {
+                    Some(dup)
+                }
+            }
+            _ => None,
+        };
         if cache_dup_ok {
             let mut cache = handle.resolve_cache.lock().expect("poisoned");
             if cache.len() >= MAX_RESOLVE_CACHE {
@@ -2466,17 +2551,22 @@ mod surface_client {
                     size,
                     drm_format_modifier,
                     format: format_str.to_string(),
+                    sync_fd: cache_sync_fd,
                 },
             );
         } else {
             for fd in &cache_fds {
                 unsafe { libc::close(*fd) };
             }
+            if let Some(fd) = cache_sync_fd {
+                unsafe { libc::close(fd) };
+            }
         }
 
         let n_planes = received_fds.len();
         Box::into_raw(Box::new(SurfaceHandle {
             fds: received_fds,
+            sync_fd,
             plane_sizes,
             plane_offsets,
             plane_strides,
@@ -2956,6 +3046,861 @@ mod opengl {
     pub unsafe extern "C" fn sldn_opengl_release_read(
         _rt: *mut c_void,
         _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+}
+
+// ============================================================================
+// C ABI — Vulkan adapter runtime (#531, Linux)
+//
+// Subprocess-side runtime mirroring the Python-native twin's `slpn_vulkan_*`
+// surface. Reuses `streamlib_adapter_vulkan::VulkanSurfaceAdapter` against a
+// subprocess-local `VulkanDevice` from the RHI: same timeline-wait, same
+// layout-transition, same per-surface state machine. The cdylib never
+// re-implements layout transitions, command-pool lifetimes, fence handling,
+// or queue-mutex coordination — every line of that lives in
+// `streamlib-adapter-vulkan`.
+// ============================================================================
+
+#[cfg(target_os = "linux")]
+mod vulkan {
+    use std::collections::HashMap;
+    use std::os::unix::io::RawFd;
+    use std::sync::{Arc, Mutex};
+
+    use streamlib::adapter_support::{
+        VulkanDevice, VulkanTexture, VulkanTimelineSemaphore,
+    };
+    use streamlib::core::rhi::TextureFormat;
+    use streamlib_adapter_abi::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
+    };
+    use streamlib_adapter_vulkan::{
+        raw_handles, HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter,
+    };
+    use vulkanalia::vk;
+
+    use super::gpu_surface::SurfaceHandle;
+
+    pub struct VulkanRuntimeHandle {
+        device: Arc<VulkanDevice>,
+        adapter: Arc<VulkanSurfaceAdapter>,
+        registered: Mutex<HashMap<u64, RegisteredSurface>>,
+    }
+
+    /// See the Python-native twin for the rationale: only `vk::Image` is
+    /// cached because `VulkanTexture::clone` is a hollow no-image stub —
+    /// the texture itself is moved into `HostSurfaceRegistration` and
+    /// the adapter owns its lifetime.
+    struct RegisteredSurface {
+        vk_image: vk::Image,
+    }
+
+    #[repr(C)]
+    pub struct SldnVulkanView {
+        pub vk_image: u64,
+        pub vk_image_layout: i32,
+    }
+
+    #[repr(C)]
+    pub struct SldnVulkanRawHandles {
+        pub vk_instance: u64,
+        pub vk_physical_device: u64,
+        pub vk_device: u64,
+        pub vk_queue: u64,
+        pub vk_queue_family_index: u32,
+        pub api_version: u32,
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_runtime_new() -> *mut VulkanRuntimeHandle {
+        let device = match VulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                tracing::error!(
+                    "sldn_vulkan_runtime_new: VulkanDevice::new failed: {}",
+                    e
+                );
+                return std::ptr::null_mut();
+            }
+        };
+        let adapter = Arc::new(VulkanSurfaceAdapter::new(Arc::clone(&device)));
+        Box::into_raw(Box::new(VulkanRuntimeHandle {
+            device,
+            adapter,
+            registered: Mutex::new(HashMap::new()),
+        }))
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_runtime_free(rt: *mut VulkanRuntimeHandle) {
+        if !rt.is_null() {
+            let _ = unsafe { Box::from_raw(rt) };
+        }
+    }
+
+    fn texture_format_from_str(format: &str) -> Option<TextureFormat> {
+        match format {
+            "Bgra8Unorm" => Some(TextureFormat::Bgra8Unorm),
+            "Bgra8UnormSrgb" => Some(TextureFormat::Bgra8UnormSrgb),
+            "Rgba8Unorm" => Some(TextureFormat::Rgba8Unorm),
+            "Rgba8UnormSrgb" => Some(TextureFormat::Rgba8UnormSrgb),
+            _ => None,
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_register_surface(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+        gpu_handle: *mut SurfaceHandle,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!("sldn_vulkan_register_surface: null runtime");
+                return -1;
+            }
+        };
+        let gpu = match unsafe { gpu_handle.as_mut() } {
+            Some(g) => g,
+            None => {
+                tracing::error!("sldn_vulkan_register_surface: null gpu_handle");
+                return -1;
+            }
+        };
+        if gpu.fds.is_empty() {
+            tracing::error!(
+                "sldn_vulkan_register_surface: surface has no DMA-BUF fds"
+            );
+            return -1;
+        }
+        if gpu.drm_format_modifier == 0 {
+            tracing::error!(
+                "sldn_vulkan_register_surface: surface has DRM_FORMAT_MOD_LINEAR \
+                 (zero modifier) — render-target Vulkan import requires a tiled \
+                 modifier; see docs/learnings/nvidia-egl-dmabuf-render-target.md"
+            );
+            return -1;
+        }
+        let texture_format = match texture_format_from_str(&gpu.format) {
+            Some(f) => f,
+            None => {
+                tracing::error!(
+                    "sldn_vulkan_register_surface: unsupported format '{}' \
+                     (v1 supports Bgra8Unorm, Bgra8UnormSrgb, Rgba8Unorm, Rgba8UnormSrgb)",
+                    gpu.format
+                );
+                return -1;
+            }
+        };
+        let allocation_size = gpu.size;
+
+        let texture = match VulkanTexture::import_render_target_dma_buf(
+            &rt.device,
+            &gpu.fds,
+            &gpu.plane_offsets,
+            &gpu.plane_strides,
+            gpu.drm_format_modifier,
+            gpu.width,
+            gpu.height,
+            texture_format,
+            allocation_size,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!(
+                    "sldn_vulkan_register_surface: import_render_target_dma_buf: {}",
+                    e
+                );
+                return -1;
+            }
+        };
+        // Snapshot the VkImage handle BEFORE moving texture. See the
+        // Python-native twin for the `VulkanTexture::clone`-is-hollow
+        // rationale.
+        let vk_image = match texture.image() {
+            Some(img) => img,
+            None => {
+                tracing::error!(
+                    "sldn_vulkan_register_surface: imported texture has no VkImage handle"
+                );
+                return -1;
+            }
+        };
+
+        let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
+            Some(fd) => fd,
+            None => {
+                tracing::error!(
+                    "sldn_vulkan_register_surface: surface '{}' has no sync_fd — \
+                     the host must register the texture with an exportable \
+                     `VulkanTimelineSemaphore`.",
+                    surface_id
+                );
+                return -1;
+            }
+        };
+        let timeline = match VulkanTimelineSemaphore::from_imported_opaque_fd(
+            rt.device.device(),
+            raw_sync_fd,
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                gpu.sync_fd = Some(raw_sync_fd);
+                tracing::error!(
+                    "sldn_vulkan_register_surface: from_imported_opaque_fd: {}",
+                    e
+                );
+                return -1;
+            }
+        };
+
+        let registration = HostSurfaceRegistration {
+            texture: streamlib::core::rhi::StreamTexture::from_vulkan(texture),
+            timeline,
+            initial_layout: VulkanLayout::UNDEFINED,
+        };
+
+        if let Err(e) = rt
+            .adapter
+            .register_host_surface(surface_id, registration)
+        {
+            tracing::error!(
+                "sldn_vulkan_register_surface: register_host_surface failed: {:?}",
+                e
+            );
+            return -1;
+        }
+
+        rt.registered
+            .lock()
+            .expect("sldn_vulkan registered: poisoned")
+            .insert(surface_id, RegisteredSurface { vk_image });
+        0
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_unregister_surface(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return -1,
+        };
+        let removed = rt
+            .registered
+            .lock()
+            .expect("sldn_vulkan registered: poisoned")
+            .remove(&surface_id);
+        if removed.is_none() {
+            return -1;
+        }
+        if rt.adapter.unregister_host_surface(surface_id) {
+            0
+        } else {
+            -1
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_acquire_write(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SldnVulkanView,
+    ) -> i32 {
+        acquire_inner(rt, surface_id, out_view, AcquireKind::Write)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_release_write(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        release_inner(rt, surface_id, AcquireKind::Write)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_acquire_read(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SldnVulkanView,
+    ) -> i32 {
+        acquire_inner(rt, surface_id, out_view, AcquireKind::Read)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_release_read(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        release_inner(rt, surface_id, AcquireKind::Read)
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_raw_handles(
+        rt: *mut VulkanRuntimeHandle,
+        out: *mut SldnVulkanRawHandles,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return -1,
+        };
+        let out = match unsafe { out.as_mut() } {
+            Some(o) => o,
+            None => return -1,
+        };
+        let handles = raw_handles(&rt.device);
+        out.vk_instance = handles.vk_instance;
+        out.vk_physical_device = handles.vk_physical_device;
+        out.vk_device = handles.vk_device;
+        out.vk_queue = handles.vk_queue;
+        out.vk_queue_family_index = handles.vk_queue_family_index;
+        out.api_version = handles.api_version;
+        0
+    }
+
+    #[derive(Clone, Copy)]
+    enum AcquireKind {
+        Read,
+        Write,
+    }
+
+    fn acquire_inner(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SldnVulkanView,
+        kind: AcquireKind,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!("sldn_vulkan_acquire_*: null runtime");
+                return -1;
+            }
+        };
+        let out_view = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => {
+                tracing::error!("sldn_vulkan_acquire_*: null out_view");
+                return -1;
+            }
+        };
+        let surface = StreamlibSurface::new(
+            surface_id,
+            0,
+            0,
+            SurfaceFormat::Bgra8,
+            SurfaceUsage::RENDER_TARGET,
+            SurfaceTransportHandle::empty(),
+            SurfaceSyncState::default(),
+        );
+        match kind {
+            AcquireKind::Write => {
+                use streamlib_adapter_abi::VulkanWritable;
+                match rt.adapter.acquire_write(&surface) {
+                    Ok(g) => {
+                        out_view.vk_image = g.view().vk_image().0;
+                        out_view.vk_image_layout = g.view().vk_image_layout().0;
+                        std::mem::forget(g);
+                        0
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "sldn_vulkan_acquire_write: adapter.acquire_write: {:?}",
+                            e
+                        );
+                        -1
+                    }
+                }
+            }
+            AcquireKind::Read => {
+                use streamlib_adapter_abi::VulkanWritable;
+                match rt.adapter.acquire_read(&surface) {
+                    Ok(g) => {
+                        out_view.vk_image = g.view().vk_image().0;
+                        out_view.vk_image_layout = g.view().vk_image_layout().0;
+                        std::mem::forget(g);
+                        0
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "sldn_vulkan_acquire_read: adapter.acquire_read: {:?}",
+                            e
+                        );
+                        -1
+                    }
+                }
+            }
+        }
+    }
+
+    fn release_inner(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+        kind: AcquireKind,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return -1,
+        };
+        match kind {
+            AcquireKind::Read => rt.adapter.end_read_access(surface_id),
+            AcquireKind::Write => rt.adapter.end_write_access(surface_id),
+        }
+        0
+    }
+
+    /// Twin of `slpn_vulkan_dispatch_compute` — same v1 limitation
+    /// (#525 follow-up). Quarantined raw-vulkanalia compute dispatch
+    /// against a single-binding storage image. Signature identical to
+    /// the Python-native variant.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_dispatch_compute(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+        spv_ptr: *const u8,
+        spv_len: usize,
+        push_constants_ptr: *const u8,
+        push_constants_size: u32,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return -1,
+        };
+        if spv_ptr.is_null() || spv_len == 0 {
+            return -2;
+        }
+        if spv_len % 4 != 0 {
+            return -3;
+        }
+        let vk_image = {
+            let registered = rt
+                .registered
+                .lock()
+                .expect("sldn_vulkan registered: poisoned");
+            match registered.get(&surface_id) {
+                Some(e) => e.vk_image,
+                None => {
+                    tracing::error!(
+                        "sldn_vulkan_dispatch_compute: surface_id {} not registered",
+                        surface_id
+                    );
+                    return -4;
+                }
+            }
+        };
+
+        let spv: &[u8] = unsafe { std::slice::from_raw_parts(spv_ptr, spv_len) };
+        let push_constants: &[u8] = if push_constants_size == 0 {
+            &[]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(
+                    push_constants_ptr,
+                    push_constants_size as usize,
+                )
+            }
+        };
+
+        match super::vulkan_compute_dispatch::dispatch_storage_image_compute(
+            &rt.device,
+            vk_image,
+            spv,
+            push_constants,
+            group_count_x,
+            group_count_y,
+            group_count_z,
+        ) {
+            Ok(()) => 0,
+            Err(e) => {
+                tracing::error!("sldn_vulkan_dispatch_compute: {}", e);
+                -10
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod vulkan_compute_dispatch {
+    //! Mirror of streamlib-python-native's `vulkan_compute_dispatch`
+    //! module. v1 quarantined compute-dispatch helper; replace once
+    //! #525's escalate-IPC `RunComputeKernel` lands.
+
+    use std::sync::Arc;
+
+    use streamlib::adapter_support::VulkanDevice;
+    use vulkanalia::prelude::v1_4::*;
+    use vulkanalia::vk;
+
+    pub fn dispatch_storage_image_compute(
+        device: &Arc<VulkanDevice>,
+        image: vk::Image,
+        spv: &[u8],
+        push_constants: &[u8],
+        group_x: u32,
+        group_y: u32,
+        group_z: u32,
+    ) -> Result<(), String> {
+        let dev = device.device();
+        let queue = device.queue();
+        let qf = device.queue_family_index();
+
+        let spv_words: &[u32] = unsafe {
+            std::slice::from_raw_parts(spv.as_ptr() as *const u32, spv.len() / 4)
+        };
+
+        let view_info = vk::ImageViewCreateInfo::builder()
+            .image(image)
+            .view_type(vk::ImageViewType::_2D)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .components(vk::ComponentMapping::default())
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .level_count(1)
+                    .layer_count(1)
+                    .build(),
+            )
+            .build();
+        let image_view = unsafe { dev.create_image_view(&view_info, None) }
+            .map_err(|e| format!("create_image_view: {e}"))?;
+        let cleanup_view = || unsafe { dev.destroy_image_view(image_view, None) };
+
+        let bindings = [vk::DescriptorSetLayoutBinding::builder()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .build()];
+        let dsl_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&bindings)
+            .build();
+        let dsl = unsafe { dev.create_descriptor_set_layout(&dsl_info, None) }
+            .map_err(|e| {
+                cleanup_view();
+                format!("create_descriptor_set_layout: {e}")
+            })?;
+        let cleanup_dsl = || unsafe { dev.destroy_descriptor_set_layout(dsl, None) };
+
+        let pool_sizes = [vk::DescriptorPoolSize::builder()
+            .type_(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(1)
+            .build()];
+        let pool_info = vk::DescriptorPoolCreateInfo::builder()
+            .pool_sizes(&pool_sizes)
+            .max_sets(1)
+            .build();
+        let dpool = unsafe { dev.create_descriptor_pool(&pool_info, None) }
+            .map_err(|e| {
+                cleanup_dsl();
+                cleanup_view();
+                format!("create_descriptor_pool: {e}")
+            })?;
+        let cleanup_dpool = || unsafe { dev.destroy_descriptor_pool(dpool, None) };
+
+        let layouts = [dsl];
+        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(dpool)
+            .set_layouts(&layouts)
+            .build();
+        let descriptor_set = unsafe { dev.allocate_descriptor_sets(&alloc_info) }
+            .map_err(|e| {
+                cleanup_dpool();
+                cleanup_dsl();
+                cleanup_view();
+                format!("allocate_descriptor_sets: {e}")
+            })?[0];
+
+        let image_info = [vk::DescriptorImageInfo::builder()
+            .image_view(image_view)
+            .image_layout(vk::ImageLayout::GENERAL)
+            .build()];
+        let writes = [vk::WriteDescriptorSet::builder()
+            .dst_set(descriptor_set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .image_info(&image_info)
+            .build()];
+        unsafe {
+            dev.update_descriptor_sets(&writes, &[] as &[vk::CopyDescriptorSet])
+        };
+
+        let push_const_ranges: Vec<vk::PushConstantRange> = if push_constants.is_empty() {
+            Vec::new()
+        } else {
+            vec![vk::PushConstantRange::builder()
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .offset(0)
+                .size(push_constants.len() as u32)
+                .build()]
+        };
+        let mut pl_builder = vk::PipelineLayoutCreateInfo::builder().set_layouts(&layouts);
+        if !push_const_ranges.is_empty() {
+            pl_builder = pl_builder.push_constant_ranges(&push_const_ranges);
+        }
+        let pipeline_layout =
+            unsafe { dev.create_pipeline_layout(&pl_builder.build(), None) }.map_err(|e| {
+                cleanup_dpool();
+                cleanup_dsl();
+                cleanup_view();
+                format!("create_pipeline_layout: {e}")
+            })?;
+        let cleanup_pl = || unsafe { dev.destroy_pipeline_layout(pipeline_layout, None) };
+
+        let shader_info = vk::ShaderModuleCreateInfo::builder()
+            .code(spv_words)
+            .build();
+        let shader = unsafe { dev.create_shader_module(&shader_info, None) }.map_err(|e| {
+            cleanup_pl();
+            cleanup_dpool();
+            cleanup_dsl();
+            cleanup_view();
+            format!("create_shader_module: {e}")
+        })?;
+        let cleanup_shader = || unsafe { dev.destroy_shader_module(shader, None) };
+
+        let entry_name = b"main\0";
+        let stage = vk::PipelineShaderStageCreateInfo::builder()
+            .stage(vk::ShaderStageFlags::COMPUTE)
+            .module(shader)
+            .name(entry_name)
+            .build();
+        let pipeline_info = vk::ComputePipelineCreateInfo::builder()
+            .stage(stage)
+            .layout(pipeline_layout)
+            .build();
+        let (pipelines, _result_code) = unsafe {
+            dev.create_compute_pipelines(
+                vk::PipelineCache::null(),
+                &[pipeline_info],
+                None,
+            )
+        }
+        .map_err(|e| {
+            cleanup_shader();
+            cleanup_pl();
+            cleanup_dpool();
+            cleanup_dsl();
+            cleanup_view();
+            format!("create_compute_pipelines: {:?}", e)
+        })?;
+        let pipeline = pipelines[0];
+        let cleanup_pipeline = || unsafe { dev.destroy_pipeline(pipeline, None) };
+
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(qf)
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+            .build();
+        let cmd_pool = unsafe { dev.create_command_pool(&pool_info, None) }.map_err(|e| {
+            cleanup_pipeline();
+            cleanup_shader();
+            cleanup_pl();
+            cleanup_dpool();
+            cleanup_dsl();
+            cleanup_view();
+            format!("create_command_pool: {e}")
+        })?;
+        let cleanup_cmd_pool = || unsafe { dev.destroy_command_pool(cmd_pool, None) };
+
+        let cmd_alloc = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(cmd_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1)
+            .build();
+        let cmd = unsafe { dev.allocate_command_buffers(&cmd_alloc) }.map_err(|e| {
+            cleanup_cmd_pool();
+            cleanup_pipeline();
+            cleanup_shader();
+            cleanup_pl();
+            cleanup_dpool();
+            cleanup_dsl();
+            cleanup_view();
+            format!("allocate_command_buffers: {e}")
+        })?[0];
+
+        let begin = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
+        unsafe { dev.begin_command_buffer(cmd, &begin) }
+            .map_err(|e| format!("begin_command_buffer: {e}"))?;
+
+        unsafe {
+            dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
+            dev.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline_layout,
+                0,
+                &[descriptor_set],
+                &[],
+            );
+            if !push_constants.is_empty() {
+                dev.cmd_push_constants(
+                    cmd,
+                    pipeline_layout,
+                    vk::ShaderStageFlags::COMPUTE,
+                    0,
+                    push_constants,
+                );
+            }
+            dev.cmd_dispatch(cmd, group_x, group_y, group_z);
+        }
+
+        let barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
+            .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_queue_family_index(qf)
+            .dst_queue_family_index(qf)
+            .image(image)
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .level_count(1)
+                    .layer_count(1)
+                    .build(),
+            )
+            .build();
+        let barriers = [barrier];
+        let dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&barriers)
+            .build();
+        unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
+
+        unsafe { dev.end_command_buffer(cmd) }
+            .map_err(|e| format!("end_command_buffer: {e}"))?;
+
+        let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(cmd)
+            .build()];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cmd_infos)
+            .build();
+        unsafe { device.submit_to_queue(queue, &[submit], vk::Fence::null()) }
+            .map_err(|e| format!("submit_to_queue: {e}"))?;
+        unsafe { dev.queue_wait_idle(queue) }
+            .map_err(|e| format!("queue_wait_idle: {e}"))?;
+
+        cleanup_cmd_pool();
+        cleanup_pipeline();
+        cleanup_shader();
+        cleanup_pl();
+        cleanup_dpool();
+        cleanup_dsl();
+        cleanup_view();
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod vulkan {
+    use std::ffi::c_void;
+
+    #[repr(C)]
+    pub struct SldnVulkanView {
+        pub vk_image: u64,
+        pub vk_image_layout: i32,
+    }
+
+    #[repr(C)]
+    pub struct SldnVulkanRawHandles {
+        pub vk_instance: u64,
+        pub vk_physical_device: u64,
+        pub vk_device: u64,
+        pub vk_queue: u64,
+        pub vk_queue_family_index: u32,
+        pub api_version: u32,
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_runtime_new() -> *mut c_void {
+        tracing::error!("sldn_vulkan_*: Vulkan adapter runtime is Linux-only");
+        std::ptr::null_mut()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_runtime_free(_rt: *mut c_void) {}
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_register_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _gpu_handle: *mut c_void,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_unregister_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_acquire_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SldnVulkanView,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_release_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_acquire_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SldnVulkanView,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_release_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_raw_handles(
+        _rt: *mut c_void,
+        _out: *mut SldnVulkanRawHandles,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_dispatch_compute(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _spv_ptr: *const u8,
+        _spv_len: usize,
+        _push_constants_ptr: *const u8,
+        _push_constants_size: u32,
+        _group_count_x: u32,
+        _group_count_y: u32,
+        _group_count_z: u32,
     ) -> i32 {
         -1
     }

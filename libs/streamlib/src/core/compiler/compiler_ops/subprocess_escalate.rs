@@ -546,7 +546,10 @@ fn assign_texture_handle_id(
     #[cfg(target_os = "linux")]
     {
         if let Some(store) = full.surface_store() {
-            store.register_texture(&handle_id, texture.texture())?;
+            // No timeline semaphore — escalate-IPC consumers (CPU-readback
+            // bridge) handle sync via the per-acquire response, not via a
+            // shared host timeline.
+            store.register_texture(&handle_id, texture.texture(), None)?;
         }
     }
     Ok(handle_id)
@@ -565,7 +568,7 @@ fn assign_image_handle_id(
 ) -> crate::core::error::Result<String> {
     let handle_id = Uuid::new_v4().to_string();
     if let Some(store) = full.surface_store() {
-        store.register_texture(&handle_id, texture)?;
+        store.register_texture(&handle_id, texture, None)?;
     }
     Ok(handle_id)
 }
