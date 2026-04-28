@@ -6,12 +6,14 @@
 //! Device, texture, command buffer/queue, sync, pixel buffer, and texture cache
 //! are fully implemented via ash. Blitter and format converter are partial.
 
+mod device_capability;
 mod vulkan_command_buffer;
 mod vulkan_command_queue;
 mod vulkan_device;
 mod vulkan_sync;
 mod vulkan_texture;
 
+pub use device_capability::{ConsumerMarker, DevicePrivilege, HostMarker, VulkanRhiDevice};
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
 pub use vulkan_device::VulkanDevice;

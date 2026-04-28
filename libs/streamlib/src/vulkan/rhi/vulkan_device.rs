@@ -18,7 +18,7 @@ use crate::core::{Result, StreamError};
 
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
-use super::{VulkanCommandQueue, VulkanTexture};
+use super::{HostMarker, VulkanCommandQueue, VulkanRhiDevice, VulkanTexture};
 
 /// Vulkan GPU device.
 ///
@@ -1315,6 +1315,31 @@ impl vulkan_video::RhiQueueSubmitter for VulkanDevice {
     fn with_device_resource_lock(&self, f: &mut dyn FnMut()) {
         let _guard = self.lock_device();
         f();
+    }
+}
+
+impl VulkanRhiDevice for VulkanDevice {
+    type Privilege = HostMarker;
+
+    fn device(&self) -> &vulkanalia::Device {
+        &self.device
+    }
+
+    fn queue(&self) -> vk::Queue {
+        self.queue
+    }
+
+    fn queue_family_index(&self) -> u32 {
+        self.queue_family_index
+    }
+
+    unsafe fn submit_to_queue(
+        &self,
+        queue: vk::Queue,
+        submits: &[vk::SubmitInfo2],
+        fence: vk::Fence,
+    ) -> Result<()> {
+        unsafe { VulkanDevice::submit_to_queue(self, queue, submits, fence) }
     }
 }
 
