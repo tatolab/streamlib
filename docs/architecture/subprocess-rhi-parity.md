@@ -397,8 +397,43 @@ halt before reaching for them.
   shader-cache behavior in Vulkan / D3D / Metal pipeline caches.
   Recommend stable-by-hash; flag for confirmation when #550 is picked
   up.
-- **Compute pipeline cache persistence across host restarts** — out of
-  scope here; defer until startup-cost profiling shows it matters.
+- **Compute pipeline cache persistence across host restarts** — defer
+  until profiling shows host startup time or `RegisterComputeKernel`
+  first-call latency on user-registered kernels matters. For
+  streamlib's built-in kernels (NV12 conversion, format converter —
+  ~1–2 bindings each), recompile is genuinely milliseconds and
+  persistence buys nothing visible. The case where it matters:
+  customer registers a 50-binding ML compute graph via
+  `RegisterComputeKernel` (#550) and the host process restarts on a
+  hot path (cron, crash recovery, frequent deploys) — they pay the
+  recompile cost every minute and the "compiling shaders…" pause from
+  game launchers becomes user-visible.
+
+  **Triggers to revisit:** any of (a) host process restarts on a hot
+  path; (b) customers report "first inference is slow" with
+  user-registered ML kernels; (c) `RegisterComputeKernel` shows up in
+  startup-cost profiles.
+
+  **Implementation shape when triggered.** Two dirty-detection layers,
+  neither of them ours to write:
+
+  1. *Per-shader code change* — file path
+     `~/.cache/streamlib/pipeline-cache/<spirv_hash>.bin`. We hash the
+     SPIR-V blob already in hand; new shader source → glslc emits new
+     SPIR-V → new hash → different file path → cache miss → driver
+     recompiles → we serialize the freshly-built blob back under the
+     new path. Old files become orphaned (LRU-evict the cache dir).
+  2. *Per-driver/device change* —
+     [`VkPipelineCacheHeaderVersionOne`](https://registry.khronos.org/vulkan/specs/1.3-extensions/man/html/VkPipelineCacheHeaderVersionOne.html)
+     (vendor_id + device_id + 16-byte `pipeline_cache_uuid`) is
+     driver-validated on every `vkCreatePipelineCache` with
+     `pInitialData`. Driver upgrade changes the uuid → blob silently
+     rejected → fallback to recompile → we serialize the new blob back.
+     We write zero code for this layer; the driver does it.
+
+  Implementation is ~10 lines of orchestration on top of
+  `vkGetPipelineCacheData` / `vkCreatePipelineCache` — Unreal's
+  `DerivedDataCache` shape minus the cross-platform shader translator.
 
 ## Related
 
