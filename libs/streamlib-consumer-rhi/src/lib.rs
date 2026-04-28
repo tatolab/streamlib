@@ -136,12 +136,11 @@ pub use device_capability::private;
 /// ```
 ///
 /// The seal on [`DevicePrivilege`] keeps external crates from
-/// inventing their own privilege flavors — `Sealed` lives in
-/// `private` (doc-hidden but pub so streamlib can implement it on
-/// `HostMarker`). External code can name `private::Sealed` but
-/// implementing it without an out-of-tree marker type yields an
-/// orphan-rule error; implementing `DevicePrivilege` on a
-/// non-Sealed marker fails the trait bound:
+/// **accidentally** inventing their own privilege flavors. `Sealed`
+/// lives in [`private`] (`pub` so streamlib can implement it on
+/// `HostMarker` across the crate boundary, but `#[doc(hidden)]` so
+/// rustdoc doesn't surface it). The default failure mode for an
+/// outside crate is an unsatisfied trait bound:
 ///
 /// ```compile_fail
 /// // External marker doesn't implement Sealed → can't impl
@@ -157,6 +156,15 @@ pub use device_capability::private;
 ///     type Texture = ConsumerVulkanTexture;
 /// }
 /// ```
+///
+/// This is the standard cross-crate seal trade-off (serde / std use
+/// the same pattern): the seal is **convention with friction** —
+/// `private` is reachable, named with an `__`-style hint that it's
+/// not part of the API, and a determined external crate can still
+/// write `impl streamlib_consumer_rhi::private::Sealed for MyMarker`
+/// before implementing `DevicePrivilege`. The hard guarantee is
+/// against accidental implementation; the looser guarantee is that
+/// any deliberate breach is visible at the call site.
 ///
 /// Positive control: the consumer-side path compiles fine. Only
 /// type-checked — no Vulkan loader call at test time.
