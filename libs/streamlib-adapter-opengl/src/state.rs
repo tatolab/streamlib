@@ -6,7 +6,7 @@
 //! enforces at the API level.
 
 use khronos_egl as egl;
-use streamlib_adapter_abi::SurfaceId;
+use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
 
 #[allow(dead_code)] // referenced via SurfaceState; kept private to the adapter
 type EglImage = egl::Image;
@@ -56,3 +56,21 @@ pub(crate) struct SurfaceState {
 // both locks.
 unsafe impl Send for SurfaceState {}
 unsafe impl Sync for SurfaceState {}
+
+impl SurfaceRegistration for SurfaceState {
+    fn write_held(&self) -> bool {
+        self.write_held
+    }
+    fn read_holders(&self) -> u64 {
+        self.read_holders
+    }
+    fn set_write_held(&mut self, held: bool) {
+        self.write_held = held;
+    }
+    fn inc_read_holders(&mut self) {
+        self.read_holders += 1;
+    }
+    fn dec_read_holders(&mut self) {
+        self.read_holders = self.read_holders.saturating_sub(1);
+    }
+}

@@ -15,14 +15,12 @@
 //!   the registry-mutex level; concurrent GL access through the same
 //!   context is serialized by [`EglRuntime::lock_make_current`].
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use khronos_egl as egl;
-use parking_lot::Mutex;
 use streamlib_adapter_abi::{
-    AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceId, WriteGuard,
+    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId, WriteGuard,
 };
 use tracing::{instrument, warn};
 
@@ -43,7 +41,7 @@ use crate::view::{OpenGlReadView, OpenGlWriteView};
 /// API or via the [`crate::OpenGlContext`] convenience.
 pub struct OpenGlSurfaceAdapter {
     runtime: Arc<EglRuntime>,
-    surfaces: Mutex<HashMap<SurfaceId, SurfaceState>>,
+    surfaces: Registry<SurfaceState>,
 }
 
 impl OpenGlSurfaceAdapter {
@@ -51,7 +49,7 @@ impl OpenGlSurfaceAdapter {
     pub fn new(runtime: Arc<EglRuntime>) -> Self {
         Self {
             runtime,
-            surfaces: Mutex::new(HashMap::new()),
+            surfaces: Registry::new(),
         }
     }
 
@@ -78,11 +76,10 @@ impl OpenGlSurfaceAdapter {
         id: SurfaceId,
         registration: HostSurfaceRegistration,
     ) -> Result<(), AdapterError> {
-        let mut map = self.surfaces.lock();
-        if map.contains_key(&id) {
-            return Err(AdapterError::SurfaceNotFound { surface_id: id });
-        }
-
+        // Reject duplicates up-front via the Registry's atomic insert
+        // below; build the EGLImage + GL texture without holding the
+        // registry lock so make-current and registry locks don't
+        // shoulder each other across user code.
         let _current = self.runtime.lock_make_current().map_err(egl_to_adapter)?;
 
         // Build the DMA-BUF import attribute list. Modifier is split
@@ -148,16 +145,23 @@ impl OpenGlSurfaceAdapter {
             gl::BindTexture(gl::TEXTURE_2D, 0);
         }
 
-        map.insert(
-            id,
-            SurfaceState {
-                surface_id: id,
-                image,
-                texture,
-                read_holders: 0,
-                write_held: false,
-            },
-        );
+        let state = SurfaceState {
+            surface_id: id,
+            image,
+            texture,
+            read_holders: 0,
+            write_held: false,
+        };
+        if !self.surfaces.register(id, state) {
+            // Lost a race to a concurrent registration with the same
+            // id (or caller passed a duplicate). Tear down what we
+            // just built so we don't leak the EGLImage / GL texture.
+            unsafe {
+                gl::DeleteTextures(1, &texture);
+                self.runtime.destroy_image(image);
+            }
+            return Err(AdapterError::SurfaceNotFound { surface_id: id });
+        }
         Ok(())
     }
 
@@ -168,11 +172,7 @@ impl OpenGlSurfaceAdapter {
     /// Returns `true` if a surface was removed.
     #[instrument(level = "debug", skip(self), fields(surface_id = id))]
     pub fn unregister_host_surface(&self, id: SurfaceId) -> bool {
-        let removed = {
-            let mut map = self.surfaces.lock();
-            map.remove(&id)
-        };
-        let Some(state) = removed else {
+        let Some(state) = self.surfaces.unregister(id) else {
             return false;
         };
 
@@ -194,58 +194,45 @@ impl OpenGlSurfaceAdapter {
     /// Snapshot the registry size — primarily for tests and
     /// observability.
     pub fn registered_count(&self) -> usize {
-        self.surfaces.lock().len()
+        self.surfaces.len()
     }
 
     fn try_begin_read(
         &self,
         surface: &StreamlibSurface,
     ) -> Result<Option<u32>, AdapterError> {
-        let mut map = self.surfaces.lock();
-        let state = map
-            .get_mut(&surface.id)
-            .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
-        if state.write_held {
-            return Ok(None);
-        }
-        state.read_holders += 1;
-        Ok(Some(state.texture))
+        self.surfaces
+            .try_begin_read(surface.id, |state| Ok(state.texture))
     }
 
     fn try_begin_write(
         &self,
         surface: &StreamlibSurface,
     ) -> Result<Option<u32>, AdapterError> {
-        let mut map = self.surfaces.lock();
-        let state = map
-            .get_mut(&surface.id)
-            .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
-        if state.write_held || state.read_holders > 0 {
-            return Ok(None);
-        }
-        state.write_held = true;
-        Ok(Some(state.texture))
+        self.surfaces
+            .try_begin_write(surface.id, |state| Ok(state.texture))
     }
 }
 
 impl Drop for OpenGlSurfaceAdapter {
     fn drop(&mut self) {
-        let mut map = self.surfaces.lock();
-        if map.is_empty() {
+        if self.surfaces.is_empty() {
             return;
         }
         match self.runtime.lock_make_current() {
             Ok(_current) => {
-                for (_, state) in map.drain() {
-                    unsafe {
-                        gl::DeleteTextures(1, &state.texture);
-                        self.runtime.destroy_image(state.image);
-                    }
-                }
+                self.surfaces.drain(|_id, state| unsafe {
+                    gl::DeleteTextures(1, &state.texture);
+                    self.runtime.destroy_image(state.image);
+                });
             }
             Err(e) => {
                 warn!(?e, "could not make-current during adapter drop — leaking GL textures");
-                map.clear();
+                // Without a current context we can't safely delete the
+                // GL textures or EGLImages. Drop the entries anyway so
+                // we don't keep them alive past the adapter; the GL
+                // resources leak for the lifetime of the runtime.
+                self.surfaces.drain(|_id, _state| {});
             }
         }
     }
@@ -288,19 +275,10 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
                     _marker: PhantomData,
                 },
             )),
-            None => {
-                let map = self.surfaces.lock();
-                let holder = match map.get(&surface.id) {
-                    Some(s) if s.write_held => "writer".to_string(),
-                    Some(s) => format!("{} reader(s)", s.read_holders),
-                    None => "unknown".to_string(),
-                };
-                drop(map);
-                Err(AdapterError::WriteContended {
-                    surface_id: surface.id,
-                    holder,
-                })
-            }
+            None => Err(AdapterError::WriteContended {
+                surface_id: surface.id,
+                holder: self.surfaces.describe_contention(surface.id),
+            }),
         }
     }
 
@@ -339,13 +317,13 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
     }
 
     fn end_read_access(&self, surface_id: SurfaceId) {
-        let mut map = self.surfaces.lock();
-        let Some(state) = map.get_mut(&surface_id) else {
+        let updated = self.surfaces.with_mut(surface_id, |state| {
+            debug_assert!(state.read_holders > 0, "read release without acquire");
+            state.read_holders = state.read_holders.saturating_sub(1);
+        });
+        if updated.is_none() {
             warn!(?surface_id, "end_read_access on unknown surface — racing unregister");
-            return;
-        };
-        debug_assert!(state.read_holders > 0, "read release without acquire");
-        state.read_holders = state.read_holders.saturating_sub(1);
+        }
         // Reads that just sample don't need a flush; if the caller
         // wrote uniforms or did indirect work they're responsible for
         // their own ordering. The adapter does NOT issue glFinish on
@@ -353,14 +331,14 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
     }
 
     fn end_write_access(&self, surface_id: SurfaceId) {
-        let mut map = self.surfaces.lock();
-        let Some(state) = map.get_mut(&surface_id) else {
+        let updated = self.surfaces.with_mut(surface_id, |state| {
+            debug_assert!(state.write_held, "write release without acquire");
+            state.write_held = false;
+        });
+        if updated.is_none() {
             warn!(?surface_id, "end_write_access on unknown surface — racing unregister");
             return;
-        };
-        debug_assert!(state.write_held, "write release without acquire");
-        state.write_held = false;
-        drop(map);
+        }
 
         // Drain the GL command stream so subsequent host Vulkan work
         // (or another adapter) sees the writes through the DMA-BUF.

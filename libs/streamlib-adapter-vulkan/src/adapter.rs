@@ -15,17 +15,15 @@
 //! - Signals the next timeline value on guard drop so the next acquire
 //!   wakes up.
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::Mutex;
 use streamlib::adapter_support::{VulkanDevice, VulkanTimelineSemaphore};
 use streamlib::core::rhi::StreamTexture;
 use streamlib_adapter_abi::{
-    AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceId, VkImageInfo,
-    WriteGuard,
+    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
+    SurfaceRegistration, VkImageInfo, WriteGuard,
 };
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -47,7 +45,7 @@ const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
 /// API or via the [`crate::VulkanContext`] convenience.
 pub struct VulkanSurfaceAdapter {
     device: Arc<VulkanDevice>,
-    surfaces: Mutex<HashMap<SurfaceId, SurfaceState>>,
+    surfaces: Registry<SurfaceState>,
     /// Per-acquire timeline wait timeout. Adjustable via
     /// [`Self::with_acquire_timeout`].
     acquire_timeout: Duration,
@@ -58,7 +56,7 @@ impl VulkanSurfaceAdapter {
     pub fn new(device: Arc<VulkanDevice>) -> Self {
         Self {
             device,
-            surfaces: Mutex::new(HashMap::new()),
+            surfaces: Registry::new(),
             acquire_timeout: DEFAULT_TIMELINE_WAIT,
         }
     }
@@ -85,11 +83,7 @@ impl VulkanSurfaceAdapter {
         id: SurfaceId,
         registration: HostSurfaceRegistration,
     ) -> Result<(), AdapterError> {
-        let mut map = self.surfaces.lock();
-        if map.contains_key(&id) {
-            return Err(AdapterError::SurfaceNotFound { surface_id: id });
-        }
-        map.insert(
+        let inserted = self.surfaces.register(
             id,
             SurfaceState {
                 surface_id: id,
@@ -102,6 +96,9 @@ impl VulkanSurfaceAdapter {
                 current_release_value: 0,
             },
         );
+        if !inserted {
+            return Err(AdapterError::SurfaceNotFound { surface_id: id });
+        }
         Ok(())
     }
 
@@ -109,13 +106,13 @@ impl VulkanSurfaceAdapter {
     /// `Arc<VulkanTimelineSemaphore>` alive; the next acquire returns
     /// [`AdapterError::SurfaceNotFound`].
     pub fn unregister_host_surface(&self, id: SurfaceId) -> bool {
-        self.surfaces.lock().remove(&id).is_some()
+        self.surfaces.unregister(id).is_some()
     }
 
     /// Snapshot the registry size — primarily for tests and
     /// observability.
     pub fn registered_count(&self) -> usize {
-        self.surfaces.lock().len()
+        self.surfaces.len()
     }
 
     fn make_image_info(&self, texture: &StreamTexture) -> VkImageInfo {
@@ -265,62 +262,50 @@ impl VulkanSurfaceAdapter {
         &self,
         surface: &StreamlibSurface,
     ) -> Result<Option<ReadAcquired>, AdapterError> {
-        let mut map = self.surfaces.lock();
-        let state = map
-            .get_mut(&surface.id)
-            .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
-        if state.write_held {
-            return Ok(None);
-        }
-        // Snapshot what we need before we drop the lock so the wait /
-        // layout transition runs unlocked. Counters are committed below.
-        let timeline = Arc::clone(&state.timeline);
-        let wait_value = state.current_release_value;
-        let image = state
-            .texture
-            .vulkan_inner()
-            .image()
-            .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
-        let from = state.current_layout;
-        state.read_holders += 1;
-        state.last_acquire_value = wait_value;
-        Ok(Some(ReadAcquired {
-            timeline,
-            wait_value,
-            image,
-            from,
-            info: self.make_image_info(&state.texture),
-        }))
+        let id = surface.id;
+        self.surfaces.try_begin_read(id, |state| {
+            let timeline = Arc::clone(&state.timeline);
+            let wait_value = state.current_release_value;
+            let image = state
+                .texture
+                .vulkan_inner()
+                .image()
+                .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
+            let from = state.current_layout;
+            state.last_acquire_value = wait_value;
+            Ok(ReadAcquired {
+                timeline,
+                wait_value,
+                image,
+                from,
+                info: self.make_image_info(&state.texture),
+            })
+        })
     }
 
     fn try_begin_write(
         &self,
         surface: &StreamlibSurface,
     ) -> Result<Option<WriteAcquired>, AdapterError> {
-        let mut map = self.surfaces.lock();
-        let state = map
-            .get_mut(&surface.id)
-            .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
-        if state.write_held || state.read_holders > 0 {
-            return Ok(None);
-        }
-        let timeline = Arc::clone(&state.timeline);
-        let wait_value = state.current_release_value;
-        let image = state
-            .texture
-            .vulkan_inner()
-            .image()
-            .ok_or(AdapterError::SurfaceNotFound { surface_id: surface.id })?;
-        let from = state.current_layout;
-        state.write_held = true;
-        state.last_acquire_value = wait_value;
-        Ok(Some(WriteAcquired {
-            timeline,
-            wait_value,
-            image,
-            from,
-            info: self.make_image_info(&state.texture),
-        }))
+        let id = surface.id;
+        self.surfaces.try_begin_write(id, |state| {
+            let timeline = Arc::clone(&state.timeline);
+            let wait_value = state.current_release_value;
+            let image = state
+                .texture
+                .vulkan_inner()
+                .image()
+                .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
+            let from = state.current_layout;
+            state.last_acquire_value = wait_value;
+            Ok(WriteAcquired {
+                timeline,
+                wait_value,
+                image,
+                from,
+                info: self.make_image_info(&state.texture),
+            })
+        })
     }
 
     /// Wait + transition + commit-layout for a successful read acquire.
@@ -335,7 +320,7 @@ impl VulkanSurfaceAdapter {
             .is_err()
         {
             // Roll back: the acquire had bumped read_holders; undo it.
-            self.rollback_read(surface_id);
+            self.surfaces.rollback_read(surface_id);
             return Err(AdapterError::SyncTimeout {
                 duration: self.acquire_timeout,
             });
@@ -343,13 +328,12 @@ impl VulkanSurfaceAdapter {
 
         let to = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
         if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.vk(), to) {
-            self.rollback_read(surface_id);
+            self.surfaces.rollback_read(surface_id);
             return Err(err);
         }
-        let mut map = self.surfaces.lock();
-        if let Some(state) = map.get_mut(&surface_id) {
+        self.surfaces.with_mut(surface_id, |state| {
             state.current_layout = VulkanLayout(to.as_raw());
-        }
+        });
         Ok(to)
     }
 
@@ -363,7 +347,7 @@ impl VulkanSurfaceAdapter {
             .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
             .is_err()
         {
-            self.rollback_write(surface_id);
+            self.surfaces.rollback_write(surface_id);
             return Err(AdapterError::SyncTimeout {
                 duration: self.acquire_timeout,
             });
@@ -375,28 +359,13 @@ impl VulkanSurfaceAdapter {
         // destination; GENERAL is the right shape for the v1 adapter.
         let to = vk::ImageLayout::GENERAL;
         if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.vk(), to) {
-            self.rollback_write(surface_id);
+            self.surfaces.rollback_write(surface_id);
             return Err(err);
         }
-        let mut map = self.surfaces.lock();
-        if let Some(state) = map.get_mut(&surface_id) {
+        self.surfaces.with_mut(surface_id, |state| {
             state.current_layout = VulkanLayout(to.as_raw());
-        }
+        });
         Ok(to)
-    }
-
-    fn rollback_read(&self, surface_id: SurfaceId) {
-        let mut map = self.surfaces.lock();
-        if let Some(state) = map.get_mut(&surface_id) {
-            state.read_holders = state.read_holders.saturating_sub(1);
-        }
-    }
-
-    fn rollback_write(&self, surface_id: SurfaceId) {
-        let mut map = self.surfaces.lock();
-        if let Some(state) = map.get_mut(&surface_id) {
-            state.write_held = false;
-        }
     }
 }
 
@@ -458,16 +427,9 @@ impl SurfaceAdapter for VulkanSurfaceAdapter {
         let acquired = match self.try_begin_write(surface)? {
             Some(a) => a,
             None => {
-                let map = self.surfaces.lock();
-                let holder = match map.get(&surface.id) {
-                    Some(s) if s.write_held => "writer".to_string(),
-                    Some(s) => format!("{} reader(s)", s.read_holders),
-                    None => "unknown".to_string(),
-                };
-                drop(map);
                 return Err(AdapterError::WriteContended {
                     surface_id: surface.id,
-                    holder,
+                    holder: self.surfaces.describe_contention(surface.id),
                 });
             }
         };
@@ -533,52 +495,52 @@ impl SurfaceAdapter for VulkanSurfaceAdapter {
     }
 
     fn end_read_access(&self, surface_id: SurfaceId) {
-        let (timeline, value) = {
-            let mut map = self.surfaces.lock();
-            let state = match map.get_mut(&surface_id) {
-                Some(s) => s,
-                None => {
-                    tracing::warn!(
-                        ?surface_id,
-                        "end_read_access on unknown surface — racing unregister"
-                    );
-                    return;
-                }
-            };
+        // Inner Option: `None` means "not the last reader, skip signal".
+        // Outer Option: `None` means "surface raced an unregister".
+        let signal = self.surfaces.with_mut(surface_id, |state| {
             debug_assert!(state.read_holders > 0, "read release without acquire");
-            state.read_holders = state.read_holders.saturating_sub(1);
-            // Only the last reader advances the timeline — concurrent
-            // reads share a single release boundary.
+            state.dec_read_holders();
             if state.read_holders > 0 {
-                return;
+                return None;
             }
             let next = state.next_release_value();
             state.current_release_value = next;
-            (Arc::clone(&state.timeline), next)
+            Some((Arc::clone(&state.timeline), next))
+        });
+        let signal = match signal {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    ?surface_id,
+                    "end_read_access on unknown surface — racing unregister"
+                );
+                return;
+            }
         };
-        if let Err(e) = timeline.signal_host(value) {
-            tracing::error!(?surface_id, %value, %e, "timeline signal failed on read release");
+        if let Some((timeline, value)) = signal {
+            if let Err(e) = timeline.signal_host(value) {
+                tracing::error!(?surface_id, %value, %e, "timeline signal failed on read release");
+            }
         }
     }
 
     fn end_write_access(&self, surface_id: SurfaceId) {
-        let (timeline, value) = {
-            let mut map = self.surfaces.lock();
-            let state = match map.get_mut(&surface_id) {
-                Some(s) => s,
-                None => {
-                    tracing::warn!(
-                        ?surface_id,
-                        "end_write_access on unknown surface — racing unregister"
-                    );
-                    return;
-                }
-            };
+        let signal = self.surfaces.with_mut(surface_id, |state| {
             debug_assert!(state.write_held, "write release without acquire");
-            state.write_held = false;
+            state.set_write_held(false);
             let next = state.next_release_value();
             state.current_release_value = next;
             (Arc::clone(&state.timeline), next)
+        });
+        let (timeline, value) = match signal {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    ?surface_id,
+                    "end_write_access on unknown surface — racing unregister"
+                );
+                return;
+            }
         };
         if let Err(e) = timeline.signal_host(value) {
             tracing::error!(?surface_id, %value, %e, "timeline signal failed on write release");

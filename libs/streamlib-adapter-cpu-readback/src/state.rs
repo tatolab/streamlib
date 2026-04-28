@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use streamlib::adapter_support::{VulkanPixelBuffer, VulkanTimelineSemaphore};
 use streamlib::core::rhi::StreamTexture;
-use streamlib_adapter_abi::{SurfaceFormat, SurfaceId};
+use streamlib_adapter_abi::{SurfaceFormat, SurfaceId, SurfaceRegistration};
 use vulkanalia::vk;
 
 /// `VkImageLayout` enumerant. Stored as `i32` per the Vulkan spec.
@@ -90,5 +90,23 @@ pub(crate) struct SurfaceState {
 impl SurfaceState {
     pub(crate) fn next_release_value(&self) -> u64 {
         self.current_release_value + 1
+    }
+}
+
+impl SurfaceRegistration for SurfaceState {
+    fn write_held(&self) -> bool {
+        self.write_held
+    }
+    fn read_holders(&self) -> u64 {
+        self.read_holders
+    }
+    fn set_write_held(&mut self, held: bool) {
+        self.write_held = held;
+    }
+    fn inc_read_holders(&mut self) {
+        self.read_holders += 1;
+    }
+    fn dec_read_holders(&mut self) {
+        self.read_holders = self.read_holders.saturating_sub(1);
     }
 }

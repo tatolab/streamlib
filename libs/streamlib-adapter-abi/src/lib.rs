@@ -12,6 +12,7 @@ mod conformance;
 mod error;
 mod guard;
 mod mock;
+mod registry;
 mod surface;
 
 #[cfg(target_os = "linux")]
@@ -25,6 +26,7 @@ pub use adapter::{
 };
 pub use error::AdapterError;
 pub use guard::{ReadGuard, WriteGuard};
+pub use registry::{Registry, SurfaceRegistration};
 pub use surface::{
     AccessMode, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage, StreamlibSurface,
