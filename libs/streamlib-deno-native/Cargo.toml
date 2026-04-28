@@ -36,10 +36,13 @@ vulkanalia = { workspace = true }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl" }
 # Subprocess-side Vulkan runtime (#531). Same shape as streamlib-python-native
-# — wraps the host `VulkanSurfaceAdapter` so subprocess code never
-# re-implements layout-transition / timeline-wait / queue-mutex semantics.
+# — wraps the host `VulkanSurfaceAdapter` against a subprocess-local
+# `ConsumerVulkanDevice` so subprocess code never re-implements
+# layout-transition / timeline-wait / queue-mutex semantics.
 streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
-streamlib = { path = "../streamlib" }
+# Consumer-side RHI carve-out — see streamlib-python-native/Cargo.toml
+# for the type-system-boundary rationale.
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 
 
 [lints]

@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
+use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};

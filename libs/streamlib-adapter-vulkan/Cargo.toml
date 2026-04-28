@@ -20,7 +20,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 streamlib-surface-client = { path = "../streamlib-surface-client" }
 vulkanalia.workspace = true
 libc.workspace = true
@@ -30,7 +30,17 @@ serde_json.workspace = true
 [dev-dependencies]
 tracing-subscriber.workspace = true
 
+# `streamlib` and the helper-binary crate are *test*-only deps: the
+# round-trip / conformance tests bring up a `HostVulkanDevice` and
+# spawn the helper bin to exercise the host↔subprocess seam. The
+# runtime crate (above) does NOT pull `streamlib`, so subprocess
+# cdylibs depending on `streamlib-adapter-vulkan` get the consumer-rhi
+# carve-out only, with `streamlib` absent from their dep graph. The
+# helper bin lives in `streamlib-adapter-vulkan-helpers` for the
+# same reason — see that crate's Cargo.toml for the rationale.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib = { path = "../streamlib" }
+streamlib-adapter-vulkan-helpers = { path = "../streamlib-adapter-vulkan-helpers" }
 serde = { workspace = true }
 
 [[test]]
@@ -63,12 +73,10 @@ path = "tests/concurrent_reads_two_subprocesses.rs"
 name = "subprocess_crash_mid_write"
 path = "tests/subprocess_crash_mid_write.rs"
 
-# Subprocess test helper. Built as a normal binary by `cargo test` and
-# discovered at runtime via `env!("CARGO_BIN_EXE_…")`.
-[[bin]]
-name = "vulkan_adapter_subprocess_helper"
-path = "tests/bin/vulkan_adapter_subprocess_helper.rs"
-test = false
+# Subprocess test helper lives in `streamlib-adapter-vulkan-helpers`
+# (a dev-dependency of this crate). Tests reach it via
+# `env!("CARGO_BIN_EXE_vulkan_adapter_subprocess_helper")` — Cargo
+# sets this when the helpers crate is referenced as a dev-dep.
 
 [lints]
 workspace = true

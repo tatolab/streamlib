@@ -1,0 +1,46 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Test-helper binaries for `streamlib-adapter-vulkan`. Held in a
+# dedicated crate so the `streamlib` runtime dep these helpers need
+# does NOT propagate into the adapter's runtime dep graph (and from
+# there into `streamlib-python-native` / `-deno-native`, which must
+# stay `streamlib`-free per #560).
+#
+# `streamlib-adapter-vulkan/tests/*` reach the bin via
+# `env!("CARGO_BIN_EXE_<name>")`, set automatically when the helpers
+# crate is referenced as a dev-dependency.
+
+[package]
+name = "streamlib-adapter-vulkan-helpers"
+description = "Test-helper binaries for streamlib-adapter-vulkan. Internal — not published; the helpers exist solely so adapter-vulkan tests can spawn a subprocess that brings up a real HostVulkanDevice without forcing streamlib onto adapter-vulkan's runtime dep graph."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# Empty lib to satisfy Cargo's bin-target requirement of having
+# either a lib or another target. The bin is the actual deliverable.
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib = { path = "../streamlib" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+streamlib-surface-client = { path = "../streamlib-surface-client" }
+vulkanalia.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+libc.workspace = true
+
+[[bin]]
+name = "vulkan_adapter_subprocess_helper"
+path = "src/bin/vulkan_adapter_subprocess_helper.rs"
+
+[lints]
+workspace = true

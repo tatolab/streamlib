@@ -21,13 +21,18 @@
 
 use std::sync::Arc;
 
-use streamlib::adapter_support::VulkanRhiDevice;
+use streamlib_consumer_rhi::VulkanRhiDevice;
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
 
 use crate::adapter::VulkanSurfaceAdapter;
 use crate::raw_handles::{raw_handles, RawVulkanHandles};
+
+// Power-user `raw_handles()` is generic over `VulkanRhiDevice` —
+// works against either host- or consumer-flavored devices. The
+// streamlib RHI takes the per-queue mutex internally; raw users
+// assume the responsibility.
 
 /// Customer-facing handle bound to a single runtime, generic over the
 /// device flavor.
@@ -91,18 +96,11 @@ impl<D: VulkanRhiDevice + 'static> VulkanContext<D> {
     }
 }
 
-/// Host-only convenience: raw Vulkan handles
-/// (`VkInstance`, `VkDevice`, `VkQueue`, …) for power-user code that
-/// needs to drive the GPU directly. Available only on the host
-/// (`D = HostVulkanDevice`) since `RawVulkanHandles` is a host-shaped
-/// concept (full RHI surface). Consumer-side callers go through the
-/// adapter API.
-#[cfg(target_os = "linux")]
-impl VulkanContext<streamlib::adapter_support::HostVulkanDevice> {
+impl<D: VulkanRhiDevice + 'static> VulkanContext<D> {
     /// Power-user surface — raw Vulkan handles. Caller assumes queue
     /// mutex discipline and lifetime; the adapter does not track work
     /// they submit through this path.
     pub fn raw_handles(&self) -> RawVulkanHandles {
-        raw_handles(self.adapter.device())
+        raw_handles(self.adapter.device().as_ref())
     }
 }

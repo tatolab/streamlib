@@ -956,7 +956,7 @@ mod gpu_surface {
         pub fds: Vec<RawFd>,
         /// Optional OPAQUE_FD timeline-semaphore handle the host attached
         /// when registering the surface (#531). Routed into the Vulkan
-        /// adapter's `HostVulkanTimelineSemaphore::from_imported_opaque_fd` so
+        /// adapter's `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd` so
         /// the subprocess reuses the host adapter's timeline-wait + signal
         /// path. `None` for surfaces without explicit Vulkan sync (OpenGL
         /// adapter, CPU-readback, legacy DMA-BUF consumer flows). The fd is
@@ -3056,7 +3056,7 @@ mod opengl {
 //
 // Subprocess-side runtime mirroring the Python-native twin's `slpn_vulkan_*`
 // surface. Reuses `streamlib_adapter_vulkan::VulkanSurfaceAdapter` against a
-// subprocess-local `HostVulkanDevice` from the RHI: same timeline-wait, same
+// subprocess-local `ConsumerVulkanDevice` from the RHI: same timeline-wait, same
 // layout-transition, same per-surface state machine. The cdylib never
 // re-implements layout transitions, command-pool lifetimes, fence handling,
 // or queue-mutex coordination — every line of that lives in
@@ -3069,10 +3069,10 @@ mod vulkan {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib::adapter_support::{
-        HostMarker, HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
+    use streamlib_consumer_rhi::{
+        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanTexture,
+        ConsumerVulkanTimelineSemaphore, TextureFormat,
     };
-    use streamlib::core::rhi::TextureFormat;
     use streamlib_adapter_abi::{
         StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
@@ -3085,13 +3085,13 @@ mod vulkan {
     use super::gpu_surface::SurfaceHandle;
 
     pub struct VulkanRuntimeHandle {
-        device: Arc<HostVulkanDevice>,
-        adapter: Arc<VulkanSurfaceAdapter<HostVulkanDevice>>,
+        device: Arc<ConsumerVulkanDevice>,
+        adapter: Arc<VulkanSurfaceAdapter<ConsumerVulkanDevice>>,
         registered: Mutex<HashMap<u64, RegisteredSurface>>,
     }
 
     /// See the Python-native twin for the rationale: only `vk::Image` is
-    /// cached because `HostVulkanTexture::clone` is a hollow no-image stub —
+    /// cached because `ConsumerVulkanTexture::clone` is a hollow no-image stub —
     /// the texture itself is moved into `HostSurfaceRegistration` and
     /// the adapter owns its lifetime.
     struct RegisteredSurface {
@@ -3116,11 +3116,11 @@ mod vulkan {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_vulkan_runtime_new() -> *mut VulkanRuntimeHandle {
-        let device = match HostVulkanDevice::new() {
+        let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 tracing::error!(
-                    "sldn_vulkan_runtime_new: HostVulkanDevice::new failed: {}",
+                    "sldn_vulkan_runtime_new: ConsumerVulkanDevice::new failed: {}",
                     e
                 );
                 return std::ptr::null_mut();
@@ -3198,7 +3198,7 @@ mod vulkan {
         };
         let allocation_size = gpu.size;
 
-        let texture = match HostVulkanTexture::import_render_target_dma_buf(
+        let texture = match ConsumerVulkanTexture::import_render_target_dma_buf(
             &rt.device,
             &gpu.fds,
             &gpu.plane_offsets,
@@ -3218,18 +3218,10 @@ mod vulkan {
                 return -1;
             }
         };
-        // Snapshot the VkImage handle BEFORE moving texture. See the
-        // Python-native twin for the `HostVulkanTexture::clone`-is-hollow
-        // rationale.
-        let vk_image = match texture.image() {
-            Some(img) => img,
-            None => {
-                tracing::error!(
-                    "sldn_vulkan_register_surface: imported texture has no VkImage handle"
-                );
-                return -1;
-            }
-        };
+        // Snapshot the VkImage handle BEFORE moving texture into the
+        // registration. `ConsumerVulkanTexture::image()` returns a raw
+        // `vk::Image` directly.
+        let vk_image = texture.image();
 
         let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
             Some(fd) => fd,
@@ -3237,14 +3229,14 @@ mod vulkan {
                 tracing::error!(
                     "sldn_vulkan_register_surface: surface '{}' has no sync_fd — \
                      the host must register the texture with an exportable \
-                     `HostVulkanTimelineSemaphore`.",
+                     `ConsumerVulkanTimelineSemaphore`.",
                     surface_id
                 );
                 return -1;
             }
         };
-        let timeline = match HostVulkanTimelineSemaphore::from_imported_opaque_fd(
-            rt.device.device(),
+        let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &rt.device,
             raw_sync_fd,
         ) {
             Ok(s) => Arc::new(s),
@@ -3258,7 +3250,7 @@ mod vulkan {
             }
         };
 
-        let registration = HostSurfaceRegistration::<HostMarker> {
+        let registration = HostSurfaceRegistration::<ConsumerMarker> {
             texture: Arc::new(texture),
             timeline,
             initial_layout: VulkanLayout::UNDEFINED,
@@ -3353,7 +3345,7 @@ mod vulkan {
             Some(o) => o,
             None => return -1,
         };
-        let handles = raw_handles(&rt.device);
+        let handles = raw_handles(rt.device.as_ref());
         out.vk_instance = handles.vk_instance;
         out.vk_physical_device = handles.vk_physical_device;
         out.vk_device = handles.vk_device;
@@ -3535,12 +3527,12 @@ mod vulkan_compute_dispatch {
 
     use std::sync::Arc;
 
-    use streamlib::adapter_support::HostVulkanDevice;
+    use streamlib_consumer_rhi::ConsumerVulkanDevice;
     use vulkanalia::prelude::v1_4::*;
     use vulkanalia::vk;
 
     pub fn dispatch_storage_image_compute(
-        device: &Arc<HostVulkanDevice>,
+        device: &Arc<ConsumerVulkanDevice>,
         image: vk::Image,
         spv: &[u8],
         push_constants: &[u8],

@@ -30,7 +30,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use streamlib::adapter_support::{HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
+use streamlib::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::PixelFormat;
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,

@@ -34,6 +34,14 @@ streamlib-macros = { path = "../streamlib-macros" }
 # Shared iceoryx2 payload types (for cross-process IPC)
 streamlib-ipc-types = { path = "../streamlib-ipc-types" }
 
+# Consumer-side carve-out — owns the format primitives
+# (TextureFormat / TextureUsages / PixelFormat), the trait machinery
+# (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
+# Consumer* RHI types (Linux), and a slim ConsumerRhiError. streamlib
+# re-exports the primitives so existing in-tree call sites (e.g.
+# `crate::core::rhi::TextureFormat`) keep working unchanged.
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+
 # Core dependencies (always included)
 thiserror.workspace = true
 anyhow.workspace = true
@@ -151,6 +159,13 @@ streamlib-surface-client = { path = "../streamlib-surface-client" }
 # Surface adapter ABI types referenced by the host-side CpuReadbackBridge
 # trait (linux-only; the cpu-readback adapter is linux-only).
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+# Consumer-side carve-out — defines the trait machinery
+# (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
+# Consumer* RHI types, and the format/error primitives shared with the
+# host side. streamlib re-exports for in-tree consumers; subprocess
+# cdylibs depend on it directly so the FullAccess capability boundary
+# is enforced by the type system.
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"

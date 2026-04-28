@@ -21,7 +21,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 streamlib-surface-client = { path = "../streamlib-surface-client" }
 khronos-egl = { version = "6.0", features = ["dynamic"] }
 gl = "0.14"
@@ -33,7 +33,12 @@ serde_json.workspace = true
 [dev-dependencies]
 tracing-subscriber.workspace = true
 
+# `streamlib` is a *test*-only dep — host-side bring-up for FBO /
+# round-trip / sample-from-surface tests. Subprocess cdylibs depending
+# on `streamlib-adapter-opengl` at runtime do NOT transitively pull
+# `streamlib`.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib = { path = "../streamlib" }
 streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
 vulkanalia.workspace = true
 

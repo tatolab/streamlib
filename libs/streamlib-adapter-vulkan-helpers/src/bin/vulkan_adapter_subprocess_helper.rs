@@ -29,7 +29,7 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore};
+use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::TextureFormat;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;

@@ -5,27 +5,22 @@
 //!
 //! Device, texture, command buffer/queue, sync, pixel buffer, and texture cache
 //! are fully implemented via ash. Blitter and format converter are partial.
+//!
+//! The `Consumer*` types and the `VulkanRhiDevice` / `DevicePrivilege`
+//! / `VulkanTextureLike` / `VulkanTimelineSemaphoreLike` trait
+//! machinery live in [`streamlib_consumer_rhi`]. They are re-exported
+//! here so existing in-tree call sites compile unchanged. Subprocess
+//! cdylibs depend on `streamlib-consumer-rhi` directly so the
+//! FullAccess capability boundary is enforced by the type system.
 
-mod device_capability;
+mod host_marker;
 mod vulkan_command_buffer;
 mod vulkan_command_queue;
 mod vulkan_device;
 mod vulkan_sync;
 mod vulkan_texture;
 
-#[cfg(target_os = "linux")]
-mod consumer_vulkan_device;
-#[cfg(target_os = "linux")]
-mod consumer_vulkan_pixel_buffer;
-#[cfg(target_os = "linux")]
-mod consumer_vulkan_sync;
-#[cfg(target_os = "linux")]
-mod consumer_vulkan_texture;
-
-pub use device_capability::{
-    ConsumerMarker, DevicePrivilege, HostMarker, VulkanRhiDevice, VulkanTextureLike,
-    VulkanTimelineSemaphoreLike,
-};
+pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
 pub use vulkan_device::HostVulkanDevice;
@@ -36,14 +31,19 @@ pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 pub use vulkan_sync::HostVulkanTimelineSemaphore;
 pub use vulkan_texture::HostVulkanTexture;
 
+// Trait machinery + Consumer flavor — re-exported from the canonical
+// home in `streamlib-consumer-rhi`. Some entries appear unused inside
+// streamlib itself (callers reach the trait machinery via streamlib's
+// re-export); the `#[allow(unused_imports)]` keeps the surface
+// available for downstream crates that still pull these names through
+// `streamlib::vulkan::rhi`.
 #[cfg(target_os = "linux")]
-pub use consumer_vulkan_device::ConsumerVulkanDevice;
-#[cfg(target_os = "linux")]
-pub use consumer_vulkan_pixel_buffer::ConsumerVulkanPixelBuffer;
-#[cfg(target_os = "linux")]
-pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;
-#[cfg(target_os = "linux")]
-pub use consumer_vulkan_texture::ConsumerVulkanTexture;
+#[allow(unused_imports)]
+pub use streamlib_consumer_rhi::{
+    ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, ConsumerVulkanTexture,
+    ConsumerVulkanTimelineSemaphore, DevicePrivilege, VulkanRhiDevice, VulkanTextureLike,
+    VulkanTimelineSemaphoreLike,
+};
 
 mod vulkan_blitter;
 pub use vulkan_blitter::VulkanBlitter;

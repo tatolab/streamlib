@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use streamlib::adapter_support::DevicePrivilege;
+use streamlib_consumer_rhi::DevicePrivilege;
 use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
 use vulkanalia::vk;
 
@@ -55,7 +55,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     pub texture: Arc<P::Texture>,
     /// Timeline semaphore — host- or consumer-flavored per `P`. Both
     /// flavors implement
-    /// [`streamlib::adapter_support::VulkanTimelineSemaphoreLike`] so
+    /// [`streamlib_consumer_rhi::VulkanTimelineSemaphoreLike`] so
     /// the adapter's wait + signal calls work uniformly.
     pub timeline: Arc<P::TimelineSemaphore>,
     /// Initial layout the texture is in at registration time. The first

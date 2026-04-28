@@ -30,9 +30,15 @@ carve-out exists to make that bind possible and nothing more:
 - Layout transitions on imported handles (single-shot at acquire/release boundary).
 - Sync wait/signal on imported timeline semaphores.
 
-Lives in `streamlib::adapter_support` today (convention only); graduates
-to the standalone `streamlib-consumer-rhi` crate (#552) so cdylibs
-physically cannot reach `FullAccess` types.
+Lives in the standalone [`streamlib-consumer-rhi`][crate] crate (post-#560).
+Cdylibs (`streamlib-python-native`, `streamlib-deno-native`) depend
+on this crate, NOT the full `streamlib`, so the FullAccess capability
+boundary is enforced by the type system — a cdylib's dep graph
+excludes `streamlib` and physically cannot reach `HostVulkanDevice`,
+the host VMA pools, the modifier probe, or any other privileged
+primitive.
+
+[crate]: ../../libs/streamlib-consumer-rhi/
 
 ## Per-pattern decisions
 
@@ -50,84 +56,77 @@ physically cannot reach `FullAccess` types.
 | DMA-BUF FD import + bind + map | **Carve-out** (host AND subprocess) | One shared crate (`streamlib-consumer-rhi` post-#552) |
 | Tiled-image import (`VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`) | **Carve-out** | Same crate |
 
-## Today (post-#549, pre-P0s)
+## Today (post-#560 Phase 2)
+
+> Updated 2026-04-28 — #560 Phase 2 landed; the cdylib swap to
+> `ConsumerVulkanDevice` and the `streamlib-consumer-rhi` crate
+> extraction are in. The capability boundary is type-system enforced.
+> #550 (escalate-IPC compute ops) and #553 (`surface_share_vulkan_linux`
+> retirement) remain open — see "Open follow-ups" below.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ HOST PROCESS                                                         │
 │  ╔══════════════════════════════════════════════════════════════╗    │
 │  ║  streamlib RHI  (libs/streamlib/src/vulkan/rhi/)             ║    │
-│  ║  All wins live here — VulkanComputeKernel, VMA pools, queue  ║    │
-│  ║  mutex, modifier probe, frames-in-flight=2                   ║    │
+│  ║  Host-side wins live here — VulkanComputeKernel, VMA pools,  ║    │
+│  ║  queue mutex, modifier probe, frames-in-flight=2,            ║    │
+│  ║  HostVulkanDevice + Host* RHI types                          ║    │
 │  ╚══════════════════════════════════════════════════════════════╝    │
 │       ▲                                                              │
 │  ┌────┴──────────────────────────────────────────────────────────┐   │
-│  │ streamlib::adapter_support  (re-export, convention only)      │   │
-│  │ ⚠  cdylibs link FULL streamlib — boundary not type-enforced   │   │
+│  │ streamlib-consumer-rhi (#560 — standalone crate)              │   │
+│  │ ConsumerVulkanDevice, ConsumerVulkan{Texture,PixelBuffer,     │   │
+│  │ TimelineSemaphore}, VulkanRhiDevice / DevicePrivilege /       │   │
+│  │ VulkanTextureLike / VulkanTimelineSemaphoreLike trait         │   │
+│  │ machinery, TextureFormat / TextureUsages / PixelFormat        │   │
+│  │ ✓ Capability boundary TYPE-SYSTEM enforced                    │   │
 │  └───────────────────────────────────────────────────────────────┘   │
-│       ▲      ▲      ▲     (skia frozen)                              │
+│       ▲      ▲      ▲      (skia frozen, #513)                       │
 │  ┌────┴──┬───┴──┬───┴────────┐                                       │
 │  │ vk-   │ gl-  │cpu-rb-     │  each adapter rolls its own          │
 │  │ adptr │adptr │adptr       │  try_begin_read/write — ~50 LOC × 3  │
-│  └───────┴──────┴────────────┘                                       │
-│       ▲ surface-share + escalate IPC (no compute ops)                │
-└───────┼──────────────────────────────────────────────────────────────┘
-        ▼
-┌──────────────────────┐         ┌──────────────────────┐
-│ PYTHON SUBPROC       │         │ DENO SUBPROC         │
-│  mod vulkan          │ ✓ #549  │  mod vulkan          │
-│  mod opengl          │ ✓ #530  │  mod opengl          │
-│ ✗vulkan_compute_     │         │ ✗vulkan_compute_     │ ← raw vulkan
-│  dispatch (~200 LOC) │         │  dispatch (~200 LOC) │   × 2 cdylibs
-│ ✗surface_share_      │         │ ✗surface_share_      │ ← legacy
-│  vulkan_linux (~280) │         │  vulkan_linux (~280) │   × 2 cdylibs
-│ ✗Cargo: full         │         │ ✗Cargo: full         │ ← capability
-│  streamlib dep       │         │  streamlib dep       │   leak risk
-└──────────────────────┘         └──────────────────────┘
-```
-
-## Outcome (after #550, #551, #552, #553, #555)
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│ HOST PROCESS                                                         │
-│  ╔══════════════════════════════════════════════════════════════╗    │
-│  ║  streamlib RHI (unchanged single source)                     ║    │
-│  ║  + on-disk pipeline cache (#550 scope)                       ║    │
-│  ╚══════════════════════════════════════════════════════════════╝    │
-│       ▲                                                              │
-│  ┌────┴──────────────────────────────────────────────────────────┐   │
-│  │ streamlib-consumer-rhi (#552 — standalone crate)              │   │
-│  │ ✓ Capability boundary TYPE-SYSTEM enforced                    │   │
-│  └───────────────────────────────────────────────────────────────┘   │
-│       ▲      ▲      ▲      ▲                                         │
-│  ┌────┴──┬───┴──┬───┴──┬───┴───┐                                     │
-│  │ vk-   │ gl-  │cpu-rb│ skia  │  shared Registry<T> (#551) —        │
-│  │ adptr │adptr │adptr │ #513  │  zero duplicated try_begin_*        │
-│  └───────┴──────┴──────┴───────┘  (skia unfrozen)                    │
-│  ╔══════════════════════════════════════════════════════════════╗    │
-│  ║ Escalate IPC ops (#550)                                      ║    │
-│  ║   RegisterComputeKernel(spv, bindings) → kernel_id           ║    │
-│  ║   RunComputeKernel(kernel_id, surface, push, dims)           ║    │
-│  ╚══════════════════════════════════════════════════════════════╝    │
-│  ╔══════════════════════════════════════════════════════════════╗    │
-│  ║ CI boundary-grep (#555) — defense in depth                   ║    │
-│  ╚══════════════════════════════════════════════════════════════╝    │
+│  └───────┴──────┴────────────┘  (cpu-readback keeps streamlib;      │
+│       ▲      ▲      ▲           others depend on consumer-rhi only) │
+│       │ surface-share + escalate IPC (no compute ops)                │
 └───────┼──────────────────────────────────────────────────────────────┘
         ▼
 ┌──────────────────────┐         ┌──────────────────────┐
 │ PYTHON SUBPROC       │         │ DENO SUBPROC         │
 │  mod vulkan          │         │  mod vulkan          │
 │  mod opengl          │         │  mod opengl          │
-│ ✓dispatch_compute    │         │ ✓dispatch_compute    │ ← #550: thin
-│  thin escalate-IPC   │         │  thin escalate-IPC   │   IPC wrapper
-│ ⊘surface_share_      │         │ ⊘surface_share_      │ ← #553: del
-│  vulkan_linux DELETED│         │  vulkan_linux DELETED│
-│ ✓Cargo: consumer-rhi │         │ ✓Cargo: consumer-rhi │ ← #552:
+│ ✗vulkan_compute_     │         │ ✗vulkan_compute_     │ ← raw vulkan
+│  dispatch (~200 LOC) │         │  dispatch (~200 LOC) │   × 2 cdylibs
+│ ✗surface_share_      │         │ ✗surface_share_      │ ← legacy,
+│  vulkan_linux (~280) │         │  vulkan_linux (~280) │   #553 open
+│ ✓Cargo: consumer-rhi │         │ ✓Cargo: consumer-rhi │ ← #560:
 │  + adapter-{abi,*};  │         │  + adapter-{abi,*};  │   capability
 │  NOT full streamlib  │         │  NOT full streamlib  │   ENFORCED
 └──────────────────────┘         └──────────────────────┘
 ```
+
+`cargo tree -p streamlib-{python,deno}-native | grep -c "^streamlib v"` → **0** (Phase 2 assertion, holds at HEAD of `main` post-#560).
+
+## Open follow-ups (after #560 lands)
+
+The remaining P0s in milestone #16 close out the residual technical
+debt the consumer-rhi extraction made visible:
+
+- **#550** [P0] — escalate-IPC `RegisterComputeKernel` +
+  `RunComputeKernel`; retire the `vulkan_compute_dispatch` raw-vulkan
+  helper inside each cdylib (≈200 LOC × 2 still in tree).
+- **#553** [P0] — retire `surface_share_vulkan_linux` (≈280 LOC × 2)
+  from the cdylibs once #550 covers compute and #551 covers
+  registration.
+- **#551** [P0] — pull the registration `Registry<T: SurfaceRegistration>`
+  into `streamlib-adapter-abi` so adapter crates stop redoing the same
+  per-surface book-keeping.
+- **#555** [P0] — CI boundary-grep as defense in depth around the
+  type-system boundary that #560 just established.
+- **#556** [P1] — adapter-authoring blueprint, now that the boundary
+  shape is concrete.
+- **#513** (skia adapter), **#515** (processor-port refactor) —
+  `frozen` until the P0s above land.
 
 ## Trip-wires
 

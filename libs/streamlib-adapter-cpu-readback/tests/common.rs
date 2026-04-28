@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use streamlib::adapter_support::HostVulkanTimelineSemaphore;
+use streamlib::host_rhi::HostVulkanTimelineSemaphore;
 use streamlib::core::context::GpuContext;
 use streamlib::core::error::StreamError;
 use streamlib::core::rhi::TextureFormat;

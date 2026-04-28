@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use streamlib::adapter_support::HostVulkanDevice;
+use streamlib::host_rhi::HostVulkanDevice;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 

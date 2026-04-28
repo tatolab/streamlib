@@ -93,9 +93,14 @@ blocked by it.
     register-once-dispatch-many — matches Vulkan / WebGPU / CUDA / Metal
     / Unreal RHI conventions; verify the consumer at pickup.
   - **The consumer-side RHI surface lives in `streamlib-consumer-rhi`**
-    (#552 — the standalone crate that replaces `streamlib::adapter_support`).
-    cdylibs depend on this crate, NOT the full `streamlib`, so the
-    `FullAccess` capability boundary is type-system enforced.
+    (the standalone crate, #560 Phase 2). cdylibs
+    (`streamlib-python-native`, `streamlib-deno-native`) depend on
+    this crate, NOT the full `streamlib`, so the `FullAccess`
+    capability boundary is type-system enforced. The boundary is
+    asserted by `cargo tree -p streamlib-{python,deno}-native | grep
+    -c "^streamlib v"` returning 0, plus the `compile_fail` doctests
+    in `streamlib-consumer-rhi/src/lib.rs`. New cdylib code uses
+    `ConsumerVulkanDevice::new()` (NOT `HostVulkanDevice::new()`).
 - **Don't bypass typed ctx.** Python/Deno SDKs must propagate
   `RuntimeContextFullAccess`/`RuntimeContextLimitedAccess` to processor
   lifecycle methods exactly like Rust.

@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib::adapter_support::HostVulkanTimelineSemaphore;
+use streamlib::host_rhi::HostVulkanTimelineSemaphore;
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::TextureFormat;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
