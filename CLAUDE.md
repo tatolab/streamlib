@@ -482,5 +482,16 @@ make sense if the surrounding files were renamed or restructured.
   trade-offs may shift as new adapters arrive — verify against current
   code before generalizing. Read before adding a new surface adapter
   or wondering why one path was picked over another.
+- @docs/architecture/subprocess-rhi-parity.md — Companion to
+  adapter-runtime-integration. Where adapter-runtime is "*how* a
+  subprocess obtains an adapter context", this is "*which* RHI
+  patterns the subprocess re-implements once it has one." To the best
+  of our current knowledge the answer is "only the import-side
+  carve-out — everything else escalates"; the doc buckets each
+  pattern (compute dispatch, queue mutex, frames-in-flight, modifier
+  probe, validation, dual-VkDevice) and lists trip-wires that would
+  shift the bucketing. Read before adding subprocess-side Vulkan code
+  beyond `vkImportMemoryFdInfoKHR` + `vkBindBufferMemory` +
+  `vkMapMemory`.
 
 Index: @docs/learnings/README.md
