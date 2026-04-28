@@ -15,12 +15,19 @@
 //! re-exported from `streamlib_consumer_rhi`.
 
 #[cfg(target_os = "linux")]
-use streamlib_consumer_rhi::DevicePrivilege;
+use streamlib_consumer_rhi::{private as consumer_rhi_private, DevicePrivilege};
 
 /// Privilege marker for host-side Vulkan resources — full RHI access
 /// (allocation, queue submit, modifier choice, kernel construction,
 /// swapchain).
 pub struct HostMarker;
+
+// Seal the [`DevicePrivilege`] hierarchy across the two crates: the
+// supertrait `Sealed` lives in `streamlib-consumer-rhi::private` and
+// is implemented here for the streamlib-side marker so external
+// crates cannot invent their own privilege flavors.
+#[cfg(target_os = "linux")]
+impl consumer_rhi_private::Sealed for HostMarker {}
 
 #[cfg(target_os = "linux")]
 impl DevicePrivilege for HostMarker {

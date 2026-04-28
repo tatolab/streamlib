@@ -28,15 +28,31 @@ use vulkanalia::vk;
 
 use crate::Result;
 
+/// Sealing supertrait for [`DevicePrivilege`]. Lives in a `#[doc(hidden)]`
+/// module so streamlib can implement it on `HostMarker` (the seal needs
+/// to span the two crates because `HostMarker` carries
+/// streamlib-side associated types and so cannot live in this crate),
+/// while still preventing external implementations of
+/// [`DevicePrivilege`] from outside the workspace.
+#[doc(hidden)]
+pub mod private {
+    /// Sealing trait — see [`super::DevicePrivilege`]. Public so
+    /// streamlib can `impl Sealed for HostMarker`, but doc-hidden so
+    /// it doesn't appear in the public API.
+    pub trait Sealed {}
+}
+
 /// Privilege marker for consumer-side Vulkan resources — carve-out
 /// only. See `docs/architecture/subprocess-rhi-parity.md`: DMA-BUF FD
 /// import + bind + map, tiled-image import via
 /// `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`, layout transitions on
 /// imported handles, sync wait/signal on imported timeline semaphores.
 pub struct ConsumerMarker;
+impl private::Sealed for ConsumerMarker {}
 
-/// Trait restricting privilege markers to the streamlib-defined
-/// `HostMarker` and the consumer-rhi-defined [`ConsumerMarker`].
+/// Sealed trait restricting privilege markers to the
+/// streamlib-defined `HostMarker` and the consumer-rhi-defined
+/// [`ConsumerMarker`].
 ///
 /// Carries the timeline-semaphore + texture associated types so
 /// adapter code that holds `Arc<P::TimelineSemaphore>` /
@@ -45,10 +61,12 @@ pub struct ConsumerMarker;
 /// trait so the adapter can call `wait` / `signal_host` / `image`
 /// without knowing which side it's on.
 ///
-/// External crates SHOULD NOT implement this trait — extending the
-/// privilege ladder requires coordinated changes across both
-/// `streamlib-consumer-rhi` and `streamlib`.
-pub trait DevicePrivilege: 'static + Send + Sync {
+/// The `private::Sealed` supertrait keeps this trait closed to the
+/// two markers shipped by the workspace; external crates can name
+/// the type but cannot implement it. Extending the privilege ladder
+/// requires coordinated changes across both `streamlib-consumer-rhi`
+/// and `streamlib`.
+pub trait DevicePrivilege: private::Sealed + 'static + Send + Sync {
     /// Concrete timeline-semaphore type for this privilege flavor.
     type TimelineSemaphore: VulkanTimelineSemaphoreLike + Send + Sync + 'static;
     /// Concrete texture type for this privilege flavor.

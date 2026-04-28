@@ -74,28 +74,44 @@ pub use device_capability::{
     VulkanTimelineSemaphoreLike,
 };
 
-/// Compile-time capability checks proving FullAccess types are
-/// unreachable from a `streamlib-consumer-rhi`-only dep graph.
+/// Sealing supertrait module for [`DevicePrivilege`]. Re-exported so
+/// `streamlib::vulkan::rhi::HostMarker` can `impl Sealed for HostMarker`
+/// from the streamlib crate. See [`device_capability::private`].
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub use device_capability::private;
+
+/// Compile-time capability checks for the consumer-rhi boundary.
 ///
-/// These doctests verify (at compile time) that the type-system
-/// boundary holds: a cdylib that depends on `streamlib-consumer-rhi`
-/// alone — without `streamlib` in its `[dependencies]` *or*
-/// `[dev-dependencies]` — cannot name host-only types like
-/// `streamlib::vulkan::rhi::HostVulkanDevice` or
-/// `streamlib::core::context::GpuContextFullAccess`. The doctest
-/// compilation context inherits `streamlib-consumer-rhi`'s dep graph
-/// only, so these imports failing to resolve is exactly the
-/// cdylib-shaped consumer's view.
+/// These doctests are a *narrow* layer of the boundary story:
+/// they assert that **`streamlib-consumer-rhi` itself does not
+/// depend on `streamlib`** — the doctest compilation context
+/// inherits only this crate's `[dependencies]` and
+/// `[dev-dependencies]`, so any `use streamlib::*` fails to
+/// resolve. If a future change ever pulls `streamlib` into this
+/// crate's deps, these `compile_fail` tests start compiling and
+/// the suite fails, catching the regression.
 ///
-/// If `streamlib` is ever added to `streamlib-consumer-rhi`'s
-/// `Cargo.toml`, these `compile_fail` tests will start compiling —
-/// the `compile_fail` attribute then fires and the suite fails,
-/// catching the regression.
+/// What these doctests do **NOT** prove on their own: that the
+/// polyglot cdylibs (which depend on this crate *plus*
+/// `streamlib-adapter-vulkan`, `streamlib-adapter-opengl`,
+/// `streamlib-adapter-abi`, etc.) can't reach `streamlib` through
+/// a different path. That stronger property is asserted by:
+///
+/// - `cargo tree -p streamlib-{python,deno}-native | grep -c "^streamlib v"`
+///   returning 0 (documented in `.claude/workflows/polyglot.md`).
+/// - The polyglot adapter crates (`streamlib-adapter-vulkan`,
+///   `streamlib-adapter-opengl`) holding `streamlib` in
+///   `[dev-dependencies]` only, with the helper-bin moved to
+///   `streamlib-adapter-vulkan-helpers`.
+///
+/// Together those two checks plus the doctests below give the full
+/// boundary; this module is one piece of three.
 ///
 /// ```compile_fail
-/// // HostVulkanDevice is host-only. From a consumer-rhi-shaped dep
-/// // graph the `streamlib` crate is not present and the import does
-/// // not resolve.
+/// // HostVulkanDevice is host-only. From this crate's dep graph the
+/// // `streamlib` crate is not present and the import does not
+/// // resolve.
 /// use streamlib::vulkan::rhi::HostVulkanDevice;
 /// fn _force(_: HostVulkanDevice) {}
 /// ```
@@ -117,6 +133,29 @@ pub use device_capability::{
 /// // crate replaces was deleted alongside the crate landing.
 /// use streamlib::adapter_support::HostVulkanDevice;
 /// fn _force(_: HostVulkanDevice) {}
+/// ```
+///
+/// The seal on [`DevicePrivilege`] keeps external crates from
+/// inventing their own privilege flavors — `Sealed` lives in
+/// `private` (doc-hidden but pub so streamlib can implement it on
+/// `HostMarker`). External code can name `private::Sealed` but
+/// implementing it without an out-of-tree marker type yields an
+/// orphan-rule error; implementing `DevicePrivilege` on a
+/// non-Sealed marker fails the trait bound:
+///
+/// ```compile_fail
+/// // External marker doesn't implement Sealed → can't impl
+/// // DevicePrivilege on it.
+/// use streamlib_consumer_rhi::{
+///     ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, DevicePrivilege,
+/// };
+///
+/// pub struct OutsideMarker;
+///
+/// impl DevicePrivilege for OutsideMarker {
+///     type TimelineSemaphore = ConsumerVulkanTimelineSemaphore;
+///     type Texture = ConsumerVulkanTexture;
+/// }
 /// ```
 ///
 /// Positive control: the consumer-side path compiles fine. Only

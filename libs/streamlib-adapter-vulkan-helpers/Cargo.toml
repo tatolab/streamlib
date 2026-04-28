@@ -38,6 +38,13 @@ serde_json.workspace = true
 tracing.workspace = true
 libc.workspace = true
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tracing-subscriber.workspace = true
+# Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
+# `VkInstance` creation on NVIDIA Linux trips the dual-device crash
+# documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+serial_test = "3.2"
+
 [[bin]]
 name = "vulkan_adapter_subprocess_helper"
 path = "src/bin/vulkan_adapter_subprocess_helper.rs"

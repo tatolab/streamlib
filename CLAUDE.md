@@ -304,7 +304,7 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
-**NOTHING outside the RHI (`vulkan/rhi/`) may touch Vulkan APIs directly.** No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through the RHI. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it. CI check #555 enforces.)
+**NOTHING outside the RHI may touch Vulkan APIs directly.** "The RHI" here means `libs/streamlib/src/vulkan/rhi/` (host-side) and `libs/streamlib-consumer-rhi/` (consumer-side carve-out, #560) — together they own every `vulkanalia` call in the workspace. No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through one of those two crates. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it. CI check #555 enforces.)
 
 The RHI is the **single gateway** to all GPU operations on Linux. Like Unreal Engine's RHI, it gives the runtime absolute control and traceability over every GPU resource.
 
