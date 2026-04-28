@@ -120,12 +120,17 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         self.surfaces.len()
     }
 
-    fn make_image_info(&self, image: vk::Image) -> VkImageInfo {
+    fn make_image_info(
+        &self,
+        texture: &<D::Privilege as DevicePrivilege>::Texture,
+    ) -> VkImageInfo {
         // Best-effort image info — fields the adapter doesn't track
         // (memory binding, ycbcr conversion) stay zeroed. Skia and other
         // VkImageInfoExt consumers can extend this once the adapter
-        // tracks more per-surface state.
-        let _ = image; // future-proof: consumers will read this once filled
+        // tracks more per-surface state. `memory_size` is a tight-pixel
+        // estimate (no tile padding), matching the pre-genericization
+        // behavior so debug snapshots / sizing heuristics stay stable.
+        let bytes_per_pixel = texture.format().bytes_per_pixel() as u64;
         VkImageInfo {
             format: 0,
             tiling: vk::ImageTiling::OPTIMAL.as_raw(),
@@ -135,7 +140,9 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             queue_family: self.device.queue_family_index(),
             memory_handle: 0,
             memory_offset: 0,
-            memory_size: 0,
+            memory_size: (texture.width() as u64)
+                * (texture.height() as u64)
+                * bytes_per_pixel,
             memory_property_flags: 0,
             protected: 0,
             ycbcr_conversion: 0,
@@ -276,12 +283,13 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
                 .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
             let from = state.current_layout;
             state.last_acquire_value = wait_value;
+            let info = self.make_image_info(&state.texture);
             Ok(ReadAcquired {
                 timeline,
                 wait_value,
                 image,
                 from,
-                info: self.make_image_info(image),
+                info,
             })
         })
     }
@@ -300,12 +308,13 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
                 .ok_or(AdapterError::SurfaceNotFound { surface_id: id })?;
             let from = state.current_layout;
             state.last_acquire_value = wait_value;
+            let info = self.make_image_info(&state.texture);
             Ok(WriteAcquired {
                 timeline,
                 wait_value,
                 image,
                 from,
-                info: self.make_image_info(image),
+                info,
             })
         })
     }

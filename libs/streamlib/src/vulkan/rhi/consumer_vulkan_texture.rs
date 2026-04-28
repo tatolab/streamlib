@@ -353,4 +353,13 @@ impl super::VulkanTextureLike for ConsumerVulkanTexture {
     fn chosen_drm_format_modifier(&self) -> u64 {
         ConsumerVulkanTexture::chosen_drm_format_modifier(self)
     }
+    fn width(&self) -> u32 {
+        ConsumerVulkanTexture::width(self)
+    }
+    fn height(&self) -> u32 {
+        ConsumerVulkanTexture::height(self)
+    }
+    fn format(&self) -> crate::core::rhi::TextureFormat {
+        ConsumerVulkanTexture::format(self)
+    }
 }

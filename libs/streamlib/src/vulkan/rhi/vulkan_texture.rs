@@ -988,6 +988,15 @@ impl super::VulkanTextureLike for HostVulkanTexture {
             0
         }
     }
+    fn width(&self) -> u32 {
+        HostVulkanTexture::width(self)
+    }
+    fn height(&self) -> u32 {
+        HostVulkanTexture::height(self)
+    }
+    fn format(&self) -> crate::core::rhi::TextureFormat {
+        HostVulkanTexture::format(self)
+    }
 }
 
 #[cfg(test)]

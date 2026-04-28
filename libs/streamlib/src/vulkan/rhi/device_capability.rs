@@ -99,6 +99,15 @@ impl VulkanTextureLike for NotAvailableOnThisPlatform {
     fn chosen_drm_format_modifier(&self) -> u64 {
         match *self {}
     }
+    fn width(&self) -> u32 {
+        match *self {}
+    }
+    fn height(&self) -> u32 {
+        match *self {}
+    }
+    fn format(&self) -> crate::core::rhi::TextureFormat {
+        match *self {}
+    }
 }
 
 /// Operations the surface adapter needs from a timeline semaphore. Both
@@ -116,9 +125,8 @@ pub trait VulkanTimelineSemaphoreLike {
 /// Operations the surface adapter needs from a Vulkan-flavored texture.
 /// Both [`crate::vulkan::rhi::HostVulkanTexture`] and
 /// [`crate::vulkan::rhi::ConsumerVulkanTexture`] implement this; the
-/// adapter holds `Arc<P::Texture>` and reads the `vk::Image` + DRM
-/// modifier through this trait without caring whether it's host or
-/// consumer.
+/// adapter holds `Arc<P::Texture>` and reads the `vk::Image` + metadata
+/// through this trait without caring whether it's host or consumer.
 pub trait VulkanTextureLike {
     /// `vk::Image` handle, or `None` for placeholder textures.
     fn image(&self) -> Option<vk::Image>;
@@ -126,6 +134,12 @@ pub trait VulkanTextureLike {
     /// (consumer side: propagated from the host descriptor). Zero means
     /// `DRM_FORMAT_MOD_LINEAR` or "not applicable".
     fn chosen_drm_format_modifier(&self) -> u64;
+    /// Texture width in pixels.
+    fn width(&self) -> u32;
+    /// Texture height in pixels.
+    fn height(&self) -> u32;
+    /// Texture format.
+    fn format(&self) -> crate::core::rhi::TextureFormat;
 }
 
 /// Minimal device shape every surface adapter needs at the layout-
