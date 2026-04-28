@@ -100,12 +100,12 @@ unsafe impl Sync for VulkanTextureCache {}
 mod tests {
     use super::*;
     use crate::core::rhi::{TextureDescriptor, TextureFormat};
-    use crate::vulkan::rhi::{VulkanDevice, VulkanTexture};
+    use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTexture};
     use std::sync::Arc;
 
     #[test]
     fn test_creates_image_view_for_valid_image() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -114,7 +114,7 @@ mod tests {
         };
 
         let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
-        let texture = VulkanTexture::new(&device, &desc).expect("texture creation failed");
+        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
         let image = match texture.image() {
             Some(i) => i,
             None => {
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_returns_cached_view_for_same_image() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -142,7 +142,7 @@ mod tests {
         };
 
         let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
-        let texture = VulkanTexture::new(&device, &desc).expect("texture creation failed");
+        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
         let image = match texture.image() {
             Some(i) => i,
             None => {
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_flush_destroys_all_cached_views() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -178,7 +178,7 @@ mod tests {
         // Create views for two textures so the cache is non-empty
         for _ in 0..2 {
             let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm);
-            let texture = VulkanTexture::new(&device, &desc).expect("texture creation failed");
+            let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
             if let Some(image) = texture.image() {
                 cache
                     .create_view_from_image(image, vk::Format::B8G8R8A8_UNORM, 64, 64)

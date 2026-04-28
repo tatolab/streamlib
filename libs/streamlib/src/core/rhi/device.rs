@@ -34,7 +34,7 @@ pub struct GpuDevice {
         feature = "backend-vulkan",
         all(target_os = "linux", not(feature = "backend-metal"))
     ))]
-    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::VulkanDevice>,
+    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice>,
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: std::sync::Arc<crate::windows::rhi::DX12Device>,
@@ -50,7 +50,7 @@ pub struct GpuDevice {
 }
 
 impl GpuDevice {
-    /// Adapter-facing: the underlying [`crate::vulkan::rhi::VulkanDevice`].
+    /// Adapter-facing: the underlying [`crate::vulkan::rhi::HostVulkanDevice`].
     ///
     /// Available only on Linux / when the Vulkan backend is selected.
     /// In-tree surface adapters reach for this when they need raw
@@ -61,7 +61,7 @@ impl GpuDevice {
         feature = "backend-vulkan",
         all(target_os = "linux", not(feature = "backend-metal"))
     ))]
-    pub fn vulkan_device(&self) -> &std::sync::Arc<crate::vulkan::rhi::VulkanDevice> {
+    pub fn vulkan_device(&self) -> &std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice> {
         &self.inner
     }
 
@@ -94,7 +94,7 @@ impl GpuDevice {
             all(target_os = "linux", not(feature = "backend-metal"))
         ))]
         {
-            let device_arc = std::sync::Arc::new(crate::vulkan::rhi::VulkanDevice::new()?);
+            let device_arc = std::sync::Arc::new(crate::vulkan::rhi::HostVulkanDevice::new()?);
             let vulkan_queue = device_arc.create_command_queue_wrapper();
 
             // On macOS/iOS with Vulkan backend, also create Metal device/queue for Apple services

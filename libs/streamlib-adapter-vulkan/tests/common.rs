@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
-use streamlib::adapter_support::VulkanTimelineSemaphore;
+use streamlib::adapter_support::HostVulkanTimelineSemaphore;
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::{StreamTexture, TextureFormat};
 use streamlib_adapter_abi::{
@@ -58,7 +58,7 @@ impl HostFixture {
             .acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)
             .expect("acquire_render_target_dma_buf_image");
         let timeline = Arc::new(
-            VulkanTimelineSemaphore::new_exportable(self.adapter.device().device(), 0)
+            HostVulkanTimelineSemaphore::new_exportable(self.adapter.device().device(), 0)
                 .expect("exportable timeline"),
         );
         self.adapter
@@ -93,7 +93,7 @@ impl HostFixture {
 pub struct RegisteredSurface {
     pub descriptor: StreamlibSurface,
     pub texture: StreamTexture,
-    pub timeline: Arc<VulkanTimelineSemaphore>,
+    pub timeline: Arc<HostVulkanTimelineSemaphore>,
     pub width: u32,
     pub height: u32,
 }

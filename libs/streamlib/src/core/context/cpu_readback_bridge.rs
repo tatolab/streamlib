@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use streamlib_adapter_abi::{SurfaceFormat, SurfaceId};
 
-use crate::adapter_support::VulkanPixelBuffer;
+use crate::adapter_support::HostVulkanPixelBuffer;
 
 /// Wire-format access mode mirrored from the escalate schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -31,7 +31,7 @@ pub enum CpuReadbackAccessMode {
 /// the surface-share service and surfaces the registered surface IDs to
 /// the subprocess.
 pub struct CpuReadbackPlane {
-    pub staging: Arc<VulkanPixelBuffer>,
+    pub staging: Arc<HostVulkanPixelBuffer>,
     pub width: u32,
     pub height: u32,
     pub bytes_per_pixel: u32,

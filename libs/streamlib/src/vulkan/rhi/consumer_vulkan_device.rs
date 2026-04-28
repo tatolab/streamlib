@@ -5,7 +5,7 @@
 //! subprocess (cdylib) use.
 //!
 //! The consumer-side device deliberately *does not* duplicate
-//! [`crate::vulkan::rhi::VulkanDevice`]. Where the host device owns
+//! [`crate::vulkan::rhi::HostVulkanDevice`]. Where the host device owns
 //! the privileged state — VMA allocator + DMA-BUF export pools, DRM
 //! modifier probe, transfer / encode / decode / compute queues, the
 //! per-queue submit-mutex matrix, swapchain extensions — the consumer

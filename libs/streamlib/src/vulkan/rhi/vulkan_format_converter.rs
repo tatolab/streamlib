@@ -13,7 +13,7 @@ use crate::core::rhi::{
 };
 use crate::core::{Result, StreamError};
 
-use super::{VulkanComputeKernel, VulkanDevice};
+use super::{VulkanComputeKernel, HostVulkanDevice};
 
 /// Push-constants struct matching the `nv12_to_bgra` compute shader's
 /// `layout(push_constant)` block (width, height, flags). Flags encode:
@@ -38,7 +38,7 @@ pub struct VulkanFormatConverter {
 
 impl VulkanFormatConverter {
     pub fn new(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         source_bytes_per_pixel: u32,
         dest_bytes_per_pixel: u32,
     ) -> Result<Self> {
@@ -113,10 +113,10 @@ mod tests {
     use super::*;
     use crate::core::rhi::RhiPixelBufferRef;
     use crate::core::StreamError;
-    use crate::vulkan::rhi::VulkanPixelBuffer;
+    use crate::vulkan::rhi::HostVulkanPixelBuffer;
 
-    fn try_vulkan_device() -> Option<Arc<VulkanDevice>> {
-        match VulkanDevice::new() {
+    fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
+        match HostVulkanDevice::new() {
             Ok(d) => Some(Arc::new(d)),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -126,13 +126,13 @@ mod tests {
     }
 
     fn make_pixel_buffer(
-        device: &Arc<VulkanDevice>,
+        device: &Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
         bytes_per_pixel: u32,
         format: PixelFormat,
     ) -> RhiPixelBuffer {
-        let vk_buf = VulkanPixelBuffer::new(device, width, height, bytes_per_pixel, format)
+        let vk_buf = HostVulkanPixelBuffer::new(device, width, height, bytes_per_pixel, format)
             .expect("Failed to create pixel buffer");
         let ref_ = RhiPixelBufferRef {
             inner: Arc::new(vk_buf),
@@ -313,7 +313,7 @@ mod tests {
     }
 
     fn run_shader_against_fixture_input(
-        device: &Arc<VulkanDevice>,
+        device: &Arc<HostVulkanDevice>,
         nv12_bytes: &[u8],
     ) -> Vec<u8> {
         let nv12_buf = make_pixel_buffer(

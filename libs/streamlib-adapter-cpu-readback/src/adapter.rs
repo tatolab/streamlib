@@ -30,7 +30,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use streamlib::adapter_support::{VulkanDevice, VulkanPixelBuffer, VulkanTimelineSemaphore};
+use streamlib::adapter_support::{HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::PixelFormat;
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
@@ -58,7 +58,7 @@ const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(5);
 /// adapter's slot from being torn down underneath an in-flight bridge
 /// call.
 pub struct CpuReadbackStagingPlane {
-    pub staging: Arc<VulkanPixelBuffer>,
+    pub staging: Arc<HostVulkanPixelBuffer>,
     pub width: u32,
     pub height: u32,
     pub bytes_per_pixel: u32,
@@ -75,23 +75,23 @@ pub struct CpuReadbackSurfaceSnapshot {
 
 /// Explicit GPU→CPU [`SurfaceAdapter`] implementation.
 ///
-/// Construct with [`Self::new`] passing the host's [`VulkanDevice`].
+/// Construct with [`Self::new`] passing the host's [`HostVulkanDevice`].
 /// Register host-allocated surfaces with [`Self::register_host_surface`];
-/// each registration allocates one dedicated [`VulkanPixelBuffer`] per
+/// each registration allocates one dedicated [`HostVulkanPixelBuffer`] per
 /// plane (HOST_VISIBLE/HOST_COHERENT linear buffer, sized exactly to the
 /// plane's pixel footprint) used as the staging area for image↔buffer
 /// copies. Consumers acquire scoped access through the standard
 /// [`SurfaceAdapter::acquire_read`] / [`SurfaceAdapter::acquire_write`]
 /// API or via the [`crate::CpuReadbackContext`] convenience.
 pub struct CpuReadbackSurfaceAdapter {
-    device: Arc<VulkanDevice>,
+    device: Arc<HostVulkanDevice>,
     surfaces: Registry<SurfaceState>,
     acquire_timeout: Duration,
 }
 
 impl CpuReadbackSurfaceAdapter {
     /// Construct an empty adapter bound to `device`.
-    pub fn new(device: Arc<VulkanDevice>) -> Self {
+    pub fn new(device: Arc<HostVulkanDevice>) -> Self {
         Self {
             device,
             surfaces: Registry::new(),
@@ -109,13 +109,13 @@ impl CpuReadbackSurfaceAdapter {
     }
 
     /// Returns the underlying device.
-    pub fn device(&self) -> &Arc<VulkanDevice> {
+    pub fn device(&self) -> &Arc<HostVulkanDevice> {
         &self.device
     }
 
     /// Register a host-allocated surface with this adapter.
     ///
-    /// Allocates one dedicated `VulkanPixelBuffer` per plane (HOST_VISIBLE,
+    /// Allocates one dedicated `HostVulkanPixelBuffer` per plane (HOST_VISIBLE,
     /// HOST_COHERENT, linear). Plane geometry is derived from
     /// [`HostSurfaceRegistration::format`] via [`SurfaceFormat::plane_count`]
     /// and [`SurfaceFormat::plane_byte_size`].
@@ -155,16 +155,16 @@ impl CpuReadbackSurfaceAdapter {
             // of identical dimensions — wrong shape for an adapter that
             // needs one buffer per registered surface plane.
             //
-            // The `PixelFormat` argument to `VulkanPixelBuffer::new` is
+            // The `PixelFormat` argument to `HostVulkanPixelBuffer::new` is
             // opaque metadata only — `bytes_per_pixel` drives the
             // allocation size. We pass `Bgra32` uniformly so the
             // staging buffer's recorded format isn't claiming a specific
             // pixel layout (Y/UV/RGB) the adapter never interprets.
             let staging = Arc::new(
-                VulkanPixelBuffer::new(&self.device, pw, ph, pbpp, PixelFormat::Bgra32).map_err(
+                HostVulkanPixelBuffer::new(&self.device, pw, ph, pbpp, PixelFormat::Bgra32).map_err(
                     |e| AdapterError::IpcDisconnected {
                         reason: format!(
-                            "VulkanPixelBuffer::new for cpu-readback staging plane {plane_idx}: {e}"
+                            "HostVulkanPixelBuffer::new for cpu-readback staging plane {plane_idx}: {e}"
                         ),
                     },
                 )?,
@@ -192,7 +192,7 @@ impl CpuReadbackSurfaceAdapter {
         };
         if !self.surfaces.register(id, state) {
             // Local `state` (and its `planes` Vec) drops here, releasing
-            // the staging `VulkanPixelBuffer`s we just allocated. Return
+            // the staging `HostVulkanPixelBuffer`s we just allocated. Return
             // SurfaceNotFound to match the pre-Registry semantics —
             // callers reading that error treat it as "id collision".
             return Err(AdapterError::SurfaceNotFound { surface_id: id });
@@ -716,7 +716,7 @@ struct PlaneAcquireSlot {
 /// copy can run unlocked. `read_holders` / `write_held` are already
 /// incremented; rollback paths decrement them on failure.
 struct AcquireSnapshot {
-    timeline: Arc<VulkanTimelineSemaphore>,
+    timeline: Arc<HostVulkanTimelineSemaphore>,
     wait_value: u64,
     image: vk::Image,
     from: VulkanLayout,

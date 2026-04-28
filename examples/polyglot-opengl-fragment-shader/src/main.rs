@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib::adapter_support::VulkanDevice;
+use streamlib::adapter_support::HostVulkanDevice;
 use streamlib::core::rhi::TextureFormat;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
@@ -103,14 +103,14 @@ fn main() -> Result<()> {
     let runtime = StreamRuntime::new()?;
 
     // Slots the setup hook populates with the host StreamTexture and
-    // the underlying VulkanDevice so main.rs can read the surface back
+    // the underlying HostVulkanDevice so main.rs can read the surface back
     // post-stop and write the output PNG. We can't keep the
     // `&GpuContext` borrow past the hook, so we Arc-clone the bits we
     // need.
     let texture_slot: Arc<
         Mutex<Option<streamlib::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
-    let device_slot: Arc<Mutex<Option<Arc<VulkanDevice>>>> =
+    let device_slot: Arc<Mutex<Option<Arc<HostVulkanDevice>>>> =
         Arc::new(Mutex::new(None));
 
     {
@@ -284,7 +284,7 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
 /// + queue wait — the canonical Vulkan readback shape, parallel to the
 /// `host_readback` helper in `streamlib-adapter-opengl/tests/common.rs`.
 fn vulkan_readback(
-    device: &Arc<VulkanDevice>,
+    device: &Arc<HostVulkanDevice>,
     texture: &streamlib::core::rhi::StreamTexture,
 ) -> Vec<u8> {
     use vulkanalia::prelude::v1_4::*;

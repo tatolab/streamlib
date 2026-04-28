@@ -10,13 +10,13 @@ use vulkanalia::vk;
 
 use crate::core::{Result, StreamError};
 
-use super::{VulkanCommandBuffer, VulkanDevice};
+use super::{VulkanCommandBuffer, HostVulkanDevice};
 
 /// Vulkan command queue wrapper.
 ///
 /// Manages the Vulkan queue and command pool for allocating command buffers.
 pub struct VulkanCommandQueue {
-    vulkan_device: Arc<VulkanDevice>,
+    vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
     command_pool: vk::CommandPool,
@@ -24,7 +24,7 @@ pub struct VulkanCommandQueue {
 
 impl VulkanCommandQueue {
     /// Create a new command queue wrapper.
-    pub fn new(vulkan_device: Arc<VulkanDevice>, queue: vk::Queue, queue_family_index: u32) -> Self {
+    pub fn new(vulkan_device: Arc<HostVulkanDevice>, queue: vk::Queue, queue_family_index: u32) -> Self {
         let device = vulkan_device.device().clone();
 
         // Create command pool for this queue family
@@ -100,11 +100,11 @@ unsafe impl Sync for VulkanCommandQueue {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vulkan::rhi::VulkanDevice;
+    use crate::vulkan::rhi::HostVulkanDevice;
 
     #[test]
     fn test_creates_command_buffer() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn test_empty_command_buffer_commit_and_wait_completes() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");

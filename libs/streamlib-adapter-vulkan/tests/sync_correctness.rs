@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use streamlib::adapter_support::VulkanTimelineSemaphore;
+use streamlib::adapter_support::HostVulkanTimelineSemaphore;
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::TextureFormat;
 use streamlib_adapter_abi::{
@@ -49,7 +49,7 @@ fn timeline_counter_advances_on_release_and_is_observable_by_next_acquire() {
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
         .expect("acquire_render_target_dma_buf_image");
     let timeline = Arc::new(
-        VulkanTimelineSemaphore::new(adapter.device().device(), 0)
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
             .expect("create timeline"),
     );
     adapter

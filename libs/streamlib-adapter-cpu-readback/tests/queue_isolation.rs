@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use streamlib::adapter_support::VulkanDevice;
+use streamlib::adapter_support::HostVulkanDevice;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -47,7 +47,7 @@ use crate::common::HostFixture;
 /// with a per-call fence and wait for it. Used by the worker thread to
 /// keep the queue busy with unrelated submits while the main thread is
 /// running cpu-readback acquires.
-fn submit_noop_and_wait(device: &VulkanDevice) -> Result<(), String> {
+fn submit_noop_and_wait(device: &HostVulkanDevice) -> Result<(), String> {
     let raw = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();
@@ -120,7 +120,7 @@ fn acquire_release_cycles_robust_under_concurrent_queue_submits() {
 
     // Worker thread: keep the queue busy with unrelated noop submits
     // until the main thread tells it to stop. Each iteration goes
-    // through `VulkanDevice::submit_to_queue`, the same per-queue-
+    // through `HostVulkanDevice::submit_to_queue`, the same per-queue-
     // mutex-protected entrypoint the cpu-readback adapter uses, so we
     // exercise the same submission path under contention.
     let stop = Arc::new(AtomicBool::new(false));

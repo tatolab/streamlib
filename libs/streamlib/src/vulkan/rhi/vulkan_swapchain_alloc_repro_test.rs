@@ -26,7 +26,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowAttributes, WindowId};
 
-use super::VulkanDevice;
+use super::HostVulkanDevice;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Custom VMA allocator builders for testing different configurations
@@ -34,7 +34,7 @@ use super::VulkanDevice;
 
 /// Build a VMA allocator with the BROKEN config — pTypeExternalMemoryHandleTypes
 /// set globally for all memory types.
-fn build_vma_with_global_export(device: &VulkanDevice) -> vma::Allocator {
+fn build_vma_with_global_export(device: &HostVulkanDevice) -> vma::Allocator {
     let instance = device.instance();
     let vk_device = device.device();
     let physical_device = device.physical_device();
@@ -53,7 +53,7 @@ fn build_vma_with_global_export(device: &VulkanDevice) -> vma::Allocator {
 }
 
 /// Build a VMA allocator with NO global export config. Pools handle export.
-fn build_vma_without_global_export(device: &VulkanDevice) -> vma::Allocator {
+fn build_vma_without_global_export(device: &HostVulkanDevice) -> vma::Allocator {
     let instance = device.instance();
     let vk_device = device.device();
     let physical_device = device.physical_device();
@@ -196,7 +196,7 @@ enum TestScenario {
 /// This is critical because the bug only triggers AFTER the compositor has had
 /// a chance to import the swapchain images as DMA-BUFs.
 struct SwapchainTestApp {
-    device: Arc<VulkanDevice>,
+    device: Arc<HostVulkanDevice>,
     scenario: TestScenario,
     width: u32,
     height: u32,
@@ -662,7 +662,7 @@ struct SwapchainResources {
 }
 
 fn create_swapchain(
-    device: &VulkanDevice,
+    device: &HostVulkanDevice,
     surface: vk::SurfaceKHR,
     width: u32,
     height: u32,
@@ -746,8 +746,8 @@ fn create_swapchain(
 // Test harness — runs a scenario inside winit's event loop
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn try_create_device() -> Option<Arc<VulkanDevice>> {
-    match VulkanDevice::new() {
+fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
+    match HostVulkanDevice::new() {
         Ok(d) => Some(Arc::new(d)),
         Err(e) => {
             println!("Skipping — Vulkan device unavailable: {e}");
@@ -935,7 +935,7 @@ fn test_swapchain_allocation_scenarios() {
 /// Helper that runs a scenario via the shared event loop.
 fn run_scenario_via_event_loop(
     event_loop: &mut EventLoop<()>,
-    device: Arc<VulkanDevice>,
+    device: Arc<HostVulkanDevice>,
     scenario: TestScenario,
 ) -> AllocationOutcome {
     use winit::platform::run_on_demand::EventLoopExtRunOnDemand;

@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib::adapter_support::VulkanTimelineSemaphore;
+use streamlib::adapter_support::HostVulkanTimelineSemaphore;
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::TextureFormat;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
@@ -263,7 +263,7 @@ fn register_host_surface(
         TextureFormat::Bgra8Unorm,
     )?;
     let timeline = Arc::new(
-        VulkanTimelineSemaphore::new(adapter.device().device(), 0).map_err(|e| {
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0).map_err(|e| {
             StreamError::Configuration(format!("create timeline semaphore: {e}"))
         })?,
     );

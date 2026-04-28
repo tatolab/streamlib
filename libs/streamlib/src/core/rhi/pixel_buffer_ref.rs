@@ -9,7 +9,7 @@ use super::PixelFormat;
 ///
 /// Wraps the platform's native pixel buffer type:
 /// - macOS/iOS: CVPixelBufferRef (raw pointer, platform manages lifecycle)
-/// - Linux: Arc\<VulkanPixelBuffer\> (shared GPU staging buffer, Rust manages lifecycle)
+/// - Linux: Arc\<HostVulkanPixelBuffer\> (shared GPU staging buffer, Rust manages lifecycle)
 /// - Windows: ID3D11Texture2D* (future)
 ///
 /// Clone increments the appropriate refcount, Drop decrements it.
@@ -19,7 +19,7 @@ pub struct RhiPixelBufferRef {
     pub(crate) inner: std::ptr::NonNull<std::ffi::c_void>,
 
     #[cfg(target_os = "linux")]
-    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::VulkanPixelBuffer>,
+    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(crate) _marker: std::marker::PhantomData<()>,
@@ -126,7 +126,7 @@ impl RhiPixelBufferRef {
         self.inner.as_ptr()
     }
 
-    /// Adapter-facing: the underlying [`crate::vulkan::rhi::VulkanPixelBuffer`].
+    /// Adapter-facing: the underlying [`crate::vulkan::rhi::HostVulkanPixelBuffer`].
     ///
     /// In-tree surface adapters (`streamlib-adapter-cpu-readback`, others
     /// that need to issue `vkCmdCopyImageToBuffer` /
@@ -137,7 +137,7 @@ impl RhiPixelBufferRef {
     /// to touch raw Vulkan types are the RHI itself and the in-tree
     /// adapters. Mirror of [`crate::core::rhi::StreamTexture::vulkan_inner`].
     #[cfg(target_os = "linux")]
-    pub fn vulkan_inner(&self) -> &std::sync::Arc<crate::vulkan::rhi::VulkanPixelBuffer> {
+    pub fn vulkan_inner(&self) -> &std::sync::Arc<crate::vulkan::rhi::HostVulkanPixelBuffer> {
         &self.inner
     }
 
@@ -183,7 +183,7 @@ impl Drop for RhiPixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::drop_impl(self);
         }
-        // On Linux, VulkanPixelBuffer handles its own cleanup via its Drop impl.
+        // On Linux, HostVulkanPixelBuffer handles its own cleanup via its Drop impl.
         // No additional action needed here.
     }
 }

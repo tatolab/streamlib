@@ -18,13 +18,13 @@ use crate::core::{Result, StreamError};
 
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
-use super::{HostMarker, VulkanCommandQueue, VulkanRhiDevice, VulkanTexture};
+use super::{HostMarker, VulkanCommandQueue, VulkanRhiDevice, HostVulkanTexture};
 
 /// Vulkan GPU device.
 ///
 /// Wraps the Vulkan instance, physical device, and logical device.
 /// On macOS/iOS, uses MoltenVK to provide Vulkan API on top of Metal.
-pub struct VulkanDevice {
+pub struct HostVulkanDevice {
     entry: vulkanalia::Entry,
     instance: vulkanalia::Instance,
     physical_device: vk::PhysicalDevice,
@@ -81,7 +81,7 @@ pub struct VulkanDevice {
     /// Render-target-capable DRM modifiers per format from the EGL probe at
     /// device init. Empty when libEGL is unavailable or the probe failed.
     /// Callers consult this before requesting
-    /// [`VulkanTexture::new_render_target_dma_buf`].
+    /// [`HostVulkanTexture::new_render_target_dma_buf`].
     #[cfg(target_os = "linux")]
     drm_modifier_table: Arc<DrmModifierTable>,
     /// Tracks DMA-BUF import-path allocations (raw vkAllocateMemory for import only).
@@ -100,7 +100,7 @@ pub struct VulkanDevice {
     device_mutex: Mutex<()>,
 }
 
-impl VulkanDevice {
+impl HostVulkanDevice {
     /// Create a new Vulkan device.
     ///
     /// On macOS/iOS, this loads MoltenVK and enables VK_EXT_metal_objects
@@ -864,7 +864,7 @@ fn probe_tiled_dma_buf_memory_type(
     )))
 }
 
-impl VulkanDevice {
+impl HostVulkanDevice {
     /// Build VMA pools dedicated to DMA-BUF exportable allocations.
     ///
     /// Each pool is pinned to a memory type that supports the relevant property
@@ -895,7 +895,7 @@ impl VulkanDevice {
     )> {
         // ── Find memory type for HOST_VISIBLE DMA-BUF exportable buffers ──
         // The probe must mirror the real buffer create info used by
-        // `VulkanPixelBuffer::new`, including the `ExternalMemoryBufferCreateInfo`
+        // `HostVulkanPixelBuffer::new`, including the `ExternalMemoryBufferCreateInfo`
         // pNext chain — DMA-BUF external buffers have a narrower
         // `memoryTypeBits` than plain buffers, and omitting the chain lets VMA
         // pick a memory type the real buffer won't accept at bind time
@@ -932,7 +932,7 @@ impl VulkanDevice {
         })?;
 
         // ── Find memory type for DEVICE_LOCAL DMA-BUF exportable images ──
-        // Same rationale: the real image (`VulkanTexture::new`) carries
+        // Same rationale: the real image (`HostVulkanTexture::new`) carries
         // `ExternalMemoryImageCreateInfo::DMA_BUF_EXT` which can narrow
         // `memoryTypeBits`.
         let mut probe_image_external_info = vk::ExternalMemoryImageCreateInfo::builder()
@@ -985,7 +985,7 @@ impl VulkanDevice {
         // ── Create the pools ──────────────────────────────────────────────────
         // VMA's pMemoryAllocateNext stores a raw pointer to the export info.
         // Box gives a stable heap address — we keep the Boxes alive by returning
-        // them alongside the pools. Drop order (handled by VulkanDevice::drop):
+        // them alongside the pools. Drop order (handled by HostVulkanDevice::drop):
         // pool → Box, so the pointer is valid for the pool's entire lifetime.
         let mut buffer_pool_options = vma::PoolOptions::default();
         buffer_pool_options = buffer_pool_options.push_next(buffer_export_info.as_mut());
@@ -1117,8 +1117,8 @@ impl VulkanDevice {
     }
 
     /// Create a texture on this device.
-    pub fn create_texture(self: &Arc<Self>, desc: &TextureDescriptor) -> Result<VulkanTexture> {
-        VulkanTexture::new(self, desc)
+    pub fn create_texture(self: &Arc<Self>, desc: &TextureDescriptor) -> Result<HostVulkanTexture> {
+        HostVulkanTexture::new(self, desc)
     }
 
     /// Create a non-exportable device-local texture for same-process consumers.
@@ -1131,8 +1131,8 @@ impl VulkanDevice {
     pub fn create_texture_local(
         self: &Arc<Self>,
         desc: &TextureDescriptor,
-    ) -> Result<VulkanTexture> {
-        VulkanTexture::new_device_local(self, desc)
+    ) -> Result<HostVulkanTexture> {
+        HostVulkanTexture::new_device_local(self, desc)
     }
 
     /// Create a VulkanCommandQueue wrapper for the shared command queue.
@@ -1300,7 +1300,7 @@ impl VulkanDevice {
     }
 }
 
-impl vulkan_video::RhiQueueSubmitter for VulkanDevice {
+impl vulkan_video::RhiQueueSubmitter for HostVulkanDevice {
     unsafe fn submit_to_queue(
         &self,
         queue: vk::Queue,
@@ -1318,7 +1318,7 @@ impl vulkan_video::RhiQueueSubmitter for VulkanDevice {
     }
 }
 
-impl VulkanRhiDevice for VulkanDevice {
+impl VulkanRhiDevice for HostVulkanDevice {
     type Privilege = HostMarker;
 
     fn device(&self) -> &vulkanalia::Device {
@@ -1339,11 +1339,11 @@ impl VulkanRhiDevice for VulkanDevice {
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> Result<()> {
-        unsafe { VulkanDevice::submit_to_queue(self, queue, submits, fence) }
+        unsafe { HostVulkanDevice::submit_to_queue(self, queue, submits, fence) }
     }
 }
 
-impl VulkanDevice {
+impl HostVulkanDevice {
     /// Copy a host-visible VkBuffer to a device-local VkImage (RGBA upload).
     ///
     /// Transitions the image UNDEFINED → TRANSFER_DST → SHADER_READ_ONLY.
@@ -1511,7 +1511,7 @@ impl VulkanDevice {
 
         let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
         tracing::debug!(
-            "VulkanDevice: DMA-BUF memory imported ({} bytes, type={}, live={})",
+            "HostVulkanDevice: DMA-BUF memory imported ({} bytes, type={}, live={})",
             allocation_size, memory_type_index, count
         );
 
@@ -1548,7 +1548,7 @@ impl VulkanDevice {
     /// Render-target-capable DRM format modifiers, by DRM FOURCC, from the
     /// EGL probe at device init. Empty when the probe failed. Callers
     /// pass [`DrmModifierTable::rt_modifiers`] into
-    /// [`VulkanTexture::new_render_target_dma_buf`].
+    /// [`HostVulkanTexture::new_render_target_dma_buf`].
     #[cfg(target_os = "linux")]
     pub fn drm_modifier_table(&self) -> &Arc<DrmModifierTable> {
         &self.drm_modifier_table
@@ -1587,12 +1587,12 @@ impl VulkanDevice {
     }
 }
 
-impl Drop for VulkanDevice {
+impl Drop for HostVulkanDevice {
     fn drop(&mut self) {
         let live = self.live_allocation_count.load(Ordering::Relaxed);
         if live > 0 {
             tracing::warn!(
-                "VulkanDevice dropping with {} live import allocations (leak)",
+                "HostVulkanDevice dropping with {} live import allocations (leak)",
                 live
             );
         }
@@ -1629,17 +1629,17 @@ impl Drop for VulkanDevice {
     }
 }
 
-// VulkanDevice is Send + Sync because Vulkan handles are thread-safe
-unsafe impl Send for VulkanDevice {}
-unsafe impl Sync for VulkanDevice {}
+// HostVulkanDevice is Send + Sync because Vulkan handles are thread-safe
+unsafe impl Send for HostVulkanDevice {}
+unsafe impl Sync for HostVulkanDevice {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Try to create a VulkanDevice; return None if GPU/Vulkan is unavailable (CI).
-    fn try_create_device() -> Option<Arc<VulkanDevice>> {
-        match VulkanDevice::new() {
+    /// Try to create a HostVulkanDevice; return None if GPU/Vulkan is unavailable (CI).
+    fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
+        match HostVulkanDevice::new() {
             Ok(d) => Some(Arc::new(d)),
             Err(e) => {
                 println!("Skipping test — Vulkan not available: {e}");

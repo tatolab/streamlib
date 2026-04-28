@@ -4,7 +4,7 @@
 // H.264 Encoder Processor
 //
 // Thin wrapper around vulkan_video::SimpleEncoder using the shared RHI
-// VulkanDevice. The encoder shares streamlib's Vulkan device, VMA allocator,
+// HostVulkanDevice. The encoder shares streamlib's Vulkan device, VMA allocator,
 // and queues — no separate device creation, no NVIDIA dual-device crash.
 //
 // The camera's GPU-resident textures are on the same device, so encode_image()

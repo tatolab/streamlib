@@ -145,7 +145,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
                 .get()
                 .ok_or_else(|| {
                     crate::core::StreamError::NotSupported(
-                        "DMA-BUF import: VulkanDevice not initialized (GpuDevice::new() not called)"
+                        "DMA-BUF import: HostVulkanDevice not initialized (GpuDevice::new() not called)"
                             .into(),
                     )
                 })?;
@@ -181,7 +181,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         }
 
         let vulkan_pixel_buffer =
-            crate::vulkan::rhi::VulkanPixelBuffer::from_dma_buf_fds(
+            crate::vulkan::rhi::HostVulkanPixelBuffer::from_dma_buf_fds(
                 vulkan_device,
                 &fds,
                 &plane_sizes,

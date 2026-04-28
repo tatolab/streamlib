@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
-use streamlib::adapter_support::{VulkanDevice, VulkanTimelineSemaphore};
+use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::StreamTexture;
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
@@ -38,13 +38,13 @@ const DEFAULT_TIMELINE_WAIT: Duration = Duration::from_secs(5);
 
 /// Vulkan-native [`SurfaceAdapter`] implementation.
 ///
-/// Construct with [`Self::new`] passing the host's [`VulkanDevice`].
+/// Construct with [`Self::new`] passing the host's [`HostVulkanDevice`].
 /// Register host-allocated surfaces with [`Self::register_host_surface`];
 /// consumers acquire scoped access through the standard
 /// [`SurfaceAdapter::acquire_read`] / [`SurfaceAdapter::acquire_write`]
 /// API or via the [`crate::VulkanContext`] convenience.
 pub struct VulkanSurfaceAdapter {
-    device: Arc<VulkanDevice>,
+    device: Arc<HostVulkanDevice>,
     surfaces: Registry<SurfaceState>,
     /// Per-acquire timeline wait timeout. Adjustable via
     /// [`Self::with_acquire_timeout`].
@@ -53,7 +53,7 @@ pub struct VulkanSurfaceAdapter {
 
 impl VulkanSurfaceAdapter {
     /// Construct an empty adapter bound to `device`.
-    pub fn new(device: Arc<VulkanDevice>) -> Self {
+    pub fn new(device: Arc<HostVulkanDevice>) -> Self {
         Self {
             device,
             surfaces: Registry::new(),
@@ -69,7 +69,7 @@ impl VulkanSurfaceAdapter {
 
     /// Returns the underlying device for callers (test harnesses, the
     /// `VulkanContext`, raw-handle escape hatches) that need it.
-    pub fn device(&self) -> &Arc<VulkanDevice> {
+    pub fn device(&self) -> &Arc<HostVulkanDevice> {
         &self.device
     }
 
@@ -103,7 +103,7 @@ impl VulkanSurfaceAdapter {
     }
 
     /// Drop a registered surface. Pending guards keep the underlying
-    /// `Arc<VulkanTimelineSemaphore>` alive; the next acquire returns
+    /// `Arc<HostVulkanTimelineSemaphore>` alive; the next acquire returns
     /// [`AdapterError::SurfaceNotFound`].
     pub fn unregister_host_surface(&self, id: SurfaceId) -> bool {
         self.surfaces.unregister(id).is_some()
@@ -119,7 +119,7 @@ impl VulkanSurfaceAdapter {
         // Best-effort image info — fields the adapter doesn't track
         // (memory binding, ycbcr conversion) stay zeroed. Skia and other
         // VkImageInfoExt consumers can extend this once
-        // VulkanTexture exposes more accessors.
+        // HostVulkanTexture exposes more accessors.
         VkImageInfo {
             format: 0,
             tiling: vk::ImageTiling::OPTIMAL.as_raw(),
@@ -373,7 +373,7 @@ impl VulkanSurfaceAdapter {
 /// transition can run unlocked. `read_holders` / `write_held` are
 /// already incremented; rollback paths decrement them on failure.
 struct ReadAcquired {
-    timeline: Arc<VulkanTimelineSemaphore>,
+    timeline: Arc<HostVulkanTimelineSemaphore>,
     wait_value: u64,
     image: vk::Image,
     from: VulkanLayout,
@@ -381,7 +381,7 @@ struct ReadAcquired {
 }
 
 struct WriteAcquired {
-    timeline: Arc<VulkanTimelineSemaphore>,
+    timeline: Arc<HostVulkanTimelineSemaphore>,
     wait_value: u64,
     image: vk::Image,
     from: VulkanLayout,

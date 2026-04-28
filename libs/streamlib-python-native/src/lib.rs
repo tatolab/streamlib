@@ -953,7 +953,7 @@ mod gpu_surface {
     //!
     //! CPU access on lock goes through a Vulkan DMA-BUF import
     //! (`VkImportMemoryFdInfoKHR` + `vkBindBufferMemory` + `vkMapMemory`) —
-    //! same shape as the host's `VulkanPixelBuffer::from_dma_buf_fd` so both
+    //! same shape as the host's `HostVulkanPixelBuffer::from_dma_buf_fd` so both
     //! ends speak the canonical driver-supported path. The import-side only —
     //! allocation always escalates to the host per the research doc.
     use std::ffi::c_void;
@@ -978,7 +978,7 @@ mod gpu_surface {
         pub fds: Vec<RawFd>,
         /// Optional OPAQUE_FD timeline-semaphore handle the host attached
         /// when registering the surface (#531). Routed into the Vulkan
-        /// adapter's `VulkanTimelineSemaphore::from_imported_opaque_fd` so
+        /// adapter's `HostVulkanTimelineSemaphore::from_imported_opaque_fd` so
         /// the subprocess reuses the host adapter's timeline-wait + signal
         /// path. `None` for surfaces without explicit Vulkan sync (OpenGL
         /// adapter, CPU-readback, legacy DMA-BUF consumer flows). The fd is
@@ -2140,7 +2140,7 @@ mod surface_share_vulkan_linux {
 
         /// Import a DMA-BUF fd as a `HOST_VISIBLE | HOST_COHERENT` buffer,
         /// persistently mapped. Mirrors the host's
-        /// `VulkanPixelBuffer::from_dma_buf_fd` shape.
+        /// `HostVulkanPixelBuffer::from_dma_buf_fd` shape.
         ///
         /// On success, Vulkan takes ownership of `fd` — the caller must
         /// **not** `close(fd)`. On error, the caller retains ownership.
@@ -3298,7 +3298,7 @@ mod opengl {
 //
 // Subprocess-side runtime for the Vulkan-native surface adapter. Reuses the
 // host adapter crate's `VulkanSurfaceAdapter` against a subprocess-local
-// `VulkanDevice` from the RHI: same timeline-wait, same layout-transition,
+// `HostVulkanDevice` from the RHI: same timeline-wait, same layout-transition,
 // same per-surface state machine. The cdylib never re-implements layout
 // transitions, command-pool lifetimes, fence handling, or queue-mutex
 // coordination — every line of that lives in `streamlib-adapter-vulkan`.
@@ -3317,7 +3317,7 @@ mod vulkan {
     use std::sync::{Arc, Mutex};
 
     use streamlib::adapter_support::{
-        VulkanDevice, VulkanTexture, VulkanTimelineSemaphore,
+        HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
     };
     use streamlib::core::rhi::TextureFormat;
     use streamlib_adapter_abi::{
@@ -3334,7 +3334,7 @@ mod vulkan {
     /// Process-scoped Vulkan adapter runtime. One `VkDevice` + one
     /// `VulkanSurfaceAdapter` per subprocess; held for the cdylib's life.
     pub struct VulkanRuntimeHandle {
-        device: Arc<VulkanDevice>,
+        device: Arc<HostVulkanDevice>,
         adapter: Arc<VulkanSurfaceAdapter>,
         /// Per-surface book-keeping. The actual texture + timeline are
         /// owned by the adapter (transferred into `HostSurfaceRegistration`);
@@ -3346,7 +3346,7 @@ mod vulkan {
 
     struct RegisteredSurface {
         /// Cached `vk::Image` handle. The adapter owns the underlying
-        /// `VulkanTexture` (and therefore the `VkImage` lifetime); we
+        /// `HostVulkanTexture` (and therefore the `VkImage` lifetime); we
         /// just snapshot the handle for fast lookup. Valid until
         /// `unregister_host_surface` drops the adapter's record.
         vk_image: vk::Image,
@@ -3375,16 +3375,16 @@ mod vulkan {
         pub api_version: u32,
     }
 
-    /// Bring up `VulkanDevice` + `VulkanSurfaceAdapter`. Returns NULL on
+    /// Bring up `HostVulkanDevice` + `VulkanSurfaceAdapter`. Returns NULL on
     /// failure (typically because the driver doesn't support the required
     /// DMA-BUF / external-semaphore extensions).
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_vulkan_runtime_new() -> *mut VulkanRuntimeHandle {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 tracing::error!(
-                    "slpn_vulkan_runtime_new: VulkanDevice::new failed: {}",
+                    "slpn_vulkan_runtime_new: HostVulkanDevice::new failed: {}",
                     e
                 );
                 return std::ptr::null_mut();
@@ -3480,7 +3480,7 @@ mod vulkan {
         // `import_render_target_dma_buf` `dup`s every FD internally — the
         // SurfaceHandle keeps its originals so callers can re-import for
         // a second adapter (e.g. CPU-readback alongside Vulkan).
-        let texture = match VulkanTexture::import_render_target_dma_buf(
+        let texture = match HostVulkanTexture::import_render_target_dma_buf(
             &rt.device,
             &gpu.fds,
             &gpu.plane_offsets,
@@ -3501,7 +3501,7 @@ mod vulkan {
             }
         };
         // Snapshot the `vk::Image` handle BEFORE transferring `texture`
-        // into the registration. `VulkanTexture::clone` is a hollow
+        // into the registration. `HostVulkanTexture::clone` is a hollow
         // metadata-only clone (`image: None`) by design, so we cannot
         // duplicate the texture itself; only the underlying VkImage
         // handle survives across the move.
@@ -3523,14 +3523,14 @@ mod vulkan {
                 tracing::error!(
                     "slpn_vulkan_register_surface: surface '{}' has no sync_fd — \
                      the host must register the texture with an exportable \
-                     `VulkanTimelineSemaphore` (see SurfaceStore::register_texture's \
+                     `HostVulkanTimelineSemaphore` (see SurfaceStore::register_texture's \
                      `timeline` argument).",
                     surface_id
                 );
                 return -1;
             }
         };
-        let timeline = match VulkanTimelineSemaphore::from_imported_opaque_fd(
+        let timeline = match HostVulkanTimelineSemaphore::from_imported_opaque_fd(
             rt.device.device(),
             raw_sync_fd,
         ) {
@@ -3887,12 +3887,12 @@ mod vulkan_compute_dispatch {
 
     use std::sync::Arc;
 
-    use streamlib::adapter_support::VulkanDevice;
+    use streamlib::adapter_support::HostVulkanDevice;
     use vulkanalia::prelude::v1_4::*;
     use vulkanalia::vk;
 
     pub fn dispatch_storage_image_compute(
-        device: &Arc<VulkanDevice>,
+        device: &Arc<HostVulkanDevice>,
         image: vk::Image,
         spv: &[u8],
         push_constants: &[u8],

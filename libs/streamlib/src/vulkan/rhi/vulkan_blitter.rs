@@ -10,11 +10,11 @@ use crate::core::rhi::blitter::RhiBlitter;
 use crate::core::rhi::RhiPixelBuffer;
 use crate::core::{Result, StreamError};
 
-use super::VulkanDevice;
+use super::HostVulkanDevice;
 
 /// Vulkan implementation of [`RhiBlitter`] for GPU copy operations on Linux.
 pub struct VulkanBlitter {
-    vulkan_device: Arc<VulkanDevice>,
+    vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
     #[allow(dead_code)]
@@ -24,7 +24,7 @@ pub struct VulkanBlitter {
 
 impl VulkanBlitter {
     /// Create a new Vulkan blitter with a dedicated command pool.
-    pub fn new(vulkan_device: &Arc<VulkanDevice>, queue: vk::Queue, queue_family_index: u32) -> Result<Self> {
+    pub fn new(vulkan_device: &Arc<HostVulkanDevice>, queue: vk::Queue, queue_family_index: u32) -> Result<Self> {
         let device = vulkan_device.device();
         let pool_info = vk::CommandPoolCreateInfo::builder()
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
@@ -187,15 +187,15 @@ unsafe impl Sync for VulkanBlitter {}
 mod tests {
     use super::*;
     use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
-    use crate::vulkan::rhi::{VulkanDevice, VulkanPixelBuffer};
+    use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanPixelBuffer};
     use std::sync::Arc;
 
     fn make_rhi_buffer(
-        device: &Arc<VulkanDevice>,
+        device: &Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
     ) -> RhiPixelBuffer {
-        let buf = VulkanPixelBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanPixelBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
             .expect("pixel buffer allocation failed");
         RhiPixelBuffer::new(RhiPixelBufferRef {
             inner: Arc::new(buf),
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_blit_copy_between_equal_size_buffers() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn test_blit_copy_rejects_mismatched_buffer_sizes() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");

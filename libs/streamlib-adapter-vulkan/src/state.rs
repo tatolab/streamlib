@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use streamlib::adapter_support::VulkanTimelineSemaphore;
+use streamlib::adapter_support::HostVulkanTimelineSemaphore;
 use streamlib::core::rhi::StreamTexture;
 use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
 use vulkanalia::vk;
@@ -43,11 +43,11 @@ impl VulkanLayout {
 /// The host is responsible for allocating the texture (via
 /// `GpuContext::acquire_render_target_dma_buf_image` or equivalent) and
 /// creating an exportable timeline semaphore (via
-/// [`VulkanTimelineSemaphore::new_exportable`]). The adapter then takes
+/// [`HostVulkanTimelineSemaphore::new_exportable`]). The adapter then takes
 /// joint ownership and exposes scoped acquire/release for consumers.
 pub struct HostSurfaceRegistration {
     pub texture: StreamTexture,
-    pub timeline: Arc<VulkanTimelineSemaphore>,
+    pub timeline: Arc<HostVulkanTimelineSemaphore>,
     /// Initial layout the host left the image in after allocation. The
     /// first `acquire_*` will transition from here. For freshly-allocated
     /// images this is typically [`VulkanLayout::UNDEFINED`].
@@ -65,7 +65,7 @@ pub(crate) struct SurfaceState {
     #[allow(dead_code)] // kept for tracing / debug output, not read in hot paths
     pub(crate) surface_id: SurfaceId,
     pub(crate) texture: StreamTexture,
-    pub(crate) timeline: Arc<VulkanTimelineSemaphore>,
+    pub(crate) timeline: Arc<HostVulkanTimelineSemaphore>,
     pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,

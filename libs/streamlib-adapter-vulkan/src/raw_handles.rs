@@ -9,7 +9,7 @@
 //! resistance and handles sync + layout transitions; this is the "you
 //! own the footguns from here" surface.
 
-use streamlib::adapter_support::VulkanDevice;
+use streamlib::adapter_support::HostVulkanDevice;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -41,13 +41,13 @@ pub struct RawVulkanHandles {
     pub api_version: u32,
 }
 
-/// Snapshot the underlying `VulkanDevice`'s raw handles.
+/// Snapshot the underlying `HostVulkanDevice`'s raw handles.
 ///
 /// The handles are valid for the lifetime of the device; the customer
 /// MUST NOT outlive the runtime that owns it. There is intentionally
 /// no destructor or refcount handed back — this is the documented
 /// power-user surface that says *"you own the consequences"*.
-pub fn raw_handles(device: &VulkanDevice) -> RawVulkanHandles {
+pub fn raw_handles(device: &HostVulkanDevice) -> RawVulkanHandles {
     RawVulkanHandles {
         vk_instance: device.instance().handle().as_raw() as u64,
         vk_physical_device: device.physical_device().as_raw() as u64,

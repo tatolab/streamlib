@@ -731,7 +731,7 @@ where
     let mut registered_ids: Vec<String> = Vec::with_capacity(acquired.planes.len());
 
     for plane in &acquired.planes {
-        // Wrap the staging VulkanPixelBuffer in an RhiPixelBuffer so
+        // Wrap the staging HostVulkanPixelBuffer in an RhiPixelBuffer so
         // surface-share's check_in (which exports per-plane DMA-BUF FDs)
         // can register it. The Arc keeps the staging buffer alive for
         // the lifetime of the surface-share entry.

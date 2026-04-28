@@ -186,7 +186,7 @@ unsafe impl Sync for VulkanFence {}
 /// file descriptor to a subprocess, which imports it via
 /// [`Self::from_imported_opaque_fd`] into its own `VkDevice`. The two
 /// processes then signal/wait the same timeline.
-pub struct VulkanTimelineSemaphore {
+pub struct HostVulkanTimelineSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,
     /// Whether the semaphore was created with VK_KHR_external_semaphore_fd
@@ -195,7 +195,7 @@ pub struct VulkanTimelineSemaphore {
 }
 
 #[cfg(target_os = "linux")]
-impl VulkanTimelineSemaphore {
+impl HostVulkanTimelineSemaphore {
     /// Create an in-process timeline semaphore (no export).
     ///
     /// Pair with [`Self::wait`] / [`Self::signal_host`] / [`Self::signal_on_queue`]
@@ -315,7 +315,7 @@ impl VulkanTimelineSemaphore {
     pub fn export_opaque_fd(&self) -> Result<std::os::unix::io::RawFd> {
         if !self.exportable {
             return Err(StreamError::GpuError(
-                "VulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
+                "HostVulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
             ));
         }
         let info = vk::SemaphoreGetFdInfoKHR::builder()
@@ -387,25 +387,25 @@ impl VulkanTimelineSemaphore {
 }
 
 #[cfg(target_os = "linux")]
-impl Drop for VulkanTimelineSemaphore {
+impl Drop for HostVulkanTimelineSemaphore {
     fn drop(&mut self) {
         unsafe { self.device.destroy_semaphore(self.semaphore, None) };
     }
 }
 
 #[cfg(target_os = "linux")]
-unsafe impl Send for VulkanTimelineSemaphore {}
+unsafe impl Send for HostVulkanTimelineSemaphore {}
 #[cfg(target_os = "linux")]
-unsafe impl Sync for VulkanTimelineSemaphore {}
+unsafe impl Sync for HostVulkanTimelineSemaphore {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vulkan::rhi::VulkanDevice;
+    use crate::vulkan::rhi::HostVulkanDevice;
 
     #[test]
     fn test_semaphore_creation() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => d,
             Err(_) => {
                 println!("Skipping test - Vulkan not available");
@@ -421,14 +421,14 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn timeline_semaphore_host_signal_advances_counter() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => d,
             Err(_) => {
                 println!("Skipping test - Vulkan not available");
                 return;
             }
         };
-        let sem = VulkanTimelineSemaphore::new(device.device(), 0)
+        let sem = HostVulkanTimelineSemaphore::new(device.device(), 0)
             .expect("create timeline semaphore");
         assert_eq!(sem.current_value().unwrap(), 0);
         sem.signal_host(7).expect("host signal");
@@ -444,14 +444,14 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn timeline_semaphore_exports_valid_opaque_fd() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => d,
             Err(_) => {
                 println!("Skipping test - Vulkan not available");
                 return;
             }
         };
-        let sem = match VulkanTimelineSemaphore::new_exportable(device.device(), 0) {
+        let sem = match HostVulkanTimelineSemaphore::new_exportable(device.device(), 0) {
             Ok(s) => s,
             Err(_) => {
                 println!("Skipping — VK_KHR_external_semaphore_fd unavailable on this driver");
@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn test_fence_creation() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => d,
             Err(_) => {
                 println!("Skipping test - Vulkan not available");

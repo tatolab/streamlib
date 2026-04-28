@@ -25,13 +25,13 @@ mod consumer_vulkan_texture;
 pub use device_capability::{ConsumerMarker, DevicePrivilege, HostMarker, VulkanRhiDevice};
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
-pub use vulkan_device::VulkanDevice;
+pub use vulkan_device::HostVulkanDevice;
 #[allow(unused_imports)]
 pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 #[cfg(target_os = "linux")]
 #[allow(unused_imports)]
-pub use vulkan_sync::VulkanTimelineSemaphore;
-pub use vulkan_texture::VulkanTexture;
+pub use vulkan_sync::HostVulkanTimelineSemaphore;
+pub use vulkan_texture::HostVulkanTexture;
 
 #[cfg(target_os = "linux")]
 pub use consumer_vulkan_device::ConsumerVulkanDevice;
@@ -46,7 +46,7 @@ mod vulkan_blitter;
 pub use vulkan_blitter::VulkanBlitter;
 
 pub(crate) mod vulkan_pixel_buffer;
-pub use vulkan_pixel_buffer::VulkanPixelBuffer;
+pub use vulkan_pixel_buffer::HostVulkanPixelBuffer;
 
 mod vulkan_texture_cache;
 pub use vulkan_texture_cache::VulkanTextureCache;
