@@ -1065,7 +1065,7 @@ impl SurfaceStore {
     /// exported as an OPAQUE_FD and shipped alongside the DMA-BUF FD. The
     /// surface-share service stores the FD; subprocess Vulkan adapters
     /// `check_out` it via [`streamlib_adapter_vulkan::VulkanSurfaceAdapter`]
-    /// and import it through `VulkanTimelineSemaphore::from_imported_opaque_fd`,
+    /// and import it through `HostVulkanTimelineSemaphore::from_imported_opaque_fd`,
     /// reusing the host adapter's timeline-wait + signal path (#531). `None`
     /// for adapters that don't need explicit Vulkan sync (OpenGL — its
     /// `glFinish` + DMA-BUF kernel-fence semantics carry visibility).
@@ -1074,7 +1074,7 @@ impl SurfaceStore {
         &self,
         surface_id: &str,
         texture: &crate::core::rhi::StreamTexture,
-        timeline: Option<&crate::vulkan::rhi::VulkanTimelineSemaphore>,
+        timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) -> Result<()> {
         // Export the DMA-BUF fd from the texture
         let fd = texture.inner.export_dma_buf_fd()?;
@@ -1321,11 +1321,11 @@ impl SurfaceStore {
                 .get()
                 .ok_or_else(|| {
                     StreamError::NotSupported(
-                        "lookup_texture: VulkanDevice not initialized for import".into(),
+                        "lookup_texture: HostVulkanDevice not initialized for import".into(),
                     )
                 })?;
 
-        let vulkan_texture = crate::vulkan::rhi::VulkanTexture::from_dma_buf_fd(
+        let vulkan_texture = crate::vulkan::rhi::HostVulkanTexture::from_dma_buf_fd(
             vulkan_device,
             dma_buf_fd,
             width,

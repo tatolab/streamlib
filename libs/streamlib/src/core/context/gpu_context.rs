@@ -801,9 +801,9 @@ impl GpuContext {
     /// tiled-modifier VMA pool.
     ///
     /// The driver picks one of the EGL-advertised render-target modifiers
-    /// from [`VulkanDevice::drm_modifier_table`]. The resulting
+    /// from [`HostVulkanDevice::drm_modifier_table`]. The resulting
     /// `StreamTexture` carries the chosen modifier on its inner
-    /// [`VulkanTexture`] (see [`VulkanTexture::chosen_drm_format_modifier`]),
+    /// [`HostVulkanTexture`] (see [`HostVulkanTexture::chosen_drm_format_modifier`]),
     /// ready to be carried in a `SurfaceTransportHandle` when the host
     /// surface-share service registers the surface.
     ///
@@ -877,7 +877,7 @@ impl GpuContext {
                 // streamlib runs on.
                 | TextureUsages::STORAGE_BINDING,
         );
-        let texture = crate::vulkan::rhi::VulkanTexture::new_render_target_dma_buf(
+        let texture = crate::vulkan::rhi::HostVulkanTexture::new_render_target_dma_buf(
             vulkan_device,
             &desc,
             &modifiers,

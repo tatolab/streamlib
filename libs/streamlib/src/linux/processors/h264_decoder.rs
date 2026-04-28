@@ -4,7 +4,7 @@
 // H.264 Decoder Processor
 //
 // Thin wrapper around vulkan_video::SimpleDecoder using the shared RHI
-// VulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
+// HostVulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
 
 use crate::_generated_::{Encodedvideoframe, Videoframe};
 use crate::core::context::GpuContextLimitedAccess;

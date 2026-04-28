@@ -5,7 +5,7 @@
 //! using the `from_device()` constructors with a shared Vulkan device.
 //!
 //! This test creates its own Vulkan instance, device, and VMA allocator
-//! (mirroring what streamlib's VulkanDevice would provide), then exercises
+//! (mirroring what streamlib's HostVulkanDevice would provide), then exercises
 //! the `SimpleEncoder::from_device()` and `SimpleDecoder::from_device()`
 //! paths to confirm the shared-device integration works end-to-end.
 //!

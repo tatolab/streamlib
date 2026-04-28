@@ -27,7 +27,7 @@ use crate::core::rhi::{
 };
 use crate::core::{Result, StreamError};
 
-use super::VulkanDevice;
+use super::HostVulkanDevice;
 
 /// One compute kernel: shader pipeline + descriptor set + per-dispatch primitives.
 ///
@@ -38,7 +38,7 @@ use super::VulkanDevice;
 /// this abstraction targets.
 pub struct VulkanComputeKernel {
     label: String,
-    vulkan_device: Arc<VulkanDevice>,
+    vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
     bindings: Vec<ComputeBindingSpec>,
@@ -85,7 +85,7 @@ impl VulkanComputeKernel {
     /// `bindings` match the shader's descriptor types, and rejects any mismatch
     /// before allocating Vulkan objects.
     pub fn new(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &ComputeKernelDescriptor<'_>,
     ) -> Result<Self> {
         let queue = vulkan_device.queue();
@@ -920,10 +920,10 @@ fn vk_image_view_for(texture: &StreamTexture) -> Result<vk::ImageView> {
 mod tests {
     use super::*;
     use crate::core::rhi::PixelFormat;
-    use crate::vulkan::rhi::VulkanPixelBuffer;
+    use crate::vulkan::rhi::HostVulkanPixelBuffer;
 
-    fn try_vulkan_device() -> Option<Arc<VulkanDevice>> {
-        match VulkanDevice::new() {
+    fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
+        match HostVulkanDevice::new() {
             Ok(d) => Some(Arc::new(d)),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -935,10 +935,10 @@ mod tests {
     /// Allocate a HOST_VISIBLE storage buffer of `element_count * 4` bytes
     /// usable as both an input and output of the test_blend kernel.
     fn make_storage_buffer(
-        device: &Arc<VulkanDevice>,
+        device: &Arc<HostVulkanDevice>,
         element_count: u32,
     ) -> RhiPixelBuffer {
-        let vk_buf = VulkanPixelBuffer::new(device, element_count, 1, 4, PixelFormat::Bgra32)
+        let vk_buf = HostVulkanPixelBuffer::new(device, element_count, 1, 4, PixelFormat::Bgra32)
             .expect("Failed to create storage buffer");
         let ref_ = crate::core::rhi::RhiPixelBufferRef {
             inner: Arc::new(vk_buf),
@@ -982,7 +982,7 @@ mod tests {
     }
 
     fn run_blend_kernel_for(
-        device: &Arc<VulkanDevice>,
+        device: &Arc<HostVulkanDevice>,
         input_count: u32,
         element_count: u32,
     ) -> (Vec<RhiPixelBuffer>, RhiPixelBuffer) {

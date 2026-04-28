@@ -11,19 +11,19 @@ use vma::Alloc as _;
 use crate::core::rhi::PixelFormat;
 use crate::core::{Result, StreamError};
 
-use super::VulkanDevice;
+use super::HostVulkanDevice;
 
-/// Process-global VulkanDevice reference for DMA-BUF import.
+/// Process-global HostVulkanDevice reference for DMA-BUF import.
 ///
 /// Set once during [`GpuDevice::new()`] on Linux. The import trait
 /// (`RhiPixelBufferImport::from_external_handle`) is a static method with no
 /// device parameter, so this global bridges that gap.
 #[cfg(target_os = "linux")]
-pub(crate) static VULKAN_DEVICE_FOR_IMPORT: std::sync::OnceLock<Arc<VulkanDevice>> =
+pub(crate) static VULKAN_DEVICE_FOR_IMPORT: std::sync::OnceLock<Arc<HostVulkanDevice>> =
     std::sync::OnceLock::new();
 
 /// One extra plane of a multi-plane DMA-BUF import (planes 1..N on the
-/// Linux side). Plane 0 lives in [`VulkanPixelBuffer::buffer`] /
+/// Linux side). Plane 0 lives in [`HostVulkanPixelBuffer::buffer`] /
 /// `imported_memory` / `mapped_ptr` for back-compat with the
 /// single-plane accessors; additional planes are stored here so an
 /// exported multi-plane format (e.g. NV12 with disjoint Y and UV
@@ -37,9 +37,9 @@ struct VulkanImportedPlane {
 }
 
 /// CPU-visible staging buffer for pixel data upload/readback.
-pub struct VulkanPixelBuffer {
-    /// VulkanDevice reference for tracked allocation/free through the RHI.
-    vulkan_device: Arc<VulkanDevice>,
+pub struct HostVulkanPixelBuffer {
+    /// HostVulkanDevice reference for tracked allocation/free through the RHI.
+    vulkan_device: Arc<HostVulkanDevice>,
     buffer: vk::Buffer,
     /// VMA allocation (HOST_VISIBLE | DEDICATED_MEMORY for DMA-BUF export).
     allocation: Option<vma::Allocation>,
@@ -62,7 +62,7 @@ pub struct VulkanPixelBuffer {
     size: vk::DeviceSize,
 }
 
-impl VulkanPixelBuffer {
+impl HostVulkanPixelBuffer {
     /// Create a new DMA-BUF exportable CPU-visible staging buffer via the
     /// device's dedicated VMA export pool.
     ///
@@ -70,7 +70,7 @@ impl VulkanPixelBuffer {
     /// avoiding NVIDIA driver failures where global export configuration causes
     /// OOM after swapchain creation.
     pub fn new(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
         bytes_per_pixel: u32,
@@ -247,7 +247,7 @@ impl VulkanPixelBuffer {
 }
 
 #[cfg(target_os = "linux")]
-impl VulkanPixelBuffer {
+impl HostVulkanPixelBuffer {
     /// Export the buffer's memory as a DMA-BUF file descriptor.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         // Determine which DeviceMemory to export from
@@ -281,7 +281,7 @@ impl VulkanPixelBuffer {
     /// existing single-plane callers — new code should prefer the
     /// multi-plane signature even when there is only one plane.
     pub fn from_dma_buf_fd(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         fd: std::os::unix::io::RawFd,
         width: u32,
         height: u32,
@@ -311,7 +311,7 @@ impl VulkanPixelBuffer {
     /// caller retains ownership of the fds — each fd is consumed by
     /// `vkAllocateMemory` only on success.
     pub fn from_dma_buf_fds(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
         plane_sizes: &[vk::DeviceSize],
         width: u32,
@@ -396,10 +396,10 @@ impl VulkanPixelBuffer {
 }
 
 /// Create one `VkBuffer` + bind one imported `VkDeviceMemory` + map it.
-/// Used by [`VulkanPixelBuffer::from_dma_buf_fds`] once per plane.
+/// Used by [`HostVulkanPixelBuffer::from_dma_buf_fds`] once per plane.
 #[cfg(target_os = "linux")]
 fn import_single_plane(
-    vulkan_device: &Arc<VulkanDevice>,
+    vulkan_device: &Arc<HostVulkanDevice>,
     fd: std::os::unix::io::RawFd,
     effective_size: vk::DeviceSize,
 ) -> Result<VulkanImportedPlane> {
@@ -461,10 +461,10 @@ fn import_single_plane(
     })
 }
 
-/// Partial-unwind helper for [`VulkanPixelBuffer::from_dma_buf_fds`] —
+/// Partial-unwind helper for [`HostVulkanPixelBuffer::from_dma_buf_fds`] —
 /// tears down one already-imported plane when a later plane fails.
 #[cfg(target_os = "linux")]
-fn teardown_imported_plane(vulkan_device: &Arc<VulkanDevice>, plane: VulkanImportedPlane) {
+fn teardown_imported_plane(vulkan_device: &Arc<HostVulkanDevice>, plane: VulkanImportedPlane) {
     unsafe {
         vulkan_device.device().destroy_buffer(plane.buffer, None);
     }
@@ -472,7 +472,7 @@ fn teardown_imported_plane(vulkan_device: &Arc<VulkanDevice>, plane: VulkanImpor
     vulkan_device.free_imported_memory(plane.memory);
 }
 
-impl Drop for VulkanPixelBuffer {
+impl Drop for HostVulkanPixelBuffer {
     fn drop(&mut self) {
         #[cfg(target_os = "linux")]
         if self.imported_from_dma_buf {
@@ -498,8 +498,8 @@ impl Drop for VulkanPixelBuffer {
 }
 
 // Safety: Vulkan handles are thread-safe
-unsafe impl Send for VulkanPixelBuffer {}
-unsafe impl Sync for VulkanPixelBuffer {}
+unsafe impl Send for HostVulkanPixelBuffer {}
+unsafe impl Sync for HostVulkanPixelBuffer {}
 
 #[cfg(test)]
 mod tests {
@@ -507,7 +507,7 @@ mod tests {
 
     #[test]
     fn test_pool_buffer_creation_1920x1080_bgra32() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -515,7 +515,7 @@ mod tests {
             }
         };
 
-        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
             .expect("buffer creation failed");
 
         assert_eq!(buf.width(), 1920);
@@ -536,7 +536,7 @@ mod tests {
 
     #[test]
     fn test_buffer_write_and_readback() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -544,7 +544,7 @@ mod tests {
             }
         };
 
-        let buf = VulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
             .expect("buffer creation failed");
 
         let size = buf.size() as usize;
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_dma_buf_export() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -582,7 +582,7 @@ mod tests {
             }
         };
 
-        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
             .expect("buffer creation failed");
 
         let fd = buf.export_dma_buf_fd().expect("DMA-BUF export failed");
@@ -595,7 +595,7 @@ mod tests {
 
     #[test]
     fn test_multiple_buffers_coexist() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -603,13 +603,13 @@ mod tests {
             }
         };
 
-        let b0 = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b0 = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
             .expect("buffer 0 failed");
-        let b1 = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b1 = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
             .expect("buffer 1 failed");
-        let b2 = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b2 = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
             .expect("buffer 2 failed");
-        let b3 = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b3 = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
             .expect("buffer 3 failed");
 
         assert_ne!(b0.buffer(), vk::Buffer::null());
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn test_drop_frees_without_panic() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -637,7 +637,7 @@ mod tests {
             }
         };
 
-        let buf = VulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
             .expect("buffer creation failed");
         drop(buf);
 
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn test_dma_buf_import_round_trip() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -658,7 +658,7 @@ mod tests {
         let width = 64u32;
         let height = 64u32;
         let bpp = 4u32;
-        let src = VulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
+        let src = HostVulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
             .expect("source buffer creation failed");
 
         let size = src.size() as usize;
@@ -674,7 +674,7 @@ mod tests {
         assert!(fd >= 0);
 
         // Import into a new buffer from the DMA-BUF fd
-        let imported = VulkanPixelBuffer::from_dma_buf_fd(
+        let imported = HostVulkanPixelBuffer::from_dma_buf_fd(
             &device,
             fd,
             width,
@@ -705,12 +705,12 @@ mod tests {
 
     /// Multi-plane `from_dma_buf_fds` round-trip: import two independently
     /// allocated + pattern-written DMA-BUFs as the two planes of a single
-    /// `VulkanPixelBuffer`, confirm `plane_count()` reports 2, and each
+    /// `HostVulkanPixelBuffer`, confirm `plane_count()` reports 2, and each
     /// plane's bytes survive intact. Mirrors the symmetry the polyglot
     /// Python and Deno shims provide via `*_gpu_surface_plane_{count,size,mmap,base_address}`.
     #[test]
     fn test_dma_buf_import_multi_plane_round_trip() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -726,9 +726,9 @@ mod tests {
         // Two independent source buffers, each seeded with a distinct
         // byte pattern so a cross-plane swap would be visible in the
         // readback.
-        let src0 = VulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
+        let src0 = HostVulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
             .expect("source plane 0 creation failed");
-        let src1 = VulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
+        let src1 = HostVulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
             .expect("source plane 1 creation failed");
         let pattern0: [u8; 4] = [0xA0, 0xA1, 0xA2, 0xA3];
         let pattern1: [u8; 4] = [0xB0, 0xB1, 0xB2, 0xB3];
@@ -743,7 +743,7 @@ mod tests {
         let fd1 = src1.export_dma_buf_fd().expect("plane 1 export failed");
 
         // Import both as planes of a single pixel buffer.
-        let imported = VulkanPixelBuffer::from_dma_buf_fds(
+        let imported = HostVulkanPixelBuffer::from_dma_buf_fds(
             &device,
             &[fd0, fd1],
             &[plane_size, plane_size],
@@ -801,7 +801,7 @@ mod tests {
     /// enforce on sends/receives.
     #[test]
     fn test_dma_buf_import_rejects_oversize_plane_vec() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -818,7 +818,7 @@ mod tests {
                 .collect();
         let sizes: Vec<vk::DeviceSize> = vec![1024; fds.len()];
 
-        let result = VulkanPixelBuffer::from_dma_buf_fds(
+        let result = HostVulkanPixelBuffer::from_dma_buf_fds(
             &device,
             &fds,
             &sizes,

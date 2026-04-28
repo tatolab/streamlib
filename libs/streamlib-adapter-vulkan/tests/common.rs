@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 
-use streamlib::adapter_support::VulkanTimelineSemaphore;
+use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::{StreamTexture, TextureFormat};
 use streamlib_adapter_abi::{
@@ -33,8 +33,8 @@ pub fn try_init_gpu() -> Option<GpuContext> {
 
 pub struct HostFixture {
     pub gpu: GpuContext,
-    pub adapter: Arc<VulkanSurfaceAdapter>,
-    pub ctx: VulkanContext,
+    pub adapter: Arc<VulkanSurfaceAdapter<HostVulkanDevice>>,
+    pub ctx: VulkanContext<HostVulkanDevice>,
 }
 
 impl HostFixture {
@@ -58,14 +58,14 @@ impl HostFixture {
             .acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)
             .expect("acquire_render_target_dma_buf_image");
         let timeline = Arc::new(
-            VulkanTimelineSemaphore::new_exportable(self.adapter.device().device(), 0)
+            HostVulkanTimelineSemaphore::new_exportable(self.adapter.device().device(), 0)
                 .expect("exportable timeline"),
         );
         self.adapter
             .register_host_surface(
                 surface_id,
                 HostSurfaceRegistration {
-                    texture: texture.clone(),
+                    texture: texture.vulkan_inner().clone(),
                     timeline: Arc::clone(&timeline),
                     initial_layout: VulkanLayout::UNDEFINED,
                 },
@@ -93,7 +93,7 @@ impl HostFixture {
 pub struct RegisteredSurface {
     pub descriptor: StreamlibSurface,
     pub texture: StreamTexture,
-    pub timeline: Arc<VulkanTimelineSemaphore>,
+    pub timeline: Arc<HostVulkanTimelineSemaphore>,
     pub width: u32,
     pub height: u32,
 }

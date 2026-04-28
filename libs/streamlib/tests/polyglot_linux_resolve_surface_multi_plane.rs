@@ -14,7 +14,7 @@
 //! DMA-BUFs — the shim only `mmap`s them, never Vulkan-imports, so
 //! SCM_RIGHTS + `mmap(MAP_SHARED)` is enough.
 //!
-//! The Rust-side test goes through `VulkanPixelBuffer::from_dma_buf_fds`
+//! The Rust-side test goes through `HostVulkanPixelBuffer::from_dma_buf_fds`
 //! via `SurfaceStore::check_out`, which *does* Vulkan-import each plane.
 //! NVIDIA's driver rejects memfds as DMA_BUF_EXT handles, so the Rust
 //! case uses `TestDmaBufProducer` to mint two real Vulkan-exported
@@ -296,7 +296,7 @@ fn rust_surface_store_resolve_surface_multi_plane() {
     use streamlib::core::context::GpuContext;
     use streamlib::core::context::SurfaceStore;
 
-    // Initialize the process-global `VulkanDevice` — `SurfaceStore::check_out`
+    // Initialize the process-global `HostVulkanDevice` — `SurfaceStore::check_out`
     // needs it for DMA-BUF import. `GpuContext::init_for_platform` wires up
     // the global; duplicate calls across tests are accepted via
     // `OnceLock::get_or_init`.

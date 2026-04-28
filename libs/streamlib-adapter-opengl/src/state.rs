@@ -15,7 +15,7 @@ type EglImage = egl::Image;
 /// [`crate::OpenGlSurfaceAdapter::register_host_surface`].
 ///
 /// `dma_buf_fd` is the FD exported from a host-allocated `VkImage`
-/// (via `streamlib`'s `VulkanTexture::export_dma_buf_fd`). The adapter
+/// (via `streamlib`'s `HostVulkanTexture::export_dma_buf_fd`). The adapter
 /// dups it during EGL import; the caller may close their copy after
 /// `register_host_surface` returns.
 ///

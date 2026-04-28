@@ -171,15 +171,27 @@ pub mod linux_surface_share {
 }
 
 /// RHI types that in-tree surface adapters (`streamlib-adapter-vulkan`,
-/// `-opengl`, `-skia`, `-cpu-readback`) need to reach. NOT a general
-/// public surface — every entry here is load-bearing for the adapter
-/// architecture. The Vulkan boundary rule from `CLAUDE.md` still holds:
-/// nothing outside an adapter or `vulkan/rhi/` may import from this
-/// module.
+/// `-opengl`, `-skia`, `-cpu-readback`) and the polyglot cdylibs need
+/// to reach. NOT a general public surface — every entry here is
+/// load-bearing for the adapter architecture. The Vulkan boundary rule
+/// from `CLAUDE.md` still holds: nothing outside an adapter or
+/// `vulkan/rhi/` may import from this module.
+///
+/// Both the `Host*` and `Consumer*` flavors are surfaced here so
+/// adapter crates can be generic over `D: VulkanRhiDevice`. The
+/// follow-up `streamlib-consumer-rhi` crate will pull the `Consumer*`
+/// half into a dep that cdylibs can take *without* the rest of
+/// `streamlib`, type-system-enforcing the FullAccess capability
+/// boundary; until then this transitional re-export keeps the
+/// workspace compiling.
 #[cfg(target_os = "linux")]
 pub mod adapter_support {
     pub use crate::vulkan::rhi::{
-        VulkanDevice, VulkanPixelBuffer, VulkanTexture, VulkanTimelineSemaphore,
+        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer,
+        ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, DevicePrivilege, HostMarker,
+        HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTexture,
+        HostVulkanTimelineSemaphore, VulkanRhiDevice, VulkanTextureLike,
+        VulkanTimelineSemaphoreLike,
     };
 }
 

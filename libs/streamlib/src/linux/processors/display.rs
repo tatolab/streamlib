@@ -243,7 +243,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
                 }
 
-                // Camera textures are owned by the texture_cache / VulkanTexture Drop.
+                // Camera textures are owned by the texture_cache / HostVulkanTexture Drop.
 
                 // Clean up swapchain resources before exiting
                 if let Some(state) = app.swapchain_state.take() {
@@ -366,7 +366,7 @@ struct PersistentPipelineState {
 #[allow(dead_code)]
 struct DisplayEventLoopHandler {
     window: Option<Window>,
-    vulkan_device: Arc<crate::vulkan::rhi::VulkanDevice>,
+    vulkan_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
     gpu_context: GpuContextLimitedAccess,
     inputs: crate::iceoryx2::InputMailboxes,
     running: Arc<AtomicBool>,
@@ -1104,7 +1104,7 @@ fn crc32(kind: &[u8; 4], data: &[u8]) -> u32 {
 // ---------------------------------------------------------------------------
 
 fn create_swapchain_state(
-    vulkan_device: &crate::vulkan::rhi::VulkanDevice,
+    vulkan_device: &crate::vulkan::rhi::HostVulkanDevice,
     window: &Window,
     width: u32,
     height: u32,
@@ -1549,7 +1549,7 @@ fn create_swapchain_state(
 }
 
 fn recreate_swapchain(
-    vulkan_device: &crate::vulkan::rhi::VulkanDevice,
+    vulkan_device: &crate::vulkan::rhi::HostVulkanDevice,
     _window: &Window,
     old_state: &SwapchainState,
     width: u32,
@@ -1732,7 +1732,7 @@ fn recreate_swapchain(
 
 /// Destroy swapchain-related resources only (not the surface or persistent pipeline objects).
 fn destroy_swapchain_resources_only(
-    vulkan_device: &crate::vulkan::rhi::VulkanDevice,
+    vulkan_device: &crate::vulkan::rhi::HostVulkanDevice,
     state: &SwapchainState,
 ) {
     let device = vulkan_device.device();
@@ -1755,7 +1755,7 @@ fn destroy_swapchain_resources_only(
 
 /// Destroy all swapchain state including the surface (but not persistent pipeline objects).
 fn destroy_swapchain_state(
-    vulkan_device: &crate::vulkan::rhi::VulkanDevice,
+    vulkan_device: &crate::vulkan::rhi::HostVulkanDevice,
     state: &SwapchainState,
 ) {
     let instance = vulkan_device.instance();

@@ -9,7 +9,7 @@ use vma::Alloc as _;
 use crate::core::rhi::{PixelFormat, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
-use crate::vulkan::rhi::VulkanTexture;
+use crate::vulkan::rhi::HostVulkanTexture;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use v4l::buffer::Type;
@@ -780,7 +780,7 @@ fn capture_thread_loop(
     let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
 
     for i in 0..RING_TEXTURE_COUNT {
-        let vk_texture = match VulkanTexture::new(vulkan_device, &ring_texture_desc) {
+        let vk_texture = match HostVulkanTexture::new(vulkan_device, &ring_texture_desc) {
             Ok(t) => t,
             Err(e) => {
                 tracing::error!(
@@ -1719,7 +1719,7 @@ fn capture_thread_loop(
             }
         }
 
-        // Ring textures are owned by StreamTexture (Arc<VulkanTexture>) — they
+        // Ring textures are owned by StreamTexture (Arc<HostVulkanTexture>) — they
         // clean up via Drop when ring_textures goes out of scope. Clear the
         // texture cache references so display doesn't try to use stale textures.
         gpu_context.set_camera_timeline_semaphore(0);

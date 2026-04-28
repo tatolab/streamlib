@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use streamlib::adapter_support::{VulkanPixelBuffer, VulkanTimelineSemaphore};
+use streamlib::adapter_support::{HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::StreamTexture;
 use streamlib_adapter_abi::{SurfaceFormat, SurfaceId, SurfaceRegistration};
 use vulkanalia::vk;
@@ -31,13 +31,13 @@ impl VulkanLayout {
 ///
 /// The host allocates the texture (typically via
 /// `GpuContext::acquire_render_target_dma_buf_image`) and an exportable
-/// timeline semaphore (via `VulkanTimelineSemaphore::new_exportable`),
+/// timeline semaphore (via `HostVulkanTimelineSemaphore::new_exportable`),
 /// then registers them here. The adapter takes joint ownership and
 /// allocates one dedicated linear staging buffer per plane sized to the
 /// plane's pixel footprint.
 pub struct HostSurfaceRegistration {
     pub texture: StreamTexture,
-    pub timeline: Arc<VulkanTimelineSemaphore>,
+    pub timeline: Arc<HostVulkanTimelineSemaphore>,
     /// Initial layout the host left the image in after allocation.
     /// For freshly-allocated images this is typically
     /// `vk::ImageLayout::UNDEFINED` (raw value 0).
@@ -47,12 +47,12 @@ pub struct HostSurfaceRegistration {
     pub format: SurfaceFormat,
 }
 
-/// Per-plane staging slot. One [`VulkanPixelBuffer`] per plane, with the
+/// Per-plane staging slot. One [`HostVulkanPixelBuffer`] per plane, with the
 /// plane's tightly-packed `(width, height, bytes_per_pixel)` geometry
 /// recorded so the copy paths and the customer-facing view can compute
 /// strides without re-deriving from `format` on every access.
 pub(crate) struct PlaneSlot {
-    pub(crate) staging: Arc<VulkanPixelBuffer>,
+    pub(crate) staging: Arc<HostVulkanPixelBuffer>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) bytes_per_pixel: u32,
@@ -67,7 +67,7 @@ impl PlaneSlot {
 /// Per-surface state held inside the adapter's
 /// `Mutex<HashMap<SurfaceId, _>>`.
 ///
-/// Each entry owns one dedicated `VulkanPixelBuffer` per plane (a
+/// Each entry owns one dedicated `HostVulkanPixelBuffer` per plane (a
 /// HOST_VISIBLE/HOST_COHERENT linear `VkBuffer`) sized once at
 /// registration. The staging buffers are reused on every acquire — per-
 /// acquire allocation would be far too expensive on the hot path, and
@@ -77,7 +77,7 @@ pub(crate) struct SurfaceState {
     pub(crate) surface_id: SurfaceId,
     pub(crate) texture: StreamTexture,
     pub(crate) planes: Vec<PlaneSlot>,
-    pub(crate) timeline: Arc<VulkanTimelineSemaphore>,
+    pub(crate) timeline: Arc<HostVulkanTimelineSemaphore>,
     pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,

@@ -29,7 +29,7 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use streamlib::adapter_support::{VulkanDevice, VulkanTexture, VulkanTimelineSemaphore};
+use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::TextureFormat;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -126,13 +126,13 @@ fn run() -> ExitCode {
 
     // Build our own VkDevice. The parent has no GPU work in flight when
     // it spawns us, so the dual-VkDevice crash on NVIDIA does not apply.
-    let device = match VulkanDevice::new() {
+    let device = match HostVulkanDevice::new() {
         Ok(d) => Arc::new(d),
-        Err(e) => return die(Some(&socket), format!("VulkanDevice::new: {e}")),
+        Err(e) => return die(Some(&socket), format!("HostVulkanDevice::new: {e}")),
     };
 
     // Import VkImage with the host-chosen DRM modifier.
-    let texture = match VulkanTexture::import_render_target_dma_buf(
+    let texture = match HostVulkanTexture::import_render_target_dma_buf(
         &device,
         &dma_buf_fds,
         &req.plane_offsets,
@@ -149,7 +149,7 @@ fn run() -> ExitCode {
 
     // Import the timeline semaphore. Vulkan takes ownership of `sync_fd`
     // on success; we close every other fd.
-    let timeline = match VulkanTimelineSemaphore::from_imported_opaque_fd(
+    let timeline = match HostVulkanTimelineSemaphore::from_imported_opaque_fd(
         device.device(),
         sync_fd,
     ) {
@@ -164,7 +164,7 @@ fn run() -> ExitCode {
 
     // dma_buf_fds were dup'd by the kernel during SCM_RIGHTS; the
     // VkImage import does NOT take ownership in our import path (the
-    // memory_fd helper inside VulkanDevice dups internally). Close our
+    // memory_fd helper inside HostVulkanDevice dups internally). Close our
     // copies — without this they leak across the helper's lifetime.
     for f in &dma_buf_fds {
         unsafe { libc::close(*f) };
@@ -246,7 +246,7 @@ fn run() -> ExitCode {
 
 /// Subprocess `vkCmdClearColorImage` — equivalent to a plain GPU write.
 fn subprocess_clear_image(
-    device: &Arc<VulkanDevice>,
+    device: &Arc<HostVulkanDevice>,
     image: vk::Image,
     color: [f32; 4],
 ) -> streamlib::core::Result<()> {
@@ -351,7 +351,7 @@ fn subprocess_clear_image(
 /// Subprocess readback — `vkCmdCopyImageToBuffer` into a staging buffer,
 /// then map and read.
 fn subprocess_readback_image(
-    device: &Arc<VulkanDevice>,
+    device: &Arc<HostVulkanDevice>,
     image: vk::Image,
     width: u32,
     height: u32,

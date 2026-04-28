@@ -83,7 +83,7 @@ fn subprocess_writes_host_reads_round_trip() {
 }
 
 fn host_readback(
-    device: &Arc<streamlib::adapter_support::VulkanDevice>,
+    device: &Arc<streamlib::adapter_support::HostVulkanDevice>,
     image: vk::Image,
     width: u32,
     height: u32,

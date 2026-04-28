@@ -86,7 +86,7 @@ pub struct EscalateResponseOk {
     /// target surface (1 for BGRA8/RGBA8, 2 for NV12). Each entry's
     /// `staging_surface_id` can be `check_out`ed from the surface-share
     /// service to obtain a DMA-BUF FD over the host-allocated staging
-    /// `VulkanPixelBuffer` for that plane; mmap that FD to read or write the
+    /// `HostVulkanPixelBuffer` for that plane; mmap that FD to read or write the
     /// plane's tightly-packed bytes (`width * height * bytes_per_pixel` per
     /// plane).
     #[serde(rename = "cpu_readback_planes")]

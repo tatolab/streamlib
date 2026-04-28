@@ -8,16 +8,16 @@ use std::sync::{Arc, Mutex};
 use crate::core::rhi::{PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
 use crate::core::{Result, StreamError};
 
-use super::{VulkanDevice, VulkanPixelBuffer};
+use super::{HostVulkanDevice, HostVulkanPixelBuffer};
 
-/// Reusable pool of [`VulkanPixelBuffer`]s for efficient buffer recycling.
+/// Reusable pool of [`HostVulkanPixelBuffer`]s for efficient buffer recycling.
 pub struct VulkanPixelBufferPool {
-    device: Arc<VulkanDevice>,
+    device: Arc<HostVulkanDevice>,
     width: u32,
     height: u32,
     bytes_per_pixel: u32,
     format: PixelFormat,
-    buffers: Vec<Arc<VulkanPixelBuffer>>,
+    buffers: Vec<Arc<HostVulkanPixelBuffer>>,
     next_index: AtomicUsize,
     buffer_to_pool_id: Mutex<HashMap<usize, PixelBufferPoolId>>,
 }
@@ -30,7 +30,7 @@ impl VulkanPixelBufferPool {
     /// pre-allocation is acceptable — the pool degrades gracefully under
     /// memory pressure rather than failing the entire pipeline.
     pub fn new(
-        device: Arc<VulkanDevice>,
+        device: Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
         bytes_per_pixel: u32,
@@ -42,7 +42,7 @@ impl VulkanPixelBufferPool {
         let mut last_err: Option<StreamError> = None;
 
         for i in 0..pre_allocate {
-            match VulkanPixelBuffer::new(&device, width, height, bytes_per_pixel, format) {
+            match HostVulkanPixelBuffer::new(&device, width, height, bytes_per_pixel, format) {
                 Ok(buffer) => {
                     buffers.push(Arc::new(buffer));
                     buffer_to_pool_id.insert(i, PixelBufferPoolId::new());
@@ -146,11 +146,11 @@ unsafe impl Sync for VulkanPixelBufferPool {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vulkan::rhi::VulkanDevice;
+    use crate::vulkan::rhi::HostVulkanDevice;
 
     #[test]
     fn test_pool_acquire_returns_buffer() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_pool_exhaustion_returns_error() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_pool_reuses_buffer_after_release() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");

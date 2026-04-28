@@ -13,7 +13,7 @@ use vma::Alloc as _;
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{Result, StreamError};
 
-use super::VulkanDevice;
+use super::HostVulkanDevice;
 
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::fourcc;
@@ -84,11 +84,11 @@ fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
 ///
 /// Wraps a VkImage with associated memory and metadata.
 /// Can be created from scratch or imported from an IOSurface via VK_EXT_metal_objects.
-pub struct VulkanTexture {
-    /// VulkanDevice reference for tracked allocation/free through the RHI.
-    vulkan_device: Option<Arc<VulkanDevice>>,
+pub struct HostVulkanTexture {
+    /// HostVulkanDevice reference for tracked allocation/free through the RHI.
+    vulkan_device: Option<Arc<HostVulkanDevice>>,
     image: Option<vk::Image>,
-    /// VMA allocation (always allocated with DMA-BUF export flags via VulkanDevice).
+    /// VMA allocation (always allocated with DMA-BUF export flags via HostVulkanDevice).
     allocation: Option<vma::Allocation>,
     /// Imported device memory for DMA-BUF import path (VMA cannot import external memory).
     #[cfg(target_os = "linux")]
@@ -116,7 +116,7 @@ pub struct VulkanTexture {
     format: TextureFormat,
 }
 
-impl VulkanTexture {
+impl HostVulkanTexture {
     /// Create a new DMA-BUF exportable Vulkan texture via the device's
     /// dedicated VMA export pool.
     ///
@@ -125,7 +125,7 @@ impl VulkanTexture {
     /// allocations from the default VMA pool. This avoids NVIDIA driver
     /// failures where global export configuration causes OOM after swapchain
     /// creation.
-    pub fn new(vulkan_device: &Arc<VulkanDevice>, desc: &TextureDescriptor) -> Result<Self> {
+    pub fn new(vulkan_device: &Arc<HostVulkanDevice>, desc: &TextureDescriptor) -> Result<Self> {
         let vk_format = texture_format_to_vk(desc.format);
         let usage_flags = texture_usages_to_vk(desc.usage);
 
@@ -205,7 +205,7 @@ impl VulkanTexture {
     /// VMA allocator with no external memory info. For same-process textures that
     /// don't need cross-process sharing.
     pub fn new_device_local(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         desc: &TextureDescriptor,
     ) -> Result<Self> {
         let vk_format = texture_format_to_vk(desc.format);
@@ -277,7 +277,7 @@ impl VulkanTexture {
     /// want a linear allocation should use [`Self::new`].
     #[cfg(target_os = "linux")]
     pub fn new_render_target_dma_buf(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         desc: &TextureDescriptor,
         modifier_candidates: &[u64],
     ) -> Result<Self> {
@@ -370,7 +370,7 @@ impl VulkanTexture {
         }
 
         tracing::info!(
-            "VulkanTexture render-target DMA-BUF: {}x{} {:?} → modifier 0x{:016x}",
+            "HostVulkanTexture render-target DMA-BUF: {}x{} {:?} → modifier 0x{:016x}",
             desc.width,
             desc.height,
             desc.format,
@@ -472,7 +472,7 @@ impl VulkanTexture {
         })
     }
 
-    /// Create a placeholder texture for cases where a VulkanTexture is needed
+    /// Create a placeholder texture for cases where a HostVulkanTexture is needed
     /// but the actual texture is stored elsewhere (e.g., Metal texture on macOS).
     pub fn placeholder() -> Self {
         Self {
@@ -526,7 +526,7 @@ impl VulkanTexture {
         }
 
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
-            StreamError::GpuError("Cannot create image view: no VulkanDevice stored".into())
+            StreamError::GpuError("Cannot create image view: no HostVulkanDevice stored".into())
         })?;
         let image = self.image.ok_or_else(|| {
             StreamError::GpuError("Cannot create image view: no image".into())
@@ -557,7 +557,7 @@ impl VulkanTexture {
 }
 
 #[cfg(target_os = "linux")]
-impl VulkanTexture {
+impl HostVulkanTexture {
     /// DRM format modifier the driver picked at allocation time.
     ///
     /// Zero for textures created via [`Self::new`] / [`Self::new_device_local`]
@@ -582,7 +582,7 @@ impl VulkanTexture {
     /// build.
     pub fn dma_buf_plane_layout(&self) -> Result<Vec<(u64, u64)>> {
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
-            StreamError::GpuError("dma_buf_plane_layout: no VulkanDevice".into())
+            StreamError::GpuError("dma_buf_plane_layout: no HostVulkanDevice".into())
         })?;
         let image = self.image.ok_or_else(|| {
             StreamError::GpuError("dma_buf_plane_layout: no image".into())
@@ -642,7 +642,7 @@ impl VulkanTexture {
         }
 
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
-            StreamError::GpuError("Cannot export DMA-BUF: no VulkanDevice stored".into())
+            StreamError::GpuError("Cannot export DMA-BUF: no HostVulkanDevice stored".into())
         })?;
 
         // Get DeviceMemory from raw allocation (export/import path) or VMA allocation
@@ -693,7 +693,7 @@ impl VulkanTexture {
     /// success (the driver `dup`s internally and releases on
     /// `vkFreeMemory`). On error the caller still owns `fds[0]`.
     pub fn import_render_target_dma_buf(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
         plane_offsets: &[u64],
         plane_strides: &[u64],
@@ -824,7 +824,7 @@ impl VulkanTexture {
 
     /// Import a texture from a DMA-BUF file descriptor.
     pub fn from_dma_buf_fd(
-        vulkan_device: &Arc<VulkanDevice>,
+        vulkan_device: &Arc<HostVulkanDevice>,
         fd: std::os::unix::io::RawFd,
         width: u32,
         height: u32,
@@ -902,7 +902,7 @@ impl VulkanTexture {
     }
 }
 
-impl Clone for VulkanTexture {
+impl Clone for HostVulkanTexture {
     fn clone(&self) -> Self {
         Self {
             vulkan_device: None,
@@ -925,7 +925,7 @@ impl Clone for VulkanTexture {
     }
 }
 
-impl Drop for VulkanTexture {
+impl Drop for HostVulkanTexture {
     fn drop(&mut self) {
         // Destroy cached image view before the image it references
         if let Some(&view) = self.cached_image_view.get() {
@@ -970,18 +970,43 @@ impl Drop for VulkanTexture {
     }
 }
 
-// VulkanTexture is Send + Sync because Vulkan handles are thread-safe
-unsafe impl Send for VulkanTexture {}
-unsafe impl Sync for VulkanTexture {}
+// HostVulkanTexture is Send + Sync because Vulkan handles are thread-safe
+unsafe impl Send for HostVulkanTexture {}
+unsafe impl Sync for HostVulkanTexture {}
+
+impl super::VulkanTextureLike for HostVulkanTexture {
+    fn image(&self) -> Option<vk::Image> {
+        HostVulkanTexture::image(self)
+    }
+    fn chosen_drm_format_modifier(&self) -> u64 {
+        #[cfg(target_os = "linux")]
+        {
+            HostVulkanTexture::chosen_drm_format_modifier(self)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            0
+        }
+    }
+    fn width(&self) -> u32 {
+        HostVulkanTexture::width(self)
+    }
+    fn height(&self) -> u32 {
+        HostVulkanTexture::height(self)
+    }
+    fn format(&self) -> crate::core::rhi::TextureFormat {
+        HostVulkanTexture::format(self)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vulkan::rhi::VulkanDevice;
+    use crate::vulkan::rhi::HostVulkanDevice;
 
     #[test]
     fn test_pool_texture_creation_1920x1080_bgra8() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -990,7 +1015,7 @@ mod tests {
         };
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
-        let texture = VulkanTexture::new(&device, &desc).expect("texture creation failed");
+        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
 
         assert!(texture.image().is_some());
         assert_eq!(texture.width(), 1920);
@@ -1007,7 +1032,7 @@ mod tests {
 
     #[test]
     fn test_texture_drop_frees_memory() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -1016,7 +1041,7 @@ mod tests {
         };
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
-        let texture = VulkanTexture::new(&device, &desc).expect("texture creation failed");
+        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
         drop(texture);
 
         println!("Texture drop completed without panic");
@@ -1024,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_multiple_textures_coexist() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -1034,10 +1059,10 @@ mod tests {
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
 
-        let t0 = VulkanTexture::new(&device, &desc).expect("texture 0 failed");
-        let t1 = VulkanTexture::new(&device, &desc).expect("texture 1 failed");
-        let t2 = VulkanTexture::new(&device, &desc).expect("texture 2 failed");
-        let t3 = VulkanTexture::new(&device, &desc).expect("texture 3 failed");
+        let t0 = HostVulkanTexture::new(&device, &desc).expect("texture 0 failed");
+        let t1 = HostVulkanTexture::new(&device, &desc).expect("texture 1 failed");
+        let t2 = HostVulkanTexture::new(&device, &desc).expect("texture 2 failed");
+        let t3 = HostVulkanTexture::new(&device, &desc).expect("texture 3 failed");
 
         assert!(t0.image().is_some());
         assert!(t1.image().is_some());
@@ -1056,7 +1081,7 @@ mod tests {
 
     #[test]
     fn test_dma_buf_export() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -1065,18 +1090,18 @@ mod tests {
         };
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Bgra8Unorm);
-        let texture = VulkanTexture::new(&device, &desc).expect("texture creation failed");
+        let texture = HostVulkanTexture::new(&device, &desc).expect("texture creation failed");
 
         let fd = texture.export_dma_buf_fd().expect("DMA-BUF export failed");
         assert!(fd >= 0, "DMA-BUF fd must be non-negative, got {fd}");
 
         println!("DMA-BUF exported: fd={fd}");
-        // fd is closed by VulkanTexture::drop via cached_dma_buf_fd
+        // fd is closed by HostVulkanTexture::drop via cached_dma_buf_fd
     }
 
     #[test]
     fn test_placeholder_has_no_resources() {
-        let tex = VulkanTexture::placeholder();
+        let tex = HostVulkanTexture::placeholder();
         assert!(tex.image().is_none());
         assert_eq!(tex.width(), 0);
         assert_eq!(tex.height(), 0);
@@ -1101,7 +1126,7 @@ mod tests {
     /// dedicated allocation + multi-type fallback (no export flags).
     #[test]
     fn test_camera_display_allocation_pattern() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -1114,12 +1139,12 @@ mod tests {
         let width = 1920u32;
         let height = 1080u32;
 
-        // Step 1: Camera pixel buffers via VulkanPixelBuffer (raw exportable allocation)
-        use crate::vulkan::rhi::VulkanPixelBuffer;
+        // Step 1: Camera pixel buffers via HostVulkanPixelBuffer (raw exportable allocation)
+        use crate::vulkan::rhi::HostVulkanPixelBuffer;
         use crate::core::rhi::PixelFormat;
         let mut pixel_buffers = Vec::new();
         for i in 0..4 {
-            let buf = VulkanPixelBuffer::new(&device, width, height, 4, PixelFormat::Bgra32)
+            let buf = HostVulkanPixelBuffer::new(&device, width, height, 4, PixelFormat::Bgra32)
                 .unwrap_or_else(|e| panic!("pixel buffer [{i}] creation failed: {e}"));
             assert!(!buf.mapped_ptr().is_null());
             pixel_buffers.push(buf);
@@ -1237,7 +1262,7 @@ mod tests {
 
     #[test]
     fn test_various_formats() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -1249,7 +1274,7 @@ mod tests {
 
         for format in formats {
             let desc = TextureDescriptor::new(1920, 1080, format);
-            let texture = VulkanTexture::new(&device, &desc)
+            let texture = HostVulkanTexture::new(&device, &desc)
                 .unwrap_or_else(|e| panic!("Failed to create texture with {format:?}: {e}"));
 
             assert!(texture.image().is_some());
@@ -1260,7 +1285,7 @@ mod tests {
 
     #[test]
     fn test_device_local_texture_creation() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -1270,7 +1295,7 @@ mod tests {
 
         let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Rgba8Unorm)
             .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
-        let texture = VulkanTexture::new_device_local(&device, &desc)
+        let texture = HostVulkanTexture::new_device_local(&device, &desc)
             .expect("device-local texture creation failed");
 
         assert!(texture.image().is_some());
@@ -1283,7 +1308,7 @@ mod tests {
 
     #[test]
     fn test_lazy_image_view() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -1292,7 +1317,7 @@ mod tests {
         };
 
         let desc = TextureDescriptor::new(640, 480, TextureFormat::Rgba8Unorm);
-        let texture = VulkanTexture::new(&device, &desc)
+        let texture = HostVulkanTexture::new(&device, &desc)
             .expect("texture creation failed");
 
         // First call creates the image view
@@ -1317,7 +1342,7 @@ mod tests {
     fn test_render_target_dma_buf_round_trip() {
         use crate::vulkan::rhi::drm_modifier_probe::fourcc;
 
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 println!("Skipping — no Vulkan device: {e}");
@@ -1340,7 +1365,7 @@ mod tests {
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::COPY_SRC,
         );
-        let texture = VulkanTexture::new_render_target_dma_buf(&device, &desc, modifiers)
+        let texture = HostVulkanTexture::new_render_target_dma_buf(&device, &desc, modifiers)
             .expect("RT DMA-BUF allocation must succeed when modifiers exist");
 
         assert!(texture.image().is_some());
@@ -1384,7 +1409,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_render_target_dma_buf_empty_modifiers_rejected() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
                 println!("Skipping — no Vulkan device: {e}");
@@ -1393,7 +1418,7 @@ mod tests {
         };
         let desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm)
             .with_usage(TextureUsages::RENDER_ATTACHMENT);
-        let result = VulkanTexture::new_render_target_dma_buf(&device, &desc, &[]);
+        let result = HostVulkanTexture::new_render_target_dma_buf(&device, &desc, &[]);
         let err = match result {
             Ok(_) => panic!("empty modifier list must reject, but allocation succeeded"),
             Err(e) => e,
@@ -1407,7 +1432,7 @@ mod tests {
 
     #[test]
     fn test_ring_texture_lifecycle() {
-        let device = match VulkanDevice::new() {
+        let device = match HostVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
@@ -1419,8 +1444,8 @@ mod tests {
             .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
 
         // Create 2 ring textures (matches RING_TEXTURE_COUNT)
-        let t0 = VulkanTexture::new(&device, &desc).expect("ring texture 0 failed");
-        let t1 = VulkanTexture::new(&device, &desc).expect("ring texture 1 failed");
+        let t0 = HostVulkanTexture::new(&device, &desc).expect("ring texture 0 failed");
+        let t1 = HostVulkanTexture::new(&device, &desc).expect("ring texture 1 failed");
 
         // Both should have valid images and image views
         assert!(t0.image().is_some());

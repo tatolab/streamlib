@@ -8,14 +8,14 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use super::{VulkanDevice, VulkanTexture};
+use super::{HostVulkanDevice, HostVulkanTexture};
 
 /// Vulkan command buffer wrapper.
 ///
 /// Command buffers are single-use: create, record, commit.
 /// The buffer is automatically begun when created.
 pub struct VulkanCommandBuffer {
-    vulkan_device: Arc<VulkanDevice>,
+    vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
     command_pool: vk::CommandPool,
@@ -25,7 +25,7 @@ pub struct VulkanCommandBuffer {
 impl VulkanCommandBuffer {
     /// Create a new command buffer wrapper.
     pub fn new(
-        vulkan_device: Arc<VulkanDevice>,
+        vulkan_device: Arc<HostVulkanDevice>,
         queue: vk::Queue,
         command_pool: vk::CommandPool,
         command_buffer: vk::CommandBuffer,
@@ -41,7 +41,7 @@ impl VulkanCommandBuffer {
     }
 
     /// Copy one texture to another.
-    pub fn copy_texture(&mut self, src: &VulkanTexture, dst: &VulkanTexture) {
+    pub fn copy_texture(&mut self, src: &HostVulkanTexture, dst: &HostVulkanTexture) {
         // Skip if either texture doesn't have a valid image
         let (Some(src_image), Some(dst_image)) = (src.image(), dst.image()) else {
             return;

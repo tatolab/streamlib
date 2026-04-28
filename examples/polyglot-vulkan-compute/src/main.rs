@@ -5,7 +5,7 @@
 //!
 //! End-to-end gate for the subprocess `VulkanContext` runtime: the host
 //! pre-allocates ONE render-target-capable DMA-BUF surface AND an
-//! exportable `VulkanTimelineSemaphore`, registers both with surface-share
+//! exportable `HostVulkanTimelineSemaphore`, registers both with surface-share
 //! under a known UUID. A Python or Deno polyglot processor opens the
 //! surface through `VulkanContext.acquire_write` (which imports the
 //! DMA-BUF as a `VkImage` in the subprocess and imports the timeline via
@@ -34,7 +34,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib::adapter_support::{VulkanDevice, VulkanTimelineSemaphore};
+use streamlib::adapter_support::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::TextureFormat;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
@@ -116,9 +116,9 @@ fn main() -> Result<()> {
     let texture_slot: Arc<
         Mutex<Option<streamlib::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
-    let device_slot: Arc<Mutex<Option<Arc<VulkanDevice>>>> =
+    let device_slot: Arc<Mutex<Option<Arc<HostVulkanDevice>>>> =
         Arc::new(Mutex::new(None));
-    let timeline_slot: Arc<Mutex<Option<Arc<VulkanTimelineSemaphore>>>> =
+    let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
 
     {
@@ -137,10 +137,10 @@ fn main() -> Result<()> {
             // subprocess release; the subprocess waits on it before
             // every acquire.
             let timeline = Arc::new(
-                VulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
                     .map_err(|e| {
                         StreamError::Configuration(format!(
-                            "VulkanTimelineSemaphore::new_exportable: {e}"
+                            "HostVulkanTimelineSemaphore::new_exportable: {e}"
                         ))
                     })?,
             );
@@ -307,7 +307,7 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
 /// `examples/polyglot-opengl-fragment-shader` — transient HOST_VISIBLE
 /// staging buffer + `vkCmdCopyImageToBuffer` + `queue_wait_idle`.
 fn vulkan_readback(
-    device: &Arc<VulkanDevice>,
+    device: &Arc<HostVulkanDevice>,
     texture: &streamlib::core::rhi::StreamTexture,
 ) -> Vec<u8> {
     use vulkanalia::prelude::v1_4::*;

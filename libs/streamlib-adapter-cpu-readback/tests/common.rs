@@ -10,7 +10,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use streamlib::adapter_support::VulkanTimelineSemaphore;
+use streamlib::adapter_support::HostVulkanTimelineSemaphore;
 use streamlib::core::context::GpuContext;
 use streamlib::core::error::StreamError;
 use streamlib::core::rhi::TextureFormat;
@@ -116,7 +116,7 @@ impl HostFixture {
             .gpu
             .acquire_render_target_dma_buf_image(width, height, texture_format)?;
         let timeline = Arc::new(
-            VulkanTimelineSemaphore::new(self.adapter.device().device(), 0)
+            HostVulkanTimelineSemaphore::new(self.adapter.device().device(), 0)
                 .map_err(|e| StreamError::GpuError(format!("create timeline: {e}")))?,
         );
         self.adapter

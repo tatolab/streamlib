@@ -43,9 +43,9 @@ pub struct SurfaceMetadata {
     pub drm_format_modifier: u64,
     /// Optional OPAQUE_FD timeline-semaphore handle owned by the table.
     /// Set when the host registers the surface with an exportable
-    /// `VulkanTimelineSemaphore` (#531). `check_out` / `lookup` `dup`s it
+    /// `HostVulkanTimelineSemaphore` (#531). `check_out` / `lookup` `dup`s it
     /// alongside the DMA-BUF plane fds so the subprocess Vulkan adapter
-    /// can call `VulkanTimelineSemaphore::from_imported_opaque_fd` and
+    /// can call `HostVulkanTimelineSemaphore::from_imported_opaque_fd` and
     /// reuse the host adapter's timeline-wait + signal path. `None` for
     /// surfaces that don't need explicit Vulkan sync (the OpenGL adapter
     /// path, CPU-readback, legacy `VkBuffer` pixel buffers).
@@ -99,7 +99,7 @@ pub struct SurfaceRegistration<'a> {
     /// [`SurfaceMetadata::drm_format_modifier`].
     pub drm_format_modifier: u64,
     /// Optional OPAQUE_FD timeline-semaphore handle exported by the host
-    /// (`VulkanTimelineSemaphore::export_opaque_fd`). The table takes
+    /// (`HostVulkanTimelineSemaphore::export_opaque_fd`). The table takes
     /// ownership on success and closes it on `release_surface`. `None`
     /// for adapters that don't need explicit Vulkan sync.
     pub sync_fd: Option<RawFd>,

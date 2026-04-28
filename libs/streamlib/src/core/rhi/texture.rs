@@ -155,7 +155,7 @@ pub struct StreamTexture {
         feature = "backend-vulkan",
         all(target_os = "linux", not(feature = "backend-metal"))
     ))]
-    pub(crate) inner: Arc<crate::vulkan::rhi::VulkanTexture>,
+    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanTexture>,
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: Arc<crate::windows::rhi::DX12Texture>,
@@ -284,9 +284,9 @@ impl StreamTexture {
             // When Metal is backend, inner is the MetalTexture
             #[cfg(not(feature = "backend-vulkan"))]
             inner: arc_texture.clone(),
-            // When Vulkan is backend on macOS, inner would be VulkanTexture (not set here)
+            // When Vulkan is backend on macOS, inner would be HostVulkanTexture (not set here)
             #[cfg(feature = "backend-vulkan")]
-            inner: Arc::new(crate::vulkan::rhi::VulkanTexture::placeholder()),
+            inner: Arc::new(crate::vulkan::rhi::HostVulkanTexture::placeholder()),
             metal_texture: Some(arc_texture),
         }
     }
@@ -296,7 +296,7 @@ impl StreamTexture {
         feature = "backend-vulkan",
         all(target_os = "linux", not(feature = "backend-metal"))
     ))]
-    pub fn from_vulkan(texture: crate::vulkan::rhi::VulkanTexture) -> Self {
+    pub fn from_vulkan(texture: crate::vulkan::rhi::HostVulkanTexture) -> Self {
         Self {
             inner: Arc::new(texture),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -304,7 +304,7 @@ impl StreamTexture {
         }
     }
 
-    /// Adapter-facing: the underlying [`crate::vulkan::rhi::VulkanTexture`].
+    /// Adapter-facing: the underlying [`crate::vulkan::rhi::HostVulkanTexture`].
     ///
     /// In-tree surface adapters (`streamlib-adapter-vulkan`,
     /// `-skia`, `-opengl`, `-cpu-readback`) need direct access to the
@@ -316,7 +316,7 @@ impl StreamTexture {
         feature = "backend-vulkan",
         all(target_os = "linux", not(feature = "backend-metal"))
     ))]
-    pub fn vulkan_inner(&self) -> &Arc<crate::vulkan::rhi::VulkanTexture> {
+    pub fn vulkan_inner(&self) -> &Arc<crate::vulkan::rhi::HostVulkanTexture> {
         &self.inner
     }
 }
