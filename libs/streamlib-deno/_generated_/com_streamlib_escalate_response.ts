@@ -38,29 +38,6 @@ export interface EscalateResponseErr {
   request_id: string;
 }
 
-export interface EscalateResponseOkCpuReadbackPlane {
-  /**
-   * Plane bytes-per-pixel. BGRA/RGBA: 4. NV12 plane 0 (Y): 1. NV12 plane 1 (UV
-   * interleaved): 2.
-   */
-  bytes_per_pixel: number;
-
-  /**
-   * Plane height in texels.
-   */
-  height: number;
-
-  /**
-   * Surface-share UUID for this plane's staging buffer.
-   */
-  staging_surface_id: string;
-
-  /**
-   * Plane width in texels.
-   */
-  width: number;
-}
-
 export interface EscalateResponseOk {
   result: "ok";
 
@@ -79,17 +56,6 @@ export interface EscalateResponseOk {
   request_id: string;
 
   /**
-   * Per-plane staging-buffer descriptors set on `acquire_cpu_readback`
-   * responses. Length equals `SurfaceFormat::plane_count` for the target
-   * surface (1 for BGRA8/RGBA8, 2 for NV12). Each entry's `staging_surface_id`
-   * can be `check_out`ed from the surface-share service to obtain a DMA-BUF FD
-   * over the host-allocated staging `VulkanPixelBuffer` for that plane; mmap
-   * that FD to read or write the plane's tightly-packed bytes (`width * height
-   * * bytes_per_pixel` per plane).
-   */
-  cpu_readback_planes?: EscalateResponseOkCpuReadbackPlane[];
-
-  /**
    * Resolved pixel or texture format identifier.
    */
   format?: string;
@@ -99,6 +65,17 @@ export interface EscalateResponseOk {
    * responses).
    */
   height?: number;
+
+  /**
+   * Decimal-string-encoded u64 timeline value the host signaled on
+   * the surface's shared timeline semaphore at end-of-submit. Set on
+   * `run_cpu_readback_copy` and `try_run_cpu_readback_copy` responses. The
+   * subprocess waits on its imported `ConsumerVulkanTimelineSemaphore` for this
+   * value before reading or writing the staging buffer mapped at registration
+   * time. JTD has no native u64 — wire form is decimal-string, parsed back to
+   * u64 on the subprocess side.
+   */
+  timeline_value?: string;
 
   /**
    * Resolved usage tokens (set on acquire_texture responses). Array reflects

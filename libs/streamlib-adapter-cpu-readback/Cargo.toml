@@ -20,7 +20,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 streamlib-surface-client = { path = "../streamlib-surface-client" }
 vulkanalia.workspace = true
 libc.workspace = true
@@ -30,8 +30,22 @@ serde_json.workspace = true
 [dev-dependencies]
 tracing-subscriber.workspace = true
 
+# `streamlib` is dev-deps only: tests bring up a real `HostVulkanDevice`
+# + `HostVulkanPixelBuffer` + `HostVulkanTimelineSemaphore` to exercise
+# the host trigger end-to-end. The runtime crate (above) does NOT pull
+# `streamlib`, so subprocess cdylibs depending on `streamlib-adapter-
+# cpu-readback` get the consumer-rhi carve-out only and `streamlib` is
+# absent from their dep graph (asserted by `cargo tree | grep -c
+# "^streamlib v"` returning 0). Mirrors `streamlib-adapter-vulkan`'s
+# shape post-#560.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib = { path = "../streamlib" }
 serde = { workspace = true }
+# Test-helper bin lives in this dev-deps-only crate so the
+# `streamlib`-pulling helper does NOT propagate into adapter-cpu-readback's
+# runtime dep graph (and from there into the cdylibs). Tests reach the
+# bin via `env!("CARGO_BIN_EXE_cpu_readback_adapter_subprocess_helper")`.
+streamlib-adapter-cpu-readback-helpers = { path = "../streamlib-adapter-cpu-readback-helpers" }
 
 [[test]]
 name = "conformance"
@@ -52,13 +66,6 @@ path = "tests/stride_offset_handling.rs"
 [[test]]
 name = "subprocess_crash_mid_write"
 path = "tests/subprocess_crash_mid_write.rs"
-
-# Subprocess test helper. Built as a normal binary by `cargo test` and
-# discovered at runtime via `env!("CARGO_BIN_EXE_…")`.
-[[bin]]
-name = "cpu_readback_adapter_subprocess_helper"
-path = "tests/bin/cpu_readback_adapter_subprocess_helper.rs"
-test = false
 
 [lints]
 workspace = true

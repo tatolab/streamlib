@@ -19,16 +19,16 @@
 
 import type {
   EscalateRequest,
-  EscalateRequestAcquireCpuReadback,
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
   EscalateRequestReleaseHandle,
-  EscalateRequestTryAcquireCpuReadback,
+  EscalateRequestRunCpuReadbackCopy,
+  EscalateRequestTryRunCpuReadbackCopy,
 } from "./_generated_/com_streamlib_escalate_request.ts";
 import {
-  EscalateRequestAcquireCpuReadbackMode,
-  EscalateRequestTryAcquireCpuReadbackMode,
+  EscalateRequestRunCpuReadbackCopyDirection,
+  EscalateRequestTryRunCpuReadbackCopyDirection,
 } from "./_generated_/com_streamlib_escalate_request.ts";
 import type {
   EscalateResponse,
@@ -39,20 +39,20 @@ import type {
 
 export type {
   EscalateRequest,
-  EscalateRequestAcquireCpuReadback,
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
   EscalateRequestReleaseHandle,
-  EscalateRequestTryAcquireCpuReadback,
+  EscalateRequestRunCpuReadbackCopy,
+  EscalateRequestTryRunCpuReadbackCopy,
   EscalateResponse,
   EscalateResponseContended,
   EscalateResponseErr,
   EscalateResponseOk,
 };
 export {
-  EscalateRequestAcquireCpuReadbackMode,
-  EscalateRequestTryAcquireCpuReadbackMode,
+  EscalateRequestRunCpuReadbackCopyDirection,
+  EscalateRequestTryRunCpuReadbackCopyDirection,
 };
 
 /** Backwards-compat alias for the `ok` variant of [`EscalateResponse`]. */
@@ -69,11 +69,11 @@ export const ESCALATE_RESPONSE_RPC = "escalate_response";
  * `request_id` when serializing onto the wire.
  */
 export type EscalateOpPayload =
-  | Omit<EscalateRequestAcquireCpuReadback, "request_id">
   | Omit<EscalateRequestAcquirePixelBuffer, "request_id">
   | Omit<EscalateRequestAcquireTexture, "request_id">
   | Omit<EscalateRequestReleaseHandle, "request_id">
-  | Omit<EscalateRequestTryAcquireCpuReadback, "request_id">;
+  | Omit<EscalateRequestRunCpuReadbackCopy, "request_id">
+  | Omit<EscalateRequestTryRunCpuReadbackCopy, "request_id">;
 
 export class EscalateError extends Error {}
 
@@ -136,68 +136,64 @@ export class EscalateChannel {
   }
 
   /**
-   * Request a host-side cpu-readback acquire of an already-registered
-   * surface. `surfaceId` is the host-assigned `u64`; we marshal it as
-   * a decimal string per the JTD wire format. `mode` is `"read"` or
-   * `"write"`.
-   *
-   * Returns the `ok`-payload, which includes `cpu_readback_planes` —
-   * a list of per-plane descriptors `{staging_surface_id, width,
-   * height, bytes_per_pixel}` the subprocess uses to `check_out` each
-   * plane's staging buffer from the surface-share service.
+   * Trigger the host-side cpu-readback copy for an already-registered
+   * surface. `direction` selects `image_to_buffer` (host runs
+   * `vkCmdCopyImageToBuffer`) or `buffer_to_image` (host runs the
+   * inverse on write release). The host signals a new value on the
+   * surface's shared timeline and returns the value in `timeline_value`
+   * (decimal-string `u64`); the consumer waits on its imported
+   * `ConsumerVulkanTimelineSemaphore` at that value before reading or
+   * after writing the staging buffers' mapped bytes.
    */
-  async acquireCpuReadback(
+  async runCpuReadbackCopy(
     surfaceId: bigint | number,
-    mode: "read" | "write",
+    direction: "image_to_buffer" | "buffer_to_image",
   ): Promise<EscalateOkResponse> {
-    if (mode !== "read" && mode !== "write") {
+    if (direction !== "image_to_buffer" && direction !== "buffer_to_image") {
       throw new EscalateError(
-        `acquireCpuReadback: mode must be 'read' or 'write', got ${
-          JSON.stringify(mode)
+        `runCpuReadbackCopy: direction must be 'image_to_buffer' or 'buffer_to_image', got ${
+          JSON.stringify(direction)
         }`,
       );
     }
-    const wireMode = mode === "read"
-      ? EscalateRequestAcquireCpuReadbackMode.Read
-      : EscalateRequestAcquireCpuReadbackMode.Write;
+    const wireDirection = direction === "image_to_buffer"
+      ? EscalateRequestRunCpuReadbackCopyDirection.ImageToBuffer
+      : EscalateRequestRunCpuReadbackCopyDirection.BufferToImage;
     return await this.request({
-      op: "acquire_cpu_readback",
+      op: "run_cpu_readback_copy",
       surface_id: typeof surfaceId === "bigint"
         ? surfaceId.toString()
         : Math.trunc(surfaceId).toString(),
-      mode: wireMode,
+      direction: wireDirection,
     }) as EscalateOkResponse;
   }
 
   /**
-   * Non-blocking variant of [`acquireCpuReadback`]. Resolves to the
-   * same `ok`-payload on success. Resolves to `null` (the
-   * [`ESCALATE_CONTENDED`] sentinel) when the host's cpu-readback
-   * adapter reports the surface as contended. Rejects on hard errors
-   * (no bridge, surface not registered, malformed `surfaceId`, GPU
-   * submit failure).
+   * Non-blocking variant of [`runCpuReadbackCopy`]. Resolves to the
+   * same `ok`-payload on success or to `null` on contention; rejects
+   * on hard errors.
    */
-  async tryAcquireCpuReadback(
+  async tryRunCpuReadbackCopy(
     surfaceId: bigint | number,
-    mode: "read" | "write",
+    direction: "image_to_buffer" | "buffer_to_image",
   ): Promise<EscalateOkResponse | null> {
-    if (mode !== "read" && mode !== "write") {
+    if (direction !== "image_to_buffer" && direction !== "buffer_to_image") {
       throw new EscalateError(
-        `tryAcquireCpuReadback: mode must be 'read' or 'write', got ${
-          JSON.stringify(mode)
+        `tryRunCpuReadbackCopy: direction must be 'image_to_buffer' or 'buffer_to_image', got ${
+          JSON.stringify(direction)
         }`,
       );
     }
-    const wireMode = mode === "read"
-      ? EscalateRequestTryAcquireCpuReadbackMode.Read
-      : EscalateRequestTryAcquireCpuReadbackMode.Write;
+    const wireDirection = direction === "image_to_buffer"
+      ? EscalateRequestTryRunCpuReadbackCopyDirection.ImageToBuffer
+      : EscalateRequestTryRunCpuReadbackCopyDirection.BufferToImage;
     return await this.request(
       {
-        op: "try_acquire_cpu_readback",
+        op: "try_run_cpu_readback_copy",
         surface_id: typeof surfaceId === "bigint"
           ? surfaceId.toString()
           : Math.trunc(surfaceId).toString(),
-        mode: wireMode,
+        direction: wireDirection,
       },
       { allowContended: true },
     );

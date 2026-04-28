@@ -105,59 +105,59 @@ class EscalateChannel:
             }
         )
 
-    def acquire_cpu_readback(
-        self, surface_id: int, mode: str
+    def run_cpu_readback_copy(
+        self, surface_id: int, direction: str
     ) -> Dict[str, Any]:
-        """Request a host-side cpu-readback acquire of an already-registered
-        surface. ``surface_id`` is the host-assigned ``u64`` (we marshal it
-        as decimal string per the JTD wire format). ``mode`` is ``"read"``
-        or ``"write"``.
+        """Trigger the host-side cpu-readback copy for an already-registered
+        surface. ``direction`` is ``"image_to_buffer"`` (host runs
+        `vkCmdCopyImageToBuffer` so the consumer can read the latest
+        image bytes) or ``"buffer_to_image"`` (host runs
+        `vkCmdCopyBufferToImage` so the consumer's writes land back in
+        the source `VkImage`).
 
         Returns the ``ok``-payload dict, which includes
-        ``cpu_readback_planes`` — a list of per-plane descriptors
-        ``{staging_surface_id, width, height, bytes_per_pixel}`` the
-        subprocess uses to ``check_out`` each plane's staging buffer
-        from the surface-share service.
+        ``timeline_value`` — the decimal-string `u64` the host-adapter
+        signaled on its shared timeline semaphore. The consumer is
+        expected to wait on the imported timeline at this value before
+        reading / after writing the staging buffer's mapped bytes.
 
-        On failure raises :class:`EscalateError`. Blocking — on
-        contention this call waits until the host's adapter can grant
-        access. Use :meth:`try_acquire_cpu_readback` to probe-and-skip
-        instead.
+        Blocking — on host-side contention this call waits until the
+        adapter can dispatch the copy. Use :meth:`try_run_cpu_readback_copy`
+        to probe-and-skip instead.
         """
-        if mode not in ("read", "write"):
+        if direction not in ("image_to_buffer", "buffer_to_image"):
             raise ValueError(
-                f"acquire_cpu_readback: mode must be 'read' or 'write', got {mode!r}"
+                "run_cpu_readback_copy: direction must be 'image_to_buffer' "
+                f"or 'buffer_to_image', got {direction!r}"
             )
         return self.request(
             {
-                "op": "acquire_cpu_readback",
+                "op": "run_cpu_readback_copy",
                 "surface_id": str(int(surface_id)),
-                "mode": mode,
+                "direction": direction,
             }
         )
 
-    def try_acquire_cpu_readback(
-        self, surface_id: int, mode: str
+    def try_run_cpu_readback_copy(
+        self, surface_id: int, direction: str
     ) -> Optional[Dict[str, Any]]:
-        """Non-blocking variant of :meth:`acquire_cpu_readback`.
+        """Non-blocking variant of :meth:`run_cpu_readback_copy`.
 
-        Returns the same ``ok``-payload dict as :meth:`acquire_cpu_readback`
-        on success. Returns ``None`` when the host's cpu-readback adapter
-        reports the surface as contended (already write-held, or, for
-        ``"write"`` mode, read-held); the subprocess gets no handle and
-        nothing to release. Raises :class:`EscalateError` for hard
-        failures (no bridge, surface not registered, malformed
-        ``surface_id``, GPU submit failure).
+        Returns the same ``ok``-payload dict on success. Returns
+        ``None`` when the host's cpu-readback bridge reports the
+        surface as contended; raises :class:`EscalateError` for hard
+        failures.
         """
-        if mode not in ("read", "write"):
+        if direction not in ("image_to_buffer", "buffer_to_image"):
             raise ValueError(
-                f"try_acquire_cpu_readback: mode must be 'read' or 'write', got {mode!r}"
+                "try_run_cpu_readback_copy: direction must be 'image_to_buffer' "
+                f"or 'buffer_to_image', got {direction!r}"
             )
         return self.request(
             {
-                "op": "try_acquire_cpu_readback",
+                "op": "try_run_cpu_readback_copy",
                 "surface_id": str(int(surface_id)),
-                "mode": mode,
+                "direction": direction,
             },
             allow_contended=True,
         )

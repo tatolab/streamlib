@@ -196,9 +196,8 @@ freshly-populated staging FD.
 | `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path. |
 | `streamlib-adapter-cpu-readback` | Same shape: host pre-registers a HOST_VISIBLE staging `VkBuffer` + a timeline semaphore via surface-share; subprocess imports through `ConsumerVulkanPixelBuffer` + `ConsumerVulkanTimelineSemaphore`. Per-acquire is a thin `RunCpuReadbackCopy(surface_id)` IPC that triggers the host's `vkCmdCopyImageToBuffer` and returns the timeline value to wait on. Subprocess waits on the imported timeline through the carve-out, then mmaps the pre-imported staging buffer. |
 
-`vulkan/opengl/skia` adapters already follow this shape after #560
-Phase 2. `cpu-readback`'s rewire is the cpu-readback rewire issue
-under milestone #16.
+All four adapters (vulkan, opengl, cpu-readback after #562; skia
+once #513 lands) follow this shape — no outliers.
 
 ## Customer-facing surface — unchanged
 
@@ -449,28 +448,19 @@ property is load-bearing.
 
 ## Implementation issues
 
-The subprocess runtimes for the three already-shipped adapters all
-flow through the single-pattern shape post-#560:
+The subprocess runtimes for all three already-shipped adapters flow
+through the single-pattern shape post-#560 / #562:
 
-- ~~`#529` — `feat(adapter-cpu-readback): subprocess
-  CpuReadbackContext runtime + cv2 fixture` — escalate IPC seam~~
-  — Closed under the dual-seam framing. The cpu-readback rewire
-  issue under milestone #16 supersedes this: cpu-readback joins
-  the unified shape (pre-registered staging + timeline via
-  surface-share, thin per-acquire copy trigger).
 - `#530` — `feat(adapter-opengl): subprocess OpenGlContext
   runtime + scenario binary` — single-pattern shape, lives in
   consumer-rhi.
 - `#531` — `feat(adapter-vulkan): subprocess VulkanContext
   runtime + scenario binary` — single-pattern shape, lives in
   consumer-rhi.
-
-Suggested implementation order: cpu-readback first (smallest
-data shape; escalate-IPC seam is well-trodden), opengl second
-(DRM-modifier import path already exists in
-`polyglot-dma-buf-consumer`), vulkan third (most plumbing,
-biggest blast radius if any of the others surfaces a design
-gap).
+- `#562` — `refactor(adapter-cpu-readback): rewire to ride
+  consumer-rhi import path (Path E)` — folds cpu-readback under
+  the single-pattern shape. Replaces the per-acquire FD-passing
+  framing in the now-superseded #529.
 
 `#513` (Skia host crate) is not yet implemented; its subprocess
 runtime issue should be filed once #513 lands and inherits this

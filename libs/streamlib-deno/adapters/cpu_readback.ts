@@ -4,39 +4,37 @@
 /**
  * Explicit GPU→CPU surface adapter — Deno customer-facing API.
  *
- * Mirrors the Rust crate `streamlib-adapter-cpu-readback` (#514, #529,
- * #533). The subprocess's actual GPU→CPU copy is performed by the
- * host (the adapter runs in-process on the host and issues
- * `vkCmdCopyImageToBuffer` against per-plane HOST_VISIBLE staging
- * buffers).
+ * Mirrors the Rust crate `streamlib-adapter-cpu-readback` (#562, Path E
+ * single-pattern shape). The subprocess delegates to
+ * `streamlib-deno-native`'s `sldn_cpu_readback_*` FFI surface, which
+ * itself wraps the host adapter crate's
+ * `CpuReadbackSurfaceAdapter<ConsumerVulkanDevice>` against a
+ * subprocess-local Vulkan device. Per-acquire control flow:
  *
- *  - `CpuReadbackPlaneView` / `CpuReadbackPlaneViewMut` — per-plane
- *    byte slices (`Uint8Array`) and dimensions in plane texels. NV12
- *    UV plane has half the surface width × half the surface height.
- *  - `CpuReadbackReadView` / `CpuReadbackWriteView` — surface-level
- *    metadata plus the array of plane views inside `acquireRead` /
- *    `acquireWrite` scopes. `planeCount` reflects the surface's
- *    `SurfaceFormat`: 1 for BGRA8/RGBA8, 2 for NV12.
- *  - `CpuReadbackContext` — concrete subprocess runtime. Wires the
- *    SDK's escalate channel (host-side `acquire` / release op) to
- *    the surface-share `resolveSurface` path (per-plane staging
- *    buffer mmap). Customers use TC39 `await using` for scoped
- *    acquire/release.
+ * 1. The Deno SDK looks the host's pre-registered cpu-readback surface
+ *    up via surface-share once (`sldn_cpu_readback_register_surface`).
+ *    The DMA-BUF FDs and timeline OPAQUE_FD are consumed by the cdylib
+ *    via `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`.
+ * 2. On every `acquireRead` / `acquireWrite` the cdylib's adapter
+ *    calls back into a JS-installed `Deno.UnsafeCallback` that sends a
+ *    `run_cpu_readback_copy` escalate-IPC request to the host. The
+ *    host runs `vkCmdCopyImageToBuffer` (or its inverse on write
+ *    release), signals the shared timeline, replies with the new
+ *    timeline value. The cdylib waits on the imported timeline through
+ *    the carve-out and hands back mapped pointers as `Uint8Array`.
  *
  * This is the **single sanctioned CPU exit** in the surface-adapter
- * architecture. GPU adapters (`vulkan`, `opengl`, `skia`)
- * deliberately do not expose CPU bytes — switching to this adapter
- * is the contractual signal that you've opted in to a host-side
- * GPU→CPU roundtrip. Do not use this in performance-critical
- * pipelines; the copy is per-acquire and the host blocks on a
- * per-submit fence.
+ * architecture. GPU adapters (`vulkan`, `opengl`, `skia`) deliberately
+ * do not expose CPU bytes — switching to this adapter is the
+ * contractual signal that you've opted in to a host-side GPU→CPU
+ * roundtrip. Do not use this in performance-critical pipelines; the
+ * copy is per-acquire and the host blocks on a per-submit timeline
+ * wait.
  *
- * Note: the API here is `async` (Promises + `await using`), unlike
- * the synchronous Python equivalent. Deno's stdio + the escalate
- * channel are Promise-based; the language idiom for scoped async
- * release is `await using`. Customers `await` the acquire, then
- * leave scope normally — the guard's `[Symbol.asyncDispose]` runs
- * the release.
+ * The acquire / release API here is `async` (Promises + `await using`)
+ * because the trigger callback's escalate IPC must be `await`ed. Deno
+ * runs JS callbacks invoked from FFI on the same event loop, so the
+ * cdylib's synchronous `acquire_*` returns Promises here.
  */
 
 import {
@@ -45,37 +43,36 @@ import {
   type SurfaceFormat,
 } from "../surface_adapter.ts";
 import { getChannel } from "../escalate.ts";
-import type { EscalateChannel, EscalateResponseOk } from "../escalate.ts";
+import type { EscalateChannel } from "../escalate.ts";
+import * as log from "../log.ts";
 
 export { STREAMLIB_ADAPTER_ABI_VERSION };
 
-/** Minimal subset of `GpuContextLimitedAccess` the cpu-readback runtime
- * needs: per-plane staging-surface lookup. The full shape lives in
- * `context.ts`; we type against a structural subset here so tests can
- * stub it without dragging the FFI in. */
-export interface CpuReadbackGpuLimitedAccess {
-  resolveSurface(stagingSurfaceId: string): {
-    readonly width: number;
-    readonly height: number;
-    readonly bytesPerRow: number;
-    lock(readOnly: boolean): void;
-    unlock(readOnly: boolean): void;
-    asBuffer(): ArrayBuffer;
-    release(): void;
-  };
-}
+/** Direction wire constants — match `SLDN_CPU_READBACK_DIRECTION_*`. */
+const DIRECTION_IMAGE_TO_BUFFER = 0;
+const DIRECTION_BUFFER_TO_IMAGE = 1;
+
+const RC_OK = 0;
+const RC_CONTENDED = 1;
+
+/** Maximum planes the cdylib's view struct exposes. Matches
+ * `SLDN_CPU_READBACK_MAX_PLANES`. */
+const MAX_PLANES = 4;
+
+/** `#[repr(C)]` plane struct: `{ptr u8, u32 w, u32 h, u32 bpp, u64 byte_size}`
+ * with 4-byte tail padding before alignment to 8-byte boundary →
+ * 8 + 4 + 4 + 4 + 4 (pad) + 8 = 32 bytes per plane. */
+const PLANE_STRIDE = 32;
+/** View struct: `{u32 w, u32 h, u32 fmt, u32 plane_count, planes[MAX_PLANES]}`
+ * → 16 + MAX_PLANES * PLANE_STRIDE. */
+const VIEW_STRUCT_SIZE = 16 + MAX_PLANES * PLANE_STRIDE;
 
 /** Read-only view of a single plane of an acquired surface. */
 export interface CpuReadbackPlaneView {
-  /** Plane width in texels. */
   readonly width: number;
-  /** Plane height in texels. */
   readonly height: number;
-  /** Bytes per texel of this plane (BGRA: 4, NV12 Y: 1, NV12 UV: 2). */
   readonly bytesPerPixel: number;
-  /** Tightly-packed row stride in bytes (`width * bytesPerPixel`). */
   readonly rowStride: number;
-  /** Read-only view of this plane's staging buffer. */
   readonly bytes: Uint8Array;
 }
 
@@ -85,7 +82,6 @@ export interface CpuReadbackPlaneViewMut {
   readonly height: number;
   readonly bytesPerPixel: number;
   readonly rowStride: number;
-  /** Mutable view of this plane's staging buffer. */
   readonly bytes: Uint8Array;
 }
 
@@ -94,17 +90,14 @@ export interface CpuReadbackReadView {
   readonly width: number;
   readonly height: number;
   readonly format: SurfaceFormat;
-  /** Number of planes (1 for BGRA/RGBA, 2 for NV12). */
   readonly planeCount: number;
-  /** All planes in declaration order — for NV12, `[Y, UV]`. */
   readonly planes: readonly CpuReadbackPlaneView[];
-  /** Borrow plane `index`. Throws `RangeError` on out-of-range. */
   plane(index: number): CpuReadbackPlaneView;
 }
 
 /** Write-side view inside an `acquireWrite` scope. Edits to any
- * plane's `bytes` are flushed back to the host `VkImage` via per-
- * plane `vkCmdCopyBufferToImage` on guard drop. */
+ * plane's `bytes` are flushed back to the host `VkImage` on guard
+ * drop. */
 export interface CpuReadbackWriteView {
   readonly width: number;
   readonly height: number;
@@ -116,251 +109,392 @@ export interface CpuReadbackWriteView {
 
 /** Async-disposable guard returned by `acquireRead` / `acquireWrite`.
  * `await using` runs `[Symbol.asyncDispose]` at scope exit, which
- * unlocks every plane's staging buffer and tells the host to release
- * the adapter guard (CPU→GPU flush on write + timeline signal). */
+ * tells the host to release the adapter guard (CPU→GPU flush on
+ * write + timeline signal). */
 export interface CpuReadbackAccessGuard<V> extends AsyncDisposable {
   readonly view: V;
-  readonly handleId: string;
 }
 
-const _FORMAT_FROM_WIRE: Record<string, SurfaceFormat> = {
-  bgra8: 0 as SurfaceFormat, // SurfaceFormat.BGRA8
-  rgba8: 1 as SurfaceFormat, // SurfaceFormat.RGBA8
-  nv12: 2 as SurfaceFormat, // SurfaceFormat.NV12
-};
-
-function _formatFromWire(wire: string | undefined): SurfaceFormat {
-  if (!wire) return 0 as SurfaceFormat; // BGRA8 default
-  const fmt = _FORMAT_FROM_WIRE[wire.toLowerCase()];
-  if (fmt === undefined) {
-    throw new Error(
-      `unknown cpu-readback surface format on the wire: ${JSON.stringify(wire)}`,
-    );
-  }
-  return fmt;
+/** Minimal subset of `GpuContextLimitedAccess` the cpu-readback runtime
+ * needs. The full shape lives in `context.ts`; we type against a
+ * structural subset here so tests can stub it without dragging the
+ * FFI in. */
+export interface CpuReadbackGpuLimitedAccess {
+  resolveSurface(poolId: string): {
+    readonly nativeHandlePtr: Deno.PointerObject | null;
+    release(): void;
+  };
+  // deno-lint-ignore no-explicit-any
+  readonly nativeLib: { readonly symbols: any };
 }
 
-function _surfaceIdFrom(surface: StreamlibSurface | bigint | number): bigint {
-  if (typeof surface === "bigint") return surface;
-  if (typeof surface === "number") return BigInt(Math.trunc(surface));
-  // StreamlibSurface descriptor
-  const id = (surface as { id?: bigint | number }).id;
+let _SURFACE_ID_COUNTER = 0n;
+function nextSurfaceId(): bigint {
+  _SURFACE_ID_COUNTER += 1n;
+  return _SURFACE_ID_COUNTER;
+}
+
+let _SHARED_INSTANCE: CpuReadbackContext | null = null;
+
+function surfacePoolId(
+  surface: StreamlibSurface | string | bigint | number,
+): string {
+  if (typeof surface === "string") return surface;
+  if (typeof surface === "bigint") return surface.toString();
+  if (typeof surface === "number") return String(Math.trunc(surface));
+  const id = (surface as { id?: bigint | string | number }).id;
   if (id === undefined) {
     throw new TypeError(
-      `CpuReadbackContext: expected StreamlibSurface, bigint, or number — got ${
-        typeof surface
-      }`,
+      `CpuReadbackContext: expected StreamlibSurface or pool_id, got ${typeof surface}`,
     );
   }
-  return typeof id === "bigint" ? id : BigInt(Math.trunc(id));
+  return String(id);
+}
+
+function surfaceFormatFrom(
+  surface: StreamlibSurface | string | bigint | number,
+): SurfaceFormat {
+  if (typeof surface === "object" && surface !== null) {
+    const fmt = (surface as { format?: number }).format;
+    if (fmt !== undefined) return fmt as SurfaceFormat;
+  }
+  return 0 as SurfaceFormat; // BGRA8 default
 }
 
 /** Customer-facing context for the Deno subprocess SDK.
  *
- * Customers obtain one via the SDK's `adapters` factory; tests
- * construct one directly with `new CpuReadbackContext(gpu, escalate)`.
- *
  *     await using guard = await ctx.acquireWrite(surface);
  *     guard.view.plane(0).bytes.set(myImage);
  *     // [Symbol.asyncDispose] runs at scope exit:
- *     //   unlock + release every plane staging buffer, then
- *     //   send release_handle so the host flushes CPU→GPU.
+ *     //   release the adapter guard so the host flushes CPU→GPU.
  */
 export class CpuReadbackContext {
   private readonly gpu: CpuReadbackGpuLimitedAccess;
   private readonly escalate: EscalateChannel;
+  // deno-lint-ignore no-explicit-any
+  private readonly symbols: any;
+  private readonly rt: Deno.PointerObject;
+  private readonly triggerCallback: Deno.UnsafeCallback;
+  private readonly surfaceIds = new Map<string, bigint>();
+  private readonly resolvedHandles = new Map<
+    string,
+    ReturnType<CpuReadbackGpuLimitedAccess["resolveSurface"]>
+  >();
 
   constructor(gpu: CpuReadbackGpuLimitedAccess, escalate: EscalateChannel) {
     this.gpu = gpu;
     this.escalate = escalate;
+    this.symbols = gpu.nativeLib.symbols;
+    const rtPtr = this.symbols.sldn_cpu_readback_runtime_new();
+    if (rtPtr === null) {
+      throw new Error(
+        "CpuReadbackContext: sldn_cpu_readback_runtime_new returned NULL — " +
+          "the subprocess could not bring up a Vulkan device. Check that " +
+          "libvulkan.so.1 is installed and the driver supports " +
+          "VK_KHR_external_memory_fd, VK_EXT_external_memory_dma_buf, and " +
+          "VK_KHR_external_semaphore_fd.",
+      );
+    }
+    this.rt = rtPtr;
+
+    // The trigger callback receives synchronous calls FROM the cdylib
+    // during `acquire_*`. Inside it we'd ordinarily dispatch the
+    // escalate IPC, but Deno's escalate channel is async (Promises) and
+    // `Deno.UnsafeCallback` cannot `await`. The bridge:
+    //
+    //   1. `_acquire` issues the async escalate IPC FIRST and stores
+    //      the host's `timeline_value` in `_pendingTimelineValue`.
+    //   2. `_acquire` then calls the synchronous cdylib `acquire_*`,
+    //      which calls back into this callback.
+    //   3. The callback reads the cell, returns the value as `u64`,
+    //      and clears the cell.
+    //
+    // The cdylib's FFI returns the timeline value directly as `u64`
+    // (rather than via an out-pointer) so this callback never needs
+    // to write through a foreign pointer — `Deno.UnsafePointerView`
+    // is read-only. 0 is the host's unused-by-construction sentinel
+    // for "trigger failed" (the host adapter starts every timeline at
+    // 0 and only ever signals values >= 1).
+    //
+    // Single-flight escalate channel + single-threaded JS event loop
+    // guarantees no interleaving between priming and the FFI call.
+    this.triggerCallback = new Deno.UnsafeCallback(
+      {
+        parameters: ["pointer", "u64", "u32"] as const,
+        result: "u64" as const,
+      },
+      (
+        _userData: Deno.PointerValue,
+        _surfaceId: bigint,
+        _direction: number,
+      ): bigint => {
+        if (_pendingTimelineValue === null) {
+          return 0n;
+        }
+        const value = _pendingTimelineValue;
+        _pendingTimelineValue = null;
+        return value;
+      },
+    );
+    const rc: number = this.symbols.sldn_cpu_readback_set_trigger_callback(
+      this.rt,
+      this.triggerCallback.pointer,
+      null,
+    );
+    if (rc !== 0) {
+      this.triggerCallback.close();
+      throw new Error(
+        `CpuReadbackContext: set_trigger_callback returned ${rc}`,
+      );
+    }
   }
 
-  /**
-   * Build from a typed runtime context. Mirrors Python's
-   * `CpuReadbackContext.from_runtime`. Pulls the process-wide escalate
-   * channel singleton (installed by the subprocess runner) and pairs
-   * it with the runtime context's `gpuLimitedAccess`.
-   */
   static fromRuntime(
     ctx: { readonly gpuLimitedAccess: CpuReadbackGpuLimitedAccess },
   ): CpuReadbackContext {
-    return new CpuReadbackContext(ctx.gpuLimitedAccess, getChannel());
+    if (_SHARED_INSTANCE === null) {
+      _SHARED_INSTANCE = new CpuReadbackContext(
+        ctx.gpuLimitedAccess,
+        getChannel(),
+      );
+    }
+    return _SHARED_INSTANCE;
+  }
+
+  /** Close the cdylib runtime and the trigger callback. After
+   * `close()` the context is unusable; this is mostly for tests. */
+  close(): void {
+    this.symbols.sldn_cpu_readback_runtime_free(this.rt);
+    this.triggerCallback.close();
+    _SHARED_INSTANCE = null;
+  }
+
+  private resolveAndRegister(poolId: string, format: SurfaceFormat): bigint {
+    const cached = this.surfaceIds.get(poolId);
+    if (cached !== undefined) return cached;
+    const handle = this.gpu.resolveSurface(poolId);
+    const handlePtr = handle.nativeHandlePtr;
+    if (handlePtr === null) {
+      throw new Error(
+        `CpuReadbackContext: resolveSurface('${poolId}') returned a handle with a null native pointer`,
+      );
+    }
+    const surfaceId = nextSurfaceId();
+    const rc: number = this.symbols.sldn_cpu_readback_register_surface(
+      this.rt,
+      surfaceId,
+      handlePtr,
+      Number(format),
+    );
+    if (rc !== 0) {
+      throw new Error(
+        `CpuReadbackContext: register_surface failed for pool_id ` +
+          `'${poolId}' (rc=${rc}). Typically a missing sync_fd or a ` +
+          `plane-count mismatch with format ${format}.`,
+      );
+    }
+    this.surfaceIds.set(poolId, surfaceId);
+    this.resolvedHandles.set(poolId, handle);
+    return surfaceId;
   }
 
   async acquireRead(
-    surface: StreamlibSurface | bigint | number,
+    surface: StreamlibSurface | string | bigint | number,
   ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView>> {
-    return await this._acquire(surface, "read", false);
+    return await this._acquire(surface, false, true) as CpuReadbackAccessGuard<
+      CpuReadbackReadView
+    >;
   }
 
   async acquireWrite(
-    surface: StreamlibSurface | bigint | number,
+    surface: StreamlibSurface | string | bigint | number,
   ): Promise<CpuReadbackAccessGuard<CpuReadbackWriteView>> {
-    return (await this._acquire(
-      surface,
-      "write",
-      true,
-    )) as CpuReadbackAccessGuard<CpuReadbackWriteView>;
+    return await this._acquire(surface, true, true) as CpuReadbackAccessGuard<
+      CpuReadbackWriteView
+    >;
   }
 
-  /** Non-blocking variant. Resolves to the same scoped guard on
-   * success or `null` when the host's adapter reports the surface as
-   * contended. Customers pattern: ::
-   *
-   *     await using guard = await ctx.tryAcquireRead(surface);
-   *     if (guard === null) return;  // skip this frame
-   *     // use guard.view as if it came from acquireRead.
-   *
-   * `await using` on `null` is a no-op (the runtime treats `null`
-   * as a non-disposable), so the skip branch needs no extra cleanup.
-   */
   async tryAcquireRead(
-    surface: StreamlibSurface | bigint | number,
+    surface: StreamlibSurface | string | bigint | number,
   ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView> | null> {
-    return (await this._tryAcquire(surface, "read", false)) as
+    return await this._acquire(surface, false, false) as
       | CpuReadbackAccessGuard<CpuReadbackReadView>
       | null;
   }
 
   async tryAcquireWrite(
-    surface: StreamlibSurface | bigint | number,
+    surface: StreamlibSurface | string | bigint | number,
   ): Promise<CpuReadbackAccessGuard<CpuReadbackWriteView> | null> {
-    return (await this._tryAcquire(surface, "write", true)) as
+    return await this._acquire(surface, true, false) as
       | CpuReadbackAccessGuard<CpuReadbackWriteView>
       | null;
   }
 
-  private async _tryAcquire(
-    surface: StreamlibSurface | bigint | number,
-    mode: "read" | "write",
-    writable: boolean,
-  ): Promise<
-    CpuReadbackAccessGuard<CpuReadbackReadView | CpuReadbackWriteView> | null
-  > {
-    const surfaceId = _surfaceIdFrom(surface);
-    const response = await this.escalate.tryAcquireCpuReadback(surfaceId, mode);
-    if (response === null) return null;
-    return await this._buildGuardFromResponse(response, writable);
-  }
-
   private async _acquire(
-    surface: StreamlibSurface | bigint | number,
-    mode: "read" | "write",
-    writable: boolean,
-  ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView | CpuReadbackWriteView>> {
-    const surfaceId = _surfaceIdFrom(surface);
-    const response = await this.escalate.acquireCpuReadback(surfaceId, mode);
-    return await this._buildGuardFromResponse(response, writable);
-  }
+    surface: StreamlibSurface | string | bigint | number,
+    write: boolean,
+    blocking: boolean,
+  ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView | CpuReadbackWriteView> | null> {
+    const poolId = surfacePoolId(surface);
+    const format = surfaceFormatFrom(surface);
+    const surfaceId = this.resolveAndRegister(poolId, format);
 
-  private async _buildGuardFromResponse(
-    response: EscalateResponseOk,
-    writable: boolean,
-  ): Promise<CpuReadbackAccessGuard<CpuReadbackReadView | CpuReadbackWriteView>> {
-    const handleId = response.handle_id;
+    // Prime the trigger cell with the host's timeline value BEFORE we
+    // call into the cdylib's synchronous acquire. The cdylib calls
+    // back into the JS trigger to fetch the value during the same
+    // call; the trigger reads from `_pendingTimelineValue` and zeros it.
+    //
+    // Both read and write acquires drive an `image_to_buffer` copy
+    // first (write mode flushes back via `buffer_to_image` on dispose).
+    // Single-flight escalate channel + single-threaded event loop
+    // means no interleaving between `prime` and the FFI call.
+    const response = await this.escalate.runCpuReadbackCopy(
+      surfaceId,
+      "image_to_buffer",
+    );
+    _pendingTimelineValue = BigInt(response.timeline_value);
 
-    let view: CpuReadbackReadView | CpuReadbackWriteView;
-    const lockedHandles: ReturnType<
-      CpuReadbackGpuLimitedAccess["resolveSurface"]
-    >[] = [];
-    try {
-      view = this._buildView(response, writable, lockedHandles);
-    } catch (e) {
-      // Unwind any plane handles already locked, then drop the host's
-      // adapter guard so it doesn't leak.
-      this._releaseLocked(lockedHandles, writable);
-      try {
-        await this.escalate.releaseHandle(handleId);
-      } catch (_releaseErr) {
-        // Surface the original failure — release errors during a
-        // failure unwind are diagnostic-only.
-      }
-      throw e;
-    }
-
-    const release = async () => {
-      this._releaseLocked(lockedHandles, writable);
-      await this.escalate.releaseHandle(handleId);
-    };
-
-    return {
-      view,
-      handleId,
-      [Symbol.asyncDispose]: release,
-    };
-  }
-
-  private _releaseLocked(
-    handles: ReturnType<CpuReadbackGpuLimitedAccess["resolveSurface"]>[],
-    writable: boolean,
-  ): void {
-    // Release in reverse acquire order. Best-effort: a single bad
-    // handle must not block the rest of the cleanup.
-    for (let i = handles.length - 1; i >= 0; i -= 1) {
-      const handle = handles[i];
-      try {
-        handle.unlock(!writable);
-      } catch (_e) { /* swallow */ }
-      try {
-        handle.release();
-      } catch (_e) { /* swallow */ }
-    }
-    handles.length = 0;
-  }
-
-  private _buildView(
-    response: EscalateResponseOk,
-    writable: boolean,
-    lockedHandles: ReturnType<
-      CpuReadbackGpuLimitedAccess["resolveSurface"]
-    >[],
-  ): CpuReadbackReadView | CpuReadbackWriteView {
-    const format = _formatFromWire(response.format);
-    const width = response.width ?? 0;
-    const height = response.height ?? 0;
-    const planeDescriptors = response.cpu_readback_planes ?? [];
-    if (planeDescriptors.length === 0) {
+    const buf = new Uint8Array(VIEW_STRUCT_SIZE);
+    const fn = blocking
+      ? (write
+        ? this.symbols.sldn_cpu_readback_acquire_write
+        : this.symbols.sldn_cpu_readback_acquire_read)
+      : (write
+        ? this.symbols.sldn_cpu_readback_try_acquire_write
+        : this.symbols.sldn_cpu_readback_try_acquire_read);
+    const rc: number = fn(this.rt, surfaceId, Deno.UnsafePointer.of(buf));
+    // Defensive cleanup — the trigger should have consumed the value,
+    // but if the cdylib short-circuited (e.g. surface not registered)
+    // we don't want a stale value to bleed into the next acquire.
+    _pendingTimelineValue = null;
+    if (rc === RC_CONTENDED) return null;
+    if (rc !== RC_OK) {
       throw new Error(
-        "cpu-readback acquire response missing cpu_readback_planes",
+        `CpuReadbackContext.${blocking ? "" : "try_"}acquire_${
+          write ? "write" : "read"
+        }: rc=${rc} for surface '${poolId}'`,
       );
     }
 
-    const planeViews: (CpuReadbackPlaneView | CpuReadbackPlaneViewMut)[] = [];
-    for (const descriptor of planeDescriptors) {
-      const handle = this.gpu.resolveSurface(descriptor.staging_surface_id);
-      handle.lock(!writable);
-      lockedHandles.push(handle);
+    const view = this.parseView(buf, write);
+    const surfaceIdSnapshot = surfaceId;
+    const symbols = this.symbols;
+    const rt = this.rt;
+    const escalate = this.escalate;
+    const writeMode = write;
 
-      const buf = handle.asBuffer();
-      const expected = handle.bytesPerRow * descriptor.height;
-      // The mmap may be larger than the tightly-packed plane (e.g. the
-      // staging buffer was sized to bytesPerRow*height but the response
-      // describes plane geometry). Slice to the descriptor extent so
-      // customer-visible bytes match the documented shape.
-      const bytes = new Uint8Array(buf, 0, expected);
-      planeViews.push({
-        width: descriptor.width,
-        height: descriptor.height,
-        bytesPerPixel: descriptor.bytes_per_pixel,
-        rowStride: descriptor.width * descriptor.bytes_per_pixel,
+    return {
+      view,
+      [Symbol.asyncDispose]: async () => {
+        if (writeMode) {
+          // On write release the cdylib's `end_write_access` calls back
+          // into the trigger to schedule the buffer→image flush. Same
+          // pattern as acquire — prime the cell, then call.
+          try {
+            const flushResponse = await escalate.runCpuReadbackCopy(
+              surfaceIdSnapshot,
+              "buffer_to_image",
+            );
+            _pendingTimelineValue = BigInt(flushResponse.timeline_value);
+          } catch (e) {
+            // Surface flush failure through the polyglot unified
+            // logging pathway; the cdylib logs its own context too.
+            log.error(
+              "cpu-readback write flush trigger IPC failed",
+              {
+                surfaceId: surfaceIdSnapshot.toString(),
+                error: String(e),
+              },
+            );
+            _pendingTimelineValue = 0n;
+          }
+          symbols.sldn_cpu_readback_release_write(rt, surfaceIdSnapshot);
+        } else {
+          symbols.sldn_cpu_readback_release_read(rt, surfaceIdSnapshot);
+        }
+        _pendingTimelineValue = null;
+      },
+    };
+  }
+
+  private parseView(
+    buf: Uint8Array,
+    writable: boolean,
+  ): CpuReadbackReadView | CpuReadbackWriteView {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const width = dv.getUint32(0, true);
+    const height = dv.getUint32(4, true);
+    const format = dv.getUint32(8, true) as SurfaceFormat;
+    const planeCount = dv.getUint32(12, true);
+    if (planeCount === 0) {
+      throw new Error("cpu-readback acquire returned zero planes");
+    }
+    const planes: (CpuReadbackPlaneView | CpuReadbackPlaneViewMut)[] = [];
+    for (let idx = 0; idx < planeCount && idx < MAX_PLANES; idx += 1) {
+      const offset = 16 + idx * PLANE_STRIDE;
+      // Plane struct field offsets:
+      //   ptr        : 0  (8 bytes)
+      //   width      : 8  (4)
+      //   height     : 12 (4)
+      //   bytes_per_pixel: 16 (4)
+      //   pad        : 20 (4)
+      //   byte_size  : 24 (8)
+      const mappedPtrLow = dv.getUint32(offset, true);
+      const mappedPtrHigh = dv.getUint32(offset + 4, true);
+      const mappedPtrAddr = (BigInt(mappedPtrHigh) << 32n) |
+        BigInt(mappedPtrLow);
+      const planeWidth = dv.getUint32(offset + 8, true);
+      const planeHeight = dv.getUint32(offset + 12, true);
+      const planeBpp = dv.getUint32(offset + 16, true);
+      const planeBytes = dv.getBigUint64(offset + 24, true);
+      if (mappedPtrAddr === 0n) {
+        throw new Error(
+          `cpu-readback plane ${idx} has null mapped_ptr — host staging registration may be stale`,
+        );
+      }
+      const planePtr = Deno.UnsafePointer.create(mappedPtrAddr);
+      if (planePtr === null) {
+        throw new Error(
+          `cpu-readback plane ${idx} mapped_ptr could not be wrapped`,
+        );
+      }
+      const planeView = new Deno.UnsafePointerView(planePtr);
+      const arrayBuffer = planeView.getArrayBuffer(Number(planeBytes));
+      const bytes = new Uint8Array(arrayBuffer);
+      planes.push({
+        width: planeWidth,
+        height: planeHeight,
+        bytesPerPixel: planeBpp,
+        rowStride: planeWidth * planeBpp,
         bytes,
       });
     }
-
-    return {
+    const view = {
       width,
       height,
       format,
-      planeCount: planeViews.length,
-      planes: planeViews,
-      plane(index: number) {
-        if (index < 0 || index >= planeViews.length) {
+      planeCount: planes.length,
+      planes,
+      plane(index: number): CpuReadbackPlaneView | CpuReadbackPlaneViewMut {
+        if (index < 0 || index >= planes.length) {
           throw new RangeError(
-            `cpu-readback plane index ${index} out of range (0..${planeViews.length})`,
+            `cpu-readback plane index ${index} out of range (0..${planes.length})`,
           );
         }
-        return planeViews[index];
+        return planes[index];
       },
-    } as CpuReadbackReadView | CpuReadbackWriteView;
+    };
+    return writable
+      ? (view as unknown as CpuReadbackWriteView)
+      : (view as unknown as CpuReadbackReadView);
   }
 }
+
+// Module-scoped cell used to thread the host's timeline value from the
+// async escalate IPC response into the synchronous trigger callback
+// the cdylib calls during `acquire_*`. Single-flight escalate + single-
+// threaded event loop means no interleaving — between `_acquire`
+// priming the cell and the cdylib calling the trigger, no other
+// JS code runs.
+let _pendingTimelineValue: bigint | null = null;
+

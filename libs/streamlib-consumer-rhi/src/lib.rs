@@ -70,7 +70,7 @@ pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;
 pub use consumer_vulkan_texture::ConsumerVulkanTexture;
 #[cfg(target_os = "linux")]
 pub use device_capability::{
-    ConsumerMarker, DevicePrivilege, VulkanRhiDevice, VulkanTextureLike,
+    ConsumerMarker, DevicePrivilege, VulkanPixelBufferLike, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike,
 };
 

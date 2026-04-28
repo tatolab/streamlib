@@ -15,6 +15,7 @@ members = [
     "libs/streamlib-adapter-vulkan-helpers", # Test-helper binaries for streamlib-adapter-vulkan — held in a dedicated crate so streamlib doesn't leak into adapter-vulkan's runtime dep graph (Linux)
     "libs/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux)
     "libs/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux)
+    "libs/streamlib-adapter-cpu-readback-helpers", # Test-helper binaries for streamlib-adapter-cpu-readback — held in a dedicated crate so streamlib doesn't leak into adapter-cpu-readback's runtime dep graph (Linux)
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC

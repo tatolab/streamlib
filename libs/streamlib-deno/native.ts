@@ -242,6 +242,62 @@ const symbols = {
     ] as const,
     result: "i32" as const,
   },
+
+  // cpu-readback adapter runtime (#562, Linux). Same shape as
+  // `sldn_vulkan_*` — adapter generic over device flavor; this cdylib
+  // instantiates it against `ConsumerVulkanDevice`. Per-acquire copy
+  // runs host-side via a `run_cpu_readback_copy` escalate IPC; the
+  // SDK installs a trigger callback that wraps that call.
+  sldn_cpu_readback_runtime_new: {
+    parameters: [] as const,
+    result: "pointer" as const,
+  },
+  sldn_cpu_readback_runtime_free: {
+    parameters: ["pointer"] as const,
+    result: "void" as const,
+  },
+  // The callback parameter is typed as `pointer` here because Deno
+  // FFI doesn't have a dedicated `function` slot for received-from-JS
+  // callbacks — the SDK creates a `Deno.UnsafeCallback` and passes
+  // its `.pointer` field. Callback signature on the cdylib side is
+  // `(*mut c_void user_data, u64 surface_id, u32 direction) -> u64`
+  // (timeline value; 0 sentinel for failure).
+  sldn_cpu_readback_set_trigger_callback: {
+    parameters: ["pointer", "pointer", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cpu_readback_register_surface: {
+    parameters: ["pointer", "u64", "pointer", "u32"] as const,
+    result: "i32" as const,
+  },
+  sldn_cpu_readback_unregister_surface: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_cpu_readback_acquire_read: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cpu_readback_acquire_write: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cpu_readback_try_acquire_read: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cpu_readback_try_acquire_write: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cpu_readback_release_read: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_cpu_readback_release_write: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
 } as const;
 
 export type NativeLib = Deno.DynamicLibrary<typeof symbols>;

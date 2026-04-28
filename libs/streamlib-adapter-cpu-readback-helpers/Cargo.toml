@@ -1,19 +1,19 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Test-helper binaries for `streamlib-adapter-vulkan`. Held in a
+# Test-helper binaries for `streamlib-adapter-cpu-readback`. Held in a
 # dedicated crate so the `streamlib` runtime dep these helpers need
 # does NOT propagate into the adapter's runtime dep graph (and from
 # there into `streamlib-python-native` / `-deno-native`, which must
-# stay `streamlib`-free per #560).
+# stay `streamlib`-free per #560 / #562).
 #
-# `streamlib-adapter-vulkan/tests/*` reach the bin via
+# `streamlib-adapter-cpu-readback/tests/*` reach the bin via
 # `env!("CARGO_BIN_EXE_<name>")`, set automatically when the helpers
 # crate is referenced as a dev-dependency.
 
 [package]
-name = "streamlib-adapter-vulkan-helpers"
-description = "Test-helper binaries for streamlib-adapter-vulkan. Internal — not published; the helpers exist solely so adapter-vulkan tests can spawn a subprocess that brings up a real HostVulkanDevice without forcing streamlib onto adapter-vulkan's runtime dep graph."
+name = "streamlib-adapter-cpu-readback-helpers"
+description = "Test-helper binaries for streamlib-adapter-cpu-readback. Internal — not published; the helpers exist solely so adapter-cpu-readback tests and a carve-out semantic test can spawn a subprocess that brings up a real ConsumerVulkanDevice without forcing streamlib onto adapter-cpu-readback's runtime dep graph."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -29,7 +29,7 @@ path = "src/lib.rs"
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib = { path = "../streamlib" }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
-streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
+streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback" }
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 streamlib-surface-client = { path = "../streamlib-surface-client" }
 vulkanalia.workspace = true
@@ -46,8 +46,8 @@ libc.workspace = true
 serial_test = "3.2"
 
 [[bin]]
-name = "vulkan_adapter_subprocess_helper"
-path = "src/bin/vulkan_adapter_subprocess_helper.rs"
+name = "cpu_readback_adapter_subprocess_helper"
+path = "src/bin/cpu_readback_adapter_subprocess_helper.rs"
 
 [lints]
 workspace = true

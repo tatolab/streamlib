@@ -103,19 +103,14 @@ three flow through the same `consumer-rhi` types.
 | Tiled-image import (`VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`) | **Carve-out** | Same crate |
 | HOST_VISIBLE staging-buffer import (cpu-readback) | **Carve-out** | Same crate (`ConsumerVulkanPixelBuffer`) |
 
-## Today (post-#560 Phase 2)
+## Today (post-#560 Phase 2 + #562 cpu-readback rewire)
 
-> Updated 2026-04-28 — #560 Phase 2 landed; the cdylib swap to
-> `ConsumerVulkanDevice` and the `streamlib-consumer-rhi` crate
-> extraction are in for the Vulkan and OpenGL adapters. The
-> capability boundary is type-system enforced for those two.
->
-> **cpu-readback is the outlier**: still on bespoke per-acquire
-> escalate-IPC FD passing, runtime-deps the full `streamlib` crate,
-> doesn't ride consumer-rhi. The cpu-readback rewire (Path E in the
-> #560 PR thread) folds it under the same single-pattern shape as
-> vulkan/opengl. Tracked under milestone *Surface Adapter
-> Architecture*; this section flips when that issue lands.
+> Updated 2026-04-28 — #562 cpu-readback rewire (Path E) landed.
+> The cdylib swap to `ConsumerVulkanDevice` and the
+> `streamlib-consumer-rhi` crate extraction now hold for **all three
+> active adapters** (Vulkan, OpenGL, cpu-readback); Skia (#513) is
+> frozen until its host crate ships and will land directly on the
+> single-pattern shape from day one.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -131,51 +126,52 @@ three flow through the same `consumer-rhi` types.
 │  │ streamlib-consumer-rhi (#560 — standalone crate)              │   │
 │  │ ConsumerVulkanDevice, ConsumerVulkan{Texture,PixelBuffer,     │   │
 │  │ TimelineSemaphore}, VulkanRhiDevice / DevicePrivilege /       │   │
-│  │ VulkanTextureLike / VulkanTimelineSemaphoreLike trait         │   │
-│  │ machinery, TextureFormat / TextureUsages / PixelFormat        │   │
+│  │ VulkanTextureLike / VulkanPixelBufferLike /                   │   │
+│  │ VulkanTimelineSemaphoreLike trait machinery,                  │   │
+│  │ TextureFormat / TextureUsages / PixelFormat                   │   │
 │  │ ✓ Capability boundary TYPE-SYSTEM enforced                    │   │
 │  └───────────────────────────────────────────────────────────────┘   │
-│       ▲      ▲      ⚠      (skia frozen, #513)                       │
+│       ▲      ▲      ▲       (skia frozen, #513)                      │
 │  ┌────┴──┬───┴──┬───┴────────┐                                       │
-│  │ vk-   │ gl-  │cpu-rb-     │  vk + gl ride consumer-rhi cleanly;   │
-│  │ adptr │adptr │adptr       │  cpu-readback is the OUTLIER —        │
-│  │       │      │  ⚠ FULL    │   bespoke per-acquire escalate IPC,   │
-│  │       │      │  streamlib │   runtime-deps full streamlib, no     │
-│  │       │      │  dep ⚠     │   consumer-rhi import. Rewire issue   │
-│  └───────┴──────┴────────────┘   under milestone #16 folds it under  │
-│       ▲      ▲      ▲            the same shape as the others.      │
-│       │ surface-share + escalate IPC (no compute ops)                │
+│  │ vk-   │ gl-  │cpu-rb-     │  All three adapters ride consumer-rhi.│
+│  │ adptr │adptr │adptr       │  Each is generic over                 │
+│  │       │      │            │  D: VulkanRhiDevice; the host         │
+│  │       │      │            │  instantiates against HostVulkan-     │
+│  │       │      │            │  Device, the cdylib against           │
+│  │       │      │            │  ConsumerVulkanDevice.                │
+│  └───────┴──────┴────────────┘                                       │
+│       ▲      ▲      ▲           Pre-registered surfaces via          │
+│       │ surface-share check_in (one-shot DMA-BUF + timeline FD       │
+│       │ passing); per-acquire IPC reduces to a thin trigger when     │
+│       │ host work is required (cpu-readback's vkCmdCopyImageToBuffer │
+│       │ via `run_cpu_readback_copy`; compute via #550 once landed).  │
 └───────┼──────────────────────────────────────────────────────────────┘
         ▼
 ┌──────────────────────┐         ┌──────────────────────┐
 │ PYTHON SUBPROC       │         │ DENO SUBPROC         │
 │  mod vulkan          │         │  mod vulkan          │
 │  mod opengl          │         │  mod opengl          │
+│  mod cpu_readback    │         │  mod cpu_readback    │ ← #562: shape
 │ ✗vulkan_compute_     │         │ ✗vulkan_compute_     │ ← raw vulkan
-│  dispatch (~200 LOC) │         │  dispatch (~200 LOC) │   × 2 cdylibs
+│  dispatch (~200 LOC) │         │  dispatch (~200 LOC) │   × 2 cdylibs,
+│                      │         │                      │   #550 open
 │ ✗surface_share_      │         │ ✗surface_share_      │ ← legacy,
 │  vulkan_linux (~280) │         │  vulkan_linux (~280) │   #553 open
-│ ✓Cargo: consumer-rhi │         │ ✓Cargo: consumer-rhi │ ← #560:
-│  + adapter-{abi,*};  │         │  + adapter-{abi,*};  │   capability
-│  NOT full streamlib  │         │  NOT full streamlib  │   ENFORCED
+│ ✓Cargo: consumer-rhi │         │ ✓Cargo: consumer-rhi │ ← capability
+│  + adapter-{abi,    │         │  + adapter-{abi,    │   boundary
+│   vulkan, opengl,   │         │   vulkan, opengl,   │   ENFORCED for
+│   cpu-readback};    │         │   cpu-readback};    │   all three
+│  NOT full streamlib │         │  NOT full streamlib │   adapters
 └──────────────────────┘         └──────────────────────┘
 ```
 
-`cargo tree -p streamlib-{python,deno}-native | grep -c "^streamlib v"` → **0** (Phase 2 assertion, holds at HEAD of `main` post-#560).
+`cargo tree -p streamlib-{python,deno}-native | grep -c "^streamlib v"` → **0** (assertion holds for all three adapters post-#562).
 
-## Open follow-ups (after #560 lands)
+## Open follow-ups (after #562 lands)
 
 The remaining P0s in milestone #16 close out the residual technical
 debt the consumer-rhi extraction made visible:
 
-- **cpu-readback rewire (Path E)** [P0] — fold cpu-readback under
-  the same single-pattern shape as vulkan/opengl: adapter generic
-  over `D: VulkanRhiDevice`, staging buffer + timeline pre-registered
-  via surface-share, per-acquire IPC reduced to a thin
-  `RunCpuReadbackCopy` trigger. Removes the full `streamlib` runtime
-  dep from `streamlib-adapter-cpu-readback`. Issue filed under
-  milestone #16; see also the cpu-readback section of the #560 PR
-  body for the before/after architecture.
 - **#550** [P0] — escalate-IPC `RegisterComputeKernel` +
   `RunComputeKernel`; retire the `vulkan_compute_dispatch` raw-vulkan
   helper inside each cdylib (≈200 LOC × 2 still in tree).

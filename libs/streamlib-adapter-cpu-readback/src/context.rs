@@ -1,73 +1,80 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `CpuReadbackContext` — the customer-facing one-stop API.
+//! `CpuReadbackContext<D>` — customer-facing one-stop API.
+//!
+//! Generic over the device flavor `D: VulkanRhiDevice` so the same
+//! shape works in-process Rust (host-flavor adapter) and in a
+//! subprocess cdylib (consumer-flavor adapter). Customers acquire
+//! scoped read / write access via
 //!
 //! ```ignore
-//! let ctx = streamlib_adapter_cpu_readback::CpuReadbackContext::new(adapter);
-//! {
-//!     let mut guard = ctx.acquire_write(&surface)?;
-//!     // guard.view().plane(i).bytes() (read) /
-//!     // guard.view_mut().plane_mut(i).bytes_mut() (write) are the
-//!     // tightly-packed bytes for plane i. Single-plane formats
-//!     // (BGRA8/RGBA8) report plane_count() == 1; multi-plane (NV12)
-//!     // reports 2 (Y at 0, UV at 1). On guard drop the adapter
-//!     // flushes every plane back to the host VkImage.
-//! }
+//! let mut guard = ctx.acquire_write(&surface)?;
+//! let mut view = guard.view_mut();
+//! view.plane_mut(0).bytes_mut(); // tightly-packed pixel bytes
 //! ```
+//!
+//! On the host side the bytes are observable after `acquire_*`
+//! returns (a `vkCmdCopyImageToBuffer` already ran via the in-process
+//! trigger); on the consumer side an IPC trigger ran on the host and
+//! a timeline wait observed the result before this call returned.
+//! Multi-plane surfaces (NV12) report `plane_count() == 2`.
 
 use std::sync::Arc;
 
+use streamlib_consumer_rhi::VulkanRhiDevice;
 use streamlib_adapter_abi::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
 
 use crate::adapter::CpuReadbackSurfaceAdapter;
 
-/// Customer-facing handle bound to a single host runtime.
-#[derive(Clone)]
-pub struct CpuReadbackContext {
-    adapter: Arc<CpuReadbackSurfaceAdapter>,
+/// Customer-facing handle bound to a single runtime / cdylib.
+pub struct CpuReadbackContext<D: VulkanRhiDevice + 'static> {
+    adapter: Arc<CpuReadbackSurfaceAdapter<D>>,
 }
 
-impl CpuReadbackContext {
-    pub fn new(adapter: Arc<CpuReadbackSurfaceAdapter>) -> Self {
+impl<D: VulkanRhiDevice + 'static> Clone for CpuReadbackContext<D> {
+    fn clone(&self) -> Self {
+        Self {
+            adapter: Arc::clone(&self.adapter),
+        }
+    }
+}
+
+impl<D: VulkanRhiDevice + 'static> CpuReadbackContext<D> {
+    pub fn new(adapter: Arc<CpuReadbackSurfaceAdapter<D>>) -> Self {
         Self { adapter }
     }
 
-    pub fn adapter(&self) -> &Arc<CpuReadbackSurfaceAdapter> {
+    pub fn adapter(&self) -> &Arc<CpuReadbackSurfaceAdapter<D>> {
         &self.adapter
     }
+}
 
-    /// Blocking read acquire. The guard's view exposes per-plane byte
-    /// slices via `view.plane(i).bytes()` (tightly packed,
-    /// `plane_width * plane_height * plane_bytes_per_pixel`). The
-    /// GPU→CPU copy is performed before this call returns; release is a
-    /// no-op flush plus timeline signal.
+#[cfg(target_os = "linux")]
+impl<D: VulkanRhiDevice + 'static> CpuReadbackContext<D> {
+    /// Blocking read acquire.
     pub fn acquire_read<'a>(
         &'a self,
         surface: &StreamlibSurface,
-    ) -> Result<ReadGuard<'a, CpuReadbackSurfaceAdapter>, AdapterError> {
+    ) -> Result<ReadGuard<'a, CpuReadbackSurfaceAdapter<D>>, AdapterError> {
         self.adapter.acquire_read(surface)
     }
 
-    /// Blocking write acquire. The guard's view exposes mutable per-
-    /// plane byte slices via `view_mut().plane_mut(i).bytes_mut()`. On
-    /// guard drop, every plane's modified bytes are flushed back to the
-    /// host `VkImage` via per-plane `vkCmdCopyBufferToImage` before the
-    /// timeline release-value signals.
+    /// Blocking write acquire.
     pub fn acquire_write<'a>(
         &'a self,
         surface: &StreamlibSurface,
-    ) -> Result<WriteGuard<'a, CpuReadbackSurfaceAdapter>, AdapterError> {
+    ) -> Result<WriteGuard<'a, CpuReadbackSurfaceAdapter<D>>, AdapterError> {
         self.adapter.acquire_write(surface)
     }
 
-    /// Non-blocking read acquire — `Ok(None)` on contention, never blocks.
+    /// Non-blocking read acquire — `Ok(None)` on contention.
     pub fn try_acquire_read<'a>(
         &'a self,
         surface: &StreamlibSurface,
-    ) -> Result<Option<ReadGuard<'a, CpuReadbackSurfaceAdapter>>, AdapterError> {
+    ) -> Result<Option<ReadGuard<'a, CpuReadbackSurfaceAdapter<D>>>, AdapterError> {
         self.adapter.try_acquire_read(surface)
     }
 
@@ -75,7 +82,7 @@ impl CpuReadbackContext {
     pub fn try_acquire_write<'a>(
         &'a self,
         surface: &StreamlibSurface,
-    ) -> Result<Option<WriteGuard<'a, CpuReadbackSurfaceAdapter>>, AdapterError> {
+    ) -> Result<Option<WriteGuard<'a, CpuReadbackSurfaceAdapter<D>>>, AdapterError> {
         self.adapter.try_acquire_write(surface)
     }
 }

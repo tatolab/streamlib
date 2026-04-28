@@ -33,6 +33,7 @@ impl consumer_rhi_private::Sealed for HostMarker {}
 impl DevicePrivilege for HostMarker {
     type TimelineSemaphore = super::HostVulkanTimelineSemaphore;
     type Texture = super::HostVulkanTexture;
+    type PixelBuffer = super::HostVulkanPixelBuffer;
 }
 
 // Non-Linux: HostMarker still resolves but to phantom unit types for
@@ -41,7 +42,8 @@ impl DevicePrivilege for HostMarker {
 #[cfg(not(target_os = "linux"))]
 mod placeholder {
     use streamlib_consumer_rhi::{
-        DevicePrivilege, TextureFormat, VulkanTextureLike, VulkanTimelineSemaphoreLike,
+        DevicePrivilege, TextureFormat, VulkanPixelBufferLike, VulkanTextureLike,
+        VulkanTimelineSemaphoreLike,
     };
 
     use super::HostMarker;
@@ -54,6 +56,7 @@ mod placeholder {
     impl DevicePrivilege for HostMarker {
         type TimelineSemaphore = NotAvailableOnThisPlatform;
         type Texture = NotAvailableOnThisPlatform;
+        type PixelBuffer = NotAvailableOnThisPlatform;
     }
 
     impl VulkanTimelineSemaphoreLike for NotAvailableOnThisPlatform {
@@ -61,6 +64,9 @@ mod placeholder {
             match *self {}
         }
         fn signal_host(&self, _value: u64) -> streamlib_consumer_rhi::Result<()> {
+            match *self {}
+        }
+        fn semaphore(&self) -> vulkanalia::vk::Semaphore {
             match *self {}
         }
     }
@@ -79,6 +85,27 @@ mod placeholder {
             match *self {}
         }
         fn format(&self) -> TextureFormat {
+            match *self {}
+        }
+    }
+
+    impl VulkanPixelBufferLike for NotAvailableOnThisPlatform {
+        fn buffer(&self) -> vulkanalia::vk::Buffer {
+            match *self {}
+        }
+        fn mapped_ptr(&self) -> *mut u8 {
+            match *self {}
+        }
+        fn size(&self) -> vulkanalia::vk::DeviceSize {
+            match *self {}
+        }
+        fn width(&self) -> u32 {
+            match *self {}
+        }
+        fn height(&self) -> u32 {
+            match *self {}
+        }
+        fn bytes_per_pixel(&self) -> u32 {
             match *self {}
         }
     }

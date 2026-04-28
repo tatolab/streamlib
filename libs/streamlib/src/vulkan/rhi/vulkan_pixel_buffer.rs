@@ -246,6 +246,27 @@ impl HostVulkanPixelBuffer {
     }
 }
 
+impl super::VulkanPixelBufferLike for HostVulkanPixelBuffer {
+    fn buffer(&self) -> vk::Buffer {
+        HostVulkanPixelBuffer::buffer(self)
+    }
+    fn mapped_ptr(&self) -> *mut u8 {
+        HostVulkanPixelBuffer::mapped_ptr(self)
+    }
+    fn size(&self) -> vk::DeviceSize {
+        HostVulkanPixelBuffer::size(self)
+    }
+    fn width(&self) -> u32 {
+        HostVulkanPixelBuffer::width(self)
+    }
+    fn height(&self) -> u32 {
+        HostVulkanPixelBuffer::height(self)
+    }
+    fn bytes_per_pixel(&self) -> u32 {
+        HostVulkanPixelBuffer::bytes_per_pixel(self)
+    }
+}
+
 #[cfg(target_os = "linux")]
 impl HostVulkanPixelBuffer {
     /// Export the buffer's memory as a DMA-BUF file descriptor.
