@@ -4,9 +4,21 @@
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation):
 > use Opus, show your work, preserve disagreed-with content with
 > reasoning rather than silently deleting. Treat this academically,
-> not dogmatically. The recommendations below reflect the best
-> understanding of the codebase as of 2026-04-27; trade-offs may
-> shift as new adapters arrive or as existing seams evolve.
+> not dogmatically.
+>
+> **2026-04-28 — Architectural correction.** Earlier revisions of
+> this doc recommended a "hybrid" shape: GPU adapters (Vulkan /
+> OpenGL / Skia) ride the surface-share seam, cpu-readback rides
+> escalate IPC. That bucketing was wrong-shaped. **Every surface
+> adapter rides the same single-pattern shape**: pre-registered
+> resources via surface-share + `consumer-rhi` import, plus thin
+> per-acquire IPC triggers when the host has work to do. See
+> [Single-pattern principle](../../docs/architecture/subprocess-rhi-parity.md#single-pattern-principle-2026-04-28)
+> in `subprocess-rhi-parity.md` and the cpu-readback rewire (Path E)
+> issue under milestone *Surface Adapter Architecture*. The
+> recommendation section below is preserved with crossed-out content
+> per the markdown-editing rules so future readers can see the
+> dead-end and why.
 
 ## Question
 
@@ -157,19 +169,36 @@ freshly-populated staging FD.
 
 ## Recommendation
 
-**Option C — hybrid.** The data-flow shapes are genuinely
-different and forcing one seam on both buckets re-creates work
-that already exists. Specifically:
+> ~~**Option C — hybrid.** GPU adapters ride surface-share;
+> cpu-readback rides escalate IPC.~~ — **Superseded 2026-04-28.**
+> The hybrid framing was an architectural drift: it conflated
+> "host has per-acquire work" (true for cpu-readback's copy) with
+> "host must per-acquire-pass FDs back to the subprocess" (false —
+> staging buffers + timeline can be pre-registered through the
+> same surface-share seam vulkan/opengl use). Earlier reviews
+> didn't separate those concerns.
+>
+> The actual rule, per the engine-model principle in CLAUDE.md
+> ("the RHI is the single gateway"): **every surface adapter
+> rides the same shape**. Pre-register resources via surface-share,
+> import them through `consumer-rhi`, run the adapter generic over
+> `D: VulkanRhiDevice`. Per-acquire IPC, when host work is needed
+> (cpu-readback's copy, escalated compute via #550), is a thin
+> trigger that publishes a timeline value the consumer waits on
+> through the carve-out — not a fresh FD-passing payload.
+>
+> Concretely:
 
-| Adapter | Seam | Why |
-|---|---|---|
-| `streamlib-adapter-vulkan` | surface-share registry | Imported `VkImage`/`VkBuffer` is a static handle for the surface's lifetime. Once the FD is bound, every acquire is a layout-transition + sync wait — no fresh host work. |
-| `streamlib-adapter-opengl` | surface-share registry | Same shape as Vulkan. The DRM-modifier import path already exists in `polyglot-dma-buf-consumer` and `nvidia-egl-dmabuf-render-target.md` documents the modifier-vs-`external_only` constraint that must be solved at allocation time on host. |
-| `streamlib-adapter-skia` | surface-share registry | Skia composes on Vulkan via `VulkanImageInfoExt` (per `surface-adapter.md`), so it inherits Vulkan's seam transitively. |
-| `streamlib-adapter-cpu-readback` | escalate IPC | Each `acquire_read` requires a fresh `vkCmdCopyImageToBuffer` on the host VkDevice/queue (the readback is a snapshot, not a static handle). The host-driven copy is exactly the kind of "small request, host does the privileged work" operation escalate IPC was built for. |
+| Adapter | Pattern (single shape) |
+|---|---|
+| `streamlib-adapter-vulkan` | Generic over `D: VulkanRhiDevice`. Host pre-registers `VkImage` + timeline via surface-share; subprocess imports through `ConsumerVulkanTexture` + `ConsumerVulkanTimelineSemaphore`. Per-acquire is layout-transition + timeline wait, no IPC. |
+| `streamlib-adapter-opengl` | Same shape; subprocess imports the `VkImage` and binds it as a `GL_TEXTURE_2D` via EGL DMA-BUF import. |
+| `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path. |
+| `streamlib-adapter-cpu-readback` | Same shape: host pre-registers a HOST_VISIBLE staging `VkBuffer` + a timeline semaphore via surface-share; subprocess imports through `ConsumerVulkanPixelBuffer` + `ConsumerVulkanTimelineSemaphore`. Per-acquire is a thin `RunCpuReadbackCopy(surface_id)` IPC that triggers the host's `vkCmdCopyImageToBuffer` and returns the timeline value to wait on. Subprocess waits on the imported timeline through the carve-out, then mmaps the pre-imported staging buffer. |
 
-This recommendation is the working hypothesis; the trip-wires
-section below names the conditions that would shift it.
+`vulkan/opengl/skia` adapters already follow this shape after #560
+Phase 2. `cpu-readback`'s rewire is the cpu-readback rewire issue
+under milestone #16.
 
 ## Customer-facing surface — unchanged
 
@@ -209,13 +238,18 @@ Customer code (Rust processor / Python script / Deno script)
   └── adapter.acquire_write(surface)              ← public API, unchanged
       └── streamlib-{python,deno} adapter Protocol ← type stub
           └── streamlib-{python,deno}-native FFI   ← runtime impl
-              └── ONE OF:
-                  ├── surface-share registry      ← Vulkan / OpenGL / Skia
-                  └── escalate IPC                ← cpu-readback
+              └── streamlib-adapter-* (vulkan, opengl, skia, cpu-readback)
+                  ↳ generic over D: VulkanRhiDevice
+                  ↳ pre-registered resources via surface-share
+                  ↳ imports via streamlib-consumer-rhi (Consumer*)
+                  ↳ per-acquire: layout transitions + timeline waits;
+                    thin escalate-IPC trigger when host work needed
+                    (cpu-readback's vkCmdCopyImageToBuffer, escalated
+                    compute via #550)
                       └── host RHI                ← FullAccess, only here
 ```
 
-Above the bottom line, the seam choice is invisible.
+Above the host-RHI line the customer sees a single uniform shape.
 
 ## Capability sandbox preservation
 
@@ -415,15 +449,21 @@ property is load-bearing.
 
 ## Implementation issues
 
-The subprocess runtimes for the three already-shipped adapters
-inherit this design:
+The subprocess runtimes for the three already-shipped adapters all
+flow through the single-pattern shape post-#560:
 
-- `#529` — `feat(adapter-cpu-readback): subprocess
-  CpuReadbackContext runtime + cv2 fixture` — escalate IPC seam
+- ~~`#529` — `feat(adapter-cpu-readback): subprocess
+  CpuReadbackContext runtime + cv2 fixture` — escalate IPC seam~~
+  — Closed under the dual-seam framing. The cpu-readback rewire
+  issue under milestone #16 supersedes this: cpu-readback joins
+  the unified shape (pre-registered staging + timeline via
+  surface-share, thin per-acquire copy trigger).
 - `#530` — `feat(adapter-opengl): subprocess OpenGlContext
-  runtime + scenario binary` — surface-share seam
+  runtime + scenario binary` — single-pattern shape, lives in
+  consumer-rhi.
 - `#531` — `feat(adapter-vulkan): subprocess VulkanContext
-  runtime + scenario binary` — surface-share seam
+  runtime + scenario binary` — single-pattern shape, lives in
+  consumer-rhi.
 
 Suggested implementation order: cpu-readback first (smallest
 data shape; escalate-IPC seam is well-trodden), opengl second
