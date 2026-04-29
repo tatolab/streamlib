@@ -75,9 +75,10 @@ fn duplicate_registration_returns_surface_already_registered() {
     let _first = fixture.register_surface(id, 64, 64);
 
     // Build a second registration against a fresh DMA-BUF for the
-    // same id. The adapter must reject the duplicate AND tear down
-    // the EGLImage / GL texture it just constructed for this attempt
-    // (verified by build green — leaks would surface on Drop).
+    // same id. The adapter must reject it as
+    // `SurfaceAlreadyRegistered`. The duplicate-rejection path also
+    // tears down the just-built EGLImage / GL texture; that cleanup
+    // is exercised here but isn't independently asserted.
     let texture = fixture
         .gpu
         .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
