@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+pub mod check_boundaries;
 mod generate_schemas;
 pub mod lint_logging;
 
@@ -57,6 +58,12 @@ enum Commands {
     /// Ban ad-hoc logging in polyglot SDK library code (Python + TypeScript).
     /// Paired with the workspace clippy.toml `disallowed-macros` rule for Rust.
     LintLogging,
+
+    /// Boundary-grep CI gate for the Vulkan RHI capability split. Fails on
+    /// `ash`, raw `vulkanalia` outside RHI/adapter crates, cdylibs depending
+    /// on the full `streamlib` crate, or privileged Vulkan calls outside
+    /// the RHI. See `docs/architecture/subprocess-rhi-parity.md`.
+    CheckBoundaries,
 }
 
 fn main() -> Result<()> {
@@ -71,6 +78,7 @@ fn main() -> Result<()> {
             schema_dir,
         } => generate_schemas::run(runtime, output, project_file, schema_file, schema_dir)?,
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
+        Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
     }
 
     Ok(())
