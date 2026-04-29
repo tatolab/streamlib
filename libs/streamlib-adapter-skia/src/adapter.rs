@@ -35,7 +35,7 @@ use streamlib_adapter_abi::{
 use streamlib_adapter_vulkan::VulkanSurfaceAdapter;
 use streamlib_consumer_rhi::VulkanRhiDevice;
 use vulkanalia::loader::LIBRARY;
-use vulkanalia::vk::{self, Handle as _, DeviceV1_0, InstanceV1_0};
+use vulkanalia::vk::{self, DeviceV1_0, Handle as _, InstanceV1_0};
 
 use crate::error::SkiaAdapterError;
 use crate::view::{SkiaReadView, SkiaWriteView};
@@ -127,24 +127,14 @@ fn build_direct_context<D: VulkanRhiDevice>(
     let entry_get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr =
         *get_instance_proc_addr_sym;
     let device_get_device_proc_addr = instance.commands().get_device_proc_addr;
-    let instance_handle = instance.handle();
-    let device_handle = logical_device.handle();
 
-    // Skia hands us its own typed handles inside GetProcOf — we use
-    // those directly rather than caching ours, because Skia is allowed
-    // to invoke `get_proc` with `VkInstance::null()` during the bootstrap
-    // phase (`vkGetInstanceProcAddr(NULL, "vkCreateInstance")` etc.)
-    // and the spec requires that to work. The underlying handles are
-    // the same VkInstance/VkDevice we passed; their raw bits round-trip
-    // through skia's pointer-shaped typedefs and back to vulkanalia's
-    // Handle::from_raw.
-    //
-    // Suppress the unused warning on the cached handles — they'd be
-    // load-bearing if Skia stopped passing the instance/device through
-    // GetProcOf, so keeping them around as a fall-back-source-of-truth
-    // is documented insurance.
-    let _instance_handle_kept = instance_handle;
-    let _device_handle_kept = device_handle;
+    // Skia hands us its own typed handles inside GetProcOf and we use
+    // those directly. The Vulkan spec requires
+    // `vkGetInstanceProcAddr(NULL, "vkCreateInstance")` to work, so
+    // accepting the skia-provided pointer (which may be `null` during
+    // bootstrap) is the correct shape. The handles' raw bits round-trip
+    // through skia's pointer-shaped typedefs back to vulkanalia's
+    // `Handle::from_raw` cleanly on every Linux target.
     let get_proc = move |of: GetProcOf| -> *const c_void {
         match of {
             GetProcOf::Instance(skia_instance, name) => unsafe {
@@ -174,9 +164,9 @@ fn build_direct_context<D: VulkanRhiDevice>(
 
     let backend_context = unsafe {
         BackendContext::new(
-            instance_handle.as_raw() as _,
+            instance.handle().as_raw() as _,
             physical_device.as_raw() as _,
-            device_handle.as_raw() as _,
+            logical_device.handle().as_raw() as _,
             (queue.as_raw() as _, queue_family_index),
             &get_proc,
         )

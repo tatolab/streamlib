@@ -96,10 +96,14 @@ impl<'g, D: VulkanRhiDevice + 'static> Drop for SkiaWriteView<'g, D> {
         //  1. Flush + submit Skia surface, sync_cpu = true → wait
         //     for GPU work to drain so the host can host-signal the
         //     timeline below.
-        //  2. Drop the Skia surface (releases its DirectContext refs).
-        //  3. Drop the inner WriteGuard → triggers
-        //     inner.end_write_access → host-signals the next timeline
-        //     value, unblocking the next acquire.
+        //  2. Drop the Skia surface inside the same mutex scope —
+        //     RCHandle drop decrements the surface's refcount on the
+        //     DirectContext, which can issue cleanup commands. Skia
+        //     treats DirectContext as single-thread-affine, so the
+        //     cleanup must run while we still hold the mutex.
+        //  3. Release the mutex, then drop the inner WriteGuard →
+        //     triggers inner.end_write_access → host-signals the next
+        //     timeline value, unblocking the next acquire.
         if let Some(mut surface) = self.skia_surface.take() {
             match self.direct_context.lock() {
                 Ok(mut ctx_guard) => {
@@ -109,16 +113,22 @@ impl<'g, D: VulkanRhiDevice + 'static> Drop for SkiaWriteView<'g, D> {
                     ctx_guard
                         .0
                         .flush_and_submit_surface(&mut surface, Some(SyncCpu::Yes));
+                    // Drop the Skia surface BEFORE the ctx_guard goes
+                    // out of scope. The ctx_guard's drop releases the
+                    // mutex; doing the surface drop after that would
+                    // run RCHandle cleanup unprotected.
+                    drop(surface);
                 }
                 Err(_) => {
                     tracing::error!(
                         "SkiaWriteView::drop: direct_context mutex poisoned — \
                          skipping flush, GPU work may not be drained before timeline signal"
                     );
+                    // Mutex poisoned means we're already in a degraded
+                    // state — drop the surface anyway so we don't leak.
+                    drop(surface);
                 }
             }
-            // Surface is now dropped — releases its DirectContext refcount.
-            drop(surface);
         }
 
         // SAFETY: inner_guard is in ManuallyDrop so this is the one
@@ -136,13 +146,15 @@ impl<'g, D: VulkanRhiDevice + 'static> std::fmt::Debug for SkiaWriteView<'g, D> 
     }
 }
 
-// SkiaWriteView is Send + Sync: skia_safe::Surface is Send (rust-skia
-// marks RCHandle<SkSurface> Send + !Sync); the Mutex<DirectContext>
-// covers Sync semantics. Customers are still expected to drive Skia
-// from one thread per context; the trait-level Send + Sync is for the
-// adapter shape, not for genuinely parallel Skia drawing.
-unsafe impl<'g, D: VulkanRhiDevice + 'static> Send for SkiaWriteView<'g, D> {}
-unsafe impl<'g, D: VulkanRhiDevice + 'static> Sync for SkiaWriteView<'g, D> {}
+// SkiaWriteView is auto-derived `!Send + !Sync` because
+// `skia_safe::Surface` is `RCHandle<SkSurface>` (a raw pointer wrapper)
+// and rust-skia marks it accordingly. We deliberately do NOT add an
+// `unsafe impl Send + Sync` — the SurfaceAdapter trait only requires
+// the *adapter* to be `Send + Sync`, not the views. Forcing the views
+// to Send would let customers move a Skia Surface across threads,
+// breaking Skia's single-thread-affinity contract on `GrDirectContext`.
+// Each thread that needs Skia work calls `acquire_write` on its own
+// thread, gets its own non-Send guard, and drops it on the same thread.
 
 /// Read view of an acquired Skia surface — exposes a `skia::Image`
 /// that wraps the host's `VkImage` for sampling. Skia treats the
@@ -150,9 +162,11 @@ unsafe impl<'g, D: VulkanRhiDevice + 'static> Sync for SkiaWriteView<'g, D> {}
 pub struct SkiaReadView<'g, D: VulkanRhiDevice + 'static> {
     skia_image: Option<skia_safe::Image>,
     inner_guard: ManuallyDrop<ReadGuard<'g, VulkanSurfaceAdapter<D>>>,
-    /// Held so reads don't tear-down the DirectContext while a Skia
-    /// `Image` is still pinning a refcount.
-    _direct_context: Arc<Mutex<SyncDirectContext>>,
+    /// Held so the `Image`'s `RCHandle` cleanup path (refcount-decrement
+    /// → potential GPU command emission) runs under the same mutex
+    /// `SkiaWriteView::drop` uses. Skia's `GrDirectContext` is single-
+    /// thread-affine; both read and write drops must lock.
+    direct_context: Arc<Mutex<SyncDirectContext>>,
 }
 
 impl<'g, D: VulkanRhiDevice + 'static> SkiaReadView<'g, D> {
@@ -164,7 +178,7 @@ impl<'g, D: VulkanRhiDevice + 'static> SkiaReadView<'g, D> {
         Self {
             skia_image: Some(skia_image),
             inner_guard: ManuallyDrop::new(inner_guard),
-            _direct_context: direct_context,
+            direct_context,
         }
     }
 
@@ -179,10 +193,20 @@ impl<'g, D: VulkanRhiDevice + 'static> SkiaReadView<'g, D> {
 impl<'g, D: VulkanRhiDevice + 'static> Drop for SkiaReadView<'g, D> {
     fn drop(&mut self) {
         // No flush needed for read — Skia hasn't issued GPU work
-        // against this image. Drop the image (releases DirectContext
-        // refcount), then drop the inner guard (signals timeline).
+        // against this image. But the `Image`'s `RCHandle` drop
+        // decrements its refcount on the DirectContext, which can
+        // emit GPU cleanup commands; Skia's DirectContext is single-
+        // thread-affine, so the drop must happen under the mutex.
         if let Some(image) = self.skia_image.take() {
-            drop(image);
+            match self.direct_context.lock() {
+                Ok(_ctx_guard) => drop(image),
+                Err(_) => {
+                    tracing::error!(
+                        "SkiaReadView::drop: direct_context mutex poisoned"
+                    );
+                    drop(image);
+                }
+            }
         }
         // SAFETY: same as SkiaWriteView::drop.
         unsafe { ManuallyDrop::drop(&mut self.inner_guard) };
@@ -197,8 +221,10 @@ impl<'g, D: VulkanRhiDevice + 'static> std::fmt::Debug for SkiaReadView<'g, D> {
     }
 }
 
-unsafe impl<'g, D: VulkanRhiDevice + 'static> Send for SkiaReadView<'g, D> {}
-unsafe impl<'g, D: VulkanRhiDevice + 'static> Sync for SkiaReadView<'g, D> {}
+// SkiaReadView is auto-derived `!Send + !Sync` for the same reason as
+// SkiaWriteView — Skia's `Image` is `RCHandle<SkImage>`, and forcing
+// the view across threads would break Skia's single-thread contract.
+// See SkiaWriteView's note above.
 
 // Compile-time assertion: Skia views must NOT impl `CpuReadable` /
 // `CpuWritable`. Switching to `streamlib-adapter-cpu-readback` is the
