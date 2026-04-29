@@ -68,8 +68,8 @@ impl OpenGlSurfaceAdapter {
     /// long-lived FBOs / VAOs / shader bindings across acquires.
     ///
     /// `id` MUST be unique across the adapter's lifetime; double-
-    /// registration returns an error and leaves the existing entry
-    /// untouched.
+    /// registration returns [`AdapterError::SurfaceAlreadyRegistered`]
+    /// and leaves the existing entry untouched.
     #[instrument(level = "debug", skip(self, registration), fields(surface_id = id))]
     pub fn register_host_surface(
         &self,
@@ -160,7 +160,7 @@ impl OpenGlSurfaceAdapter {
                 gl::DeleteTextures(1, &texture);
                 self.runtime.destroy_image(image);
             }
-            return Err(AdapterError::SurfaceNotFound { surface_id: id });
+            return Err(AdapterError::SurfaceAlreadyRegistered { surface_id: id });
         }
         Ok(())
     }

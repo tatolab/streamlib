@@ -108,9 +108,14 @@ three flow through the same `consumer-rhi` types.
 > Updated 2026-04-28 — #562 cpu-readback rewire (Path E) landed.
 > The cdylib swap to `ConsumerVulkanDevice` and the
 > `streamlib-consumer-rhi` crate extraction now hold for **all three
-> active adapters** (Vulkan, OpenGL, cpu-readback); Skia (#513) is
-> frozen until its host crate ships and will land directly on the
-> single-pattern shape from day one.
+> active adapters** (Vulkan, OpenGL, cpu-readback).
+>
+> ~~Skia (#513) is frozen until its host crate ships and will land
+> directly on the single-pattern shape from day one.~~ — Superseded
+> 2026-04-29: all five P0s (#550, #551, #552, #553, #555) closed, so
+> #513 and #515 unfrozen the same day. Skia and the processor-port
+> refactor are now eligible to start; both must still land on the
+> single-pattern shape.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -131,7 +136,7 @@ three flow through the same `consumer-rhi` types.
 │  │ TextureFormat / TextureUsages / PixelFormat                   │   │
 │  │ ✓ Capability boundary TYPE-SYSTEM enforced                    │   │
 │  └───────────────────────────────────────────────────────────────┘   │
-│       ▲      ▲      ▲       (skia frozen, #513)                      │
+│       ▲      ▲      ▲       (skia in flight, #513 — unfrozen 04-29)  │
 │  ┌────┴──┬───┴──┬───┴────────┐                                       │
 │  │ vk-   │ gl-  │cpu-rb-     │  All three adapters ride consumer-rhi.│
 │  │ adptr │adptr │adptr       │  Each is generic over                 │
@@ -169,29 +174,31 @@ three flow through the same `consumer-rhi` types.
 
 ## Open follow-ups (after #562 lands)
 
-The remaining P0s in milestone #16 close out the residual technical
-debt the consumer-rhi extraction made visible:
+> Updated 2026-04-29 — every P0 below closed. Section preserved with
+> strike-throughs so future readers can see the original gating chain.
 
-- **#550** [P0] — escalate-IPC `RegisterComputeKernel` +
+- ~~**#550** [P0] — escalate-IPC `RegisterComputeKernel` +
   `RunComputeKernel`; retire the `vulkan_compute_dispatch` raw-vulkan
-  helper inside each cdylib (≈200 LOC × 2 still in tree).
-- **#553** [P0] — retire `surface_share_vulkan_linux` (≈280 LOC × 2)
+  helper inside each cdylib (≈200 LOC × 2 still in tree).~~ Closed
+  2026-04-29 (#571).
+- ~~**#553** [P0] — retire `surface_share_vulkan_linux` (≈280 LOC × 2)
   from the cdylibs once #550 covers compute and #551 covers
-  registration.
-- **#551** [P0] — pull the registration `Registry<T: SurfaceRegistration>`
+  registration.~~ Closed 2026-04-29 (#573).
+- ~~**#551** [P0] — pull the registration `Registry<T: SurfaceRegistration>`
   into `streamlib-adapter-abi` so adapter crates stop redoing the same
-  per-surface book-keeping.
-- **#555** [P0] — CI boundary-grep as defense in depth around the
+  per-surface book-keeping.~~ Closed 2026-04-28.
+- ~~**#555** [P0] — CI boundary-grep as defense in depth around the
   type-system boundary. Must include "no cdylib transitively pulls
   the full `streamlib` crate" plus "no adapter crate's runtime
   `[dependencies]` lists `streamlib`" — covers cpu-readback once it
-  lands the rewire.
+  lands the rewire.~~ Closed 2026-04-29 (#570 + tightening in #574).
 - **#556** [P1] — adapter-authoring blueprint, codifies the
   single-pattern shape so future adapters land on the right shape
   by default.
 - **#513** (skia adapter), **#515** (processor-port refactor) —
-  `frozen` until the P0s above land. Skia must follow the
-  single-pattern shape from day one.
+  ~~`frozen` until the P0s above land.~~ Unfrozen 2026-04-29 once
+  the P0 chain closed. Skia must follow the single-pattern shape
+  from day one.
 
 ## Trip-wires
 
@@ -207,13 +214,15 @@ Revisit when:
 
 Milestone *Surface Adapter Architecture* (#16):
 
-- **#550** [P0] — escalate-IPC `RegisterComputeKernel` + `RunComputeKernel`; on-disk pipeline cache; retire `vulkan_compute_dispatch`.
-- **#551** [P0] — extract `Registry<T: SurfaceRegistration>` into `streamlib-adapter-abi`.
-- **#552** [P0] — promote `streamlib::adapter_support` → `streamlib-consumer-rhi` crate.
-- **#553** [P0] — retire `surface_share_vulkan_linux` from natives.
-- **#555** [P0] — boundary-grep CI check.
+- ~~**#550** [P0] — escalate-IPC `RegisterComputeKernel` + `RunComputeKernel`; on-disk pipeline cache; retire `vulkan_compute_dispatch`.~~ Closed 2026-04-29 (#571).
+- ~~**#551** [P0] — extract `Registry<T: SurfaceRegistration>` into `streamlib-adapter-abi`.~~ Closed 2026-04-28.
+- ~~**#552** [P0] — promote `streamlib::adapter_support` → `streamlib-consumer-rhi` crate.~~ Closed 2026-04-28.
+- ~~**#553** [P0] — retire `surface_share_vulkan_linux` from natives.~~ Closed 2026-04-29 (#573).
+- ~~**#555** [P0] — boundary-grep CI check.~~ Closed 2026-04-29 (#570 + #574).
 - **#556** [P1] — adapter authoring blueprint.
-- **#513** (skia adapter), **#515** (processor-port refactor) — `frozen` until P0s land.
+- **#558** — dedicated `AdapterError::SurfaceAlreadyRegistered` variant.
+- **#565** — CUDA surface adapter.
+- **#513** (skia adapter), **#515** (processor-port refactor) — ~~`frozen` until P0s land.~~ Unfrozen 2026-04-29 — eligible to start.
 
 ## Related
 

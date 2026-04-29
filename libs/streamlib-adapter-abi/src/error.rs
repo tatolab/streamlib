@@ -29,6 +29,12 @@ pub enum AdapterError {
     #[error("surface {surface_id} not found")]
     SurfaceNotFound { surface_id: SurfaceId },
 
+    /// `register_host_surface` was called with an id already present in
+    /// the adapter's surface registry. Distinct from [`Self::SurfaceNotFound`]
+    /// — the surface *is* registered; that's the conflict.
+    #[error("surface {surface_id} is already registered")]
+    SurfaceAlreadyRegistered { surface_id: SurfaceId },
+
     /// The host-side IPC channel went away before/during the operation.
     #[error("IPC disconnected: {reason}")]
     IpcDisconnected { reason: String },

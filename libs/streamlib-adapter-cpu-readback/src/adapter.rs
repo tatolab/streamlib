@@ -254,7 +254,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             height,
         };
         if !self.surfaces.register(id, state) {
-            return Err(AdapterError::SurfaceNotFound { surface_id: id });
+            return Err(AdapterError::SurfaceAlreadyRegistered { surface_id: id });
         }
         Ok(())
     }
