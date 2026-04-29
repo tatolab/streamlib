@@ -91,5 +91,13 @@ path = "tests/round_trip_skia_canvas_gl.rs"
 name = "conformance_gl"
 path = "tests/conformance_gl.rs"
 
+[[test]]
+name = "skia_visual_evidence_gl"
+path = "tests/skia_visual_evidence_gl.rs"
+
+[[test]]
+name = "skia_animated_stress_gl"
+path = "tests/skia_animated_stress_gl.rs"
+
 [lints]
 workspace = true
