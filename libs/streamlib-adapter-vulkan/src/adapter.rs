@@ -123,32 +123,44 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         self.surfaces.len()
     }
 
+    /// Resolve the full [`VkImageInfo`] descriptor for a registered
+    /// surface. Returns `None` if the surface isn't registered.
+    ///
+    /// The descriptor is per-image (fixed at registration time) — it
+    /// does NOT change across acquires. Polyglot Skia wrappers (and
+    /// any other adapter that needs to wrap the underlying `VkImage`
+    /// as a framework-native render target) call this once on
+    /// registration to build their backend-context state, then read
+    /// only the per-acquire `vk_image_layout` from the live view.
+    pub fn surface_image_info(
+        &self,
+        id: SurfaceId,
+    ) -> Option<VkImageInfo> {
+        self.surfaces
+            .with(id, |state| self.make_image_info(&state.texture))
+    }
+
     fn make_image_info(
         &self,
         texture: &<D::Privilege as DevicePrivilege>::Texture,
     ) -> VkImageInfo {
-        // Best-effort image info — fields the adapter doesn't track
-        // (memory binding, ycbcr conversion) stay zeroed. Skia and other
-        // VkImageInfoExt consumers can extend this once the adapter
-        // tracks more per-surface state. `memory_size` is a tight-pixel
-        // estimate (no tile padding), matching the pre-genericization
-        // behavior so debug snapshots / sizing heuristics stay stable.
-        let bytes_per_pixel = texture.format().bytes_per_pixel() as u64;
+        // Populated from VulkanTextureLike's create-time metadata.
+        // `memory_handle` is opaque (raw VkDeviceMemory bits) for
+        // frameworks like Skia that need to wrap the image as a
+        // GrBackendRenderTarget.
         VkImageInfo {
-            format: 0,
-            tiling: vk::ImageTiling::OPTIMAL.as_raw(),
-            usage_flags: 0,
-            sample_count: vk::SampleCountFlags::_1.bits(),
-            level_count: 1,
+            format: texture.vk_format().as_raw(),
+            tiling: texture.vk_image_tiling().as_raw(),
+            usage_flags: texture.vk_image_usage_flags().bits(),
+            sample_count: texture.vk_sample_count().bits(),
+            level_count: texture.vk_level_count(),
             queue_family: self.device.queue_family_index(),
-            memory_handle: 0,
-            memory_offset: 0,
-            memory_size: (texture.width() as u64)
-                * (texture.height() as u64)
-                * bytes_per_pixel,
-            memory_property_flags: 0,
-            protected: 0,
-            ycbcr_conversion: 0,
+            memory_handle: texture.vk_memory().as_raw(),
+            memory_offset: texture.vk_memory_offset(),
+            memory_size: texture.vk_memory_size(),
+            memory_property_flags: texture.vk_memory_property_flags().bits(),
+            protected: u32::from(texture.vk_protected()),
+            ycbcr_conversion: texture.vk_ycbcr_conversion_handle(),
             _reserved: [0; 16],
         }
     }

@@ -1,0 +1,15 @@
+package:
+  name: polyglot-skia-canvas
+  version: "0.1.0"
+  description: "Polyglot Skia adapter scenario (#513) — Python Skia processor draws a canvas into a host DMA-BUF VkImage via streamlib.adapters.skia.SkiaContext"
+
+processors:
+  - name: com.tatolab.skia_canvas
+    version: "1.0.0"
+    description: "Acquires a host-pre-registered render-target DMA-BUF surface as a skia.Surface, draws a known shape, releases"
+    runtime: python
+    execution: reactive
+    entrypoint: "skia_canvas:SkiaCanvasProcessor"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0

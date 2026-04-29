@@ -87,6 +87,21 @@ mod placeholder {
         fn format(&self) -> TextureFormat {
             match *self {}
         }
+        fn vk_format(&self) -> vulkanalia::vk::Format {
+            match *self {}
+        }
+        fn vk_image_tiling(&self) -> vulkanalia::vk::ImageTiling {
+            match *self {}
+        }
+        fn vk_image_usage_flags(&self) -> vulkanalia::vk::ImageUsageFlags {
+            match *self {}
+        }
+        fn vk_memory(&self) -> vulkanalia::vk::DeviceMemory {
+            match *self {}
+        }
+        fn vk_memory_size(&self) -> vulkanalia::vk::DeviceSize {
+            match *self {}
+        }
     }
 
     impl VulkanPixelBufferLike for NotAvailableOnThisPlatform {

@@ -3107,6 +3107,35 @@ mod vulkan {
         pub api_version: u32,
     }
 
+    /// Per-image VkImageInfo descriptor for a registered surface.
+    /// Mirrors `streamlib_adapter_abi::VkImageInfo` field-for-field —
+    /// kept as a separate `#[repr(C)]` here so the cdylib's ABI
+    /// surface stays self-contained (the SDK doesn't need to mirror
+    /// `streamlib-adapter-abi` to read this).
+    ///
+    /// Per-image (fixed at registration), NOT per-acquire. Polyglot
+    /// Skia wrappers call `slpn_vulkan_get_image_info` once per
+    /// registered surface to populate their backend-context state;
+    /// per-acquire `vk_image_layout` still flows through
+    /// [`SlpnVulkanView`].
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct SlpnVulkanImageInfo {
+        pub format: i32,
+        pub tiling: i32,
+        pub usage_flags: u32,
+        pub sample_count: u32,
+        pub level_count: u32,
+        pub queue_family: u32,
+        pub memory_handle: u64,
+        pub memory_offset: u64,
+        pub memory_size: u64,
+        pub memory_property_flags: u32,
+        pub protected: u32,
+        pub ycbcr_conversion: u64,
+        pub _reserved: [u8; 16],
+    }
+
     /// Bring up `ConsumerVulkanDevice` + `VulkanSurfaceAdapter`. Returns NULL on
     /// failure (typically because the driver doesn't support the required
     /// DMA-BUF / external-semaphore extensions).
@@ -3384,6 +3413,56 @@ mod vulkan {
         out.vk_queue = handles.vk_queue;
         out.vk_queue_family_index = handles.vk_queue_family_index;
         out.api_version = handles.api_version;
+        0
+    }
+
+    /// Fetch the per-image VkImageInfo descriptor for a registered
+    /// surface. Returns 0 on success, -1 on null pointer or
+    /// unregistered surface.
+    ///
+    /// Per-image (fixed at registration time). Polyglot wrappers that
+    /// build a framework-native handle from the underlying VkImage
+    /// (Skia's `GrBackendRenderTarget`, vulkano's `Image`, etc.)
+    /// call this once per registration to populate their backend
+    /// state; the per-acquire `vk_image_layout` still flows through
+    /// [`SlpnVulkanView`] on every acquire.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_vulkan_get_image_info(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+        out: *mut SlpnVulkanImageInfo,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return -1,
+        };
+        let out = match unsafe { out.as_mut() } {
+            Some(o) => o,
+            None => return -1,
+        };
+        let info = match rt.adapter.surface_image_info(surface_id) {
+            Some(i) => i,
+            None => {
+                tracing::error!(
+                    "slpn_vulkan_get_image_info: surface_id {} not registered",
+                    surface_id
+                );
+                return -1;
+            }
+        };
+        out.format = info.format;
+        out.tiling = info.tiling;
+        out.usage_flags = info.usage_flags;
+        out.sample_count = info.sample_count;
+        out.level_count = info.level_count;
+        out.queue_family = info.queue_family;
+        out.memory_handle = info.memory_handle;
+        out.memory_offset = info.memory_offset;
+        out.memory_size = info.memory_size;
+        out.memory_property_flags = info.memory_property_flags;
+        out.protected = info.protected;
+        out.ycbcr_conversion = info.ycbcr_conversion;
+        out._reserved = [0; 16];
         0
     }
 
@@ -4315,6 +4394,23 @@ mod vulkan {
         pub api_version: u32,
     }
 
+    #[repr(C)]
+    pub struct SlpnVulkanImageInfo {
+        pub format: i32,
+        pub tiling: i32,
+        pub usage_flags: u32,
+        pub sample_count: u32,
+        pub level_count: u32,
+        pub queue_family: u32,
+        pub memory_handle: u64,
+        pub memory_offset: u64,
+        pub memory_size: u64,
+        pub memory_property_flags: u32,
+        pub protected: u32,
+        pub ycbcr_conversion: u64,
+        pub _reserved: [u8; 16],
+    }
+
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_vulkan_runtime_new() -> *mut c_void {
         tracing::error!("slpn_vulkan_*: Vulkan adapter runtime is Linux-only");
@@ -4379,6 +4475,15 @@ mod vulkan {
     pub unsafe extern "C" fn slpn_vulkan_raw_handles(
         _rt: *mut c_void,
         _out: *mut SlpnVulkanRawHandles,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_vulkan_get_image_info(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out: *mut SlpnVulkanImageInfo,
     ) -> i32 {
         -1
     }

@@ -1,0 +1,74 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-adapter-skia"
+description = "Skia surface adapter (Linux). Customer sees skia::Surface directly — never GrVkImageInfo, GrBackendTexture, or VkImageLayout. Composes on streamlib-adapter-vulkan via the VulkanWritable / VulkanImageInfoExt capability traits from streamlib-adapter-abi."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_adapter_skia"
+path = "src/lib.rs"
+
+[dependencies]
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+vulkanalia.workspace = true
+skia-safe = { workspace = true }
+# vkGetInstanceProcAddr lives on vulkanalia's private StaticCommands;
+# we dlopen libvulkan ourselves to grab the PFN once at construction
+# time (Skia copies it internally during make_vulkan, so the Library
+# handle can be dropped right after).
+libloading = "0.8"
+
+# `streamlib` is a *test*-only dep: the round-trip / conformance
+# tests bring up a `HostVulkanDevice`. The runtime crate (above)
+# does NOT pull `streamlib`, so subprocess cdylibs depending on
+# `streamlib-adapter-skia` get the consumer-rhi carve-out only, with
+# `streamlib` absent from their dep graph (enforced by `cargo xtask
+# check-boundaries`).
+#
+# A subprocess test-helper binary (analogous to
+# `streamlib-adapter-vulkan-helpers`) is intentionally NOT shipped
+# in v1: the Skia adapter composes on `streamlib-adapter-vulkan` and
+# does not allocate per-acquire GPU resources of its own, so
+# subprocess-crash cleanup is already covered by the inner Vulkan
+# adapter's tests. A Skia-specific helper will land alongside the
+# polyglot Skia wrapper follow-up issue.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib = { path = "../streamlib" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
+tracing-subscriber.workspace = true
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+
+[[test]]
+name = "round_trip_skia_canvas"
+path = "tests/round_trip_skia_canvas.rs"
+
+[[test]]
+name = "concurrent_skia_and_vulkan_read"
+path = "tests/concurrent_skia_and_vulkan_read.rs"
+
+[[test]]
+name = "layout_never_leaks"
+path = "tests/layout_never_leaks.rs"
+
+[[test]]
+name = "subprocess_crash_mid_write"
+path = "tests/subprocess_crash_mid_write.rs"
+
+[lints]
+workspace = true

@@ -882,6 +882,18 @@ impl GpuContext {
             TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::COPY_SRC
+                // COPY_DST is required by Skia's `check_image_info`
+                // gate (`GrVkGpu.cpp:1298-1302`): Skia mandates both
+                // `VK_IMAGE_USAGE_TRANSFER_SRC_BIT` and
+                // `VK_IMAGE_USAGE_TRANSFER_DST_BIT` on every
+                // externally-allocated image it wraps as a Surface or
+                // Image — without TRANSFER_DST, both
+                // `wrap_backend_render_target` and `borrow_texture_from`
+                // silently return `None`. The bit is also additive
+                // for OpenGL / Vulkan compute / cpu-readback adapters,
+                // so it lives at the canonical render-target
+                // allocation point rather than per-adapter.
+                | TextureUsages::COPY_DST
                 // STORAGE_BINDING is on by default so subprocess Vulkan
                 // adapters can bind the imported VkImage as a storage
                 // image for compute writes (#531). Render-target +

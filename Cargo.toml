@@ -16,6 +16,7 @@ members = [
     "libs/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux)
     "libs/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux)
     "libs/streamlib-adapter-cpu-readback-helpers", # Test-helper binaries for streamlib-adapter-cpu-readback — held in a dedicated crate so streamlib doesn't leak into adapter-cpu-readback's runtime dep graph (Linux)
+    "libs/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux)
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
@@ -41,6 +42,7 @@ members = [
     "examples/polyglot-cpu-readback-blur", # Example: Polyglot cpu-readback adapter — Python cv2 / Deno hand-rolled Gaussian blur (#529)
     "examples/polyglot-opengl-fragment-shader", # Example: Polyglot OpenGL adapter — Python Mandelbrot / Deno plasma fragment shader rendered into a host DMA-BUF (#530)
     "examples/polyglot-vulkan-compute",   # Example: Polyglot Vulkan adapter — Python/Deno Mandelbrot compute kernel dispatched against a host DMA-BUF VkImage (#531)
+    "examples/polyglot-skia-canvas",      # Example: Polyglot Skia adapter — Python skia-python draws into a host DMA-BUF VkImage via composing on the Vulkan adapter (#513)
     "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline
     "examples/camera-rust-plugin/plugin", # Grayscale plugin cdylib for camera-rust-plugin example
     "examples/vulkan-video-roundtrip",    # Example: Vulkan Video encode roundtrip (BgraFileSource → Encoder → MP4Writer)
@@ -111,6 +113,24 @@ vulkanalia-vma = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982
 
 # SPIR-V reflection for descriptor-set-layout validation in the compute-kernel RHI.
 rspirv-reflect = "0.9.0"
+
+# Skia bindings for the streamlib-adapter-skia crate.
+#
+# - `vulkan`: GrDirectContext + GrVkImageInfo + GrBackendRenderTarget
+#   machinery needed to wrap a host-allocated VkImage as a SkSurface.
+# - `binary-cache` (default): pull pre-built Skia binaries from the
+#   rust-skia release tarballs instead of compiling Skia C++ from
+#   source. Without this the build needs `git-sync-deps`, GN, ninja,
+#   and 15+ minutes — way out of scope for this repo's CI.
+#
+# We deliberately do NOT enable `textlayout` / `embed-icudtl` / `pdf`
+# (the rust-skia defaults) — those drag fontconfig + freetype + harfbuzz
+# + ICU / harfbuzz-icu link deps that aren't available in dev-package
+# form on a baseline Linux install. The text-rendering Python smoke
+# test from the v1 issue body moves to the polyglot Skia follow-up
+# along with the rest of the wrapper layer; the Rust adapter doesn't
+# render text.
+skia-safe = { version = "0.86", features = ["vulkan"] }
 
 # Shader compilation
 # TODO: Add when implementing HLSL shader compilation:

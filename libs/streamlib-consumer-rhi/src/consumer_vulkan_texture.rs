@@ -66,6 +66,16 @@ pub struct ConsumerVulkanTexture {
     image: vk::Image,
     /// Imported `VkDeviceMemory` from the host's DMA-BUF FD.
     imported_memory: vk::DeviceMemory,
+    /// Byte size of the imported memory allocation. Tracked because
+    /// `VulkanTextureLike::vk_memory_size` needs it for Skia's
+    /// `GrVkAlloc.fSize` and serializing debug snapshots.
+    imported_memory_size: vk::DeviceSize,
+    /// `VkImageTiling` used at create time — `DRM_FORMAT_MODIFIER_EXT`
+    /// for `import_render_target_dma_buf`, `LINEAR` for
+    /// `from_dma_buf_fd`.
+    vk_image_tiling: vk::ImageTiling,
+    /// `VkImageUsageFlags` the image was created with.
+    vk_image_usage_flags: vk::ImageUsageFlags,
     cached_image_view: OnceLock<vk::ImageView>,
     /// DRM format modifier the host's driver chose at allocation time.
     /// Zero is reserved for `DRM_FORMAT_MOD_LINEAR` — sampler-only on
@@ -121,6 +131,14 @@ impl ConsumerVulkanTexture {
 
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
+        // Same usage set as the raw create_info builder below — tracked
+        // separately so VulkanTextureLike::vk_image_usage_flags can
+        // report it without re-reading the image_create_info chain.
+        let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::COLOR_ATTACHMENT
+            | vk::ImageUsageFlags::STORAGE;
 
         let plane_layouts: Vec<vk::SubresourceLayout> = plane_offsets
             .iter()
@@ -148,13 +166,7 @@ impl ConsumerVulkanTexture {
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
             .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
-            .usage(
-                vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST
-                    | vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::COLOR_ATTACHMENT
-                    | vk::ImageUsageFlags::STORAGE,
-            )
+            .usage(usage_flags)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut explicit_modifier_info)
@@ -198,6 +210,9 @@ impl ConsumerVulkanTexture {
             vulkan_device: Arc::clone(vulkan_device),
             image,
             imported_memory: memory,
+            imported_memory_size: alloc_size,
+            vk_image_tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+            vk_image_usage_flags: usage_flags,
             cached_image_view: OnceLock::new(),
             drm_format_modifier,
             width,
@@ -221,6 +236,9 @@ impl ConsumerVulkanTexture {
     ) -> Result<Self> {
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
+        let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED;
 
         let image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
@@ -230,11 +248,7 @@ impl ConsumerVulkanTexture {
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
             .tiling(vk::ImageTiling::LINEAR)
-            .usage(
-                vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST
-                    | vk::ImageUsageFlags::SAMPLED,
-            )
+            .usage(usage_flags)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .build();
@@ -272,6 +286,9 @@ impl ConsumerVulkanTexture {
             vulkan_device: Arc::clone(vulkan_device),
             image,
             imported_memory: memory,
+            imported_memory_size: alloc_size,
+            vk_image_tiling: vk::ImageTiling::LINEAR,
+            vk_image_usage_flags: usage_flags,
             cached_image_view: OnceLock::new(),
             drm_format_modifier: 0,
             width,
@@ -364,4 +381,23 @@ impl VulkanTextureLike for ConsumerVulkanTexture {
     fn format(&self) -> TextureFormat {
         ConsumerVulkanTexture::format(self)
     }
+    fn vk_format(&self) -> vk::Format {
+        texture_format_to_vk(self.format)
+    }
+    fn vk_image_tiling(&self) -> vk::ImageTiling {
+        self.vk_image_tiling
+    }
+    fn vk_image_usage_flags(&self) -> vk::ImageUsageFlags {
+        self.vk_image_usage_flags
+    }
+    fn vk_memory(&self) -> vk::DeviceMemory {
+        self.imported_memory
+    }
+    fn vk_memory_size(&self) -> vk::DeviceSize {
+        self.imported_memory_size
+    }
+    // Defaults cover sample_count, level_count, memory_offset (0 because
+    // import binds at offset 0), memory_property_flags (DEVICE_LOCAL —
+    // both consumer-side import paths request DEVICE_LOCAL), protected,
+    // ycbcr_conversion_handle.
 }

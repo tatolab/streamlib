@@ -80,6 +80,30 @@ fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
     flags
 }
 
+/// Per-construction Vulkan image metadata exposed through
+/// [`super::VulkanTextureLike`] to surface-adapter consumers (Skia in
+/// particular needs the full create-time descriptor to wrap the image
+/// as a `GrBackendRenderTarget`).
+///
+/// Memory binding (`vk_memory`, `vk_memory_offset`, `vk_memory_size`)
+/// is populated lazily from VMA's `get_allocation_info` for the VMA
+/// path or directly from the import call for the DMA-BUF / IOSurface
+/// path — see [`HostVulkanTexture::vk_memory_binding`].
+#[derive(Clone, Copy)]
+struct HostVkImageMeta {
+    vk_image_tiling: vk::ImageTiling,
+    vk_image_usage_flags: vk::ImageUsageFlags,
+}
+
+impl Default for HostVkImageMeta {
+    fn default() -> Self {
+        Self {
+            vk_image_tiling: vk::ImageTiling::OPTIMAL,
+            vk_image_usage_flags: vk::ImageUsageFlags::empty(),
+        }
+    }
+}
+
 /// Vulkan texture wrapper.
 ///
 /// Wraps a VkImage with associated memory and metadata.
@@ -93,6 +117,12 @@ pub struct HostVulkanTexture {
     /// Imported device memory for DMA-BUF import path (VMA cannot import external memory).
     #[cfg(target_os = "linux")]
     imported_memory: Option<vk::DeviceMemory>,
+    /// Allocation size for the imported_memory path (the size we passed
+    /// to `vkAllocateMemory` via `import_dma_buf_memory`). Tracked
+    /// because `VulkanTextureLike::vk_memory_size` needs it for Skia's
+    /// `GrVkAlloc.fSize`.
+    #[cfg(target_os = "linux")]
+    imported_memory_size: vk::DeviceSize,
     /// Cached DMA-BUF fd to avoid leaking a new fd on each export call.
     #[cfg(target_os = "linux")]
     cached_dma_buf_fd: OnceLock<std::os::unix::io::RawFd>,
@@ -114,6 +144,9 @@ pub struct HostVulkanTexture {
     width: u32,
     height: u32,
     format: TextureFormat,
+    /// Per-construction Vulkan image metadata for trait-level
+    /// inspection (Skia adapter, debug snapshots).
+    vk_image_meta: HostVkImageMeta,
 }
 
 impl HostVulkanTexture {
@@ -186,6 +219,8 @@ impl HostVulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory: None,
             #[cfg(target_os = "linux")]
+            imported_memory_size: 0,
+            #[cfg(target_os = "linux")]
             cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
@@ -196,6 +231,10 @@ impl HostVulkanTexture {
             width: desc.width,
             height: desc.height,
             format: desc.format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::OPTIMAL,
+                vk_image_usage_flags: usage_flags,
+            },
         })
     }
 
@@ -245,6 +284,8 @@ impl HostVulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory: None,
             #[cfg(target_os = "linux")]
+            imported_memory_size: 0,
+            #[cfg(target_os = "linux")]
             cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
@@ -255,6 +296,10 @@ impl HostVulkanTexture {
             width: desc.width,
             height: desc.height,
             format: desc.format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::OPTIMAL,
+                vk_image_usage_flags: usage_flags,
+            },
         })
     }
 
@@ -382,6 +427,7 @@ impl HostVulkanTexture {
             image: Some(image),
             allocation: Some(allocation),
             imported_memory: None,
+            imported_memory_size: 0,
             cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
@@ -390,6 +436,10 @@ impl HostVulkanTexture {
             width: desc.width,
             height: desc.height,
             format: desc.format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                vk_image_usage_flags: usage_flags,
+            },
         })
     }
 
@@ -469,6 +519,12 @@ impl HostVulkanTexture {
             width,
             height,
             format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::OPTIMAL,
+                vk_image_usage_flags: vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST,
+            },
         })
     }
 
@@ -482,6 +538,8 @@ impl HostVulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory: None,
             #[cfg(target_os = "linux")]
+            imported_memory_size: 0,
+            #[cfg(target_os = "linux")]
             cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
@@ -492,6 +550,7 @@ impl HostVulkanTexture {
             width: 0,
             height: 0,
             format: TextureFormat::Rgba8Unorm,
+            vk_image_meta: HostVkImageMeta::default(),
         }
     }
 
@@ -725,6 +784,22 @@ impl HostVulkanTexture {
 
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
+        // Same usage set as the create_info builder below — tracked
+        // separately so VulkanTextureLike::vk_image_usage_flags can
+        // report it without re-reading the image_create_info chain.
+        // TRANSFER_DST is required by Skia's `check_image_info` gate
+        // (and by symmetric host↔consumer parity); see the matching
+        // comment in
+        // `streamlib::core::context::GpuContext::acquire_render_target_dma_buf_image`.
+        let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::COLOR_ATTACHMENT
+            // STORAGE for subprocess compute shaders that bind the
+            // imported VkImage as a storage image (#531). Must match
+            // the host's `acquire_render_target_dma_buf_image` usage
+            // flags or the cross-process import fails.
+            | vk::ImageUsageFlags::STORAGE;
 
         let plane_layouts: Vec<vk::SubresourceLayout> = plane_offsets
             .iter()
@@ -754,17 +829,7 @@ impl HostVulkanTexture {
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
             .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
-            .usage(
-                vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST
-                    | vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::COLOR_ATTACHMENT
-                    // STORAGE for subprocess compute shaders that bind
-                    // the imported VkImage as a storage image (#531).
-                    // Must match the host's `acquire_render_target_dma_buf_image`
-                    // usage flags or the cross-process import fails.
-                    | vk::ImageUsageFlags::STORAGE,
-            )
+            .usage(usage_flags)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .push_next(&mut explicit_modifier_info)
@@ -811,6 +876,7 @@ impl HostVulkanTexture {
             image: Some(image),
             allocation: None,
             imported_memory: Some(memory),
+            imported_memory_size: alloc_size,
             cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
@@ -819,6 +885,10 @@ impl HostVulkanTexture {
             width,
             height,
             format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                vk_image_usage_flags: usage_flags,
+            },
         })
     }
 
@@ -833,6 +903,9 @@ impl HostVulkanTexture {
     ) -> Result<Self> {
         let device = vulkan_device.device();
         let vk_format = texture_format_to_vk(format);
+        let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED;
 
         let image_info = vk::ImageCreateInfo::builder()
             .image_type(vk::ImageType::_2D)
@@ -846,11 +919,7 @@ impl HostVulkanTexture {
             .array_layers(1)
             .samples(vk::SampleCountFlags::_1)
             .tiling(vk::ImageTiling::LINEAR)
-            .usage(
-                vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST
-                    | vk::ImageUsageFlags::SAMPLED,
-            )
+            .usage(usage_flags)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED)
             .build();
@@ -890,6 +959,7 @@ impl HostVulkanTexture {
             image: Some(image),
             allocation: None,
             imported_memory: Some(memory),
+            imported_memory_size: alloc_size,
             cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
@@ -898,6 +968,10 @@ impl HostVulkanTexture {
             width,
             height,
             format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::LINEAR,
+                vk_image_usage_flags: usage_flags,
+            },
         })
     }
 }
@@ -911,6 +985,8 @@ impl Clone for HostVulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory: None,
             #[cfg(target_os = "linux")]
+            imported_memory_size: 0,
+            #[cfg(target_os = "linux")]
             cached_dma_buf_fd: OnceLock::new(),
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
@@ -921,6 +997,7 @@ impl Clone for HostVulkanTexture {
             width: self.width,
             height: self.height,
             format: self.format,
+            vk_image_meta: HostVkImageMeta::default(),
         }
     }
 }
@@ -974,6 +1051,32 @@ impl Drop for HostVulkanTexture {
 unsafe impl Send for HostVulkanTexture {}
 unsafe impl Sync for HostVulkanTexture {}
 
+impl HostVulkanTexture {
+    /// Memory binding tuple `(memory, offset, size)` resolved against
+    /// whichever path created the image — VMA for the standard
+    /// allocators, the imported `VkDeviceMemory` for the DMA-BUF
+    /// import paths, or `(null, 0, 0)` for placeholder / IOSurface-
+    /// import textures (Skia consumers must check before relying on
+    /// `vk_memory()`).
+    fn vk_memory_binding(&self) -> (vk::DeviceMemory, vk::DeviceSize, vk::DeviceSize) {
+        // VMA path: query allocation_info on demand. The lookup is a
+        // simple struct read from VMA's internal allocation handle.
+        if let (Some(vk_dev), Some(allocation)) =
+            (&self.vulkan_device, self.allocation.as_ref())
+        {
+            let info = vk_dev.allocator().get_allocation_info(*allocation);
+            return (info.deviceMemory, info.offset, info.size);
+        }
+        // DMA-BUF import path (Linux only).
+        #[cfg(target_os = "linux")]
+        if let Some(memory) = self.imported_memory {
+            return (memory, 0, self.imported_memory_size);
+        }
+        // Placeholder / IOSurface — no Vulkan memory binding.
+        (vk::DeviceMemory::null(), 0, 0)
+    }
+}
+
 impl super::VulkanTextureLike for HostVulkanTexture {
     fn image(&self) -> Option<vk::Image> {
         HostVulkanTexture::image(self)
@@ -996,6 +1099,24 @@ impl super::VulkanTextureLike for HostVulkanTexture {
     }
     fn format(&self) -> crate::core::rhi::TextureFormat {
         HostVulkanTexture::format(self)
+    }
+    fn vk_format(&self) -> vk::Format {
+        texture_format_to_vk(self.format)
+    }
+    fn vk_image_tiling(&self) -> vk::ImageTiling {
+        self.vk_image_meta.vk_image_tiling
+    }
+    fn vk_image_usage_flags(&self) -> vk::ImageUsageFlags {
+        self.vk_image_meta.vk_image_usage_flags
+    }
+    fn vk_memory(&self) -> vk::DeviceMemory {
+        self.vk_memory_binding().0
+    }
+    fn vk_memory_offset(&self) -> vk::DeviceSize {
+        self.vk_memory_binding().1
+    }
+    fn vk_memory_size(&self) -> vk::DeviceSize {
+        self.vk_memory_binding().2
     }
 }
 

@@ -138,6 +138,22 @@ pub trait VulkanPixelBufferLike {
 /// adapter holds `Arc<P::Texture>` and reads the `vk::Image` +
 /// metadata through this trait without caring whether it's host or
 /// consumer.
+///
+/// The trait is split into two groups:
+///
+/// - **Identity / shape** ([`Self::image`], [`Self::format`],
+///   [`Self::width`], [`Self::height`], [`Self::chosen_drm_format_modifier`]):
+///   the original surface-adapter v1 surface — what an adapter needs
+///   to record a layout transition on the right `VkImage` of the right
+///   shape.
+/// - **Full image metadata** ([`Self::vk_format`] through
+///   [`Self::vk_ycbcr_conversion_handle`]): what frameworks like Skia
+///   need to wrap an externally-allocated `VkImage` as their native
+///   surface type (`GrVkBackendContext` → `GrBackendRenderTarget` →
+///   `SkSurface`). Defaults match the streamlib surface-adapter
+///   model: DEVICE_LOCAL, single-sample, single-mip, unprotected, no
+///   YCbCr conversion, bound at offset 0. Constructors that violate
+///   any default override the corresponding method.
 pub trait VulkanTextureLike {
     /// `vk::Image` handle, or `None` for placeholder textures.
     fn image(&self) -> Option<vk::Image>;
@@ -151,6 +167,73 @@ pub trait VulkanTextureLike {
     fn height(&self) -> u32;
     /// Texture format.
     fn format(&self) -> crate::TextureFormat;
+
+    /// Vulkan format the image was created with. Distinct from
+    /// [`Self::format`] (the RHI-level enum) — this is the raw
+    /// `vk::Format` the framework consumer sees. Required because
+    /// Skia rejects `VK_FORMAT_UNDEFINED`.
+    fn vk_format(&self) -> vk::Format;
+
+    /// `VkImageTiling` used at image creation. `OPTIMAL` for the
+    /// standard render-target path; `DRM_FORMAT_MODIFIER_EXT` for
+    /// tiled DMA-BUF render targets.
+    fn vk_image_tiling(&self) -> vk::ImageTiling;
+
+    /// `VkImageUsageFlags` the image was created with. Skia checks
+    /// these bits to decide which surface ops are valid (e.g.
+    /// `COLOR_ATTACHMENT` is required for `wrap_backend_render_target`).
+    fn vk_image_usage_flags(&self) -> vk::ImageUsageFlags;
+
+    /// `VkDeviceMemory` handle the image is bound to. Returns
+    /// `vk::DeviceMemory::null()` for placeholder textures.
+    fn vk_memory(&self) -> vk::DeviceMemory;
+
+    /// Byte size of the memory allocation backing the image.
+    fn vk_memory_size(&self) -> vk::DeviceSize;
+
+    /// `VkSampleCountFlagBits` the image was created with. Default
+    /// `_1` covers every surface-adapter-managed texture today;
+    /// multi-sample render targets aren't part of the surface-adapter
+    /// contract.
+    fn vk_sample_count(&self) -> vk::SampleCountFlags {
+        vk::SampleCountFlags::_1
+    }
+
+    /// Number of mip levels. Default `1` — surface-adapter textures
+    /// don't carry mipmaps.
+    fn vk_level_count(&self) -> u32 {
+        1
+    }
+
+    /// Byte offset of the image's storage within [`Self::vk_memory`].
+    /// Default `0` — surface-adapter textures bind at offset 0
+    /// (VMA dedicated allocations and DMA-BUF imports both).
+    fn vk_memory_offset(&self) -> vk::DeviceSize {
+        0
+    }
+
+    /// `VkMemoryPropertyFlags` of the backing allocation. Default
+    /// `DEVICE_LOCAL` matches the universal surface-adapter shape
+    /// (render targets are GPU-local; HOST_VISIBLE staging buffers
+    /// live on [`VulkanPixelBufferLike`], not here).
+    fn vk_memory_property_flags(&self) -> vk::MemoryPropertyFlags {
+        vk::MemoryPropertyFlags::DEVICE_LOCAL
+    }
+
+    /// `true` if the image was allocated with
+    /// `VK_IMAGE_CREATE_PROTECTED_BIT`. Default `false` — surface-
+    /// adapter textures aren't protected-content.
+    fn vk_protected(&self) -> bool {
+        false
+    }
+
+    /// `VkSamplerYcbcrConversion` handle as `u64`, or `0` if unused.
+    /// Default `0` — adapter-internal NV12 conversion is the
+    /// surface-adapter contract; YCbCr conversion handles aren't
+    /// exposed across the boundary.
+    fn vk_ycbcr_conversion_handle(&self) -> u64 {
+        0
+    }
 }
 
 /// Minimal device shape every surface adapter needs at the layout-
