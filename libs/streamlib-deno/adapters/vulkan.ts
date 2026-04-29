@@ -35,20 +35,6 @@ import {
 
 export { STREAMLIB_ADAPTER_ABI_VERSION };
 
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  // Copy into a fresh ArrayBuffer-backed view so `crypto.subtle.digest`
-  // accepts it regardless of the source's underlying buffer flavor.
-  const fresh = new Uint8Array(bytes.byteLength);
-  fresh.set(bytes);
-  const digest = await crypto.subtle.digest("SHA-256", fresh);
-  const view = new Uint8Array(digest);
-  let s = "";
-  for (let i = 0; i < view.length; i++) {
-    s += view[i].toString(16).padStart(2, "0");
-  }
-  return s;
-}
-
 /** Mirror of `vk::ImageLayout` enumerant values used in views. */
 export const VkImageLayout = {
   Undefined: 0,
@@ -165,12 +151,17 @@ export class VulkanContext {
   private readonly symbols: any;
   private readonly rt: Deno.PointerObject;
   private readonly surfaceIds = new Map<string, bigint>();
-  /** SHA-256(spv) hex → host-assigned kernel_id. Re-registering
-   * identical SPIR-V is a host-side cache hit and returns the same
-   * id; this map keeps us from re-issuing the register IPC for blobs
-   * we've already shown the host once.
+  /** Identity-keyed kernel-id cache: keying by the `Uint8Array` itself
+   * keeps the hot path O(1) (no per-call hashing), so multi-MB ML
+   * SPIR-V doesn't pay a SHA-256 cost on every dispatch. `WeakMap`
+   * auto-clears entries when the customer drops their reference to the
+   * bytes — no unbounded growth and no manual eviction. Customers who
+   * dispatch repeatedly should reuse the same `Uint8Array` (stash it
+   * on the processor at setup); a fresh instance is a cache miss and
+   * re-registers through escalate IPC (host-side cache hit, but the
+   * IPC payload is sent again).
    */
-  private readonly computeKernelIds = new Map<string, string>();
+  private readonly computeKernelIds = new WeakMap<Uint8Array, string>();
   private readonly resolvedHandles = new Map<
     string,
     ReturnType<VulkanGpuLimitedAccess["resolveSurface"]>
@@ -363,19 +354,18 @@ export class VulkanContext {
       );
     }
     const ch = getEscalateChannel();
-    // Cache kernel registrations by SHA-256(spv) hex (the same key
-    // the host uses), so identical SPIR-V is registered once per
-    // subprocess. Re-registration of the same blob is a host-side
-    // cache hit too.
-    const spvKey = await sha256Hex(spirv);
-    let kernelId = this.computeKernelIds.get(spvKey);
+    // Identity-keyed kernel-id cache: `WeakMap` lookup is O(1) per
+    // dispatch, so multi-MB ML SPIR-V doesn't pay a hashing cost on
+    // the hot path. Entries auto-clear when the customer drops the
+    // Uint8Array — see the field comment.
+    let kernelId = this.computeKernelIds.get(spirv);
     if (kernelId === undefined) {
       const response = await ch.registerComputeKernel(
         spirv,
         pushConstants.byteLength,
       );
       kernelId = response.handle_id;
-      this.computeKernelIds.set(spvKey, kernelId);
+      this.computeKernelIds.set(spirv, kernelId);
     }
     // Send the surface-share UUID, not the cdylib's local u64
     // surfaceId — the host bridge resolves UUID → host

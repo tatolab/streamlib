@@ -33,7 +33,6 @@ This module provides:
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import itertools
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -252,13 +251,16 @@ class VulkanContext:
         # transfers the sync_fd into the cdylib's adapter, but the plane
         # fds remain the SurfaceHandle's responsibility.
         self._resolved_handles: dict[str, object] = {}
-        # Per-`VulkanContext` cache: SHA-256(spv) hex → host-assigned
-        # kernel_id. The host caches the `Arc<VulkanComputeKernel>` keyed
-        # by the same hash, so re-registering identical SPIR-V hits a
-        # cache and returns the same id without re-reflecting or
-        # rebuilding the pipeline. The cache survives for the
-        # `VulkanContext`'s lifetime.
-        self._compute_kernel_ids: dict[str, str] = {}
+        # Per-`VulkanContext` cache: `id(spv)` → (spv_strong_ref, kernel_id).
+        # The strong ref pins the bytes so Python can't recycle the id for
+        # a different object while we still hold the cached kernel_id.
+        # Identity-keyed (no per-call hashing) so the hot path stays O(1)
+        # even for multi-MB ML SPIR-V — customers should reuse the same
+        # `bytes` object across dispatches (stash it on the processor at
+        # `setup()`); fresh `bytes` instances are a cache miss and
+        # re-register through escalate IPC (host-side cache hit, but the
+        # IPC payload is sent again).
+        self._compute_kernel_ids: dict[int, tuple[bytes, str]] = {}
 
     def _wire_signatures(self) -> None:
         """Set ctypes signatures on every `slpn_vulkan_*` entry point.
@@ -479,16 +481,18 @@ class VulkanContext:
                 "registered — call acquire_write inside a `with` block first."
             )
         ch = _escalate_channel()
-        # Cache kernel registrations by SHA-256(spv) hex (the same key
-        # the host uses), so identical SPIR-V is registered once per
-        # subprocess. Re-registration of the same blob is a host-side
-        # cache hit too.
-        spv_key = hashlib.sha256(spirv).hexdigest()
-        kernel_id = self._compute_kernel_ids.get(spv_key)
-        if kernel_id is None:
+        # Identity-keyed kernel-id cache: `id(spv)` is O(1) per dispatch,
+        # so multi-MB ML SPIR-V doesn't pay a SHA-256 cost on the hot
+        # path. The cache holds a strong reference to the bytes so
+        # Python can't recycle the id for a different object.
+        spv_id = id(spirv)
+        cached_entry = self._compute_kernel_ids.get(spv_id)
+        if cached_entry is not None and cached_entry[0] is spirv:
+            kernel_id = cached_entry[1]
+        else:
             response = ch.register_compute_kernel(spirv, len(push_constants))
             kernel_id = response["handle_id"]
-            self._compute_kernel_ids[spv_key] = kernel_id
+            self._compute_kernel_ids[spv_id] = (spirv, kernel_id)
         # Send the surface-share UUID, not the cdylib's local u64
         # surface_id — the host bridge resolves UUID → host
         # `StreamTexture` via an application-provided map.
