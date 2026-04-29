@@ -78,5 +78,9 @@ path = "tests/subprocess_crash_mid_write.rs"
 name = "skia_visual_evidence"
 path = "tests/skia_visual_evidence.rs"
 
+[[test]]
+name = "skia_animated_stress"
+path = "tests/skia_animated_stress.rs"
+
 [lints]
 workspace = true
