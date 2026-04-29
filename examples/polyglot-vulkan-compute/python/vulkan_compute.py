@@ -3,23 +3,26 @@
 
 """Polyglot Vulkan compute processor — Python.
 
-End-to-end gate for the subprocess `VulkanContext` runtime (#531). The
-host pre-allocates a render-target-capable DMA-BUF surface AND an
-exportable `VulkanTimelineSemaphore`, registers both with surface-share.
-This processor receives a trigger Videoframe, opens the host surface
-through ``VulkanContext.acquire_write`` (which imports the DMA-BUF as a
-``VkImage`` in the subprocess and imports the timeline via
-``from_imported_opaque_fd``), dispatches the Mandelbrot compute kernel
-via the cdylib's quarantined ``slpn_vulkan_dispatch_compute`` helper,
-and releases — the host adapter advances the timeline so the host's
-pre-stop readback sees the writes.
+End-to-end gate for the subprocess `VulkanContext` runtime (#531) +
+escalate-IPC compute (#550). The host pre-allocates a render-target-
+capable DMA-BUF surface AND an exportable `VulkanTimelineSemaphore`,
+registers both with surface-share, and installs a
+`ComputeKernelBridge` wired to its `VulkanComputeKernel`. This
+processor receives a trigger Videoframe, opens the host surface
+through ``VulkanContext.acquire_write`` (which imports the DMA-BUF
+as a ``VkImage`` in the subprocess and imports the timeline via
+``from_imported_opaque_fd``), and calls
+``VulkanContext.dispatch_compute`` — which routes through escalate
+IPC's ``register_compute_kernel`` + ``run_compute_kernel`` ops to
+the host's ``VulkanComputeKernel``. Release advances the timeline so
+the host's pre-stop readback sees the writes.
 
-No `pyvulkan` / `vulkan` Python binding required: the cdylib's
-`dispatch_compute` accepts SPIR-V bytes + push-constant bytes + group
-counts and runs the dispatch on the same `VkDevice` the adapter
-manages. Real customers can use whatever Vulkan binding they prefer
-through the ``raw_handles()`` escape hatch — the cdylib's runtime
-exposes its raw `VkInstance` / `VkDevice` / `VkQueue` for that.
+No `pyvulkan` / `vulkan` Python binding required: the wire form is
+SPIR-V bytes + push-constant bytes + group counts. Real customers
+can still use whatever Vulkan binding they prefer for non-compute
+work through the ``raw_handles()`` escape hatch — the cdylib's
+runtime exposes its raw `VkInstance` / `VkDevice` / `VkQueue` for
+that.
 
 Config keys:
     vulkan_surface_uuid (str, required)

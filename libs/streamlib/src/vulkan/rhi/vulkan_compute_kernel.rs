@@ -1418,6 +1418,17 @@ mod tests {
     }
 
     // ---- Pipeline cache tests ------------------------------------------------
+    //
+    // Every test that mutates `STREAMLIB_PIPELINE_CACHE_DIR` is marked
+    // `#[serial(streamlib_pipeline_cache_env)]` so they serialize against
+    // each other regardless of whether they skip the GPU device queue
+    // mutex. The `pipeline_cache_dir()` resolution path doesn't need a
+    // Vulkan device, so the queue-mutex serialization isn't sufficient
+    // by itself. Required for soundness under Rust 2024's `unsafe
+    // std::env::set_var` — concurrent reads from sibling test threads
+    // would otherwise be UB.
+
+    use serial_test::serial;
 
     fn unique_cache_dir(label: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -1432,14 +1443,14 @@ mod tests {
     }
 
     /// Run `f` with `STREAMLIB_PIPELINE_CACHE_DIR` set to `dir`, restoring
-    /// the previous value (or unsetting) afterward. Tests that touch this
-    /// env var must NOT run concurrently with other tests that also touch
-    /// it — kernel tests serialize through the device queue mutex anyway.
+    /// the previous value (or unsetting) afterward. Callers MUST mark
+    /// the test `#[serial(streamlib_pipeline_cache_env)]` — see the
+    /// section comment above for why.
     fn with_pipeline_cache_dir<R>(dir: &Path, f: impl FnOnce() -> R) -> R {
         let prev = std::env::var(PIPELINE_CACHE_DIR_ENV).ok();
-        // SAFETY: tests in this module run serialized via the device queue
-        // mutex, so concurrent env-var reads/writes from sibling tests are
-        // not possible.
+        // SAFETY: callers serialize via `#[serial(streamlib_pipeline_cache_env)]`,
+        // so concurrent env-var reads/writes from sibling tests are not
+        // possible.
         unsafe { std::env::set_var(PIPELINE_CACHE_DIR_ENV, dir) };
         let r = f();
         // SAFETY: same as above.
@@ -1453,6 +1464,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(streamlib_pipeline_cache_env)]
     fn cache_file_path_is_stable_for_same_spirv_and_distinct_for_different() {
         let dir = unique_cache_dir("path-stability");
         with_pipeline_cache_dir(&dir, || {
@@ -1473,6 +1485,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(streamlib_pipeline_cache_env)]
     fn env_override_takes_precedence_over_xdg_default() {
         let dir = unique_cache_dir("env-override");
         with_pipeline_cache_dir(&dir, || {
@@ -1482,6 +1495,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(streamlib_pipeline_cache_env)]
     fn empty_env_var_falls_through_to_xdg_default() {
         // Whatever the XDG default resolves to is platform-dependent — what we
         // assert is that an explicitly-empty override does NOT short-circuit
@@ -1508,6 +1522,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(streamlib_pipeline_cache_env)]
     fn cache_miss_writes_cache_file_after_kernel_construction() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
         let dir = unique_cache_dir("miss-writes");
@@ -1551,6 +1566,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(streamlib_pipeline_cache_env)]
     fn cache_hit_does_not_panic_or_break_kernel_construction() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
         let dir = unique_cache_dir("hit-reuses");
@@ -1595,6 +1611,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(streamlib_pipeline_cache_env)]
     fn corrupt_cache_blob_falls_back_to_recompile_and_overwrites() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
         let dir = unique_cache_dir("corrupt-blob");
@@ -1630,6 +1647,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(streamlib_pipeline_cache_env)]
     fn read_only_cache_dir_does_not_break_kernel_construction() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
         let dir = unique_cache_dir("readonly-dir");

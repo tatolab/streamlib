@@ -3336,10 +3336,10 @@ mod vulkan {
         device: Arc<ConsumerVulkanDevice>,
         adapter: Arc<VulkanSurfaceAdapter<ConsumerVulkanDevice>>,
         /// Per-surface book-keeping. The actual texture + timeline are
-        /// owned by the adapter (transferred into `HostSurfaceRegistration`);
-        /// we keep only the raw `vk::Image` handle so
-        /// `slpn_vulkan_dispatch_compute` can look it up without a
-        /// round-trip through the adapter's lock + `try_begin_write`.
+        /// owned by the adapter (transferred into
+        /// `HostSurfaceRegistration`); this map only tracks which
+        /// surface_ids have been registered so the FFI boundary can
+        /// reject double-registers / double-unregisters cleanly.
         registered: Mutex<HashMap<u64, RegisteredSurface>>,
     }
 
