@@ -24,8 +24,8 @@ use skia_safe::gpu::{
 };
 use skia_safe::{AlphaType, ColorSpace, ColorType};
 use streamlib_adapter_abi::{
-    AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
-    WriteGuard,
+    AdapterError, GlWritable, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat,
+    SurfaceId, WriteGuard,
 };
 use streamlib_adapter_opengl::{EglRuntime, OpenGlSurfaceAdapter, GL_TEXTURE_2D};
 
@@ -100,7 +100,11 @@ impl SkiaGlSurfaceAdapter {
         surface: &StreamlibSurface,
     ) -> Result<WriteGuard<'g, Self>, AdapterError> {
         let surface_id = inner_guard.surface_id();
-        let texture_id = inner_guard.view().gl_texture_id();
+        // Route through `GlWritable` rather than the view's inherent
+        // `gl_texture_id` method so the capability-trait composition
+        // is explicit at the call site — matches the issue's
+        // "composition via the GlWritable marker" framing.
+        let texture_id = GlWritable::gl_texture_id(inner_guard.view());
         let color_type = surface_format_to_color_type(surface.format).ok_or_else(|| {
             AdapterError::UnsupportedFormat {
                 surface_id,
@@ -160,7 +164,7 @@ impl SkiaGlSurfaceAdapter {
         surface: &StreamlibSurface,
     ) -> Result<ReadGuard<'g, Self>, AdapterError> {
         let surface_id = inner_guard.surface_id();
-        let texture_id = inner_guard.view().gl_texture_id();
+        let texture_id = GlWritable::gl_texture_id(inner_guard.view());
         let color_type = surface_format_to_color_type(surface.format).ok_or_else(|| {
             AdapterError::UnsupportedFormat {
                 surface_id,

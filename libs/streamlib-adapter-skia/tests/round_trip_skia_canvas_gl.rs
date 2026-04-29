@@ -131,6 +131,14 @@ fn round_trip_skia_canvas_gl() {
     let pixels = host_readback_bgra(&host_device, stream_tex.vulkan_inner().image().expect("image"), W, H);
 
     // === Pixel-content assertions =======================================
+    // Asymmetric tolerances: the corner is far from any geometry and
+    // sits inside the flat blue clear, so it must be (255,0,0,255)
+    // within driver rounding (tolerance 4). The geometric center sits
+    // inside the red disc but near the AA-blended edge transitions of
+    // any rasterizer's circle; tolerance 12 accommodates that bleed
+    // without weakening the channel-order check (a swap would shift
+    // 255 to a different channel and blow either tolerance). Mirrors
+    // the Vulkan-backend round-trip test's tolerances.
     let center = sample(&pixels, W as i32 / 2, H as i32 / 2, W);
     assert_pixel_close(
         "center (red disc)",

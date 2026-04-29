@@ -30,14 +30,6 @@ skia-safe = { workspace = true }
 # time (Skia copies it internally during make_vulkan, so the Library
 # handle can be dropped right after).
 libloading = "0.8"
-# GL backend deps. The GL composition borrows the OpenGl adapter's
-# EGL runtime (`lock_make_current`) and binds `gl_texture_id`-typed
-# views as Skia `BackendTexture`s. `khronos-egl` is unused at runtime
-# here but is the source of the EGL types `streamlib-adapter-opengl`
-# returns; `gl` is needed if a future test wants to drive raw GL
-# alongside Skia.
-khronos-egl = { version = "6.0", features = ["dynamic"] }
-gl = "0.14"
 
 # `streamlib` is a *test*-only dep: the round-trip / conformance
 # tests bring up a `HostVulkanDevice`. The runtime crate (above)

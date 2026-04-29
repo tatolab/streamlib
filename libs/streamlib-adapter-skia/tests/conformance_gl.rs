@@ -16,10 +16,10 @@
 
 #![cfg(target_os = "linux")]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::TextureFormat;
+use streamlib::core::rhi::{StreamTexture, TextureFormat};
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
@@ -48,60 +48,69 @@ fn try_init() -> Option<(GpuContext, Arc<EglRuntime>)> {
     Some((gpu, egl))
 }
 
-fn register_one(
-    inner: &OpenGlSurfaceAdapter,
-    gpu: &GpuContext,
-    id: SurfaceId,
-) -> StreamlibSurface {
-    let texture = gpu
-        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
-        .expect("acquire_render_target_dma_buf_image");
-    let dma_buf_fd = texture
-        .vulkan_inner()
-        .export_dma_buf_fd()
-        .expect("export DMA-BUF");
-    let plane_layout = texture
-        .vulkan_inner()
-        .dma_buf_plane_layout()
-        .expect("dma_buf_plane_layout");
-    let modifier = texture.vulkan_inner().chosen_drm_format_modifier();
-
-    let registration = HostSurfaceRegistration {
-        dma_buf_fd,
-        width: 64,
-        height: 64,
-        drm_fourcc: DRM_FORMAT_ARGB8888,
-        drm_format_modifier: modifier,
-        plane_offset: plane_layout[0].0,
-        plane_stride: plane_layout[0].1,
-    };
-    inner
-        .register_host_surface(id, registration)
-        .expect("register_host_surface");
-    // We deliberately leak the `StreamTexture` here for the lifetime
-    // of the test — the GL adapter holds the DMA-BUF FD imported via
-    // EGL, and the host VkImage backing must outlive every guard the
-    // conformance suite acquires.
-    std::mem::forget(texture);
-    StreamlibSurface::new(
-        id,
-        64,
-        64,
-        SurfaceFormat::Bgra8,
-        SurfaceUsage::RENDER_TARGET | SurfaceUsage::SAMPLED,
-        SurfaceTransportHandle::empty(),
-        SurfaceSyncState::default(),
-    )
-}
-
+/// Factory that owns the per-surface `StreamTexture`s for the
+/// duration of the conformance run. The GL adapter imports each
+/// texture's DMA-BUF FD into an EGLImage at registration time; the
+/// host-side `VkImage` backing must outlive every guard the
+/// conformance suite acquires, so we hold the textures here rather
+/// than leaking via `std::mem::forget`.
 struct ConformanceFactory<'a> {
     inner: &'a OpenGlSurfaceAdapter,
     gpu: &'a GpuContext,
+    textures: Mutex<Vec<StreamTexture>>,
+}
+
+impl<'a> ConformanceFactory<'a> {
+    fn new(inner: &'a OpenGlSurfaceAdapter, gpu: &'a GpuContext) -> Self {
+        Self {
+            inner,
+            gpu,
+            textures: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 impl streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'_> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
-        register_one(self.inner, self.gpu, id)
+        let texture = self
+            .gpu
+            .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
+            .expect("acquire_render_target_dma_buf_image");
+        let dma_buf_fd = texture
+            .vulkan_inner()
+            .export_dma_buf_fd()
+            .expect("export DMA-BUF");
+        let plane_layout = texture
+            .vulkan_inner()
+            .dma_buf_plane_layout()
+            .expect("dma_buf_plane_layout");
+        let modifier = texture.vulkan_inner().chosen_drm_format_modifier();
+
+        let registration = HostSurfaceRegistration {
+            dma_buf_fd,
+            width: 64,
+            height: 64,
+            drm_fourcc: DRM_FORMAT_ARGB8888,
+            drm_format_modifier: modifier,
+            plane_offset: plane_layout[0].0,
+            plane_stride: plane_layout[0].1,
+        };
+        self.inner
+            .register_host_surface(id, registration)
+            .expect("register_host_surface");
+        self.textures
+            .lock()
+            .expect("textures mutex poisoned")
+            .push(texture);
+        StreamlibSurface::new(
+            id,
+            64,
+            64,
+            SurfaceFormat::Bgra8,
+            SurfaceUsage::RENDER_TARGET | SurfaceUsage::SAMPLED,
+            SurfaceTransportHandle::empty(),
+            SurfaceSyncState::default(),
+        )
     }
 }
 
@@ -123,10 +132,7 @@ fn skia_gl_adapter_passes_run_conformance() {
         }
     };
 
-    let factory = ConformanceFactory {
-        inner: inner.as_ref(),
-        gpu: &gpu,
-    };
+    let factory = ConformanceFactory::new(inner.as_ref(), &gpu);
     run_conformance(&skia_gl_adapter, factory);
 
     // Unknown surface id must propagate as SurfaceNotFound through
