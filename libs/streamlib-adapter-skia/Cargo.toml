@@ -49,6 +49,10 @@ streamlib = { path = "../streamlib" }
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
 tracing-subscriber.workspace = true
+# Used by the visual-evidence dump in `round_trip_skia_canvas` and the
+# new `skia_visual_evidence` test — write the host-readback BGRA bytes
+# back out as a PNG when `STREAMLIB_SKIA_E2E_PNG_DIR` is set.
+png = "0.17"
 
 [[test]]
 name = "conformance"
@@ -69,6 +73,10 @@ path = "tests/layout_never_leaks.rs"
 [[test]]
 name = "subprocess_crash_mid_write"
 path = "tests/subprocess_crash_mid_write.rs"
+
+[[test]]
+name = "skia_visual_evidence"
+path = "tests/skia_visual_evidence.rs"
 
 [lints]
 workspace = true
