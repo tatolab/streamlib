@@ -130,7 +130,7 @@ rspirv-reflect = "0.9.0"
 # test from the v1 issue body moves to the polyglot Skia follow-up
 # along with the rest of the wrapper layer; the Rust adapter doesn't
 # render text.
-skia-safe = { version = "0.86", features = ["vulkan"] }
+skia-safe = { version = "0.86", features = ["vulkan", "gl"] }
 
 # Shader compilation
 # TODO: Add when implementing HLSL shader compilation:
