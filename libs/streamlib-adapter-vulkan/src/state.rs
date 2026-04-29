@@ -12,34 +12,8 @@
 
 use std::sync::Arc;
 
-use streamlib_consumer_rhi::DevicePrivilege;
+use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
-use vulkanalia::vk;
-
-/// `VkImageLayout` enumerant. Stored as `i32` per the Vulkan spec.
-///
-/// Re-exported so the adapter's public API doesn't drag every consumer
-/// through a `vulkanalia` import. Convert to `vk::ImageLayout` via
-/// `vk::ImageLayout::from_raw(layout.0)`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct VulkanLayout(pub i32);
-
-impl VulkanLayout {
-    pub const UNDEFINED: Self = Self(vk::ImageLayout::UNDEFINED.as_raw());
-    pub const GENERAL: Self = Self(vk::ImageLayout::GENERAL.as_raw());
-    pub const COLOR_ATTACHMENT_OPTIMAL: Self =
-        Self(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw());
-    pub const SHADER_READ_ONLY_OPTIMAL: Self =
-        Self(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw());
-    pub const TRANSFER_SRC_OPTIMAL: Self =
-        Self(vk::ImageLayout::TRANSFER_SRC_OPTIMAL.as_raw());
-    pub const TRANSFER_DST_OPTIMAL: Self =
-        Self(vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw());
-
-    pub(crate) fn vk(self) -> vk::ImageLayout {
-        vk::ImageLayout::from_raw(self.0)
-    }
-}
 
 /// Inputs handed to [`crate::VulkanSurfaceAdapter::register_host_surface`].
 ///

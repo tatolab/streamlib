@@ -15,24 +15,8 @@
 
 use std::sync::Arc;
 
-use streamlib_consumer_rhi::DevicePrivilege;
+use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 use streamlib_adapter_abi::{SurfaceFormat, SurfaceId, SurfaceRegistration};
-use vulkanalia::vk;
-
-/// `VkImageLayout` enumerant. Stored as `i32` per the Vulkan spec.
-///
-/// Convert to `vk::ImageLayout` via `vk::ImageLayout::from_raw(layout.0)`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct VulkanLayout(pub i32);
-
-impl VulkanLayout {
-    pub const UNDEFINED: Self = Self(vk::ImageLayout::UNDEFINED.as_raw());
-    pub const GENERAL: Self = Self(vk::ImageLayout::GENERAL.as_raw());
-
-    pub(crate) fn vk(self) -> vk::ImageLayout {
-        vk::ImageLayout::from_raw(self.0)
-    }
-}
 
 /// Inputs the registration site hands to
 /// [`crate::CpuReadbackSurfaceAdapter::register_host_surface`].

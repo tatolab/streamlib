@@ -37,7 +37,9 @@ use streamlib_adapter_abi::{
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::state::{HostSurfaceRegistration, SurfaceState, VulkanLayout};
+use streamlib_consumer_rhi::VulkanLayout;
+
+use crate::state::{HostSurfaceRegistration, SurfaceState};
 use crate::view::{VulkanReadView, VulkanWriteView};
 
 /// Default per-acquire timeline-wait timeout. Long enough to cover any
@@ -338,7 +340,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         }
 
         let to = vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL;
-        if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.vk(), to) {
+        if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.as_vk(), to) {
             self.surfaces.rollback_read(surface_id);
             return Err(err);
         }
@@ -369,7 +371,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         // every time a customer wants to use the image as a transfer
         // destination; GENERAL is the right shape for the v1 adapter.
         let to = vk::ImageLayout::GENERAL;
-        if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.vk(), to) {
+        if let Err(err) = self.transition_layout_sync(acquired.image, acquired.from.as_vk(), to) {
             self.surfaces.rollback_write(surface_id);
             return Err(err);
         }

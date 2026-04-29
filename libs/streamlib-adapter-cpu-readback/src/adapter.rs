@@ -46,7 +46,9 @@ use tracing::instrument;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::state::{HostSurfaceRegistration, PlaneSlot, SurfaceState, VulkanLayout};
+use streamlib_consumer_rhi::VulkanLayout;
+
+use crate::state::{HostSurfaceRegistration, PlaneSlot, SurfaceState};
 use crate::view::{
     CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
 };
@@ -337,7 +339,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
         CpuReadbackTriggerContext {
             surface_id,
             image: snap.image,
-            from_layout: snap.from.vk(),
+            from_layout: snap.from.as_vk(),
             format: snap.format,
             timeline: &snap.timeline,
             planes: trigger_planes,
