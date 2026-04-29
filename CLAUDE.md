@@ -304,7 +304,9 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 
 ### Vulkan RHI Boundary — ABSOLUTE RULE
 
-**NOTHING outside the RHI may touch Vulkan APIs directly.** "The RHI" here means `libs/streamlib/src/vulkan/rhi/` (host-side) and `libs/streamlib-consumer-rhi/` (consumer-side carve-out, #560) — together they own every `vulkanalia` call in the workspace. No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through one of those two crates. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it. CI check #555 enforces.)
+**NOTHING outside the RHI may touch Vulkan APIs directly.** "The RHI" here means `libs/streamlib/src/vulkan/rhi/` (host-side) and `libs/streamlib-consumer-rhi/` (consumer-side carve-out, #560) — together they own every `vulkanalia` call in the workspace. No processor, utility, codec wrapper, or any other code may call `vulkanalia::Device`, `vkAllocateMemory`, `vkCreateImage`, or any Vulkan function without going through one of those two crates. This is non-negotiable. (`ash` is fully removed from the workspace per #252; never reintroduce it.)
+
+The boundary is enforced in CI by `cargo xtask check-boundaries` (see `xtask/src/check_boundaries.rs` and `.github/workflows/check-boundaries.yml`). The check fails any PR that reintroduces `ash`, reaches for raw `vulkanalia` outside the RHI / consumer-rhi / adapter / codec crates, makes a cdylib or adapter crate depend on the full `streamlib` crate at runtime, or calls a privileged Vulkan primitive (`vkAllocateMemory`, `vkGetMemoryFdKHR`, `vkCreateComputePipelines`) outside the RHI. Allowlists for legitimate exceptions are explicit and carry per-entry rationale; the right move when a check trips is almost always to extend the offending file to ride the RHI / consumer-rhi shape, not to add an allowlist entry.
 
 The RHI is the **single gateway** to all GPU operations on Linux. Like Unreal Engine's RHI, it gives the runtime absolute control and traceability over every GPU resource.
 

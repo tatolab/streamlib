@@ -1,0 +1,55 @@
+name: Check Boundaries
+
+# Layer 6 of the regression-prevention defense for the Vulkan RHI capability
+# split — see docs/architecture/subprocess-rhi-parity.md. `cargo xtask
+# check-boundaries` enforces four boundary invariants by code-search across
+# `libs/` and `examples/`:
+#   1. No `ash` imports or Cargo deps (vulkanalia is the canonical Vulkan
+#      binding, per #252).
+#   2. `use vulkanalia` confined to RHI / consumer-rhi / adapter / codec
+#      crates — anyone reaching for raw vulkanalia outside those crates is
+#      breaking the RHI boundary.
+#   3. Cdylibs and adapter crates depend on `streamlib-consumer-rhi`, NOT
+#      the full `streamlib` crate. The FullAccess capability boundary is
+#      type-system enforced by the cdylib's dep graph excluding `streamlib`.
+#   4. Privileged Vulkan calls (`vkAllocateMemory`, `vkGetMemoryFdKHR`,
+#      `vkCreateComputePipelines`) live only inside the RHI.
+#
+# The check is grep-shaped on purpose: sub-second on a clean runner, no
+# Cargo build of the workspace needed.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  xtask-check-boundaries:
+    name: xtask check-boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-xtask-${{ hashFiles('xtask/Cargo.toml', 'xtask/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-xtask-
+
+      - name: cargo xtask check-boundaries
+        run: cargo xtask check-boundaries
+
+      - name: cargo test -p xtask check_boundaries (fixture tests)
+        run: cargo test -p xtask check_boundaries
