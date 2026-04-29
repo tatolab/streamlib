@@ -55,6 +55,8 @@ mod consumer_vulkan_sync;
 mod consumer_vulkan_texture;
 #[cfg(target_os = "linux")]
 mod device_capability;
+#[cfg(target_os = "linux")]
+mod vulkan_layout;
 
 pub use error::{ConsumerRhiError, Result};
 pub use formats::{TextureFormat, TextureUsages};
@@ -73,6 +75,8 @@ pub use device_capability::{
     ConsumerMarker, DevicePrivilege, VulkanPixelBufferLike, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike,
 };
+#[cfg(target_os = "linux")]
+pub use vulkan_layout::VulkanLayout;
 
 /// Sealing supertrait module for [`DevicePrivilege`]. Re-exported so
 /// `streamlib::vulkan::rhi::HostMarker` can `impl Sealed for HostMarker`

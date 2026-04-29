@@ -301,21 +301,13 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::ExactFile,
         rationale: "RHI wrapper layer; bridges processors to the RHI",
     },
-    // Subprocess cdylibs — construct ConsumerVulkanDevice from
-    // vulkanalia entry/instance handles. Some legacy raw-vulkan helpers
-    // still live here pending #550 (escalate-IPC compute) and #553
-    // (retire surface_share_vulkan_linux); those calls are flagged
-    // separately by Check 4.
-    AllowEntry {
-        path: "libs/streamlib-python-native/",
-        kind: AllowKind::PathPrefix,
-        rationale: "cdylib: ConsumerVulkanDevice construction; legacy raw-vulkan retired by #550/#553",
-    },
-    AllowEntry {
-        path: "libs/streamlib-deno-native/",
-        kind: AllowKind::PathPrefix,
-        rationale: "cdylib: ConsumerVulkanDevice construction; legacy raw-vulkan retired by #550/#553",
-    },
+    // Subprocess cdylibs are NOT allowlisted — post-#550/#553/#572
+    // they no longer use `vulkanalia` directly; consumer-side device
+    // construction lives in `streamlib-consumer-rhi`, layout enums
+    // come typed from the cpu-readback adapter, and any reintroduction
+    // of `use vulkanalia` or a `vulkanalia` Cargo dep in the cdylibs
+    // is a regression of the FullAccess capability boundary.
+    //
     // Polyglot example/scenario binaries that exercise the consumer
     // path end-to-end.
     AllowEntry {
@@ -426,16 +418,9 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "codec layer; refactor-to-RHI tracked under Vulkan Video RHI Coupling milestone",
     },
-    AllowEntry {
-        path: "libs/streamlib-python-native/",
-        kind: AllowKind::PathPrefix,
-        rationale: "cdylib: ConsumerVulkanDevice construction",
-    },
-    AllowEntry {
-        path: "libs/streamlib-deno-native/",
-        kind: AllowKind::PathPrefix,
-        rationale: "cdylib: ConsumerVulkanDevice construction",
-    },
+    // Subprocess cdylibs are intentionally NOT allowlisted post-#572 —
+    // their `Cargo.toml`s no longer declare `vulkanalia`, and any
+    // reintroduction is a capability-boundary regression.
     AllowEntry {
         path: "examples/polyglot-",
         kind: AllowKind::PathPrefix,
@@ -547,18 +532,12 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::ExactFile,
         rationale: "compute pipeline for NV12→BGRA; migration to VulkanComputeKernel tracked separately",
     },
-    // Cdylibs still hold raw-vulkan helpers (vulkan_compute_dispatch,
-    // surface_share_vulkan_linux) pending #550 and #553.
-    AllowEntry {
-        path: "libs/streamlib-python-native/",
-        kind: AllowKind::PathPrefix,
-        rationale: "legacy raw-vulkan helpers retired by #550 (compute) and #553 (surface-share)",
-    },
-    AllowEntry {
-        path: "libs/streamlib-deno-native/",
-        kind: AllowKind::PathPrefix,
-        rationale: "legacy raw-vulkan helpers retired by #550 (compute) and #553 (surface-share)",
-    },
+    // Subprocess cdylibs are NOT allowlisted post-#572 — their entire
+    // privileged-vk surface lives in `streamlib-consumer-rhi`'s
+    // import-side carve-out and `streamlib-adapter-*`. A privileged
+    // call appearing inside a cdylib means a regression of the
+    // FullAccess capability boundary.
+    //
     // Examples and tests bring up real devices for end-to-end validation.
     AllowEntry {
         path: "examples/polyglot-",
@@ -1205,6 +1184,124 @@ streamlib = { path = "../streamlib" }
         let report = scan_all(dir.path()).unwrap();
         let pv: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_PRIVILEGED_VK).collect();
         assert!(pv.is_empty(), "consumer-rhi import-side carve-out should pass: {:?}", pv);
+    }
+
+    // ----- Cdylib tightening (#572) -----
+    //
+    // Post-#550/#553, neither cdylib needs raw `vulkanalia` access. These
+    // tests prove the path-prefix exemption is gone — any reintroduction
+    // of `use vulkanalia`, a `vulkanalia` Cargo dep, or a privileged-vk
+    // call inside `libs/streamlib-{python,deno}-native/` trips a
+    // violation rather than slipping through.
+
+    #[test]
+    fn rejects_use_vulkanalia_in_python_native_cdylib() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-python-native/src/lib.rs",
+            "use vulkanalia::vk;\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            "expected vulkanalia confinement violation in python-native cdylib, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_use_vulkanalia_in_deno_native_cdylib() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-deno-native/src/lib.rs",
+            "use vulkanalia::vk;\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            "expected vulkanalia confinement violation in deno-native cdylib, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_vulkanalia_cargo_dep_in_python_native_cdylib() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-python-native/Cargo.toml",
+            r#"[package]
+name = "streamlib-python-native"
+version = "0.1.0"
+edition = "2021"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vulkanalia = { workspace = true }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            "expected vulkanalia Cargo-dep violation in python-native cdylib, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_vulkanalia_cargo_dep_in_deno_native_cdylib() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-deno-native/Cargo.toml",
+            r#"[package]
+name = "streamlib-deno-native"
+version = "0.1.0"
+edition = "2021"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vulkanalia = { workspace = true }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            "expected vulkanalia Cargo-dep violation in deno-native cdylib, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_allocate_memory_in_python_native_cdylib() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-python-native/src/some_module.rs",
+            "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_PRIVILEGED_VK),
+            "expected privileged-vk violation in python-native cdylib, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_allocate_memory_in_deno_native_cdylib() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-deno-native/src/some_module.rs",
+            "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_PRIVILEGED_VK),
+            "expected privileged-vk violation in deno-native cdylib, got {:?}",
+            report.violations,
+        );
     }
 
     // ----- Comment-line skip -----

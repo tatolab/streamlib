@@ -39,6 +39,7 @@ pub use adapter::{
 };
 pub use context::CpuReadbackContext;
 pub use state::HostSurfaceRegistration;
+pub use streamlib_consumer_rhi::VulkanLayout;
 pub use view::{
     CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
 };

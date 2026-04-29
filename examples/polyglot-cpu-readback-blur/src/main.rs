@@ -59,7 +59,7 @@ use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat, SurfaceId};
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
-    InProcessCpuReadbackCopyTrigger,
+    InProcessCpuReadbackCopyTrigger, VulkanLayout,
 };
 
 /// Single host surface id used throughout this scenario. The polyglot
@@ -381,7 +381,7 @@ fn register_host_surface(
                 texture: Some(texture_arc),
                 staging_planes: vec![staging_arc],
                 timeline,
-                initial_image_layout: vulkanalia::vk::ImageLayout::UNDEFINED.as_raw(),
+                initial_image_layout: VulkanLayout::UNDEFINED,
                 format: SurfaceFormat::Bgra8,
                 width: SURFACE_SIZE,
                 height: SURFACE_SIZE,
