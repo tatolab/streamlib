@@ -3304,10 +3304,10 @@ mod opengl {
 // coordination — every line of that lives in `streamlib-adapter-vulkan`.
 //
 // Acquire returns a `SlpnVulkanView` (raw `VkImage` handle + layout) so the
-// Python / Deno SDK can dispatch its own raw vulkanalia / Deno-FFI work
-// against the imported image. Future tickets (subprocess `ComputeKernel`
-// parity, see #525) will close the remaining gap by escalating compute
-// dispatches to the host's `GpuContext::create_compute_kernel` path.
+// Python SDK can dispatch its own work against the imported image. Compute
+// dispatches escalate to the host's `GpuContext::create_compute_kernel` via
+// the `register_compute_kernel` / `run_compute_kernel` IPC ops (#550) — no
+// raw-vulkanalia compute lives in this cdylib.
 // ============================================================================
 
 #[cfg(target_os = "linux")]
@@ -3327,7 +3327,6 @@ mod vulkan {
     use streamlib_adapter_vulkan::{
         raw_handles, HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter,
     };
-    use vulkanalia::vk;
 
     use super::gpu_surface::SurfaceHandle;
 
@@ -3337,20 +3336,17 @@ mod vulkan {
         device: Arc<ConsumerVulkanDevice>,
         adapter: Arc<VulkanSurfaceAdapter<ConsumerVulkanDevice>>,
         /// Per-surface book-keeping. The actual texture + timeline are
-        /// owned by the adapter (transferred into `HostSurfaceRegistration`);
-        /// we keep only the raw `vk::Image` handle so
-        /// `slpn_vulkan_dispatch_compute` can look it up without a
-        /// round-trip through the adapter's lock + `try_begin_write`.
+        /// owned by the adapter (transferred into
+        /// `HostSurfaceRegistration`); this map only tracks which
+        /// surface_ids have been registered so the FFI boundary can
+        /// reject double-registers / double-unregisters cleanly.
         registered: Mutex<HashMap<u64, RegisteredSurface>>,
     }
 
-    struct RegisteredSurface {
-        /// Cached `vk::Image` handle. The adapter owns the underlying
-        /// `ConsumerVulkanTexture` (and therefore the `VkImage` lifetime); we
-        /// just snapshot the handle for fast lookup. Valid until
-        /// `unregister_host_surface` drops the adapter's record.
-        vk_image: vk::Image,
-    }
+    /// Tracks which surface_ids have been registered. The adapter owns
+    /// the imported VkImage + timeline; this registry only exists to
+    /// reject double-registers / double-unregisters at the FFI boundary.
+    struct RegisteredSurface;
 
     /// Returned to Python / Deno via out-pointer on `slpn_vulkan_acquire_*`.
     /// Mirrors `streamlib_adapter_vulkan::VulkanWriteView` but flattened
@@ -3500,12 +3496,6 @@ mod vulkan {
                 return -1;
             }
         };
-        // Snapshot the `vk::Image` handle BEFORE transferring `texture`
-        // into the registration. `ConsumerVulkanTexture::image()` returns
-        // a raw `vk::Image` directly — the texture wraps a single
-        // imported VkImage that lives until Drop.
-        let vk_image = texture.image();
-
         // Import the host's timeline semaphore. The OPAQUE_FD on the
         // SurfaceHandle is `take`n: Vulkan owns it on success.
         let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
@@ -3564,7 +3554,7 @@ mod vulkan {
         rt.registered
             .lock()
             .expect("slpn_vulkan registered: poisoned")
-            .insert(surface_id, RegisteredSurface { vk_image });
+            .insert(surface_id, RegisteredSurface);
         0
     }
 
@@ -3761,404 +3751,6 @@ mod vulkan {
             }
         }
         0
-    }
-
-    /// Dispatch a single-binding compute shader against the surface's
-    /// imported `VkImage`. The image must be currently held in WRITE
-    /// mode (use `slpn_vulkan_acquire_write` first). The shader binds
-    /// the image as a `binding=0` storage image and may use up to
-    /// `push_constants_size` bytes of push constants.
-    ///
-    /// **v1 limitation (#525 follow-up).** This function builds the
-    /// compute pipeline + descriptor set + command buffer + fence
-    /// inline using raw vulkanalia, instead of escalating to the host's
-    /// `GpuContext::create_compute_kernel` (which has SPIR-V reflection
-    /// + descriptor-set lifetime + pipeline cache). It's a quarantined
-    /// bypass — every line lives in this one function, and the
-    /// follow-up ticket replaces it with an escalate-IPC
-    /// `RunComputeKernel` op once #525's RHI-parity decision lands.
-    ///
-    /// Submits to the same `VkQueue` the adapter uses for layout
-    /// transitions, so this runs serially with adapter activity on
-    /// that queue. Blocks until the dispatch + a `vkCmdPipelineBarrier`
-    /// (storage-write → memory-read across all stages) have completed,
-    /// so the next host-side readback observes the writes.
-    ///
-    /// Returns 0 on success, negative error code on failure.
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_vulkan_dispatch_compute(
-        rt: *mut VulkanRuntimeHandle,
-        surface_id: u64,
-        spv_ptr: *const u8,
-        spv_len: usize,
-        push_constants_ptr: *const u8,
-        push_constants_size: u32,
-        group_count_x: u32,
-        group_count_y: u32,
-        group_count_z: u32,
-    ) -> i32 {
-        let rt = match unsafe { rt.as_ref() } {
-            Some(r) => r,
-            None => return -1,
-        };
-        if spv_ptr.is_null() || spv_len == 0 {
-            tracing::error!("slpn_vulkan_dispatch_compute: null/empty spv");
-            return -2;
-        }
-        if spv_len % 4 != 0 {
-            tracing::error!(
-                "slpn_vulkan_dispatch_compute: spv_len {} not a multiple of 4",
-                spv_len
-            );
-            return -3;
-        }
-        // Look up the surface's cached VkImage handle. The adapter owns
-        // the underlying texture; we cached the handle at register time
-        // so dispatch is a single hash-lookup with no adapter-lock.
-        let vk_image = {
-            let registered = rt
-                .registered
-                .lock()
-                .expect("slpn_vulkan registered: poisoned");
-            match registered.get(&surface_id) {
-                Some(e) => e.vk_image,
-                None => {
-                    tracing::error!(
-                        "slpn_vulkan_dispatch_compute: surface_id {} not registered",
-                        surface_id
-                    );
-                    return -4;
-                }
-            }
-        };
-
-        let spv: &[u8] = unsafe { std::slice::from_raw_parts(spv_ptr, spv_len) };
-        let push_constants: &[u8] = if push_constants_size == 0 {
-            &[]
-        } else {
-            unsafe {
-                std::slice::from_raw_parts(
-                    push_constants_ptr,
-                    push_constants_size as usize,
-                )
-            }
-        };
-
-        match super::vulkan_compute_dispatch::dispatch_storage_image_compute(
-            &rt.device,
-            vk_image,
-            spv,
-            push_constants,
-            group_count_x,
-            group_count_y,
-            group_count_z,
-        ) {
-            Ok(()) => 0,
-            Err(e) => {
-                tracing::error!("slpn_vulkan_dispatch_compute: {}", e);
-                -10
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-mod vulkan_compute_dispatch {
-    //! Quarantined v1 compute-dispatch helper for `slpn_vulkan_dispatch_compute`
-    //! / `sldn_vulkan_dispatch_compute`. Builds a single-binding compute
-    //! pipeline + descriptor set + command buffer + fence inline using
-    //! raw vulkanalia. **Replace with escalate-IPC `RunComputeKernel`
-    //! once #525 lands** — the host's `GpuContext::create_compute_kernel`
-    //! is the canonical path and has SPIR-V reflection + descriptor-set
-    //! lifetime + pipeline cache the cdylib can't replicate.
-    //!
-    //! Layout assumed by the shader:
-    //!   layout(set = 0, binding = 0, rgba8) uniform image2D outputImage;
-    //!   layout(push_constant) uniform PushConstants { … } pc;
-
-    use std::sync::Arc;
-
-    use streamlib_consumer_rhi::ConsumerVulkanDevice;
-    use vulkanalia::prelude::v1_4::*;
-    use vulkanalia::vk;
-
-    pub fn dispatch_storage_image_compute(
-        device: &Arc<ConsumerVulkanDevice>,
-        image: vk::Image,
-        spv: &[u8],
-        push_constants: &[u8],
-        group_x: u32,
-        group_y: u32,
-        group_z: u32,
-    ) -> Result<(), String> {
-        let dev = device.device();
-        let queue = device.queue();
-        let qf = device.queue_family_index();
-
-        // Re-cast the SPIR-V byte slice as `&[u32]`. vulkanalia's builder
-        // wants the u32 word view; `spv_len % 4 == 0` is enforced upstream.
-        let spv_words: &[u32] = unsafe {
-            std::slice::from_raw_parts(spv.as_ptr() as *const u32, spv.len() / 4)
-        };
-
-        // Image view over the imported VkImage so the descriptor binds
-        // a 2D storage image. Mirrors the host adapter's `make_image_info`
-        // — single mip, single layer, COLOR aspect.
-        let view_info = vk::ImageViewCreateInfo::builder()
-            .image(image)
-            .view_type(vk::ImageViewType::_2D)
-            .format(vk::Format::R8G8B8A8_UNORM)
-            .components(vk::ComponentMapping::default())
-            .subresource_range(
-                vk::ImageSubresourceRange::builder()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .level_count(1)
-                    .layer_count(1)
-                    .build(),
-            )
-            .build();
-        let image_view = unsafe { dev.create_image_view(&view_info, None) }
-            .map_err(|e| format!("create_image_view: {e}"))?;
-
-        let cleanup_view = || unsafe { dev.destroy_image_view(image_view, None) };
-
-        // Descriptor set layout: 1 storage image at binding 0.
-        let bindings = [vk::DescriptorSetLayoutBinding::builder()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .build()];
-        let dsl_info = vk::DescriptorSetLayoutCreateInfo::builder()
-            .bindings(&bindings)
-            .build();
-        let dsl = unsafe { dev.create_descriptor_set_layout(&dsl_info, None) }
-            .map_err(|e| {
-                cleanup_view();
-                format!("create_descriptor_set_layout: {e}")
-            })?;
-        let cleanup_dsl = || unsafe { dev.destroy_descriptor_set_layout(dsl, None) };
-
-        // Descriptor pool — single set with one storage image.
-        let pool_sizes = [vk::DescriptorPoolSize::builder()
-            .type_(vk::DescriptorType::STORAGE_IMAGE)
-            .descriptor_count(1)
-            .build()];
-        let pool_info = vk::DescriptorPoolCreateInfo::builder()
-            .pool_sizes(&pool_sizes)
-            .max_sets(1)
-            .build();
-        let dpool = unsafe { dev.create_descriptor_pool(&pool_info, None) }
-            .map_err(|e| {
-                cleanup_dsl();
-                cleanup_view();
-                format!("create_descriptor_pool: {e}")
-            })?;
-        let cleanup_dpool = || unsafe { dev.destroy_descriptor_pool(dpool, None) };
-
-        let layouts = [dsl];
-        let alloc_info = vk::DescriptorSetAllocateInfo::builder()
-            .descriptor_pool(dpool)
-            .set_layouts(&layouts)
-            .build();
-        let descriptor_set = unsafe { dev.allocate_descriptor_sets(&alloc_info) }
-            .map_err(|e| {
-                cleanup_dpool();
-                cleanup_dsl();
-                cleanup_view();
-                format!("allocate_descriptor_sets: {e}")
-            })?[0];
-
-        let image_info = [vk::DescriptorImageInfo::builder()
-            .image_view(image_view)
-            .image_layout(vk::ImageLayout::GENERAL)
-            .build()];
-        let writes = [vk::WriteDescriptorSet::builder()
-            .dst_set(descriptor_set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-            .image_info(&image_info)
-            .build()];
-        unsafe {
-            dev.update_descriptor_sets(
-                &writes,
-                &[] as &[vk::CopyDescriptorSet],
-            )
-        };
-
-        // Pipeline layout — descriptor set + optional push constants.
-        let push_const_ranges: Vec<vk::PushConstantRange> = if push_constants.is_empty() {
-            Vec::new()
-        } else {
-            vec![vk::PushConstantRange::builder()
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .offset(0)
-                .size(push_constants.len() as u32)
-                .build()]
-        };
-        let mut pl_builder = vk::PipelineLayoutCreateInfo::builder().set_layouts(&layouts);
-        if !push_const_ranges.is_empty() {
-            pl_builder = pl_builder.push_constant_ranges(&push_const_ranges);
-        }
-        let pipeline_layout =
-            unsafe { dev.create_pipeline_layout(&pl_builder.build(), None) }.map_err(|e| {
-                cleanup_dpool();
-                cleanup_dsl();
-                cleanup_view();
-                format!("create_pipeline_layout: {e}")
-            })?;
-        let cleanup_pl = || unsafe { dev.destroy_pipeline_layout(pipeline_layout, None) };
-
-        // Shader module from SPIR-V.
-        let shader_info = vk::ShaderModuleCreateInfo::builder()
-            .code(spv_words)
-            .build();
-        let shader = unsafe { dev.create_shader_module(&shader_info, None) }.map_err(|e| {
-            cleanup_pl();
-            cleanup_dpool();
-            cleanup_dsl();
-            cleanup_view();
-            format!("create_shader_module: {e}")
-        })?;
-        let cleanup_shader = || unsafe { dev.destroy_shader_module(shader, None) };
-
-        // Compute pipeline.
-        let entry_name = b"main\0";
-        let stage = vk::PipelineShaderStageCreateInfo::builder()
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(shader)
-            .name(entry_name)
-            .build();
-        let pipeline_info = vk::ComputePipelineCreateInfo::builder()
-            .stage(stage)
-            .layout(pipeline_layout)
-            .build();
-        let (pipelines, _result_code) = unsafe {
-            dev.create_compute_pipelines(
-                vk::PipelineCache::null(),
-                &[pipeline_info],
-                None,
-            )
-        }
-        .map_err(|e| {
-            cleanup_shader();
-            cleanup_pl();
-            cleanup_dpool();
-            cleanup_dsl();
-            cleanup_view();
-            format!("create_compute_pipelines: {:?}", e)
-        })?;
-        let pipeline = pipelines[0];
-        let cleanup_pipeline = || unsafe { dev.destroy_pipeline(pipeline, None) };
-
-        // Command pool + buffer.
-        let pool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(qf)
-            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-            .build();
-        let cmd_pool = unsafe { dev.create_command_pool(&pool_info, None) }.map_err(|e| {
-            cleanup_pipeline();
-            cleanup_shader();
-            cleanup_pl();
-            cleanup_dpool();
-            cleanup_dsl();
-            cleanup_view();
-            format!("create_command_pool: {e}")
-        })?;
-        let cleanup_cmd_pool = || unsafe { dev.destroy_command_pool(cmd_pool, None) };
-
-        let cmd_alloc = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(cmd_pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1)
-            .build();
-        let cmd = unsafe { dev.allocate_command_buffers(&cmd_alloc) }.map_err(|e| {
-            cleanup_cmd_pool();
-            cleanup_pipeline();
-            cleanup_shader();
-            cleanup_pl();
-            cleanup_dpool();
-            cleanup_dsl();
-            cleanup_view();
-            format!("allocate_command_buffers: {e}")
-        })?[0];
-
-        let begin = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .build();
-        unsafe { dev.begin_command_buffer(cmd, &begin) }
-            .map_err(|e| format!("begin_command_buffer: {e}"))?;
-
-        unsafe {
-            dev.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline);
-            dev.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                pipeline_layout,
-                0,
-                &[descriptor_set],
-                &[],
-            );
-            if !push_constants.is_empty() {
-                dev.cmd_push_constants(
-                    cmd,
-                    pipeline_layout,
-                    vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    push_constants,
-                );
-            }
-            dev.cmd_dispatch(cmd, group_x, group_y, group_z);
-        }
-
-        // Barrier so the host's subsequent transfer / readback sees the
-        // dispatched writes.
-        let barrier = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::COMPUTE_SHADER)
-            .src_access_mask(vk::AccessFlags2::SHADER_STORAGE_WRITE)
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
-            .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(qf)
-            .dst_queue_family_index(qf)
-            .image(image)
-            .subresource_range(
-                vk::ImageSubresourceRange::builder()
-                    .aspect_mask(vk::ImageAspectFlags::COLOR)
-                    .level_count(1)
-                    .layer_count(1)
-                    .build(),
-            )
-            .build();
-        let barriers = [barrier];
-        let dep = vk::DependencyInfo::builder()
-            .image_memory_barriers(&barriers)
-            .build();
-        unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
-
-        unsafe { dev.end_command_buffer(cmd) }
-            .map_err(|e| format!("end_command_buffer: {e}"))?;
-
-        let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
-            .command_buffer(cmd)
-            .build()];
-        let submit = vk::SubmitInfo2::builder()
-            .command_buffer_infos(&cmd_infos)
-            .build();
-        unsafe { device.submit_to_queue(queue, &[submit], vk::Fence::null()) }
-            .map_err(|e| format!("submit_to_queue: {e}"))?;
-        unsafe { dev.queue_wait_idle(queue) }
-            .map_err(|e| format!("queue_wait_idle: {e}"))?;
-
-        cleanup_cmd_pool();
-        cleanup_pipeline();
-        cleanup_shader();
-        cleanup_pl();
-        cleanup_dpool();
-        cleanup_dsl();
-        cleanup_view();
-        Ok(())
     }
 }
 
@@ -5055,20 +4647,6 @@ mod vulkan {
         -1
     }
 
-    #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn slpn_vulkan_dispatch_compute(
-        _rt: *mut c_void,
-        _surface_id: u64,
-        _spv_ptr: *const u8,
-        _spv_len: usize,
-        _push_constants_ptr: *const u8,
-        _push_constants_size: u32,
-        _group_count_x: u32,
-        _group_count_y: u32,
-        _group_count_z: u32,
-    ) -> i32 {
-        -1
-    }
 }
 
 // ============================================================================

@@ -22,7 +22,9 @@ import type {
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
+  EscalateRequestRegisterComputeKernel,
   EscalateRequestReleaseHandle,
+  EscalateRequestRunComputeKernel,
   EscalateRequestRunCpuReadbackCopy,
   EscalateRequestTryRunCpuReadbackCopy,
 } from "./_generated_/com_streamlib_escalate_request.ts";
@@ -42,7 +44,9 @@ export type {
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
+  EscalateRequestRegisterComputeKernel,
   EscalateRequestReleaseHandle,
+  EscalateRequestRunComputeKernel,
   EscalateRequestRunCpuReadbackCopy,
   EscalateRequestTryRunCpuReadbackCopy,
   EscalateResponse,
@@ -71,9 +75,24 @@ export const ESCALATE_RESPONSE_RPC = "escalate_response";
 export type EscalateOpPayload =
   | Omit<EscalateRequestAcquirePixelBuffer, "request_id">
   | Omit<EscalateRequestAcquireTexture, "request_id">
+  | Omit<EscalateRequestRegisterComputeKernel, "request_id">
   | Omit<EscalateRequestReleaseHandle, "request_id">
+  | Omit<EscalateRequestRunComputeKernel, "request_id">
   | Omit<EscalateRequestRunCpuReadbackCopy, "request_id">
   | Omit<EscalateRequestTryRunCpuReadbackCopy, "request_id">;
+
+/**
+ * Encode bytes as lowercase hex without separators. Matches the wire
+ * shape expected by `register_compute_kernel.spv_hex` and
+ * `run_compute_kernel.push_constants_hex`.
+ */
+function bytesToHex(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) {
+    s += bytes[i].toString(16).padStart(2, "0");
+  }
+  return s;
+}
 
 export class EscalateError extends Error {}
 
@@ -197,6 +216,54 @@ export class EscalateChannel {
       },
       { allowContended: true },
     );
+  }
+
+  /**
+   * Register a compute kernel on the host. Resolves to the `ok`-payload
+   * whose `handle_id` is the SHA-256 hex of the SPIR-V — re-registering
+   * identical SPIR-V hits the host-side cache and returns the same id.
+   *
+   * The host derives the kernel's binding shape from `rspirv-reflect`
+   * and persists driver-compiled pipeline state to
+   * `$STREAMLIB_PIPELINE_CACHE_DIR` (or
+   * `$XDG_CACHE_HOME/streamlib/pipeline-cache`) so first-inference
+   * latency after a host process restart is fast.
+   */
+  async registerComputeKernel(
+    spv: Uint8Array,
+    pushConstantSize: number,
+  ): Promise<EscalateOkResponse> {
+    return await this.request({
+      op: "register_compute_kernel",
+      spv_hex: bytesToHex(spv),
+      push_constant_size: Math.trunc(pushConstantSize),
+    }) as EscalateOkResponse;
+  }
+
+  /**
+   * Dispatch a previously-registered compute kernel against
+   * `surfaceId`. Compute is synchronous host-side: this resolves once
+   * the GPU work has retired, after which the consumer can advance
+   * its surface-share timeline. `pushConstants` length must equal the
+   * kernel's declared `push_constant_size`.
+   */
+  async runComputeKernel(
+    kernelId: string,
+    surfaceUuid: string,
+    pushConstants: Uint8Array,
+    groupCountX: number,
+    groupCountY: number,
+    groupCountZ: number,
+  ): Promise<EscalateOkResponse> {
+    return await this.request({
+      op: "run_compute_kernel",
+      kernel_id: kernelId,
+      surface_uuid: surfaceUuid,
+      push_constants_hex: bytesToHex(pushConstants),
+      group_count_x: Math.trunc(groupCountX),
+      group_count_y: Math.trunc(groupCountY),
+      group_count_z: Math.trunc(groupCountZ),
+    }) as EscalateOkResponse;
   }
 
   async releaseHandle(handleId: string): Promise<EscalateOkResponse> {

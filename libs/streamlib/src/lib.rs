@@ -192,7 +192,7 @@ pub mod linux_surface_share {
 pub mod host_rhi {
     pub use crate::vulkan::rhi::{
         HostMarker, HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTexture,
-        HostVulkanTimelineSemaphore,
+        HostVulkanTimelineSemaphore, VulkanComputeKernel,
     };
 }
 

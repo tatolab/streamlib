@@ -5,17 +5,20 @@
  * Polyglot Vulkan compute processor — Deno twin of
  * `examples/polyglot-vulkan-compute/python/vulkan_compute.py`.
  *
- * End-to-end gate for the subprocess `VulkanContext` runtime (#531).
- * The host pre-allocates a render-target-capable DMA-BUF surface AND
- * an exportable `VulkanTimelineSemaphore`, registers both with
- * surface-share. This processor receives a trigger Videoframe, opens
- * the host surface through `VulkanContext.acquireWrite` (which imports
- * the DMA-BUF as a `VkImage` in the subprocess and imports the
- * timeline via `from_imported_opaque_fd`), dispatches the Mandelbrot
- * compute kernel via the cdylib's quarantined
- * `sldn_vulkan_dispatch_compute` helper, and releases — the host
- * adapter advances the timeline so the host's pre-stop readback sees
- * the writes.
+ * End-to-end gate for the subprocess `VulkanContext` runtime (#531)
+ * + escalate-IPC compute (#550). The host pre-allocates a render-
+ * target-capable DMA-BUF surface AND an exportable
+ * `VulkanTimelineSemaphore`, registers both with surface-share, and
+ * installs a `ComputeKernelBridge` wired to its
+ * `VulkanComputeKernel`. This processor receives a trigger
+ * Videoframe, opens the host surface through
+ * `VulkanContext.acquireWrite` (which imports the DMA-BUF as a
+ * `VkImage` in the subprocess and imports the timeline via
+ * `from_imported_opaque_fd`), and calls
+ * `VulkanContext.dispatchCompute` — which routes through escalate
+ * IPC's `register_compute_kernel` + `run_compute_kernel` ops to the
+ * host's `VulkanComputeKernel`. Release advances the timeline so the
+ * host's pre-stop readback sees the writes.
  *
  * Same compute shader as the Python twin, with `variant=1` so the
  * cosine palette differs slightly — visually distinct PNGs make

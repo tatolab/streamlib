@@ -8,7 +8,7 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestReleaseHandle | EscalateRequestRunCpuReadbackCopy | EscalateRequestTryRunCpuReadbackCopy;
+export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestRegisterComputeKernel | EscalateRequestReleaseHandle | EscalateRequestRunComputeKernel | EscalateRequestRunCpuReadbackCopy | EscalateRequestTryRunCpuReadbackCopy;
 
 export interface EscalateRequestAcquireImage {
   op: "acquire_image";
@@ -191,6 +191,37 @@ export interface EscalateRequestLog {
   source_ts: string;
 }
 
+export interface EscalateRequestRegisterComputeKernel {
+  op: "register_compute_kernel";
+
+  /**
+   * Push-constant range size in bytes. 0 if the shader uses no push constants.
+   * The host validates this against the shader's reflected push-constant range
+   * and rejects mismatches with an `err` response.
+   */
+  push_constant_size: number;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Compiled SPIR-V bytecode for the compute shader, encoded as lowercase
+   * hex (no `0x` prefix, no whitespace). The host parses the bytes back,
+   * derives the binding shape from `rspirv-reflect`, and constructs a
+   * `VulkanComputeKernel` via `GpuContext::create_compute_kernel`.
+   * Re-registering identical SPIR-V is a host-side cache hit keyed by SHA-
+   * 256(spv_bytes) — no re-reflection, no fresh pipeline. The returned
+   * `kernel_id` is the same.
+   * The host's `VulkanComputeKernel` also persists driver- compiled pipeline
+   * state to `<XDG_CACHE_HOME>/streamlib/ pipeline-cache/<spirv_hash>.bin`,
+   * so first-inference latency after a host process restart is fast on user-
+   * registered ML kernels.
+   */
+  spv_hex: string;
+}
+
 export interface EscalateRequestReleaseHandle {
   op: "release_handle";
 
@@ -203,6 +234,55 @@ export interface EscalateRequestReleaseHandle {
    * Correlates request with response. UUID string.
    */
   request_id: string;
+}
+
+export interface EscalateRequestRunComputeKernel {
+  op: "run_compute_kernel";
+
+  /**
+   * vkCmdDispatch groupCountX.
+   */
+  group_count_x: number;
+
+  /**
+   * vkCmdDispatch groupCountY.
+   */
+  group_count_y: number;
+
+  /**
+   * vkCmdDispatch groupCountZ.
+   */
+  group_count_z: number;
+
+  /**
+   * Handle returned by a prior `register_compute_kernel` response. The host
+   * looks up the cached `Arc<VulkanComputeKernel>` and dispatches against it.
+   * Dispatching with an unrecognized kernel_id returns an `err` response.
+   */
+  kernel_id: string;
+
+  /**
+   * Push-constant payload for this dispatch, encoded as lowercase hex.
+   * Length in bytes (after hex decoding) must equal the kernel's declared
+   * `push_constant_size`. Empty string when the kernel has no push constants.
+   */
+  push_constants_hex: string;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * UUID string of a render-target surface previously registered with
+   * the surface-share service via `register_texture`. The host bridge
+   * holds an application-provided UUID→`StreamTexture` map (populated in
+   * `install_setup_hook`) and binds the looked-up `VkImage` as a storage_image
+   * at slot 0 (the single-output convention enforced for v1 — multi-binding
+   * kernels are a future extension). UUID rather than u64 so the host can
+   * resolve the surface without subprocess-side counter coordination.
+   */
+  surface_uuid: string;
 }
 
 /**

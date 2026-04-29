@@ -49,6 +49,8 @@ impl RhiBlitter for NoOpBlitter {
 }
 
 #[cfg(target_os = "linux")]
+use super::compute_kernel_bridge::ComputeKernelBridge;
+#[cfg(target_os = "linux")]
 use super::cpu_readback_bridge::CpuReadbackBridge;
 use super::surface_store::SurfaceStore;
 use super::texture_pool::{
@@ -398,6 +400,14 @@ pub struct GpuContext {
     /// (the escalate handler responds with an `Err` in that case).
     #[cfg(target_os = "linux")]
     cpu_readback_bridge: Arc<Mutex<Option<Arc<dyn CpuReadbackBridge>>>>,
+    /// Host-side bridge for the compute-kernel escalate ops
+    /// (`register_compute_kernel`, `run_compute_kernel`). Wired by
+    /// application code that exposes the host's
+    /// [`crate::vulkan::rhi::VulkanComputeKernel`] to subprocess customers;
+    /// left unset on hosts that don't expose compute dispatch (the escalate
+    /// handler responds with an `Err` in that case).
+    #[cfg(target_os = "linux")]
+    compute_kernel_bridge: Arc<Mutex<Option<Arc<dyn ComputeKernelBridge>>>>,
 }
 
 impl GpuContext {
@@ -418,6 +428,8 @@ impl GpuContext {
             processor_setup_lock: Arc::new(Mutex::new(())),
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
+            #[cfg(target_os = "linux")]
+            compute_kernel_bridge: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -438,6 +450,8 @@ impl GpuContext {
             processor_setup_lock: Arc::new(Mutex::new(())),
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
+            #[cfg(target_os = "linux")]
+            compute_kernel_bridge: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1079,6 +1093,26 @@ impl GpuContext {
         self.cpu_readback_bridge.lock().unwrap().clone()
     }
 
+    // =========================================================================
+    // ComputeKernelBridge — host-side dispatch for the compute-kernel escalate ops
+    // =========================================================================
+
+    /// Register a [`ComputeKernelBridge`] implementation. The escalate handler
+    /// dispatches `register_compute_kernel` and `run_compute_kernel` requests
+    /// through this bridge; until it is set, those requests fail with an
+    /// "unsupported" error response. Linux-only: compute escalate uses the
+    /// Linux-side `VulkanComputeKernel`.
+    #[cfg(target_os = "linux")]
+    pub fn set_compute_kernel_bridge(&self, bridge: Arc<dyn ComputeKernelBridge>) {
+        *self.compute_kernel_bridge.lock().unwrap() = Some(bridge);
+    }
+
+    /// Get the registered [`ComputeKernelBridge`], if any.
+    #[cfg(target_os = "linux")]
+    pub fn compute_kernel_bridge(&self) -> Option<Arc<dyn ComputeKernelBridge>> {
+        self.compute_kernel_bridge.lock().unwrap().clone()
+    }
+
     /// Check in a pixel buffer to the surface-share service, returning a surface ID.
     ///
     /// The surface ID can be shared with other processes (e.g., Python subprocesses)
@@ -1639,6 +1673,13 @@ impl GpuContextFullAccess {
     #[cfg(target_os = "linux")]
     pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
         self.inner.cpu_readback_bridge()
+    }
+
+    /// Get the registered compute-kernel bridge, if any. Reachable only inside
+    /// `escalate(|full| ...)` since it requires `FullAccess`.
+    #[cfg(target_os = "linux")]
+    pub fn compute_kernel_bridge(&self) -> Option<Arc<dyn ComputeKernelBridge>> {
+        self.inner.compute_kernel_bridge()
     }
 }
 

@@ -27,6 +27,7 @@
  *    customers driving Vulkan directly.
  */
 
+import { getChannel as getEscalateChannel } from "../escalate.ts";
 import {
   STREAMLIB_ADAPTER_ABI_VERSION,
   type StreamlibSurface,
@@ -150,6 +151,17 @@ export class VulkanContext {
   private readonly symbols: any;
   private readonly rt: Deno.PointerObject;
   private readonly surfaceIds = new Map<string, bigint>();
+  /** Identity-keyed kernel-id cache: keying by the `Uint8Array` itself
+   * keeps the hot path O(1) (no per-call hashing), so multi-MB ML
+   * SPIR-V doesn't pay a SHA-256 cost on every dispatch. `WeakMap`
+   * auto-clears entries when the customer drops their reference to the
+   * bytes — no unbounded growth and no manual eviction. Customers who
+   * dispatch repeatedly should reuse the same `Uint8Array` (stash it
+   * on the processor at setup); a fresh instance is a cache miss and
+   * re-registers through escalate IPC (host-side cache hit, but the
+   * IPC payload is sent again).
+   */
+  private readonly computeKernelIds = new WeakMap<Uint8Array, string>();
   private readonly resolvedHandles = new Map<
     string,
     ReturnType<VulkanGpuLimitedAccess["resolveSurface"]>
@@ -311,26 +323,28 @@ export class VulkanContext {
     };
   }
 
-  /** Dispatch a single-binding compute shader against the surface's
-   * imported `VkImage`. The surface MUST currently be held in WRITE
+  /** Dispatch a compute shader against the surface's host-side `VkImage`
+   * via escalate IPC. The surface MUST currently be held in WRITE
    * mode (call inside an `acquireWrite` `using` block).
    *
-   * The shader's `binding=0` is bound as a storage image; up to
-   * `pushConstants.byteLength` bytes of push constants are written at
-   * offset 0.
+   * The shader's `binding=0` is bound as a storage image; push
+   * constants are forwarded byte-for-byte.
    *
-   * **v1 limitation (#525 follow-up):** the cdylib builds the compute
-   * pipeline + descriptor set + command buffer + fence inline using
-   * raw vulkanalia. Replace once the escalate-IPC `RunComputeKernel`
-   * op lands. */
-  dispatchCompute(
+   * Compute is synchronous host-side: when this resolves, the GPU
+   * work has retired and the host's writes are visible. The
+   * `VulkanComputeKernel` is built once on the host (SPIR-V
+   * reflection, on-disk pipeline cache via
+   * `$STREAMLIB_PIPELINE_CACHE_DIR` /
+   * `$XDG_CACHE_HOME/streamlib/pipeline-cache`) and re-used across
+   * dispatches with the same SPIR-V. */
+  async dispatchCompute(
     surface: StreamlibSurface | string | bigint,
     spirv: Uint8Array,
     pushConstants: Uint8Array,
     groupCountX: number,
     groupCountY: number,
     groupCountZ: number,
-  ): void {
+  ): Promise<void> {
     const poolId = VulkanContext.surfacePoolId(surface);
     const cached = this.surfaceIds.get(poolId);
     if (cached === undefined) {
@@ -339,26 +353,32 @@ export class VulkanContext {
           "— call acquireWrite inside a `using` block first.",
       );
     }
-    const spvPtr = Deno.UnsafePointer.of(spirv);
-    const pcPtr = pushConstants.byteLength === 0
-      ? null
-      : Deno.UnsafePointer.of(pushConstants);
-    const rc: number = this.symbols.sldn_vulkan_dispatch_compute(
-      this.rt,
-      cached,
-      spvPtr,
-      BigInt(spirv.byteLength),
-      pcPtr,
-      pushConstants.byteLength,
+    const ch = getEscalateChannel();
+    // Identity-keyed kernel-id cache: `WeakMap` lookup is O(1) per
+    // dispatch, so multi-MB ML SPIR-V doesn't pay a hashing cost on
+    // the hot path. Entries auto-clear when the customer drops the
+    // Uint8Array — see the field comment.
+    let kernelId = this.computeKernelIds.get(spirv);
+    if (kernelId === undefined) {
+      const response = await ch.registerComputeKernel(
+        spirv,
+        pushConstants.byteLength,
+      );
+      kernelId = response.handle_id;
+      this.computeKernelIds.set(spirv, kernelId);
+    }
+    // Send the surface-share UUID, not the cdylib's local u64
+    // surfaceId — the host bridge resolves UUID → host
+    // `StreamTexture` via an application-provided map.
+    void cached;
+    await ch.runComputeKernel(
+      kernelId,
+      poolId,
+      pushConstants,
       groupCountX,
       groupCountY,
       groupCountZ,
     );
-    if (rc !== 0) {
-      throw new Error(
-        `VulkanContext.dispatchCompute: sldn_vulkan_dispatch_compute returned ${rc} for surface '${poolId}'`,
-      );
-    }
   }
 
   /** Return the cdylib runtime's raw Vulkan handles — same shape as

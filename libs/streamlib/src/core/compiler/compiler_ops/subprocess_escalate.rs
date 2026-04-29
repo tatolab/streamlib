@@ -23,7 +23,8 @@ use uuid::Uuid;
 use crate::_generated_::com_streamlib_escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestReleaseHandle, EscalateRequestRunCpuReadbackCopy,
+    EscalateRequestRegisterComputeKernel, EscalateRequestReleaseHandle,
+    EscalateRequestRunComputeKernel, EscalateRequestRunCpuReadbackCopy,
     EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestTryRunCpuReadbackCopy,
     EscalateRequestTryRunCpuReadbackCopyDirection,
 };
@@ -34,7 +35,7 @@ use crate::_generated_::{EscalateRequest, EscalateResponse};
 use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
-use crate::core::context::{CpuReadbackBridge, CpuReadbackCopyDirection};
+use crate::core::context::{ComputeKernelBridge, CpuReadbackBridge, CpuReadbackCopyDirection};
 use crate::core::logging::{push_polyglot_record, LogLevel, LogRecord, Source};
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat, TextureUsages};
 
@@ -58,6 +59,8 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::TryRunCpuReadbackCopy(p) => Some(&p.request_id),
+        EscalateRequest::RegisterComputeKernel(p) => Some(&p.request_id),
+        EscalateRequest::RunComputeKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
@@ -332,6 +335,67 @@ pub(crate) fn handle_escalate_op(
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "try_run_cpu_readback_copy is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
+            request_id: _,
+            spv_hex,
+            push_constant_size,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_register_compute_kernel(
+                    sandbox,
+                    rid,
+                    &spv_hex,
+                    push_constant_size,
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (spv_hex, push_constant_size);
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "register_compute_kernel is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
+            request_id: _,
+            kernel_id,
+            surface_uuid,
+            push_constants_hex,
+            group_count_x,
+            group_count_y,
+            group_count_z,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_run_compute_kernel(
+                    sandbox,
+                    rid,
+                    &kernel_id,
+                    &surface_uuid,
+                    &push_constants_hex,
+                    group_count_x,
+                    group_count_y,
+                    group_count_z,
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (
+                    kernel_id,
+                    surface_uuid,
+                    push_constants_hex,
+                    group_count_x,
+                    group_count_y,
+                    group_count_z,
+                );
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "run_compute_kernel is only available on Linux".to_string(),
                 }))
             }
         }
@@ -640,6 +704,187 @@ where
     })
 }
 
+/// Map a wire-format `register_compute_kernel` request through the
+/// registered [`ComputeKernelBridge`].
+///
+/// The bridge derives the kernel's binding shape from `rspirv-reflect`,
+/// builds the `VulkanComputeKernel` (with on-disk pipeline cache
+/// persistence keyed by SHA-256 of the SPIR-V), and returns the same
+/// hash hex back as `kernel_id`. Subsequent identical SPIR-V hits the
+/// host-side cache and returns the same id without re-reflecting.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. `spv_hex` doesn't decode as hex bytes.
+/// 2. No bridge is registered — the host runtime didn't wire a
+///    compute-kernel bridge into [`crate::core::context::GpuContext::set_compute_kernel_bridge`].
+/// 3. Bridge `register` returned an error — typically reflection
+///    failure, push-constant size mismatch, or pipeline build failure.
+#[cfg(target_os = "linux")]
+fn handle_register_compute_kernel(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    spv_hex: &str,
+    push_constant_size: u32,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let spv = match decode_hex(spv_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("register_compute_kernel: spv_hex decode: {e}"),
+            });
+        }
+    };
+
+    let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
+        full.compute_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "register_compute_kernel: no ComputeKernelBridge registered on GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    match bridge.register(&spv, push_constant_size) {
+        Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: kernel_id,
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("register_compute_kernel bridge call failed: {msg}"),
+        }),
+    }
+}
+
+/// Map a wire-format `run_compute_kernel` request through the
+/// registered [`ComputeKernelBridge`].
+///
+/// Compute dispatch on the host is synchronous: the bridge's `run`
+/// blocks on the kernel's fence before returning, so by the time this
+/// function emits an `Ok` response, the GPU work has retired and the
+/// host's writes to the surface's `VkImage` are visible to any
+/// subsequent submission against the same VkDevice. The subprocess can
+/// safely advance its surface-share timeline on receipt of the `ok`.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. `push_constants_hex` doesn't decode as hex bytes.
+/// 2. No bridge is registered.
+/// 3. Bridge `run` returned an error — typically unrecognized
+///    `kernel_id`, surface lookup failure, or Vulkan submit failure.
+#[cfg(target_os = "linux")]
+fn handle_run_compute_kernel(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    kernel_id: &str,
+    surface_uuid: &str,
+    push_constants_hex: &str,
+    group_count_x: u32,
+    group_count_y: u32,
+    group_count_z: u32,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let push_constants = match decode_hex(push_constants_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("run_compute_kernel: push_constants_hex decode: {e}"),
+            });
+        }
+    };
+
+    let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
+        full.compute_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "run_compute_kernel: no ComputeKernelBridge registered on GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    match bridge.run(
+        kernel_id,
+        surface_uuid,
+        &push_constants,
+        group_count_x,
+        group_count_y,
+        group_count_z,
+    ) {
+        Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            // Echo the kernel_id back — compute is sync host-side, no
+            // separate handle is allocated per dispatch.
+            handle_id: kernel_id.to_string(),
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("run_compute_kernel bridge call failed: {msg}"),
+        }),
+    }
+}
+
+/// Decode lowercase hex into bytes, returning a clean error message on
+/// any malformed character or odd-length input. Empty string decodes to
+/// an empty Vec — the caller validates push-constant size separately
+/// against the kernel's declaration.
+fn decode_hex(s: &str) -> std::result::Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err(format!(
+            "expected even-length hex string, got {} characters",
+            s.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    let nibble = |b: u8| -> std::result::Result<u8, String> {
+        match b {
+            b'0'..=b'9' => Ok(b - b'0'),
+            b'a'..=b'f' => Ok(b - b'a' + 10),
+            b'A'..=b'F' => Ok(b - b'A' + 10),
+            _ => Err(format!(
+                "non-hex character {:?} at byte position",
+                b as char
+            )),
+        }
+    };
+    for pair in bytes.chunks_exact(2) {
+        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
+    }
+    Ok(out)
+}
+
 /// Best-effort surface-share service release paired with registry eviction on Linux.
 ///
 /// The registry drop alone releases the host's strong refcount on the
@@ -888,6 +1133,30 @@ mod tests {
     #[test]
     fn parse_pixel_format_rejects_unknown() {
         assert!(parse_pixel_format("xyz").is_err());
+    }
+
+    #[test]
+    fn decode_hex_round_trips_lowercase_and_mixed_case() {
+        assert_eq!(decode_hex("").unwrap(), Vec::<u8>::new());
+        assert_eq!(decode_hex("00").unwrap(), vec![0u8]);
+        assert_eq!(decode_hex("ff").unwrap(), vec![0xff]);
+        assert_eq!(decode_hex("DeAdBeEf").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            decode_hex("0123456789abcdef").unwrap(),
+            vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
+        );
+    }
+
+    #[test]
+    fn decode_hex_rejects_odd_length() {
+        let err = decode_hex("abc").err().expect("expected odd-length error");
+        assert!(err.contains("even-length"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_hex_rejects_non_hex_character() {
+        let err = decode_hex("abxy").err().expect("expected non-hex error");
+        assert!(err.contains("non-hex"), "got: {err}");
     }
 
     #[test]
@@ -1287,6 +1556,482 @@ mod tests {
                 }
                 other => panic!("expected Err response, got {other:?}"),
             }
+        }
+    }
+
+    /// Compute-kernel handler tests: cover the IPC dispatch paths
+    /// `register_compute_kernel` / `run_compute_kernel` end-to-end
+    /// (bridge missing, invalid hex, kernel_id stability, unregistered
+    /// kernel_id). The bridge implementation lives in application setup
+    /// glue (`examples/polyglot-vulkan-compute/src/main.rs`); these
+    /// tests use a synthetic in-test bridge so the contract holds even
+    /// when no GPU is available.
+    #[cfg(target_os = "linux")]
+    mod compute_kernel_dispatch {
+        use super::super::*;
+        use super::EscalateHandleRegistry;
+        use std::sync::{Arc, Mutex};
+
+        use crate::core::context::{
+            ComputeKernelBridge, GpuContext, GpuContextLimitedAccess,
+        };
+
+        /// Synthetic bridge: returns SHA-256(spv) hex on register and
+        /// records the (kernel_id, surface_uuid, push, dispatch) tuple
+        /// per `run` call so the test can assert the wire shape.
+        struct RecordingBridge {
+            registered: Mutex<std::collections::HashMap<String, u32>>,
+            runs: Mutex<Vec<RecordedRun>>,
+        }
+
+        #[derive(Clone, Debug)]
+        struct RecordedRun {
+            kernel_id: String,
+            surface_uuid: String,
+            push_len: usize,
+            groups: (u32, u32, u32),
+        }
+
+        impl RecordingBridge {
+            fn new() -> Arc<Self> {
+                Arc::new(Self {
+                    registered: Mutex::new(std::collections::HashMap::new()),
+                    runs: Mutex::new(Vec::new()),
+                })
+            }
+
+            fn registered_count(&self) -> usize {
+                self.registered.lock().unwrap().len()
+            }
+
+            fn runs(&self) -> Vec<RecordedRun> {
+                self.runs.lock().unwrap().clone()
+            }
+        }
+
+        impl ComputeKernelBridge for RecordingBridge {
+            fn register(
+                &self,
+                spv: &[u8],
+                push_constant_size: u32,
+            ) -> std::result::Result<String, String> {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(spv);
+                let id = format!("{:x}", h.finalize());
+                self.registered
+                    .lock()
+                    .unwrap()
+                    .insert(id.clone(), push_constant_size);
+                Ok(id)
+            }
+
+            fn run(
+                &self,
+                kernel_id: &str,
+                surface_uuid: &str,
+                push_constants: &[u8],
+                group_count_x: u32,
+                group_count_y: u32,
+                group_count_z: u32,
+            ) -> std::result::Result<(), String> {
+                if !self.registered.lock().unwrap().contains_key(kernel_id) {
+                    return Err(format!(
+                        "kernel_id '{kernel_id}' not registered with this bridge"
+                    ));
+                }
+                self.runs.lock().unwrap().push(RecordedRun {
+                    kernel_id: kernel_id.to_string(),
+                    surface_uuid: surface_uuid.to_string(),
+                    push_len: push_constants.len(),
+                    groups: (group_count_x, group_count_y, group_count_z),
+                });
+                Ok(())
+            }
+        }
+
+        fn make_sandbox_with_bridge(
+            bridge: Option<Arc<dyn ComputeKernelBridge>>,
+        ) -> Option<GpuContextLimitedAccess> {
+            let gpu = match GpuContext::init_for_platform_sync() {
+                Ok(g) => g,
+                Err(_) => return None,
+            };
+            if let Some(b) = bridge {
+                gpu.set_compute_kernel_bridge(b);
+            }
+            Some(GpuContextLimitedAccess::new(gpu))
+        }
+
+        /// `register_compute_kernel` with no bridge registered must
+        /// surface a typed `Err`, not a panic. Mirrors
+        /// `run_cpu_readback_copy_without_bridge_returns_err`.
+        #[test]
+        fn register_without_bridge_returns_err() {
+            let sandbox = match make_sandbox_with_bridge(None) {
+                Some(s) => s,
+                None => {
+                    println!("register_without_bridge_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterComputeKernel(
+                EscalateRequestRegisterComputeKernel {
+                    request_id: "req-reg-1".to_string(),
+                    spv_hex: "deadbeef".to_string(),
+                    push_constant_size: 0,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-reg-1");
+                    assert!(
+                        err.message.contains("ComputeKernelBridge"),
+                        "expected bridge-not-registered error, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err when no bridge registered, got {other:?}"
+                ),
+            }
+        }
+
+        /// `run_compute_kernel` with no bridge registered must surface a
+        /// typed `Err`, not a panic.
+        #[test]
+        fn run_without_bridge_returns_err() {
+            let sandbox = match make_sandbox_with_bridge(None) {
+                Some(s) => s,
+                None => {
+                    println!("run_without_bridge_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RunComputeKernel(
+                EscalateRequestRunComputeKernel {
+                    request_id: "req-run-1".to_string(),
+                    kernel_id: "abc".to_string(),
+                    surface_uuid: "uuid-1".to_string(),
+                    push_constants_hex: "".to_string(),
+                    group_count_x: 1,
+                    group_count_y: 1,
+                    group_count_z: 1,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-run-1");
+                    assert!(
+                        err.message.contains("ComputeKernelBridge"),
+                        "expected bridge-not-registered error, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err when no bridge registered, got {other:?}"
+                ),
+            }
+        }
+
+        /// Malformed `spv_hex` must surface as a clean parse error
+        /// keyed by `request_id`, not a panic.
+        #[test]
+        fn register_with_invalid_hex_returns_err() {
+            let bridge = RecordingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!("register_with_invalid_hex_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterComputeKernel(
+                EscalateRequestRegisterComputeKernel {
+                    request_id: "req-reg-bad".to_string(),
+                    spv_hex: "xyz123".to_string(), // non-hex character
+                    push_constant_size: 0,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-reg-bad");
+                    assert!(
+                        err.message.contains("spv_hex"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err for malformed hex, got {other:?}"),
+            }
+            assert_eq!(
+                bridge.registered_count(),
+                0,
+                "bridge.register must not have been called on the parse-error path"
+            );
+        }
+
+        /// Malformed `push_constants_hex` must surface as a clean parse
+        /// error keyed by `request_id`.
+        #[test]
+        fn run_with_invalid_push_constants_hex_returns_err() {
+            let bridge = RecordingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_with_invalid_push_constants_hex_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RunComputeKernel(
+                EscalateRequestRunComputeKernel {
+                    request_id: "req-run-bad".to_string(),
+                    kernel_id: "abc".to_string(),
+                    surface_uuid: "uuid-1".to_string(),
+                    push_constants_hex: "xyz".to_string(), // odd-length + non-hex
+                    group_count_x: 1,
+                    group_count_y: 1,
+                    group_count_z: 1,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-run-bad");
+                    assert!(
+                        err.message.contains("push_constants_hex"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err for malformed hex, got {other:?}"),
+            }
+            assert!(
+                bridge.runs().is_empty(),
+                "bridge.run must not have been called on the parse-error path"
+            );
+        }
+
+        /// Registering identical SPIR-V twice must return the same
+        /// `kernel_id`. Reflects the issue body's "kernel_id stability"
+        /// requirement and the host-side cache-hit semantics.
+        #[test]
+        fn register_returns_stable_kernel_id_for_identical_spirv() {
+            let bridge = RecordingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_returns_stable_kernel_id_for_identical_spirv: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let make_req = |rid: &str| {
+                EscalateRequest::RegisterComputeKernel(
+                    EscalateRequestRegisterComputeKernel {
+                        request_id: rid.to_string(),
+                        spv_hex: "deadbeefcafebabe".to_string(),
+                        push_constant_size: 0,
+                    },
+                )
+            };
+            let first = handle_escalate_op(&sandbox, &registry, make_req("r1"))
+                .expect("first register must produce a response");
+            let second = handle_escalate_op(&sandbox, &registry, make_req("r2"))
+                .expect("second register must produce a response");
+            let id1 = match first {
+                EscalateResponse::Ok(ok) => {
+                    assert_eq!(ok.request_id, "r1");
+                    ok.handle_id
+                }
+                other => panic!("first register expected Ok, got {other:?}"),
+            };
+            let id2 = match second {
+                EscalateResponse::Ok(ok) => {
+                    assert_eq!(ok.request_id, "r2");
+                    ok.handle_id
+                }
+                other => panic!("second register expected Ok, got {other:?}"),
+            };
+            assert_eq!(
+                id1, id2,
+                "identical SPIR-V must produce the same kernel_id"
+            );
+        }
+
+        /// Different SPIR-V must produce different `kernel_id`s.
+        #[test]
+        fn register_returns_distinct_kernel_ids_for_different_spirv() {
+            let bridge = RecordingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_returns_distinct_kernel_ids_for_different_spirv: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req_a = EscalateRequest::RegisterComputeKernel(
+                EscalateRequestRegisterComputeKernel {
+                    request_id: "ra".to_string(),
+                    spv_hex: "deadbeef".to_string(),
+                    push_constant_size: 0,
+                },
+            );
+            let req_b = EscalateRequest::RegisterComputeKernel(
+                EscalateRequestRegisterComputeKernel {
+                    request_id: "rb".to_string(),
+                    spv_hex: "cafebabe".to_string(),
+                    push_constant_size: 0,
+                },
+            );
+            let resp_a = match handle_escalate_op(&sandbox, &registry, req_a)
+                .expect("must produce a response")
+            {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok, got {other:?}"),
+            };
+            let resp_b = match handle_escalate_op(&sandbox, &registry, req_b)
+                .expect("must produce a response")
+            {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok, got {other:?}"),
+            };
+            assert_ne!(
+                resp_a, resp_b,
+                "different SPIR-V must produce different kernel_ids"
+            );
+        }
+
+        /// Dispatching a kernel_id the bridge has never seen must
+        /// surface as a typed `Err`, not a panic. Reflects the issue
+        /// body's "Negative test: dispatch with an unregistered
+        /// kernel_id returns a typed `EscalateError`, not a panic"
+        /// requirement.
+        #[test]
+        fn run_with_unregistered_kernel_id_returns_err() {
+            let bridge = RecordingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_with_unregistered_kernel_id_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RunComputeKernel(
+                EscalateRequestRunComputeKernel {
+                    request_id: "req-run-bad-id".to_string(),
+                    kernel_id: "never-registered-id".to_string(),
+                    surface_uuid: "uuid-1".to_string(),
+                    push_constants_hex: "".to_string(),
+                    group_count_x: 1,
+                    group_count_y: 1,
+                    group_count_z: 1,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-run-bad-id");
+                    assert!(
+                        err.message.contains("not registered")
+                            || err.message.contains("never-registered-id"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err for unregistered kernel_id, got {other:?}"
+                ),
+            }
+        }
+
+        /// Successful `run_compute_kernel` echoes the kernel_id back as
+        /// `handle_id` (no separate handle is allocated per dispatch —
+        /// compute is sync host-side) and forwards push-constants /
+        /// dispatch dimensions to the bridge unchanged.
+        #[test]
+        fn run_forwards_payload_to_bridge_and_echoes_kernel_id() {
+            let bridge = RecordingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_forwards_payload_to_bridge_and_echoes_kernel_id: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            // Register first so the bridge has the kernel_id cached.
+            let reg = EscalateRequest::RegisterComputeKernel(
+                EscalateRequestRegisterComputeKernel {
+                    request_id: "reg".to_string(),
+                    spv_hex: "abcdef0123456789".to_string(),
+                    push_constant_size: 8,
+                },
+            );
+            let kernel_id =
+                match handle_escalate_op(&sandbox, &registry, reg).unwrap() {
+                    EscalateResponse::Ok(ok) => ok.handle_id,
+                    other => panic!("register expected Ok, got {other:?}"),
+                };
+
+            let run = EscalateRequest::RunComputeKernel(
+                EscalateRequestRunComputeKernel {
+                    request_id: "run".to_string(),
+                    kernel_id: kernel_id.clone(),
+                    surface_uuid: "surface-xyz".to_string(),
+                    push_constants_hex: "00112233aabbccdd".to_string(),
+                    group_count_x: 4,
+                    group_count_y: 5,
+                    group_count_z: 6,
+                },
+            );
+            let response = handle_escalate_op(&sandbox, &registry, run).unwrap();
+            match response {
+                EscalateResponse::Ok(ok) => {
+                    assert_eq!(ok.request_id, "run");
+                    assert_eq!(
+                        ok.handle_id, kernel_id,
+                        "run response handle_id must echo the kernel_id"
+                    );
+                    assert!(
+                        ok.timeline_value.is_none(),
+                        "run_compute_kernel responses carry no timeline"
+                    );
+                }
+                other => panic!("run expected Ok, got {other:?}"),
+            }
+            let runs = bridge.runs();
+            assert_eq!(runs.len(), 1, "bridge.run must have been called once");
+            let r = &runs[0];
+            assert_eq!(r.kernel_id, kernel_id);
+            assert_eq!(r.surface_uuid, "surface-xyz");
+            assert_eq!(r.push_len, 8, "push_constants_hex decoded to 8 bytes");
+            assert_eq!(r.groups, (4, 5, 6));
         }
     }
 

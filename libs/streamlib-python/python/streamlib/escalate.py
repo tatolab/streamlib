@@ -162,6 +162,65 @@ class EscalateChannel:
             allow_contended=True,
         )
 
+    def register_compute_kernel(
+        self, spv: bytes, push_constant_size: int
+    ) -> Dict[str, Any]:
+        """Register a compute kernel on the host. Returns the ``ok``-payload
+        whose ``handle_id`` is the SHA-256 hex of the SPIR-V — re-registering
+        identical SPIR-V hits the host-side cache and returns the same id.
+
+        The host derives the kernel's binding shape from `rspirv-reflect`
+        and persists driver-compiled pipeline state to
+        ``$STREAMLIB_PIPELINE_CACHE_DIR`` (or ``$XDG_CACHE_HOME/streamlib/
+        pipeline-cache``) so first-inference latency after a host process
+        restart is fast.
+
+        On failure raises :class:`EscalateError`.
+        """
+        return self.request(
+            {
+                "op": "register_compute_kernel",
+                "spv_hex": spv.hex(),
+                "push_constant_size": int(push_constant_size),
+            }
+        )
+
+    def run_compute_kernel(
+        self,
+        kernel_id: str,
+        surface_uuid: str,
+        push_constants: bytes,
+        group_count_x: int,
+        group_count_y: int,
+        group_count_z: int,
+    ) -> Dict[str, Any]:
+        """Dispatch a previously-registered compute kernel against the
+        surface registered under ``surface_uuid``. Compute is synchronous
+        host-side: the call returns once the GPU work has retired, after
+        which the consumer can advance its surface-share timeline.
+
+        ``kernel_id`` is the value returned by an earlier
+        :meth:`register_compute_kernel` response. ``surface_uuid`` is
+        the surface-share UUID under which the host registered the
+        target render-target image (the same UUID
+        :meth:`VulkanContext.acquire_write` was opened with).
+        ``push_constants`` is a `bytes` payload whose length must equal
+        the kernel's declared ``push_constant_size``.
+
+        On failure raises :class:`EscalateError`.
+        """
+        return self.request(
+            {
+                "op": "run_compute_kernel",
+                "kernel_id": kernel_id,
+                "surface_uuid": str(surface_uuid),
+                "push_constants_hex": push_constants.hex(),
+                "group_count_x": int(group_count_x),
+                "group_count_y": int(group_count_y),
+                "group_count_z": int(group_count_z),
+            }
+        )
+
     def release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Tell the host to drop its strong reference to ``handle_id``."""
         return self.request(
