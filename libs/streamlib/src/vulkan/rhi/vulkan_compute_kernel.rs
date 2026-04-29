@@ -1502,7 +1502,9 @@ mod tests {
         // resolution to an empty path.
         let dir = unique_cache_dir("empty-env");
         let prev = std::env::var(PIPELINE_CACHE_DIR_ENV).ok();
-        // SAFETY: tests serialize through the device queue mutex.
+        // SAFETY: serialized via `#[serial(streamlib_pipeline_cache_env)]`
+        // above, so concurrent env-var reads/writes from sibling tests
+        // are not possible.
         unsafe { std::env::set_var(PIPELINE_CACHE_DIR_ENV, "") };
         let resolved = pipeline_cache_dir();
         unsafe {
