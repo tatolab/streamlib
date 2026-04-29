@@ -84,7 +84,8 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     ///
     /// `id` is assigned by the host (typically from the surface-share
     /// service); it MUST be unique across the adapter's lifetime.
-    /// Returns an error if `id` is already registered.
+    /// Returns [`AdapterError::SurfaceAlreadyRegistered`] if `id` is
+    /// already registered.
     pub fn register_host_surface(
         &self,
         id: SurfaceId,
@@ -104,7 +105,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             },
         );
         if !inserted {
-            return Err(AdapterError::SurfaceNotFound { surface_id: id });
+            return Err(AdapterError::SurfaceAlreadyRegistered { surface_id: id });
         }
         Ok(())
     }

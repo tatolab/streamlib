@@ -17,8 +17,15 @@
 #[path = "common.rs"]
 mod common;
 
+use std::sync::Arc;
+
+use streamlib::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
+use streamlib::core::rhi::{PixelFormat, TextureFormat};
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
-use streamlib_adapter_abi::{AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceId};
+use streamlib_adapter_abi::{
+    AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
+};
+use streamlib_adapter_cpu_readback::{HostSurfaceRegistration, VulkanLayout};
 
 use common::HostFixture;
 
@@ -55,5 +62,55 @@ fn cpu_readback_adapter_passes_run_conformance() {
             assert_eq!(surface_id, 0xdead_beef);
         }
         other => panic!("expected SurfaceNotFound, got {other:?}"),
+    }
+}
+
+#[test]
+fn duplicate_registration_returns_surface_already_registered() {
+    let fixture = match HostFixture::try_new() {
+        Some(f) => f,
+        None => {
+            println!(
+                "cpu-readback duplicate-registration: skipping — no Vulkan device available"
+            );
+            return;
+        }
+    };
+    let id: SurfaceId = 0xfeed_face;
+    let _first = fixture.register_surface(id, 64, 64);
+
+    // Build a fresh registration for the same id and assert the
+    // adapter rejects it as `SurfaceAlreadyRegistered` rather than
+    // the overloaded `SurfaceNotFound`.
+    let stream_texture = fixture
+        .gpu
+        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
+        .expect("acquire_render_target_dma_buf_image");
+    let texture_arc = Arc::clone(stream_texture.vulkan_inner());
+    let staging = Arc::new(
+        HostVulkanPixelBuffer::new(fixture.adapter.device(), 64, 64, 4, PixelFormat::Bgra32)
+            .expect("staging plane"),
+    );
+    let timeline = Arc::new(
+        HostVulkanTimelineSemaphore::new(fixture.adapter.device().device(), 0)
+            .expect("timeline"),
+    );
+    let result = fixture.adapter.register_host_surface(
+        id,
+        HostSurfaceRegistration::<HostMarker> {
+            texture: Some(texture_arc),
+            staging_planes: vec![staging],
+            timeline,
+            initial_image_layout: VulkanLayout::UNDEFINED,
+            format: SurfaceFormat::Bgra8,
+            width: 64,
+            height: 64,
+        },
+    );
+    match result {
+        Err(AdapterError::SurfaceAlreadyRegistered { surface_id }) => {
+            assert_eq!(surface_id, id);
+        }
+        other => panic!("expected SurfaceAlreadyRegistered, got {other:?}"),
     }
 }

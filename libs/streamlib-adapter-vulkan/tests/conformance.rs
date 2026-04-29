@@ -105,3 +105,39 @@ fn vulkan_adapter_passes_run_conformance() {
         other => panic!("expected SurfaceNotFound, got {other:?}"),
     }
 }
+
+#[test]
+fn duplicate_registration_returns_surface_already_registered() {
+    let gpu = match try_init_gpu() {
+        Some(g) => g,
+        None => {
+            println!("vulkan-adapter duplicate-registration: skipping — no Vulkan device available");
+            return;
+        }
+    };
+    let adapter = VulkanSurfaceAdapter::new(Arc::clone(gpu.device().vulkan_device()));
+    let id: SurfaceId = 0xfeed_face;
+    let _first = register_one(&adapter, &gpu, id);
+
+    let stream_tex = gpu
+        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
+        .expect("acquire_render_target_dma_buf_image");
+    let texture = stream_tex.vulkan_inner().clone();
+    let timeline = Arc::new(
+        HostVulkanTimelineSemaphore::new(adapter.device().device(), 0).expect("timeline"),
+    );
+    let result = adapter.register_host_surface(
+        id,
+        HostSurfaceRegistration {
+            texture,
+            timeline,
+            initial_layout: VulkanLayout::UNDEFINED,
+        },
+    );
+    match result {
+        Err(AdapterError::SurfaceAlreadyRegistered { surface_id }) => {
+            assert_eq!(surface_id, id);
+        }
+        other => panic!("expected SurfaceAlreadyRegistered, got {other:?}"),
+    }
+}

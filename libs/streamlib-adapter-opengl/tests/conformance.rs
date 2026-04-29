@@ -19,8 +19,10 @@
 #[path = "common.rs"]
 mod common;
 
+use streamlib::core::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceId};
+use streamlib_adapter_opengl::{HostSurfaceRegistration, DRM_FORMAT_ARGB8888};
 
 use common::HostFixture;
 
@@ -59,3 +61,51 @@ fn opengl_adapter_passes_run_conformance() {
         other => panic!("expected SurfaceNotFound for unknown id, got {other:?}"),
     }
 }
+
+#[test]
+fn duplicate_registration_returns_surface_already_registered() {
+    let fixture = match HostFixture::try_new() {
+        Some(f) => f,
+        None => {
+            println!("opengl-adapter duplicate-registration: skipping — no Vulkan or no EGL");
+            return;
+        }
+    };
+    let id: SurfaceId = 0xfeed_face;
+    let _first = fixture.register_surface(id, 64, 64);
+
+    // Build a second registration against a fresh DMA-BUF for the
+    // same id. The adapter must reject it as
+    // `SurfaceAlreadyRegistered`. The duplicate-rejection path also
+    // tears down the just-built EGLImage / GL texture; that cleanup
+    // is exercised here but isn't independently asserted.
+    let texture = fixture
+        .gpu
+        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
+        .expect("acquire_render_target_dma_buf_image");
+    let dma_buf_fd = texture
+        .vulkan_inner()
+        .export_dma_buf_fd()
+        .expect("export DMA-BUF");
+    let plane_layout = texture
+        .vulkan_inner()
+        .dma_buf_plane_layout()
+        .expect("dma_buf_plane_layout");
+    let modifier = texture.vulkan_inner().chosen_drm_format_modifier();
+    let registration = HostSurfaceRegistration {
+        dma_buf_fd,
+        width: 64,
+        height: 64,
+        drm_fourcc: DRM_FORMAT_ARGB8888,
+        drm_format_modifier: modifier,
+        plane_offset: plane_layout[0].0,
+        plane_stride: plane_layout[0].1,
+    };
+    match fixture.adapter.register_host_surface(id, registration) {
+        Err(AdapterError::SurfaceAlreadyRegistered { surface_id }) => {
+            assert_eq!(surface_id, id);
+        }
+        other => panic!("expected SurfaceAlreadyRegistered, got {other:?}"),
+    }
+}
+
