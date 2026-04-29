@@ -716,7 +716,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackCopyTrigger<D::Privilege>
         &self,
         ctx: &CpuReadbackTriggerContext<'_, D::Privilege>,
     ) -> Result<u64, AdapterError> {
-        let image = ctx.image.ok_or(AdapterError::IpcDisconnected {
+        let image = ctx.image.ok_or(AdapterError::BackendRejected {
             reason:
                 "InProcessCpuReadbackCopyTrigger requires a source VkImage; consumer-flavor surfaces have none"
                     .into(),
@@ -735,7 +735,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackCopyTrigger<D::Privilege>
         &self,
         ctx: &CpuReadbackTriggerContext<'_, D::Privilege>,
     ) -> Result<u64, AdapterError> {
-        let image = ctx.image.ok_or(AdapterError::IpcDisconnected {
+        let image = ctx.image.ok_or(AdapterError::BackendRejected {
             reason: "InProcessCpuReadbackCopyTrigger requires a source VkImage on flush".into(),
         })?;
         submit_image_buffer_copy(
@@ -786,7 +786,7 @@ fn submit_image_buffer_copy<D: VulkanRhiDevice, P: DevicePrivilege>(
         .build();
     if let Err(e) = unsafe { vk_device.begin_command_buffer(cmd, &begin_info) } {
         unsafe { vk_device.destroy_command_pool(pool, None) };
-        return Err(AdapterError::IpcDisconnected {
+        return Err(AdapterError::BackendRejected {
             reason: format!("begin_command_buffer: {e}"),
         });
     }
@@ -858,7 +858,7 @@ fn submit_image_buffer_copy<D: VulkanRhiDevice, P: DevicePrivilege>(
 
     if let Err(e) = unsafe { vk_device.end_command_buffer(cmd) } {
         unsafe { vk_device.destroy_command_pool(pool, None) };
-        return Err(AdapterError::IpcDisconnected {
+        return Err(AdapterError::BackendRejected {
             reason: format!("end_command_buffer: {e}"),
         });
     }
@@ -878,7 +878,7 @@ fn submit_image_buffer_copy<D: VulkanRhiDevice, P: DevicePrivilege>(
 
     let submit_result = unsafe { device.submit_to_queue(queue, &[submit], vk::Fence::null()) };
     unsafe { vk_device.destroy_command_pool(pool, None) };
-    submit_result.map_err(|e| AdapterError::IpcDisconnected {
+    submit_result.map_err(|e| AdapterError::BackendRejected {
         reason: format!("submit_to_queue: {e}"),
     })?;
 
@@ -929,7 +929,7 @@ fn create_one_shot_command_buffer(
         .build();
     let pool =
         unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
-            AdapterError::IpcDisconnected {
+            AdapterError::BackendRejected {
                 reason: format!("create_command_pool: {e}"),
             }
         })?;
@@ -943,7 +943,7 @@ fn create_one_shot_command_buffer(
         Ok(v) => v,
         Err(e) => {
             unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::IpcDisconnected {
+            return Err(AdapterError::BackendRejected {
                 reason: format!("allocate_command_buffers: {e}"),
             });
         }

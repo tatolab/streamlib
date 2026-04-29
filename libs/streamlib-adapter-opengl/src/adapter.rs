@@ -132,7 +132,7 @@ impl OpenGlSurfaceAdapter {
             if err != gl::NO_ERROR {
                 gl::DeleteTextures(1, &texture);
                 self.runtime.destroy_image(image);
-                return Err(AdapterError::IpcDisconnected {
+                return Err(AdapterError::BackendRejected {
                     reason: format!(
                         "glEGLImageTargetTexture2DOES failed: GL error 0x{:x}; \
                          likely external_only modifier (host should pick a \
@@ -356,7 +356,7 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
 }
 
 fn egl_to_adapter(err: EglRuntimeError) -> AdapterError {
-    AdapterError::IpcDisconnected {
+    AdapterError::BackendRejected {
         reason: format!("egl runtime: {err}"),
     }
 }

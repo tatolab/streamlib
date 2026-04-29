@@ -31,9 +31,16 @@
 mod adapter;
 mod context;
 mod error;
+mod gl_adapter;
+mod gl_context;
+mod gl_view;
+mod skia_internal;
 mod view;
 
 pub use adapter::SkiaSurfaceAdapter;
 pub use context::SkiaContext;
 pub use error::SkiaAdapterError;
+pub use gl_adapter::SkiaGlSurfaceAdapter;
+pub use gl_context::SkiaGlContext;
+pub use gl_view::{SkiaGlReadView, SkiaGlWriteView};
 pub use view::{SkiaReadView, SkiaWriteView};

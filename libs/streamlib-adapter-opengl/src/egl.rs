@@ -296,6 +296,26 @@ impl EglRuntime {
     pub unsafe fn image_target_texture_2d(&self, image: egl::Image) {
         unsafe { (self.image_target_texture_2d_oes)(gl::TEXTURE_2D, image.as_ptr()) };
     }
+
+    /// Resolve a GL/EGL function pointer by name via
+    /// `eglGetProcAddress`.
+    ///
+    /// Returned for adapters that compose on this runtime and need to
+    /// build their own GL function tables — Skia's `gl::Interface`,
+    /// for example, holds its own private proc table separate from
+    /// the global `gl` crate's table. Caller passes `name` without a
+    /// trailing NUL; non-extension core entrypoints resolve regardless
+    /// of make-current state, but extension entrypoints (everything
+    /// suffixed `*OES`, `*KHR`, `*EXT`) require the EGL context to be
+    /// current on the calling thread per the EGL spec.
+    ///
+    /// Returns `null` when `name` is not exported.
+    pub fn get_proc_address(&self, name: &str) -> *const std::ffi::c_void {
+        match self.egl.get_proc_address(name) {
+            Some(f) => f as *const std::ffi::c_void,
+            None => std::ptr::null(),
+        }
+    }
 }
 
 impl Drop for EglRuntime {

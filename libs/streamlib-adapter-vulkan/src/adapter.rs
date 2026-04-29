@@ -191,7 +191,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .flags(vk::CommandPoolCreateFlags::TRANSIENT)
             .build();
         let pool = unsafe { device.create_command_pool(&pool_info, None) }
-            .map_err(|e| AdapterError::IpcDisconnected {
+            .map_err(|e| AdapterError::BackendRejected {
                 reason: format!("create_command_pool: {e}"),
             })?;
 
@@ -203,7 +203,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         let cmd_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
             .map_err(|e| {
                 unsafe { device.destroy_command_pool(pool, None) };
-                AdapterError::IpcDisconnected {
+                AdapterError::BackendRejected {
                     reason: format!("allocate_command_buffers: {e}"),
                 }
             })?;
@@ -214,7 +214,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .build();
         if let Err(e) = unsafe { device.begin_command_buffer(cmd, &begin_info) } {
             unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::IpcDisconnected {
+            return Err(AdapterError::BackendRejected {
                 reason: format!("begin_command_buffer: {e}"),
             });
         }
@@ -250,7 +250,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
 
         if let Err(e) = unsafe { device.end_command_buffer(cmd) } {
             unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::IpcDisconnected {
+            return Err(AdapterError::BackendRejected {
                 reason: format!("end_command_buffer: {e}"),
             });
         }
@@ -266,7 +266,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             self.device.submit_to_queue(queue, &[submit], vk::Fence::null())
         } {
             unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::IpcDisconnected {
+            return Err(AdapterError::BackendRejected {
                 reason: format!("submit_to_queue: {e}"),
             });
         }
@@ -275,7 +275,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         // consumer's view assumes the new layout is visible.
         if let Err(e) = unsafe { device.queue_wait_idle(queue) } {
             unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::IpcDisconnected {
+            return Err(AdapterError::BackendRejected {
                 reason: format!("queue_wait_idle: {e}"),
             });
         }

@@ -38,6 +38,7 @@ use vulkanalia::loader::LIBRARY;
 use vulkanalia::vk::{self, DeviceV1_0, Handle as _, InstanceV1_0};
 
 use crate::error::SkiaAdapterError;
+use crate::skia_internal::SyncDirectContext;
 use crate::view::{SkiaReadView, SkiaWriteView};
 
 /// Skia-typed surface adapter. Composes on
@@ -55,14 +56,6 @@ pub struct SkiaSurfaceAdapter<D: VulkanRhiDevice + 'static> {
     inner: Arc<VulkanSurfaceAdapter<D>>,
     direct_context: Arc<Mutex<SyncDirectContext>>,
 }
-
-/// Newtype wrapping Skia's `DirectContext` to manually claim
-/// `Send + Sync`. Skia treats `GrDirectContext` as single-thread-
-/// affine; the surrounding `Mutex` provides that invariant.
-pub(crate) struct SyncDirectContext(pub(crate) DirectContext);
-
-unsafe impl Send for SyncDirectContext {}
-unsafe impl Sync for SyncDirectContext {}
 
 impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
     /// Build a Skia adapter on top of an existing Vulkan adapter.
@@ -303,9 +296,10 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
 
         let skia_info = build_skia_image_info(view).map_err(skia_to_adapter_error)?;
         let color_type = vk_format_to_skia_color_type(vk::Format::from_raw(info.format))
-            .ok_or_else(|| AdapterError::IpcDisconnected {
+            .ok_or_else(|| AdapterError::UnsupportedFormat {
+                surface_id,
                 reason: format!(
-                    "unsupported vk::Format {} for Skia BGRA/RGBA mapping",
+                    "vk::Format {} not in Skia BGRA/RGBA mapping",
                     info.format
                 ),
             })?;
@@ -315,7 +309,7 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
         let mut ctx_guard = self
             .direct_context
             .lock()
-            .map_err(|_| AdapterError::IpcDisconnected {
+            .map_err(|_| AdapterError::BackendRejected {
                 reason: "Skia DirectContext mutex poisoned".into(),
             })?;
         let surface = surfaces::wrap_backend_render_target(
@@ -326,7 +320,7 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
             None::<ColorSpace>,
             None,
         )
-        .ok_or_else(|| AdapterError::IpcDisconnected {
+        .ok_or_else(|| AdapterError::BackendRejected {
             reason: "skia_safe::gpu::surfaces::wrap_backend_render_target returned None"
                 .into(),
         })?;
@@ -354,9 +348,10 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
 
         let skia_info = build_skia_image_info(view).map_err(skia_to_adapter_error)?;
         let color_type = vk_format_to_skia_color_type(vk::Format::from_raw(info.format))
-            .ok_or_else(|| AdapterError::IpcDisconnected {
+            .ok_or_else(|| AdapterError::UnsupportedFormat {
+                surface_id,
                 reason: format!(
-                    "unsupported vk::Format {} for Skia BGRA/RGBA mapping",
+                    "vk::Format {} not in Skia BGRA/RGBA mapping",
                     info.format
                 ),
             })?;
@@ -368,7 +363,7 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
         let mut ctx_guard = self
             .direct_context
             .lock()
-            .map_err(|_| AdapterError::IpcDisconnected {
+            .map_err(|_| AdapterError::BackendRejected {
                 reason: "Skia DirectContext mutex poisoned".into(),
             })?;
         let image = skia_images::borrow_texture_from(
@@ -379,7 +374,7 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
             AlphaType::Opaque,
             None::<ColorSpace>,
         )
-        .ok_or_else(|| AdapterError::IpcDisconnected {
+        .ok_or_else(|| AdapterError::BackendRejected {
             reason: "skia_safe::gpu::images::borrow_texture_from returned None".into(),
         })?;
         drop(ctx_guard);
@@ -390,7 +385,7 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
 }
 
 fn skia_to_adapter_error(e: SkiaAdapterError) -> AdapterError {
-    AdapterError::IpcDisconnected {
+    AdapterError::BackendRejected {
         reason: format!("skia adapter: {e}"),
     }
 }

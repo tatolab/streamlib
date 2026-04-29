@@ -39,6 +39,20 @@ pub enum AdapterError {
     #[error("IPC disconnected: {reason}")]
     IpcDisconnected { reason: String },
 
+    /// The underlying backend GPU/framework API rejected an operation
+    /// that should structurally have succeeded — e.g. Skia's
+    /// `wrap_backend_render_target` returning `None`, EGL `make_current`
+    /// failing on a known-good context, a Vulkan submit returning a
+    /// driver-side error during a layout transition. The backend's
+    /// failure carries no actionable inner cause; `reason` is a
+    /// human-readable description.
+    ///
+    /// Distinct from [`Self::IpcDisconnected`] (the wire is alive — the
+    /// backend itself said no) and [`Self::UnsupportedFormat`] (the
+    /// rejection is *not* about pixel format / layout).
+    #[error("backend rejected operation: {reason}")]
+    BackendRejected { reason: String },
+
     /// A wait on the timeline semaphore exceeded the configured timeout.
     #[error("sync timeout after {duration:?}")]
     SyncTimeout { duration: Duration },

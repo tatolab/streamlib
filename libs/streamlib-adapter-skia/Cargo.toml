@@ -21,6 +21,7 @@ tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
+streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl" }
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 vulkanalia.workspace = true
 skia-safe = { workspace = true }
@@ -81,6 +82,22 @@ path = "tests/skia_visual_evidence.rs"
 [[test]]
 name = "skia_animated_stress"
 path = "tests/skia_animated_stress.rs"
+
+[[test]]
+name = "round_trip_skia_canvas_gl"
+path = "tests/round_trip_skia_canvas_gl.rs"
+
+[[test]]
+name = "conformance_gl"
+path = "tests/conformance_gl.rs"
+
+[[test]]
+name = "skia_visual_evidence_gl"
+path = "tests/skia_visual_evidence_gl.rs"
+
+[[test]]
+name = "skia_animated_stress_gl"
+path = "tests/skia_animated_stress_gl.rs"
 
 [lints]
 workspace = true
