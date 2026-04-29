@@ -363,8 +363,84 @@ fn check_vulkanalia_confined(
             }
         }
     }
+    // Defense in depth: a non-allowlisted crate could add `vulkanalia` to
+    // its Cargo.toml without a `use` statement (qualified paths,
+    // re-exports, build.rs only) and slip past the import-statement scan.
+    // The Cargo.toml dep scan catches that. The allowlist is keyed on
+    // crate roots (one entry per crate that owns at least one
+    // vulkanalia-allowlisted source file). Matching is against the full
+    // Cargo.toml file path so trailing-slash directory boundaries hit
+    // (`libs/streamlib/Cargo.toml` matches `libs/streamlib/`, but
+    // `libs/streamlib-runtime/Cargo.toml` does not).
+    for path in walk_cargo_toml(project_root) {
+        *files_scanned += 1;
+        let rel = rel_to_root(&path, project_root);
+        if matches_allow(rel, VULKANALIA_CARGO_DEP_ALLOWLIST) {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("read {}", path.display()))?;
+        let parsed: toml::Value = match toml::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        for (section, dep_name, line_no) in iter_dep_entries(&parsed, &content) {
+            if dep_name == "vulkanalia" {
+                violations.push(Violation {
+                    path: rel.to_path_buf(),
+                    line_no,
+                    line_text: format!("[{}] vulkanalia = ...", section),
+                    matched_pattern: format!("vulkanalia dep in [{}]", section),
+                    check: CHECK_VULKANALIA,
+                    rationale: VULKANALIA_RATIONALE,
+                });
+            }
+        }
+    }
     Ok(())
 }
+
+/// Crate roots permitted to declare `vulkanalia` as a Cargo dependency. A
+/// crate qualifies if at least one file under it appears in the
+/// `.rs`-level vulkanalia allowlist (`VULKANALIA_ALLOWLIST`); declaring
+/// the dep elsewhere is a regression.
+const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "libs/streamlib/",
+        kind: AllowKind::PathPrefix,
+        rationale: "host crate: src/vulkan/ owns the RHI; processors/display.rs and processors/camera.rs are documented exceptions",
+    },
+    AllowEntry {
+        path: "libs/streamlib-consumer-rhi/",
+        kind: AllowKind::PathPrefix,
+        rationale: "consumer-side carve-out (#560)",
+    },
+    AllowEntry {
+        path: "libs/streamlib-adapter-",
+        kind: AllowKind::PathPrefix,
+        rationale: "adapter crates ride consumer-rhi",
+    },
+    AllowEntry {
+        path: "libs/vulkan-video/",
+        kind: AllowKind::PathPrefix,
+        rationale: "codec layer; refactor-to-RHI tracked under Vulkan Video RHI Coupling milestone",
+    },
+    AllowEntry {
+        path: "libs/streamlib-python-native/",
+        kind: AllowKind::PathPrefix,
+        rationale: "cdylib: ConsumerVulkanDevice construction",
+    },
+    AllowEntry {
+        path: "libs/streamlib-deno-native/",
+        kind: AllowKind::PathPrefix,
+        rationale: "cdylib: ConsumerVulkanDevice construction",
+    },
+    AllowEntry {
+        path: "examples/polyglot-",
+        kind: AllowKind::PathPrefix,
+        rationale: "polyglot scenario binaries exercise the consumer path end-to-end",
+    },
+];
 
 // ---------------------------------------------------------------------------
 // Check 3 — cdylibs and adapter crates depend on consumer-rhi, NOT streamlib
@@ -767,6 +843,49 @@ mod tests {
     }
 
     #[test]
+    fn rejects_vulkanalia_cargo_dep_outside_allowlist() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-runtime/Cargo.toml",
+            r#"[package]
+name = "streamlib-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vulkanalia = "0.20"
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA),
+            "expected vulkanalia Cargo dep violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn allows_vulkanalia_cargo_dep_in_adapter_crate() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            r#"[package]
+name = "streamlib-adapter-vulkan"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vulkanalia = "0.20"
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let vk: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA).collect();
+        assert!(vk.is_empty(), "vulkanalia dep in adapter crate should pass: {:?}", vk);
+    }
+
+    #[test]
     fn allows_use_vulkanalia_in_tests() {
         let dir = empty_workspace();
         write_fixture(
@@ -911,6 +1030,10 @@ streamlib = { path = "../streamlib" }
 
     #[test]
     fn skips_commented_use_ash() {
+        // After `trim_start()` the line begins with `//`, so
+        // `starts_with("use ash::")` is false and the check correctly
+        // ignores commented-out imports. Locks the behavior so a future
+        // refactor to `line.contains("use ash::")` would fail loudly.
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
@@ -919,13 +1042,6 @@ streamlib = { path = "../streamlib" }
         );
         let report = scan_all(dir.path()).unwrap();
         let no_ash: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_NO_ASH).collect();
-        // `use ash::` after `//` still hits the substring matcher because
-        // we only check `trim_start().starts_with(...)`. Document this
-        // as a known limitation if someone hits it, but for now the
-        // simple matcher is fine — there are no commented-out `use ash`
-        // lines in main.
-        // Test asserts current behavior so a future tightening (skip
-        // comments) breaks loudly and forces a docs update.
-        assert!(no_ash.is_empty(), "comment-only use ash should not match (current behavior): {:?}", no_ash);
+        assert!(no_ash.is_empty(), "commented import should not match: {:?}", no_ash);
     }
 }
