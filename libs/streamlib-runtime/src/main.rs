@@ -8,6 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
+// DELIBERATE BREAK for negative-test of #555 boundary CI gate. Will revert.
+use ash::vk;
+
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use libloading::Library;
