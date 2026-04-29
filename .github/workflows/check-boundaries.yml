@@ -2,18 +2,22 @@ name: Check Boundaries
 
 # Layer 6 of the regression-prevention defense for the Vulkan RHI capability
 # split — see docs/architecture/subprocess-rhi-parity.md. `cargo xtask
-# check-boundaries` enforces four boundary invariants by code-search across
+# check-boundaries` enforces five boundary invariants by code-search across
 # `libs/` and `examples/`:
 #   1. No `ash` imports or Cargo deps (vulkanalia is the canonical Vulkan
 #      binding, per #252).
-#   2. `use vulkanalia` confined to RHI / consumer-rhi / adapter / codec
-#      crates — anyone reaching for raw vulkanalia outside those crates is
-#      breaking the RHI boundary.
+#   2. `use vulkanalia` (and Cargo.toml `vulkanalia` deps) confined to
+#      RHI / consumer-rhi / adapter / codec crates — anyone reaching for
+#      raw vulkanalia outside those crates is breaking the RHI boundary.
 #   3. Cdylibs and adapter crates depend on `streamlib-consumer-rhi`, NOT
 #      the full `streamlib` crate. The FullAccess capability boundary is
 #      type-system enforced by the cdylib's dep graph excluding `streamlib`.
 #   4. Privileged Vulkan calls (`vkAllocateMemory`, `vkGetMemoryFdKHR`,
 #      `vkCreateComputePipelines`) live only inside the RHI.
+#   5. Every `vulkanalia` / `vulkanalia-sys` / `vulkanalia-vma` dep in a
+#      member crate inherits from `[workspace.dependencies]` (the
+#      `tatolab/vulkanalia` fork). Direct version specs in member crates
+#      can silently pull crates.io upstream and lose the VMA 3.3.0 patch.
 #
 # The check is grep-shaped on purpose: sub-second on a clean runner, no
 # Cargo build of the workspace needed.

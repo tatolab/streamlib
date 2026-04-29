@@ -81,6 +81,7 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_vulkanalia_confined(project_root, &mut violations, &mut files_scanned)?;
     check_cdylib_and_adapter_runtime_deps(project_root, &mut violations, &mut files_scanned)?;
     check_privileged_vk_calls(project_root, &mut violations, &mut files_scanned)?;
+    check_vulkanalia_uses_workspace_fork(project_root, &mut violations, &mut files_scanned)?;
     Ok(CheckReport { violations, files_scanned })
 }
 
@@ -616,6 +617,60 @@ fn check_privileged_vk_calls(
 }
 
 // ---------------------------------------------------------------------------
+// Check 5 — every member crate's vulkanalia* dep is workspace-inherited
+// ---------------------------------------------------------------------------
+
+const CHECK_VULKANALIA_FORK: &str = "vulkanalia-uses-workspace-fork";
+
+const VULKANALIA_FORK_RATIONALE: &str = "all vulkanalia / vulkanalia-sys / vulkanalia-vma deps must inherit from [workspace.dependencies] (the tatolab fork) — direct version specifications can silently pull crates.io upstream and lose the VMA 3.3.0 patch";
+
+fn check_vulkanalia_uses_workspace_fork(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    for path in walk_cargo_toml(project_root) {
+        *files_scanned += 1;
+        let rel = rel_to_root(&path, project_root);
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("read {}", path.display()))?;
+        let parsed: toml::Value = match toml::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        for (section, dep_name, dep_value, line_no) in iter_dep_entries_with_values(&parsed, &content) {
+            if !is_vulkanalia_dep(&dep_name) {
+                continue;
+            }
+            if dep_is_workspace_inherited(&dep_value) {
+                continue;
+            }
+            violations.push(Violation {
+                path: rel.to_path_buf(),
+                line_no,
+                line_text: format!("[{}] {} = ... (not `workspace = true`)", section, dep_name),
+                matched_pattern: format!("{} bypasses workspace fork in [{}]", dep_name, section),
+                check: CHECK_VULKANALIA_FORK,
+                rationale: VULKANALIA_FORK_RATIONALE,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn is_vulkanalia_dep(name: &str) -> bool {
+    name == "vulkanalia" || name == "vulkanalia-sys" || name == "vulkanalia-vma"
+}
+
+fn dep_is_workspace_inherited(value: &toml::Value) -> bool {
+    value
+        .as_table()
+        .and_then(|t| t.get("workspace"))
+        .and_then(|w| w.as_bool())
+        .unwrap_or(false)
+}
+
+// ---------------------------------------------------------------------------
 // Cargo.toml dep iteration
 // ---------------------------------------------------------------------------
 
@@ -627,19 +682,32 @@ fn check_privileged_vk_calls(
 /// - `[target.<cfg>.dependencies]`
 /// - `[target.<cfg>.dev-dependencies]`
 /// - `[target.<cfg>.build-dependencies]`
-fn iter_dep_entries<'a>(
-    toml_value: &'a toml::Value,
-    raw_text: &'a str,
+fn iter_dep_entries(
+    toml_value: &toml::Value,
+    raw_text: &str,
 ) -> Vec<(String, String, usize)> {
+    iter_dep_entries_with_values(toml_value, raw_text)
+        .into_iter()
+        .map(|(section, name, _value, line)| (section, name, line))
+        .collect()
+}
+
+/// Same as [`iter_dep_entries`] but also includes the dep value (as a
+/// `toml::Value`), for checks that need to inspect whether a dep is
+/// `workspace = true`, has a `git = "..."` URL, etc.
+fn iter_dep_entries_with_values(
+    toml_value: &toml::Value,
+    raw_text: &str,
+) -> Vec<(String, String, toml::Value, usize)> {
     let mut out = Vec::new();
     let Some(table) = toml_value.as_table() else {
         return out;
     };
     for section_name in ["dependencies", "dev-dependencies", "build-dependencies"] {
         if let Some(deps) = table.get(section_name).and_then(|v| v.as_table()) {
-            for (dep_name, _) in deps {
+            for (dep_name, value) in deps {
                 let line = find_dep_line(raw_text, section_name, dep_name);
-                out.push((section_name.to_string(), dep_name.clone(), line));
+                out.push((section_name.to_string(), dep_name.clone(), value.clone(), line));
             }
         }
     }
@@ -651,9 +719,9 @@ fn iter_dep_entries<'a>(
             for sub in ["dependencies", "dev-dependencies", "build-dependencies"] {
                 if let Some(deps) = cfg_tbl.get(sub).and_then(|v| v.as_table()) {
                     let qualified = format!("target.{}.{}", cfg_key, sub);
-                    for (dep_name, _) in deps {
+                    for (dep_name, value) in deps {
                         let line = find_dep_line(raw_text, &qualified, dep_name);
-                        out.push((qualified.clone(), dep_name.clone(), line));
+                        out.push((qualified.clone(), dep_name.clone(), value.clone(), line));
                     }
                 }
             }
@@ -883,6 +951,119 @@ vulkanalia = "0.20"
         let report = scan_all(dir.path()).unwrap();
         let vk: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA).collect();
         assert!(vk.is_empty(), "vulkanalia dep in adapter crate should pass: {:?}", vk);
+    }
+
+    // ----- Check 5: vulkanalia uses workspace fork -----
+
+    #[test]
+    fn rejects_direct_vulkanalia_version_in_member() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            r#"[package]
+name = "streamlib-adapter-vulkan"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vulkanalia = "0.35"
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA_FORK),
+            "expected workspace-fork violation, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_direct_vulkanalia_vma_version_in_member() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/vulkan-video/Cargo.toml",
+            r#"[package]
+name = "vulkan-video"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vulkanalia-vma = "0.4"
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA_FORK),
+            "expected workspace-fork violation for vulkanalia-vma, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn rejects_direct_vulkanalia_git_in_member() {
+        let dir = empty_workspace();
+        // Even a git URL in a member crate is a violation: it bypasses the
+        // single source of truth at workspace level.
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-adapter-opengl/Cargo.toml",
+            r#"[package]
+name = "streamlib-adapter-opengl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vulkanalia = { git = "https://github.com/KhronosGroup/Vulkan-Headers" }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        assert!(
+            report.violations.iter().any(|v| v.check == CHECK_VULKANALIA_FORK),
+            "expected workspace-fork violation for git dep, got {:?}",
+            report.violations,
+        );
+    }
+
+    #[test]
+    fn allows_workspace_inline_vulkanalia_dep() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            r#"[package]
+name = "streamlib-adapter-vulkan"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vulkanalia = { workspace = true }
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let fork: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA_FORK).collect();
+        assert!(fork.is_empty(), "{{ workspace = true }} should pass: {:?}", fork);
+    }
+
+    #[test]
+    fn allows_workspace_dotted_vulkanalia_dep() {
+        let dir = empty_workspace();
+        write_fixture(
+            dir.path(),
+            "libs/streamlib-adapter-vulkan/Cargo.toml",
+            r#"[package]
+name = "streamlib-adapter-vulkan"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vulkanalia.workspace = true
+"#,
+        );
+        let report = scan_all(dir.path()).unwrap();
+        let fork: Vec<_> = report.violations.iter().filter(|v| v.check == CHECK_VULKANALIA_FORK).collect();
+        assert!(fork.is_empty(), "dotted-key form should pass: {:?}", fork);
     }
 
     #[test]
