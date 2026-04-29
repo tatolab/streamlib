@@ -46,6 +46,7 @@ from streamlib.surface_adapter import (
 __all__ = [
     "STREAMLIB_ADAPTER_ABI_VERSION",
     "RawVulkanHandles",
+    "VulkanImageInfo",
     "VulkanReadView",
     "VulkanWriteView",
     "VulkanSurfaceAdapter",
@@ -64,6 +65,36 @@ class VkImageLayout:
     SHADER_READ_ONLY_OPTIMAL = 5
     TRANSFER_SRC_OPTIMAL = 6
     TRANSFER_DST_OPTIMAL = 7
+
+
+@dataclass(frozen=True)
+class VulkanImageInfo:
+    """Per-image VkImageInfo descriptor for a registered surface.
+
+    Mirrors ``streamlib_adapter_abi::VkImageInfo`` field-for-field —
+    customers wrapping the underlying ``VkImage`` as a framework-native
+    handle (Skia's ``GrVkImageInfo``, vulkano's ``Image``, etc.) read
+    this once on registration to populate their backend-context state.
+    The per-acquire layout still flows through :class:`VulkanReadView`
+    / :class:`VulkanWriteView`'s ``vk_image_layout`` field.
+
+    All Vulkan enum / bitmask fields are kept as raw integers (the
+    underlying types are ``i32`` / ``u32`` / ``u64`` per the spec) so
+    this dataclass stays binding-agnostic.
+    """
+
+    format: int
+    tiling: int
+    usage_flags: int
+    sample_count: int
+    level_count: int
+    queue_family: int
+    memory_handle: int
+    memory_offset: int
+    memory_size: int
+    memory_property_flags: int
+    protected: int
+    ycbcr_conversion: int
 
 
 @dataclass(frozen=True)
@@ -200,6 +231,26 @@ class _SlpnVulkanRawHandles(ctypes.Structure):
     ]
 
 
+class _SlpnVulkanImageInfo(ctypes.Structure):
+    """C struct matching `streamlib_python_native::vulkan::SlpnVulkanImageInfo`."""
+
+    _fields_ = [
+        ("format", ctypes.c_int32),
+        ("tiling", ctypes.c_int32),
+        ("usage_flags", ctypes.c_uint32),
+        ("sample_count", ctypes.c_uint32),
+        ("level_count", ctypes.c_uint32),
+        ("queue_family", ctypes.c_uint32),
+        ("memory_handle", ctypes.c_uint64),
+        ("memory_offset", ctypes.c_uint64),
+        ("memory_size", ctypes.c_uint64),
+        ("memory_property_flags", ctypes.c_uint32),
+        ("protected", ctypes.c_uint32),
+        ("ycbcr_conversion", ctypes.c_uint64),
+        ("_reserved", ctypes.c_uint8 * 16),
+    ]
+
+
 class VulkanContext:
     """Subprocess-side Vulkan adapter runtime (#531).
 
@@ -314,6 +365,13 @@ class VulkanContext:
         lib.slpn_vulkan_raw_handles.argtypes = [
             ctypes.c_void_p,
             ctypes.POINTER(_SlpnVulkanRawHandles),
+        ]
+
+        lib.slpn_vulkan_get_image_info.restype = ctypes.c_int32
+        lib.slpn_vulkan_get_image_info.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+            ctypes.POINTER(_SlpnVulkanImageInfo),
         ]
 
         # Compute dispatch routes through escalate IPC (`register_compute_kernel`
@@ -523,4 +581,46 @@ class VulkanContext:
             vk_queue=int(h.vk_queue),
             vk_queue_family_index=int(h.vk_queue_family_index),
             api_version=int(h.api_version),
+        )
+
+    def image_info(self, surface) -> VulkanImageInfo:
+        """Return the per-image VkImageInfo descriptor for a registered
+        surface. Resolves and registers the surface lazily if it
+        hasn't been touched yet (same shape as
+        :meth:`acquire_write` / :meth:`acquire_read`).
+
+        Per-image: the descriptor is fixed at registration time and
+        does NOT change across acquires. Customers that wrap the
+        underlying ``VkImage`` as a framework-native handle (Skia's
+        ``GrVkImageInfo``, vulkano's ``Image``, etc.) call this once
+        per surface and cache the result; the per-acquire layout
+        flows through the ``vk_image_layout`` field on
+        :class:`VulkanReadView` / :class:`VulkanWriteView`.
+        """
+        pool_id = self._surface_pool_id(surface)
+        surface_id = self._resolve_and_register(pool_id)
+        info = _SlpnVulkanImageInfo()
+        rc = self._lib.slpn_vulkan_get_image_info(
+            self._rt,
+            ctypes.c_uint64(surface_id),
+            ctypes.byref(info),
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"VulkanContext.image_info: slpn_vulkan_get_image_info "
+                f"returned {rc} for surface '{pool_id}'"
+            )
+        return VulkanImageInfo(
+            format=int(info.format),
+            tiling=int(info.tiling),
+            usage_flags=int(info.usage_flags),
+            sample_count=int(info.sample_count),
+            level_count=int(info.level_count),
+            queue_family=int(info.queue_family),
+            memory_handle=int(info.memory_handle),
+            memory_offset=int(info.memory_offset),
+            memory_size=int(info.memory_size),
+            memory_property_flags=int(info.memory_property_flags),
+            protected=int(info.protected),
+            ycbcr_conversion=int(info.ycbcr_conversion),
         )
