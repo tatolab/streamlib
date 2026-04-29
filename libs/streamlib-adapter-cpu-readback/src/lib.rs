@@ -38,7 +38,7 @@ pub use adapter::{
     InProcessCpuReadbackCopyTrigger, TriggerPlane,
 };
 pub use context::CpuReadbackContext;
-pub use state::HostSurfaceRegistration;
+pub use state::{HostSurfaceRegistration, VulkanLayout};
 pub use view::{
     CpuReadbackPlaneView, CpuReadbackPlaneViewMut, CpuReadbackReadView, CpuReadbackWriteView,
 };

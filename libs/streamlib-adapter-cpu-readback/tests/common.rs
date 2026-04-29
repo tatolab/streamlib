@@ -29,9 +29,8 @@ use streamlib_adapter_abi::{
 };
 use streamlib_adapter_cpu_readback::{
     CpuReadbackContext, CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter,
-    HostSurfaceRegistration, InProcessCpuReadbackCopyTrigger,
+    HostSurfaceRegistration, InProcessCpuReadbackCopyTrigger, VulkanLayout,
 };
-use vulkanalia::vk;
 
 /// Convenience alias — every host-side test instantiates the adapter
 /// against a real `HostVulkanDevice`.
@@ -165,7 +164,7 @@ impl HostFixture {
                     texture: Some(texture_arc),
                     staging_planes,
                     timeline,
-                    initial_image_layout: vk::ImageLayout::UNDEFINED.as_raw(),
+                    initial_image_layout: VulkanLayout::UNDEFINED,
                     format: surface_format,
                     width,
                     height,

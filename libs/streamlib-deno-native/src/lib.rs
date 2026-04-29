@@ -3222,7 +3222,7 @@ mod cpu_readback {
     };
     use streamlib_adapter_cpu_readback::{
         CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, CpuReadbackTriggerContext,
-        HostSurfaceRegistration,
+        HostSurfaceRegistration, VulkanLayout,
     };
     use streamlib_consumer_rhi::{
         ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer,
@@ -3551,7 +3551,7 @@ mod cpu_readback {
             texture: None,
             staging_planes,
             timeline,
-            initial_image_layout: vulkanalia::vk::ImageLayout::GENERAL.as_raw(),
+            initial_image_layout: VulkanLayout::GENERAL,
             format,
             width: surface_width,
             height: surface_height,

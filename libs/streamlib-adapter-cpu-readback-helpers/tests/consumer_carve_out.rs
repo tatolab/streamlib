@@ -35,7 +35,7 @@ use streamlib_adapter_abi::{
 };
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
-    InProcessCpuReadbackCopyTrigger,
+    InProcessCpuReadbackCopyTrigger, VulkanLayout,
 };
 use streamlib_consumer_rhi::{
     ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, ConsumerVulkanTimelineSemaphore,
@@ -105,7 +105,7 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
                 texture: Some(texture_arc),
                 staging_planes: vec![Arc::clone(&staging_arc)],
                 timeline: Arc::clone(&timeline_arc),
-                initial_image_layout: vulkanalia::vk::ImageLayout::UNDEFINED.as_raw(),
+                initial_image_layout: VulkanLayout::UNDEFINED,
                 format: SurfaceFormat::Bgra8,
                 width: W,
                 height: H,

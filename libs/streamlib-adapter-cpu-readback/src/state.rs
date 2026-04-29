@@ -23,9 +23,10 @@ use vulkanalia::vk;
 ///
 /// Convert to `vk::ImageLayout` via `vk::ImageLayout::from_raw(layout.0)`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub(crate) struct VulkanLayout(pub i32);
+pub struct VulkanLayout(pub i32);
 
 impl VulkanLayout {
+    pub const UNDEFINED: Self = Self(vk::ImageLayout::UNDEFINED.as_raw());
     pub const GENERAL: Self = Self(vk::ImageLayout::GENERAL.as_raw());
 
     pub(crate) fn vk(self) -> vk::ImageLayout {
@@ -64,10 +65,12 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// imports via OPAQUE_FD. Both flavors `wait` and `signal_host`
     /// against the same kernel object after import.
     pub timeline: Arc<P::TimelineSemaphore>,
-    /// Initial `VkImageLayout` raw value the host left the source image
-    /// in. Consumer-side this is informational — layout transitions are
-    /// host-only.
-    pub initial_image_layout: i32,
+    /// Initial `VkImageLayout` the host left the source image in.
+    /// Consumer-side this is informational — layout transitions are
+    /// host-only. Use [`VulkanLayout::UNDEFINED`] for freshly-allocated
+    /// images and [`VulkanLayout::GENERAL`] when the host has already
+    /// transitioned the image into a copy-source-capable state.
+    pub initial_image_layout: VulkanLayout,
     /// Pixel format. Drives plane count and per-plane geometry consumed
     /// by the copy paths and the customer-facing view.
     pub format: SurfaceFormat,

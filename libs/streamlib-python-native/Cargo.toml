@@ -25,12 +25,6 @@ tracing.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
 streamlib-surface-client = { path = "../streamlib-surface-client" }
-# Vulkan import of DMA-BUF fds from the surface-share service (issue #420).
-# Consumer-only — this cdylib never allocates GPU memory, it only imports fds
-# the host already exported via escalate IPC. `libloading` feature avoids a
-# hard link to libvulkan.so so the cdylib loads on systems without a Vulkan
-# driver.
-vulkanalia = { workspace = true }
 # Subprocess-side OpenGl runtime (#530). Reuses the host adapter crate's
 # EglRuntime + OpenGlSurfaceAdapter so subprocess code never re-derives EGL
 # bring-up or DMA-BUF → GL_TEXTURE_2D import.
