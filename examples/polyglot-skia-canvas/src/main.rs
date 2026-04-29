@@ -57,7 +57,7 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("=== Polyglot Skia adapter canvas scenario (#513) ===");
+    println!("=== Polyglot Skia adapter canvas scenario (#577) ===");
     println!(
         "Surface:    {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})"
     );
@@ -115,10 +115,10 @@ fn main() -> Result<()> {
                 .map_err(|e| {
                     StreamError::Configuration(format!("register_texture: {e}"))
                 })?;
-            // No bridge wiring: Skia composes on the Vulkan adapter,
+            // No bridge wiring: Skia composes on the OpenGL adapter,
             // which has no per-acquire host work — every line of GPU
             // dispatch happens inside the subprocess process via
-            // skia-python.
+            // skia-python's GL backend (`MakeGL(MakeEGL())`).
             *texture_slot.lock().unwrap() = Some(texture);
             *device_slot.lock().unwrap() = Some(host_device);
             *timeline_slot.lock().unwrap() = Some(timeline);
