@@ -30,13 +30,19 @@
 
 #![cfg(target_os = "linux")]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
-use streamlib::core::rhi::TextureFormat;
+use streamlib::core::context::ComputeKernelBridge;
+use streamlib::core::rhi::{
+    derive_bindings_from_spirv, ComputeKernelDescriptor, StreamTexture, TextureFormat,
+};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::host_rhi::{
+    HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanComputeKernel,
+};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 /// Compiled SPIR-V for the Mandelbrot compute shader. Built by
@@ -84,6 +90,110 @@ impl RuntimeKind {
             Self::Python => "com.tatolab.vulkan_compute",
             Self::Deno => "com.tatolab.vulkan_compute_deno",
         }
+    }
+}
+
+/// Bridge between the host runtime's `set_compute_kernel_bridge` and
+/// the host's `VulkanComputeKernel`. Lives in this example because the
+/// `ComputeKernelBridge` trait lives in `streamlib` and the
+/// `streamlib-adapter-vulkan` crate cannot depend on the full
+/// `streamlib` (the consumer-rhi capability boundary forbids it).
+///
+/// Holds a UUID → `StreamTexture` map populated at setup time so
+/// `run_compute_kernel(surface_uuid, ...)` can resolve to the host's
+/// `VkImage` for the storage_image binding. The kernel cache is
+/// keyed by SHA-256(spv) hex (the same key the wire format returns
+/// to the subprocess).
+struct MandelbrotKernelBridge {
+    device: Arc<HostVulkanDevice>,
+    surfaces: HashMap<String, StreamTexture>,
+    kernels: parking_lot::Mutex<HashMap<String, Arc<VulkanComputeKernel>>>,
+}
+
+impl MandelbrotKernelBridge {
+    fn new(
+        device: Arc<HostVulkanDevice>,
+        surfaces: Vec<(String, StreamTexture)>,
+    ) -> Self {
+        Self {
+            device,
+            surfaces: surfaces.into_iter().collect(),
+            kernels: parking_lot::Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(bytes);
+        format!("{:x}", h.finalize())
+    }
+}
+
+impl ComputeKernelBridge for MandelbrotKernelBridge {
+    fn register(
+        &self,
+        spv: &[u8],
+        push_constant_size: u32,
+    ) -> std::result::Result<String, String> {
+        let kernel_id = Self::sha256_hex(spv);
+        let mut kernels = self.kernels.lock();
+        if !kernels.contains_key(&kernel_id) {
+            let (bindings, reflected_push) = derive_bindings_from_spirv(spv)
+                .map_err(|e| format!("derive_bindings_from_spirv: {e}"))?;
+            if reflected_push != push_constant_size {
+                return Err(format!(
+                    "push_constant_size mismatch — caller declared {push_constant_size}, \
+                     SPIR-V reflects {reflected_push}"
+                ));
+            }
+            let descriptor = ComputeKernelDescriptor {
+                label: "polyglot-mandelbrot",
+                spv,
+                bindings: &bindings,
+                push_constant_size,
+            };
+            let kernel = VulkanComputeKernel::new(&self.device, &descriptor)
+                .map_err(|e| format!("VulkanComputeKernel::new: {e}"))?;
+            kernels.insert(kernel_id.clone(), Arc::new(kernel));
+        }
+        Ok(kernel_id)
+    }
+
+    fn run(
+        &self,
+        kernel_id: &str,
+        surface_uuid: &str,
+        push_constants: &[u8],
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> std::result::Result<(), String> {
+        let kernel = self
+            .kernels
+            .lock()
+            .get(kernel_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!("kernel_id '{kernel_id}' not registered with this bridge")
+            })?;
+        let texture = self.surfaces.get(surface_uuid).ok_or_else(|| {
+            format!(
+                "surface_uuid '{surface_uuid}' not registered with this bridge"
+            )
+        })?;
+        kernel
+            .set_storage_image(0, texture)
+            .map_err(|e| format!("set_storage_image(0): {e}"))?;
+        if !push_constants.is_empty() {
+            kernel
+                .set_push_constants(push_constants)
+                .map_err(|e| format!("set_push_constants: {e}"))?;
+        }
+        kernel
+            .dispatch(group_count_x, group_count_y, group_count_z)
+            .map_err(|e| format!("kernel.dispatch: {e}"))?;
+        Ok(())
     }
 }
 
@@ -165,6 +275,18 @@ fn main() -> Result<()> {
                         "register_texture: {e}"
                     ))
                 })?;
+
+            // Wire the compute-kernel bridge: subprocess
+            // `register_compute_kernel` + `run_compute_kernel` IPCs
+            // are routed through this bridge to the host's
+            // `VulkanComputeKernel`. The bridge holds a
+            // UUID→`StreamTexture` map populated here at setup time.
+            let bridge = Arc::new(MandelbrotKernelBridge::new(
+                Arc::clone(&host_device),
+                vec![(SCENARIO_SURFACE_UUID.to_string(), texture.clone())],
+            ));
+            gpu.set_compute_kernel_bridge(bridge);
+
             *texture_slot.lock().unwrap() = Some(texture);
             *device_slot.lock().unwrap() = Some(host_device);
             *timeline_slot.lock().unwrap() = Some(timeline);

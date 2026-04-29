@@ -24,8 +24,14 @@ pub enum EscalateRequest {
     #[serde(rename = "log")]
     Log(EscalateRequestLog),
 
+    #[serde(rename = "register_compute_kernel")]
+    RegisterComputeKernel(EscalateRequestRegisterComputeKernel),
+
     #[serde(rename = "release_handle")]
     ReleaseHandle(EscalateRequestReleaseHandle),
+
+    #[serde(rename = "run_compute_kernel")]
+    RunComputeKernel(EscalateRequestRunComputeKernel),
 
     #[serde(rename = "run_cpu_readback_copy")]
     RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy),
@@ -206,6 +212,34 @@ pub struct EscalateRequestLog {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct EscalateRequestRegisterComputeKernel {
+    /// Push-constant range size in bytes. 0 if the shader uses no push
+    /// constants. The host validates this against the shader's reflected push-
+    /// constant range and rejects mismatches with an `err` response.
+    #[serde(rename = "push_constant_size")]
+    pub push_constant_size: u32,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// Compiled SPIR-V bytecode for the compute shader, encoded as lowercase
+    /// hex (no `0x` prefix, no whitespace). The host parses the bytes back,
+    /// derives the binding shape from `rspirv-reflect`, and constructs a
+    /// `VulkanComputeKernel` via `GpuContext::create_compute_kernel`.
+    /// Re-registering identical SPIR-V is a host-side cache hit keyed by SHA-
+    /// 256(spv_bytes) — no re-reflection, no fresh pipeline. The returned
+    /// `kernel_id` is the same.
+    /// The host's `VulkanComputeKernel` also persists driver- compiled pipeline
+    /// state to `<XDG_CACHE_HOME>/streamlib/ pipeline-cache/<spirv_hash>.bin`,
+    /// so first-inference latency after a host process restart is fast on user-
+    /// registered ML kernels.
+    #[serde(rename = "spv_hex")]
+    pub spv_hex: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EscalateRequestReleaseHandle {
     /// Opaque handle ID previously returned by acquire_*.
     #[serde(rename = "handle_id")]
@@ -214,6 +248,51 @@ pub struct EscalateRequestReleaseHandle {
     /// Correlates request with response. UUID string.
     #[serde(rename = "request_id")]
     pub request_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRunComputeKernel {
+    /// vkCmdDispatch groupCountX.
+    #[serde(rename = "group_count_x")]
+    pub group_count_x: u32,
+
+    /// vkCmdDispatch groupCountY.
+    #[serde(rename = "group_count_y")]
+    pub group_count_y: u32,
+
+    /// vkCmdDispatch groupCountZ.
+    #[serde(rename = "group_count_z")]
+    pub group_count_z: u32,
+
+    /// Handle returned by a prior `register_compute_kernel` response. The
+    /// host looks up the cached `Arc<VulkanComputeKernel>` and dispatches
+    /// against it. Dispatching with an unrecognized kernel_id returns an `err`
+    /// response.
+    #[serde(rename = "kernel_id")]
+    pub kernel_id: String,
+
+    /// Push-constant payload for this dispatch, encoded as lowercase hex.
+    /// Length in bytes (after hex decoding) must equal the kernel's declared
+    /// `push_constant_size`. Empty string when the kernel has no push
+    /// constants.
+    #[serde(rename = "push_constants_hex")]
+    pub push_constants_hex: String,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// UUID string of a render-target surface previously registered with
+    /// the surface-share service via `register_texture`. The host bridge
+    /// holds an application-provided UUID→`StreamTexture` map (populated
+    /// in `install_setup_hook`) and binds the looked-up `VkImage` as a
+    /// storage_image at slot 0 (the single-output convention enforced for v1
+    /// — multi-binding kernels are a future extension). UUID rather than u64
+    /// so the host can resolve the surface without subprocess-side counter
+    /// coordination.
+    #[serde(rename = "surface_uuid")]
+    pub surface_uuid: String,
 }
 
 /// Which copy direction to run on the host. `image_to_buffer` runs

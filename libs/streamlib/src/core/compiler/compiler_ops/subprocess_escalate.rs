@@ -23,7 +23,8 @@ use uuid::Uuid;
 use crate::_generated_::com_streamlib_escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestReleaseHandle, EscalateRequestRunCpuReadbackCopy,
+    EscalateRequestRegisterComputeKernel, EscalateRequestReleaseHandle,
+    EscalateRequestRunComputeKernel, EscalateRequestRunCpuReadbackCopy,
     EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestTryRunCpuReadbackCopy,
     EscalateRequestTryRunCpuReadbackCopyDirection,
 };
@@ -34,7 +35,7 @@ use crate::_generated_::{EscalateRequest, EscalateResponse};
 use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
-use crate::core::context::{CpuReadbackBridge, CpuReadbackCopyDirection};
+use crate::core::context::{ComputeKernelBridge, CpuReadbackBridge, CpuReadbackCopyDirection};
 use crate::core::logging::{push_polyglot_record, LogLevel, LogRecord, Source};
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat, TextureUsages};
 
@@ -58,6 +59,8 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::TryRunCpuReadbackCopy(p) => Some(&p.request_id),
+        EscalateRequest::RegisterComputeKernel(p) => Some(&p.request_id),
+        EscalateRequest::RunComputeKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
@@ -332,6 +335,67 @@ pub(crate) fn handle_escalate_op(
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "try_run_cpu_readback_copy is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RegisterComputeKernel(EscalateRequestRegisterComputeKernel {
+            request_id: _,
+            spv_hex,
+            push_constant_size,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_register_compute_kernel(
+                    sandbox,
+                    rid,
+                    &spv_hex,
+                    push_constant_size,
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (spv_hex, push_constant_size);
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "register_compute_kernel is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RunComputeKernel(EscalateRequestRunComputeKernel {
+            request_id: _,
+            kernel_id,
+            surface_uuid,
+            push_constants_hex,
+            group_count_x,
+            group_count_y,
+            group_count_z,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_run_compute_kernel(
+                    sandbox,
+                    rid,
+                    &kernel_id,
+                    &surface_uuid,
+                    &push_constants_hex,
+                    group_count_x,
+                    group_count_y,
+                    group_count_z,
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (
+                    kernel_id,
+                    surface_uuid,
+                    push_constants_hex,
+                    group_count_x,
+                    group_count_y,
+                    group_count_z,
+                );
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "run_compute_kernel is only available on Linux".to_string(),
                 }))
             }
         }
@@ -640,6 +704,187 @@ where
     })
 }
 
+/// Map a wire-format `register_compute_kernel` request through the
+/// registered [`ComputeKernelBridge`].
+///
+/// The bridge derives the kernel's binding shape from `rspirv-reflect`,
+/// builds the `VulkanComputeKernel` (with on-disk pipeline cache
+/// persistence keyed by SHA-256 of the SPIR-V), and returns the same
+/// hash hex back as `kernel_id`. Subsequent identical SPIR-V hits the
+/// host-side cache and returns the same id without re-reflecting.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. `spv_hex` doesn't decode as hex bytes.
+/// 2. No bridge is registered — the host runtime didn't wire a
+///    compute-kernel bridge into [`crate::core::context::GpuContext::set_compute_kernel_bridge`].
+/// 3. Bridge `register` returned an error — typically reflection
+///    failure, push-constant size mismatch, or pipeline build failure.
+#[cfg(target_os = "linux")]
+fn handle_register_compute_kernel(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    spv_hex: &str,
+    push_constant_size: u32,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let spv = match decode_hex(spv_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("register_compute_kernel: spv_hex decode: {e}"),
+            });
+        }
+    };
+
+    let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
+        full.compute_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "register_compute_kernel: no ComputeKernelBridge registered on GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    match bridge.register(&spv, push_constant_size) {
+        Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: kernel_id,
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("register_compute_kernel bridge call failed: {msg}"),
+        }),
+    }
+}
+
+/// Map a wire-format `run_compute_kernel` request through the
+/// registered [`ComputeKernelBridge`].
+///
+/// Compute dispatch on the host is synchronous: the bridge's `run`
+/// blocks on the kernel's fence before returning, so by the time this
+/// function emits an `Ok` response, the GPU work has retired and the
+/// host's writes to the surface's `VkImage` are visible to any
+/// subsequent submission against the same VkDevice. The subprocess can
+/// safely advance its surface-share timeline on receipt of the `ok`.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. `push_constants_hex` doesn't decode as hex bytes.
+/// 2. No bridge is registered.
+/// 3. Bridge `run` returned an error — typically unrecognized
+///    `kernel_id`, surface lookup failure, or Vulkan submit failure.
+#[cfg(target_os = "linux")]
+fn handle_run_compute_kernel(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    kernel_id: &str,
+    surface_uuid: &str,
+    push_constants_hex: &str,
+    group_count_x: u32,
+    group_count_y: u32,
+    group_count_z: u32,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let push_constants = match decode_hex(push_constants_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("run_compute_kernel: push_constants_hex decode: {e}"),
+            });
+        }
+    };
+
+    let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
+        full.compute_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "run_compute_kernel: no ComputeKernelBridge registered on GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    match bridge.run(
+        kernel_id,
+        surface_uuid,
+        &push_constants,
+        group_count_x,
+        group_count_y,
+        group_count_z,
+    ) {
+        Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            // Echo the kernel_id back — compute is sync host-side, no
+            // separate handle is allocated per dispatch.
+            handle_id: kernel_id.to_string(),
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("run_compute_kernel bridge call failed: {msg}"),
+        }),
+    }
+}
+
+/// Decode lowercase hex into bytes, returning a clean error message on
+/// any malformed character or odd-length input. Empty string decodes to
+/// an empty Vec — the caller validates push-constant size separately
+/// against the kernel's declaration.
+fn decode_hex(s: &str) -> std::result::Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err(format!(
+            "expected even-length hex string, got {} characters",
+            s.len()
+        ));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    let nibble = |b: u8| -> std::result::Result<u8, String> {
+        match b {
+            b'0'..=b'9' => Ok(b - b'0'),
+            b'a'..=b'f' => Ok(b - b'a' + 10),
+            b'A'..=b'F' => Ok(b - b'A' + 10),
+            _ => Err(format!(
+                "non-hex character {:?} at byte position",
+                b as char
+            )),
+        }
+    };
+    for pair in bytes.chunks_exact(2) {
+        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
+    }
+    Ok(out)
+}
+
 /// Best-effort surface-share service release paired with registry eviction on Linux.
 ///
 /// The registry drop alone releases the host's strong refcount on the
@@ -888,6 +1133,30 @@ mod tests {
     #[test]
     fn parse_pixel_format_rejects_unknown() {
         assert!(parse_pixel_format("xyz").is_err());
+    }
+
+    #[test]
+    fn decode_hex_round_trips_lowercase_and_mixed_case() {
+        assert_eq!(decode_hex("").unwrap(), Vec::<u8>::new());
+        assert_eq!(decode_hex("00").unwrap(), vec![0u8]);
+        assert_eq!(decode_hex("ff").unwrap(), vec![0xff]);
+        assert_eq!(decode_hex("DeAdBeEf").unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            decode_hex("0123456789abcdef").unwrap(),
+            vec![0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]
+        );
+    }
+
+    #[test]
+    fn decode_hex_rejects_odd_length() {
+        let err = decode_hex("abc").err().expect("expected odd-length error");
+        assert!(err.contains("even-length"), "got: {err}");
+    }
+
+    #[test]
+    fn decode_hex_rejects_non_hex_character() {
+        let err = decode_hex("abxy").err().expect("expected non-hex error");
+        assert!(err.contains("non-hex"), "got: {err}");
     }
 
     #[test]

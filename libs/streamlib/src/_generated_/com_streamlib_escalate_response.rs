@@ -51,8 +51,12 @@ pub struct EscalateResponseOk {
     /// Opaque handle returned by the host. For acquire_pixel_buffer this is
     /// the PixelBufferPoolId the host registered with its pixel-buffer pool and
     /// SurfaceStore. For acquire_texture this is a host-side UUID keying the
-    /// EscalateHandleRegistry's texture slot. For release_handle this echoes
-    /// the released id.
+    /// EscalateHandleRegistry's texture slot. For register_compute_kernel this
+    /// is the SHA-256 hex of the SPIR-V blob — re-registering identical SPIR-V
+    /// returns the same handle_id and re-uses the cached `VulkanComputeKernel`.
+    /// For release_handle this echoes the released id. For run_compute_kernel
+    /// this echoes the kernel_id (compute is synchronous host-side; nothing
+    /// extra travels).
     #[serde(rename = "handle_id")]
     pub handle_id: String,
 

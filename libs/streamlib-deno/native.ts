@@ -228,20 +228,9 @@ const symbols = {
     parameters: ["pointer", "pointer"] as const,
     result: "i32" as const,
   },
-  sldn_vulkan_dispatch_compute: {
-    parameters: [
-      "pointer",  // rt
-      "u64",      // surface_id
-      "pointer",  // spv_ptr
-      "usize",    // spv_len
-      "pointer",  // push_constants_ptr
-      "u32",      // push_constants_size
-      "u32",      // group_count_x
-      "u32",      // group_count_y
-      "u32",      // group_count_z
-    ] as const,
-    result: "i32" as const,
-  },
+  // Compute dispatch routes through escalate IPC (`register_compute_kernel`
+  // + `run_compute_kernel`) — no cdylib FFI for compute. See
+  // `adapters/vulkan.ts::dispatchCompute`.
 
   // cpu-readback adapter runtime (#562, Linux). Same shape as
   // `sldn_vulkan_*` — adapter generic over device flavor; this cdylib

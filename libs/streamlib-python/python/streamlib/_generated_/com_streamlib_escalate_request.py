@@ -27,7 +27,9 @@ class EscalateRequest:
             "acquire_pixel_buffer": EscalateRequestAcquirePixelBuffer,
             "acquire_texture": EscalateRequestAcquireTexture,
             "log": EscalateRequestLog,
+            "register_compute_kernel": EscalateRequestRegisterComputeKernel,
             "release_handle": EscalateRequestReleaseHandle,
+            "run_compute_kernel": EscalateRequestRunComputeKernel,
             "run_cpu_readback_copy": EscalateRequestRunCPUReadbackCopy,
             "try_run_cpu_readback_copy": EscalateRequestTryRunCPUReadbackCopy,
         }
@@ -311,6 +313,52 @@ class EscalateRequestLog(EscalateRequest):
         return data
 
 @dataclass
+class EscalateRequestRegisterComputeKernel(EscalateRequest):
+    push_constant_size: 'int'
+    """
+    Push-constant range size in bytes. 0 if the shader uses no push constants.
+    The host validates this against the shader's reflected push-constant range
+    and rejects mismatches with an `err` response.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    spv_hex: 'str'
+    """
+    Compiled SPIR-V bytecode for the compute shader, encoded as lowercase hex
+    (no `0x` prefix, no whitespace). The host parses the bytes back, derives the
+    binding shape from `rspirv-reflect`, and constructs a `VulkanComputeKernel`
+    via `GpuContext::create_compute_kernel`.
+    Re-registering identical SPIR-V is a host-side cache hit keyed by SHA-
+    256(spv_bytes) — no re-reflection, no fresh pipeline. The returned
+    `kernel_id` is the same.
+    The host's `VulkanComputeKernel` also persists driver- compiled pipeline
+    state to `<XDG_CACHE_HOME>/streamlib/ pipeline-cache/<spirv_hash>.bin`,
+    so first-inference latency after a host process restart is fast on user-
+    registered ML kernels.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterComputeKernel':
+        return cls(
+            "register_compute_kernel",
+            _from_json_data(int, data.get("push_constant_size")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(str, data.get("spv_hex")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "register_compute_kernel" }
+        data["push_constant_size"] = _to_json_data(self.push_constant_size)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["spv_hex"] = _to_json_data(self.spv_hex)
+        return data
+
+@dataclass
 class EscalateRequestReleaseHandle(EscalateRequest):
     handle_id: 'str'
     """
@@ -335,6 +383,78 @@ class EscalateRequestReleaseHandle(EscalateRequest):
         data = { "op": "release_handle" }
         data["handle_id"] = _to_json_data(self.handle_id)
         data["request_id"] = _to_json_data(self.request_id)
+        return data
+
+@dataclass
+class EscalateRequestRunComputeKernel(EscalateRequest):
+    group_count_x: 'int'
+    """
+    vkCmdDispatch groupCountX.
+    """
+
+    group_count_y: 'int'
+    """
+    vkCmdDispatch groupCountY.
+    """
+
+    group_count_z: 'int'
+    """
+    vkCmdDispatch groupCountZ.
+    """
+
+    kernel_id: 'str'
+    """
+    Handle returned by a prior `register_compute_kernel` response. The host
+    looks up the cached `Arc<VulkanComputeKernel>` and dispatches against it.
+    Dispatching with an unrecognized kernel_id returns an `err` response.
+    """
+
+    push_constants_hex: 'str'
+    """
+    Push-constant payload for this dispatch, encoded as lowercase hex.
+    Length in bytes (after hex decoding) must equal the kernel's declared
+    `push_constant_size`. Empty string when the kernel has no push constants.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    surface_uuid: 'str'
+    """
+    UUID string of a render-target surface previously registered with
+    the surface-share service via `register_texture`. The host bridge
+    holds an application-provided UUID→`StreamTexture` map (populated in
+    `install_setup_hook`) and binds the looked-up `VkImage` as a storage_image
+    at slot 0 (the single-output convention enforced for v1 — multi-binding
+    kernels are a future extension). UUID rather than u64 so the host can
+    resolve the surface without subprocess-side counter coordination.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunComputeKernel':
+        return cls(
+            "run_compute_kernel",
+            _from_json_data(int, data.get("group_count_x")),
+            _from_json_data(int, data.get("group_count_y")),
+            _from_json_data(int, data.get("group_count_z")),
+            _from_json_data(str, data.get("kernel_id")),
+            _from_json_data(str, data.get("push_constants_hex")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(str, data.get("surface_uuid")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "run_compute_kernel" }
+        data["group_count_x"] = _to_json_data(self.group_count_x)
+        data["group_count_y"] = _to_json_data(self.group_count_y)
+        data["group_count_z"] = _to_json_data(self.group_count_z)
+        data["kernel_id"] = _to_json_data(self.kernel_id)
+        data["push_constants_hex"] = _to_json_data(self.push_constants_hex)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["surface_uuid"] = _to_json_data(self.surface_uuid)
         return data
 
 class EscalateRequestRunCPUReadbackCopyDirection(Enum):

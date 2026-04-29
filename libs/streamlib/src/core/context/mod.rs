@@ -3,6 +3,8 @@
 
 mod audio_clock;
 #[cfg(target_os = "linux")]
+mod compute_kernel_bridge;
+#[cfg(target_os = "linux")]
 mod cpu_readback_bridge;
 mod gpu_context;
 mod runtime_context;
@@ -14,6 +16,8 @@ pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
     SoftwareAudioClock,
 };
+#[cfg(target_os = "linux")]
+pub use compute_kernel_bridge::ComputeKernelBridge;
 #[cfg(target_os = "linux")]
 pub use cpu_readback_bridge::{CpuReadbackBridge, CpuReadbackCopyDirection};
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};

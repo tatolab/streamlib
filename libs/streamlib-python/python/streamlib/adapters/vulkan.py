@@ -33,6 +33,7 @@ This module provides:
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import itertools
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
@@ -251,6 +252,13 @@ class VulkanContext:
         # transfers the sync_fd into the cdylib's adapter, but the plane
         # fds remain the SurfaceHandle's responsibility.
         self._resolved_handles: dict[str, object] = {}
+        # Per-`VulkanContext` cache: SHA-256(spv) hex → host-assigned
+        # kernel_id. The host caches the `Arc<VulkanComputeKernel>` keyed
+        # by the same hash, so re-registering identical SPIR-V hits a
+        # cache and returns the same id without re-reflecting or
+        # rebuilding the pipeline. The cache survives for the
+        # `VulkanContext`'s lifetime.
+        self._compute_kernel_ids: dict[str, str] = {}
 
     def _wire_signatures(self) -> None:
         """Set ctypes signatures on every `slpn_vulkan_*` entry point.
@@ -306,18 +314,8 @@ class VulkanContext:
             ctypes.POINTER(_SlpnVulkanRawHandles),
         ]
 
-        lib.slpn_vulkan_dispatch_compute.restype = ctypes.c_int32
-        lib.slpn_vulkan_dispatch_compute.argtypes = [
-            ctypes.c_void_p,        # rt
-            ctypes.c_uint64,        # surface_id
-            ctypes.c_void_p,        # spv_ptr
-            ctypes.c_size_t,        # spv_len
-            ctypes.c_void_p,        # push_constants_ptr
-            ctypes.c_uint32,        # push_constants_size
-            ctypes.c_uint32,        # group_count_x
-            ctypes.c_uint32,        # group_count_y
-            ctypes.c_uint32,        # group_count_z
-        ]
+        # Compute dispatch routes through escalate IPC (`register_compute_kernel`
+        # + `run_compute_kernel`) — no cdylib FFI for compute. See `dispatch_compute`.
 
     @classmethod
     def from_runtime(cls, runtime_context) -> "VulkanContext":
@@ -454,21 +452,25 @@ class VulkanContext:
         group_count_y: int,
         group_count_z: int,
     ) -> None:
-        """Dispatch a single-binding compute shader against the surface's
-        imported ``VkImage``. The surface MUST currently be held in WRITE
-        mode (call inside an ``acquire_write`` ``with`` block).
+        """Dispatch a compute shader against the surface's host-side
+        ``VkImage`` via escalate IPC. The surface MUST currently be held
+        in WRITE mode (call inside an ``acquire_write`` ``with`` block).
 
-        The shader's `binding=0` is bound to the surface's `VkImage` as a
-        storage image (layout: ``GENERAL``). Up to ``len(push_constants)``
-        bytes of push constants are written at offset 0.
+        The shader's `binding=0` is bound to the surface's `VkImage` as
+        a storage image. Push constants are forwarded byte-for-byte;
+        their length must match the kernel's reflected push-constant
+        range size.
 
-        **v1 limitation (#525 follow-up):** the cdylib builds the
-        compute pipeline + descriptor set + command buffer + fence
-        inline using raw vulkanalia. The follow-up replaces this with
-        an escalate-IPC ``RunComputeKernel`` op that uses the host
-        RHI's ``GpuContext::create_compute_kernel`` (SPIR-V reflection,
-        descriptor-set lifetime, pipeline cache).
+        Compute is synchronous host-side: when this returns, the GPU
+        work has retired and the host's writes are visible. The
+        ``VulkanComputeKernel`` is built once on the host (SPIR-V
+        reflection, on-disk pipeline cache via
+        ``$STREAMLIB_PIPELINE_CACHE_DIR`` /
+        ``$XDG_CACHE_HOME/streamlib/pipeline-cache``) and re-used
+        across dispatches with the same SPIR-V.
         """
+        from streamlib.escalate import channel as _escalate_channel
+
         pool_id = self._surface_pool_id(surface)
         cached = self._surface_ids.get(pool_id)
         if cached is None:
@@ -476,35 +478,28 @@ class VulkanContext:
                 f"VulkanContext.dispatch_compute: surface '{pool_id}' is not "
                 "registered — call acquire_write inside a `with` block first."
             )
-        spv_buf = (ctypes.c_uint8 * len(spirv)).from_buffer_copy(spirv)
-        if push_constants:
-            pc_buf = (ctypes.c_uint8 * len(push_constants)).from_buffer_copy(
-                push_constants
-            )
-            pc_ptr = ctypes.cast(pc_buf, ctypes.c_void_p)
-        else:
-            pc_buf = None
-            pc_ptr = ctypes.c_void_p(0)
-        rc = self._lib.slpn_vulkan_dispatch_compute(
-            self._rt,
-            ctypes.c_uint64(cached),
-            ctypes.cast(spv_buf, ctypes.c_void_p),
-            ctypes.c_size_t(len(spirv)),
-            pc_ptr,
-            ctypes.c_uint32(len(push_constants)),
-            ctypes.c_uint32(group_count_x),
-            ctypes.c_uint32(group_count_y),
-            ctypes.c_uint32(group_count_z),
+        ch = _escalate_channel()
+        # Cache kernel registrations by SHA-256(spv) hex (the same key
+        # the host uses), so identical SPIR-V is registered once per
+        # subprocess. Re-registration of the same blob is a host-side
+        # cache hit too.
+        spv_key = hashlib.sha256(spirv).hexdigest()
+        kernel_id = self._compute_kernel_ids.get(spv_key)
+        if kernel_id is None:
+            response = ch.register_compute_kernel(spirv, len(push_constants))
+            kernel_id = response["handle_id"]
+            self._compute_kernel_ids[spv_key] = kernel_id
+        # Send the surface-share UUID, not the cdylib's local u64
+        # surface_id — the host bridge resolves UUID → host
+        # `StreamTexture` via an application-provided map.
+        ch.run_compute_kernel(
+            kernel_id=kernel_id,
+            surface_uuid=pool_id,
+            push_constants=push_constants,
+            group_count_x=int(group_count_x),
+            group_count_y=int(group_count_y),
+            group_count_z=int(group_count_z),
         )
-        # Keep buffers alive until after the FFI call returns; the cdylib
-        # waits for `vkQueueWaitIdle` before returning so this is safe.
-        del spv_buf
-        del pc_buf
-        if rc != 0:
-            raise RuntimeError(
-                f"VulkanContext.dispatch_compute: slpn_vulkan_dispatch_compute "
-                f"returned {rc} for surface '{pool_id}'"
-            )
 
     def raw_handles(self) -> RawVulkanHandles:
         """Return the cdylib runtime's raw Vulkan handles — same shape

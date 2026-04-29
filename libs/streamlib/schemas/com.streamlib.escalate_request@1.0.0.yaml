@@ -154,6 +154,88 @@ mapping:
         enum:
           - image_to_buffer
           - buffer_to_image
+  register_compute_kernel:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      spv_hex:
+        metadata:
+          description: >
+            Compiled SPIR-V bytecode for the compute shader, encoded as
+            lowercase hex (no `0x` prefix, no whitespace). The host parses
+            the bytes back, derives the binding shape from
+            `rspirv-reflect`, and constructs a `VulkanComputeKernel` via
+            `GpuContext::create_compute_kernel`.
+
+            Re-registering identical SPIR-V is a host-side cache hit
+            keyed by SHA-256(spv_bytes) — no re-reflection, no fresh
+            pipeline. The returned `kernel_id` is the same.
+
+            The host's `VulkanComputeKernel` also persists driver-
+            compiled pipeline state to `<XDG_CACHE_HOME>/streamlib/
+            pipeline-cache/<spirv_hash>.bin`, so first-inference latency
+            after a host process restart is fast on user-registered ML
+            kernels.
+        type: string
+      push_constant_size:
+        metadata:
+          description: >
+            Push-constant range size in bytes. 0 if the shader uses no
+            push constants. The host validates this against the
+            shader's reflected push-constant range and rejects
+            mismatches with an `err` response.
+        type: uint32
+  run_compute_kernel:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      kernel_id:
+        metadata:
+          description: >
+            Handle returned by a prior `register_compute_kernel`
+            response. The host looks up the cached
+            `Arc<VulkanComputeKernel>` and dispatches against it.
+            Dispatching with an unrecognized kernel_id returns an
+            `err` response.
+        type: string
+      surface_uuid:
+        metadata:
+          description: >
+            UUID string of a render-target surface previously
+            registered with the surface-share service via
+            `register_texture`. The host bridge holds an
+            application-provided UUID→`StreamTexture` map (populated
+            in `install_setup_hook`) and binds the looked-up
+            `VkImage` as a storage_image at slot 0 (the single-output
+            convention enforced for v1 — multi-binding kernels are a
+            future extension). UUID rather than u64 so the host can
+            resolve the surface without subprocess-side counter
+            coordination.
+        type: string
+      push_constants_hex:
+        metadata:
+          description: >
+            Push-constant payload for this dispatch, encoded as
+            lowercase hex. Length in bytes (after hex decoding) must
+            equal the kernel's declared `push_constant_size`. Empty
+            string when the kernel has no push constants.
+        type: string
+      group_count_x:
+        metadata:
+          description: "vkCmdDispatch groupCountX."
+        type: uint32
+      group_count_y:
+        metadata:
+          description: "vkCmdDispatch groupCountY."
+        type: uint32
+      group_count_z:
+        metadata:
+          description: "vkCmdDispatch groupCountZ."
+        type: uint32
   release_handle:
     properties:
       request_id:

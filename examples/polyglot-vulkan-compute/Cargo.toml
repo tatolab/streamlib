@@ -13,6 +13,8 @@ streamlib = { path = "../../libs/streamlib" }
 streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
 serde_json = "1.0"
 png = "0.17"
+parking_lot = "0.12"
+sha2 = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-vulkan = { path = "../../libs/streamlib-adapter-vulkan" }
