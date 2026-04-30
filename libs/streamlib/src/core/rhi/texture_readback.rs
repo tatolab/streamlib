@@ -30,8 +30,8 @@ pub struct TextureReadbackDescriptor<'a> {
     pub height: u32,
 }
 
-/// Last-known image layout the texture is in when handed to
-/// [`submit`](super::super::vulkan::rhi::VulkanTextureReadback::submit).
+/// Last-known image layout the texture is in when handed to the
+/// readback handle's `submit`.
 ///
 /// The readback transitions `source_layout → TRANSFER_SRC_OPTIMAL` for
 /// the copy and back to `source_layout` afterward, so the texture is in

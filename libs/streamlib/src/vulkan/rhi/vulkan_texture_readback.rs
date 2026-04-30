@@ -632,9 +632,25 @@ fn vk_layout_for(layout: TextureSourceLayout) -> vk::ImageLayout {
 impl Drop for VulkanTextureReadback {
     fn drop(&mut self) {
         unsafe {
-            // Wait for any in-flight submission so we don't tear down
-            // resources the GPU still holds.
-            let _ = self.device.device_wait_idle();
+            // Wait only for THIS handle's pending submission rather
+            // than calling `device_wait_idle()` — the doc explicitly
+            // recommends holding N handles for parallel readback, so a
+            // device-wide stall on every handle drop would serialize
+            // unrelated work. Timeline starts at 0; if `next_counter`
+            // is still 0, no submit has ever happened and the wait
+            // returns immediately. If a submit is in flight, waiting
+            // on the value that submit signals at is sufficient.
+            let target = self.state.lock().next_counter;
+            if target > 0 {
+                let semaphores = [self.timeline];
+                let values = [target];
+                let info = vk::SemaphoreWaitInfo::builder()
+                    .flags(vk::SemaphoreWaitFlags::empty())
+                    .semaphores(&semaphores)
+                    .values(&values)
+                    .build();
+                let _ = self.device.wait_semaphores(&info, u64::MAX);
+            }
             self.device.destroy_semaphore(self.timeline, None);
             self.device.destroy_command_pool(self.command_pool, None);
             self.vulkan_device
