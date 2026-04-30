@@ -16,6 +16,8 @@ members = [
     "libs/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux)
     "libs/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux)
     "libs/streamlib-adapter-cpu-readback-helpers", # Test-helper binaries for streamlib-adapter-cpu-readback — held in a dedicated crate so streamlib doesn't leak into adapter-cpu-readback's runtime dep graph (Linux)
+    "libs/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux, #587)
+    "libs/streamlib-adapter-cuda-helpers", # Test-helper crate for streamlib-adapter-cuda — held in a dedicated crate so streamlib (and the optional CUDA SDK) don't leak into adapter-cuda's runtime dep graph (Linux)
     "libs/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux)
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access

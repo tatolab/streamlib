@@ -1,0 +1,62 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-adapter-cuda"
+description = "CUDA surface adapter (Linux). Imports a host-allocated Vulkan resource into a CUDA context via VK_KHR_external_memory_fd ↔ cudaImportExternalMemory + VK_KHR_external_semaphore_fd ↔ cudaImportExternalSemaphore. Foundation for GPU-resident AI inference (PyTorch / TensorRT / ONNX-Runtime CUDA backend) on subprocess customers without the CPU readback round-trip."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_adapter_cuda"
+path = "src/lib.rs"
+
+[features]
+# Default OFF — enabling pulls the CUDA SDK into this crate's transitive
+# build surface. cudarc itself loads `libcuda.so` lazily via dlopen
+# (`fallback-dynamic-loading`), so toolkit absence at runtime is a
+# graceful skip rather than a build error; the feature flag still
+# gates the *type surface* (CUDA-typed views, FFI hooks) so non-CUDA
+# customers don't pay for unused API.
+#
+# #587 introduces the feature scaffold so customers know how to opt in;
+# the dependent CUDA cdylib + DLPack work (#589/#590) wires its
+# functionality into the public surface.
+default = []
+cuda = []
+
+[dependencies]
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+streamlib-surface-client = { path = "../streamlib-surface-client" }
+vulkanalia.workspace = true
+libc.workspace = true
+
+# `streamlib` and the helper-binary crate are *test*-only deps: the
+# carve-out test brings up a `HostVulkanDevice`, allocates an
+# OPAQUE_FD-exportable buffer + timeline, and (when the `cuda`
+# feature on the helpers crate is enabled) imports both into CUDA
+# via cudarc to assert byte-equal. The runtime crate (above) does
+# NOT pull `streamlib`, so future subprocess cdylibs depending on
+# `streamlib-adapter-cuda` get the consumer-rhi carve-out only,
+# with `streamlib` absent from their dep graph. The helper bin
+# lives in `streamlib-adapter-cuda-helpers` for the same reason —
+# see that crate's Cargo.toml for the full rationale.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+streamlib = { path = "../streamlib" }
+streamlib-adapter-cuda-helpers = { path = "../streamlib-adapter-cuda-helpers" }
+tracing-subscriber.workspace = true
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+
+[lints]
+workspace = true

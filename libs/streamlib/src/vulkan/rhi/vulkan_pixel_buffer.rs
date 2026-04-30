@@ -49,6 +49,11 @@ pub struct HostVulkanPixelBuffer {
     /// Whether this buffer was imported from a DMA-BUF fd.
     #[cfg(target_os = "linux")]
     imported_from_dma_buf: bool,
+    /// Whether this buffer was allocated from the OPAQUE_FD export pool
+    /// (vs the DMA_BUF export pool). Determines which `handle_type` is
+    /// passed to `vkGetMemoryFdKHR` on export.
+    #[cfg(target_os = "linux")]
+    is_opaque_fd_export: bool,
     /// Persistently mapped CPU pointer — plane 0 for multi-plane imports.
     mapped_ptr: *mut u8,
     /// Planes 1..N for multi-plane DMA-BUF imports. Empty for single-plane
@@ -144,6 +149,8 @@ impl HostVulkanPixelBuffer {
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            is_opaque_fd_export: false,
             mapped_ptr,
             #[cfg(target_os = "linux")]
             extra_imported_planes: Vec::new(),
@@ -269,6 +276,137 @@ impl super::VulkanPixelBufferLike for HostVulkanPixelBuffer {
 
 #[cfg(target_os = "linux")]
 impl HostVulkanPixelBuffer {
+    /// Create a new OPAQUE_FD-exportable HOST_VISIBLE staging buffer via
+    /// the device's dedicated [`HostVulkanDevice::opaque_fd_buffer_pool`].
+    ///
+    /// Companion to [`Self::new`]: same memory shape (HOST_VISIBLE +
+    /// HOST_COHERENT, persistently mapped), but the export pool's
+    /// chained `VkExportMemoryAllocateInfo::handleTypes` carries
+    /// `OPAQUE_FD` instead of `DMA_BUF_EXT`. `OPAQUE_FD` is the handle
+    /// type CUDA / OpenCL interop expects for `cudaImportExternalMemory`
+    /// (and analogous OpenCL APIs).
+    ///
+    /// Returns `Err` when the device's OPAQUE_FD pool is unavailable
+    /// (external memory unsupported, or pool construction failed at
+    /// device init). Callers must NOT silently fall back to a
+    /// non-exportable allocation — the resulting buffer would be
+    /// unusable for CUDA / OpenCL interop and the failure would
+    /// surface only at `vkGetMemoryFdKHR` time.
+    pub fn new_opaque_fd_export(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        format: PixelFormat,
+    ) -> Result<Self> {
+        let size = (width as vk::DeviceSize)
+            * (height as vk::DeviceSize)
+            * (bytes_per_pixel as vk::DeviceSize);
+
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .build();
+
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(
+                vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut external_buffer_info);
+
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
+                | vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ..Default::default()
+        };
+
+        let pool = vulkan_device.opaque_fd_buffer_pool().ok_or_else(|| {
+            StreamError::GpuError(
+                "OPAQUE_FD buffer pool unavailable — external memory unsupported \
+                 or pool construction failed; CUDA / OpenCL interop requires this pool"
+                    .into(),
+            )
+        })?;
+        let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
+            .map_err(|e| {
+                StreamError::GpuError(format!(
+                    "Failed to create OPAQUE_FD exportable buffer: {e}"
+                ))
+            })?;
+
+        let allocator = vulkan_device.allocator();
+        let alloc_info = allocator.get_allocation_info(allocation);
+        let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
+        if mapped_ptr.is_null() {
+            unsafe { allocator.destroy_buffer(buffer, allocation) };
+            return Err(StreamError::GpuError(
+                "VMA OPAQUE_FD staging buffer mapped pointer is null — expected persistent mapping".into(),
+            ));
+        }
+
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer,
+            allocation: Some(allocation),
+            imported_memory: None,
+            imported_from_dma_buf: false,
+            is_opaque_fd_export: true,
+            mapped_ptr,
+            extra_imported_planes: Vec::new(),
+            width,
+            height,
+            bytes_per_pixel,
+            format,
+            size,
+        })
+    }
+
+    /// Export the buffer's memory as an OPAQUE_FD file descriptor.
+    ///
+    /// Only valid for buffers created via [`Self::new_opaque_fd_export`];
+    /// returns `Err` for DMA-BUF-flavored allocations (call
+    /// [`Self::export_dma_buf_fd`] instead). Each call returns a fresh
+    /// kernel fd (the driver dups internally) — the caller owns it and
+    /// is responsible for closing it (or for transferring ownership via
+    /// SCM_RIGHTS / `cudaImportExternalMemory` etc., both of which
+    /// `dup` again on receipt).
+    pub fn export_opaque_fd_memory(&self) -> Result<std::os::unix::io::RawFd> {
+        if !self.is_opaque_fd_export {
+            return Err(StreamError::GpuError(
+                "HostVulkanPixelBuffer::export_opaque_fd_memory: buffer was not created \
+                 with `new_opaque_fd_export`; the underlying memory carries DMA_BUF_EXT \
+                 (or no) export flags and OPAQUE_FD export will fail at the driver"
+                    .into(),
+            ));
+        }
+        let allocation = self.allocation.as_ref().ok_or_else(|| {
+            StreamError::GpuError(
+                "HostVulkanPixelBuffer::export_opaque_fd_memory: buffer has no VMA allocation"
+                    .into(),
+            )
+        })?;
+        let alloc_info = self.vulkan_device.allocator().get_allocation_info(*allocation);
+        let memory = alloc_info.deviceMemory;
+
+        let get_fd_info = vk::MemoryGetFdInfoKHR::builder()
+            .memory(memory)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .build();
+
+        use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
+        let fd = unsafe { self.vulkan_device.device().get_memory_fd_khr(&get_fd_info) }
+            .map_err(|e| {
+                StreamError::GpuError(format!("Failed to export OPAQUE_FD memory fd: {e}"))
+            })?;
+        Ok(fd)
+    }
+
     /// Export the buffer's memory as a DMA-BUF file descriptor.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         // Determine which DeviceMemory to export from
@@ -405,6 +543,7 @@ impl HostVulkanPixelBuffer {
             allocation: None,
             imported_memory: Some(plane0.memory),
             imported_from_dma_buf: true,
+            is_opaque_fd_export: false,
             mapped_ptr: plane0.mapped_ptr,
             extra_imported_planes: imported,
             width,
@@ -414,6 +553,7 @@ impl HostVulkanPixelBuffer {
             size: plane0.size,
         })
     }
+
 }
 
 /// Create one `VkBuffer` + bind one imported `VkDeviceMemory` + map it.
@@ -612,6 +752,100 @@ mod tests {
         println!("DMA-BUF exported: fd={fd}");
         // fd ownership is caller's — close it
         unsafe { libc::close(fd) };
+    }
+
+    /// `new_opaque_fd_export` allocates from the OPAQUE_FD pool;
+    /// `export_opaque_fd_memory` returns a valid kernel fd; cross-flavor
+    /// export is rejected (calling `export_opaque_fd_memory` on a DMA-BUF
+    /// buffer produces an error).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opaque_fd_export_round_trip_and_cross_flavor_rejection() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_buffer_pool().is_none() {
+            println!("Skipping - OPAQUE_FD buffer pool unavailable on this driver");
+            return;
+        }
+
+        // Positive: OPAQUE_FD-allocated buffer exports an OPAQUE_FD fd.
+        let buf = HostVulkanPixelBuffer::new_opaque_fd_export(
+            &device,
+            128,
+            128,
+            4,
+            PixelFormat::Bgra32,
+        )
+        .expect("new_opaque_fd_export failed");
+        assert!(!buf.mapped_ptr().is_null(), "mapped pointer should be non-null");
+        assert_eq!(buf.size(), (128 * 128 * 4) as vk::DeviceSize);
+        let fd = buf
+            .export_opaque_fd_memory()
+            .expect("export_opaque_fd_memory failed");
+        assert!(fd >= 0, "OPAQUE_FD fd must be non-negative");
+        unsafe { libc::close(fd) };
+
+        // Negative: DMA-BUF-allocated buffer rejects OPAQUE_FD export.
+        let dma_buf = HostVulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
+            .expect("dma-buf buffer failed");
+        match dma_buf.export_opaque_fd_memory() {
+            Err(crate::core::StreamError::GpuError(msg)) => {
+                assert!(
+                    msg.contains("not created with `new_opaque_fd_export`"),
+                    "error must call out the cross-flavor mismatch, got: {msg}"
+                );
+            }
+            other => panic!(
+                "expected cross-flavor rejection on DMA-BUF buffer, got {other:?}"
+            ),
+        }
+    }
+
+    /// `physical_device_uuid()` returns 16 bytes that look like a real
+    /// UUID — neither all-zero (would indicate `vkGetPhysicalDeviceProperties2`
+    /// never ran) nor all-the-same-byte (would catch a constant-write bug
+    /// like `[0u8; 16].fill(1)`). Real GPU UUIDs from NVIDIA / AMD / Intel
+    /// have many distinct byte values; a threshold of >= 4 distinct bytes
+    /// is comfortably below every observed real-device UUID and well
+    /// above any plausible constant-write bug.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn physical_device_uuid_is_populated() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        let uuid = device.physical_device_uuid();
+        assert!(
+            uuid.iter().any(|b| *b != 0),
+            "physical_device_uuid should not be all-zero — got {uuid:?}"
+        );
+        let distinct: std::collections::HashSet<u8> = uuid.iter().copied().collect();
+        assert!(
+            distinct.len() >= 4,
+            "physical_device_uuid should have >= 4 distinct byte values \
+             (real GPU UUIDs do; a constant-write bug wouldn't) — got {uuid:02x?} \
+             with {} distinct values",
+            distinct.len()
+        );
+
+        // Cheap idempotence check: the accessor is a copy of a stored
+        // array; calling it twice must yield identical bytes.
+        assert_eq!(
+            uuid,
+            device.physical_device_uuid(),
+            "physical_device_uuid must be stable across calls"
+        );
+
+        println!("physical_device_uuid: {uuid:02x?}");
     }
 
     #[test]

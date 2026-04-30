@@ -442,6 +442,7 @@ const NO_STREAMLIB_RUNTIME_DEP: &[&str] = &[
     "libs/streamlib-adapter-opengl/Cargo.toml",
     "libs/streamlib-adapter-cpu-readback/Cargo.toml",
     "libs/streamlib-adapter-skia/Cargo.toml",
+    "libs/streamlib-adapter-cuda/Cargo.toml",
 ];
 
 fn check_cdylib_and_adapter_runtime_deps(
