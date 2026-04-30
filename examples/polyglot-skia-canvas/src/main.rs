@@ -47,9 +47,11 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use streamlib::core::rhi::TextureFormat;
+use streamlib::core::rhi::{
+    TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
+};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
+use streamlib::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000005c1a";
@@ -90,15 +92,15 @@ fn main() -> Result<()> {
     let texture_slot: Arc<
         Mutex<Option<streamlib::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
-    let device_slot: Arc<Mutex<Option<Arc<HostVulkanDevice>>>> =
-        Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+        Arc::new(Mutex::new(None));
+    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
         Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
-        let device_slot = Arc::clone(&device_slot);
         let timeline_slot = Arc::clone(&timeline_slot);
+        let readback_slot = Arc::clone(&readback_slot);
         runtime.install_setup_hook(move |gpu| {
             // BGRA8: the EGL DMA-BUF importer hands the subprocess a
             // `GL_RGBA8`-typed `GL_TEXTURE_2D` regardless of host
@@ -111,14 +113,16 @@ fn main() -> Result<()> {
                 SURFACE_SIZE,
                 TextureFormat::Bgra8Unorm,
             )?;
-            let host_device = Arc::clone(gpu.device().vulkan_device());
             let timeline = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                    .map_err(|e| {
-                        StreamError::Configuration(format!(
-                            "HostVulkanTimelineSemaphore::new_exportable: {e}"
-                        ))
-                    })?,
+                HostVulkanTimelineSemaphore::new_exportable(
+                    gpu.device().vulkan_device().device(),
+                    0,
+                )
+                .map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "HostVulkanTimelineSemaphore::new_exportable: {e}"
+                    ))
+                })?,
             );
             let store = gpu.surface_store().ok_or_else(|| {
                 StreamError::Configuration(
@@ -140,9 +144,20 @@ fn main() -> Result<()> {
             // which has no per-acquire host work — every line of GPU
             // dispatch happens inside the subprocess process via
             // skia-python's GL backend (`MakeGL(MakeEGL())`).
+
+            // RHI-owned readback handle, reused for every frame —
+            // staging buffer + command pool/buffer + timeline semaphore
+            // allocated once at construction.
+            let readback = gpu.create_texture_readback(&TextureReadbackDescriptor {
+                label: "polyglot-skia-canvas/readback",
+                format: TextureFormat::Bgra8Unorm,
+                width: SURFACE_SIZE,
+                height: SURFACE_SIZE,
+            })?;
+
             *texture_slot.lock().unwrap() = Some(texture);
-            *device_slot.lock().unwrap() = Some(host_device);
             *timeline_slot.lock().unwrap() = Some(timeline);
+            *readback_slot.lock().unwrap() = Some(readback);
             println!(
                 "✓ render-target DMA-BUF + timeline registered as '{}'",
                 SCENARIO_SURFACE_UUID
@@ -258,11 +273,11 @@ fn main() -> Result<()> {
                 "host texture slot is empty — setup hook never ran".into(),
             )
         })?;
-    let device = device_slot
+    let readback = readback_slot
         .lock()
         .unwrap()
         .clone()
-        .ok_or_else(|| StreamError::Runtime("device slot is empty".into()))?;
+        .ok_or_else(|| StreamError::Runtime("readback slot is empty".into()))?;
 
     // 60Hz readback loop. The Python subprocess draws as fast as it
     // gets trigger frames from BgraFileSource (also 60fps); host
@@ -270,6 +285,12 @@ fn main() -> Result<()> {
     // sees a fresh draw. Drift between the two clocks is bounded by
     // `glFinish` on Skia release — torn frames are bounded by Skia's
     // single-step write atomicity, not by inter-process timing.
+    //
+    // Skia leaves the image in whatever layout it transitioned to
+    // during `MakeFromBackendRenderTarget`-driven rendering; passing
+    // `TextureSourceLayout::General` is the tolerant choice that
+    // matches what the inner Vulkan adapter's release-time setup
+    // expects on the next acquire.
     let run_start = Instant::now();
     let mut hero_pixels: Option<Vec<u8>> = None;
     let mut readback_times: Vec<Duration> = Vec::with_capacity(FRAME_COUNT as usize);
@@ -281,14 +302,26 @@ fn main() -> Result<()> {
             std::thread::sleep(sleep);
         }
         let rb_start = Instant::now();
-        let bgra = vulkan_readback(&device, &texture);
+        let ticket = readback
+            .submit(&texture, TextureSourceLayout::General)
+            .map_err(|e| StreamError::Runtime(format!("readback submit: {e}")))?;
+        let capture_hero = f == HERO_FRAME_INDEX;
+        let mut hero_capture: Option<Vec<u8>> = None;
+        readback
+            .wait_and_read_with(ticket, u64::MAX, |bgra| -> std::io::Result<()> {
+                if capture_hero {
+                    hero_capture = Some(bgra.to_vec());
+                }
+                ffmpeg_stdin.write_all(bgra)
+            })
+            .map_err(|e| StreamError::Runtime(format!("readback wait: {e}")))?
+            .map_err(|e| {
+                StreamError::Runtime(format!("ffmpeg stdin write: {e}"))
+            })?;
         readback_times.push(rb_start.elapsed());
-        if f == HERO_FRAME_INDEX {
-            hero_pixels = Some(bgra.clone());
+        if let Some(pixels) = hero_capture {
+            hero_pixels = Some(pixels);
         }
-        ffmpeg_stdin.write_all(&bgra).map_err(|e| {
-            StreamError::Runtime(format!("ffmpeg stdin write: {e}"))
-        })?;
         if (f + 1) % 120 == 0 {
             let wall = run_start.elapsed().as_secs_f32();
             let avg_rb_ms = readback_times.iter().sum::<Duration>().as_secs_f32()
@@ -347,167 +380,6 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     f.write_all(&vec![0u8; total])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
-}
-
-/// Read pixels from the host `StreamTexture` back into a CPU buffer.
-/// Mirrors the helper in `examples/polyglot-vulkan-compute` —
-/// transient HOST_VISIBLE staging buffer + `vkCmdCopyImageToBuffer`
-/// + `queue_wait_idle`.
-fn vulkan_readback(
-    device: &Arc<HostVulkanDevice>,
-    texture: &streamlib::core::rhi::StreamTexture,
-) -> Vec<u8> {
-    use vulkanalia::prelude::v1_4::*;
-    use vulkanalia::vk;
-
-    let dev = device.device();
-    let queue = device.queue();
-    let qf = device.queue_family_index();
-    let image = texture
-        .vulkan_inner()
-        .image()
-        .expect("StreamTexture must have a Vulkan image handle on Linux");
-    let width = texture.width();
-    let height = texture.height();
-    let bytes = (width as u64) * (height as u64) * 4;
-
-    let buf = unsafe {
-        dev.create_buffer(
-            &vk::BufferCreateInfo::builder()
-                .size(bytes)
-                .usage(vk::BufferUsageFlags::TRANSFER_DST)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .build(),
-            None,
-        )
-    }
-    .expect("create_buffer");
-    let mem_req = unsafe { dev.get_buffer_memory_requirements(buf) };
-    let inst = device.instance();
-    let phys = device.physical_device();
-    let mem_props = unsafe { inst.get_physical_device_memory_properties(phys) };
-    let needed =
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-    let mem_idx = (0..mem_props.memory_type_count)
-        .find(|i| {
-            let bit = 1u32 << i;
-            (mem_req.memory_type_bits & bit) != 0
-                && mem_props.memory_types[*i as usize]
-                    .property_flags
-                    .contains(needed)
-        })
-        .expect("host-visible memory type");
-    let mem = unsafe {
-        dev.allocate_memory(
-            &vk::MemoryAllocateInfo::builder()
-                .allocation_size(mem_req.size)
-                .memory_type_index(mem_idx)
-                .build(),
-            None,
-        )
-    }
-    .expect("allocate_memory");
-    unsafe { dev.bind_buffer_memory(buf, mem, 0) }.expect("bind_buffer_memory");
-
-    let pool = unsafe {
-        dev.create_command_pool(
-            &vk::CommandPoolCreateInfo::builder()
-                .queue_family_index(qf)
-                .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-                .build(),
-            None,
-        )
-    }
-    .expect("create_command_pool");
-    let cmd = unsafe {
-        dev.allocate_command_buffers(
-            &vk::CommandBufferAllocateInfo::builder()
-                .command_pool(pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1)
-                .build(),
-        )
-    }
-    .expect("allocate_command_buffers")[0];
-    unsafe {
-        dev.begin_command_buffer(
-            cmd,
-            &vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                .build(),
-        )
-    }
-    .expect("begin_command_buffer");
-
-    // Skia leaves the image in whatever layout it transitioned to
-    // during `MakeFromBackendRenderTarget`-driven rendering; the
-    // inner Vulkan adapter's release-time `current_layout` isn't
-    // updated by Skia. We use a generic `GENERAL` → `TRANSFER_SRC_OPTIMAL`
-    // barrier here that's tolerant of either GENERAL or
-    // COLOR_ATTACHMENT_OPTIMAL on the way in.
-    let to_src = vk::ImageMemoryBarrier2::builder()
-        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::ALL_TRANSFER)
-        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .old_layout(vk::ImageLayout::GENERAL)
-        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-        .src_queue_family_index(qf)
-        .dst_queue_family_index(qf)
-        .image(image)
-        .subresource_range(
-            vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .level_count(1)
-                .layer_count(1)
-                .build(),
-        )
-        .build();
-    let bs = [to_src];
-    let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
-    unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
-
-    let copy = vk::BufferImageCopy::builder()
-        .buffer_offset(0)
-        .buffer_row_length(0)
-        .buffer_image_height(0)
-        .image_subresource(
-            vk::ImageSubresourceLayers::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .layer_count(1)
-                .build(),
-        )
-        .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
-        .build();
-    let regions = [copy];
-    unsafe {
-        dev.cmd_copy_image_to_buffer(
-            cmd,
-            image,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            buf,
-            &regions,
-        )
-    };
-
-    unsafe { dev.end_command_buffer(cmd) }.expect("end_command_buffer");
-    let cmd_infos = [vk::CommandBufferSubmitInfo::builder().command_buffer(cmd).build()];
-    let submits = [vk::SubmitInfo2::builder().command_buffer_infos(&cmd_infos).build()];
-    unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }
-        .expect("submit");
-    unsafe { dev.queue_wait_idle(queue) }.expect("queue_wait_idle");
-
-    let mapped = unsafe { dev.map_memory(mem, 0, bytes, vk::MemoryMapFlags::empty()) }
-        .expect("map_memory");
-    let slice =
-        unsafe { std::slice::from_raw_parts(mapped as *const u8, bytes as usize) };
-    let out = slice.to_vec();
-    unsafe { dev.unmap_memory(mem) };
-    unsafe { dev.destroy_command_pool(pool, None) };
-    unsafe { dev.destroy_buffer(buf, None) };
-    unsafe { dev.free_memory(mem, None) };
-    out
 }
 
 fn write_png(

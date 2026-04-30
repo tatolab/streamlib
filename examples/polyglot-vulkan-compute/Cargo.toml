@@ -18,4 +18,3 @@ sha2 = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-vulkan = { path = "../../libs/streamlib-adapter-vulkan" }
-vulkanalia = { workspace = true }

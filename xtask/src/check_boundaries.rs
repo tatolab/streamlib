@@ -308,13 +308,11 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // of `use vulkanalia` or a `vulkanalia` Cargo dep in the cdylibs
     // is a regression of the FullAccess capability boundary.
     //
-    // Polyglot example/scenario binaries that exercise the consumer
-    // path end-to-end.
-    AllowEntry {
-        path: "examples/polyglot-",
-        kind: AllowKind::PathPrefix,
-        rationale: "polyglot scenario binaries demonstrate the consumer path end-to-end",
-    },
+    // Polyglot example/scenario binaries are NOT allowlisted post-#583
+    // — every host-side per-frame readback rides the host RHI's
+    // `VulkanTextureReadback` primitive; any reintroduction of raw
+    // `vulkanalia` in those crates means an example bypassed the RHI.
+    //
     // Test code in any crate is allowed to use vulkanalia directly to
     // bring up real devices for end-to-end validation.
     AllowEntry {
@@ -421,11 +419,10 @@ const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     // Subprocess cdylibs are intentionally NOT allowlisted post-#572 —
     // their `Cargo.toml`s no longer declare `vulkanalia`, and any
     // reintroduction is a capability-boundary regression.
-    AllowEntry {
-        path: "examples/polyglot-",
-        kind: AllowKind::PathPrefix,
-        rationale: "polyglot scenario binaries exercise the consumer path end-to-end",
-    },
+    //
+    // Polyglot example/scenario binaries are intentionally NOT
+    // allowlisted post-#583 — host-side readback rides
+    // `VulkanTextureReadback` via the streamlib host RHI.
 ];
 
 // ---------------------------------------------------------------------------
@@ -539,12 +536,12 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // call appearing inside a cdylib means a regression of the
     // FullAccess capability boundary.
     //
-    // Examples and tests bring up real devices for end-to-end validation.
-    AllowEntry {
-        path: "examples/polyglot-",
-        kind: AllowKind::PathPrefix,
-        rationale: "polyglot scenario binaries exercise privileged paths end-to-end",
-    },
+    // Polyglot example/scenario binaries are NOT allowlisted post-#583
+    // — host-side readback rides `VulkanTextureReadback` via the
+    // streamlib host RHI; raw privileged-vk inside them indicates the
+    // example bypassed the RHI.
+    //
+    // Tests bring up real devices for end-to-end validation.
     AllowEntry {
         path: "tests",
         kind: AllowKind::PathSegment,

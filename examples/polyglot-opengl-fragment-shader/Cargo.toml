@@ -15,4 +15,3 @@ png = "0.17"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-opengl = { path = "../../libs/streamlib-adapter-opengl" }
-vulkanalia = { workspace = true }

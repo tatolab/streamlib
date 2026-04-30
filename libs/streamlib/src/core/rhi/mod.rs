@@ -18,6 +18,7 @@ mod pixel_buffer_pool;
 mod pixel_buffer_ref;
 mod texture;
 mod texture_cache;
+mod texture_readback;
 
 pub use backend::RhiBackend;
 pub use blitter::RhiBlitter;
@@ -44,3 +45,6 @@ pub use pixel_buffer_ref::RhiPixelBufferRef;
 pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages};
 pub use texture::{NativeTextureHandle, StreamTexture, TextureDescriptor};
 pub use texture_cache::{RhiTextureCache, RhiTextureView};
+pub use texture_readback::{
+    ReadbackTicket, TextureReadbackDescriptor, TextureReadbackError, TextureSourceLayout,
+};

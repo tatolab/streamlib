@@ -38,10 +38,11 @@ use std::time::Duration;
 use streamlib::core::context::ComputeKernelBridge;
 use streamlib::core::rhi::{
     derive_bindings_from_spirv, ComputeKernelDescriptor, StreamTexture, TextureFormat,
+    TextureReadbackDescriptor, TextureSourceLayout,
 };
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::host_rhi::{
-    HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanComputeKernel,
+    HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanComputeKernel, VulkanTextureReadback,
 };
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
@@ -226,15 +227,15 @@ fn main() -> Result<()> {
     let texture_slot: Arc<
         Mutex<Option<streamlib::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
-    let device_slot: Arc<Mutex<Option<Arc<HostVulkanDevice>>>> =
-        Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+        Arc::new(Mutex::new(None));
+    let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
         Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
-        let device_slot = Arc::clone(&device_slot);
         let timeline_slot = Arc::clone(&timeline_slot);
+        let readback_slot = Arc::clone(&readback_slot);
         runtime.install_setup_hook(move |gpu| {
             let texture = gpu.acquire_render_target_dma_buf_image(
                 SURFACE_SIZE,
@@ -287,9 +288,19 @@ fn main() -> Result<()> {
             ));
             gpu.set_compute_kernel_bridge(bridge);
 
+            // RHI-owned readback handle for the post-stop pixel
+            // capture — the staging buffer + command resources +
+            // timeline semaphore allocate once at construction.
+            let readback = gpu.create_texture_readback(&TextureReadbackDescriptor {
+                label: "polyglot-vulkan-compute/readback",
+                format: TextureFormat::Rgba8Unorm,
+                width: SURFACE_SIZE,
+                height: SURFACE_SIZE,
+            })?;
+
             *texture_slot.lock().unwrap() = Some(texture);
-            *device_slot.lock().unwrap() = Some(host_device);
             *timeline_slot.lock().unwrap() = Some(timeline);
+            *readback_slot.lock().unwrap() = Some(readback);
             println!(
                 "✓ render-target DMA-BUF + timeline registered as '{}'",
                 SCENARIO_SURFACE_UUID
@@ -392,12 +403,18 @@ fn main() -> Result<()> {
                 "host texture slot is empty — setup hook never ran".into(),
             )
         })?;
-    let device = device_slot
+    let readback = readback_slot
         .lock()
         .unwrap()
         .clone()
-        .ok_or_else(|| StreamError::Runtime("device slot is empty".into()))?;
-    let bgra = vulkan_readback(&device, &texture);
+        .ok_or_else(|| StreamError::Runtime("readback slot is empty".into()))?;
+    let ticket = readback
+        .submit(&texture, TextureSourceLayout::General)
+        .map_err(|e| StreamError::Runtime(format!("readback submit: {e}")))?;
+    let bgra = readback
+        .wait_and_read(ticket, u64::MAX)
+        .map_err(|e| StreamError::Runtime(format!("readback wait: {e}")))?
+        .to_vec();
     write_png(&bgra, SURFACE_SIZE, SURFACE_SIZE, &output_png)?;
     println!("✓ Output PNG written: {}", output_png.display());
 
@@ -422,185 +439,6 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     f.write_all(&[0u8; 4 * 4 * 4 * 3])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
-}
-
-/// Read pixels from the host `StreamTexture` back into a CPU buffer for
-/// PNG verification. Mirrors the helper in
-/// `examples/polyglot-opengl-fragment-shader` — transient HOST_VISIBLE
-/// staging buffer + `vkCmdCopyImageToBuffer` + `queue_wait_idle`.
-fn vulkan_readback(
-    device: &Arc<HostVulkanDevice>,
-    texture: &streamlib::core::rhi::StreamTexture,
-) -> Vec<u8> {
-    use vulkanalia::prelude::v1_4::*;
-    use vulkanalia::vk;
-
-    let dev = device.device();
-    let queue = device.queue();
-    let qf = device.queue_family_index();
-    let image = texture
-        .vulkan_inner()
-        .image()
-        .expect("StreamTexture must have a Vulkan image handle on Linux");
-    let width = texture.width();
-    let height = texture.height();
-    let bytes = (width as u64) * (height as u64) * 4;
-
-    let buf = unsafe {
-        dev.create_buffer(
-            &vk::BufferCreateInfo::builder()
-                .size(bytes)
-                .usage(vk::BufferUsageFlags::TRANSFER_DST)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE)
-                .build(),
-            None,
-        )
-    }
-    .expect("create_buffer");
-    let mem_req = unsafe { dev.get_buffer_memory_requirements(buf) };
-    let inst = device.instance();
-    let phys = device.physical_device();
-    let mem_props = unsafe { inst.get_physical_device_memory_properties(phys) };
-    let needed =
-        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-    let mem_idx = (0..mem_props.memory_type_count)
-        .find(|i| {
-            let bit = 1u32 << i;
-            (mem_req.memory_type_bits & bit) != 0
-                && mem_props.memory_types[*i as usize]
-                    .property_flags
-                    .contains(needed)
-        })
-        .expect("host-visible memory type");
-    let mem = unsafe {
-        dev.allocate_memory(
-            &vk::MemoryAllocateInfo::builder()
-                .allocation_size(mem_req.size)
-                .memory_type_index(mem_idx)
-                .build(),
-            None,
-        )
-    }
-    .expect("allocate_memory");
-    unsafe { dev.bind_buffer_memory(buf, mem, 0) }.expect("bind_buffer_memory");
-
-    let pool = unsafe {
-        dev.create_command_pool(
-            &vk::CommandPoolCreateInfo::builder()
-                .queue_family_index(qf)
-                .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-                .build(),
-            None,
-        )
-    }
-    .expect("create_command_pool");
-    let cmd = unsafe {
-        dev.allocate_command_buffers(
-            &vk::CommandBufferAllocateInfo::builder()
-                .command_pool(pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .command_buffer_count(1)
-                .build(),
-        )
-    }
-    .expect("allocate_command_buffers")[0];
-    unsafe {
-        dev.begin_command_buffer(
-            cmd,
-            &vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                .build(),
-        )
-    }
-    .expect("begin_command_buffer");
-
-    // The compute dispatch left the image in GENERAL — transition to
-    // TRANSFER_SRC_OPTIMAL for the copy, then back to GENERAL.
-    let to_src = vk::ImageMemoryBarrier2::builder()
-        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
-        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
-        .dst_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .old_layout(vk::ImageLayout::GENERAL)
-        .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-        .src_queue_family_index(qf)
-        .dst_queue_family_index(qf)
-        .image(image)
-        .subresource_range(
-            vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .level_count(1)
-                .layer_count(1)
-                .build(),
-        )
-        .build();
-    let bs = [to_src];
-    let dep = vk::DependencyInfo::builder().image_memory_barriers(&bs).build();
-    unsafe { dev.cmd_pipeline_barrier2(cmd, &dep) };
-
-    let copy = vk::BufferImageCopy::builder()
-        .buffer_offset(0)
-        .buffer_row_length(0)
-        .buffer_image_height(0)
-        .image_subresource(
-            vk::ImageSubresourceLayers::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .layer_count(1)
-                .build(),
-        )
-        .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(vk::Extent3D { width, height, depth: 1 })
-        .build();
-    let regions = [copy];
-    unsafe {
-        dev.cmd_copy_image_to_buffer(
-            cmd,
-            image,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            buf,
-            &regions,
-        )
-    };
-
-    let to_general = vk::ImageMemoryBarrier2::builder()
-        .src_stage_mask(vk::PipelineStageFlags2::COPY)
-        .src_access_mask(vk::AccessFlags2::TRANSFER_READ)
-        .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .dst_access_mask(vk::AccessFlags2::MEMORY_READ)
-        .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-        .new_layout(vk::ImageLayout::GENERAL)
-        .src_queue_family_index(qf)
-        .dst_queue_family_index(qf)
-        .image(image)
-        .subresource_range(
-            vk::ImageSubresourceRange::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .level_count(1)
-                .layer_count(1)
-                .build(),
-        )
-        .build();
-    let bs2 = [to_general];
-    let dep2 = vk::DependencyInfo::builder().image_memory_barriers(&bs2).build();
-    unsafe { dev.cmd_pipeline_barrier2(cmd, &dep2) };
-
-    unsafe { dev.end_command_buffer(cmd) }.expect("end_command_buffer");
-    let cmd_infos = [vk::CommandBufferSubmitInfo::builder().command_buffer(cmd).build()];
-    let submits = [vk::SubmitInfo2::builder().command_buffer_infos(&cmd_infos).build()];
-    unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }
-        .expect("submit");
-    unsafe { dev.queue_wait_idle(queue) }.expect("queue_wait_idle");
-
-    let mapped = unsafe { dev.map_memory(mem, 0, bytes, vk::MemoryMapFlags::empty()) }
-        .expect("map_memory");
-    let slice =
-        unsafe { std::slice::from_raw_parts(mapped as *const u8, bytes as usize) };
-    let out = slice.to_vec();
-    unsafe { dev.unmap_memory(mem) };
-    unsafe { dev.destroy_command_pool(pool, None) };
-    unsafe { dev.destroy_buffer(buf, None) };
-    unsafe { dev.free_memory(mem, None) };
-    out
 }
 
 fn write_png(
