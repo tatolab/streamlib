@@ -434,6 +434,31 @@ impl HostVulkanPixelBuffer {
         Ok(fd)
     }
 
+    /// Export this buffer as the canonical [`crate::core::rhi::RhiExternalHandle`]
+    /// for its allocation flavor.
+    ///
+    /// - Buffers from [`Self::new_opaque_fd_export`] yield
+    ///   [`crate::core::rhi::RhiExternalHandle::OpaqueFd`].
+    /// - All other buffers yield
+    ///   [`crate::core::rhi::RhiExternalHandle::DmaBuf`].
+    ///
+    /// Callers that don't care which handle type they get use this method;
+    /// callers that need a specific type call [`Self::export_dma_buf_fd`] or
+    /// [`Self::export_opaque_fd_memory`] directly. The returned `fd` carries
+    /// the same ownership semantics as the underlying export — caller
+    /// closes it (or transfers ownership via SCM_RIGHTS).
+    #[tracing::instrument(level = "trace", skip(self), fields(width = self.width, height = self.height, opaque_fd = self.is_opaque_fd_export))]
+    pub fn export_external_handle(&self) -> Result<crate::core::rhi::RhiExternalHandle> {
+        let size = self.size() as usize;
+        if self.is_opaque_fd_export {
+            let fd = self.export_opaque_fd_memory()?;
+            Ok(crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size })
+        } else {
+            let fd = self.export_dma_buf_fd()?;
+            Ok(crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size })
+        }
+    }
+
     /// Import a buffer from a single-plane DMA-BUF file descriptor.
     ///
     /// Thin wrapper over [`Self::from_dma_buf_fds`] for back-compat with
@@ -803,6 +828,56 @@ mod tests {
             other => panic!(
                 "expected cross-flavor rejection on DMA-BUF buffer, got {other:?}"
             ),
+        }
+    }
+
+    /// `export_external_handle` dispatches to the correct
+    /// `RhiExternalHandle` variant for each allocation flavor.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn export_external_handle_dispatches_on_allocation_flavor() {
+        use crate::core::rhi::RhiExternalHandle;
+
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        // DMA-BUF flavor → DmaBuf variant.
+        let dma_buf =
+            HostVulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
+                .expect("dma-buf buffer failed");
+        match dma_buf.export_external_handle() {
+            Ok(RhiExternalHandle::DmaBuf { fd, size }) => {
+                assert!(fd >= 0, "DMA-BUF fd must be non-negative, got {fd}");
+                assert_eq!(size, (64 * 64 * 4) as usize);
+                unsafe { libc::close(fd) };
+            }
+            other => panic!("expected DmaBuf, got: {other:?}"),
+        }
+
+        // OPAQUE_FD flavor → OpaqueFd variant. Skip if the pool isn't
+        // available on this driver (already tested separately above).
+        if device.opaque_fd_buffer_pool().is_some() {
+            let opaque_buf = HostVulkanPixelBuffer::new_opaque_fd_export(
+                &device,
+                64,
+                64,
+                4,
+                PixelFormat::Bgra32,
+            )
+            .expect("new_opaque_fd_export failed");
+            match opaque_buf.export_external_handle() {
+                Ok(RhiExternalHandle::OpaqueFd { fd, size }) => {
+                    assert!(fd >= 0, "OPAQUE_FD fd must be non-negative, got {fd}");
+                    assert_eq!(size, (64 * 64 * 4) as usize);
+                    unsafe { libc::close(fd) };
+                }
+                other => panic!("expected OpaqueFd, got: {other:?}"),
+            }
         }
     }
 

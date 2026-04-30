@@ -24,10 +24,12 @@
   - [x] `cargo xtask check-boundaries` clean.
   - Note: no `tracing::instrument` added — this stage doesn't introduce new public functions; instrumentation lives on Stages 3/4/5's new APIs.
 
-- [ ] **Stage 3** — Host RHI OPAQUE_FD export through `RhiPixelBufferExport`.
-  - [ ] Decide trait shape (extend `export_handle()` vs add `export_opaque_fd_handle()`) — record in `context.md`.
-  - [ ] Wire `HostVulkanPixelBuffer::export_opaque_fd_memory` (already exists from #587) through the new path.
-  - [ ] Conformance test.
+- [x] **Stage 3** — Host RHI OPAQUE_FD export through `RhiPixelBufferExport`.
+  - [x] Decision: polymorphic `export_handle()` that delegates to a new `HostVulkanPixelBuffer::export_external_handle()` method which dispatches on the buffer's `is_opaque_fd_export` flag. Keeps the flag private; one canonical export entry point on the buffer; trait impl is a one-liner.
+  - [x] Added `HostVulkanPixelBuffer::export_external_handle() -> Result<RhiExternalHandle>` with `#[tracing::instrument]`.
+  - [x] Updated `impl RhiPixelBufferExport for super::RhiPixelBuffer` to delegate.
+  - [x] New `export_external_handle_dispatches_on_allocation_flavor` integration test exercises both DMA-BUF and OPAQUE_FD flavors against a real `HostVulkanDevice` (skips gracefully when GPU/pool unavailable).
+  - [x] `cargo xtask check-boundaries` clean; full workspace check clean.
 
 - [ ] **Stage 4** — Surface-share wire format extension.
   - [ ] Add `handle_type` discriminator on register/lookup JSON (additive, defaults to `"dma_buf"`).

@@ -63,6 +63,12 @@ If the probe reports `cudaMemoryTypeHost`: drop HOST_VISIBLE on the staging buff
 
 - **2026-04-30** — Stage ordering (2→3→4→5→6) is a hard dependency chain; later stages (7, 8, 9) parallelize after Stage 6.
 
+- **2026-04-30** — Stage 3 polymorphic-export design. The `RhiPixelBufferExport::export_handle()` trait method stays as-is; its impl for `RhiPixelBuffer` delegates to a new `HostVulkanPixelBuffer::export_external_handle()` which dispatches internally on `is_opaque_fd_export`. Rejected alternatives:
+  - Adding `is_opaque_fd_export()` accessor + caller-side dispatch — leaks the flag.
+  - Adding a separate `export_opaque_fd_handle()` trait method — two parallel paths the caller has to know about.
+  - Try-OPAQUE_FD-fallback-DMA-BUF — error path as control flow.
+  Chosen shape: caller asks for "the natural handle" and gets back a tagged variant; surface-share / consumer-rhi code dispatches on the variant. Engine-grade single-path.
+
 ## File-path index
 
 ### Foundation from #587 (don't edit unless explicitly required)

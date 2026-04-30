@@ -129,10 +129,13 @@ pub trait RhiPixelBufferImport {
 
 #[cfg(target_os = "linux")]
 impl RhiPixelBufferExport for super::RhiPixelBuffer {
+    /// Returns the natural handle type for the underlying allocation —
+    /// `RhiExternalHandle::OpaqueFd` for OPAQUE_FD-flavored buffers
+    /// (see [`crate::vulkan::rhi::HostVulkanPixelBuffer::new_opaque_fd_export`]),
+    /// `RhiExternalHandle::DmaBuf` otherwise. Callers dispatch on the
+    /// returned variant.
     fn export_handle(&self) -> Result<RhiExternalHandle> {
-        let fd = self.ref_.inner.export_dma_buf_fd()?;
-        let size = self.ref_.inner.size() as usize;
-        Ok(RhiExternalHandle::DmaBuf { fd, size })
+        self.ref_.inner.export_external_handle()
     }
 }
 
