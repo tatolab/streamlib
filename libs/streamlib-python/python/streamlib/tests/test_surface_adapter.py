@@ -18,6 +18,7 @@ from streamlib.surface_adapter import (
     AccessMode,
     MAX_DMA_BUF_PLANES,
     STREAMLIB_ADAPTER_ABI_VERSION,
+    StreamlibSurface,
     SurfaceFormat,
     SurfaceUsage,
     _StreamlibSurfaceC,
@@ -160,3 +161,35 @@ def test_surface_format_round_trip():
     assert SurfaceUsage.SAMPLED in flags
     assert SurfaceUsage.RENDER_TARGET in flags
     assert SurfaceUsage.CPU_READBACK not in flags
+
+
+def test_streamlib_surface_constructible_with_uuid_id():
+    """Concrete `StreamlibSurface` is the public, customer-visible type
+    polyglot processors construct at `setup` and pass to adapter
+    `acquire_*`."""
+    uuid = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
+    s = StreamlibSurface(
+        id=uuid,
+        width=1920,
+        height=1080,
+        format=int(SurfaceFormat.BGRA8),
+        usage=int(SurfaceUsage.RENDER_TARGET | SurfaceUsage.SAMPLED),
+    )
+    assert s.id == uuid
+    assert s.width == 1920
+    assert s.height == 1080
+    assert SurfaceFormat(s.format) is SurfaceFormat.BGRA8
+    flags = SurfaceUsage(s.usage)
+    assert SurfaceUsage.RENDER_TARGET in flags
+    assert SurfaceUsage.SAMPLED in flags
+
+
+def test_streamlib_surface_is_frozen():
+    """The dataclass is frozen so adapters can cache the descriptor
+    without worrying about callers mutating it after they pass it in."""
+    import dataclasses
+    import pytest
+
+    s = StreamlibSurface(id="abc", width=64, height=64, format=0, usage=1)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        s.width = 128  # type: ignore[misc]
