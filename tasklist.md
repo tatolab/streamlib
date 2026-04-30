@@ -13,14 +13,16 @@
   - [x] Issue body rewrite (`gh issue edit 588`).
   - [x] Branch created.
   - [x] `tasklist.md` + `context.md` committed.
-  - [ ] #589 body updated (DMA-BUF→OPAQUE_FD wording, strike VkImage).
-  - [ ] #590 body updated (same).
+  - [x] #589 body updated (DMA-BUF→OPAQUE_FD wording, strike VkImage).
+  - [x] #590 body updated (same).
 
-- [ ] **Stage 2** — `RhiExternalHandle::OpaqueFd` variant.
-  - [ ] Add `OpaqueFd { fd: RawFd, size: u64 }` variant to `libs/streamlib/src/core/rhi/external_handle.rs`.
-  - [ ] Update every closed match arm (`grep RhiExternalHandle::DmaBuf` for the ripple list).
-  - [ ] `tracing::instrument` per CLAUDE.md.
-  - [ ] Unit tests for FD lifecycle + debug repr.
+- [x] **Stage 2** — `RhiExternalHandle::OpaqueFd` variant.
+  - [x] Added `OpaqueFd { fd: RawFd, size: usize }` variant (Linux-cfg, matches `DmaBuf` shape).
+  - [x] Ripple closed: 4 sites in `surface_store.rs` (`check_in`, `register_buffer`, `register_pixel_buffer_with_timeline`) + 1 in `external_handle.rs` (`from_external_plane_handles`). All host-side DMA-BUF-only paths now return `StreamError::NotSupported` for OPAQUE_FD with messages pointing at the correct alternative.
+  - [x] Reordered handle-type validation in `from_external_plane_handles` ahead of the device-init guard so the rejection contract is unit-testable without a live `HostVulkanDevice`.
+  - [x] 3 unit tests in `external_handle.rs`: variant discriminator, Debug formatting, host-side rejection path. All pass.
+  - [x] `cargo xtask check-boundaries` clean.
+  - Note: no `tracing::instrument` added — this stage doesn't introduce new public functions; instrumentation lives on Stages 3/4/5's new APIs.
 
 - [ ] **Stage 3** — Host RHI OPAQUE_FD export through `RhiPixelBufferExport`.
   - [ ] Decide trait shape (extend `export_handle()` vs add `export_opaque_fd_handle()`) — record in `context.md`.
@@ -76,6 +78,7 @@
 
 ### Session 2026-04-30 — Initial pickup (Opus 4.7, 1M ctx)
 
-- Stage 1 partial done: comprehensive issue body shipped to #588, branch + scratchpads created.
+- Stage 1 done: comprehensive issue body shipped to #588, branch + scratchpads created, #589 + #590 bodies rewritten with strikethroughs preserving original framing.
+- Stage 2 done: `OpaqueFd` variant + ripple + 3 unit tests (all pass) + boundary check clean.
 - Three Opus agents at max reasoning ran the staleness/correctness/gap audits. Findings consolidated in `context.md`.
-- Open: #589 + #590 body rewrites; Stage 2.
+- Next session pickup: Stage 3 (Host RHI OPAQUE_FD export through `RhiPixelBufferExport`). Decision pending in `context.md`: extend `export_handle()` to dispatch on buffer flavor vs. add a new `export_opaque_fd_handle()` method.

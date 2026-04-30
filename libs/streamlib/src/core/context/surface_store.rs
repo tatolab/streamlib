@@ -863,7 +863,17 @@ impl SurfaceStore {
         let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
         let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
         for handle in planes {
-            let crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } = handle;
+            let (fd, size) = match handle {
+                crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
+                crate::core::rhi::RhiExternalHandle::OpaqueFd { .. } => {
+                    return Err(StreamError::NotSupported(
+                        "SurfaceStore::check_in: OPAQUE_FD pixel buffers \
+                         are not yet wired through this code path; use the \
+                         OPAQUE_FD-aware register API once Stage 4 lands"
+                            .into(),
+                    ));
+                }
+            };
             plane_fds.push(fd);
             plane_sizes.push(size as u64);
             plane_offsets.push(0);
@@ -1021,6 +1031,14 @@ impl SurfaceStore {
         let handle = pixel_buffer.export_handle()?;
         let (fd, _size) = match handle {
             crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
+            crate::core::rhi::RhiExternalHandle::OpaqueFd { .. } => {
+                return Err(StreamError::NotSupported(
+                    "SurfaceStore::register_buffer: OPAQUE_FD pixel buffers \
+                     are not yet wired through this code path; use the \
+                     OPAQUE_FD-aware register API once Stage 4 lands"
+                        .into(),
+                ));
+            }
         };
 
         let request = serde_json::json!({
@@ -1193,7 +1211,18 @@ impl SurfaceStore {
         let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
         let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
         for handle in planes {
-            let crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } = handle;
+            let (fd, size) = match handle {
+                crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
+                crate::core::rhi::RhiExternalHandle::OpaqueFd { .. } => {
+                    return Err(StreamError::NotSupported(
+                        "SurfaceStore::register_pixel_buffer_with_timeline: \
+                         OPAQUE_FD pixel buffers are not yet wired through \
+                         this code path; use the OPAQUE_FD-aware register \
+                         API once Stage 4 lands"
+                            .into(),
+                    ));
+                }
+            };
             plane_fds.push(fd);
             plane_sizes.push(size as u64);
             plane_offsets.push(0);
