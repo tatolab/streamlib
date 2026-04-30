@@ -60,6 +60,9 @@ pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 mod vulkan_compute_kernel;
 pub use vulkan_compute_kernel::VulkanComputeKernel;
 
+mod vulkan_texture_readback;
+pub use vulkan_texture_readback::VulkanTextureReadback;
+
 mod vulkan_format_converter;
 pub use vulkan_format_converter::VulkanFormatConverter;
 

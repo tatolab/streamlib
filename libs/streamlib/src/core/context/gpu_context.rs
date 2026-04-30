@@ -979,6 +979,34 @@ impl GpuContext {
         Ok(Arc::new(kernel))
     }
 
+    /// Create a host-side texture-readback handle bound to a fixed
+    /// format/extent. The staging buffer + command resources + timeline
+    /// semaphore are allocated once at construction and reused across
+    /// every submit. Single-in-flight per handle (mirroring
+    /// [`crate::vulkan::rhi::VulkanComputeKernel`]); for parallel
+    /// readbacks, hold N handles.
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_readback(
+        &self,
+        descriptor: &crate::core::rhi::TextureReadbackDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanTextureReadback>> {
+        tracing::debug!(
+            rhi_op = "create_texture_readback",
+            label = descriptor.label,
+            format = ?descriptor.format,
+            width = descriptor.width,
+            height = descriptor.height,
+            bytes = descriptor.staging_size(),
+            "GpuContext::create_texture_readback"
+        );
+        let vulkan_device = &self.device.inner;
+        let handle = crate::vulkan::rhi::VulkanTextureReadback::new_into_stream_error(
+            vulkan_device,
+            descriptor,
+        )?;
+        Ok(Arc::new(handle))
+    }
+
     /// Initialize GPU context for the current platform.
     pub fn init_for_platform() -> Result<Self> {
         #[cfg(target_os = "macos")]
