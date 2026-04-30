@@ -111,8 +111,6 @@ def _hsl_to_color4f(h: float, s: float, l: float):
     import skia
 
     h = h % 360.0
-    if h < 0.0:
-        h += 360.0
     c = (1.0 - abs(2.0 * l - 1.0)) * s
     x = c * (1.0 - abs((h / 60.0) % 2.0 - 1.0))
     m = l - c / 2.0
