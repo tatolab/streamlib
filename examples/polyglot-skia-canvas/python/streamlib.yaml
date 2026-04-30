@@ -1,7 +1,7 @@
 package:
   name: polyglot-skia-canvas
   version: "0.1.0"
-  description: "Polyglot Skia adapter scenario (#513) — Python Skia processor draws a canvas into a host DMA-BUF VkImage via streamlib.adapters.skia.SkiaContext"
+  description: "Polyglot Skia adapter scenario (#577) — Python Skia processor (composed on the OpenGL adapter via skia-python's GrDirectContext.MakeGL) draws a canvas into a host DMA-BUF VkImage via streamlib.adapters.skia.SkiaContext"
 
 processors:
   - name: com.tatolab.skia_canvas

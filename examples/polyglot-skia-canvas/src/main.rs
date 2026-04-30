@@ -1,28 +1,31 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Polyglot Skia adapter scenario (#513).
+//! Polyglot Skia adapter scenario (#577).
 //!
 //! End-to-end gate for the subprocess `SkiaContext` runtime: the host
 //! pre-allocates ONE render-target-capable DMA-BUF surface AND an
 //! exportable `HostVulkanTimelineSemaphore`, registers both with
 //! surface-share under a known UUID. A Python polyglot processor opens
 //! the surface through `SkiaContext.acquire_write` (which under the
-//! hood opens `VulkanContext.acquire_write` to get the imported
-//! VkImage, builds a `skia.GrBackendRenderTarget`, and yields a
-//! `skia.Surface`), draws a known shape (red disc on blue background),
-//! and releases — Skia's flush-and-submit drains the GPU and the inner
-//! Vulkan adapter signals the timeline so the host's pre-stop readback
-//! sees the drawing. This binary then reads the surface back via
-//! Vulkan and writes a PNG; reading the PNG with the Read tool is the
-//! visual gate.
+//! hood opens `OpenGLContext.acquire_write` to import the DMA-BUF as a
+//! `GL_TEXTURE_2D` via EGL, builds a `skia.GrBackendTexture`, and
+//! yields a `skia.Surface`), draws a known shape (red disc on blue
+//! background), and releases — Skia's flush-and-submit drains the GPU
+//! and the inner OpenGL adapter runs `glFinish` so the host's pre-stop
+//! readback sees the drawing. This binary then reads the surface back
+//! via Vulkan and writes a PNG; reading the PNG with the Read tool is
+//! the visual gate.
 //!
-//! Skia is composed on Vulkan in the subprocess (no `slpn_skia_*` FFI;
-//! `streamlib.adapters.skia.SkiaContext` uses the existing
-//! `slpn_vulkan_*` symbols + skia-python). Deno is intentionally
-//! deferred: there is no Deno Skia binding ecosystem (#513 AI Agent
-//! Notes — same construction-language argument as the abandoned #481
-//! polyglot deferral).
+//! Skia is composed on OpenGL in the subprocess (no `slpn_skia_*`
+//! FFI; `streamlib.adapters.skia.SkiaContext` uses the existing
+//! `slpn_opengl_*` symbols + skia-python's `GrDirectContext.MakeGL`).
+//! The pivot from Vulkan to GL inside Python is forced by skia-python's
+//! pybind11 Vulkan binding being unimplemented — see #577 / the
+//! adapter's `skia.py` module docstring. The Rust adapter's Vulkan
+//! backend is unchanged. Deno is intentionally deferred: there is no
+//! maintained Deno Skia binding (same construction-language argument
+//! as the abandoned #481 polyglot deferral).
 //!
 //! Build the Python `.slpkg` first:
 //!   cargo run -p streamlib-cli -- pack examples/polyglot-skia-canvas/python
@@ -54,7 +57,7 @@ fn main() -> Result<()> {
         }
     }
 
-    println!("=== Polyglot Skia adapter canvas scenario (#513) ===");
+    println!("=== Polyglot Skia adapter canvas scenario (#577) ===");
     println!(
         "Surface:    {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})"
     );
@@ -76,10 +79,12 @@ fn main() -> Result<()> {
         let device_slot = Arc::clone(&device_slot);
         let timeline_slot = Arc::clone(&timeline_slot);
         runtime.install_setup_hook(move |gpu| {
-            // BGRA8 because skia-python's default ColorType for
-            // wrap_backend_render_target on Skia-Vulkan is BGRA on
-            // little-endian hosts; this keeps the Python side from
-            // having to translate.
+            // BGRA8: the EGL DMA-BUF importer hands the subprocess a
+            // `GL_RGBA8`-typed `GL_TEXTURE_2D` regardless of host
+            // channel order; the Python wrapper passes
+            // `kBGRA_8888_ColorType` to Skia, which then interprets the
+            // bytes back-to-front so what gets drawn ends up in the
+            // host's BGRA memory in the right order.
             let texture = gpu.acquire_render_target_dma_buf_image(
                 SURFACE_SIZE,
                 SURFACE_SIZE,
@@ -110,10 +115,10 @@ fn main() -> Result<()> {
                 .map_err(|e| {
                     StreamError::Configuration(format!("register_texture: {e}"))
                 })?;
-            // No bridge wiring: Skia composes on the Vulkan adapter,
+            // No bridge wiring: Skia composes on the OpenGL adapter,
             // which has no per-acquire host work — every line of GPU
             // dispatch happens inside the subprocess process via
-            // skia-python.
+            // skia-python's GL backend (`MakeGL(MakeEGL())`).
             *texture_slot.lock().unwrap() = Some(texture);
             *device_slot.lock().unwrap() = Some(host_device);
             *timeline_slot.lock().unwrap() = Some(timeline);

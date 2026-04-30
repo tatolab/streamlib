@@ -4,17 +4,18 @@
 """Polyglot Skia canvas processor — Python.
 
 End-to-end gate for the subprocess :class:`SkiaContext` runtime
-(#513). The host pre-allocates a render-target-capable DMA-BUF
+(#577). The host pre-allocates a render-target-capable DMA-BUF
 surface AND an exportable timeline semaphore, registers both with
-surface-share, and installs no bridge (Skia composes on the Vulkan
+surface-share, and installs no bridge (Skia composes on the OpenGL
 adapter, which doesn't need one). This processor receives a trigger
 ``Videoframe``, opens the host surface through
 ``SkiaContext.acquire_write`` (which under the hood opens
-``VulkanContext.acquire_write``, builds a Skia ``GrBackendRenderTarget``,
-and yields a ``skia.Surface``), draws a known shape (red disc on
-blue background), and releases — Skia's flush+submit drains the GPU
-and the inner Vulkan adapter signals the timeline so the host's
-pre-stop readback sees the drawing.
+``OpenGLContext.acquire_write``, imports the DMA-BUF as a
+``GL_TEXTURE_2D`` via EGL, builds a Skia ``GrBackendTexture``, and
+yields a ``skia.Surface``), draws a known shape (red disc on blue
+background), and releases — Skia's flush+submit drains the GPU and
+the inner OpenGL adapter runs ``glFinish`` so the host's pre-stop
+readback sees the drawing.
 
 Config keys:
     skia_surface_uuid (str, required)
@@ -26,15 +27,30 @@ Config keys:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
 from streamlib.adapters.skia import SkiaContext
-from streamlib.surface_adapter import (
-    StreamlibSurface,
-    SurfaceFormat,
-    SurfaceUsage,
-)
+from streamlib.surface_adapter import SurfaceFormat, SurfaceUsage
+
+
+@dataclass(frozen=True)
+class _SurfaceDescriptor:
+    """Minimal duck-typed descriptor for `SkiaContext.acquire_*`.
+
+    The Skia wrapper needs `id` (surface-share UUID), `width`, `height`,
+    `format` to build a `GrBackendTexture`. `streamlib.surface_adapter`
+    exports `StreamlibSurface` only as a `typing.Protocol` (not a
+    concrete class), so processors construct their own descriptor; any
+    object with these attributes is accepted.
+    """
+
+    id: str
+    width: int
+    height: int
+    format: int
+    usage: int
 
 
 class SkiaCanvasProcessor:
@@ -46,16 +62,12 @@ class SkiaCanvasProcessor:
         self._skia_ctx = SkiaContext.from_runtime(ctx)
         self._drawn = False
         self._error: Optional[str] = None
-        # The Skia adapter wraps the inner Vulkan adapter, which
-        # registers surfaces lazily on first acquire. Build a minimal
-        # `StreamlibSurface` descriptor here that carries the UUID +
-        # dims; surface-share fills in the rest under the hood.
-        self._surface = StreamlibSurface(
+        self._surface = _SurfaceDescriptor(
             id=self._uuid,
             width=self._width,
             height=self._height,
-            format=SurfaceFormat.Bgra8,
-            usage=SurfaceUsage.RENDER_TARGET | SurfaceUsage.SAMPLED,
+            format=int(SurfaceFormat.BGRA8),
+            usage=int(SurfaceUsage.RENDER_TARGET | SurfaceUsage.SAMPLED),
         )
         print(
             f"[SkiaCanvas/py] setup uuid={self._uuid} "
