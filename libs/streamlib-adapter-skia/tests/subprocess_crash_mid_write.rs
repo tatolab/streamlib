@@ -34,6 +34,7 @@
 
 use std::os::fd::IntoRawFd;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -173,10 +174,20 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
         "cleanup_latency {:?} exceeded budget",
         outcome.cleanup_latency
     );
+    // Discriminate "actually got into the crash path" from "died at
+    // setup": helper's own `abort()` raises SIGABRT, the harness's
+    // watchdog SIGKILLs if the helper out-runs the AfterDelay window.
+    // Either is a signal-terminated exit (no exit code). A `die()` /
+    // `ExitCode(1)` from a setup-time failure (e.g. `EglRuntime::new`,
+    // `SkiaGlContext::new`, `register_host_surface`) returns
+    // `signal() == None`, which we want to fail-loud rather than
+    // silently green via a mere `!success()` check.
     let exit_status = outcome.exit_status.expect("child waited");
     assert!(
-        !exit_status.success(),
-        "subprocess SIGKILL'd by harness must NOT report success: {exit_status:?}"
+        exit_status.signal().is_some(),
+        "expected signal-terminated subprocess (SIGABRT from helper's \
+         own abort() or SIGKILL from harness watchdog); got {exit_status:?} \
+         which means setup failed before the crash path was reached"
     );
 
     // Keep the host texture live until after the harness asserts the
