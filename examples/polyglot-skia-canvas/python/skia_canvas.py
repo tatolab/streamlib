@@ -27,30 +27,11 @@ Config keys:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Optional
 
 from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
 from streamlib.adapters.skia import SkiaContext
-from streamlib.surface_adapter import SurfaceFormat, SurfaceUsage
-
-
-@dataclass(frozen=True)
-class _SurfaceDescriptor:
-    """Minimal duck-typed descriptor for `SkiaContext.acquire_*`.
-
-    The Skia wrapper needs `id` (surface-share UUID), `width`, `height`,
-    `format` to build a `GrBackendTexture`. `streamlib.surface_adapter`
-    exports `StreamlibSurface` only as a `typing.Protocol` (not a
-    concrete class), so processors construct their own descriptor; any
-    object with these attributes is accepted.
-    """
-
-    id: str
-    width: int
-    height: int
-    format: int
-    usage: int
+from streamlib.surface_adapter import StreamlibSurface, SurfaceFormat, SurfaceUsage
 
 
 class SkiaCanvasProcessor:
@@ -62,7 +43,7 @@ class SkiaCanvasProcessor:
         self._skia_ctx = SkiaContext.from_runtime(ctx)
         self._drawn = False
         self._error: Optional[str] = None
-        self._surface = _SurfaceDescriptor(
+        self._surface = StreamlibSurface(
             id=self._uuid,
             width=self._width,
             height=self._height,

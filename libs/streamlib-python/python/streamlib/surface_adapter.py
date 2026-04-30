@@ -4,8 +4,11 @@
 """Python mirror of streamlib_adapter_abi.
 
 Provides:
-  - StreamlibSurface, SurfaceFormat, SurfaceUsage, AccessMode (Protocols
-    and IntFlag/IntEnum types matching the Rust shape).
+  - StreamlibSurface — concrete frozen dataclass carrying the
+    customer-visible fields (id / width / height / format / usage).
+    Adapters' `acquire_*` accept these directly.
+  - SurfaceFormat, SurfaceUsage, AccessMode — IntFlag/IntEnum types
+    matching the Rust shape.
   - _SurfaceTransportHandleC, _SurfaceSyncStateC, _StreamlibSurfaceC
     ctypes mirrors locked to the Rust #[repr(C)] layout. Twin tests in
     libs/streamlib-adapter-abi/src/surface.rs (Rust) and
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import ctypes
 import enum
+from dataclasses import dataclass
 from typing import Iterator, Protocol, runtime_checkable
 
 # ABI version major. Subprocess SDK refuses adapters with a different
@@ -156,20 +160,25 @@ class _StreamlibSurfaceC(ctypes.Structure):
 
 
 # ---------------------------------------------------------------------------
-# Adapter trait shape (Protocols)
+# Customer-visible surface descriptor
 # ---------------------------------------------------------------------------
 
 
-@runtime_checkable
-class StreamlibSurface(Protocol):
-    """Customer-visible view of a `StreamlibSurface` descriptor.
+@dataclass(frozen=True)
+class StreamlibSurface:
+    """Customer-visible descriptor for a host-allocated GPU surface.
 
-    Adapter implementations may also expose the underlying ctypes
-    struct (`_StreamlibSurfaceC`) for FFI calls — keep that path
-    private to the adapter, customers never see it.
+    Constructed by polyglot processors at `setup` time from the
+    surface-share registry key the host published the surface under,
+    then passed to adapter `acquire_*` to open the host's backing.
+
+    `id` is the surface-share registry key (a UUID string for the
+    GPU adapters; stringified u64 for cpu-readback). The numeric
+    `SurfaceId` carried inside the FFI struct (`_StreamlibSurfaceC`)
+    is adapter-internal — customers never see it.
     """
 
-    id: int
+    id: str
     width: int
     height: int
     format: int
