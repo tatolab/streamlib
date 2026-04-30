@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.25](https://github.com/tatolab/streamlib/compare/v0.4.24...v0.4.25) (2026-04-30)
+
+
+### Features
+
+* **adapter-cpu-readback:** non-blocking try_acquire_cpu_readback wire op + polyglot SDKs ([#544](https://github.com/tatolab/streamlib/issues/544)) ([#546](https://github.com/tatolab/streamlib/issues/546)) ([9f531de](https://github.com/tatolab/streamlib/commit/9f531de2a0feafa8e364f89955cf618e56b31145))
+* **adapter-opengl:** subprocess OpenGlContext runtime + polyglot scenario ([#530](https://github.com/tatolab/streamlib/issues/530)) ([#548](https://github.com/tatolab/streamlib/issues/548)) ([487dd20](https://github.com/tatolab/streamlib/commit/487dd2008f2938895c8584abf8565fe543a241d7))
+* **adapter-skia:** GL backend (Skia-on-OpenGL composition) ([#576](https://github.com/tatolab/streamlib/issues/576)) ([#579](https://github.com/tatolab/streamlib/issues/579)) ([da9ac51](https://github.com/tatolab/streamlib/commit/da9ac5170df11eed51d6848b543445e98ed72a5a))
+* **adapter-skia:** rewire Python wrapper onto GL backend + polyglot E2E + crash test ([#580](https://github.com/tatolab/streamlib/issues/580)) ([6a843b4](https://github.com/tatolab/streamlib/commit/6a843b4c9b8f8650e2915ee814443aab7427541f))
+* **adapter-skia:** Skia surface adapter — host crate + polyglot Python wrapper ([#513](https://github.com/tatolab/streamlib/issues/513)) ([#578](https://github.com/tatolab/streamlib/issues/578)) ([f5c2d25](https://github.com/tatolab/streamlib/commit/f5c2d2595f01d24d9a2496aa51cb4e731af6dbd4))
+* **adapter-vulkan:** escalate-IPC RegisterComputeKernel + RunComputeKernel ([#571](https://github.com/tatolab/streamlib/issues/571)) ([b01bb4b](https://github.com/tatolab/streamlib/commit/b01bb4b9ae8fabcd96558460fdcaf0c1bf2de692))
+* **adapter-vulkan:** subprocess VulkanContext runtime + polyglot scenario ([#531](https://github.com/tatolab/streamlib/issues/531)) ([#549](https://github.com/tatolab/streamlib/issues/549)) ([4795a60](https://github.com/tatolab/streamlib/commit/4795a60c9f85783a5266c78195b4bdedf6dbf821))
+* **ci:** boundary-grep CI gate — five invariants for the Vulkan RHI capability split ([#570](https://github.com/tatolab/streamlib/issues/570)) ([3b35f40](https://github.com/tatolab/streamlib/commit/3b35f40b8323236c7aa2c618095b99bc581edcad))
+* **python:** concrete StreamlibSurface dataclass ([#581](https://github.com/tatolab/streamlib/issues/581)) ([#582](https://github.com/tatolab/streamlib/issues/582)) ([00f4591](https://github.com/tatolab/streamlib/commit/00f45914779b02d3ddbfa7ab118d3b0b471bc03b))
+* **rhi:** host-side TextureReadback API + migrate polyglot examples ([#583](https://github.com/tatolab/streamlib/issues/583)) ([#585](https://github.com/tatolab/streamlib/issues/585)) ([3838a61](https://github.com/tatolab/streamlib/commit/3838a61cfa12c6f00158aa8562ab7bae63e53f33))
+
 ## [0.4.24](https://github.com/tatolab/streamlib/compare/v0.4.23...v0.4.24) (2026-04-27)
 
 
