@@ -1,0 +1,164 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+"""Smoke test for the Python CUDA adapter wrapper module (#589).
+
+Confirms the module imports, the view dataclasses round-trip
+construction, the FFI struct layout matches what the cdylib emits,
+and the DLPack PyCapsule machinery is wired to ``ctypes.pythonapi``.
+
+A real subprocess test (host registers a host-allocated OPAQUE_FD
+``VkBuffer``, Python opens the cdylib, ``slpn_cuda_acquire_read`` →
+``torch.from_dlpack`` → byte-equal assertion against the host pattern)
+requires a polyglot test harness that doesn't yet exist in tree —
+filed as a follow-up. This file exercises the Python module's
+contract against the cdylib's documented FFI ABI.
+"""
+
+from __future__ import annotations
+
+import ctypes
+
+from streamlib.adapters import cuda as c
+from streamlib.surface_adapter import STREAMLIB_ADAPTER_ABI_VERSION, SurfaceFormat
+
+
+def test_module_re_exports_abi_version_constant():
+    assert c.STREAMLIB_ADAPTER_ABI_VERSION == STREAMLIB_ADAPTER_ABI_VERSION
+
+
+def test_slpn_cuda_view_layout_matches_cdylib():
+    # Mirrors `slpn_cuda_view_layout_matches_spec_64bit` in the cdylib's
+    # tests — these offsets / sizes are part of the wire ABI between
+    # the cdylib's `SlpnCudaView` and Python's `_SlpnCudaView`.
+    assert ctypes.sizeof(c._SlpnCudaView) == 32
+    fields = {name: c._SlpnCudaView.__dict__[name].offset for name, _ in c._SlpnCudaView._fields_}
+    assert fields == {
+        "size": 0,
+        "device_ptr": 8,
+        "device_type": 16,
+        "device_id": 20,
+        "dlpack_managed_tensor": 24,
+    }
+
+
+def test_constants_match_dlpack_spec():
+    # DLPack v0.8 `DLDeviceType` discriminants — wire ABI.
+    assert c._DEVICE_TYPE_CUDA == 2
+    assert c._DEVICE_TYPE_CUDA_HOST == 3
+    # `slpn_cuda_*` return values — must match the cdylib's
+    # SLPN_CUDA_OK / _ERR / _CONTENDED constants.
+    assert c._RC_OK == 0
+    assert c._RC_ERR == -1
+    assert c._RC_CONTENDED == 1
+    # DLManagedTensor deleter offset — pinned by adapter-cuda's dlpack
+    # layout regression test. dl_tensor (48) + manager_ctx (8) = 56.
+    assert c._DLPACK_DELETER_OFFSET == 56
+
+
+def test_cuda_views_round_trip_dataclass_construction():
+    # Use a `c_uint8 * 0` as a stand-in PyCapsule; the dataclass just
+    # holds the reference — it doesn't dereference.
+    fake_capsule = object()
+    rv = c.CudaReadView(
+        width=0,
+        height=0,
+        format=SurfaceFormat.BGRA8,
+        size=1024 * 1024,
+        device_id=0,
+        device_type=c._DEVICE_TYPE_CUDA,
+        dlpack=fake_capsule,
+    )
+    wv = c.CudaWriteView(
+        width=0,
+        height=0,
+        format=SurfaceFormat.BGRA8,
+        size=2048,
+        device_id=1,
+        device_type=c._DEVICE_TYPE_CUDA_HOST,
+        dlpack=fake_capsule,
+    )
+    assert rv.size == 1024 * 1024
+    assert rv.device_type == 2
+    assert rv.device_id == 0
+    assert wv.size == 2048
+    assert wv.device_type == 3
+    assert wv.device_id == 1
+    # Both views must hold the capsule reference; the producer relies
+    # on this to keep the underlying CUDA memory alive across the
+    # acquire scope.
+    assert rv.dlpack is fake_capsule
+    assert wv.dlpack is fake_capsule
+
+
+def test_pythonapi_pycapsule_helpers_are_wired():
+    # `_wire_pythonapi` runs at module import time; this asserts the
+    # argtypes / restypes survived intact for the helpers the capsule
+    # destructor reaches into. Argtypes for `PyCapsule_GetName` /
+    # `PyCapsule_GetPointer` use `c_void_p` (raw `PyObject*`) rather
+    # than `py_object` so the destructor path doesn't trigger ctypes
+    # refcount manipulation against an object in `tp_dealloc`.
+    assert ctypes.pythonapi.PyCapsule_New.restype == ctypes.py_object
+    assert ctypes.pythonapi.PyCapsule_GetPointer.argtypes == [
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+    ]
+    assert ctypes.pythonapi.PyCapsule_GetPointer.restype == ctypes.c_void_p
+    assert ctypes.pythonapi.PyCapsule_GetName.argtypes == [ctypes.c_void_p]
+    assert ctypes.pythonapi.PyCapsule_GetName.restype == ctypes.c_char_p
+
+
+def test_capsule_lifecycle_releases_destructor_pin():
+    """Confirms the PyCapsule destructor wiring is in place: the
+    destructor closure is pinned in `_capsule_destructors` for the
+    capsule's lifetime, then popped when the capsule is dropped.
+
+    Uses a fake `DLManagedTensor` with a NULL deleter at offset 56 —
+    the destructor's null-check skips the deleter call, so this test
+    exercises wire-up + cleanup without crossing the Python-callable-
+    during-GC boundary (the real deleter is exercised end-to-end by
+    `cuda_carve_out.rs` once the cdylib is loaded against a real
+    consumer).
+    """
+    # Build a fake DLManagedTensor: 64 bytes total, deleter slot at
+    # offset 56 is implicitly zero (calloc-style ctypes zeroing). The
+    # destructor reads the deleter pointer there and skips the call
+    # because it's NULL — no cross-runtime callback risk.
+    fake_mt = (ctypes.c_uint8 * 64)()
+    initial_pin_count = len(c._capsule_destructors)
+
+    capsule = c._make_dlpack_capsule(ctypes.addressof(fake_mt))
+    assert capsule is not None
+
+    # Pinning happened: one new entry in the destructor table while
+    # the capsule is live. The wrapper holds the CFUNCTYPE alive so
+    # PyCapsule_New's stored pointer remains valid.
+    assert len(c._capsule_destructors) == initial_pin_count + 1, (
+        "PyCapsule destructor must be pinned in _capsule_destructors "
+        "for the capsule's lifetime"
+    )
+
+    # Drop the capsule — destructor fires; null deleter slot means
+    # the destructor's deleter-call branch is skipped, but the
+    # cleanup branch (popping its own entry from the dict) runs.
+    del capsule
+    # Force a GC cycle so the destructor definitely runs.
+    import gc
+
+    gc.collect()
+
+    assert len(c._capsule_destructors) == initial_pin_count, (
+        "PyCapsule destructor must pop its own entry from "
+        f"_capsule_destructors on drop; expected {initial_pin_count} "
+        f"entries, found {len(c._capsule_destructors)}"
+    )
+
+
+def test_cuda_context_class_exposes_expected_method_set():
+    # Surface-adapter Protocol shape — any future Protocol type-check
+    # against `CudaContext` should structurally match these.
+    assert hasattr(c.CudaContext, "acquire_read")
+    assert hasattr(c.CudaContext, "acquire_write")
+    assert hasattr(c.CudaContext, "try_acquire_read")
+    assert hasattr(c.CudaContext, "try_acquire_write")
+    assert hasattr(c.CudaContext, "from_runtime")
