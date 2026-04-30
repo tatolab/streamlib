@@ -1,44 +1,51 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Polyglot Skia adapter scenario (#577).
+//! Polyglot Skia adapter scenario (#577 / #581).
 //!
-//! End-to-end gate for the subprocess `SkiaContext` runtime: the host
-//! pre-allocates ONE render-target-capable DMA-BUF surface AND an
-//! exportable `HostVulkanTimelineSemaphore`, registers both with
-//! surface-share under a known UUID. A Python polyglot processor opens
-//! the surface through `SkiaContext.acquire_write` (which under the
-//! hood opens `OpenGLContext.acquire_write` to import the DMA-BUF as a
+//! End-to-end gate for the subprocess `SkiaContext` runtime, mirroring
+//! the in-process Rust stress test
+//! `libs/streamlib-adapter-skia/tests/skia_animated_stress_gl.rs`
+//! across the polyglot boundary: the host pre-allocates ONE
+//! render-target-capable DMA-BUF surface AND an exportable
+//! `HostVulkanTimelineSemaphore`, registers both with surface-share
+//! under a known UUID. A Python polyglot processor opens the surface
+//! through `SkiaContext.acquire_write` (which under the hood opens
+//! `OpenGLContext.acquire_write` to import the DMA-BUF as a
 //! `GL_TEXTURE_2D` via EGL, builds a `skia.GrBackendTexture`, and
-//! yields a `skia.Surface`), draws a known shape (red disc on blue
-//! background), and releases — Skia's flush-and-submit drains the GPU
-//! and the inner OpenGL adapter runs `glFinish` so the host's pre-stop
-//! readback sees the drawing. This binary then reads the surface back
-//! via Vulkan and writes a PNG; reading the PNG with the Read tool is
-//! the visual gate.
+//! yields a `skia.Surface`), draws the animated 60fps × 30s scene,
+//! and releases — Skia's flush+submit drains GPU and the inner OpenGL
+//! adapter runs `glFinish` so the host's per-frame Vulkan readback
+//! sees coherent BGRA bytes.
+//!
+//! While the pipeline is live the main thread runs a 60Hz readback
+//! loop that pipes each frame's BGRA into ffmpeg → an MP4. A hero PNG
+//! is captured at frame 900 (15s in). Reading the hero PNG with the
+//! Read tool is the visual gate; the MP4 is the long-form evidence.
 //!
 //! Skia is composed on OpenGL in the subprocess (no `slpn_skia_*`
 //! FFI; `streamlib.adapters.skia.SkiaContext` uses the existing
 //! `slpn_opengl_*` symbols + skia-python's `GrDirectContext.MakeGL`).
-//! The pivot from Vulkan to GL inside Python is forced by skia-python's
-//! pybind11 Vulkan binding being unimplemented — see #577 / the
-//! adapter's `skia.py` module docstring. The Rust adapter's Vulkan
-//! backend is unchanged. Deno is intentionally deferred: there is no
-//! maintained Deno Skia binding (same construction-language argument
-//! as the abandoned #481 polyglot deferral).
+//! See `libs/streamlib-python/python/streamlib/adapters/skia.py` for
+//! why GL, not Vulkan, in Python.
 //!
 //! Build the Python `.slpkg` first:
 //!   cargo run -p streamlib-cli -- pack examples/polyglot-skia-canvas/python
 //!
 //! Run:
 //!   cargo run -p polyglot-skia-canvas-scenario -- \
-//!       --output=/tmp/skia-canvas-py.png
+//!       --output-dir=/tmp/skia-canvas-py
+//!   # produces:
+//!   #   /tmp/skia-canvas-py/skia_canvas.mp4
+//!   #   /tmp/skia-canvas-py/skia_canvas_hero.png
 
 #![cfg(target_os = "linux")]
 
+use std::io::Write as _;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use streamlib::core::rhi::TextureFormat;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
@@ -46,22 +53,36 @@ use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000005c1a";
-const SURFACE_SIZE: u32 = 256;
+const SURFACE_SIZE: u32 = 512;
+const FPS: u32 = 60;
+const DURATION_SECS: u32 = 30;
+const FRAME_COUNT: u32 = FPS * DURATION_SECS;
+const HERO_FRAME_INDEX: u32 = FPS * (DURATION_SECS / 2);
 
 fn main() -> Result<()> {
     let args = std::env::args().skip(1);
-    let mut output_png = PathBuf::from("/tmp/skia-canvas-py.png");
+    let mut output_dir = PathBuf::from("/tmp/skia-canvas-py");
     for a in args {
-        if let Some(value) = a.strip_prefix("--output=") {
-            output_png = PathBuf::from(value);
+        if let Some(value) = a.strip_prefix("--output-dir=") {
+            output_dir = PathBuf::from(value);
         }
     }
+    std::fs::create_dir_all(&output_dir).map_err(|e| {
+        StreamError::Configuration(format!(
+            "create output dir {}: {e}",
+            output_dir.display()
+        ))
+    })?;
+    let mp4_path = output_dir.join("skia_canvas.mp4");
+    let hero_path = output_dir.join("skia_canvas_hero.png");
 
-    println!("=== Polyglot Skia adapter canvas scenario (#577) ===");
+    println!("=== Polyglot Skia adapter canvas scenario (#577 / #581) ===");
     println!(
         "Surface:    {SURFACE_SIZE}x{SURFACE_SIZE} BGRA8 (uuid {SCENARIO_SURFACE_UUID})"
     );
-    println!("Output PNG: {}", output_png.display());
+    println!("Animation:  {FPS} fps × {DURATION_SECS}s = {FRAME_COUNT} frames");
+    println!("MP4:        {}", mp4_path.display());
+    println!("Hero PNG:   {} (frame {HERO_FRAME_INDEX})", hero_path.display());
     println!();
 
     let runtime = StreamRuntime::new()?;
@@ -156,8 +177,8 @@ fn main() -> Result<()> {
                 .to_string(),
             width: 4,
             height: 4,
-            fps: 5,
-            frame_count: 3,
+            fps: FPS,
+            frame_count: FRAME_COUNT,
         },
     ))?;
     println!("+ BgraFileSource: {source}");
@@ -166,6 +187,7 @@ fn main() -> Result<()> {
         "skia_surface_uuid": SCENARIO_SURFACE_UUID,
         "width": SURFACE_SIZE,
         "height": SURFACE_SIZE,
+        "fps": FPS,
     });
     let canvas = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.skia_canvas",
@@ -179,13 +201,54 @@ fn main() -> Result<()> {
     )?;
     println!("\nPipeline: BgraFileSource → python skia-canvas\n");
 
+    // Spawn ffmpeg before starting the runtime so the first readback
+    // has somewhere to land.
+    let ffmpeg_bin = if std::path::Path::new("/usr/bin/ffmpeg").exists() {
+        "/usr/bin/ffmpeg"
+    } else {
+        "ffmpeg"
+    };
+    println!("Spawning {ffmpeg_bin} → {}", mp4_path.display());
+    let mut ffmpeg = Command::new(ffmpeg_bin)
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "bgra",
+            "-s",
+            &format!("{}x{}", SURFACE_SIZE, SURFACE_SIZE),
+            "-r",
+            &FPS.to_string(),
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-movflags",
+            "+faststart",
+            mp4_path.to_str().expect("mp4 path utf-8"),
+        ])
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            StreamError::Configuration(format!(
+                "ffmpeg spawn (install ffmpeg if missing): {e}"
+            ))
+        })?;
+    let mut ffmpeg_stdin = ffmpeg.stdin.take().expect("ffmpeg stdin");
+
     println!("Starting pipeline...");
     runtime.start()?;
-    std::thread::sleep(Duration::from_secs(4));
-    println!("Stopping pipeline...");
-    runtime.stop()?;
 
-    println!("\nReading host surface back via Vulkan...");
     let texture = texture_slot
         .lock()
         .unwrap()
@@ -200,9 +263,72 @@ fn main() -> Result<()> {
         .unwrap()
         .clone()
         .ok_or_else(|| StreamError::Runtime("device slot is empty".into()))?;
-    let bgra = vulkan_readback(&device, &texture);
-    write_png(&bgra, SURFACE_SIZE, SURFACE_SIZE, &output_png)?;
-    println!("✓ Output PNG written: {}", output_png.display());
+
+    // 60Hz readback loop. The Python subprocess draws as fast as it
+    // gets trigger frames from BgraFileSource (also 60fps); host
+    // readback runs at the same cadence so each captured BGRA buffer
+    // sees a fresh draw. Drift between the two clocks is bounded by
+    // `glFinish` on Skia release — torn frames are bounded by Skia's
+    // single-step write atomicity, not by inter-process timing.
+    let run_start = Instant::now();
+    let mut hero_pixels: Option<Vec<u8>> = None;
+    let mut readback_times: Vec<Duration> = Vec::with_capacity(FRAME_COUNT as usize);
+    for f in 0..FRAME_COUNT {
+        let target =
+            run_start + Duration::from_secs_f64((f as f64) / (FPS as f64));
+        let now = Instant::now();
+        if let Some(sleep) = target.checked_duration_since(now) {
+            std::thread::sleep(sleep);
+        }
+        let rb_start = Instant::now();
+        let bgra = vulkan_readback(&device, &texture);
+        readback_times.push(rb_start.elapsed());
+        if f == HERO_FRAME_INDEX {
+            hero_pixels = Some(bgra.clone());
+        }
+        ffmpeg_stdin.write_all(&bgra).map_err(|e| {
+            StreamError::Runtime(format!("ffmpeg stdin write: {e}"))
+        })?;
+        if (f + 1) % 120 == 0 {
+            let wall = run_start.elapsed().as_secs_f32();
+            let avg_rb_ms = readback_times.iter().sum::<Duration>().as_secs_f32()
+                * 1000.0
+                / (f as f32 + 1.0);
+            println!(
+                "  frame {:>4}/{FRAME_COUNT} wall={:>5.1}s readback_avg={:>5.2}ms",
+                f + 1,
+                wall,
+                avg_rb_ms
+            );
+        }
+    }
+
+    println!("Stopping pipeline...");
+    runtime.stop()?;
+
+    drop(ffmpeg_stdin);
+    let ffmpeg_status = ffmpeg.wait().map_err(|e| {
+        StreamError::Runtime(format!("ffmpeg wait: {e}"))
+    })?;
+    if !ffmpeg_status.success() {
+        return Err(StreamError::Runtime(format!(
+            "ffmpeg encode failed: {ffmpeg_status:?}"
+        )));
+    }
+
+    if let Some(pixels) = hero_pixels {
+        write_png(&pixels, SURFACE_SIZE, SURFACE_SIZE, &hero_path)?;
+        println!(
+            "✓ hero PNG (frame {HERO_FRAME_INDEX}, t={:.2}s): {}",
+            HERO_FRAME_INDEX as f32 / FPS as f32,
+            hero_path.display()
+        );
+    } else {
+        return Err(StreamError::Runtime(
+            "hero frame was never captured — readback loop exited early".into(),
+        ));
+    }
+    println!("✓ MP4: {}", mp4_path.display());
     Ok(())
 }
 
@@ -210,10 +336,15 @@ fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::fs::File;
     use std::io::Write;
 
+    // 4×4 BGRA trigger frames — content doesn't matter; the subprocess
+    // ignores the buffer and uses each frame as a per-tick wakeup so
+    // it can run a Skia draw against the host's render-target surface.
     let path = std::env::temp_dir().join("skia-canvas-trigger.bgra");
     let mut f = File::create(&path)
         .map_err(|e| format!("create {}: {e}", path.display()))?;
-    f.write_all(&[0u8; 4 * 4 * 4 * 3])
+    let bytes_per_frame: usize = 4 * 4 * 4;
+    let total = bytes_per_frame * (FRAME_COUNT as usize);
+    f.write_all(&vec![0u8; total])
         .map_err(|e| format!("write {}: {e}", path.display()))?;
     Ok(path)
 }
