@@ -806,9 +806,13 @@ mod tests {
         }
     }
 
-    /// `physical_device_uuid()` returns 16 bytes that are not all zero
-    /// (NVIDIA / AMD / Intel all populate the UUID; an all-zero result
-    /// signals the `vkGetPhysicalDeviceProperties2` query never ran).
+    /// `physical_device_uuid()` returns 16 bytes that look like a real
+    /// UUID — neither all-zero (would indicate `vkGetPhysicalDeviceProperties2`
+    /// never ran) nor all-the-same-byte (would catch a constant-write bug
+    /// like `[0u8; 16].fill(1)`). Real GPU UUIDs from NVIDIA / AMD / Intel
+    /// have many distinct byte values; a threshold of >= 4 distinct bytes
+    /// is comfortably below every observed real-device UUID and well
+    /// above any plausible constant-write bug.
     #[cfg(target_os = "linux")]
     #[test]
     fn physical_device_uuid_is_populated() {
@@ -824,6 +828,23 @@ mod tests {
             uuid.iter().any(|b| *b != 0),
             "physical_device_uuid should not be all-zero — got {uuid:?}"
         );
+        let distinct: std::collections::HashSet<u8> = uuid.iter().copied().collect();
+        assert!(
+            distinct.len() >= 4,
+            "physical_device_uuid should have >= 4 distinct byte values \
+             (real GPU UUIDs do; a constant-write bug wouldn't) — got {uuid:02x?} \
+             with {} distinct values",
+            distinct.len()
+        );
+
+        // Cheap idempotence check: the accessor is a copy of a stored
+        // array; calling it twice must yield identical bytes.
+        assert_eq!(
+            uuid,
+            device.physical_device_uuid(),
+            "physical_device_uuid must be stable across calls"
+        );
+
         println!("physical_device_uuid: {uuid:02x?}");
     }
 

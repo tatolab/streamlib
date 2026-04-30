@@ -197,10 +197,30 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // CUDA waits on value 1 below, which is unconditionally past.
 
     // ── Phase 3: export OPAQUE_FDs from the registered surface ─────
-    let memory_fd = pixel_buffer
+    // Round-trip through the adapter's registry accessors (rather than
+    // the local Arcs) so this also exercises `surface_pixel_buffer` /
+    // `surface_timeline` — the production cdylib path will read FDs
+    // out of the registered surface, not from a local handle. Returning
+    // `None` here means the registry forgot the surface, which would be
+    // a regression in `register_host_surface`.
+    let registered_pixel_buffer = adapter
+        .surface_pixel_buffer(SURFACE_ID)
+        .expect("CudaSurfaceAdapter::surface_pixel_buffer must return registered buffer");
+    let registered_timeline = adapter
+        .surface_timeline(SURFACE_ID)
+        .expect("CudaSurfaceAdapter::surface_timeline must return registered timeline");
+    assert!(
+        Arc::ptr_eq(&registered_pixel_buffer, &pixel_buffer),
+        "registry-returned pixel_buffer Arc must point at the originally-registered buffer"
+    );
+    assert!(
+        Arc::ptr_eq(&registered_timeline, &timeline),
+        "registry-returned timeline Arc must point at the originally-registered timeline"
+    );
+    let memory_fd = registered_pixel_buffer
         .export_opaque_fd_memory()
         .expect("HostVulkanPixelBuffer::export_opaque_fd_memory");
-    let timeline_fd = timeline
+    let timeline_fd = registered_timeline
         .export_opaque_fd()
         .expect("HostVulkanTimelineSemaphore::export_opaque_fd");
 
