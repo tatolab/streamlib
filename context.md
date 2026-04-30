@@ -51,6 +51,17 @@ If the host pipeline produces frames into a tiled `VkImage` that needs copying i
 
 If the probe reports `cudaMemoryTypeHost`: drop HOST_VISIBLE on the staging buffer. The host-side mapped-pointer convenience disappears, which is fine — the host-side code paths that need to populate the buffer can do so via `vkCmdCopyImageToBuffer` / `vkCmdCopyBuffer` instead of memcpy through the mapped pointer.
 
+### Stage 8 status (2026-04-30)
+
+Probe **assertion shipped** in `cuda_carve_out.rs::host_buffer_to_cuda_byte_equal_round_trip` (Phase 4a). Calls `sys::cudaPointerGetAttributes(dev_ptr)` after `cudaExternalMemoryGetMappedBuffer` returns the device pointer; matches on `cudaMemoryType`:
+- `cudaMemoryTypeDevice` → expected (pass-through, no panic).
+- `cudaMemoryTypeHost` → panics with the action-list above (drop HOST_VISIBLE, document, flip dlpack default).
+- `cudaMemoryTypeUnregistered` / `cudaMemoryTypeManaged` → panics with "investigate driver before proceeding".
+
+**Empirical answer: PENDING** — confirmation requires a rig with `libcudart.so.12.9` or newer. This branch's local rig has `libcudart.so.12.0` (from IsaacSim's bundled CUDA runtime); cudarc 0.19.4 with `cuda-12090` feature eagerly loads symbols including `cudaEventElapsedTime_v2`, which 12.0 doesn't export, so culib initialization fails before reaching the probe. (Confirmed pre-existing: failure reproduces on the pristine pre-Stage-8 commit, so it's unrelated to the probe addition.) The cdylib production rigs (Jetson Orin / x86 + dGPU with current NVIDIA driver) ship libcudart 12.x where x ≥ 9 alongside the driver, and the assertion will fire there.
+
+**Decision until empirical confirmation arrives**: stay on `kDLCUDA = 2` for the cdylib's DLPack capsule device. The capsule-builder API takes the `dlpack::Device` as a parameter (not hard-coded), so a flip to `kDLCUDAHost = 3` later is a one-line change inside the cdylib's `cudaPointerGetAttributes` branch — no API churn in `streamlib-adapter-cuda` or `streamlib-consumer-rhi`.
+
 ## Design decisions taken in this branch
 
 (Each session appends decisions here as they're made. Future sessions should treat anything below as load-bearing for this PR.)

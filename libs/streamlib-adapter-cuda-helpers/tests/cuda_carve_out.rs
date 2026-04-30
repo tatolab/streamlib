@@ -259,6 +259,83 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
         }
     };
 
+    // ── Phase 4a (Stage 8 of #588): probe the imported pointer's
+    //    memory class. The cdylib that constructs DLPack capsules
+    //    (#589/#590) needs to know whether to advertise the pointer
+    //    as `kDLCUDA = 2` (real device memory; reads at device
+    //    bandwidth) or `kDLCUDAHost = 3` (pinned-host memory; reads
+    //    cross PCIe per access). CUDA's `cudaPointerGetAttributes`
+    //    is the authoritative answer.
+    //
+    //    Expected: `cudaMemoryTypeDevice` for the imported HOST_VISIBLE
+    //    OPAQUE_FD `VkBuffer`. If a future driver downgrades to
+    //    `cudaMemoryTypeHost`, drop `HOST_VISIBLE` from
+    //    `HostVulkanPixelBuffer::new_opaque_fd_export` and re-test —
+    //    the host-side mapped pointer goes away (host-side population
+    //    routes through `vkCmdCopyBuffer` instead) but device-side
+    //    inference performance is preserved. The flip is recorded in
+    //    `context.md` under "Open empirical question (Stage 8)".
+    let mut ptr_attrs = MaybeUninit::<sys::cudaPointerAttributes>::uninit();
+    let ptr_attrs_call = unsafe {
+        sys::cudaPointerGetAttributes(ptr_attrs.as_mut_ptr(), dev_ptr).result()
+    };
+    if let Err(e) = ptr_attrs_call {
+        let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+        unsafe { libc::close(timeline_fd) };
+        panic!(
+            "cudaPointerGetAttributes failed on imported OPAQUE_FD device \
+             pointer: {e:?} — the Runtime API may not classify externally-\
+             imported memory on this driver; investigate before proceeding \
+             (#588 Stage 8, see context.md)"
+        );
+    }
+    let ptr_attrs = unsafe { ptr_attrs.assume_init() };
+    println!(
+        "cuda carve-out: cudaPointerGetAttributes(dev_ptr) → \
+         type={:?}, device={}, devicePointer={:?}, hostPointer={:?}",
+        ptr_attrs.type_, ptr_attrs.device, ptr_attrs.devicePointer, ptr_attrs.hostPointer,
+    );
+    match ptr_attrs.type_ {
+        sys::cudaMemoryType::cudaMemoryTypeDevice => {
+            // Expected. The imported pointer is real device memory;
+            // DLPack capsules can advertise `kDLCUDA = 2` and CUDA
+            // kernels read at device bandwidth.
+        }
+        sys::cudaMemoryType::cudaMemoryTypeHost => {
+            let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+            unsafe { libc::close(timeline_fd) };
+            panic!(
+                "Stage 8 regression (#588): imported OPAQUE_FD device pointer \
+                 presents as `cudaMemoryTypeHost` (pinned-host, PCIe per \
+                 access). Action: drop `HOST_VISIBLE` from \
+                 `HostVulkanPixelBuffer::new_opaque_fd_export`'s memory-property \
+                 mask, document the change in `context.md`, and update \
+                 `streamlib-adapter-cuda::dlpack` so the cdylib advertises \
+                 `kDLCUDAHost = 3` instead of `kDLCUDA = 2`."
+            );
+        }
+        sys::cudaMemoryType::cudaMemoryTypeUnregistered => {
+            let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+            unsafe { libc::close(timeline_fd) };
+            panic!(
+                "Stage 8 (#588): imported OPAQUE_FD device pointer is \
+                 `cudaMemoryTypeUnregistered` — the Runtime API does not \
+                 recognize the pointer at all, which would block DLPack \
+                 hand-off to PyTorch / JAX. Investigate driver \
+                 behavior before proceeding."
+            );
+        }
+        sys::cudaMemoryType::cudaMemoryTypeManaged => {
+            let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+            unsafe { libc::close(timeline_fd) };
+            panic!(
+                "Stage 8 (#588): imported OPAQUE_FD device pointer is \
+                 `cudaMemoryTypeManaged` — unexpected for an externally-\
+                 imported VkBuffer. Investigate driver before proceeding."
+            );
+        }
+    }
+
     // Build the descriptor via `zeroed()` + assignment so the body is
     // robust across `cuda-11040..=12090` (no `reserved` field) and
     // `cuda-13000..` (with `reserved: [u32; 16]`). The crate is

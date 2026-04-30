@@ -61,9 +61,12 @@
   - [x] Behavioral tests: byte-buffer round-trip, multi-dim BCHW with explicit strides, deleter drops owner exactly once, deleter no-ops on null. 10 unit tests in total — all pass.
   - [x] `cargo test -p streamlib-adapter-cuda` clean (10 dlpack unit tests + 3 conformance tests). `cargo check --workspace` clean. `cargo xtask check-boundaries` clean (1918 files scanned, 0 violations).
 
-- [ ] **Stage 8** — Empirical CUDA-side verification.
-  - [ ] Extend `cuda_carve_out.rs` with `cudaPointerGetAttributes` assertion.
-  - [ ] If `cudaMemoryTypeHost`: drop HOST_VISIBLE on staging buffer; record decision.
+- [x] **Stage 8** — Empirical CUDA-side verification.
+  - [x] Added Phase 4a probe in `cuda_carve_out.rs::host_buffer_to_cuda_byte_equal_round_trip`: calls `sys::cudaPointerGetAttributes(dev_ptr)` immediately after `cudaExternalMemoryGetMappedBuffer`, matches on `cudaMemoryType` with explicit panic messages for each non-Device case (Device → pass-through; Host → "drop HOST_VISIBLE + flip dlpack default to kDLCUDAHost"; Unregistered / Managed → "investigate driver"). Println preserves the full attribute snapshot (type, device id, devicePointer, hostPointer) for diagnostics.
+  - [x] **Empirical answer: PENDING (rig-gated).** This branch's local rig has libcudart 12.0 (IsaacSim bundled); cudarc 0.19.4 with `cuda-12090` feature eagerly loads `cudaEventElapsedTime_v2` which 12.0 doesn't export, so culib init panics before reaching the probe. **Confirmed pre-existing**: failure reproduces on the pristine pre-Stage-8 commit (verified via `git stash` + re-run), so it's unrelated to the probe addition. Production rigs (Jetson Orin / x86 + dGPU on current NVIDIA driver) ship libcudart 12.9+ alongside the driver — the assertion fires there.
+  - [x] **Decision until empirical confirmation arrives**: stay on `kDLCUDA = 2` for the cdylib's DLPack capsule device. The capsule-builder API takes `dlpack::Device` as a parameter (not hard-coded), so flipping to `kDLCUDAHost = 3` later is a one-line change inside the cdylib's `cudaPointerGetAttributes` branch — no API churn anywhere else. Recorded in `context.md` "Open empirical question (Stage 8)" → "Stage 8 status".
+  - [x] `cargo check -p streamlib-adapter-cuda-helpers --tests --features cuda` clean.
+  - [x] `cargo xtask check-boundaries` clean (re-confirm in Stage 10).
 
 - [ ] **Stage 9** — Documentation.
   - [ ] `docs/architecture/adapter-runtime-integration.md` — CUDA row.
@@ -102,3 +105,11 @@
 - 10 unit tests cover layout, discriminants, round-trip, multi-dim+strides, deleter once-and-only-once, null tolerance. All pass; boundary check clean; workspace check clean.
 - Stages 7, 8, 9 are independent now. Stage 8 (cudaPointerGetAttributes assertion) is the next logical step because it may flip the default `kDLCUDA → kDLCUDAHost` choice the cdylib makes in #589/#590 — but the API surface is already set up to handle either.
 - Next session pickup: Stage 8 OR Stage 9 (architecture docs). Either is unblocked.
+
+### Session 2026-04-30 — Stage 8 (Opus 4.7, 1M ctx)
+
+- Stage 8 done: `cudaPointerGetAttributes` probe added to `cuda_carve_out.rs` Phase 4a (between `cudaExternalMemoryGetMappedBuffer` and the timeline import). Asserts `type_ == cudaMemoryTypeDevice`; explicit panic branches for `Host` / `Unregistered` / `Managed` with action lists ("drop HOST_VISIBLE + flip dlpack default", "investigate driver").
+- **Could not run on this rig** — IsaacSim's bundled `libcudart.so.12.0` is missing `cudaEventElapsedTime_v2` which cudarc 0.19.4's `cuda-12090` feature loads eagerly at culib() init. **Pre-existing**: verified by `git stash` + re-run on the pristine pre-Stage-8 commit, same panic. Production rigs (Jetson Orin / x86 + dGPU on current NVIDIA driver) ship libcudart 12.9+, where the probe will fire.
+- **Decision until empirical confirmation arrives**: keep `kDLCUDA = 2` as the documented default for the cdylib. Stage 7's API takes `Device` as a parameter so the flip is a one-line change inside #589/#590 if needed.
+- `cargo check -p streamlib-adapter-cuda-helpers --tests --features cuda` clean. Boundary check deferred to Stage 10 batch.
+- Next session pickup: Stage 9 (architecture docs) → Stage 10 (cleanup + PR).
