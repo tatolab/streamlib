@@ -53,10 +53,13 @@
   - [x] `#[serial]` per the dual-VkDevice learning. Added `streamlib-surface-client` + `serde_json` to dev-dependencies.
   - [x] `cargo xtask check-boundaries` clean.
 
-- [ ] **Stage 7** — DLPack capsule on `CudaReadView` / `CudaWriteView`.
-  - [ ] `dlpark` vs hand-rolled decision in `context.md`.
-  - [ ] `CudaReadView::dlpack(&self) -> *mut DLManagedTensor`.
-  - [ ] Layout regression test.
+- [x] **Stage 7** — DLPack capsule on `CudaReadView` / `CudaWriteView`.
+  - [x] Decision: vendored `dlpark = "=0.6.0"` with `default-features = false`. Pulls only `bitflags` + `snafu`; gives us `dlpark::ffi::{Tensor, ManagedTensor, Device, DeviceType, DataType, DataTypeCode, ManagedTensorVersioned}` as the canonical `#[repr(C)]` ABI mirrors. Reasoning + alternatives + scope-cut record in `context.md`.
+  - [x] New `streamlib-adapter-cuda::dlpack` module: re-exports the FFI types, owns the manager-ctx + deleter plumbing (`build_managed_tensor` for arbitrary shape/strides/dtype, `build_byte_buffer_managed_tensor` for the canonical 1-D `u8` flat-buffer case). The deleter drops a caller-supplied `Box<dyn Any + Send + 'static>` owner alongside the heap-allocated shape/strides slices.
+  - [x] `CudaReadView::dlpack_managed_tensor(device_ptr, device, owner)` + `CudaWriteView::dlpack_managed_tensor(...)`. Device-pointer is supplied by the caller (cdylib pulls it from `cudaExternalMemoryGetMappedBuffer` in #589/#590). `device: dlpack::Device` parameter lets the cdylib pick `kDLCUDA` vs `kDLCUDAHost` after Stage 8 calibration.
+  - [x] Layout regression test pins `Device`/`DataType`/`Tensor`/`ManagedTensor` field offsets and sizes for the 64-bit DLPack v0.8 ABI; pins `DeviceType` (`Cpu=1`, `Cuda=2`, `CudaHost=3`, `OpenCl=4`, `Vulkan=7`, `Metal=8`, `Rocm=10`, `CudaManaged=13`) + `DataTypeCode` (`Int=0`, `UInt=1`, `Float=2`, ...) discriminants. Drift in dlpark would surface as a CI failure rather than silent ABI change.
+  - [x] Behavioral tests: byte-buffer round-trip, multi-dim BCHW with explicit strides, deleter drops owner exactly once, deleter no-ops on null. 10 unit tests in total — all pass.
+  - [x] `cargo test -p streamlib-adapter-cuda` clean (10 dlpack unit tests + 3 conformance tests). `cargo check --workspace` clean. `cargo xtask check-boundaries` clean (1918 files scanned, 0 violations).
 
 - [ ] **Stage 8** — Empirical CUDA-side verification.
   - [ ] Extend `cuda_carve_out.rs` with `cudaPointerGetAttributes` assertion.
@@ -90,3 +93,12 @@
 - Stage 2 done: `OpaqueFd` variant + ripple + 3 unit tests (all pass) + boundary check clean.
 - Three Opus agents at max reasoning ran the staleness/correctness/gap audits. Findings consolidated in `context.md`.
 - Next session pickup: Stage 3 (Host RHI OPAQUE_FD export through `RhiPixelBufferExport`). Decision pending in `context.md`: extend `export_handle()` to dispatch on buffer flavor vs. add a new `export_opaque_fd_handle()` method.
+
+### Session 2026-04-30 — Stage 7 (Opus 4.7, 1M ctx)
+
+- Stage 7 done: DLPack capsule shape on `CudaReadView` / `CudaWriteView` plus layout regression test.
+- Decision recorded in `context.md`: vendor `dlpark = "=0.6.0"` (Apache-2.0, `default-features = false` → bitflags + snafu only) for the `#[repr(C)]` ABI mirrors; build the manager-ctx + deleter plumbing in `streamlib-adapter-cuda::dlpack` ourselves so we don't drag in dlpark's pyo3-flavored safe wrappers. Opus parallel-agent research drove the call.
+- New module `streamlib-adapter-cuda::dlpack` with `build_managed_tensor` + `build_byte_buffer_managed_tensor` helpers; views grew `dlpack_managed_tensor(device_ptr, device, owner)` accessors that the cdylib (#589/#590) will call after `cudaExternalMemoryGetMappedBuffer` lands the device pointer.
+- 10 unit tests cover layout, discriminants, round-trip, multi-dim+strides, deleter once-and-only-once, null tolerance. All pass; boundary check clean; workspace check clean.
+- Stages 7, 8, 9 are independent now. Stage 8 (cudaPointerGetAttributes assertion) is the next logical step because it may flip the default `kDLCUDA → kDLCUDAHost` choice the cdylib makes in #589/#590 — but the API surface is already set up to handle either.
+- Next session pickup: Stage 8 OR Stage 9 (architecture docs). Either is unblocked.

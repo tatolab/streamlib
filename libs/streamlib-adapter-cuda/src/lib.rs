@@ -24,6 +24,7 @@
 
 mod adapter;
 mod context;
+pub mod dlpack;
 mod state;
 mod view;
 

@@ -4,21 +4,28 @@
 //! Read and write views handed back to consumers inside an acquire
 //! scope.
 //!
-//! For #587's host-flavor scaffold, the views expose the underlying
-//! `vk::Buffer` handle and the buffer size — enough metadata for the
-//! carve-out test to validate that registration + acquire flow through
-//! the trait correctly. Public CUDA-typed accessors (raw `CUdeviceptr`,
-//! DLPack capsule construction) ship in #589/#590 once the cdylib +
-//! `cudarc` integration land. The view types themselves stay compatible
-//! across that change — only their inherent methods grow.
+//! Each view exposes the underlying `vk::Buffer` handle, the buffer
+//! size, and a [`dlpack_managed_tensor`](CudaReadView::dlpack_managed_tensor)
+//! constructor that wraps a caller-supplied CUDA device pointer in a
+//! DLPack-spec [`crate::dlpack::ManagedTensor`]. The cdylib subprocess
+//! runtimes (`streamlib-python-native` / `streamlib-deno-native` in
+//! #589/#590) obtain the device pointer via
+//! `cudaExternalMemoryGetMappedBuffer` against the
+//! [`vk_buffer`](CudaReadView::vk_buffer) FD and feed it into the
+//! constructor; this crate stays free of `cudarc` so non-CUDA customers
+//! don't pay for unused dependencies.
 
 use std::marker::PhantomData;
 
 use vulkanalia::vk;
 
+use crate::dlpack::{
+    self, CapsuleOwner, Device as DlpackDevice, ManagedTensor as DlpackManagedTensor,
+};
+
 /// Read view of an acquired surface — exposes the host's `vk::Buffer`
-/// handle and the buffer's size in bytes. CUDA-typed accessors arrive
-/// in #589/#590.
+/// handle, its size in bytes, and a DLPack capsule constructor over a
+/// caller-supplied CUDA device pointer.
 pub struct CudaReadView<'g> {
     pub(crate) buffer: vk::Buffer,
     pub(crate) size: vk::DeviceSize,
@@ -33,6 +40,23 @@ impl<'g> CudaReadView<'g> {
     /// Buffer size in bytes.
     pub fn size(&self) -> vk::DeviceSize {
         self.size
+    }
+    /// Wrap `device_ptr` as a DLPack 1-D `u8` [`DlpackManagedTensor`]
+    /// of length [`Self::size`]. The cdylib obtains `device_ptr` via
+    /// `cudaExternalMemoryGetMappedBuffer` against the OPAQUE_FD
+    /// imported memory; `device` selects between `kDLCUDA` and
+    /// `kDLCUDAHost` based on
+    /// `cudaPointerGetAttributes` (Stage 8 calibration).
+    /// `owner` is heap-allocated state the deleter drops once the
+    /// consumer releases the capsule — typically an `Arc` clone of
+    /// the surface registration the cdylib is keeping alive.
+    pub fn dlpack_managed_tensor(
+        &self,
+        device_ptr: u64,
+        device: DlpackDevice,
+        owner: CapsuleOwner,
+    ) -> *mut DlpackManagedTensor {
+        dlpack::build_byte_buffer_managed_tensor(device_ptr, self.size, device, owner)
     }
 }
 
@@ -52,5 +76,14 @@ impl<'g> CudaWriteView<'g> {
     /// Buffer size in bytes.
     pub fn size(&self) -> vk::DeviceSize {
         self.size
+    }
+    /// See [`CudaReadView::dlpack_managed_tensor`].
+    pub fn dlpack_managed_tensor(
+        &self,
+        device_ptr: u64,
+        device: DlpackDevice,
+        owner: CapsuleOwner,
+    ) -> *mut DlpackManagedTensor {
+        dlpack::build_byte_buffer_managed_tensor(device_ptr, self.size, device, owner)
     }
 }

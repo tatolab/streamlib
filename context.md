@@ -57,7 +57,13 @@ If the probe reports `cudaMemoryTypeHost`: drop HOST_VISIBLE on the staging buff
 
 - **2026-04-30** — Issue scope expanded from "wire-format VkImage extension + bridge" to "full OPAQUE_FD plumbing chain" per parallel-agent research. Original framing struck through in issue body with reasoning preserved.
 
-- **2026-04-30** — DLPack capsule construction approach: pending. Will decide in Stage 7 between `dlpark` crate and hand-rolled `#[repr(C)]` `DLManagedTensor`. Constraint: layout-stable across the FFI boundary that #589 / #590 will cross.
+- **2026-04-30** — DLPack capsule construction approach: **vendored `dlpark = "=0.6.0"` with `default-features = false`**. Rationale (Opus parallel research, max reasoning, summarized in the Stage 7 commit message):
+  - All ML / Python deps in dlpark (`pyo3`, `ndarray`, `cudarc`, `half`, `image`, `candle-core`) are optional; `default-features = false` pulls in only `bitflags` + `snafu`, both already permissive and idiomatic in our tree.
+  - License Apache-2.0 — compatible with BUSL-1.1 inbound.
+  - dlpark's `dlpark::ffi` module exposes the exact `#[repr(C)]` mirrors of the DLPack v0.8 spec (`Tensor`, `ManagedTensor`, `Device`, `DeviceType`, `DataType`, `DataTypeCode`) — same structs we'd hand-roll, but pre-tested. Also ships v1.0 `ManagedTensorVersioned` for free, in case a future consumer requires it.
+  - We use `dlpark::ffi::*` as the layout-stable C-ABI mirror only; the manager-ctx + deleter plumbing that keeps an `Arc`-or-equivalent alive lives in `streamlib-adapter-cuda::dlpack`. dlpark's own safe wrappers (`SafeManagedTensor`, `ManagerCtx<T, L>`, `TensorLike`/`MemoryLayout` traits) are NOT used — they assume single-process Python ownership models we don't want to thread through our crate.
+  - Layout regression test (Stage 7) pins `Device`/`DataType`/`Tensor`/`ManagedTensor` field offsets and key enum discriminants (`DeviceType::Cuda = 2`, `DeviceType::CudaHost = 3`) — catches dlpark drift if upstream ever ships a breaking change.
+  - Pin to `=0.6.0` exact (not `^0.6.0`) at workspace level so the upgrade story stays explicit. If dlpark stalls or pulls in unwanted deps in a future minor, we fork ~400 LOC of `ffi/` + `legacy/manager_context.rs` into our own crate — a 1-day swap.
 
 - **2026-04-30** — No CUDA bridge trait. The single-pattern principle (`docs/architecture/subprocess-rhi-parity.md`) is preserved without one — CUDA falls under "no per-acquire host work" alongside the Vulkan / OpenGL adapters, not alongside cpu-readback.
 
