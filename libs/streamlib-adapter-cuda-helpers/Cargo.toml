@@ -1,0 +1,79 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Test-helper crate for `streamlib-adapter-cuda`. Held in a dedicated
+# crate so the `streamlib` runtime dep these tests need does NOT
+# propagate into the adapter's runtime dep graph (and from there into
+# future `streamlib-python-native` / `-deno-native` CUDA wiring,
+# which must stay `streamlib`-free per #560 / #562 / the `cuda` cdylib
+# work in #589/#590).
+#
+# The carve-out test (`tests/cuda_carve_out.rs`) lives here and is
+# gated behind the `cuda` Cargo feature, which pulls `cudarc` in
+# optionally; building the workspace without `--features cuda` skips
+# the test entirely so contributors without a CUDA toolkit can still
+# run `cargo test`.
+
+[package]
+name = "streamlib-adapter-cuda-helpers"
+description = "Test-helper crate for streamlib-adapter-cuda. Internal — not published; the helpers exist solely so adapter-cuda tests and the CUDA carve-out semantic test can bring up a real HostVulkanDevice + cudarc CUDA context without forcing streamlib (or the CUDA SDK) onto adapter-cuda's runtime dep graph."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# Empty lib to satisfy Cargo's "either lib or another target" rule.
+# Future #589/#590 work will likely add a `[[bin]]` subprocess helper
+# here once the cdylib + DLPack story lands; the empty lib stub stays.
+path = "src/lib.rs"
+
+[features]
+# Enable to compile the CUDA carve-out test. Off by default so
+# contributors without `libcuda.so` can still run the workspace test
+# suite. cudarc itself is configured with `fallback-dynamic-loading`
+# so build-time CUDA toolkit presence is NOT required even when this
+# feature is on; runtime absence is detected via cudarc's `Lib`
+# accessor and the test skips with rc 77 (CARGO_TEST_SKIP) instead of
+# failing.
+default = []
+cuda = ["dep:cudarc"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib = { path = "../streamlib" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+vulkanalia.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+libc.workspace = true
+# Optional CUDA bindings — `fallback-dynamic-loading` loads libcuda.so
+# lazily via dlopen on first call (toolkit absence at build time is
+# fine; runtime absence skips the test rather than failing). Drop the
+# default features so we don't drag cuBLAS / cuRAND / NVRTC into the
+# build for #587's needs.
+# Pin to a specific CUDA toolkit version (`cuda-12090`) so the build
+# does NOT require `nvcc` to be installed (`cuda-version-from-build-system`
+# is the alternative but errors when nvcc is absent). `cuda-12090`
+# bindings call the older `_v2`-suffixed external-resource symbols
+# which remain ABI-stable through cuda 13.x — runtime libcudart
+# continues to export them, so the dlopen path works regardless of
+# which toolkit version is installed on the test machine.
+cudarc = { version = "0.19", optional = true, default-features = false, features = ["driver", "runtime", "fallback-dynamic-loading", "cuda-12090"] }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
+# `VkInstance` creation on NVIDIA Linux trips the dual-device crash
+# documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+serial_test = "3.2"
+
+[[test]]
+name = "cuda_carve_out"
+path = "tests/cuda_carve_out.rs"
+required-features = ["cuda"]
+
+[lints]
+workspace = true

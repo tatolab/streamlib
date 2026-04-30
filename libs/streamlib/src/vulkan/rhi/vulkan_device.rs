@@ -67,6 +67,13 @@ pub struct HostVulkanDevice {
     /// for an RT-capable one.
     #[cfg(target_os = "linux")]
     dma_buf_image_pool_tiled: Option<vma::Pool>,
+    /// VMA pool for OPAQUE_FD exportable HOST_VISIBLE buffers — the export
+    /// flavor CUDA / OpenCL interop expects. Separate from
+    /// [`Self::dma_buf_buffer_pool`] because `VkExportMemoryAllocateInfo`'s
+    /// `handleTypes` differ (OPAQUE_FD vs DMA_BUF_EXT) and a single VMA pool
+    /// can carry only one chained `pNext`.
+    #[cfg(target_os = "linux")]
+    opaque_fd_buffer_pool: Option<vma::Pool>,
     /// Backing storage for the buffer pool's VkExportMemoryAllocateInfo. VMA stores
     /// a raw pointer to this struct via pMemoryAllocateNext, so we must keep it
     /// alive for the pool's entire lifetime.
@@ -78,6 +85,14 @@ pub struct HostVulkanDevice {
     /// Backing storage for the tiled image pool's VkExportMemoryAllocateInfo.
     #[cfg(target_os = "linux")]
     _dma_buf_image_tiled_export_info: Option<Box<vk::ExportMemoryAllocateInfo>>,
+    /// Backing storage for the OPAQUE_FD buffer pool's VkExportMemoryAllocateInfo.
+    #[cfg(target_os = "linux")]
+    _opaque_fd_buffer_export_info: Option<Box<vk::ExportMemoryAllocateInfo>>,
+    /// `VkPhysicalDeviceIDProperties::deviceUUID` queried at construction.
+    /// Required by CUDA-Vulkan interop on multi-GPU rigs to match the
+    /// CUDA device whose `cudaDeviceProp::uuid` equals this value;
+    /// using a mismatched device silently fails on the import.
+    physical_device_uuid: [u8; 16],
     /// Render-target-capable DRM modifiers per format from the EGL probe at
     /// device init. Empty when libEGL is unavailable or the probe failed.
     /// Callers consult this before requesting
@@ -234,6 +249,22 @@ impl HostVulkanDevice {
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
         let device_name =
             unsafe { CStr::from_ptr(device_props.device_name.as_ptr()) }.to_string_lossy();
+
+        // 5b. Query VkPhysicalDeviceIDProperties::deviceUUID via
+        //     vkGetPhysicalDeviceProperties2. CUDA-Vulkan interop matches
+        //     this against `cudaDeviceProp::uuid` (16 bytes) to pick the
+        //     right CUDA device; on multi-GPU rigs (Jetson + dGPU,
+        //     prosumer workstations) using a mismatched device fails
+        //     silently when CUDA imports the OPAQUE_FD memory.
+        let mut id_props = vk::PhysicalDeviceIDProperties::default();
+        let mut props2 = vk::PhysicalDeviceProperties2::builder()
+            .push_next(&mut id_props)
+            .build();
+        unsafe { instance.get_physical_device_properties2(physical_device, &mut props2) };
+        // `id_props.device_uuid` is `ByteArray<16>` (a transparent newtype
+        // around `[u8; 16]`); use the upstream `From<ByteArray<N>> for [u8; N]`
+        // impl to land in plain-array shape.
+        let physical_device_uuid: [u8; 16] = id_props.device_uuid.into();
 
         let device_type_str = match device_props.device_type {
             vk::PhysicalDeviceType::DISCRETE_GPU => "Discrete GPU",
@@ -697,6 +728,27 @@ impl HostVulkanDevice {
             }
         };
 
+        // Build the OPAQUE_FD buffer pool — used by CUDA / OpenCL interop
+        // (host allocates, exports OPAQUE_FD, CUDA `cudaImportExternalMemory`
+        // imports it). Independent of the DMA-BUF pools below; needs its
+        // own pool because VMA carries one chained `VkExportMemoryAllocateInfo`
+        // per pool. Probe failure is non-fatal — callers refuse the
+        // allocation if the pool isn't available.
+        #[cfg(target_os = "linux")]
+        let (opaque_fd_buffer_pool, opaque_fd_buffer_export_info) = if supports_external_memory {
+            match Self::create_opaque_fd_buffer_pool(&allocator) {
+                Ok((pool, export_info)) => (Some(pool), Some(export_info)),
+                Err(e) => {
+                    tracing::warn!(
+                        "OPAQUE_FD buffer pool creation failed — CUDA/OpenCL interop will be unavailable: {e}"
+                    );
+                    (None, None)
+                }
+            }
+        } else {
+            (None, None)
+        };
+
         // Build DMA-BUF export pools on Linux when external memory is supported.
         // The tiled pool is built only when the EGL probe found at least one
         // RT-capable modifier for BGRA — that's the probe shape.
@@ -781,6 +833,11 @@ impl HostVulkanDevice {
             _dma_buf_image_export_info: dma_buf_image_export_info,
             #[cfg(target_os = "linux")]
             _dma_buf_image_tiled_export_info: dma_buf_image_tiled_export_info,
+            #[cfg(target_os = "linux")]
+            opaque_fd_buffer_pool,
+            #[cfg(target_os = "linux")]
+            _opaque_fd_buffer_export_info: opaque_fd_buffer_export_info,
+            physical_device_uuid,
             #[cfg(target_os = "linux")]
             drm_modifier_table,
             live_allocation_count: AtomicUsize::new(0),
@@ -1065,6 +1122,78 @@ impl HostVulkanDevice {
             image_export_info,
             tiled_export_info,
         ))
+    }
+
+    /// Build a VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers.
+    ///
+    /// Used by CUDA / OpenCL interop: the host allocates from this pool,
+    /// `vkGetMemoryFdKHR` with `OPAQUE_FD` produces a kernel fd, and the
+    /// remote API (`cudaImportExternalMemory` etc.) imports the same
+    /// underlying memory by fd. Sibling of [`Self::create_dma_buf_pools`];
+    /// kept separate because a VMA pool can chain only one
+    /// `VkExportMemoryAllocateInfo` per pool, and OPAQUE_FD vs DMA_BUF_EXT
+    /// are mutually-exclusive handle types.
+    ///
+    /// The export info `Box` is returned alongside the pool — callers
+    /// must keep it alive for the pool's entire lifetime (VMA stores
+    /// raw pointers via `pMemoryAllocateNext`).
+    #[cfg(target_os = "linux")]
+    fn create_opaque_fd_buffer_pool(
+        allocator: &Arc<vma::Allocator>,
+    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
+        // Probe with the same shape `HostVulkanPixelBuffer::new_opaque_fd_export`
+        // will use: HOST_VISIBLE | HOST_COHERENT, TRANSFER_SRC | TRANSFER_DST,
+        // chained `VkExternalMemoryBufferCreateInfo::OPAQUE_FD`. The probe's
+        // memoryTypeBits must match the real buffer's or the bind fails
+        // with VUID-vkBindBufferMemory-memory-01035.
+        let mut probe_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+        let probe_buffer_info = vk::BufferCreateInfo::builder()
+            .size(64 * 1024)
+            .usage(
+                vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut probe_external_info);
+        let probe_alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
+                | vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ..Default::default()
+        };
+        let mem_type_idx = unsafe {
+            allocator.find_memory_type_index_for_buffer_info(
+                probe_buffer_info,
+                &probe_alloc_opts,
+            )
+        }
+        .map_err(|e| {
+            StreamError::GpuError(format!(
+                "find memory type for OPAQUE_FD buffer pool: {e}"
+            ))
+        })?;
+
+        let mut export_info = Box::new(
+            vk::ExportMemoryAllocateInfo::builder()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+                .build(),
+        );
+        let mut pool_options = vma::PoolOptions::default();
+        pool_options = pool_options.push_next(export_info.as_mut());
+        pool_options.memory_type_index = mem_type_idx;
+        let pool = allocator
+            .create_pool(&pool_options)
+            .map_err(|e| StreamError::GpuError(format!("create OPAQUE_FD buffer pool: {e}")))?;
+
+        tracing::info!(
+            "OPAQUE_FD VMA buffer pool created — mem_type={}",
+            mem_type_idx
+        );
+        Ok((pool, export_info))
     }
 
     /// Find a memory type that satisfies both the type filter and required properties.
@@ -1554,6 +1683,28 @@ impl HostVulkanDevice {
         self.dma_buf_image_pool_tiled.as_ref()
     }
 
+    /// VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers.
+    ///
+    /// Returns `None` when external memory isn't supported on this device,
+    /// or when the pool's memory-type probe failed at construction.
+    /// Used by CUDA / OpenCL interop — see
+    /// [`super::HostVulkanPixelBuffer::new_opaque_fd_export`].
+    #[cfg(target_os = "linux")]
+    pub fn opaque_fd_buffer_pool(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_buffer_pool.as_ref()
+    }
+
+    /// `VkPhysicalDeviceIDProperties::deviceUUID` queried at construction.
+    ///
+    /// 16-byte big-endian UUID identifying this physical device.
+    /// CUDA-Vulkan interop matches this against `cudaDeviceProp::uuid`
+    /// to pick the correct CUDA device on multi-GPU rigs; using a
+    /// mismatched device fails silently when CUDA imports an
+    /// OPAQUE_FD memory or semaphore exported from this device.
+    pub fn physical_device_uuid(&self) -> [u8; 16] {
+        self.physical_device_uuid
+    }
+
     /// Render-target-capable DRM format modifiers, by DRM FOURCC, from the
     /// EGL probe at device init. Empty when the probe failed. Callers
     /// pass [`DrmModifierTable::rt_modifiers`] into
@@ -1611,7 +1762,7 @@ impl Drop for HostVulkanDevice {
         }
 
         // Critical drop order:
-        //  1. DMA-BUF pools — release Arc<Allocator> refs and call vmaDestroyPool
+        //  1. DMA-BUF + OPAQUE_FD pools — release Arc<Allocator> refs and call vmaDestroyPool
         //  2. Allocator — call vmaDestroyAllocator (only after all Arc refs gone)
         //  3. Export info Boxes — VMA no longer references them after pool destruction
         //  4. Device + instance — Vulkan handles
@@ -1620,6 +1771,7 @@ impl Drop for HostVulkanDevice {
             drop(self.dma_buf_buffer_pool.take());
             drop(self.dma_buf_image_pool.take());
             drop(self.dma_buf_image_pool_tiled.take());
+            drop(self.opaque_fd_buffer_pool.take());
         }
 
         drop(self.allocator.take());
@@ -1629,6 +1781,7 @@ impl Drop for HostVulkanDevice {
             drop(self._dma_buf_buffer_export_info.take());
             drop(self._dma_buf_image_export_info.take());
             drop(self._dma_buf_image_tiled_export_info.take());
+            drop(self._opaque_fd_buffer_export_info.take());
         }
 
         unsafe {
