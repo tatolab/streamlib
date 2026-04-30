@@ -68,10 +68,12 @@
   - [x] `cargo check -p streamlib-adapter-cuda-helpers --tests --features cuda` clean.
   - [x] `cargo xtask check-boundaries` clean (re-confirm in Stage 10).
 
-- [ ] **Stage 9** — Documentation.
-  - [ ] `docs/architecture/adapter-runtime-integration.md` — CUDA row.
-  - [ ] `docs/architecture/subprocess-rhi-parity.md` — OPAQUE_FD pattern row.
-  - [ ] `streamlib-adapter-cuda::lib.rs` module doc — ready-for-cdylib state.
+- [x] **Stage 9** — Documentation.
+  - [x] `docs/architecture/adapter-runtime-integration.md` — added the CUDA row to the per-adapter table (under the single-pattern recommendation), explaining how the OPAQUE_FD twist on the FD wire fits into the same shape and *why* (DLPack-flat-pointer constraint forces OPAQUE_FD over DMA-BUF). Added a new `install_setup_hook` shape — "Surface-share seam with OPAQUE_FD (cuda — #588)" — alongside the existing surface-share / escalate-IPC bullets.
+  - [x] `docs/architecture/subprocess-rhi-parity.md` — added the OPAQUE_FD VkBuffer pattern row to "Per-pattern decisions" alongside the existing DMA-BUF carve-out rows. Updated the "Today" section heading to mention #588 and inserted a 2026-04-30 dated annotation under the existing 2026-04-28 / 04-29 markers (preserving them per CLAUDE.md markdown rules) describing what landed and noting the diagram is a 2026-04-28 snapshot — readers are pointed to mentally insert a `cuda-adptr` box.
+  - [x] `streamlib-adapter-cuda::lib.rs` module doc — rewritten from "host-flavor scaffold from #587" to "ready for the cdylib runtimes (#589 Python, #590 Deno)" with a bulleted summary of what's now in place (host scaffold, OPAQUE_FD plumbing chain, DLPack capsule shape) and what remains for #589/#590 (cudarc integration, PyCapsule/Deno FFI wrap, kDLCUDA vs kDLCUDAHost calibration result, polyglot E2E). Intra-doc links use the spec'd `[`type`]` form.
+  - [x] `cargo doc -p streamlib-adapter-cuda --no-deps` clean — no unresolved link warnings.
+  - [x] `cargo xtask check-boundaries` clean.
 
 - [ ] **Stage 10** — Pre-merge cleanup.
   - [ ] Delete `tasklist.md` + `context.md`.
@@ -113,3 +115,12 @@
 - **Decision until empirical confirmation arrives**: keep `kDLCUDA = 2` as the documented default for the cdylib. Stage 7's API takes `Device` as a parameter so the flip is a one-line change inside #589/#590 if needed.
 - `cargo check -p streamlib-adapter-cuda-helpers --tests --features cuda` clean. Boundary check deferred to Stage 10 batch.
 - Next session pickup: Stage 9 (architecture docs) → Stage 10 (cleanup + PR).
+
+### Session 2026-04-30 — Stage 9 (Opus 4.7, 1M ctx)
+
+- Stage 9 done: architecture docs + lib.rs module-doc updates.
+- `adapter-runtime-integration.md` — added the CUDA row to the single-pattern table explaining the OPAQUE_FD-vs-DMA-BUF twist + the DLPack-flat-pointer reason for it; added a "Surface-share seam with OPAQUE_FD (cuda — #588)" bullet to the `install_setup_hook` shape list.
+- `subprocess-rhi-parity.md` — added the OPAQUE_FD VkBuffer pattern row to "Per-pattern decisions" alongside the DMA-BUF rows; section heading and dated annotation updated to mention #588, preserving the existing 2026-04-28 / 04-29 markers per the CLAUDE.md markdown editing rules.
+- `streamlib-adapter-cuda/src/lib.rs` module doc — rewritten to describe the post-#588 "ready for cdylib runtimes" state with a bulleted summary of what's in place and what remains for #589/#590.
+- `cargo doc -p streamlib-adapter-cuda --no-deps` clean. Boundary check clean.
+- Next session pickup: Stage 10 — pre-merge cleanup (delete tasklist.md + context.md, run full workspace test + clippy + boundary check, open the PR).

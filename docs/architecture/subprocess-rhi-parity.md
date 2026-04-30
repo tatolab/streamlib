@@ -102,8 +102,9 @@ three flow through the same `consumer-rhi` types.
 | DMA-BUF FD import + bind + map | **Carve-out** (host AND subprocess) | One shared crate (`streamlib-consumer-rhi` post-#560) |
 | Tiled-image import (`VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`) | **Carve-out** | Same crate |
 | HOST_VISIBLE staging-buffer import (cpu-readback) | **Carve-out** | Same crate (`ConsumerVulkanPixelBuffer`) |
+| **OPAQUE_FD VkBuffer import (cuda — #588)** | **Carve-out** | **Same crate (`ConsumerVulkanDevice::import_opaque_fd_memory` + `ConsumerVulkanPixelBuffer::from_opaque_fd`); the cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedBuffer`. OPAQUE_FD is not interchangeable with DMA-BUF: DLPack consumers (PyTorch / JAX / NumPy `from_dlpack`) require a flat `void*` device pointer, and only `cudaExternalMemoryGetMappedBuffer` produces one — and that requires the source memory to be a `VkBuffer` exported as OPAQUE_FD, not DMA-BUF. The wire format carries `handle_type: "dma_buf" \| "opaque_fd"` so surface-share lookup picks the right import path** |
 
-## Today (post-#560 Phase 2 + #562 cpu-readback rewire)
+## Today (post-#560 Phase 2 + #562 cpu-readback rewire + #588 cuda OPAQUE_FD plumbing)
 
 > Updated 2026-04-28 — #562 cpu-readback rewire (Path E) landed.
 > The cdylib swap to `ConsumerVulkanDevice` and the
@@ -116,6 +117,25 @@ three flow through the same `consumer-rhi` types.
 > #513 and #515 unfrozen the same day. Skia and the processor-port
 > refactor are now eligible to start; both must still land on the
 > single-pattern shape.
+>
+> Updated 2026-04-30 — #588 OPAQUE_FD plumbing chain landed
+> (`RhiExternalHandle::OpaqueFd` variant, host-side polymorphic
+> export through `RhiPixelBufferExport`, surface-share `handle_type`
+> wire-format discriminator, `ConsumerVulkanDevice::import_opaque_fd_memory`
+> + `ConsumerVulkanPixelBuffer::from_opaque_fd`, end-to-end
+> integration test, DLPack capsule shape on `CudaReadView` /
+> `CudaWriteView`, `cudaPointerGetAttributes` probe). The
+> `streamlib-adapter-cuda` adapter (#587 / #588) is now the
+> **fourth** consumer of the single-pattern shape — same generic
+> over `D: VulkanRhiDevice`, same surface-share registration, same
+> consumer-rhi import; the only twist is that the host pre-registers
+> the staging buffer as OPAQUE_FD instead of DMA-BUF (DLPack
+> requires a flat `void*` from `cudaExternalMemoryGetMappedBuffer`,
+> which requires OPAQUE_FD). The diagram below is from the
+> 2026-04-28 snapshot — cuda fits the same `vk-adptr` / `gl-adptr`
+> / `cpu-rb-adptr` row; mentally insert a `cuda-adptr` box, and add
+> `mod cuda` to the per-cdylib module list (currently empty
+> pending #589/#590).
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐

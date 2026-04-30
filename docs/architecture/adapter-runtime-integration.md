@@ -195,9 +195,10 @@ freshly-populated staging FD.
 | `streamlib-adapter-opengl` | Same shape; subprocess imports the `VkImage` and binds it as a `GL_TEXTURE_2D` via EGL DMA-BUF import. |
 | `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path. |
 | `streamlib-adapter-cpu-readback` | Same shape: host pre-registers a HOST_VISIBLE staging `VkBuffer` + a timeline semaphore via surface-share; subprocess imports through `ConsumerVulkanPixelBuffer` + `ConsumerVulkanTimelineSemaphore`. Per-acquire is a thin `RunCpuReadbackCopy(surface_id)` IPC that triggers the host's `vkCmdCopyImageToBuffer` and returns the timeline value to wait on. Subprocess waits on the imported timeline through the carve-out, then mmaps the pre-imported staging buffer. |
+| `streamlib-adapter-cuda` (#587 / #588) | Same shape with one twist on the FD wire: host pre-registers a HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` (`HostVulkanPixelBuffer::new_opaque_fd_export`) + an OPAQUE_FD-exportable timeline semaphore via surface-share; subprocess imports through `ConsumerVulkanPixelBuffer::from_opaque_fd` + `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`, then maps the same FDs into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` + `cudaImportExternalSemaphore(TimelineSemaphoreFd)`. The OPAQUE_FD handle type (rather than DMA-BUF) is forced by the DLPack zero-copy contract: PyTorch / JAX / NumPy `from_dlpack` consume `DLTensor.data` as a flat `void*`, and only `cudaExternalMemoryGetMappedBuffer` (which requires the source memory to be a `VkBuffer` exported as OPAQUE_FD) yields the flat pointer; `cudaExternalMemoryGetMappedMipmappedArray` returns an opaque texture-array handle that has no DLPack flavor. Per-acquire is timeline wait + (optionally, when the host pipeline produces frames into a tiled `VkImage`) a host-pipeline `vkCmdCopyImageToBuffer` step that signals the next timeline value — no per-acquire IPC, no CUDA bridge trait. |
 
-All four adapters (vulkan, opengl, cpu-readback after #562; skia
-once #513 lands) follow this shape — no outliers.
+All five adapters (vulkan, opengl, cpu-readback after #562, cuda
+after #588; skia once #513 lands) follow this shape — no outliers.
 
 ## Customer-facing surface — unchanged
 
@@ -378,6 +379,21 @@ The shape of what the hook does varies by seam:
   `gpu.set_cpu_readback_bridge(...)`. The bridge is the dispatch
   target the escalate handler reaches when a subprocess sends
   `acquire_cpu_readback`.
+- **Surface-share seam with OPAQUE_FD** (cuda — #588). The hook
+  allocates a HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` via
+  `HostVulkanPixelBuffer::new_opaque_fd_export` (rather than
+  `acquire_render_target_dma_buf_image`) plus an OPAQUE_FD-exportable
+  timeline via `HostVulkanTimelineSemaphore::new_exportable`,
+  registers them through the same surface-share API with
+  `RhiExternalHandle::OpaqueFd { fd, size }` so the wire format
+  carries `handle_type: "opaque_fd"`. No bridge; the cdylib does the
+  CUDA-side work (`cudaImportExternalMemory(OPAQUE_FD)` →
+  `cudaExternalMemoryGetMappedBuffer` → DLPack capsule
+  construction) entirely inside its own `cudarc` integration. The
+  host-pipeline side, when it needs to write into the staging
+  buffer per frame, runs `vkCmdCopyImageToBuffer` as a normal
+  pipeline step authored by whoever wired the runtime — not by the
+  adapter.
 
 Reference implementation:
 `examples/polyglot-cpu-readback-blur/src/main.rs`. That example shows
