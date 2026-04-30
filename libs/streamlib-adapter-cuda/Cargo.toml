@@ -38,6 +38,11 @@ streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 streamlib-surface-client = { path = "../streamlib-surface-client" }
 vulkanalia.workspace = true
 libc.workspace = true
+# DLPack ABI mirrors only — `default-features = false` pulls in only
+# `bitflags` + `snafu`. The cdylib (Stage 9 / #589 / #590) builds the
+# Python `PyCapsule` from these `#[repr(C)]` types; we don't take any
+# of dlpark's safe-wrapper machinery (which assumes pyo3 ownership).
+dlpark.workspace = true
 
 # `streamlib` and the helper-binary crate are *test*-only deps: the
 # carve-out test brings up a `HostVulkanDevice`, allocates an

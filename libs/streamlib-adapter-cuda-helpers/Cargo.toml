@@ -69,6 +69,11 @@ cudarc = { version = "0.19", optional = true, default-features = false, features
 # `VkInstance` creation on NVIDIA Linux trips the dual-device crash
 # documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
 serial_test = "3.2"
+# Surface-share wire client for the OPAQUE_FD round-trip integration
+# test (#588 Stage 6) — drives the daemon directly so the test exercises
+# the same wire format the polyglot cdylibs consume.
+streamlib-surface-client = { path = "../streamlib-surface-client" }
+serde_json.workspace = true
 
 [[test]]
 name = "cuda_carve_out"

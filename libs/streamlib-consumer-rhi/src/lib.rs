@@ -14,9 +14,12 @@
 //!
 //! - [`ConsumerVulkanDevice`] — own `VkInstance` + `VkDevice` for the
 //!   subprocess; only the carve-out methods listed in
-//!   `docs/architecture/subprocess-rhi-parity.md` (DMA-BUF FD import +
-//!   bind + map, single-shot layout transitions, sync wait/signal on
-//!   imported timeline semaphores).
+//!   `docs/architecture/subprocess-rhi-parity.md` (DMA-BUF AND OPAQUE_FD
+//!   FD import + bind + map, single-shot layout transitions, sync
+//!   wait/signal on imported timeline semaphores). DMA-BUF imports back
+//!   memory that EGL / V4L2 / multi-plane Vulkan importers consume;
+//!   OPAQUE_FD imports back memory that Vulkan-aware importers (CUDA via
+//!   UUID-matched device, peer VkInstance) consume.
 //! - [`ConsumerVulkanTexture`], [`ConsumerVulkanPixelBuffer`],
 //!   [`ConsumerVulkanTimelineSemaphore`] — import-only resource
 //!   wrappers paired with the consumer device.

@@ -348,9 +348,60 @@ impl ConsumerVulkanDevice {
         Ok(memory)
     }
 
-    /// Free imported memory. Pair with [`Self::import_dma_buf_memory`].
-    /// Calling on memory not allocated through this method is undefined
-    /// behavior at the Vulkan level.
+    /// Import an OPAQUE_FD file descriptor as `VkDeviceMemory`. Pairs with
+    /// the host's `export_opaque_fd_memory`: the host allocates, exports,
+    /// and registers in surface-share with `handle_type="opaque_fd"`; the
+    /// consumer looks up, imports, and binds.
+    ///
+    /// Use this for cross-process Vulkan memory sharing where the importer
+    /// is also Vulkan-aware (CUDA via UUID-matched device, OpenCL, peer
+    /// VkInstance) and tile-aware DRM-modifier negotiation isn't needed.
+    /// For DMA-BUF FDs (EGL, V4L2, multi-plane Vulkan importers) use
+    /// [`Self::import_dma_buf_memory`].
+    ///
+    /// fd ownership transfers to the Vulkan driver on success — caller
+    /// must NOT close `fd` afterwards. On error the caller still owns
+    /// `fd`. Pairs with [`Self::free_imported_memory`].
+    #[tracing::instrument(level = "trace", skip(self), fields(fd, allocation_size))]
+    pub fn import_opaque_fd_memory(
+        &self,
+        fd: i32,
+        allocation_size: vk::DeviceSize,
+        memory_type_bits: u32,
+        preferred_flags: vk::MemoryPropertyFlags,
+    ) -> Result<vk::DeviceMemory> {
+        let memory_type_index = self.find_memory_type(memory_type_bits, preferred_flags)?;
+
+        let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .fd(fd)
+            .build();
+
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(allocation_size)
+            .memory_type_index(memory_type_index)
+            .push_next(&mut import_info)
+            .build();
+
+        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
+            ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanDevice: import_opaque_fd_memory failed: {e}"
+            ))
+        })?;
+
+        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::debug!(
+            "ConsumerVulkanDevice: imported OPAQUE_FD ({} bytes, type={}, live={})",
+            allocation_size, memory_type_index, count
+        );
+
+        Ok(memory)
+    }
+
+    /// Free imported memory. Pair with [`Self::import_dma_buf_memory`] or
+    /// [`Self::import_opaque_fd_memory`]. Calling on memory not allocated
+    /// through one of those methods is undefined behavior at the Vulkan
+    /// level.
     pub fn free_imported_memory(&self, memory: vk::DeviceMemory) {
         unsafe { self.device.free_memory(memory, None) };
         self.live_allocation_count.fetch_sub(1, Ordering::Relaxed);

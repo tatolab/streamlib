@@ -116,6 +116,15 @@ vulkanalia-vma = { git = "https://github.com/tatolab/vulkanalia.git", rev = "982
 # SPIR-V reflection for descriptor-set-layout validation in the compute-kernel RHI.
 rspirv-reflect = "0.9.0"
 
+# DLPack v0.8 + v1.0 `#[repr(C)]` ABI mirrors for cross-framework
+# zero-copy tensor handoff (PyTorch / JAX / NumPy `from_dlpack`).
+# Pinned exact (`=0.6.0`) so the upgrade story is explicit — a layout
+# change upstream is an API-break here, not a silent minor bump.
+# `default-features = false` keeps the dep surface to `bitflags` +
+# `snafu`; the optional `pyo3` / `ndarray` / `cudarc` features stay off
+# so the cdylib boundary doesn't pick up Python or ML transitive deps.
+dlpark = { version = "=0.6.0", default-features = false }
+
 # Skia bindings for the streamlib-adapter-skia crate.
 #
 # - `vulkan`: GrDirectContext + GrVkImageInfo + GrBackendRenderTarget

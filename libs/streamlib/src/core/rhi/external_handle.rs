@@ -30,6 +30,25 @@ pub enum RhiExternalHandle {
         size: usize,
     },
 
+    /// Linux: OPAQUE_FD file descriptor for Vulkan-aware importers.
+    ///
+    /// Used for cross-process Vulkan memory sharing where the importer is
+    /// also Vulkan-aware (CUDA via UUID-matched device, OpenCL, another
+    /// VkInstance) and tile-aware DRM-modifier negotiation isn't needed.
+    /// Must be passed via SCM_RIGHTS ancillary data.
+    ///
+    /// Source-side allocation is via
+    /// [`crate::vulkan::rhi::HostVulkanPixelBuffer::new_opaque_fd_export`].
+    /// Consumer-side import is via
+    /// `streamlib_consumer_rhi::ConsumerVulkanPixelBuffer::from_opaque_fd`
+    /// or, in CUDA's case, `cudaImportExternalMemory` with
+    /// `cudaExternalMemoryHandleTypeOpaqueFd` directly.
+    #[cfg(target_os = "linux")]
+    OpaqueFd {
+        fd: std::os::unix::io::RawFd,
+        size: usize,
+    },
+
     /// Windows: DXGI shared handle.
     /// Can be opened in another process via OpenSharedHandle().
     #[cfg(target_os = "windows")]
@@ -110,10 +129,13 @@ pub trait RhiPixelBufferImport {
 
 #[cfg(target_os = "linux")]
 impl RhiPixelBufferExport for super::RhiPixelBuffer {
+    /// Returns the natural handle type for the underlying allocation —
+    /// `RhiExternalHandle::OpaqueFd` for OPAQUE_FD-flavored buffers
+    /// (see [`crate::vulkan::rhi::HostVulkanPixelBuffer::new_opaque_fd_export`]),
+    /// `RhiExternalHandle::DmaBuf` otherwise. Callers dispatch on the
+    /// returned variant.
     fn export_handle(&self) -> Result<RhiExternalHandle> {
-        let fd = self.ref_.inner.export_dma_buf_fd()?;
-        let size = self.ref_.inner.size() as usize;
-        Ok(RhiExternalHandle::DmaBuf { fd, size })
+        self.ref_.inner.export_external_handle()
     }
 }
 
@@ -140,6 +162,21 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
             ));
         }
 
+        // Reject any non-DMA-BUF handle types up front, before we touch the
+        // global Vulkan device or pixel-format machinery — so the contract
+        // is unit-testable without a live `HostVulkanDevice`.
+        for h in handles {
+            if let RhiExternalHandle::OpaqueFd { .. } = h {
+                return Err(crate::core::StreamError::NotSupported(
+                    "RhiPixelBufferImport::from_external_plane_handles: \
+                     OPAQUE_FD handles must be imported via \
+                     ConsumerVulkanPixelBuffer::from_opaque_fd, not \
+                     this host-side DMA-BUF constructor"
+                        .into(),
+                ));
+            }
+        }
+
         let vulkan_device =
             crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
                 .get()
@@ -157,13 +194,20 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
             ));
         }
 
-        // Unpack every plane's fd + size. Every handle must be a DmaBuf
-        // today — Windows / macOS handles would trip this and belong in a
-        // future widening when those backends grow multi-plane surfaces.
+        // Unpack every plane's fd + size. OPAQUE_FD has already been
+        // rejected above; only `DmaBuf` reaches this loop on Linux.
         let mut fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(handles.len());
         let mut plane_sizes: Vec<vulkanalia::vk::DeviceSize> = Vec::with_capacity(handles.len());
         for (idx, h) in handles.iter().enumerate() {
-            let RhiExternalHandle::DmaBuf { fd, size } = h.clone();
+            let (fd, size) = match h.clone() {
+                RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
+                // Unreachable: rejected up-front above; kept for
+                // exhaustiveness so future variants force a compile error.
+                RhiExternalHandle::OpaqueFd { .. } => unreachable!(
+                    "OPAQUE_FD handle should have been rejected by the up-front \
+                     handle-type validation"
+                ),
+            };
             fds.push(fd);
             let effective = if size > 0 {
                 size as vulkanalia::vk::DeviceSize
@@ -196,5 +240,60 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         };
 
         Ok(super::RhiPixelBuffer::new(pixel_buffer_ref))
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opaque_fd_and_dma_buf_with_same_fields_are_not_equal() {
+        // Variant discriminant must distinguish OPAQUE_FD vs DMA-BUF even
+        // when fd + size are byte-identical — the consumer side dispatches
+        // on the variant, not the fields.
+        let dma = RhiExternalHandle::DmaBuf { fd: 42, size: 4096 };
+        let opaque = RhiExternalHandle::OpaqueFd { fd: 42, size: 4096 };
+        assert_ne!(dma, opaque);
+    }
+
+    #[test]
+    fn opaque_fd_debug_includes_variant_name() {
+        // Tracing relies on Debug to disambiguate handle types in logs.
+        let opaque = RhiExternalHandle::OpaqueFd { fd: 7, size: 128 };
+        let s = format!("{opaque:?}");
+        assert!(s.contains("OpaqueFd"), "got: {s}");
+        assert!(s.contains("fd: 7"), "got: {s}");
+        assert!(s.contains("size: 128"), "got: {s}");
+    }
+
+    #[test]
+    fn host_side_dma_buf_constructor_rejects_opaque_fd_handles() {
+        // Contract: `RhiPixelBufferImport::from_external_plane_handles`
+        // builds a `HostVulkanPixelBuffer` from DMA-BUF FDs only. OPAQUE_FD
+        // handles take a different path (`ConsumerVulkanPixelBuffer::from_opaque_fd`)
+        // and must be rejected up-front with a clear error rather than
+        // silently miscoercing through the DMA-BUF code path.
+        let opaque = RhiExternalHandle::OpaqueFd { fd: -1, size: 0 };
+        let result =
+            <super::super::RhiPixelBuffer as RhiPixelBufferImport>::from_external_plane_handles(
+                &[opaque],
+                1,
+                1,
+                super::super::PixelFormat::Bgra32,
+            );
+        match result {
+            Err(crate::core::StreamError::NotSupported(msg)) => {
+                assert!(
+                    msg.contains("OPAQUE_FD"),
+                    "error message must mention OPAQUE_FD: {msg}"
+                );
+                assert!(
+                    msg.contains("ConsumerVulkanPixelBuffer::from_opaque_fd"),
+                    "error must point at the right alternative: {msg}"
+                );
+            }
+            other => panic!("expected NotSupported, got: {other:?}"),
+        }
     }
 }

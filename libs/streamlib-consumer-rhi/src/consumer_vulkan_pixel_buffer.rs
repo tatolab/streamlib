@@ -64,6 +64,66 @@ impl ConsumerVulkanPixelBuffer {
         )
     }
 
+    /// Import an OPAQUE_FD as a HOST_VISIBLE staging buffer.
+    ///
+    /// Pairs with the host's
+    /// [`crate::HostVulkanPixelBuffer::new_opaque_fd_export`] +
+    /// `export_opaque_fd_memory`. This is the constructor #589 / #590
+    /// CUDA cdylibs use after looking up a surface registered with
+    /// `handle_type="opaque_fd"` on the surface-share wire — the resulting
+    /// `VkBuffer`'s memory is also what `cudaImportExternalMemory` reaches
+    /// for via the same FD.
+    ///
+    /// Single-FD only: OPAQUE_FD has no multi-plane semantics (CUDA imports
+    /// flat memory; multi-plane DMA-BUFs go through [`Self::from_dma_buf_fds`]).
+    /// fd ownership transfers to the Vulkan driver on success — caller
+    /// must NOT close `fd` afterwards. On error the caller still owns
+    /// `fd`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size, width, height))]
+    pub fn from_opaque_fd(
+        vulkan_device: &Arc<ConsumerVulkanDevice>,
+        fd: std::os::unix::io::RawFd,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        format: PixelFormat,
+        allocation_size: vk::DeviceSize,
+    ) -> Result<Self> {
+        let derived_size = (width as vk::DeviceSize)
+            * (height as vk::DeviceSize)
+            * (bytes_per_pixel as vk::DeviceSize);
+        let effective_size = if allocation_size > 0 {
+            allocation_size
+        } else if width > 0 && height > 0 && bytes_per_pixel > 0 {
+            derived_size
+        } else {
+            return Err(ConsumerRhiError::Configuration(
+                "ConsumerVulkanPixelBuffer::from_opaque_fd: allocation_size=0 \
+                 and width*height*bpp cannot derive a size"
+                    .into(),
+            ));
+        };
+
+        let plane = import_single_plane_with_handle_type(
+            vulkan_device,
+            fd,
+            effective_size,
+            ImportHandleType::OpaqueFd,
+        )?;
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer: plane.buffer,
+            imported_memory: plane.memory,
+            mapped_ptr: plane.mapped_ptr,
+            extra_imported_planes: Vec::new(),
+            width,
+            height,
+            bytes_per_pixel,
+            format,
+            size: plane.size,
+        })
+    }
+
     /// Import N planes from N DMA-BUF FDs — each gets its own
     /// `VkBuffer` + imported `VkDeviceMemory` + mapping.
     ///
@@ -211,15 +271,42 @@ impl ConsumerVulkanPixelBuffer {
     }
 }
 
+/// Which `vkImportMemoryFdInfoKHR.handleType` to chain through when
+/// importing a plane.
+#[derive(Copy, Clone, Debug)]
+enum ImportHandleType {
+    DmaBuf,
+    OpaqueFd,
+}
+
 fn import_single_plane(
     vulkan_device: &Arc<ConsumerVulkanDevice>,
     fd: std::os::unix::io::RawFd,
     effective_size: vk::DeviceSize,
 ) -> Result<ConsumerImportedPlane> {
+    import_single_plane_with_handle_type(
+        vulkan_device,
+        fd,
+        effective_size,
+        ImportHandleType::DmaBuf,
+    )
+}
+
+fn import_single_plane_with_handle_type(
+    vulkan_device: &Arc<ConsumerVulkanDevice>,
+    fd: std::os::unix::io::RawFd,
+    effective_size: vk::DeviceSize,
+    handle_type: ImportHandleType,
+) -> Result<ConsumerImportedPlane> {
     let device = vulkan_device.device();
 
+    let vk_handle_type = match handle_type {
+        ImportHandleType::DmaBuf => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+        ImportHandleType::OpaqueFd => vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
+    };
+
     let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
-        .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+        .handle_types(vk_handle_type)
         .build();
 
     let buffer_info = vk::BufferCreateInfo::builder()
@@ -242,17 +329,24 @@ fn import_single_plane(
     let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
     let alloc_size = effective_size.max(mem_requirements.size);
 
-    let memory = vulkan_device
-        .import_dma_buf_memory(
+    let memory = match handle_type {
+        ImportHandleType::DmaBuf => vulkan_device.import_dma_buf_memory(
             fd,
             alloc_size,
             mem_requirements.memory_type_bits,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )
-        .map_err(|e| {
-            unsafe { device.destroy_buffer(buffer, None) };
-            e
-        })?;
+        ),
+        ImportHandleType::OpaqueFd => vulkan_device.import_opaque_fd_memory(
+            fd,
+            alloc_size,
+            mem_requirements.memory_type_bits,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        ),
+    }
+    .map_err(|e| {
+        unsafe { device.destroy_buffer(buffer, None) };
+        e
+    })?;
 
     unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
         vulkan_device.free_imported_memory(memory);

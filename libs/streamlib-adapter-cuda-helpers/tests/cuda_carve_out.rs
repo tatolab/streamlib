@@ -259,17 +259,112 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
         }
     };
 
-    // Build the descriptor via `zeroed()` + assignment so the body is
-    // robust across `cuda-11040..=12090` (no `reserved` field) and
-    // `cuda-13000..` (with `reserved: [u32; 16]`). The crate is
-    // currently pinned to `cuda-12090`; either way `mem::zeroed()`
-    // produces a valid descriptor — unused union arms stay zero, the
-    // optional `reserved` (when present) is zero per spec.
-    let mut sem_desc: sys::cudaExternalSemaphoreHandleDesc = unsafe { std::mem::zeroed() };
-    sem_desc.type_ =
-        sys::cudaExternalSemaphoreHandleType::cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd;
-    sem_desc.handle = sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: timeline_fd };
-    sem_desc.flags = 0;
+    // ── Phase 4a (Stage 8 of #588): probe the imported pointer's
+    //    memory class. The cdylib that constructs DLPack capsules
+    //    (#589/#590) needs to know whether to advertise the pointer
+    //    as `kDLCUDA = 2` (real device memory; reads at device
+    //    bandwidth) or `kDLCUDAHost = 3` (pinned-host memory; reads
+    //    cross PCIe per access). CUDA's `cudaPointerGetAttributes`
+    //    is the authoritative answer.
+    //
+    //    Expected: `cudaMemoryTypeDevice` for the imported HOST_VISIBLE
+    //    OPAQUE_FD `VkBuffer`. If a future driver downgrades to
+    //    `cudaMemoryTypeHost`, drop `HOST_VISIBLE` from
+    //    `HostVulkanPixelBuffer::new_opaque_fd_export` and re-test —
+    //    the host-side mapped pointer goes away (host-side population
+    //    routes through `vkCmdCopyBuffer` instead) but device-side
+    //    inference performance is preserved. The flip is recorded in
+    //    `context.md` under "Open empirical question (Stage 8)".
+    let mut ptr_attrs = MaybeUninit::<sys::cudaPointerAttributes>::uninit();
+    let ptr_attrs_call = unsafe {
+        sys::cudaPointerGetAttributes(ptr_attrs.as_mut_ptr(), dev_ptr).result()
+    };
+    if let Err(e) = ptr_attrs_call {
+        let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+        unsafe { libc::close(timeline_fd) };
+        panic!(
+            "cudaPointerGetAttributes failed on imported OPAQUE_FD device \
+             pointer: {e:?} — the Runtime API may not classify externally-\
+             imported memory on this driver; investigate before proceeding \
+             (#588 Stage 8, see context.md)"
+        );
+    }
+    let ptr_attrs = unsafe { ptr_attrs.assume_init() };
+    println!(
+        "cuda carve-out: cudaPointerGetAttributes(dev_ptr) → \
+         type={:?}, device={}, devicePointer={:?}, hostPointer={:?}",
+        ptr_attrs.type_, ptr_attrs.device, ptr_attrs.devicePointer, ptr_attrs.hostPointer,
+    );
+    match ptr_attrs.type_ {
+        sys::cudaMemoryType::cudaMemoryTypeDevice => {
+            // Expected. The imported pointer is real device memory;
+            // DLPack capsules can advertise `kDLCUDA = 2` and CUDA
+            // kernels read at device bandwidth.
+        }
+        sys::cudaMemoryType::cudaMemoryTypeHost => {
+            let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+            unsafe { libc::close(timeline_fd) };
+            panic!(
+                "Stage 8 regression (#588): imported OPAQUE_FD device pointer \
+                 presents as `cudaMemoryTypeHost` (pinned-host, PCIe per \
+                 access). Action: drop `HOST_VISIBLE` from \
+                 `HostVulkanPixelBuffer::new_opaque_fd_export`'s memory-property \
+                 mask, document the change in `context.md`, and update \
+                 `streamlib-adapter-cuda::dlpack` so the cdylib advertises \
+                 `kDLCUDAHost = 3` instead of `kDLCUDA = 2`."
+            );
+        }
+        sys::cudaMemoryType::cudaMemoryTypeUnregistered => {
+            let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+            unsafe { libc::close(timeline_fd) };
+            panic!(
+                "Stage 8 (#588): imported OPAQUE_FD device pointer is \
+                 `cudaMemoryTypeUnregistered` — the Runtime API does not \
+                 recognize the pointer at all, which would block DLPack \
+                 hand-off to PyTorch / JAX. Investigate driver \
+                 behavior before proceeding."
+            );
+        }
+        sys::cudaMemoryType::cudaMemoryTypeManaged => {
+            let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+            unsafe { libc::close(timeline_fd) };
+            panic!(
+                "Stage 8 (#588): imported OPAQUE_FD device pointer is \
+                 `cudaMemoryTypeManaged` — unexpected for an externally-\
+                 imported VkBuffer. Investigate driver before proceeding."
+            );
+        }
+    }
+
+    // Build the descriptor via `MaybeUninit::zeroed()` + raw-pointer
+    // writes per field so the body is robust across `cuda-11040..=12090`
+    // (no `reserved` field) and `cuda-13000..` (with `reserved: [u32;
+    // 16]`). The naive `mem::zeroed()` shape originally shipped here
+    // panics on modern Rust because `cudaExternalSemaphoreHandleType` is
+    // a `#[repr(C)]` enum whose discriminant 0 is not a valid variant —
+    // Rust's validity-invariant check at `mem::zeroed()` rejects an
+    // all-zero bit pattern for the enclosing struct as a whole.
+    // `MaybeUninit::zeroed()` skips that check (the type *might* not be
+    // valid yet); we then overwrite `type_` to a valid variant and
+    // `assume_init()` becomes sound. `handle` (a union; all-zero is a
+    // valid bit pattern) and `flags` (c_uint; all-zero is 0) inherit the
+    // `zeroed()` pre-fill, but we still write them explicitly to make
+    // the construction self-documenting. `reserved` (cuda-13xxx only)
+    // is `[c_uint; 16]` and stays at the all-zero pre-fill, matching
+    // the CUDA spec's "reserved must be zero" contract. (#595)
+    let mut sem_desc =
+        std::mem::MaybeUninit::<sys::cudaExternalSemaphoreHandleDesc>::zeroed();
+    let sem_desc = unsafe {
+        let p = sem_desc.as_mut_ptr();
+        (&raw mut (*p).type_).write(
+            sys::cudaExternalSemaphoreHandleType::cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd,
+        );
+        (&raw mut (*p).handle).write(
+            sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: timeline_fd },
+        );
+        (&raw mut (*p).flags).write(0);
+        sem_desc.assume_init()
+    };
     let mut ext_sem = MaybeUninit::<sys::cudaExternalSemaphore_t>::uninit();
     let import_sem_result = unsafe {
         sys::cudaImportExternalSemaphore(ext_sem.as_mut_ptr(), &sem_desc).result()
@@ -288,14 +383,21 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     let stream = unsafe { stream.assume_init() };
 
     // Wait params for a TIMELINE semaphore: only `params.fence.value` is
-    // meaningful; the nested struct/union types are awkward to spell out
-    // by hand, so zeroed() + assignment is the cleanest path. CUDA spec
-    // permits this — the unused union arms (nvSciSync, keyedMutex) are
-    // only consulted when `type_` indicates that flavor.
-    let mut wait_params: sys::cudaExternalSemaphoreWaitParams =
-        unsafe { std::mem::zeroed() };
-    wait_params.params.fence.value = 1;
-    wait_params.flags = 0;
+    // meaningful; the unused union arms (nvSciSync, keyedMutex) and the
+    // `reserved` arrays must be zero per the CUDA spec. The same
+    // `MaybeUninit::zeroed()` pattern as `sem_desc` above keeps this
+    // sound under modern Rust validity rules and cross-cuda-version-stable
+    // (cuda-13xxx adds a top-level `reserved: [c_uint; 16]`). All field
+    // writes go through raw pointers so we never form a `&mut` to an
+    // intermediate not-yet-fully-initialised value. (#595)
+    let mut wait_params =
+        std::mem::MaybeUninit::<sys::cudaExternalSemaphoreWaitParams>::zeroed();
+    let wait_params = unsafe {
+        let p = wait_params.as_mut_ptr();
+        (&raw mut (*p).params.fence.value).write(1);
+        (&raw mut (*p).flags).write(0);
+        wait_params.assume_init()
+    };
 
     // The `_v2` suffixed name is the canonical extern in cuda
     // 11.4..12.9 bindings; the unsuffixed `cudaWaitExternalSemaphoresAsync`
