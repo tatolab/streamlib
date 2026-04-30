@@ -46,9 +46,12 @@
   - [x] Updated `streamlib-consumer-rhi::lib.rs` module doc to mention OPAQUE_FD support.
   - [x] `cargo xtask check-boundaries` clean; full workspace check clean. Consumer-rhi conformance test for the new constructor lives in Stage 6's cross-crate integration test (which has access to a real `HostVulkanPixelBuffer::new_opaque_fd_export` FD).
 
-- [ ] **Stage 6** — End-to-end integration test (no `cudarc`).
-  - [ ] Cross-crate test in `streamlib-adapter-cuda-helpers/tests/`.
-  - [ ] Full chain: host export → surface-share wire → consumer-rhi import → `CudaSurfaceAdapter<ConsumerVulkanDevice>` acquire.
+- [x] **Stage 6** — End-to-end integration test (no `cudarc`).
+  - [x] New test `opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire` in `libs/streamlib-adapter-cuda-helpers/tests/opaque_fd_consumer_rhi_round_trip.rs`. Walks the full chain: host RHI export (HostVulkanPixelBuffer + HostVulkanTimelineSemaphore) → surface-share wire (real `UnixSocketSurfaceService`, `register`/`lookup` over Unix socket with `handle_type="opaque_fd"`) → consumer-rhi import (`ConsumerVulkanPixelBuffer::from_opaque_fd` + `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`) → `CudaSurfaceAdapter<ConsumerVulkanDevice>` instantiation + `register_host_surface` + `acquire_read`.
+  - [x] **Byte-equal assertion** across host's mapped pointer and consumer's mapped pointer — proves the OPAQUE_FD import lands the consumer VkDevice on the same GPU memory the host wrote to. This is the load-bearing assertion for #589/#590 (their cdylibs will see the same memory through `cudaImportExternalMemory` on the same FD).
+  - [x] Skip-cleanly behavior on no Vulkan / no OPAQUE_FD pool / multi-GPU UUID mismatch.
+  - [x] `#[serial]` per the dual-VkDevice learning. Added `streamlib-surface-client` + `serde_json` to dev-dependencies.
+  - [x] `cargo xtask check-boundaries` clean.
 
 - [ ] **Stage 7** — DLPack capsule on `CudaReadView` / `CudaWriteView`.
   - [ ] `dlpark` vs hand-rolled decision in `context.md`.
