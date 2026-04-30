@@ -39,11 +39,12 @@
   - [x] `cargo xtask check-boundaries` clean.
   - Note: the existing `oversize_fd_vec_rejected` test fails on `main` too (pre-existing flake — `UnexpectedEof` vs `InvalidInput` race against the connection state). Not introduced by this PR; flagging here for a future ticket. Left as-is per CLAUDE.md "no auto-fixing on the side".
 
-- [ ] **Stage 5** — `streamlib-consumer-rhi` OPAQUE_FD import.
-  - [ ] `ConsumerVulkanDevice::import_opaque_fd_memory(fd, size)`.
-  - [ ] `ConsumerVulkanPixelBuffer::from_opaque_fd(device, fd, size, …)`.
-  - [ ] Conformance test in the consumer-rhi suite.
-  - [ ] Update `consumer-rhi::lib.rs` doc.
+- [x] **Stage 5** — `streamlib-consumer-rhi` OPAQUE_FD import.
+  - [x] `ConsumerVulkanDevice::import_opaque_fd_memory(fd, allocation_size, memory_type_bits, preferred_flags)` — mirrors `import_dma_buf_memory` shape; chains `VK_KHR_external_memory_fd` (already enabled at device init) with `OPAQUE_FD` handle type. `#[tracing::instrument]`.
+  - [x] `ConsumerVulkanPixelBuffer::from_opaque_fd(device, fd, width, height, bpp, format, allocation_size)` — single-FD only (OPAQUE_FD has no multi-plane semantics; CUDA imports flat memory). Bypasses the multi-plane allocation-size derivation logic for clarity.
+  - [x] Refactored `import_single_plane` into a parametric helper (`ImportHandleType` enum + `import_single_plane_with_handle_type`). The DMA-BUF path stays a one-line wrapper for back-compat.
+  - [x] Updated `streamlib-consumer-rhi::lib.rs` module doc to mention OPAQUE_FD support.
+  - [x] `cargo xtask check-boundaries` clean; full workspace check clean. Consumer-rhi conformance test for the new constructor lives in Stage 6's cross-crate integration test (which has access to a real `HostVulkanPixelBuffer::new_opaque_fd_export` FD).
 
 - [ ] **Stage 6** — End-to-end integration test (no `cudarc`).
   - [ ] Cross-crate test in `streamlib-adapter-cuda-helpers/tests/`.
