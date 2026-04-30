@@ -229,7 +229,7 @@ mod tests {
         let device_ptr = 0xDEAD_BEEF_CAFE_F00D_u64;
         let size = 1920 * 1080 * 4;
         let device = Device::cuda(0);
-        let owner: CapsuleOwner = Box::new(Vec::<u8>::new());
+        let owner: CapsuleOwner = Box::new(());
 
         let mt_ptr = build_byte_buffer_managed_tensor(device_ptr, size, device, owner);
         assert!(!mt_ptr.is_null());
@@ -279,13 +279,13 @@ mod tests {
         // [3*480*640, 480*640, 640, 1]. Verifies multi-dim shape and
         // explicit strides round-trip through the helper.
         let shape = vec![1_i64, 3, 480, 640];
-        let strides = Some(vec![3 * 480 * 640_i64, 480 * 640, 640, 1]);
+        let strides_vec = vec![3 * 480 * 640_i64, 480 * 640, 640, 1];
         let owner: CapsuleOwner = Box::new(());
 
         let mt = build_managed_tensor(
             0x1000_u64,
             shape.clone(),
-            strides.clone(),
+            Some(strides_vec.clone()),
             DataType::F32,
             Device::cuda(0),
             owner,
@@ -300,7 +300,7 @@ mod tests {
             assert!(!t.strides.is_null());
             let observed_strides =
                 std::slice::from_raw_parts(t.strides, t.ndim as usize).to_vec();
-            assert_eq!(observed_strides, strides.unwrap());
+            assert_eq!(observed_strides, strides_vec);
 
             let del = (*mt).deleter.expect("deleter must be Some");
             del(mt);
