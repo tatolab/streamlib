@@ -50,19 +50,11 @@ vulkanalia.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 libc.workspace = true
-# Optional CUDA bindings — `fallback-dynamic-loading` loads libcuda.so
-# lazily via dlopen on first call (toolkit absence at build time is
-# fine; runtime absence skips the test rather than failing). Drop the
-# default features so we don't drag cuBLAS / cuRAND / NVRTC into the
-# build for #587's needs.
-# Pin to a specific CUDA toolkit version (`cuda-12090`) so the build
-# does NOT require `nvcc` to be installed (`cuda-version-from-build-system`
-# is the alternative but errors when nvcc is absent). `cuda-12090`
-# bindings call the older `_v2`-suffixed external-resource symbols
-# which remain ABI-stable through cuda 13.x — runtime libcudart
-# continues to export them, so the dlopen path works regardless of
-# which toolkit version is installed on the test machine.
-cudarc = { version = "0.19", optional = true, default-features = false, features = ["driver", "runtime", "fallback-dynamic-loading", "cuda-12090"] }
+# Optional CUDA bindings — see workspace `Cargo.toml` for the
+# `fallback-dynamic-loading` + `cuda-12090` rationale. `optional = true`
+# is the only knob this crate adds on top of the workspace dep, so the
+# `cuda` Cargo feature still gates whether the binding is compiled in.
+cudarc = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Serialize Vulkan-device-touching tests; concurrent `VkDevice` /

@@ -52,6 +52,21 @@ streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 # via a thin `run_cpu_readback_copy` escalate IPC; the consumer waits
 # on the imported timeline through the carve-out.
 streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback" }
+# Subprocess-side CUDA runtime (#589). Same single-pattern shape as the
+# other adapters: generic over `D: VulkanRhiDevice`, instantiated here
+# against `ConsumerVulkanDevice`. The cdylib re-imports the OPAQUE_FD
+# `VkBuffer` + timeline into CUDA via `cudaImportExternalMemory` +
+# `cudaImportExternalSemaphore` and hands DLPack capsules back to
+# Python. No per-acquire IPC; the host's pipeline writes into the
+# OPAQUE_FD `VkBuffer` and signals the shared timeline ambiently.
+streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda" }
+# CUDA bindings. Linux-only (the cuda module is `#[cfg(target_os =
+# "linux")]`), `fallback-dynamic-loading` means libcuda.so is dlopen'd
+# at runtime so a build host without a CUDA toolkit can still link the
+# cdylib; runtime absence is detected via
+# `cudarc::runtime::sys::is_culib_present()` and surfaces as a clean
+# init failure rather than a panic.
+cudarc.workspace = true
 
 
 [lints]

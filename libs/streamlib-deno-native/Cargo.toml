@@ -43,6 +43,16 @@ streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 # runs host-side, triggered via the `run_cpu_readback_copy` escalate
 # IPC; the consumer waits on the imported timeline through the carve-out.
 streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback" }
+# Subprocess-side CUDA runtime (#590). Mirrors the Python sibling
+# (#589) — generic-over-device adapter, instantiated here against
+# `ConsumerVulkanDevice`, OPAQUE_FD VkBuffer + timeline imported into
+# CUDA via `cudaImportExternalMemory` / `cudaImportExternalSemaphore`,
+# DLPack capsule emitted across the FFI boundary.
+streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda" }
+# CUDA bindings — see streamlib-python-native/Cargo.toml for the
+# `fallback-dynamic-loading` rationale. Same workspace pin so the two
+# cdylibs stay lockstep on CUDA ABI.
+cudarc.workspace = true
 
 
 [lints]
