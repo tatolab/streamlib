@@ -370,6 +370,10 @@ fn handle_register(
         .get("resource_type")
         .and_then(|v| v.as_str())
         .unwrap_or("pixel_buffer");
+    let handle_type = request
+        .get("handle_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("dma_buf");
 
     let mut dup_plane_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
     for fd in plane_fds {
@@ -379,7 +383,7 @@ fn handle_register(
                 unsafe { libc::close(*d) };
             }
             return (
-                serde_json::json!({"error": "failed to dup DMA-BUF fd"}),
+                serde_json::json!({"error": "failed to dup memory fd"}),
                 Vec::new(),
             );
         }
@@ -414,6 +418,7 @@ fn handle_register(
         height,
         format,
         resource_type,
+        handle_type,
         drm_format_modifier,
         sync_fd: dup_sync_fd,
     }) {
@@ -507,6 +512,7 @@ fn handle_lookup(
             "height": height,
             "format": format,
             "resource_type": resource_type,
+            "handle_type": checkout.handle_type,
             "plane_sizes": checkout.plane_sizes,
             "plane_offsets": checkout.plane_offsets,
             "plane_strides": checkout.plane_strides,
@@ -587,6 +593,10 @@ fn handle_check_in(
         .get("resource_type")
         .and_then(|v| v.as_str())
         .unwrap_or("pixel_buffer");
+    let handle_type = request
+        .get("handle_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("dma_buf");
 
     let surface_id = uuid::Uuid::new_v4().to_string();
 
@@ -616,6 +626,7 @@ fn handle_check_in(
         height,
         format,
         resource_type,
+        handle_type,
         drm_format_modifier,
         // check_in is the subprocess-registers-pixel-buffer path used by
         // CPU-readback / legacy DMA-BUF consumers. None of those need
@@ -902,6 +913,129 @@ mod tests {
         service.stop();
     }
 
+    /// `handle_type` rides along through the register/lookup wire path.
+    /// Subprocess consumers (#589 Python / #590 Deno CUDA cdylibs) read
+    /// it to dispatch on the import API: `"dma_buf"` →
+    /// `ConsumerVulkanPixelBuffer::from_dma_buf_fds`, `"opaque_fd"` →
+    /// `ConsumerVulkanPixelBuffer::from_opaque_fd`. The default-when-absent
+    /// behavior (`"dma_buf"`) preserves backward compatibility with every
+    /// adapter that predates this field. Locking the round-trip contract
+    /// for both halves: explicit-OPAQUE_FD and default-DMA-BUF.
+    #[test]
+    fn handle_type_round_trips_explicit_opaque_fd_and_default_dma_buf() {
+        let state = SurfaceShareState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        // Half 1: explicit OPAQUE_FD round-trip. The wire treats the FD
+        // opaquely — a memfd stands in for what the host RHI would emit
+        // from `HostVulkanPixelBuffer::export_opaque_fd_memory`.
+        let send_fd = make_memfd_with(b"opaque-fd-fixture");
+        let opaque_req = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "test-runtime",
+            "width": 64,
+            "height": 64,
+            "format": "Bgra8Unorm",
+            "resource_type": "pixel_buffer",
+            "handle_type": "opaque_fd",
+            "plane_sizes": [64u64 * 64 * 4],
+            "plane_offsets": [0u64],
+            "plane_strides": [0u64],
+        });
+        let (opaque_resp, _) = send_request_with_fds(&stream, &opaque_req, &[send_fd], 0)
+            .expect("check_in opaque_fd");
+        unsafe { libc::close(send_fd) };
+        let opaque_surface_id = opaque_resp
+            .get("surface_id")
+            .and_then(|v| v.as_str())
+            .expect("surface_id")
+            .to_string();
+
+        let lookup_resp = {
+            let req = serde_json::json!({
+                "op": "check_out",
+                "surface_id": opaque_surface_id,
+            });
+            let (resp, fds) =
+                send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                    .expect("check_out opaque_fd");
+            for fd in &fds {
+                unsafe { libc::close(*fd) };
+            }
+            resp
+        };
+        assert_eq!(
+            lookup_resp.get("handle_type").and_then(|v| v.as_str()),
+            Some("opaque_fd"),
+            "OPAQUE_FD round-trip: lookup must echo registered handle_type",
+        );
+
+        // Half 2: handle_type-absent register defaults to dma_buf on both
+        // wire-parse and lookup-emit. Lock the back-compat contract so a
+        // future schema change can't silently flip the default.
+        let send_fd2 = make_memfd_with(b"legacy-dma-buf-fixture");
+        let legacy_req = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "test-runtime",
+            "width": 64,
+            "height": 64,
+            "format": "Bgra8Unorm",
+            "resource_type": "pixel_buffer",
+            "plane_sizes": [64u64 * 64 * 4],
+            "plane_offsets": [0u64],
+            "plane_strides": [0u64],
+            // no handle_type — must default to "dma_buf"
+        });
+        let (legacy_resp, _) = send_request_with_fds(&stream, &legacy_req, &[send_fd2], 0)
+            .expect("check_in legacy");
+        unsafe { libc::close(send_fd2) };
+        let legacy_surface_id = legacy_resp
+            .get("surface_id")
+            .and_then(|v| v.as_str())
+            .expect("surface_id")
+            .to_string();
+
+        let legacy_lookup = {
+            let req = serde_json::json!({
+                "op": "check_out",
+                "surface_id": legacy_surface_id,
+            });
+            let (resp, fds) =
+                send_request_with_fds(&stream, &req, &[], MAX_DMA_BUF_PLANES)
+                    .expect("check_out legacy");
+            for fd in &fds {
+                unsafe { libc::close(*fd) };
+            }
+            resp
+        };
+        assert_eq!(
+            legacy_lookup.get("handle_type").and_then(|v| v.as_str()),
+            Some("dma_buf"),
+            "absent handle_type must default to dma_buf on both register and lookup",
+        );
+
+        for sid in [&opaque_surface_id, &legacy_surface_id] {
+            let _ = send_request_with_fds(
+                &stream,
+                &serde_json::json!({
+                    "op": "release",
+                    "surface_id": sid,
+                    "runtime_id": "test-runtime",
+                }),
+                &[],
+                0,
+            );
+        }
+
+        drop(stream);
+        service.stop();
+    }
+
     /// `drm_format_modifier` and `plane_strides` ride along through the
     /// register/lookup path. The host adapter writes the modifier into the
     /// `SurfaceTransportHandle` field defined in `streamlib-adapter-abi`; the
@@ -1071,6 +1205,7 @@ mod tests {
                     height: 1,
                     format: "Bgra32",
                     resource_type: "pixel_buffer",
+                    handle_type: "dma_buf",
                     drm_format_modifier: 0,
                     sync_fd: None,
                 })

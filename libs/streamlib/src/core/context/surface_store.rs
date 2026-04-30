@@ -857,21 +857,20 @@ impl SurfaceStore {
 
         // Export every plane's fd. Single-plane pixel buffers return a
         // one-element vec; multi-plane DMA-BUFs (e.g. NV12 under DRM format
-        // modifiers) return one fd per plane.
+        // modifiers) return one fd per plane. OPAQUE_FD-flavored buffers
+        // (CUDA targets) yield a single OPAQUE_FD handle — `handle_type` is
+        // set on the wire per the variant.
         let planes = pixel_buffer.export_plane_handles()?;
         let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
         let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
         let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
+        let mut handle_type = "dma_buf";
         for handle in planes {
             let (fd, size) = match handle {
                 crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
-                crate::core::rhi::RhiExternalHandle::OpaqueFd { .. } => {
-                    return Err(StreamError::NotSupported(
-                        "SurfaceStore::check_in: OPAQUE_FD pixel buffers \
-                         are not yet wired through this code path; use the \
-                         OPAQUE_FD-aware register API once Stage 4 lands"
-                            .into(),
-                    ));
+                crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size } => {
+                    handle_type = "opaque_fd";
+                    (fd, size)
                 }
             };
             plane_fds.push(fd);
@@ -885,6 +884,7 @@ impl SurfaceStore {
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
             "format": format!("{:?}", pixel_buffer.format()),
+            "handle_type": handle_type,
             "plane_sizes": plane_sizes,
             "plane_offsets": plane_offsets,
         });
@@ -1027,18 +1027,13 @@ impl SurfaceStore {
     pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &RhiPixelBuffer) -> Result<()> {
         use crate::core::rhi::RhiPixelBufferExport;
 
-        // Export the DMA-BUF fd
+        // Export the buffer's natural handle — DMA-BUF or OPAQUE_FD per
+        // the underlying allocation flavor (see
+        // `HostVulkanPixelBuffer::export_external_handle`).
         let handle = pixel_buffer.export_handle()?;
-        let (fd, _size) = match handle {
-            crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
-            crate::core::rhi::RhiExternalHandle::OpaqueFd { .. } => {
-                return Err(StreamError::NotSupported(
-                    "SurfaceStore::register_buffer: OPAQUE_FD pixel buffers \
-                     are not yet wired through this code path; use the \
-                     OPAQUE_FD-aware register API once Stage 4 lands"
-                        .into(),
-                ));
-            }
+        let (fd, _size, handle_type) = match handle {
+            crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size, "dma_buf"),
+            crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size } => (fd, size, "opaque_fd"),
         };
 
         let request = serde_json::json!({
@@ -1049,6 +1044,7 @@ impl SurfaceStore {
             "height": pixel_buffer.height,
             "format": format!("{:?}", pixel_buffer.format()),
             "resource_type": "pixel_buffer",
+            "handle_type": handle_type,
         });
 
         let connection = self.inner.connection.lock();
@@ -1205,22 +1201,22 @@ impl SurfaceStore {
     ) -> Result<()> {
         use crate::core::rhi::RhiPixelBufferExport;
 
-        // Per-plane DMA-BUF FDs (single-plane buffers return a one-element vec).
+        // Per-plane FDs — DMA-BUF buffers return one fd per plane;
+        // OPAQUE_FD buffers (CUDA target) return a single OPAQUE_FD handle.
+        // Both flavors share the SCM_RIGHTS plumbing; the wire's
+        // `handle_type` discriminator tells the consumer which import API
+        // to use.
         let planes = pixel_buffer.export_plane_handles()?;
         let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
         let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
         let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
+        let mut handle_type = "dma_buf";
         for handle in planes {
             let (fd, size) = match handle {
                 crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
-                crate::core::rhi::RhiExternalHandle::OpaqueFd { .. } => {
-                    return Err(StreamError::NotSupported(
-                        "SurfaceStore::register_pixel_buffer_with_timeline: \
-                         OPAQUE_FD pixel buffers are not yet wired through \
-                         this code path; use the OPAQUE_FD-aware register \
-                         API once Stage 4 lands"
-                            .into(),
-                    ));
+                crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size } => {
+                    handle_type = "opaque_fd";
+                    (fd, size)
                 }
             };
             plane_fds.push(fd);
@@ -1256,6 +1252,7 @@ impl SurfaceStore {
             "height": pixel_buffer.height,
             "format": format!("{:?}", pixel_buffer.format()),
             "resource_type": "pixel_buffer",
+            "handle_type": handle_type,
             "plane_sizes": plane_sizes,
             "plane_offsets": plane_offsets,
             "has_sync_fd": sync_fd.is_some(),
@@ -1347,7 +1344,31 @@ impl SurfaceStore {
 
         if received_fds.is_empty() {
             return Err(StreamError::Configuration(
-                "lookup: no DMA-BUF fd in response".into(),
+                "lookup: no memory fd in response".into(),
+            ));
+        }
+
+        // Dispatch on the wire-level handle type. OPAQUE_FD lookups can't
+        // construct a host-side `RhiPixelBuffer` (that import path is
+        // DMA-BUF-only — see `RhiPixelBufferImport::from_external_plane_handles`).
+        // Subprocess consumers go through `streamlib-surface-client` directly
+        // and import via `streamlib_consumer_rhi::ConsumerVulkanPixelBuffer::from_opaque_fd`.
+        let handle_type = response
+            .get("handle_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("dma_buf");
+
+        if handle_type == "opaque_fd" {
+            for fd in &received_fds {
+                unsafe { libc::close(*fd) };
+            }
+            return Err(StreamError::NotSupported(
+                "SurfaceStore::lookup_buffer: surface registered with \
+                 handle_type=\"opaque_fd\"; the host-side RhiPixelBuffer \
+                 import path is DMA-BUF-only. Subprocess consumers should \
+                 use streamlib-surface-client directly + \
+                 ConsumerVulkanPixelBuffer::from_opaque_fd."
+                    .into(),
             ));
         }
 

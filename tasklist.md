@@ -31,11 +31,13 @@
   - [x] New `export_external_handle_dispatches_on_allocation_flavor` integration test exercises both DMA-BUF and OPAQUE_FD flavors against a real `HostVulkanDevice` (skips gracefully when GPU/pool unavailable).
   - [x] `cargo xtask check-boundaries` clean; full workspace check clean.
 
-- [ ] **Stage 4** — Surface-share wire format extension.
-  - [ ] Add `handle_type` discriminator on register/lookup JSON (additive, defaults to `"dma_buf"`).
-  - [ ] `SurfaceStore::register_pixel_buffer_opaque_fd_with_timeline` (or extend existing API).
-  - [ ] Client-side `lookup_*` returns OPAQUE_FD when registered that way.
-  - [ ] Round-trip test extending `check_in_check_out_multi_fd_roundtrip`.
+- [x] **Stage 4** — Surface-share wire format extension.
+  - [x] Added `handle_type: String` to `SurfaceMetadata`, `SurfaceRegistration`, `SurfacePlaneCheckout`. Wire JSON additive: register parses `request.get("handle_type").unwrap_or("dma_buf")`, lookup emits `checkout.handle_type`. Existing adapters that don't pass the field continue to register/lookup as `"dma_buf"` unchanged.
+  - [x] Made `SurfaceStore::{register_pixel_buffer_with_timeline, register_buffer, check_in}` polymorphic: each derives `handle_type` from the `RhiExternalHandle` variant returned by the polymorphic `export_handle()`. Dropped the OPAQUE_FD-rejection arms added in Stage 2.
+  - [x] `SurfaceStore::lookup_buffer` (Linux) dispatches on the response's `handle_type`. OPAQUE_FD lookups return `StreamError::NotSupported` pointing at `streamlib-consumer-rhi::ConsumerVulkanPixelBuffer::from_opaque_fd` — host-side `RhiPixelBuffer` import is DMA-BUF-only by design.
+  - [x] New `handle_type_round_trips_explicit_opaque_fd_and_default_dma_buf` test covers both halves: explicit OPAQUE_FD register/lookup AND back-compat default-DMA-BUF when the field is absent.
+  - [x] `cargo xtask check-boundaries` clean.
+  - Note: the existing `oversize_fd_vec_rejected` test fails on `main` too (pre-existing flake — `UnexpectedEof` vs `InvalidInput` race against the connection state). Not introduced by this PR; flagging here for a future ticket. Left as-is per CLAUDE.md "no auto-fixing on the side".
 
 - [ ] **Stage 5** — `streamlib-consumer-rhi` OPAQUE_FD import.
   - [ ] `ConsumerVulkanDevice::import_opaque_fd_memory(fd, size)`.

@@ -21,6 +21,10 @@ use parking_lot::RwLock;
 pub struct SurfaceMetadata {
     pub surface_id: String,
     pub runtime_id: String,
+    /// Memory FDs for the surface — one per plane for multi-plane DMA-BUFs,
+    /// a single FD for OPAQUE_FD `VkBuffer`-backed surfaces. The wire type
+    /// (and the importer-side API to use) is encoded in
+    /// [`Self::handle_type`].
     pub dma_buf_fds: Vec<RawFd>,
     pub plane_sizes: Vec<u64>,
     pub plane_offsets: Vec<u64>,
@@ -28,11 +32,21 @@ pub struct SurfaceMetadata {
     /// Vulkan import passes via `EGL_DMA_BUF_PLANE{N}_PITCH_EXT` /
     /// `VkSubresourceLayout::rowPitch`. One entry per plane fd; defaults
     /// to a vec of zeros for legacy registrations that didn't supply it.
+    /// Unused for OPAQUE_FD registrations (flat memory, no per-plane
+    /// layout) — set to a single zero entry there.
     pub plane_strides: Vec<u64>,
     pub width: u32,
     pub height: u32,
     pub format: String,
     pub resource_type: String,
+    /// Wire-level discriminator for the FDs in [`Self::dma_buf_fds`]:
+    /// `"dma_buf"` (default, every legacy surface) for DMA-BUF-typed
+    /// FDs that EGL / V4L2 / multi-plane Vulkan importers consume; or
+    /// `"opaque_fd"` for OPAQUE_FD-typed FDs that Vulkan-aware importers
+    /// (CUDA via UUID-matched device, peer VkInstance) consume. The host
+    /// sets this from the `RhiExternalHandle` variant returned by
+    /// [`crate::vulkan::rhi::HostVulkanPixelBuffer::export_external_handle`].
+    pub handle_type: String,
     /// DRM format modifier of the underlying VkImage. Zero means
     /// `DRM_FORMAT_MOD_LINEAR` (sampler-only on NVIDIA — see
     /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`) or "not set"
@@ -66,7 +80,8 @@ struct Inner {
 }
 
 /// Result of [`SurfaceShareState::get_surface_planes`] — everything a
-/// consumer needs to import the DMA-BUF as a Vulkan or EGL image.
+/// consumer needs to import the DMA-BUF as a Vulkan or EGL image, or the
+/// OPAQUE_FD memory as a Vulkan-aware buffer (CUDA / peer VkInstance).
 #[derive(Clone, Debug)]
 pub struct SurfacePlaneCheckout {
     pub dma_buf_fds: Vec<RawFd>,
@@ -74,10 +89,15 @@ pub struct SurfacePlaneCheckout {
     pub plane_offsets: Vec<u64>,
     pub plane_strides: Vec<u64>,
     pub drm_format_modifier: u64,
+    /// Wire-level discriminator for [`Self::dma_buf_fds`] — see
+    /// [`SurfaceMetadata::handle_type`]. Consumer-side import dispatches
+    /// on this value: `"dma_buf"` → `from_dma_buf_fds`, `"opaque_fd"` →
+    /// `from_opaque_fd`.
+    pub handle_type: String,
     /// Optional OPAQUE_FD for the surface's exportable timeline semaphore.
     /// `None` for surfaces registered without one. The table-owned fd is
     /// returned as-is; callers that hand it out via SCM_RIGHTS must `dup`
-    /// it first, just like the DMA-BUF plane fds.
+    /// it first, just like the memory fds.
     pub sync_fd: Option<RawFd>,
 }
 
@@ -95,6 +115,10 @@ pub struct SurfaceRegistration<'a> {
     pub height: u32,
     pub format: &'a str,
     pub resource_type: &'a str,
+    /// Wire-level discriminator: `"dma_buf"` (default for legacy paths)
+    /// or `"opaque_fd"` (Vulkan-aware importers like CUDA). Pass
+    /// `"dma_buf"` if you don't know.
+    pub handle_type: &'a str,
     /// DRM format modifier of the underlying VkImage. See
     /// [`SurfaceMetadata::drm_format_modifier`].
     pub drm_format_modifier: u64,
@@ -142,6 +166,7 @@ impl SurfaceShareState {
                 height: reg.height,
                 format: reg.format.to_string(),
                 resource_type: reg.resource_type.to_string(),
+                handle_type: reg.handle_type.to_string(),
                 drm_format_modifier: reg.drm_format_modifier,
                 sync_fd: reg.sync_fd,
                 checkout_count: 0,
@@ -168,6 +193,7 @@ impl SurfaceShareState {
                 plane_offsets: metadata.plane_offsets.clone(),
                 plane_strides: metadata.plane_strides.clone(),
                 drm_format_modifier: metadata.drm_format_modifier,
+                handle_type: metadata.handle_type.clone(),
                 sync_fd: metadata.sync_fd,
             }
         })
@@ -223,6 +249,7 @@ mod tests {
             height: 1080,
             format: "Rgba8Unorm",
             resource_type,
+            handle_type: "dma_buf",
             drm_format_modifier: 0,
             sync_fd: None,
         }
@@ -331,6 +358,7 @@ mod tests {
                 height: 480,
                 format: "Nv12VideoRange",
                 resource_type: "pixel_buffer",
+                handle_type: "dma_buf",
                 drm_format_modifier: 0,
                 sync_fd: None,
             })
