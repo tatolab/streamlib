@@ -125,6 +125,27 @@ rspirv-reflect = "0.9.0"
 # so the cdylib boundary doesn't pick up Python or ML transitive deps.
 dlpark = { version = "=0.6.0", default-features = false }
 
+# CUDA bindings — used by `streamlib-adapter-cuda-helpers` (test-only,
+# behind a `cuda` Cargo feature) and by the polyglot cdylib runtimes
+# (`streamlib-python-native`, `streamlib-deno-native`) to import OPAQUE_FD
+# Vulkan memory + timeline semaphores into CUDA via
+# `cudaImportExternalMemory` / `cudaImportExternalSemaphore`. The cdylibs
+# depend on cudarc unconditionally (Linux-only) but `fallback-dynamic-loading`
+# means libcuda.so is only required at runtime — build hosts without a
+# CUDA toolkit still compile the cdylib, and runtime detection via
+# `cudarc::runtime::sys::is_culib_present()` lets the adapter fail
+# gracefully on CUDA-less machines.
+#
+# Pin to `cuda-12090` so the build does NOT require `nvcc` (the
+# `cuda-version-from-build-system` alternative errors when nvcc is
+# absent). The `_v2`-suffixed external-resource symbols this binding
+# exposes remain ABI-stable through CUDA 13.x — runtime libcudart
+# continues to export them, so the dlopen path resolves regardless of
+# which CUDA version is installed on the runner. `default-features =
+# false` skips cuBLAS / cuRAND / NVRTC; we only need `runtime` (for
+# external-memory + external-semaphore APIs).
+cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "fallback-dynamic-loading", "cuda-12090"] }
+
 # Skia bindings for the streamlib-adapter-skia crate.
 #
 # - `vulkan`: GrDirectContext + GrVkImageInfo + GrBackendRenderTarget

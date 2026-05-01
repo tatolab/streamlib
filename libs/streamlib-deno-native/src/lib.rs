@@ -3937,6 +3937,1051 @@ mod cpu_readback {
     }
 }
 
+// ============================================================================
+// C ABI — cuda adapter runtime (#590, Linux)
+//
+// Subprocess-side runtime for the cuda adapter. Same single-pattern shape
+// as cpu-readback / vulkan / opengl: the adapter is generic over device
+// flavor, this cdylib instantiates it against `ConsumerVulkanDevice`, and
+// the OPAQUE_FD `VkBuffer` + timeline semaphore that surface-share hands
+// over are imported into Vulkan via `streamlib-consumer-rhi` and into
+// CUDA via `cudaImportExternalMemory` + `cudaImportExternalSemaphore`.
+// Per-acquire flow has no IPC: the host pipeline writes into the
+// OPAQUE_FD buffer and signals the shared timeline ambiently; the
+// consumer's `acquire_read` Vulkan-waits via the adapter, then CUDA-waits
+// via `cudaWaitExternalSemaphoresAsync` so CUDA driver state is in sync,
+// then hands a DLPack capsule back to Deno.
+// ============================================================================
+
+#[cfg(target_os = "linux")]
+mod cuda {
+    use std::collections::HashMap;
+    use std::ffi::c_void;
+    use std::mem::MaybeUninit;
+    use std::os::unix::io::RawFd;
+    use std::sync::{Arc, Mutex};
+
+    use cudarc::runtime::result::external_memory;
+    use cudarc::runtime::sys;
+    use streamlib_adapter_abi::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
+    };
+    use streamlib_adapter_cuda::dlpack::{
+        self, CapsuleOwner, Device as DlpackDevice, DeviceType as DlpackDeviceType,
+        ManagedTensor as DlpackManagedTensor,
+    };
+    use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
+    use streamlib_consumer_rhi::{
+        ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, ConsumerVulkanTimelineSemaphore,
+        PixelFormat,
+    };
+
+    use super::gpu_surface::SurfaceHandle;
+
+    /// `acquire_*` return values — wire-stable across the cdylib boundary.
+    pub const SLDN_CUDA_OK: i32 = 0;
+    pub const SLDN_CUDA_ERR: i32 = -1;
+    pub const SLDN_CUDA_CONTENDED: i32 = 1;
+
+    /// DLPack `DLDeviceType` discriminants exposed at the FFI surface so
+    /// the Python wrapper can interpret [`SldnCudaView::device_type`]
+    /// without re-importing the dlpark spec.
+    pub const SLDN_CUDA_DEVICE_TYPE_CUDA: i32 = DlpackDeviceType::Cuda as i32;
+    pub const SLDN_CUDA_DEVICE_TYPE_CUDA_HOST: i32 = DlpackDeviceType::CudaHost as i32;
+
+    /// Per-acquire timeline-wait timeout (nanoseconds). Long enough to
+    /// cover any realistic GPU queue depth; short enough that a deadlock
+    /// surfaces as `SLDN_CUDA_ERR` rather than wedging the consumer.
+    /// Mirrors `streamlib_adapter_cuda::CudaSurfaceAdapter`'s default
+    /// (5 s).
+    const ACQUIRE_TIMEOUT_NS: u64 = 5_000_000_000;
+
+    /// View handed back on every successful acquire. Carries the cached
+    /// CUDA device pointer (resolved once per surface at register time)
+    /// plus a freshly heap-allocated DLPack `*mut DLManagedTensor` the
+    /// caller takes ownership of — Deno wraps it as a `Uint8Array`-with-deleter
+    /// (or hands the raw `*mut DLManagedTensor` to a third-party DLPack
+    /// consumer). The capsule deleter drops an
+    /// `Arc<RegisteredCudaSurface>` clone, so the imported memory stays
+    /// alive until the consumer releases the capsule even if the adapter
+    /// guard has been released first.
+    ///
+    /// Note: the underlying `vk::Buffer` handle is deliberately NOT
+    /// exposed on this view. Consumers that need raw Vulkan access go
+    /// through `streamlib-adapter-vulkan`'s `SlpnVulkanView` instead;
+    /// switching to this adapter is the contractual signal for "I want
+    /// a DLPack capsule."
+    #[repr(C)]
+    pub struct SldnCudaView {
+        /// Buffer size in bytes — same value as
+        /// [`Self::dlpack_managed_tensor`]'s 1-D `u8` shape.
+        pub size: u64,
+        /// CUDA device pointer (`CUdeviceptr` cast to `u64`) returned by
+        /// `cudaExternalMemoryGetMappedBuffer`. Stable for the surface's
+        /// lifetime; cached at register time, not re-resolved on every
+        /// acquire.
+        pub device_ptr: u64,
+        /// DLPack `DLDeviceType` discriminant. `2` (`kDLCUDA`) for true
+        /// device memory; `3` (`kDLCUDAHost`) if `cudaPointerGetAttributes`
+        /// classifies the imported pointer as pinned-host (a regression
+        /// flagged by the carve-out test, currently driver-impossible on
+        /// our test rig but checked anyway). Mirrors
+        /// [`SLDN_CUDA_DEVICE_TYPE_CUDA`] / `_CUDA_HOST`.
+        pub device_type: i32,
+        /// CUDA device ordinal. Single-GPU rigs always see `0`; multi-GPU
+        /// UUID matching is a follow-up.
+        pub device_id: i32,
+        /// `*mut DLManagedTensor` — heap-allocated, ownership transfers
+        /// to the caller. The caller MUST eventually call the capsule's
+        /// `deleter` (typically by either (a) calling the deleter directly through
+        /// the JS side once the consumer is done, or (b) handing the
+        /// pointer to a third-party DLPack consumer that takes
+        /// ownership of the deleter call).
+        pub dlpack_managed_tensor: *mut c_void,
+    }
+
+    /// Subprocess CUDA runtime — single-process global per cdylib load.
+    pub struct CudaRuntimeHandle {
+        device: Arc<ConsumerVulkanDevice>,
+        adapter: Arc<CudaSurfaceAdapter<ConsumerVulkanDevice>>,
+        cuda_device_ordinal: i32,
+        registered: Mutex<HashMap<u64, Arc<RegisteredCudaSurface>>>,
+    }
+
+    /// Per-surface registered state. The adapter's registry holds
+    /// references to the same Vulkan-side `Arc`s; this struct adds the
+    /// CUDA-side handles + the per-surface stream the cdylib uses for
+    /// `cudaWaitExternalSemaphoresAsync`. Stored behind an `Arc` so a
+    /// DLPack capsule's `manager_ctx` can clone it cheaply and keep
+    /// every CUDA import alive until the consumer releases the capsule.
+    struct RegisteredCudaSurface {
+        // Vulkan-side handles — held for Drop ordering. The adapter's
+        // registry holds its own Arc clones; ours ensure the CUDA
+        // imports below are torn down BEFORE the underlying Vulkan
+        // memory goes away (Vulkan teardown closes the FDs CUDA still
+        // references). Drop order: this struct's fields drop in
+        // declaration order, so put CUDA imports first.
+        ext_mem: sys::cudaExternalMemory_t,
+        ext_sem: sys::cudaExternalSemaphore_t,
+        stream: sys::cudaStream_t,
+        device_ptr: u64,
+        size: u64,
+        device_type: i32,
+        cuda_device_ordinal: i32,
+        // Vulkan-side imports follow — they outlive `ext_mem` / `ext_sem`
+        // because Drop runs in declaration order, but logically the
+        // adapter's registry already owns them. Holding our own clones
+        // is belt-and-suspenders.
+        #[allow(dead_code)] // Arc held for lifetime; never read after register.
+        pixel_buffer: Arc<ConsumerVulkanPixelBuffer>,
+        timeline: Arc<ConsumerVulkanTimelineSemaphore>,
+    }
+
+    // SAFETY: `cudaExternalMemory_t`, `cudaExternalSemaphore_t`, and
+    // `cudaStream_t` are opaque pointer-shaped handles. The CUDA Runtime
+    // API's threading contract permits use of these handles from any
+    // thread once created; resource teardown (`cudaDestroyExternalMemory`,
+    // `cudaDestroyExternalSemaphore`, `cudaStreamDestroy`) is similarly
+    // thread-safe. Our `Mutex<HashMap>` serializes registration /
+    // unregistration; per-acquire wait + sync calls are reentrant.
+    unsafe impl Send for RegisteredCudaSurface {}
+    unsafe impl Sync for RegisteredCudaSurface {}
+
+    impl Drop for RegisteredCudaSurface {
+        fn drop(&mut self) {
+            // CUDA-side teardown FIRST so the imports release their
+            // hold on the OPAQUE_FD kernel objects before Vulkan-side
+            // Arcs drop and teardown the underlying VkDeviceMemory /
+            // VkSemaphore.
+            unsafe {
+                if !self.stream.is_null() {
+                    let _ = sys::cudaStreamDestroy(self.stream).result();
+                }
+                if !self.ext_sem.is_null() {
+                    let _ = sys::cudaDestroyExternalSemaphore(self.ext_sem).result();
+                }
+                if !self.ext_mem.is_null() {
+                    let _ = external_memory::destroy_external_memory(self.ext_mem);
+                }
+            }
+        }
+    }
+
+    /// Bring up `ConsumerVulkanDevice` + `CudaSurfaceAdapter` against
+    /// CUDA device 0. Returns NULL on Vulkan or CUDA bring-up failure;
+    /// see the subprocess log for the underlying cause. Idempotent
+    /// callers can rebuild after a failure once the cause is fixed.
+    #[unsafe(no_mangle)]
+    #[tracing::instrument(level = "info")]
+    pub unsafe extern "C" fn sldn_cuda_runtime_new() -> *mut CudaRuntimeHandle {
+        let device = match ConsumerVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(e) => {
+                tracing::error!(
+                    "sldn_cuda_runtime_new: ConsumerVulkanDevice::new failed: {}",
+                    e
+                );
+                return std::ptr::null_mut();
+            }
+        };
+
+        // CUDA runtime presence: dlopens libcudart + libcuda lazily on
+        // the first CUDA call. `is_culib_present()` probes without
+        // initializing — used here to surface the no-CUDA case as a
+        // clean NULL return rather than a panic on the first import.
+        if !unsafe { sys::is_culib_present() } {
+            tracing::error!(
+                "sldn_cuda_runtime_new: libcudart not present — CUDA toolkit \
+                 absent on this machine; cuda adapter is unavailable"
+            );
+            return std::ptr::null_mut();
+        }
+
+        let cuda_device_ordinal: i32 = 0;
+        if let Err(e) = unsafe { sys::cudaSetDevice(cuda_device_ordinal) }.result() {
+            tracing::error!(
+                "sldn_cuda_runtime_new: cudaSetDevice({}) failed: {:?}",
+                cuda_device_ordinal,
+                e
+            );
+            return std::ptr::null_mut();
+        }
+
+        let adapter = Arc::new(CudaSurfaceAdapter::new(Arc::clone(&device)));
+        Box::into_raw(Box::new(CudaRuntimeHandle {
+            device,
+            adapter,
+            cuda_device_ordinal,
+            registered: Mutex::new(HashMap::new()),
+        }))
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_runtime_free(rt: *mut CudaRuntimeHandle) {
+        if !rt.is_null() {
+            let _ = unsafe { Box::from_raw(rt) };
+        }
+    }
+
+    /// Register a host cuda surface — imports the OPAQUE_FD `VkBuffer`
+    /// and timeline semaphore via [`streamlib_consumer_rhi`], then
+    /// re-imports the same FDs into CUDA via
+    /// `cudaImportExternalMemory` + `cudaImportExternalSemaphore`.
+    ///
+    /// Caller (the SDK) supplies `surface_id` (subprocess-local u64;
+    /// caller picks the namespace) and `gpu_handle` (a `SurfaceHandle*`
+    /// returned by `slpn_surface_resolve_surface` after a `check_out` of
+    /// the host's pre-registered cuda surface).
+    ///
+    /// Single-FD only: the host registers cuda surfaces as a
+    /// flat OPAQUE_FD `VkBuffer` per `HostVulkanPixelBuffer::new_opaque_fd_export`;
+    /// CUDA's `cudaExternalMemoryGetMappedBuffer` requires a flat memory
+    /// region (multi-plane variants need
+    /// `cudaExternalMemoryGetMappedMipmappedArray`, which doesn't have a
+    /// DLPack flavor — see the issue body for the OPAQUE_FD vs DMA-BUF
+    /// rationale).
+    #[unsafe(no_mangle)]
+    #[tracing::instrument(level = "info", skip(rt, gpu_handle))]
+    pub unsafe extern "C" fn sldn_cuda_register_surface(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        gpu_handle: *mut SurfaceHandle,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!("sldn_cuda_register_surface: null runtime");
+                return SLDN_CUDA_ERR;
+            }
+        };
+        let gpu = match unsafe { gpu_handle.as_mut() } {
+            Some(g) => g,
+            None => {
+                tracing::error!("sldn_cuda_register_surface: null gpu_handle");
+                return SLDN_CUDA_ERR;
+            }
+        };
+        if gpu.fds.len() != 1 {
+            tracing::error!(
+                "sldn_cuda_register_surface: cuda requires exactly 1 OPAQUE_FD plane; \
+                 gpu_handle has {} fd(s)",
+                gpu.fds.len()
+            );
+            return SLDN_CUDA_ERR;
+        }
+
+        // ── Step 1: import the OPAQUE_FD `VkBuffer` into Vulkan ─────────
+        // The fd is duplicated before the Vulkan import takes ownership
+        // because we re-import the same fd into CUDA below. Vulkan and
+        // CUDA each get their own dup; both close their dups on
+        // teardown (Vulkan via `vkFreeMemory` → driver, CUDA via
+        // `cudaDestroyExternalMemory` → driver).
+        let vk_fd = unsafe { libc::dup(gpu.fds[0]) };
+        if vk_fd < 0 {
+            tracing::error!(
+                "sldn_cuda_register_surface: dup vk_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            return SLDN_CUDA_ERR;
+        }
+        let buffer_size = gpu
+            .plane_sizes
+            .first()
+            .copied()
+            .filter(|s| *s > 0)
+            .unwrap_or(gpu.size);
+        if buffer_size == 0 {
+            tracing::error!(
+                "sldn_cuda_register_surface: surface '{}' has zero size",
+                surface_id
+            );
+            unsafe { libc::close(vk_fd) };
+            return SLDN_CUDA_ERR;
+        }
+        let pixel_buffer = match ConsumerVulkanPixelBuffer::from_opaque_fd(
+            &rt.device,
+            vk_fd,
+            gpu.width,
+            gpu.height,
+            gpu.bytes_per_row.div_ceil(gpu.width.max(1)),
+            PixelFormat::Bgra32,
+            buffer_size,
+        ) {
+            Ok(b) => Arc::new(b),
+            Err(e) => {
+                tracing::error!(
+                    "sldn_cuda_register_surface: from_opaque_fd failed: {} — \
+                     verify the host registered this surface with handle_type=opaque_fd",
+                    e
+                );
+                // Vulkan import takes the fd ownership only on success;
+                // on error we still own the dup.
+                unsafe { libc::close(vk_fd) };
+                return SLDN_CUDA_ERR;
+            }
+        };
+
+        // ── Step 2: import the timeline semaphore into Vulkan ───────────
+        let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
+            Some(fd) => fd,
+            None => {
+                tracing::error!(
+                    "sldn_cuda_register_surface: surface '{}' has no sync_fd — \
+                     the host must register it with an exportable timeline semaphore \
+                     so cross-API sync (Vulkan ↔ CUDA) is well-defined",
+                    surface_id
+                );
+                return SLDN_CUDA_ERR;
+            }
+        };
+        // Same dup story: timeline imports both into Vulkan and into CUDA.
+        let vk_sync_fd = unsafe { libc::dup(raw_sync_fd) };
+        if vk_sync_fd < 0 {
+            tracing::error!(
+                "sldn_cuda_register_surface: dup sync_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            // Restore the original fd onto the handle so its Drop closes it.
+            gpu.sync_fd = Some(raw_sync_fd);
+            return SLDN_CUDA_ERR;
+        }
+        let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &rt.device,
+            vk_sync_fd,
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                tracing::error!(
+                    "sldn_cuda_register_surface: timeline from_imported_opaque_fd: {}",
+                    e
+                );
+                unsafe { libc::close(vk_sync_fd) };
+                gpu.sync_fd = Some(raw_sync_fd);
+                return SLDN_CUDA_ERR;
+            }
+        };
+
+        // ── Step 3: import the OPAQUE_FD memory into CUDA ───────────────
+        // CUDA takes ownership of the cuda-side dup on successful import.
+        let cuda_mem_fd = unsafe { libc::dup(gpu.fds[0]) };
+        if cuda_mem_fd < 0 {
+            tracing::error!(
+                "sldn_cuda_register_surface: dup cuda_mem_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            // Vulkan-side imports drop here via Arc — they own their own
+            // dups already. Restore sync_fd onto the handle so its Drop
+            // closes it (Vulkan timeline import owns its dup independently).
+            gpu.sync_fd = Some(raw_sync_fd);
+            return SLDN_CUDA_ERR;
+        }
+        // SAFETY: `cudaImportExternalMemory` per CUDA docs:
+        // - On UNIX, ownership of `cuda_mem_fd` transfers to the CUDA
+        //   driver on successful import. We MUST NOT close it after.
+        // - On error, ownership stays with us — close the fd here.
+        let ext_mem = unsafe {
+            match external_memory::import_external_memory_opaque_fd(cuda_mem_fd, buffer_size) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(
+                        "sldn_cuda_register_surface: cudaImportExternalMemory failed: {:?}",
+                        e
+                    );
+                    libc::close(cuda_mem_fd);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLDN_CUDA_ERR;
+                }
+            }
+        };
+
+        // SAFETY: `cudaExternalMemoryGetMappedBuffer` is the flat-pointer
+        // mapping helper. The returned pointer aliases the same kernel
+        // memory the OPAQUE_FD VkBuffer was bound to. Lifetime: valid
+        // until `cudaDestroyExternalMemory` (handled by Drop).
+        let dev_ptr = unsafe {
+            match external_memory::get_mapped_buffer(ext_mem, 0, buffer_size) {
+                Ok(p) => p as u64,
+                Err(e) => {
+                    tracing::error!(
+                        "sldn_cuda_register_surface: cudaExternalMemoryGetMappedBuffer: {:?}",
+                        e
+                    );
+                    let _ = external_memory::destroy_external_memory(ext_mem);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLDN_CUDA_ERR;
+                }
+            }
+        };
+
+        // ── Step 4: classify the device pointer (kDLCUDA vs kDLCUDAHost) ─
+        // The carve-out test (#588 Stage 8) flagged this as a load-bearing
+        // probe — a future driver could downgrade the import to pinned-host
+        // memory; the DLPack capsule must advertise the right device type
+        // or `torch.from_dlpack` will copy unnecessarily (or refuse).
+        let mut ptr_attrs = MaybeUninit::<sys::cudaPointerAttributes>::uninit();
+        let ptr_attrs = unsafe {
+            match sys::cudaPointerGetAttributes(ptr_attrs.as_mut_ptr(), dev_ptr as *const c_void)
+                .result()
+            {
+                Ok(()) => ptr_attrs.assume_init(),
+                Err(e) => {
+                    tracing::error!(
+                        "sldn_cuda_register_surface: cudaPointerGetAttributes failed: {:?}",
+                        e
+                    );
+                    let _ = external_memory::destroy_external_memory(ext_mem);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLDN_CUDA_ERR;
+                }
+            }
+        };
+        let device_type = match ptr_attrs.type_ {
+            sys::cudaMemoryType::cudaMemoryTypeDevice => SLDN_CUDA_DEVICE_TYPE_CUDA,
+            sys::cudaMemoryType::cudaMemoryTypeHost => SLDN_CUDA_DEVICE_TYPE_CUDA_HOST,
+            other => {
+                tracing::error!(
+                    "sldn_cuda_register_surface: imported OPAQUE_FD device pointer is \
+                     {:?} — neither cudaMemoryTypeDevice nor cudaMemoryTypeHost. \
+                     DLPack consumers cannot accept this; investigate driver before proceeding",
+                    other
+                );
+                let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+                gpu.sync_fd = Some(raw_sync_fd);
+                return SLDN_CUDA_ERR;
+            }
+        };
+
+        // ── Step 5: import the timeline semaphore into CUDA ─────────────
+        let cuda_sync_fd = unsafe { libc::dup(raw_sync_fd) };
+        if cuda_sync_fd < 0 {
+            tracing::error!(
+                "sldn_cuda_register_surface: dup cuda_sync_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            let _ = unsafe { external_memory::destroy_external_memory(ext_mem) };
+            gpu.sync_fd = Some(raw_sync_fd);
+            return SLDN_CUDA_ERR;
+        }
+        // Same descriptor-construction story as the carve-out test:
+        // `cudaExternalSemaphoreHandleType`'s zero discriminant is invalid
+        // under modern Rust validity rules, so use `MaybeUninit::zeroed()`
+        // and write fields through raw pointers before `assume_init()`.
+        // `reserved` (cuda-13xxx only) inherits the zero pre-fill, which
+        // matches the spec contract.
+        let mut sem_desc = MaybeUninit::<sys::cudaExternalSemaphoreHandleDesc>::zeroed();
+        let sem_desc = unsafe {
+            let p = sem_desc.as_mut_ptr();
+            (&raw mut (*p).type_).write(
+                sys::cudaExternalSemaphoreHandleType::cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd,
+            );
+            (&raw mut (*p).handle).write(
+                sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: cuda_sync_fd },
+            );
+            (&raw mut (*p).flags).write(0);
+            sem_desc.assume_init()
+        };
+        let mut ext_sem = MaybeUninit::<sys::cudaExternalSemaphore_t>::uninit();
+        let ext_sem = unsafe {
+            match sys::cudaImportExternalSemaphore(ext_sem.as_mut_ptr(), &sem_desc).result() {
+                Ok(()) => ext_sem.assume_init(),
+                Err(e) => {
+                    tracing::error!(
+                        "sldn_cuda_register_surface: cudaImportExternalSemaphore: {:?}",
+                        e
+                    );
+                    libc::close(cuda_sync_fd);
+                    let _ = external_memory::destroy_external_memory(ext_mem);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLDN_CUDA_ERR;
+                }
+            }
+        };
+
+        // ── Step 6: per-surface CUDA stream for the per-acquire wait ────
+        let mut stream = MaybeUninit::<sys::cudaStream_t>::uninit();
+        let stream = unsafe {
+            match sys::cudaStreamCreate(stream.as_mut_ptr()).result() {
+                Ok(()) => stream.assume_init(),
+                Err(e) => {
+                    tracing::error!(
+                        "sldn_cuda_register_surface: cudaStreamCreate: {:?}",
+                        e
+                    );
+                    let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
+                    let _ = external_memory::destroy_external_memory(ext_mem);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLDN_CUDA_ERR;
+                }
+            }
+        };
+
+        // ── Step 7: hand the imports to the adapter's registry ──────────
+        let registration = HostSurfaceRegistration {
+            pixel_buffer: Arc::clone(&pixel_buffer),
+            timeline: Arc::clone(&timeline),
+            initial_layout: VulkanLayout::UNDEFINED,
+        };
+        if let Err(e) = rt.adapter.register_host_surface(surface_id, registration) {
+            tracing::error!(
+                "sldn_cuda_register_surface: adapter.register_host_surface({}): {:?}",
+                surface_id,
+                e
+            );
+            unsafe {
+                let _ = sys::cudaStreamDestroy(stream).result();
+                let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
+                let _ = external_memory::destroy_external_memory(ext_mem);
+            };
+            gpu.sync_fd = Some(raw_sync_fd);
+            return SLDN_CUDA_ERR;
+        }
+
+        // The original `raw_sync_fd` is owned by the SurfaceHandle's drop
+        // path. We've already dup'd it twice (Vulkan + CUDA timeline), so
+        // returning it to the handle's `sync_fd` slot is the canonical
+        // ownership recovery — same pattern as cpu-readback's
+        // register_surface error paths.
+        gpu.sync_fd = Some(raw_sync_fd);
+
+        let entry = Arc::new(RegisteredCudaSurface {
+            ext_mem,
+            ext_sem,
+            stream,
+            device_ptr: dev_ptr,
+            size: buffer_size,
+            device_type,
+            cuda_device_ordinal: rt.cuda_device_ordinal,
+            pixel_buffer,
+            timeline,
+        });
+        rt.registered
+            .lock()
+            .expect("sldn_cuda registered: poisoned")
+            .insert(surface_id, entry);
+        SLDN_CUDA_OK
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_unregister_surface(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLDN_CUDA_ERR,
+        };
+        let removed = rt
+            .registered
+            .lock()
+            .expect("sldn_cuda registered: poisoned")
+            .remove(&surface_id);
+        if removed.is_none() {
+            return SLDN_CUDA_ERR;
+        }
+        if rt.adapter.unregister_host_surface(surface_id) {
+            SLDN_CUDA_OK
+        } else {
+            SLDN_CUDA_ERR
+        }
+    }
+
+    fn make_descriptor(surface_id: u64) -> StreamlibSurface {
+        StreamlibSurface::new(
+            surface_id,
+            0,
+            0,
+            SurfaceFormat::Bgra8,
+            SurfaceUsage::SAMPLED,
+            SurfaceTransportHandle::empty(),
+            SurfaceSyncState::default(),
+        )
+    }
+
+    /// Build a fresh DLPack `*mut DLManagedTensor` over the cached
+    /// device pointer; capsule owner is an `Arc<RegisteredCudaSurface>`
+    /// clone so the imported memory stays alive across the FFI handoff.
+    fn build_capsule(entry: &Arc<RegisteredCudaSurface>) -> *mut DlpackManagedTensor {
+        // dlpark's `Device::cuda(usize)` helper covers `kDLCUDA` only;
+        // construct manually so the `kDLCUDAHost` branch (regression
+        // path flagged by the carve-out test) can ride the same code.
+        let device = DlpackDevice {
+            device_type: if entry.device_type == SLDN_CUDA_DEVICE_TYPE_CUDA_HOST {
+                DlpackDeviceType::CudaHost
+            } else {
+                DlpackDeviceType::Cuda
+            },
+            device_id: entry.cuda_device_ordinal,
+        };
+        let owner: CapsuleOwner = Box::new(Arc::clone(entry));
+        dlpack::build_byte_buffer_managed_tensor(entry.device_ptr, entry.size, device, owner)
+    }
+
+    /// Cross-API sync: after the adapter's Vulkan-side wait succeeds,
+    /// CUDA's view of the same kernel timeline must also reach the
+    /// signaled value before consumer kernels read the buffer. Issues a
+    /// `cudaWaitExternalSemaphoresAsync` against the surface's stream at
+    /// the timeline's current Vulkan-observed value, then synchronizes.
+    /// Returns `Ok(())` on success.
+    fn cuda_sync_after_acquire(entry: &RegisteredCudaSurface) -> Result<(), String> {
+        let wait_value = entry
+            .timeline
+            .current_value()
+            .map_err(|e| format!("get_semaphore_counter_value: {e}"))?;
+
+        let mut wait_params = MaybeUninit::<sys::cudaExternalSemaphoreWaitParams>::zeroed();
+        let wait_params = unsafe {
+            let p = wait_params.as_mut_ptr();
+            (&raw mut (*p).params.fence.value).write(wait_value);
+            (&raw mut (*p).flags).write(0);
+            wait_params.assume_init()
+        };
+
+        let wait_result = unsafe {
+            sys::cudaWaitExternalSemaphoresAsync_v2(
+                &entry.ext_sem,
+                &wait_params,
+                1,
+                entry.stream,
+            )
+            .result()
+        };
+        if let Err(e) = wait_result {
+            return Err(format!("cudaWaitExternalSemaphoresAsync: {e:?}"));
+        }
+        if let Err(e) = unsafe { sys::cudaStreamSynchronize(entry.stream) }.result() {
+            return Err(format!("cudaStreamSynchronize: {e:?}"));
+        }
+        // Race note: the timeline can advance further between
+        // `current_value()` (above) and `cudaWaitExternalSemaphoresAsync_v2`
+        // returning. CUDA's wait-at-or-above semantics make a stale
+        // `wait_value` still valid (we just wait less). Underflow isn't
+        // possible: `current_value()` returns the present counter, never
+        // zero on a post-acquire path because the host adapter only
+        // signals values >= 1 on every release.
+        Ok(())
+    }
+
+    fn populate_view(
+        entry: &Arc<RegisteredCudaSurface>,
+        out: &mut SldnCudaView,
+    ) -> i32 {
+        let capsule = build_capsule(entry);
+        if capsule.is_null() {
+            tracing::error!("sldn_cuda: build_capsule returned null");
+            return SLDN_CUDA_ERR;
+        }
+        out.size = entry.size;
+        out.device_ptr = entry.device_ptr;
+        out.device_type = entry.device_type;
+        out.device_id = entry.cuda_device_ordinal;
+        out.dlpack_managed_tensor = capsule as *mut c_void;
+        SLDN_CUDA_OK
+    }
+
+    fn lookup_entry(
+        rt: &CudaRuntimeHandle,
+        surface_id: u64,
+    ) -> Option<Arc<RegisteredCudaSurface>> {
+        rt.registered
+            .lock()
+            .expect("sldn_cuda registered: poisoned")
+            .get(&surface_id)
+            .cloned()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_acquire_read(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SldnCudaView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLDN_CUDA_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLDN_CUDA_ERR,
+        };
+        let entry = match lookup_entry(rt, surface_id) {
+            Some(e) => e,
+            None => {
+                tracing::error!(
+                    "sldn_cuda_acquire_read: surface_id {} not registered",
+                    surface_id
+                );
+                return SLDN_CUDA_ERR;
+            }
+        };
+        let surface = make_descriptor(surface_id);
+        let _ = ACQUIRE_TIMEOUT_NS; // wired through the adapter's default — fixed for v1
+        match rt.adapter.acquire_read(&surface) {
+            Ok(g) => {
+                std::mem::forget(g);
+                if let Err(e) = cuda_sync_after_acquire(&entry) {
+                    tracing::error!(
+                        "sldn_cuda_acquire_read({}): cuda sync failed: {} — \
+                         releasing the adapter guard so the timeline can \
+                         advance",
+                        surface_id,
+                        e
+                    );
+                    rt.adapter.end_read_access(surface_id);
+                    return SLDN_CUDA_ERR;
+                }
+                populate_view(&entry, out)
+            }
+            Err(e) => {
+                tracing::error!("sldn_cuda_acquire_read({}): {:?}", surface_id, e);
+                SLDN_CUDA_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_acquire_write(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SldnCudaView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLDN_CUDA_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLDN_CUDA_ERR,
+        };
+        let entry = match lookup_entry(rt, surface_id) {
+            Some(e) => e,
+            None => {
+                tracing::error!(
+                    "sldn_cuda_acquire_write: surface_id {} not registered",
+                    surface_id
+                );
+                return SLDN_CUDA_ERR;
+            }
+        };
+        let surface = make_descriptor(surface_id);
+        match rt.adapter.acquire_write(&surface) {
+            Ok(g) => {
+                std::mem::forget(g);
+                if let Err(e) = cuda_sync_after_acquire(&entry) {
+                    tracing::error!(
+                        "sldn_cuda_acquire_write({}): cuda sync failed: {}",
+                        surface_id,
+                        e
+                    );
+                    rt.adapter.end_write_access(surface_id);
+                    return SLDN_CUDA_ERR;
+                }
+                populate_view(&entry, out)
+            }
+            Err(e) => {
+                tracing::error!("sldn_cuda_acquire_write({}): {:?}", surface_id, e);
+                SLDN_CUDA_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_try_acquire_read(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SldnCudaView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLDN_CUDA_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLDN_CUDA_ERR,
+        };
+        let entry = match lookup_entry(rt, surface_id) {
+            Some(e) => e,
+            None => return SLDN_CUDA_ERR,
+        };
+        let surface = make_descriptor(surface_id);
+        match rt.adapter.try_acquire_read(&surface) {
+            Ok(Some(g)) => {
+                std::mem::forget(g);
+                if let Err(e) = cuda_sync_after_acquire(&entry) {
+                    tracing::error!(
+                        "sldn_cuda_try_acquire_read({}): cuda sync: {}",
+                        surface_id,
+                        e
+                    );
+                    rt.adapter.end_read_access(surface_id);
+                    return SLDN_CUDA_ERR;
+                }
+                populate_view(&entry, out)
+            }
+            Ok(None) => SLDN_CUDA_CONTENDED,
+            Err(e) => {
+                tracing::error!("sldn_cuda_try_acquire_read({}): {:?}", surface_id, e);
+                SLDN_CUDA_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_try_acquire_write(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SldnCudaView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLDN_CUDA_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLDN_CUDA_ERR,
+        };
+        let entry = match lookup_entry(rt, surface_id) {
+            Some(e) => e,
+            None => return SLDN_CUDA_ERR,
+        };
+        let surface = make_descriptor(surface_id);
+        match rt.adapter.try_acquire_write(&surface) {
+            Ok(Some(g)) => {
+                std::mem::forget(g);
+                if let Err(e) = cuda_sync_after_acquire(&entry) {
+                    tracing::error!(
+                        "sldn_cuda_try_acquire_write({}): cuda sync: {}",
+                        surface_id,
+                        e
+                    );
+                    rt.adapter.end_write_access(surface_id);
+                    return SLDN_CUDA_ERR;
+                }
+                populate_view(&entry, out)
+            }
+            Ok(None) => SLDN_CUDA_CONTENDED,
+            Err(e) => {
+                tracing::error!("sldn_cuda_try_acquire_write({}): {:?}", surface_id, e);
+                SLDN_CUDA_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_release_read(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLDN_CUDA_ERR,
+        };
+        rt.adapter.end_read_access(surface_id);
+        SLDN_CUDA_OK
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_release_write(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLDN_CUDA_ERR,
+        };
+        rt.adapter.end_write_access(surface_id);
+        SLDN_CUDA_OK
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::mem::{offset_of, size_of};
+
+        // Layout regression — pins the FFI struct shape across the
+        // cdylib boundary. Python's ctypes / Deno's DataView readers
+        // depend on these offsets matching exactly.
+        #[test]
+        fn sldn_cuda_view_layout_matches_spec_64bit() {
+            // SldnCudaView fields in declaration order:
+            //   size                 : u64    @ 0
+            //   device_ptr           : u64    @ 8
+            //   device_type          : i32    @ 16
+            //   device_id            : i32    @ 20
+            //   dlpack_managed_tensor: ptr    @ 24 (8 bytes on 64-bit)
+            assert_eq!(size_of::<SldnCudaView>(), 32);
+            assert_eq!(offset_of!(SldnCudaView, size), 0);
+            assert_eq!(offset_of!(SldnCudaView, device_ptr), 8);
+            assert_eq!(offset_of!(SldnCudaView, device_type), 16);
+            assert_eq!(offset_of!(SldnCudaView, device_id), 20);
+            assert_eq!(offset_of!(SldnCudaView, dlpack_managed_tensor), 24);
+        }
+
+        #[test]
+        fn sldn_cuda_constants_match_dlpack_spec() {
+            // DLPack v0.8 — these discriminants are wire ABI; a future
+            // dlpark renumbering would land here as a compile failure.
+            assert_eq!(SLDN_CUDA_DEVICE_TYPE_CUDA, 2);
+            assert_eq!(SLDN_CUDA_DEVICE_TYPE_CUDA_HOST, 3);
+            assert_eq!(SLDN_CUDA_OK, 0);
+            assert_eq!(SLDN_CUDA_ERR, -1);
+            assert_eq!(SLDN_CUDA_CONTENDED, 1);
+        }
+
+        // Same smoke test as the python-native sibling (#589): the
+        // runtime returns NULL on Vulkan/CUDA-less CI runners and
+        // succeeds + tears down cleanly on developer boxes; both
+        // outcomes must be panic-free.
+        #[test]
+        fn runtime_new_is_panic_safe_without_cuda() {
+            let rt = unsafe { sldn_cuda_runtime_new() };
+            if !rt.is_null() {
+                unsafe { sldn_cuda_runtime_free(rt) };
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+mod cuda {
+    use std::ffi::c_void;
+
+    pub const SLDN_CUDA_OK: i32 = 0;
+    pub const SLDN_CUDA_ERR: i32 = -1;
+    pub const SLDN_CUDA_CONTENDED: i32 = 1;
+    pub const SLDN_CUDA_DEVICE_TYPE_CUDA: i32 = 2;
+    pub const SLDN_CUDA_DEVICE_TYPE_CUDA_HOST: i32 = 3;
+
+    #[repr(C)]
+    pub struct SldnCudaView {
+        pub size: u64,
+        pub device_ptr: u64,
+        pub device_type: i32,
+        pub device_id: i32,
+        pub dlpack_managed_tensor: *mut c_void,
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_runtime_new() -> *mut c_void {
+        tracing::error!("sldn_cuda_*: cuda adapter runtime is Linux-only");
+        std::ptr::null_mut()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_runtime_free(_rt: *mut c_void) {}
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_register_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _gpu_handle: *mut c_void,
+    ) -> i32 {
+        SLDN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_unregister_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        SLDN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_acquire_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SldnCudaView,
+    ) -> i32 {
+        SLDN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_acquire_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SldnCudaView,
+    ) -> i32 {
+        SLDN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_try_acquire_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SldnCudaView,
+    ) -> i32 {
+        SLDN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_try_acquire_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SldnCudaView,
+    ) -> i32 {
+        SLDN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_release_read(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        SLDN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_cuda_release_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        SLDN_CUDA_ERR
+    }
+}
+
+
+
 #[cfg(not(target_os = "linux"))]
 mod vulkan {
     use std::ffi::c_void;

@@ -1235,10 +1235,18 @@ mod tests {
         );
     }
 
-    /// The service must refuse a check_in whose fd count exceeds the plane
-    /// cap instead of truncating silently. The check runs in the wire helper
-    /// before the handler, so this exercises the shared back-pressure path
-    /// every caller relies on.
+    /// The service must refuse a check_in whose fd count exceeds the wire
+    /// helper's SCM_RIGHTS cap instead of truncating silently. The check
+    /// runs in the wire helper before the handler, so this exercises the
+    /// shared back-pressure path every caller relies on.
+    ///
+    /// Cap shape (#588 / #559):
+    /// - `MAX_DMA_BUF_PLANES = 4` — the data-plane cap that adapters
+    ///   enforce; "this many plane fds, no more."
+    /// - `MAX_SCM_RIGHTS_FDS = MAX_DMA_BUF_PLANES + 1 = 5` — the wire-level
+    ///   cap that leaves a slot for an optional timeline-semaphore fd
+    ///   alongside the plane fds.
+    /// Sentinel: `MAX_SCM_RIGHTS_FDS + 1 = 6` is "one over the cap."
     #[test]
     fn oversize_fd_vec_rejected() {
         let state = SurfaceShareState::new();
@@ -1249,8 +1257,8 @@ mod tests {
 
         let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
 
-        // MAX_DMA_BUF_PLANES + 1 fds — one over the cap.
-        let fds: Vec<RawFd> = (0..=MAX_DMA_BUF_PLANES)
+        // MAX_SCM_RIGHTS_FDS + 1 fds — one over the wire-level cap.
+        let fds: Vec<RawFd> = (0..=MAX_SCM_RIGHTS_FDS)
             .map(|i| make_memfd_with(format!("plane-{}", i).as_bytes()))
             .collect();
 
@@ -1271,6 +1279,74 @@ mod tests {
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 
         // Every caller fd is still valid; no leaks, no double-closes.
+        for fd in &fds {
+            let rc = unsafe { libc::fcntl(*fd, libc::F_GETFD) };
+            assert!(rc >= 0, "caller fd {} must still be valid", fd);
+            unsafe { libc::close(*fd) };
+        }
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// Positive-case sibling of [`oversize_fd_vec_rejected`] — the wire
+    /// helper MUST accept exactly [`MAX_SCM_RIGHTS_FDS`] fds. Locks in
+    /// the high edge of the cap so a future cap shift fails loudly on
+    /// whichever edge actually moved (without this, only the
+    /// over-the-cap edge is regression-tested and a cap *increase* could
+    /// silently widen the wire surface).
+    #[test]
+    fn at_cap_fd_vec_accepted_by_wire_helper() {
+        // The wire helper itself is what we're gating — no daemon is
+        // needed beyond a connected socket so the helper's syscall path
+        // can run. Spinning up a real service-and-handler combo would
+        // also work but introduces ordering noise; the unit-level helper
+        // gate is the narrowest test.
+        let state = SurfaceShareState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        // Exactly MAX_SCM_RIGHTS_FDS fds — the upper edge of the cap.
+        // Send-only: we don't care whether the daemon parses the JSON
+        // payload (it won't — `Custom` is a sentinel format string), only
+        // that the wire helper itself doesn't reject for fd-count.
+        let fds: Vec<RawFd> = (0..MAX_SCM_RIGHTS_FDS)
+            .map(|i| make_memfd_with(format!("at-cap-{}", i).as_bytes()))
+            .collect();
+        assert_eq!(fds.len(), MAX_SCM_RIGHTS_FDS);
+
+        let req = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": "test-runtime-at-cap",
+            "width": 640,
+            "height": 480,
+            "format": "Custom",
+            "plane_sizes": vec![0u64; fds.len()],
+            "plane_offsets": vec![0u64; fds.len()],
+        });
+
+        // The wire helper must NOT reject for fd-count. The daemon may
+        // still error on payload parsing — we don't gate on the response,
+        // only on the helper's own input-validation step. A successful
+        // send (regardless of subsequent response shape) proves the cap
+        // edge is accepted.
+        let send_result = send_message_with_fds(
+            &stream,
+            req.to_string().as_bytes(),
+            &fds,
+        );
+        assert!(
+            send_result.is_ok(),
+            "wire helper must accept exactly MAX_SCM_RIGHTS_FDS={} fds; got {:?}",
+            MAX_SCM_RIGHTS_FDS,
+            send_result
+        );
+
+        // Caller fds are independent of what the daemon does — close them.
         for fd in &fds {
             let rc = unsafe { libc::fcntl(*fd, libc::F_GETFD) };
             assert!(rc >= 0, "caller fd {} must still be valid", fd);
