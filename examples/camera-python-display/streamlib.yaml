@@ -18,7 +18,7 @@ processors:
   - name: com.tatolab.blending_compositor
     version: 1.0.0
     description: "Multi-layer alpha blending compositor with PiP support"
-    execution: reactive
+    execution: manual
     runtime:
       options:
         unsafe_send: true

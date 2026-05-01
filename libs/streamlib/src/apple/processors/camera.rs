@@ -81,33 +81,6 @@ impl CMTime {
     }
 }
 
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGMainDisplayID() -> u32;
-    fn CGDisplayCopyDisplayMode(display: u32) -> *const c_void;
-    fn CGDisplayModeGetRefreshRate(mode: *const c_void) -> f64;
-    fn CGDisplayModeRelease(mode: *const c_void);
-}
-
-/// Get the refresh rate of the main display in Hz.
-/// Returns 60.0 as fallback if detection fails.
-fn get_main_display_refresh_rate() -> f64 {
-    unsafe {
-        let display_id = CGMainDisplayID();
-        let mode = CGDisplayCopyDisplayMode(display_id);
-        if mode.is_null() {
-            return 60.0;
-        }
-        let rate = CGDisplayModeGetRefreshRate(mode);
-        CGDisplayModeRelease(mode);
-        // Some displays report 0 for "as fast as possible" - default to 60
-        if rate <= 0.0 {
-            60.0
-        } else {
-            rate
-        }
-    }
-}
 
 /// Shared state for AVFoundation initialization (async pattern).
 struct CaptureSessionInitState {
@@ -517,7 +490,9 @@ impl AppleCameraProcessor::Processor {
 
             // Get frame rate settings from config (default: 60fps min, display refresh rate max)
             let requested_min_fps = config.min_fps.unwrap_or(60.0);
-            let requested_max_fps = config.max_fps.unwrap_or_else(get_main_display_refresh_rate);
+            let requested_max_fps = config
+                .max_fps
+                .unwrap_or_else(|| crate::core::display_info::get_refresh_rate(None));
 
             // Query camera's supported frame rate range from active format
             let active_format = device.activeFormat();
