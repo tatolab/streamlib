@@ -2713,11 +2713,16 @@ mod tests {
             Some(frame_count)
         }
 
+        // Post-#604 the EscalateChannel takes a single writer; the
+        // bridge reader thread (started by subprocess_runner.main)
+        // owns the read side. These log-only tests don't need a
+        // reader thread — they just enqueue records that the writer
+        // thread frames onto stdout.
         const HELPER_PREAMBLE: &str = r#"
 import sys
 from streamlib import log
 from streamlib.escalate import EscalateChannel
-channel = EscalateChannel(sys.stdin.buffer, sys.stdout.buffer)
+channel = EscalateChannel(sys.stdout.buffer)
 log.set_processor_id("pr-test")
 log.set_pipeline_id("pl-test")
 log.install(channel, install_interceptors=False)

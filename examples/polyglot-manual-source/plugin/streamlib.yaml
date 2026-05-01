@@ -1,0 +1,17 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+package:
+  name: polyglot-manual-source-counting-sink
+  version: "0.1.0"
+  description: "Rust counting sink for the polyglot-manual-source example (#604) — counts Videoframes received over iceoryx2 and writes JSON stats on teardown"
+
+processors:
+  - name: com.tatolab.polyglot_manual_source_counting_sink
+    version: "1.0.0"
+    description: "Reactive sink that counts Videoframes and writes count + first/last timestamp to a stats file on teardown. Used to validate that polyglot manual sources can publish via iceoryx2 from a worker thread (#604)."
+    runtime: rust
+    execution: reactive
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0

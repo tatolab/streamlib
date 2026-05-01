@@ -11,6 +11,13 @@ fd1/fd2 stay as free log pipes that the host captures as `intercepted`
 records in the unified JSONL. Data I/O uses direct iceoryx2 FFI via
 libstreamlib_python_native.
 
+A single :class:`BridgeReaderThread` owns the escalate fd: it demultiplexes
+``escalate_response`` frames into their waiting caller (any thread that
+called ``ctx.escalate_*``) and forwards every other frame into a
+lifecycle queue this runner drains. That decoupling is what lets manual-
+mode worker threads issue concurrent escalate calls while the runner's
+main thread keeps draining lifecycle commands (#604).
+
 Usage:
     python -m streamlib.subprocess_runner
 
@@ -26,18 +33,19 @@ Environment variables:
 
 import importlib
 import os
+import queue
 import select
 import socket
 import sys
+import time
 import traceback
 
 from . import clock, log
-from .escalate import EscalateChannel, install_channel
+from .escalate import BridgeReaderThread, EscalateChannel, install_channel
 from .processor_context import (
     NativeProcessorState,
     NativeRuntimeContextFullAccess,
     NativeRuntimeContextLimitedAccess,
-    bridge_read_message,
     bridge_send_message,
     compute_read_buf_bytes,
     load_native_lib,
@@ -248,39 +256,33 @@ def _assert_capability(processor_id: str, cmd: str, msg: dict, expected: str) ->
         )
 
 
-def _handle_stdin_during_run(
-    stdin, stdout, processor, full_ctx, limited_ctx, processor_id,
-    escalate_channel=None,
+def _drain_lifecycle_during_run(
+    lifecycle_queue, stdout, processor, full_ctx, limited_ctx, processor_id,
 ):
-    """Non-blocking check for lifecycle commands during the run loop.
+    """Non-blocking poll for lifecycle commands during the run loop.
 
-    Also drains any lifecycle commands the escalate channel may have buffered
-    while blocked on a correlated response. Handles on_pause, on_resume, and
-    update_config inline. Returns "stop", "teardown", or None.
+    Drains all queued lifecycle messages (which the bridge reader thread
+    deposited while we were busy processing a frame) and dispatches them.
+    Handles on_pause / on_resume / update_config inline; returns ``"stop"``
+    or ``"teardown"`` (or :data:`BridgeReaderThread.EOF_SENTINEL`'s
+    sentinel form ``"eof"``) as soon as a terminal command is observed,
+    re-queueing any messages we didn't process so a stop/teardown takes
+    precedence in FIFO order.
     """
-    # Drain deferred lifecycle messages first — they arrived while a
-    # process() call was blocked on ctx.escalate_*, so they're older than
-    # anything still in the pipe.
-    if escalate_channel and escalate_channel.has_deferred_lifecycle_messages():
-        deferred = escalate_channel.take_deferred_lifecycle_messages()
-        for dm in deferred:
-            result = _dispatch_lifecycle_msg(
-                dm, stdout, processor, full_ctx, limited_ctx, processor_id,
-            )
-            if result is not None:
-                # Re-queue any messages we didn't process this turn so a
-                # stop/teardown coming from a deferred slot takes precedence.
-                remaining = deferred[deferred.index(dm) + 1 :]
-                escalate_channel._deferred_lifecycle[:0] = remaining
-                return result
+    while True:
+        try:
+            msg = lifecycle_queue.get_nowait()
+        except queue.Empty:
+            return None
 
-    if not select.select([stdin], [], [], 0)[0]:
-        return None
+        if msg.get("__bridge_eof__"):
+            return "eof"
 
-    msg = bridge_read_message(stdin)
-    return _dispatch_lifecycle_msg(
-        msg, stdout, processor, full_ctx, limited_ctx, processor_id,
-    )
+        result = _dispatch_lifecycle_msg(
+            msg, stdout, processor, full_ctx, limited_ctx, processor_id,
+        )
+        if result is not None:
+            return result
 
 
 def _dispatch_lifecycle_msg(
@@ -327,6 +329,18 @@ def _dispatch_lifecycle_msg(
     return None
 
 
+def _next_lifecycle_msg(lifecycle_queue):
+    """Block until the next lifecycle message arrives, returning ``None`` on EOF.
+
+    Used by the outer command loop. The ``__bridge_eof__`` sentinel maps to
+    ``None`` so callers see a clean EOF signal.
+    """
+    msg = lifecycle_queue.get()
+    if msg.get("__bridge_eof__"):
+        return None
+    return msg
+
+
 def main():
     """Main entry point for the subprocess runner."""
     entrypoint = os.environ.get("STREAMLIB_ENTRYPOINT")
@@ -353,10 +367,18 @@ def main():
     stdin, stdout, _escalate_sock = _open_escalate_fd_stream()
 
     # Install the escalate channel so processors can call ctx.escalate_*
-    # during setup() and process(). The channel demultiplexes responses
-    # by request_id.
-    escalate_channel = EscalateChannel(stdin, stdout)
+    # during setup() and process(). The reader thread (started below)
+    # demultiplexes responses by request_id so concurrent calls from
+    # worker threads are safe (#604).
+    escalate_channel = EscalateChannel(stdout)
     install_channel(escalate_channel)
+
+    # Lifecycle commands flow through this queue; the bridge reader thread
+    # is the sole producer, the runner's outer loop (and the run-phase
+    # `_drain_lifecycle_during_run`) are the consumers.
+    lifecycle_queue: "queue.Queue[dict]" = queue.Queue()
+    bridge_reader = BridgeReaderThread(stdin, escalate_channel, lifecycle_queue)
+    bridge_reader.start()
 
     # Install unified logging: writer thread + stdio / logging interceptors.
     # After this point, `print()` / `sys.stderr.write()` / `logging.*` all
@@ -380,7 +402,10 @@ def main():
 
     try:
         while True:
-            msg = bridge_read_message(stdin)
+            msg = _next_lifecycle_msg(lifecycle_queue)
+            if msg is None:
+                log.info("escalate channel closed, shutting down")
+                break
             cmd = msg.get("cmd", "")
 
             if cmd == "setup":
@@ -425,17 +450,11 @@ def main():
                 log.info("Entering execution loop", mode=execution_mode)
 
                 if execution_mode == "reactive":
-                    # Try the destination's listener fd; -1 means no notify
-                    # service was wired (Rust source absent or older host) —
-                    # we fall back to a coarse sleep so the loop still
-                    # progresses without burning idle CPU.
                     listener_fd = native_lib.slpn_event_listener_fd(native_ctx_ptr)
-                    stdin_fd = stdin.fileno()
-                    select_fds = [stdin_fd]
-                    if listener_fd >= 0:
-                        select_fds.append(listener_fd)
-                    # Cap the wait so a closed stdin / shutdown command latency
-                    # stays bounded even if no notify ever arrives.
+                    # Cap the wait so a closed escalate fd / shutdown command
+                    # latency stays bounded even if no notify ever arrives.
+                    # Matches the previous select() timeout — teardown latency
+                    # is bounded by this constant plus per-iteration overhead.
                     SELECT_TIMEOUT_S = 0.1
                     while running:
                         has_data = native_lib.slpn_input_poll(native_ctx_ptr)
@@ -453,13 +472,23 @@ def main():
                             except Exception as e:
                                 log.error("process() error", error=str(e))
                         else:
-                            ready, _, _ = select.select(select_fds, [], [], SELECT_TIMEOUT_S)
-                            if listener_fd >= 0 and listener_fd in ready:
-                                native_lib.slpn_event_drain(native_ctx_ptr)
+                            # No data: block on the input notify fd (when
+                            # wired) or a coarse sleep otherwise. The
+                            # lifecycle queue is drained unconditionally
+                            # below, so the SELECT_TIMEOUT_S cap is what
+                            # bounds teardown latency.
+                            if listener_fd >= 0:
+                                ready, _, _ = select.select(
+                                    [listener_fd], [], [], SELECT_TIMEOUT_S,
+                                )
+                                if listener_fd in ready:
+                                    native_lib.slpn_event_drain(native_ctx_ptr)
+                            else:
+                                time.sleep(SELECT_TIMEOUT_S)
 
-                        lifecycle_cmd = _handle_stdin_during_run(
-                            stdin, stdout, processor, full_ctx, limited_ctx,
-                            processor_id, escalate_channel=escalate_channel,
+                        lifecycle_cmd = _drain_lifecycle_during_run(
+                            lifecycle_queue, stdout, processor, full_ctx, limited_ctx,
+                            processor_id,
                         )
                         if lifecycle_cmd == "teardown":
                             running = False
@@ -473,6 +502,8 @@ def main():
                         elif lifecycle_cmd == "stop":
                             running = False
                             bridge_send_message(stdout, {"rpc": "stopped"})
+                        elif lifecycle_cmd == "eof":
+                            running = False
 
                 elif execution_mode == "continuous":
                     # Drift-free monotonic-clock dispatch via timerfd. Replaces
@@ -512,16 +543,16 @@ def main():
                                     running = False
                                     break
                                 # expirations == 0 -> timeout, fall through to
-                                # the stdin poll. expirations >= 1 -> tick(s)
+                                # the lifecycle drain. expirations >= 1 -> tick(s)
                                 # consumed; the loop body already ran once for
                                 # this iteration so missed-tick catch-up is
                                 # naturally skipped (drift-free, not catch-up).
                             # interval_ms <= 0: no timer; loop runs as fast as
-                            # process() returns, polling stdin between iterations.
+                            # process() returns.
 
-                            lifecycle_cmd = _handle_stdin_during_run(
-                                stdin, stdout, processor, full_ctx, limited_ctx,
-                                processor_id, escalate_channel=escalate_channel,
+                            lifecycle_cmd = _drain_lifecycle_during_run(
+                                lifecycle_queue, stdout, processor, full_ctx, limited_ctx,
+                                processor_id,
                             )
                             if lifecycle_cmd == "teardown":
                                 running = False
@@ -535,12 +566,18 @@ def main():
                             elif lifecycle_cmd == "stop":
                                 running = False
                                 bridge_send_message(stdout, {"rpc": "stopped"})
+                            elif lifecycle_cmd == "eof":
+                                running = False
                     finally:
                         if timer is not None:
                             timer.close()
 
                 elif execution_mode == "manual":
-                    # Manual mode: start() is a resource-lifecycle op → full access
+                    # Manual mode: start() is a resource-lifecycle op → full access.
+                    # The contract is that start() returns promptly (worker
+                    # threads do the long-lived work). Worker threads are now
+                    # safe to call ctx.escalate_* concurrently — the bridge
+                    # reader thread demuxes responses by request_id.
                     if hasattr(processor, "start"):
                         try:
                             processor.start(full_ctx)
@@ -598,14 +635,13 @@ def main():
             else:
                 log.warn("Unknown command", cmd=cmd)
 
-    except EOFError:
-        log.info("stdin closed, shutting down")
     except Exception as e:
         log.error("Fatal error", error=str(e), traceback=traceback.format_exc())
         # finally runs cleanup; exit code is set by sys.exit raising SystemExit
         sys.exit(1)
     finally:
         # Single cleanup site — the FFI free is not idempotent (#469).
+        bridge_reader.stop()
         if native_lib and native_ctx_ptr:
             _cleanup_native(native_lib, native_ctx_ptr, native_handle_ptr, state)
         log.info("Subprocess runner exiting")

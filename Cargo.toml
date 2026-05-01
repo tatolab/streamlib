@@ -43,6 +43,7 @@ members = [
     "examples/polyglot-dma-buf-consumer", # Example: Camera → Python DMA-BUF consumer → Display (Linux polyglot E2E)
     "examples/polyglot-cpu-readback-blur", # Example: Polyglot cpu-readback adapter — Python cv2 / Deno hand-rolled Gaussian blur (#529)
     "examples/polyglot-manual-source",       # Example: Polyglot manual source — Python/Deno worker thread paced by MonotonicTimer (#542)
+    "examples/polyglot-manual-source/plugin", # Counting-sink Rust dylib plugin for polyglot-manual-source (#604)
     "examples/polyglot-continuous-processor", # Example: Polyglot continuous processor — Python/Deno process() driven by monotonic-clock timerfd (#542)
     "examples/polyglot-opengl-fragment-shader", # Example: Polyglot OpenGL adapter — Python Mandelbrot / Deno plasma fragment shader rendered into a host DMA-BUF (#530)
     "examples/polyglot-vulkan-compute",   # Example: Polyglot Vulkan adapter — Python/Deno Mandelbrot compute kernel dispatched against a host DMA-BUF VkImage (#531)

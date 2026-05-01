@@ -1,0 +1,18 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "polyglot-manual-source-counting-sink-plugin"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+streamlib = { path = "../../../libs/streamlib" }
+streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = "0.1"

@@ -1,41 +1,39 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Polyglot manual source — Python reference example for issue #542.
+"""Polyglot manual source — Python reference example for issues #542 + #604.
 
 Demonstrates the canonical `execution: manual` worker-thread idiom:
 
-1. ``start()`` spawns a worker thread and returns promptly.
-2. The worker uses `streamlib.MonotonicTimer` for drift-free pacing
-   (NOT `time.sleep`).
-3. Each tick, the worker writes an incrementing frame counter into a
-   host-visible output file (atomic: write tmp + rename). The host
-   reads this file post-stop to verify frames flowed.
-4. ``stop()`` flips a shutdown flag, joins the worker thread, and
-   returns. The runtime exits cleanly without falling through to
-   the host's SIGKILL fallback.
+1. ``start()`` spawns a worker thread and returns promptly so lifecycle
+   commands (``stop``/``teardown``) can land.
+2. The worker uses :class:`streamlib.MonotonicTimer` for drift-free
+   pacing (NOT ``time.sleep``).
+3. Each tick, the worker calls ``ctx.outputs.write(...)`` to publish a
+   ``Videoframe`` over iceoryx2 to the destination input port. The
+   counting-sink Rust plugin (``examples/polyglot-manual-source/plugin``)
+   subscribes to that port and counts frames; the scenario binary reads
+   the sink's stats file post-stop to verify frames flowed.
+4. ``stop()`` flips a shutdown flag, joins the worker thread, returns.
+
+Pre-#604, worker threads couldn't safely call ``outputs.write`` because
+the Python cdylib's ``slpn_output_write`` aliased ``&mut`` against the
+context across threads — instant UB once Python's ctypes released the
+GIL on the FFI dispatch. #604 adds a [`Mutex`] inside
+``PythonNativeContext`` so concurrent ``slpn_output_write`` calls
+serialize on the publisher map. The worker idiom below is now safe by
+construction.
 
 If ``start()`` instead held a ``while True`` loop synchronously, the
 subprocess runner's command loop would never iterate — no
 ``stop`` / ``teardown`` lifecycle message would land, and the host
 falls through to a 5-second SIGKILL after timeout. That's the
 failure mode this example exists to rule out.
-
-Why a file and not the iceoryx2 output port: a polyglot source that
-publishes ``Videoframe`` payloads needs to allocate pixel buffers via
-escalate IPC ``acquire_pixel_buffer`` and call ``outputs.write`` from
-a thread the host reads — concurrent escalate IPC from a worker
-thread is not safe under the current bridge protocol (the runner's
-outer command loop and the worker would both read from stdin). A
-host-visible file sidesteps that out-of-scope plumbing and keeps the
-example focused on the worker-thread idiom.
 """
 
 from __future__ import annotations
 
-import os
 import threading
-from pathlib import Path
 from typing import Optional
 
 import streamlib
@@ -46,33 +44,44 @@ class PolyglotManualSource:
     """Manual-mode polyglot source.
 
     Config keys:
-        output_file (str, required): host-visible file path the
-            worker thread writes the latest frame count into.
         interval_ms (int, default 33): tick interval. 33ms ≈ 30fps.
+        width (int, default 32): width to claim on the published Videoframe.
+        height (int, default 32): height to claim on the published Videoframe.
+        surface_id_prefix (str, default "polyglot-manual-source"): prefix
+            for the synthetic surface_id field on each frame. Sinks that
+            simply count don't need a real GPU surface; using a synthetic
+            placeholder lets the example run without a host
+            ``GpuContextFullAccess`` allocation.
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         cfg = ctx.config
-        self._output_file = Path(str(cfg["output_file"]))
         self._interval_ns = int(cfg.get("interval_ms", 33)) * 1_000_000
+        self._width = int(cfg.get("width", 32))
+        self._height = int(cfg.get("height", 32))
+        self._surface_id_prefix = str(
+            cfg.get("surface_id_prefix", "polyglot-manual-source")
+        )
         self._frame_count = 0
         self._stop_event = threading.Event()
         self._worker: Optional[threading.Thread] = None
-        # Initialize the file so the host always finds something to read.
-        self._write_count_atomic(0)
+        # Capture the outputs view so the worker thread can publish without
+        # re-entering the lifecycle context. ``NativeOutputs`` holds only
+        # the cdylib handle + ctx pointer, both stable across the
+        # processor's lifetime.
+        self._outputs = ctx.outputs
         streamlib.log.info(
             "PolyglotManualSource setup",
-            output_file=str(self._output_file),
             interval_ns=self._interval_ns,
+            width=self._width,
+            height=self._height,
         )
 
     def start(self, _ctx: RuntimeContextFullAccess) -> None:
         # SHARP EDGE: this method MUST return promptly. The subprocess
-        # runner calls start() inline on the command loop thread; if
-        # it blocks (e.g. a `while True:` loop here), no subsequent
-        # `stop` / `teardown` lifecycle message can be received and
-        # the host falls through to a 5-second SIGKILL after timeout.
-        # Spawn a worker, return immediately.
+        # runner calls start() inline on the command loop thread; if it
+        # blocks, no subsequent `stop` / `teardown` lifecycle message can
+        # be received. Spawn a worker, return immediately.
         self._stop_event.clear()
         self._worker = threading.Thread(
             target=self._worker_loop,
@@ -84,8 +93,8 @@ class PolyglotManualSource:
 
     def _worker_loop(self) -> None:
         # MonotonicTimer is the canonical drift-free pacing primitive.
-        # Replaces `time.sleep(interval_s)` which drifts and doesn't
-        # match streamlib's monotonic-clock pacing philosophy.
+        # Replaces `time.sleep(interval_s)` which drifts and doesn't match
+        # streamlib's monotonic-clock pacing philosophy.
         with streamlib.MonotonicTimer(self._interval_ns) as timer:
             while not self._stop_event.is_set():
                 expirations = timer.wait(100)  # 100ms timeout bounds shutdown latency
@@ -97,20 +106,32 @@ class PolyglotManualSource:
                 for _ in range(expirations):
                     if self._stop_event.is_set():
                         return
-                    self._frame_count += 1
-                    self._write_count_atomic(self._frame_count)
+                    self._publish_frame()
 
-    def _write_count_atomic(self, count: int) -> None:
-        """Write `count` to the output file atomically (write-tmp + rename)."""
+    def _publish_frame(self) -> None:
+        """Publish one Videoframe on the `frame_out` port from this worker
+        thread. Exercises the cdylib Mutex around the iceoryx2 publisher
+        map (#604) — pre-fix, this raced with any other ``slpn_*`` call
+        from the runner's main thread and was instant UB."""
+        self._frame_count += 1
+        ts_ns = streamlib.monotonic_now_ns()
+        # The Videoframe schema accepts a synthetic surface_id (it's a
+        # string used by the consumer to look up a GPU surface — a sink
+        # that just counts doesn't need a real one).
+        frame = {
+            "surface_id": f"{self._surface_id_prefix}-{self._frame_count}",
+            "width": self._width,
+            "height": self._height,
+            "timestamp_ns": str(ts_ns),
+            "frame_index": str(self._frame_count),
+        }
         try:
-            tmp = self._output_file.with_suffix(self._output_file.suffix + ".tmp")
-            tmp.write_text(str(count))
-            os.replace(tmp, self._output_file)
+            self._outputs.write("frame_out", frame, timestamp_ns=ts_ns)
         except Exception as e:
             streamlib.log.warn(
-                "PolyglotManualSource write failed",
+                "PolyglotManualSource publish failed",
                 error=str(e),
-                count=count,
+                frame_count=self._frame_count,
             )
 
     def stop(self, _ctx: RuntimeContextFullAccess) -> None:
@@ -120,8 +141,6 @@ class PolyglotManualSource:
             worker.join(timeout=2.0)
             if worker.is_alive():
                 streamlib.log.warn("PolyglotManualSource worker did not exit within 2s")
-        # Final write so the host always sees the last value.
-        self._write_count_atomic(self._frame_count)
         streamlib.log.info(
             "PolyglotManualSource stop: worker joined",
             frames_emitted=self._frame_count,

@@ -7,25 +7,25 @@ A Python processor running in a subprocess only sees a
 ``GpuContextLimitedAccess`` sandbox (no raw allocations). When it needs the
 privileged ``GpuContextFullAccess`` surface — e.g. to acquire a new-shape
 pixel buffer mid-stream — it sends an ``escalate_request`` to the Rust host
-over the subprocess's stdout, and the host replies with an
-``escalate_response`` on stdin. The host runs the work inside
+over the dedicated escalate socketpair, and the host replies with an
+``escalate_response``. The host runs the work inside
 ``GpuContextLimitedAccess::escalate``, which serializes against every other
 escalation in the runtime.
 
-This module is small on purpose: it owns the request-id bookkeeping and the
-deferred-lifecycle buffer that lets ``EscalateChannel.request()`` step over
-any lifecycle commands (``on_pause``, ``stop``, …) that happen to arrive
-while it's blocked waiting for its correlated response. The outer
-``subprocess_runner`` loop drains those buffered messages through
-``EscalateChannel.take_deferred_lifecycle_messages()`` before polling stdin
-again.
+This module owns the request-id bookkeeping and the response demultiplexer
+that lets multiple worker threads issue escalate calls concurrently. A
+single reader thread (started by :func:`start_reader_thread`) consumes the
+escalate fd, routes ``escalate_response`` messages to their waiting caller
+by ``request_id``, and forwards every other message into a lifecycle queue
+the runner's outer command loop drains.
 """
 
 from __future__ import annotations
 
+import queue
 import threading
 import uuid
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 from .processor_context import bridge_read_message, bridge_send_message
 
@@ -33,27 +33,49 @@ from .processor_context import bridge_read_message, bridge_send_message
 ESCALATE_REQUEST_RPC = "escalate_request"
 ESCALATE_RESPONSE_RPC = "escalate_response"
 
+#: Default upper bound on how long :meth:`EscalateChannel.request` waits for
+#: a correlated response before raising. Generous enough for realistic
+#: escalate ops (compute pipeline-cache cold start, GPU readback under
+#: load) but tight enough that a stuck host or zombie reader thread
+#: surfaces as a clear ``EscalateError("escalate timed out…")`` instead
+#: of a silent hang. Callers can override per-request via the
+#: ``timeout_s`` parameter.
+DEFAULT_REQUEST_TIMEOUT_S: float = 60.0
+
 
 class EscalateError(RuntimeError):
     """Raised when the host returns an ``Err`` escalate response."""
 
 
-class EscalateChannel:
-    """Synchronous request/response channel over the subprocess's stdio pipes.
+class _PendingResponse:
+    """One slot per in-flight escalate request — Event + landing pad."""
 
-    The channel is single-flight: only one escalate request is in flight at
-    a time, matching the single-threaded structure of the Python subprocess
-    runner. Lifecycle messages that the host sends while we're waiting on a
-    correlated response are captured in ``_deferred_lifecycle`` and drained
-    by the outer loop through
-    :meth:`take_deferred_lifecycle_messages`.
+    __slots__ = ("event", "message")
+
+    def __init__(self) -> None:
+        self.event = threading.Event()
+        self.message: Optional[Dict[str, Any]] = None
+
+
+class EscalateChannel:
+    """Concurrent-safe request/response channel over the escalate socketpair.
+
+    Multiple worker threads may issue concurrent :meth:`request` calls; each
+    call registers a per-``request_id`` slot keyed off
+    :class:`_PendingResponse` and blocks on its event. The dedicated reader
+    thread (see :func:`start_reader_thread`) demuxes incoming
+    ``escalate_response`` frames against this map and routes anything else
+    into the runner's lifecycle queue.
+
+    Frame writes are serialized by ``bridge_send_message``'s module lock, so
+    request payloads never interleave on the wire.
     """
 
-    def __init__(self, stdin, stdout) -> None:
-        self._stdin = stdin
+    def __init__(self, stdout) -> None:
         self._stdout = stdout
-        self._send_lock = threading.Lock()
-        self._deferred_lifecycle: List[Dict[str, Any]] = []
+        self._pending: Dict[str, _PendingResponse] = {}
+        self._pending_lock = threading.Lock()
+        self._closed = False
 
     # -------------------- public SDK surface --------------------
 
@@ -233,23 +255,79 @@ class EscalateChannel:
     # -------------------- core request/response --------------------
 
     def request(
-        self, op: Dict[str, Any], *, allow_contended: bool = False
+        self,
+        op: Dict[str, Any],
+        *,
+        allow_contended: bool = False,
+        timeout_s: Optional[float] = DEFAULT_REQUEST_TIMEOUT_S,
     ) -> Optional[Dict[str, Any]]:
         """Send an escalate request and block until the correlated response.
 
+        Safe to call from any thread, including concurrently with other
+        :meth:`request` calls. The reader thread routes incoming
+        ``escalate_response`` frames by ``request_id`` so concurrent calls
+        can't steal each other's responses.
+
         When ``allow_contended`` is true, a ``"contended"`` response is
         returned as ``None`` instead of raising. Used by
-        :meth:`try_acquire_cpu_readback` and any future ``try_*`` op that
+        :meth:`try_run_cpu_readback_copy` and any future ``try_*`` op that
         opts into the contended-skip shape — every other op still treats
         contention as a protocol violation (raises
         :class:`EscalateError`) so a buggy host can't silently degrade
         an op that was supposed to be blocking.
+
+        ``timeout_s`` caps how long this call waits for the correlated
+        response. ``None`` disables the timeout (waits indefinitely);
+        otherwise on expiry the call raises :class:`EscalateError` and
+        the pending slot is cleared. Defaults to
+        :data:`DEFAULT_REQUEST_TIMEOUT_S`.
+
+        Raises :class:`EscalateError` for: send failures (broken pipe,
+        OS-level write errors), timeouts, channel-closed-mid-flight,
+        and host-reported errors. The exception type is uniform so
+        callers don't have to special-case OSError vs. semantic failures.
         """
         request_id = str(uuid.uuid4())
-        req = {"rpc": ESCALATE_REQUEST_RPC, "request_id": request_id, **op}
-        with self._send_lock:
-            bridge_send_message(self._stdout, req)
-            return self._await_response(request_id, allow_contended=allow_contended)
+        slot = _PendingResponse()
+        with self._pending_lock:
+            if self._closed:
+                raise EscalateError("escalate channel is closed")
+            self._pending[request_id] = slot
+
+        try:
+            req = {"rpc": ESCALATE_REQUEST_RPC, "request_id": request_id, **op}
+            try:
+                bridge_send_message(self._stdout, req)
+            except OSError as e:
+                raise EscalateError(
+                    f"escalate channel send failed: {e}"
+                ) from e
+            signaled = slot.event.wait(timeout=timeout_s)
+        finally:
+            with self._pending_lock:
+                self._pending.pop(request_id, None)
+
+        # Race-safe message check: a delivery can land between the
+        # `wait()` returning False (timeout) and the `finally` pop —
+        # `slot.message` reflects the latest state regardless of which
+        # branch the wait took.
+        msg = slot.message
+        if msg is None:
+            if not signaled:
+                raise EscalateError(
+                    f"escalate timed out after {timeout_s}s"
+                )
+            raise EscalateError("escalate channel closed before response arrived")
+        result = msg.get("result")
+        if result == "ok":
+            return msg
+        if result == "contended":
+            if allow_contended:
+                return None
+            raise EscalateError(
+                "escalate returned contended for an op that does not allow it"
+            )
+        raise EscalateError(msg.get("message") or "escalate failed")
 
     def log_fire_and_forget(self, payload: Dict[str, Any]) -> None:
         """Send a fire-and-forget escalate op (currently `log`).
@@ -262,38 +340,132 @@ class EscalateChannel:
         req = {"rpc": ESCALATE_REQUEST_RPC, **payload}
         bridge_send_message(self._stdout, req)
 
-    def _await_response(
-        self, request_id: str, *, allow_contended: bool = False
-    ) -> Optional[Dict[str, Any]]:
-        while True:
-            msg = bridge_read_message(self._stdin)
-            rpc = msg.get("rpc", "")
-            if rpc == ESCALATE_RESPONSE_RPC and msg.get("request_id") == request_id:
-                result = msg.get("result")
-                if result == "ok":
-                    return msg
-                if result == "contended":
-                    if allow_contended:
-                        return None
-                    raise EscalateError(
-                        "escalate returned contended for an op that does not allow it"
+    # -------------------- demux + shutdown --------------------
+
+    def deliver_response(self, msg: Dict[str, Any]) -> bool:
+        """Route an incoming ``escalate_response`` to its waiting caller.
+
+        Called from the reader thread for every frame where
+        ``rpc == ESCALATE_RESPONSE_RPC``. Returns ``True`` when the
+        response was delivered to a registered waiter, ``False`` if the
+        ``request_id`` is unknown (orphaned / late response — dropped).
+        """
+        request_id = msg.get("request_id")
+        if not isinstance(request_id, str):
+            return False
+        with self._pending_lock:
+            slot = self._pending.get(request_id)
+        if slot is None:
+            return False
+        slot.message = msg
+        slot.event.set()
+        return True
+
+    def close(self) -> None:
+        """Wake every in-flight ``request`` with a closed-channel error.
+
+        Called from the reader thread when the escalate fd reaches EOF, or
+        from the runner during shutdown. Idempotent.
+        """
+        with self._pending_lock:
+            self._closed = True
+            pending = list(self._pending.values())
+            self._pending.clear()
+        for slot in pending:
+            slot.message = None
+            slot.event.set()
+
+
+# ============================================================================
+# Reader thread — demultiplexes the escalate fd
+# ============================================================================
+
+
+class BridgeReaderThread:
+    """Background thread that owns the escalate fd reader.
+
+    Splits incoming frames between two consumers:
+
+    - ``escalate_response`` frames go to :meth:`EscalateChannel.deliver_response`.
+    - everything else goes to ``lifecycle_queue`` for the runner's outer
+      command loop to dispatch.
+
+    The thread exits on EOF (host closed the fd) or when ``stop()`` is
+    called. EOF is signaled to the lifecycle queue with a sentinel so the
+    runner can shut down.
+    """
+
+    EOF_SENTINEL: Dict[str, Any] = {"__bridge_eof__": True}
+
+    def __init__(
+        self,
+        stdin,
+        escalate_channel: EscalateChannel,
+        lifecycle_queue: "queue.Queue[Dict[str, Any]]",
+    ) -> None:
+        self._stdin = stdin
+        self._escalate_channel = escalate_channel
+        self._lifecycle_queue = lifecycle_queue
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+
+    def start(self) -> None:
+        """Start the reader thread. Idempotent — second call is a no-op."""
+        if self._thread is not None:
+            return
+        self._thread = threading.Thread(
+            target=self._loop,
+            name="streamlib-bridge-reader",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self, *, join_timeout: float = 1.0) -> None:
+        """Request the reader to exit and join it."""
+        self._stop.set()
+        thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=join_timeout)
+
+    def _loop(self) -> None:
+        try:
+            while not self._stop.is_set():
+                try:
+                    msg = bridge_read_message(self._stdin)
+                except EOFError:
+                    break
+                except Exception:
+                    # Defensive: a malformed frame shouldn't kill the runner;
+                    # log via the standard channel and keep going. The host's
+                    # bridge writer is the source of truth — drift here means
+                    # something upstream is wrong, but we don't want to mask
+                    # the issue by silently exiting.
+                    from . import log
+
+                    log.error(
+                        "bridge reader: malformed frame; continuing",
                     )
-                raise EscalateError(msg.get("message") or "escalate failed")
-            # Any other message during our blocking read is a lifecycle
-            # command (stop / teardown / on_pause / on_resume / update_config).
-            # Defer it so the outer loop consumes it in FIFO order.
-            self._deferred_lifecycle.append(msg)
+                    continue
 
-    # -------------------- lifecycle cooperation --------------------
+                if msg.get("rpc") == ESCALATE_RESPONSE_RPC:
+                    if not self._escalate_channel.deliver_response(msg):
+                        # Late / orphan response — log and drop.
+                        from . import log
 
-    def take_deferred_lifecycle_messages(self) -> List[Dict[str, Any]]:
-        """Drain and return buffered lifecycle messages, FIFO."""
-        out = self._deferred_lifecycle
-        self._deferred_lifecycle = []
-        return out
+                        log.warn(
+                            "bridge reader: orphan escalate response",
+                            request_id=msg.get("request_id"),
+                        )
+                    continue
 
-    def has_deferred_lifecycle_messages(self) -> bool:
-        return bool(self._deferred_lifecycle)
+                # Lifecycle command (or unknown rpc) — hand off to the runner.
+                self._lifecycle_queue.put(msg)
+        finally:
+            # Wake every in-flight escalate caller so they don't deadlock,
+            # and signal the runner that no more lifecycle messages will
+            # arrive on this channel.
+            self._escalate_channel.close()
+            self._lifecycle_queue.put(self.EOF_SENTINEL)
 
 
 _channel_singleton: Optional[EscalateChannel] = None

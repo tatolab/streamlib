@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use iceoryx2::port::listener::Listener;
@@ -31,9 +32,24 @@ const READ_MODE_SKIP_TO_LATEST: i32 = 0;
 const READ_MODE_READ_NEXT_IN_ORDER: i32 = 1;
 
 /// Per-processor native context holding iceoryx2 node and port state.
+///
+/// Mutable interior state lives behind [`Self::inner`]'s [`Mutex`] so
+/// concurrent FFI calls from different Deno tasks (or any future Worker)
+/// cannot alias `&mut` against each other (#604). Mirrors the
+/// `streamlib-python-native` shape so a fix or invariant in one cdylib
+/// applies to the other.
+///
+/// `node` is immutable after construction (its `service_builder` only
+/// borrows `&self`) so it sits outside the lock to keep the locked region
+/// small.
 pub struct DenoNativeContext {
     processor_id: String,
     node: Node<ipc::Service>,
+    inner: Mutex<DenoNativeContextInner>,
+}
+
+/// Mutable iceoryx2 port state guarded by [`DenoNativeContext::inner`].
+struct DenoNativeContextInner {
     subscribers: HashMap<String, SubscriberState>,
     publishers: HashMap<String, PublisherState>,
     /// Per-port read mode (port_name → READ_MODE_*). Default is SkipToLatest.
@@ -62,10 +78,12 @@ impl DenoNativeContext {
         Ok(Self {
             processor_id: processor_id.to_string(),
             node,
-            subscribers: HashMap::new(),
-            publishers: HashMap::new(),
-            port_read_modes: HashMap::new(),
-            notify_listener: None,
+            inner: Mutex::new(DenoNativeContextInner {
+                subscribers: HashMap::new(),
+                publishers: HashMap::new(),
+                port_read_modes: HashMap::new(),
+                notify_listener: None,
+            }),
         })
     }
 }
@@ -297,7 +315,7 @@ pub unsafe extern "C" fn sldn_input_subscribe(
     ctx: *mut DenoNativeContext,
     service_name: *const c_char,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -346,7 +364,11 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         }
     };
 
-    ctx.subscribers.insert(
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    inner.subscribers.insert(
         service_name.to_string(),
         SubscriberState {
             subscriber,
@@ -369,7 +391,7 @@ pub unsafe extern "C" fn sldn_input_set_read_mode(
     port_name: *const c_char,
     mode: i32,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -378,7 +400,11 @@ pub unsafe extern "C" fn sldn_input_set_read_mode(
         None => return -1,
     };
 
-    ctx.port_read_modes.insert(port_name.to_string(), mode);
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    inner.port_read_modes.insert(port_name.to_string(), mode);
     0
 }
 
@@ -387,14 +413,19 @@ pub unsafe extern "C" fn sldn_input_set_read_mode(
 /// Returns 1 if any data was received, 0 if none, -1 on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sldn_input_poll(ctx: *mut DenoNativeContext) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
 
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+
     let mut has_data = false;
 
-    for (_service_name, state) in ctx.subscribers.iter_mut() {
+    for (_service_name, state) in inner.subscribers.iter_mut() {
         while let Ok(Some(sample)) = state.subscriber.receive() {
             let buf: &[u8] = sample.payload();
             if buf.len() < FRAME_HEADER_SIZE {
@@ -442,7 +473,7 @@ pub unsafe extern "C" fn sldn_input_read(
     out_len: *mut u32,
     out_ts: *mut i64,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -451,14 +482,19 @@ pub unsafe extern "C" fn sldn_input_read(
         None => return -1,
     };
 
-    let read_mode = ctx
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+
+    let read_mode = inner
         .port_read_modes
         .get(port_name)
         .copied()
         .unwrap_or(READ_MODE_SKIP_TO_LATEST);
 
     // Search all subscribers for pending data on this port
-    for (_service_name, state) in ctx.subscribers.iter_mut() {
+    for (_service_name, state) in inner.subscribers.iter_mut() {
         if let Some(queue) = state.pending.get_mut(port_name) {
             if queue.is_empty() {
                 continue;
@@ -518,7 +554,7 @@ pub unsafe extern "C" fn sldn_output_publish(
     max_payload_bytes: usize,
     notify_service_name: *const c_char,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -618,7 +654,11 @@ pub unsafe extern "C" fn sldn_output_publish(
         _ => None,
     };
 
-    ctx.publishers.insert(
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    inner.publishers.insert(
         port_name.to_string(),
         PublisherState {
             publisher,
@@ -633,6 +673,12 @@ pub unsafe extern "C" fn sldn_output_publish(
 
 /// Write data to a specific output port.
 ///
+/// Safe to call from any Deno task, including concurrently with other
+/// `sldn_*` ops on the same context — the inner [`Mutex`] serializes
+/// access to the iceoryx2 publisher map (#604). The lock is held through
+/// `loan_slice_uninit` + `send` + `notify`; iceoryx2's publisher path is
+/// lock-free zero-copy so the held duration is short.
+///
 /// Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sldn_output_write(
@@ -642,7 +688,7 @@ pub unsafe extern "C" fn sldn_output_write(
     data_len: u32,
     timestamp_ns: i64,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -651,7 +697,12 @@ pub unsafe extern "C" fn sldn_output_write(
         None => return -1,
     };
 
-    let state = match ctx.publishers.get(port_name) {
+    let inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+
+    let state = match inner.publishers.get(port_name) {
         Some(s) => s,
         None => {
             tracing::error!(
@@ -717,12 +768,18 @@ pub unsafe extern "C" fn sldn_event_subscribe(
     ctx: *mut DenoNativeContext,
     notify_service_name: *const c_char,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
-    if ctx.notify_listener.is_some() {
-        return 0;
+    {
+        let inner = match ctx.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if inner.notify_listener.is_some() {
+            return 0;
+        }
     }
     let name = match unsafe { c_str_to_str(notify_service_name) } {
         Some(s) if !s.is_empty() => s,
@@ -765,7 +822,14 @@ pub unsafe extern "C" fn sldn_event_subscribe(
             return -1;
         }
     };
-    ctx.notify_listener = Some(listener);
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    // Re-check under the lock — another thread may have raced ahead.
+    if inner.notify_listener.is_none() {
+        inner.notify_listener = Some(listener);
+    }
     0
 }
 
@@ -779,11 +843,15 @@ pub unsafe extern "C" fn sldn_event_wait(
     ctx: *mut DenoNativeContext,
     timeout_ms: u32,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
-    let Some(listener) = ctx.notify_listener.as_ref() else {
+    let inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let Some(listener) = inner.notify_listener.as_ref() else {
         return -1;
     };
     let mut woke = false;

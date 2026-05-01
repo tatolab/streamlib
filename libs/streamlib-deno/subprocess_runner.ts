@@ -394,21 +394,17 @@ async function main(): Promise<void> {
           running = true;
           log.info("Entering execution loop", { mode: executionMode });
 
-          if (executionMode === "manual") {
-            // Manual mode: start() is a resource-lifecycle op → full access
-            const manualProc = processor as ManualProcessor;
-            try {
-              await manualProc.start(fullCtx);
-            } catch (e) {
-              log.error("start() error", { error: String(e) });
-            }
-            break;
-          }
-
-          // Reactive/continuous: the processing loop blocks the outer command
-          // loop. Read stdin commands concurrently so teardown can be received
-          // during processing. The processing loop yields at await points,
-          // allowing the event loop to progress the stdin reader.
+          // The escalate FD demuxer runs for every execution mode now —
+          // including manual (#604). Without a concurrent reader, a worker
+          // task that issues an escalate request `await`s a Promise that
+          // only resolves when someone reads its `escalate_response` from
+          // the FD. Manual mode used to break out of `case "run"` after
+          // `start()` returned, leaving the outer loop as the only reader;
+          // if the worker fired escalate after start() returned but before
+          // the outer loop iterated again, the response sat in the
+          // socketpair buffer and the worker's Promise never resolved
+          // (deadlock). Spawning the same reader pattern reactive/
+          // continuous already use closes that gap.
           let teardownReceived = false;
           const _stdinReader = (async () => {
             try {
@@ -428,6 +424,22 @@ async function main(): Promise<void> {
                 if (nextCmd === "stop") {
                   assertCapability(processorId, nextCmd, nextMsg, "full");
                   running = false;
+                  // Manual mode: stop the processor + reply here so the
+                  // outer command loop never sees this `stop`. Reactive/
+                  // continuous don't have a `stop()` lifecycle hook —
+                  // they reply `stopped` from the outer loop after the
+                  // processing loop exits. Keep the wire shape identical:
+                  // one `{rpc: "stopped"}` reply per `stop` request.
+                  if (executionMode === "manual") {
+                    const manualProc = processor as ManualProcessor;
+                    if (manualProc.stop) {
+                      try {
+                        await manualProc.stop(fullCtx);
+                      } catch (e) {
+                        log.error("stop() error", { error: String(e) });
+                      }
+                    }
+                  }
                   try {
                     await bridgeSendJson({ rpc: "stopped" });
                   } catch {
@@ -452,11 +464,50 @@ async function main(): Promise<void> {
                 }
               }
             } catch {
-              // stdin closed (pipe broken) — treat as shutdown signal
+              // escalate fd closed (pipe broken) — treat as shutdown signal
               running = false;
               teardownReceived = true;
             }
           })();
+
+          if (executionMode === "manual") {
+            // Manual mode: start() is a resource-lifecycle op → full access.
+            // Contract: start() returns promptly; long-lived work goes in a
+            // worker task. Worker tasks may now call ctx.escalate_*
+            // concurrently — the `_stdinReader` above demuxes responses by
+            // request_id. Wait for the reader to observe a stop/teardown
+            // before falling through; in manual mode it's the only thing
+            // that flips `running` to false.
+            const manualProc = processor as ManualProcessor;
+            try {
+              await manualProc.start(fullCtx);
+            } catch (e) {
+              log.error("start() error", { error: String(e) });
+            }
+            await _stdinReader;
+            if (teardownReceived) {
+              if (processor?.teardown && fullCtx) {
+                try {
+                  await processor.teardown(fullCtx);
+                } catch (e) {
+                  log.error("teardown() error", { error: String(e) });
+                }
+              }
+              try {
+                await bridgeSendJson({ rpc: "done" });
+              } catch {
+                // stdout may be closed if escalate fd EOF triggered shutdown
+              }
+              lib.symbols.sldn_context_destroy(ctxPtr);
+              lib.close();
+              closeLibcHandle();
+              await log.shutdown();
+              Deno.exit(0);
+            }
+            // stop without teardown: _stdinReader already replied; fall
+            // through and let the outer loop pick up the next command.
+            break;
+          }
 
           // Enter execution loop based on mode. process() always receives
           // the limited ctx — no path in the hot loop can reach full access.
