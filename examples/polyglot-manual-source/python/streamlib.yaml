@@ -1,0 +1,12 @@
+package:
+  name: polyglot-manual-source
+  version: "0.1.0"
+  description: "Polyglot manual source (#542) — Python worker thread paced by MonotonicTimer, writes BGRA frames into a host cpu-readback surface"
+
+processors:
+  - name: com.tatolab.polyglot_manual_source
+    version: "1.0.0"
+    description: "Manual source: spawns a worker thread in start() that writes incrementing frame counters to a host-pre-registered cpu-readback surface at MonotonicTimer cadence. Reference example for the start()-must-return-promptly contract."
+    runtime: python
+    execution: manual
+    entrypoint: "manual_source:PolyglotManualSource"

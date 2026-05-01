@@ -1,0 +1,14 @@
+package:
+  name: polyglot-continuous-processor
+  version: "0.1.0"
+  description: "Polyglot continuous processor (#542) — Python process() driven by monotonic-clock timerfd"
+
+processors:
+  - name: com.tatolab.polyglot_continuous_processor
+    version: "1.0.0"
+    description: "Continuous processor: process() called by the runner at interval_ms cadence (now timerfd-paced); each call writes the tick count + a monotonic timestamp into the host cpu-readback surface. Reference example for the no-time.sleep pacing contract."
+    runtime: python
+    execution:
+      type: continuous
+      interval_ms: 16
+    entrypoint: "continuous_processor:PolyglotContinuousProcessor"

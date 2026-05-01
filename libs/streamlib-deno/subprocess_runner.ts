@@ -503,21 +503,57 @@ async function main(): Promise<void> {
           } else if (executionMode === "continuous") {
             const continuousProc = processor as ContinuousProcessor;
             const intervalMs = (msg.interval_ms as number) ?? 0;
-            while (running) {
-              // Poll for any available input data
-              lib.symbols.sldn_input_poll(ctxPtr);
+            // Drift-free monotonic-clock dispatch via timerfd. Replaces the
+            // previous `setTimeout(intervalMs)` loop, which accumulated drift
+            // and didn't match streamlib's pacing philosophy. intervalMs <= 0
+            // falls through to a yielding loop matching the old "yield"
+            // semantics — used by tests / processors that drive their own
+            // pacing.
+            let timer: clock.MonotonicTimer | null = null;
+            if (intervalMs > 0) {
               try {
-                await continuousProc.process(limitedCtx);
+                timer = clock.MonotonicTimer.create(BigInt(intervalMs) * 1_000_000n);
               } catch (e) {
-                log.error("process() error", { error: String(e) });
+                log.error("MonotonicTimer unavailable for continuous mode", {
+                  error: String(e),
+                  interval_ms: intervalMs,
+                });
+                running = false;
               }
-              if (intervalMs > 0) {
-                await new Promise((resolve) =>
-                  setTimeout(resolve, intervalMs),
-                );
-              } else {
-                // Yield to event loop
-                await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+            try {
+              while (running) {
+                lib.symbols.sldn_input_poll(ctxPtr);
+                try {
+                  await continuousProc.process(limitedCtx);
+                } catch (e) {
+                  log.error("process() error", { error: String(e) });
+                }
+
+                if (timer !== null) {
+                  // Block until the next tick or 100ms timeout — the timeout
+                  // bounds teardown latency without spinning. sldn_timerfd_wait
+                  // is nonblocking (worker-thread dispatched) so the
+                  // _stdinReader can run lifecycle commands concurrently.
+                  const expirations = await timer.wait(100);
+                  if (expirations < 0n) {
+                    log.error("timer wait failed; exiting continuous loop");
+                    running = false;
+                    break;
+                  }
+                  // expirations === 0n → timeout, fall through to next iter.
+                  // expirations >= 1n → tick(s) consumed; loop body ran once
+                  // already this iteration, so missed-tick catch-up is
+                  // naturally skipped (drift-free, not catch-up).
+                } else {
+                  // intervalMs <= 0: yield to event loop so the _stdinReader
+                  // gets a chance to deliver lifecycle messages.
+                  await new Promise((resolve) => setTimeout(resolve, 0));
+                }
+              }
+            } finally {
+              if (timer !== null) {
+                timer.close();
               }
             }
           }

@@ -131,3 +131,61 @@ def test_sub_microsecond_resolution():
             found_sub_us = True
             break
     assert found_sub_us, "expected at least one sub-microsecond delta"
+
+
+@pytest.fixture(scope="module")
+def installed_clock(cdylib):
+    """Wire MonotonicTimer's cdylib binding for the test session."""
+    streamlib.clock.install_timerfd(cdylib)
+    yield cdylib
+
+
+def test_monotonic_timer_fires_on_schedule(installed_clock):
+    """16ms timer delivers ~10 ticks within bounded slack."""
+    interval_ns = 16 * 1_000_000
+    timer = streamlib.MonotonicTimer(interval_ns)
+    try:
+        start_ns = streamlib.monotonic_now_ns()
+        ticks = 0
+        waits = 0
+        while ticks < 10 and waits < 60:
+            got = timer.wait(50)
+            waits += 1
+            if got > 0:
+                ticks += got
+        elapsed_ns = streamlib.monotonic_now_ns() - start_ns
+        expected_ns = interval_ns * ticks
+        assert ticks >= 10, f"expected at least 10 ticks, got {ticks}"
+        slack_ns = 5_000_000 * ticks
+        assert expected_ns - slack_ns <= elapsed_ns <= expected_ns + slack_ns, (
+            f"elapsed {elapsed_ns}ns outside expected {expected_ns}±{slack_ns}"
+        )
+    finally:
+        timer.close()
+
+
+def test_monotonic_timer_wait_returns_zero_on_timeout(installed_clock):
+    """1-second interval + 50ms wait timeouts before first tick."""
+    timer = streamlib.MonotonicTimer(1_000_000_000)
+    try:
+        got = timer.wait(50)
+        assert got == 0, f"expected timeout (0), got {got}"
+    finally:
+        timer.close()
+
+
+def test_monotonic_timer_rejects_non_positive_interval(installed_clock):
+    """Construction validates intervals."""
+    with pytest.raises(ValueError, match="interval_ns must be > 0"):
+        streamlib.MonotonicTimer(0)
+    with pytest.raises(ValueError, match="interval_ns must be > 0"):
+        streamlib.MonotonicTimer(-100)
+
+
+def test_monotonic_timer_context_manager_closes(installed_clock):
+    """`with` block calls close() at exit; subsequent wait() returns -1."""
+    with streamlib.MonotonicTimer(16 * 1_000_000) as timer:
+        first = timer.wait(50)
+        assert first >= 0  # tick or timeout
+    # After __exit__, the handle is null; wait() returns -1 (error sentinel).
+    assert timer.wait(10) == -1

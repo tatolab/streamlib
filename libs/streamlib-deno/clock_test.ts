@@ -114,3 +114,65 @@ Deno.test("monotonicNowNs throws before install()", () => {
     "streamlib clock not installed",
   );
 });
+
+Deno.test("MonotonicTimer fires on schedule with bounded jitter", async () => {
+  const lib = withInstalledLib();
+  try {
+    const intervalMs = 16;
+    const intervalNs = BigInt(intervalMs) * 1_000_000n;
+    using timer = clock.MonotonicTimer.create(intervalNs);
+    const startNs = clock.monotonicNowNs();
+    let ticks = 0n;
+    let waits = 0;
+    // ~10 ticks at 16ms = ~160ms. Cap at 60 wait calls to avoid hangs.
+    while (ticks < 10n && waits < 60) {
+      const got = await timer.wait(50);
+      waits++;
+      if (got > 0n) ticks += got;
+    }
+    const elapsedNs = clock.monotonicNowNs() - startNs;
+    const expectedNs = intervalNs * ticks;
+    assertGreaterOrEqual(ticks, 10n, "expected at least 10 ticks");
+    // Allow 5ms slack per tick (timerfd resolution + scheduler noise).
+    const slackNs = 5_000_000n * ticks;
+    assert(
+      elapsedNs >= expectedNs - slackNs && elapsedNs <= expectedNs + slackNs,
+      `elapsed ${elapsedNs}ns outside expected ${expectedNs}±${slackNs}`,
+    );
+  } finally {
+    clock._resetForTests();
+    lib.close();
+  }
+});
+
+Deno.test("MonotonicTimer.wait returns 0 on timeout when no tick fires", async () => {
+  const lib = withInstalledLib();
+  try {
+    // 1-second interval, 50ms wait — guaranteed timeout before first tick.
+    using timer = clock.MonotonicTimer.create(1_000_000_000n);
+    const got = await timer.wait(50);
+    assertEquals(got, 0n);
+  } finally {
+    clock._resetForTests();
+    lib.close();
+  }
+});
+
+Deno.test("MonotonicTimer.create rejects non-positive intervals", () => {
+  const lib = withInstalledLib();
+  try {
+    assertThrows(
+      () => clock.MonotonicTimer.create(0n),
+      RangeError,
+      "intervalNs must be > 0",
+    );
+    assertThrows(
+      () => clock.MonotonicTimer.create(-100n),
+      RangeError,
+      "intervalNs must be > 0",
+    );
+  } finally {
+    clock._resetForTests();
+    lib.close();
+  }
+});

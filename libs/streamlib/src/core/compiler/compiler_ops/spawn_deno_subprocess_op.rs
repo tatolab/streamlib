@@ -127,10 +127,18 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             let mut command = Command::new(&deno_binary);
             command
                 .arg("run")
-                .arg("--allow-ffi")
-                .arg("--allow-read")
-                .arg("--allow-env")
-                .arg("--allow-net")
+                // Polyglot subprocesses run with full host trust — Rust has
+                // no sandbox, Python has no permission gate, and `--allow-ffi`
+                // alone is already the dominant capability (a Deno
+                // subprocess with FFI can do anything any other polyglot
+                // subprocess can). `--allow-all` brings Deno's posture in
+                // line with the other two runtimes; the alternative
+                // (per-permission allowlist) adds developer-experience
+                // friction without raising the security bar, since FFI
+                // bypasses every other gate anyway. If a future deployment
+                // needs Deno specifically sandboxed beyond what Python +
+                // Rust are, that's a separate axis worth its own design.
+                .arg("--allow-all")
                 .arg("--no-prompt")
                 .arg("--unstable-webgpu")
                 .arg(runner_path.to_str().unwrap_or(""))

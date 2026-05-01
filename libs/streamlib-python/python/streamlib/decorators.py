@@ -205,10 +205,25 @@ def processor(
         execution: Execution mode - one of:
             - "Reactive": process() called when input data arrives.
               Use for transforms, filters, effects, encoders, decoders.
-            - "Continuous": process() called repeatedly in a loop.
+            - "Continuous": process() called repeatedly at a fixed
+              interval. The runner paces calls via a monotonic
+              timerfd (`streamlib.MonotonicTimer`); do NOT use
+              `time.sleep` inside `process()` — return promptly.
               Use for generators, sources, polling, batch processing.
-            - "Manual": start() called once, then you control timing.
+            - "Manual": `start()` is called once with full ctx; you
+              own the lifecycle from there.
               Use for hardware callbacks, display vsync, cameras.
+
+              **`start()` MUST return promptly.** The subprocess
+              runner's command loop only iterates after `start()`
+              returns; a long-running `while True:` here will
+              block lifecycle messages (`stop` / `teardown`) and
+              the host falls through to a 5-second SIGKILL after
+              timeout. Spawn a worker thread for any ongoing work
+              and return — see
+              ``examples/polyglot-manual-source/`` for the
+              canonical pattern (worker + ``streamlib.MonotonicTimer``
+              for drift-free pacing).
 
     Required methods by execution mode:
         Reactive/Continuous:
@@ -216,7 +231,10 @@ def processor(
 
         Manual:
             - start(self, ctx): Called once to start the processor.
-            - stop(self, ctx): Optional, called when stopping.
+              Must return promptly — spawn a worker thread for any
+              ongoing work.
+            - stop(self, ctx): Optional, called when stopping. Should
+              signal the worker thread to exit and join it.
 
     Optional lifecycle methods (all modes):
         - setup(self, ctx): Called once at startup.

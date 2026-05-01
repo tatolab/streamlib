@@ -36,6 +36,7 @@ export * as log from "./log.ts";
 
 // Canonical monotonic timestamp source — `clock_gettime(CLOCK_MONOTONIC)`.
 // Use for any timestamp that crosses the host/subprocess boundary or is
-// compared against another runtime's stamps.
-export { monotonicNowNs } from "./clock.ts";
+// compared against another runtime's stamps. `MonotonicTimer` is the
+// drift-free periodic timer (timerfd) for continuous-mode dispatch.
+export { MonotonicTimer, monotonicNowNs } from "./clock.ts";
 export * as clock from "./clock.ts";

@@ -126,6 +126,166 @@ pub unsafe extern "C" fn sldn_monotonic_now_ns() -> u64 {
 }
 
 // ============================================================================
+// C ABI — Monotonic interval timer via timerfd (Linux)
+// ============================================================================
+//
+// Mirrors `LinuxTimerFdAudioClock` (libs/streamlib/src/linux/audio_clock.rs).
+// Drift-free periodic firing via `TFD_TIMER_ABSTIME`; an internal epoll fd
+// lets `sldn_timerfd_wait` honor a caller-supplied timeout, which bounds
+// teardown latency in the subprocess runner's continuous-mode dispatch.
+//
+// `sldn_timerfd_wait` is intended to be declared `nonblocking: true` in
+// the Deno FFI binding so the JS event loop stays responsive while a
+// worker thread blocks on `epoll_wait`.
+
+pub struct TimerFdHandle {
+    #[cfg(target_os = "linux")]
+    timer_fd: i32,
+    #[cfg(target_os = "linux")]
+    epoll_fd: i32,
+}
+
+#[cfg(target_os = "linux")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sldn_timerfd_create(interval_ns: u64) -> *mut TimerFdHandle {
+    timerfd::create(interval_ns)
+}
+
+#[cfg(target_os = "linux")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sldn_timerfd_wait(handle: *mut TimerFdHandle, timeout_ms: i32) -> i64 {
+    timerfd::wait(handle, timeout_ms)
+}
+
+#[cfg(target_os = "linux")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sldn_timerfd_close(handle: *mut TimerFdHandle) {
+    timerfd::close(handle)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sldn_timerfd_create(_interval_ns: u64) -> *mut TimerFdHandle {
+    std::ptr::null_mut()
+}
+
+#[cfg(not(target_os = "linux"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sldn_timerfd_wait(_handle: *mut TimerFdHandle, _timeout_ms: i32) -> i64 {
+    -1
+}
+
+#[cfg(not(target_os = "linux"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sldn_timerfd_close(_handle: *mut TimerFdHandle) {}
+
+#[cfg(target_os = "linux")]
+mod timerfd {
+    use super::TimerFdHandle;
+
+    pub(super) fn create(interval_ns: u64) -> *mut TimerFdHandle {
+        if interval_ns == 0 {
+            return std::ptr::null_mut();
+        }
+        let interval_sec = (interval_ns / 1_000_000_000) as libc::time_t;
+        let interval_nsec = (interval_ns % 1_000_000_000) as libc::c_long;
+
+        let timer_fd = unsafe { libc::timerfd_create(libc::CLOCK_MONOTONIC, 0) };
+        if timer_fd < 0 {
+            return std::ptr::null_mut();
+        }
+
+        let mut now = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } < 0 {
+            unsafe { libc::close(timer_fd) };
+            return std::ptr::null_mut();
+        }
+
+        let mut first_sec = now.tv_sec;
+        let mut first_nsec = now.tv_nsec + interval_nsec;
+        if first_nsec >= 1_000_000_000 {
+            first_sec += (first_nsec / 1_000_000_000) as libc::time_t;
+            first_nsec %= 1_000_000_000;
+        }
+        first_sec += interval_sec;
+
+        let spec = libc::itimerspec {
+            it_interval: libc::timespec { tv_sec: interval_sec, tv_nsec: interval_nsec },
+            it_value: libc::timespec { tv_sec: first_sec, tv_nsec: first_nsec },
+        };
+        let set_ret = unsafe {
+            libc::timerfd_settime(timer_fd, libc::TFD_TIMER_ABSTIME, &spec, std::ptr::null_mut())
+        };
+        if set_ret < 0 {
+            unsafe { libc::close(timer_fd) };
+            return std::ptr::null_mut();
+        }
+
+        let epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+        if epoll_fd < 0 {
+            unsafe { libc::close(timer_fd) };
+            return std::ptr::null_mut();
+        }
+        let mut event = libc::epoll_event { events: libc::EPOLLIN as u32, u64: 0 };
+        if unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, timer_fd, &mut event) } < 0 {
+            unsafe {
+                libc::close(epoll_fd);
+                libc::close(timer_fd);
+            }
+            return std::ptr::null_mut();
+        }
+
+        Box::into_raw(Box::new(TimerFdHandle { timer_fd, epoll_fd }))
+    }
+
+    pub(super) fn wait(handle: *mut TimerFdHandle, timeout_ms: i32) -> i64 {
+        let handle = match unsafe { handle.as_ref() } {
+            Some(h) => h,
+            None => return -1,
+        };
+        let mut events = [libc::epoll_event { events: 0, u64: 0 }; 1];
+        let nfds = unsafe { libc::epoll_wait(handle.epoll_fd, events.as_mut_ptr(), 1, timeout_ms) };
+        if nfds < 0 {
+            return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                0
+            } else {
+                -1
+            };
+        }
+        if nfds == 0 {
+            return 0;
+        }
+        let mut expirations: u64 = 0;
+        let read_ret = unsafe {
+            libc::read(
+                handle.timer_fd,
+                &mut expirations as *mut u64 as *mut libc::c_void,
+                std::mem::size_of::<u64>(),
+            )
+        };
+        if read_ret < 0 {
+            return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock {
+                0
+            } else {
+                -1
+            };
+        }
+        expirations.min(i64::MAX as u64) as i64
+    }
+
+    pub(super) fn close(handle: *mut TimerFdHandle) {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { Box::from_raw(handle) };
+        unsafe {
+            libc::close(h.epoll_fd);
+            libc::close(h.timer_fd);
+        }
+    }
+}
+
+// ============================================================================
 // C ABI — Input (subscribe + read)
 // ============================================================================
 
