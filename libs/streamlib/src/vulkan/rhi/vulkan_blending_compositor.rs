@@ -45,8 +45,17 @@ const BLENDING_BINDINGS: &[ComputeBindingSpec] = &[
 const WORKGROUP_SIZE: u32 = 16;
 
 /// Inputs for one compositor dispatch. All buffers are BGRA8 packed
-/// little-endian; `video`, `lower_third`, `watermark`, and `output` share
-/// the same dimensions; `pip` is its own (typically smaller) source size.
+/// little-endian.
+///
+/// **Layer-size contract.** `video`, `lower_third`, and `watermark`
+/// must match `output`'s dimensions exactly — the GLSL kernel samples
+/// them at integer pixel coordinates with no resampling, so a size
+/// mismatch is rejected at dispatch time with [`StreamError::GpuError`].
+/// `pip` may be any size; it is bilinearly sampled inside the PiP
+/// rect. This is stricter than the macOS Metal version (which silently
+/// resamples mismatched layers via the linear sampler); when porting
+/// upstream overlay processors to Linux, ensure they emit at the
+/// camera resolution.
 pub struct BlendingCompositorInputs<'a> {
     pub video: Option<&'a RhiPixelBuffer>,
     pub lower_third: Option<&'a RhiPixelBuffer>,

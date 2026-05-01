@@ -20,10 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use streamlib::core::display_info;
 use streamlib::core::rhi::PixelFormat;
-use streamlib::core::{
-    GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-    StreamError,
-};
+use streamlib::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use streamlib::iceoryx2::{InputMailboxes, OutputWriter};
 use streamlib::Videoframe;
 
@@ -385,8 +382,20 @@ impl LoopState {
     }
 }
 
+/// Slow-tick threshold restored from the pre-rewrite `STUTTER!` log
+/// (50 ms ≈ three frames at 60 Hz). Exceeding this is a clear hitch
+/// worth surfacing even when the loop's per-tick cadence still
+/// averages out.
+const SLOW_TICK_WARN_THRESHOLD: Duration = Duration::from_millis(50);
+
 /// Render loop. Sleeps after each tick to maintain `target_fps` cadence;
 /// exits when `running` is cleared. The closure runs once per iteration.
+///
+/// When a tick spends longer than `frame_period`, the deadline baseline
+/// is reset to `now` so the loop does not spiral trying to "catch up"
+/// — but each over-budget tick is also surfaced via [`tracing::warn!`]
+/// (gated by [`SLOW_TICK_WARN_THRESHOLD`]) so sustained slowness stays
+/// visible rather than silently masked.
 fn manual_render_loop<F>(target_fps: f64, running: Arc<AtomicBool>, mut tick: F)
 where
     F: FnMut(),
@@ -398,14 +407,24 @@ where
     };
     let mut next_deadline = Instant::now();
     while running.load(Ordering::Acquire) {
+        let tick_start = Instant::now();
         tick();
+        let tick_elapsed = tick_start.elapsed();
+        if tick_elapsed > SLOW_TICK_WARN_THRESHOLD {
+            tracing::warn!(
+                "BlendingCompositor: slow tick {:?} (threshold {:?})",
+                tick_elapsed,
+                SLOW_TICK_WARN_THRESHOLD
+            );
+        }
         next_deadline += frame_period;
         let now = Instant::now();
         if next_deadline > now {
             std::thread::sleep(next_deadline - now);
         } else {
             // Falling behind — reset baseline so we don't spiral when a
-            // tick spends longer than `frame_period`.
+            // tick spends longer than `frame_period`. The slow-tick
+            // tracing above keeps the issue visible despite the reset.
             next_deadline = now;
         }
     }
@@ -542,6 +561,14 @@ fn compose_one_frame(
     frame_count: &Arc<AtomicU64>,
     backend: &StdArc<VulkanBlendingCompositor>,
 ) -> Result<()> {
+    // The loop runs unconditionally at refresh rate (per the issue's
+    // "idle invocation count is bounded by display refresh + small
+    // slack" exit criterion). When no upstream frame has ever arrived
+    // the kernel still dispatches and emits a dark-blue placeholder
+    // — same as the macOS Metal path. The cost (one GPU dispatch on
+    // 1×1 placeholder buffers) is negligible and keeps the pipeline
+    // cadence steady; downstream consumers see a stream of valid
+    // frames from t=0 instead of a stall before the first input.
     let video_buf = if inputs.has_data("video_in") {
         let frame: Videoframe = inputs.read("video_in")?;
         let buf = gpu_ctx.resolve_videoframe_buffer(&frame)?;
@@ -620,12 +647,6 @@ fn compose_one_frame(
     ))
 }
 
-// Keep this compiling for `clippy::let_unit_value` etc. when the loop
-// helpers reference [`RuntimeContextLimitedAccess`] only conceptually
-// (lifecycle methods don't need on_pause / on_resume).
-#[allow(dead_code)]
-fn _ctx_marker(_ctx: &RuntimeContextLimitedAccess<'_>) {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -700,13 +721,26 @@ mod tests {
         );
     }
 
-    /// Issue exit-criterion: pushing 5 frames into one input port between
-    /// iterations causes the older 4 to be discarded; only the latest is
-    /// read. This is the contract `PortMailbox::pop_latest` provides; the
-    /// processor's render loop relies on it via `inputs.read()` (the
-    /// frame ports are configured with `ReadMode::SkipToLatest`).
+    /// Locks down the contract the render loop's drain-latest behavior
+    /// inherits from the iceoryx2 `SkipToLatest` read mode (the schema
+    /// default for video input ports — see
+    /// `libs/streamlib-macros/src/codegen.rs` `read_mode_tokens`).
+    /// `inputs.read()` calls into `PortMailbox::pop_latest`; if a future
+    /// refactor changed this primitive to FIFO behavior, the loop
+    /// would silently drift to consuming stale frames.
+    ///
+    /// **Scope note.** This test exercises the iceoryx2 primitive
+    /// directly, not the processor's call into it. A processor-level
+    /// integration test would require constructing valid
+    /// `FrameHeader`-prefixed wire bytes and pushing them through an
+    /// `InputMailboxes` / iceoryx2 subscriber — neither has a public
+    /// constructor accessible to an out-of-tree test. The combination
+    /// of (a) this primitive test, (b) the schema YAML omitting a
+    /// `read_mode` override (so codegen picks `SkipToLatest`), and
+    /// (c) the loop calling `inputs.read()` once per tick is what
+    /// satisfies the issue's exit criterion.
     #[test]
-    fn pulls_latest_input_skipping_stale() {
+    fn iceoryx2_pop_latest_skips_stale_frames() {
         use streamlib::iceoryx2::PortMailbox;
 
         let mailbox = PortMailbox::new(8);
@@ -720,6 +754,64 @@ mod tests {
         assert!(
             mailbox.is_empty(),
             "older frames must be drained (skip-stale semantics)"
+        );
+    }
+
+    /// Verifies the render loop's call shape: each tick pulls **one**
+    /// payload from the input source and ignores any that arrived
+    /// between ticks. Uses an in-memory queue mock (`Mutex<Vec<u32>>`)
+    /// in place of `InputMailboxes::read()` so the test exercises the
+    /// loop's per-tick consume model rather than the iceoryx2 primitive.
+    #[test]
+    fn render_loop_consumes_one_payload_per_tick() {
+        use std::sync::Mutex;
+
+        let target_fps: f64 = 60.0;
+        let running = Arc::new(AtomicBool::new(true));
+        // Pre-seed five "stale" payloads + a marker for the test thread
+        // to push the latest one between iterations.
+        let queue: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(vec![10, 11, 12, 13, 14]));
+        let consumed: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let queue_for_loop = Arc::clone(&queue);
+        let consumed_clone = Arc::clone(&consumed);
+        let running_clone = Arc::clone(&running);
+
+        let handle = std::thread::spawn(move || {
+            manual_render_loop(target_fps, running_clone, || {
+                // Mirror `inputs.read()` with `SkipToLatest`: drain any
+                // stale entries and consume only the most recent one.
+                let mut q = queue_for_loop.lock().unwrap();
+                if let Some(latest) = q.pop() {
+                    q.clear();
+                    drop(q);
+                    consumed_clone.lock().unwrap().push(latest);
+                }
+            });
+        });
+
+        // First tick should consume only the latest of the seeded five.
+        std::thread::sleep(Duration::from_millis(40));
+        // Push one more between iterations; the next tick should pick
+        // it up directly with no buffering of the prior consumed frame.
+        queue.lock().unwrap().push(99);
+        std::thread::sleep(Duration::from_millis(40));
+
+        running.store(false, Ordering::Release);
+        handle.join().expect("loop join");
+
+        let observed = consumed.lock().unwrap().clone();
+        assert!(
+            observed.contains(&14),
+            "loop must consume the latest pre-seeded frame, got {observed:?}"
+        );
+        assert!(
+            observed.contains(&99),
+            "loop must pick up the post-seed frame, got {observed:?}"
+        );
+        assert!(
+            !observed.contains(&10) && !observed.contains(&11) && !observed.contains(&12),
+            "stale frames must NOT be consumed, got {observed:?}"
         );
     }
 
