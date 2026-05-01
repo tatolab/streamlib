@@ -63,10 +63,18 @@ const RUN_DURATION: Duration = Duration::from_secs(2);
 /// Manifest-declared interval. Must match the YAML in
 /// {python,deno}/streamlib.yaml — change both if changing.
 const NOMINAL_INTERVAL_MS: u32 = 16;
-/// Allow ±10ms of slack on the average inter-tick interval. Way wider
-/// than timerfd's natural resolution; keeps the gate robust against
-/// CI scheduler noise + cpu-readback round-trip overhead.
-const INTERVAL_SLACK_MS: f64 = 10.0;
+/// Allow ±5ms of slack on the average inter-tick interval. Picked to
+/// stay within a small multiple of the timerfd target's nominal
+/// granularity per the issue's tests/validation criterion: tight
+/// enough that a regression to `time.sleep` / `setTimeout` semantics
+/// (which on Linux land at ~16ms + drift, often exceeding 21ms
+/// average over 2s once IPC overhead and accumulated drift compound)
+/// would blow the gate, loose enough to absorb scheduler noise and
+/// the cpu-readback IPC round-trip on a quiet box. The SDK-level
+/// `MonotonicTimer fires on schedule` tests in `test_clock.py` /
+/// `clock_test.ts` use the same per-tick scale and are the
+/// independent confirmation that the timer itself is drift-free.
+const INTERVAL_SLACK_MS: f64 = 5.0;
 const MIN_TICK_COUNT: u32 = 30;
 const MAX_TICK_COUNT: u32 = 400; // generous upper bound — runner shouldn't burst
 
