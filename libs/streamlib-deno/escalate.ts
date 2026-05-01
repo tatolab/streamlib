@@ -69,6 +69,17 @@ export const ESCALATE_REQUEST_RPC = "escalate_request";
 export const ESCALATE_RESPONSE_RPC = "escalate_response";
 
 /**
+ * Default upper bound on how long [`EscalateChannel.request`] waits for
+ * a correlated response before rejecting. Generous enough for realistic
+ * escalate ops (compute pipeline-cache cold start, GPU readback under
+ * load) but tight enough that a stuck host or zombie reader surfaces
+ * as a clear `EscalateError("escalate timed out…")` instead of an
+ * unobservable hang. Callers can override per-request via the
+ * `timeoutMs` option.
+ */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+
+/**
  * Caller-facing payload — the discriminator variants of
  * [`EscalateRequest`] with `request_id` stripped. The channel injects
  * `request_id` when serializing onto the wire.
@@ -289,9 +300,10 @@ export class EscalateChannel {
 
   async request(
     op: EscalateOpPayload,
-    options: { allowContended?: boolean } = {},
+    options: { allowContended?: boolean; timeoutMs?: number } = {},
   ): Promise<EscalateOkResponse | null> {
     const allowContended = options.allowContended === true;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     const requestId = this.nextRequestId();
     const msg = {
       rpc: ESCALATE_REQUEST_RPC,
@@ -303,16 +315,41 @@ export class EscalateChannel {
         this.pending.set(requestId, { resolve, reject, allowContended });
       },
     );
-    try {
-      await this.writer(msg);
-    } catch (e) {
+    // Schedule a timeout that races with the response. Like
+    // `handleIncoming` and `cancelAll`, the timeout pops the pending
+    // entry under the same map so a late delivery sees no slot and is
+    // dropped — no resolve/reject double-fire.
+    const timeoutHandle = setTimeout(() => {
       const p = this.pending.get(requestId);
       if (p) {
         this.pending.delete(requestId);
-        p.reject(e as Error);
+        p.reject(
+          new EscalateError(`escalate timed out after ${timeoutMs}ms`),
+        );
+      }
+    }, timeoutMs);
+    try {
+      await this.writer(msg);
+    } catch (e) {
+      // Wrap non-EscalateError exceptions (broken pipe from the
+      // bridge writer, etc.) so callers see one error type for every
+      // failure mode of the channel — same uniformity the Python SDK
+      // gives.
+      const p = this.pending.get(requestId);
+      if (p) {
+        this.pending.delete(requestId);
+        p.reject(
+          e instanceof EscalateError
+            ? e
+            : new EscalateError(`escalate channel send failed: ${e}`),
+        );
       }
     }
-    return promise;
+    try {
+      return await promise;
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
   }
 
   /**

@@ -356,6 +356,148 @@ def test_lifecycle_messages_routed_to_queue_not_request():
                 pass
 
 
+def test_send_failure_surfaces_as_escalate_error():
+    """If `bridge_send_message` raises (broken pipe, fd revoked, etc.),
+    `request()` must convert the OSError into an EscalateError so callers
+    see a single uniform exception type for every channel failure."""
+
+    class _BrokenWriter:
+        """Stream stub whose write() raises BrokenPipeError on first call."""
+
+        def write(self, _b: bytes) -> int:
+            raise BrokenPipeError("simulated broken pipe")
+
+        def flush(self) -> None:
+            pass
+
+    channel = EscalateChannel(_BrokenWriter())
+    raised: list[Exception] = []
+    try:
+        channel.request({"op": "noop"})
+    except Exception as e:  # noqa: BLE001 — we want the type comparison
+        raised.append(e)
+
+    assert len(raised) == 1
+    assert isinstance(raised[0], EscalateError), (
+        f"expected EscalateError, got {type(raised[0]).__name__}: {raised[0]}"
+    )
+    assert "send failed" in str(raised[0])
+
+
+def test_request_timeout_surfaces_as_escalate_error():
+    """If no response arrives within `timeout_s`, the request raises
+    EscalateError with a clear timeout message rather than hanging."""
+    sub_reader, sub_writer, host_reader, host_writer, sub_sock, host_sock = _make_pair()
+    channel = EscalateChannel(sub_writer)
+    lifecycle_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+    reader = BridgeReaderThread(sub_reader, channel, lifecycle_queue)
+    reader.start()
+
+    raised: list[Exception] = []
+    started = threading.Event()
+    finished = threading.Event()
+
+    def _worker() -> None:
+        started.set()
+        try:
+            channel.request({"op": "blocked"}, timeout_s=0.2)
+        except Exception as e:  # noqa: BLE001
+            raised.append(e)
+        finally:
+            finished.set()
+
+    threading.Thread(target=_worker, name="test-timeout-worker", daemon=True).start()
+
+    try:
+        # Drain the request frame on the host side without responding.
+        # The worker should hit the 200ms timeout.
+        assert started.wait(timeout=2.0)
+        _ = _read_frame(host_reader)
+        assert finished.wait(timeout=5.0), "request() did not honor timeout"
+        assert len(raised) == 1
+        assert isinstance(raised[0], EscalateError)
+        assert "timed out" in str(raised[0])
+    finally:
+        reader.stop()
+        for s in (sub_writer, host_writer, sub_reader, host_reader, sub_sock, host_sock):
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
+def test_late_response_after_timeout_does_not_lose_data():
+    """Race-safety: if a response arrives between `event.wait(timeout)`
+    returning False and the slot pop, `slot.message` is still populated.
+    The current request will see the timeout error, but the next
+    request's slot must not be corrupted by the orphaned message — the
+    reader's `deliver_response` looks the slot up under the lock and
+    returns False if the entry is gone."""
+    sub_reader, sub_writer, host_reader, host_writer, sub_sock, host_sock = _make_pair()
+    channel = EscalateChannel(sub_writer)
+    lifecycle_queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+    reader = BridgeReaderThread(sub_reader, channel, lifecycle_queue)
+    reader.start()
+
+    try:
+        # First request times out before the host responds.
+        first_raised: list[Exception] = []
+        try:
+            channel.request({"op": "first"}, timeout_s=0.1)
+        except Exception as e:  # noqa: BLE001
+            first_raised.append(e)
+        assert len(first_raised) == 1
+        assert isinstance(first_raised[0], EscalateError)
+
+        # Host now responds to the first request — orphaned, dropped.
+        first_msg = _read_frame(host_reader)
+        _send_frame(
+            host_writer,
+            {
+                "rpc": "escalate_response",
+                "request_id": first_msg["request_id"],
+                "result": "ok",
+                "stale": True,
+            },
+        )
+
+        # Second request should NOT see the orphaned response from the
+        # first — its own slot is registered under a fresh request_id
+        # and the orphan goes through deliver_response → returns False
+        # (no slot found) → logged + dropped.
+        captured: dict[str, Any] = {}
+        done = threading.Event()
+
+        def _second() -> None:
+            captured["response"] = channel.request({"op": "second"})
+            done.set()
+
+        threading.Thread(target=_second, daemon=True).start()
+        second_msg = _read_frame(host_reader)
+        _send_frame(
+            host_writer,
+            {
+                "rpc": "escalate_response",
+                "request_id": second_msg["request_id"],
+                "result": "ok",
+                "second": True,
+            },
+        )
+        assert done.wait(timeout=5.0)
+        # The second request's response is its own — not the stale
+        # first response.
+        assert captured["response"] is not None
+        assert captured["response"].get("second") is True
+        assert "stale" not in captured["response"]
+    finally:
+        reader.stop()
+        for s in (sub_writer, host_writer, sub_reader, host_reader, sub_sock, host_sock):
+            try:
+                s.close()
+            except Exception:
+                pass
+
+
 def test_eof_wakes_in_flight_requests_with_error():
     """If the host closes the escalate fd while a request is waiting, the
     request must wake with [`EscalateError`] rather than hang."""

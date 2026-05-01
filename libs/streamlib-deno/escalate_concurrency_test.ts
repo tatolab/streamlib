@@ -19,7 +19,7 @@
  * `tests/polyglot_linux_execution_modes.rs` against a real subprocess.
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import {
   EscalateChannel,
   EscalateError,
@@ -197,6 +197,129 @@ Deno.test("EscalateChannel: contended response on non-allowContended request rej
     caught = e;
   }
   assert(caught instanceof EscalateError, "expected EscalateError on contended");
+});
+
+Deno.test("EscalateChannel: writer rejection surfaces as EscalateError", async () => {
+  // Wrapping non-EscalateError exceptions matches the Python SDK's
+  // contract: a single error type for every channel failure mode.
+  const channel = new EscalateChannel(() => {
+    return Promise.reject(new Error("simulated broken pipe"));
+  });
+
+  let caught: unknown = null;
+  try {
+    await channel.request(
+      { op: "noop" } as unknown as Parameters<EscalateChannel["request"]>[0],
+    );
+  } catch (e) {
+    caught = e;
+  }
+  assert(
+    caught instanceof EscalateError,
+    `expected EscalateError, got ${
+      caught instanceof Error ? caught.constructor.name : typeof caught
+    }: ${caught}`,
+  );
+  assertStringIncludes((caught as EscalateError).message, "send failed");
+});
+
+Deno.test("EscalateChannel: existing EscalateError from writer passes through unwrapped", async () => {
+  // If the writer already raises EscalateError (e.g. the underlying
+  // bridge layer has its own typed errors), preserve it — don't double-
+  // wrap. This keeps surface area uniform without burying the inner
+  // EscalateError's message under a generic "send failed: …" prefix.
+  const inner = new EscalateError("inner error");
+  const channel = new EscalateChannel(() => Promise.reject(inner));
+
+  let caught: unknown = null;
+  try {
+    await channel.request(
+      { op: "noop" } as unknown as Parameters<EscalateChannel["request"]>[0],
+    );
+  } catch (e) {
+    caught = e;
+  }
+  assertEquals(caught, inner);
+});
+
+Deno.test("EscalateChannel: request times out via timeoutMs", async () => {
+  const bridge = new FakeBridge();
+  const channel = new EscalateChannel((msg) => bridge.write(msg));
+
+  const start = performance.now();
+  let caught: unknown = null;
+  try {
+    await channel.request(
+      { op: "blocked" } as unknown as Parameters<EscalateChannel["request"]>[0],
+      { timeoutMs: 100 },
+    );
+  } catch (e) {
+    caught = e;
+  }
+  const elapsed = performance.now() - start;
+
+  assert(caught instanceof EscalateError, "expected EscalateError on timeout");
+  assertStringIncludes((caught as EscalateError).message, "timed out");
+  // Tolerance: timer scheduling jitter on a busy box can extend the
+  // wait, but we should never finish *before* the timeout. The upper
+  // bound (1000ms) guards against the timeout being silently broken
+  // (e.g. someone removing the setTimeout but tests still passing
+  // because the channel drops responses).
+  assert(
+    elapsed >= 100,
+    `request returned in ${elapsed}ms — timeout fired too early`,
+  );
+  assert(
+    elapsed < 1000,
+    `request waited ${elapsed}ms — timeout much longer than expected`,
+  );
+});
+
+Deno.test("EscalateChannel: late response after timeout is dropped, doesn't poison next request", async () => {
+  // Race-safety: if a response arrives after `setTimeout` fires (the
+  // pending entry was popped by the timeout handler), `handleIncoming`
+  // looks the entry up and finds nothing — returns true but takes no
+  // action. The next request must see only its own response.
+  const bridge = new FakeBridge();
+  const channel = new EscalateChannel((msg) => bridge.write(msg));
+
+  // First request — times out.
+  let caught: unknown = null;
+  try {
+    await channel.request(
+      { op: "first" } as unknown as Parameters<EscalateChannel["request"]>[0],
+      { timeoutMs: 50 },
+    );
+  } catch (e) {
+    caught = e;
+  }
+  assert(caught instanceof EscalateError);
+
+  await bridge.waitForCount(1);
+  // Late "stale" response arrives after the timeout.
+  channel.handleIncoming({
+    rpc: "escalate_response",
+    request_id: bridge.captured[0].request_id,
+    result: "ok",
+    stale: true,
+  });
+
+  // Second request should resolve to its own (fresh) response.
+  const p = channel.request(
+    { op: "second" } as unknown as Parameters<EscalateChannel["request"]>[0],
+  );
+  await bridge.waitForCount(2);
+  channel.handleIncoming({
+    rpc: "escalate_response",
+    request_id: bridge.captured[1].request_id,
+    result: "ok",
+    fresh: true,
+  });
+  const r = await p;
+  assert(r !== null);
+  const rec = r as unknown as Record<string, unknown>;
+  assertEquals(rec.fresh, true);
+  assertEquals(rec.stale, undefined, "stale response leaked into second request");
 });
 
 Deno.test("EscalateChannel: contended response on allowContended request resolves to null", async () => {

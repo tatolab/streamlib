@@ -33,6 +33,15 @@ from .processor_context import bridge_read_message, bridge_send_message
 ESCALATE_REQUEST_RPC = "escalate_request"
 ESCALATE_RESPONSE_RPC = "escalate_response"
 
+#: Default upper bound on how long :meth:`EscalateChannel.request` waits for
+#: a correlated response before raising. Generous enough for realistic
+#: escalate ops (compute pipeline-cache cold start, GPU readback under
+#: load) but tight enough that a stuck host or zombie reader thread
+#: surfaces as a clear ``EscalateError("escalate timed out…")`` instead
+#: of a silent hang. Callers can override per-request via the
+#: ``timeout_s`` parameter.
+DEFAULT_REQUEST_TIMEOUT_S: float = 60.0
+
 
 class EscalateError(RuntimeError):
     """Raised when the host returns an ``Err`` escalate response."""
@@ -246,7 +255,11 @@ class EscalateChannel:
     # -------------------- core request/response --------------------
 
     def request(
-        self, op: Dict[str, Any], *, allow_contended: bool = False
+        self,
+        op: Dict[str, Any],
+        *,
+        allow_contended: bool = False,
+        timeout_s: Optional[float] = DEFAULT_REQUEST_TIMEOUT_S,
     ) -> Optional[Dict[str, Any]]:
         """Send an escalate request and block until the correlated response.
 
@@ -262,6 +275,17 @@ class EscalateChannel:
         contention as a protocol violation (raises
         :class:`EscalateError`) so a buggy host can't silently degrade
         an op that was supposed to be blocking.
+
+        ``timeout_s`` caps how long this call waits for the correlated
+        response. ``None`` disables the timeout (waits indefinitely);
+        otherwise on expiry the call raises :class:`EscalateError` and
+        the pending slot is cleared. Defaults to
+        :data:`DEFAULT_REQUEST_TIMEOUT_S`.
+
+        Raises :class:`EscalateError` for: send failures (broken pipe,
+        OS-level write errors), timeouts, channel-closed-mid-flight,
+        and host-reported errors. The exception type is uniform so
+        callers don't have to special-case OSError vs. semantic failures.
         """
         request_id = str(uuid.uuid4())
         slot = _PendingResponse()
@@ -272,14 +296,27 @@ class EscalateChannel:
 
         try:
             req = {"rpc": ESCALATE_REQUEST_RPC, "request_id": request_id, **op}
-            bridge_send_message(self._stdout, req)
-            slot.event.wait()
-            msg = slot.message
+            try:
+                bridge_send_message(self._stdout, req)
+            except OSError as e:
+                raise EscalateError(
+                    f"escalate channel send failed: {e}"
+                ) from e
+            signaled = slot.event.wait(timeout=timeout_s)
         finally:
             with self._pending_lock:
                 self._pending.pop(request_id, None)
 
+        # Race-safe message check: a delivery can land between the
+        # `wait()` returning False (timeout) and the `finally` pop —
+        # `slot.message` reflects the latest state regardless of which
+        # branch the wait took.
+        msg = slot.message
         if msg is None:
+            if not signaled:
+                raise EscalateError(
+                    f"escalate timed out after {timeout_s}s"
+                )
             raise EscalateError("escalate channel closed before response arrived")
         result = msg.get("result")
         if result == "ok":
