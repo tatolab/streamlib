@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import ctypes
 import itertools
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator, Optional
@@ -203,8 +204,6 @@ def _make_dlpack_capsule(mt_ptr: int) -> object:
     # level `_capsule_destructors` set so it isn't GC'd until we
     # explicitly remove it.
 
-    destructor_key = next(_destructor_id_counter)
-
     @_PyCapsule_Destructor
     def destructor(capsule):
         # Read the capsule name. If the consumer claimed it, the name
@@ -212,12 +211,12 @@ def _make_dlpack_capsule(mt_ptr: int) -> object:
         name_ptr = ctypes.pythonapi.PyCapsule_GetName(capsule)
         if name_ptr is None:
             # The capsule was invalidated; nothing to do.
-            _capsule_destructors.pop(destructor_key, None)
+            _release_destructor(destructor)
             return
         if name_ptr == _DLPACK_CAPSULE_NAME_USED:
             # Consumer (PyTorch / etc.) took the capsule and is
             # responsible for calling the deleter.
-            _capsule_destructors.pop(destructor_key, None)
+            _release_destructor(destructor)
             return
         # Producer-owned cleanup path: call the DLManagedTensor's
         # deleter to free shape / strides / manager_ctx / the
@@ -226,7 +225,7 @@ def _make_dlpack_capsule(mt_ptr: int) -> object:
             capsule, _DLPACK_CAPSULE_NAME
         )
         if not raw_ptr:
-            _capsule_destructors.pop(destructor_key, None)
+            _release_destructor(destructor)
             return
         # Read the deleter function pointer at offset 56 in
         # DLManagedTensor.
@@ -240,9 +239,9 @@ def _make_dlpack_capsule(mt_ptr: int) -> object:
                 deleter_fn(ctypes.c_void_p(raw_ptr))
             except Exception:  # pragma: no cover - logged on the cdylib
                 pass
-        _capsule_destructors.pop(destructor_key, None)
+        _release_destructor(destructor)
 
-    _capsule_destructors[destructor_key] = destructor
+    _retain_destructor(destructor)
 
     capsule = ctypes.pythonapi.PyCapsule_New(
         ctypes.c_void_p(mt_ptr),
@@ -253,11 +252,35 @@ def _make_dlpack_capsule(mt_ptr: int) -> object:
 
 
 # Pin ctypes destructor closures so they outlive the capsules that
-# reference them. ``CFUNCTYPE``-bound objects aren't hashable, so use
-# a counter-keyed dict instead of a set. The destructor itself pops
-# its entry on call (consumed or not).
-_destructor_id_counter = itertools.count(start=1)
+# reference them: when the C side calls back through the function
+# pointer, the trampoline (the ``CFUNCTYPE`` wrapper) must still be
+# alive or the call segfaults.
+#
+# Keyed on ``id(destructor)`` rather than a counter so each entry is
+# self-identifying and there's no monotonic-ish state to race against
+# under PEP 703 free-threaded Python (where ``itertools.count`` may
+# need additional locking). Wrapped in a ``threading.Lock`` so dict
+# mutations are atomic across producer threads (capsule creation) and
+# consumer threads (capsule destruction); this is defense-in-depth on
+# top of CPython's per-dict critical-section guarantees in 3.13+.
+_capsule_destructors_lock = threading.Lock()
 _capsule_destructors: "dict[int, object]" = {}
+
+
+def _retain_destructor(destructor: object) -> None:
+    """Pin ``destructor`` in the global registry so it outlives the
+    PyCapsule that points at its C function pointer."""
+    with _capsule_destructors_lock:
+        _capsule_destructors[id(destructor)] = destructor
+
+
+def _release_destructor(destructor: object) -> None:
+    """Drop the registry's reference so the ``CFUNCTYPE`` wrapper can
+    be garbage-collected. Called from inside the destructor after the
+    PyCapsule_* C calls have completed; safe under all consumed /
+    unconsumed paths."""
+    with _capsule_destructors_lock:
+        _capsule_destructors.pop(id(destructor), None)
 
 
 @dataclass(frozen=True)

@@ -162,3 +162,59 @@ def test_cuda_context_class_exposes_expected_method_set():
     assert hasattr(c.CudaContext, "try_acquire_read")
     assert hasattr(c.CudaContext, "try_acquire_write")
     assert hasattr(c.CudaContext, "from_runtime")
+
+
+def test_capsule_destructor_registry_survives_concurrent_create_drop():
+    """Stress the lock-guarded registry across many threads creating
+    and dropping capsules concurrently.
+
+    Locks in the no-GIL-readiness property (review #5 from the
+    pr-review-gate): the registry must end up empty after every
+    capsule has been dropped + collected, regardless of interleaving.
+    Under PEP 703 free-threaded Python, dict mutations need explicit
+    locking — `threading.Lock` around `_retain_destructor` /
+    `_release_destructor` covers that.
+    """
+    import threading
+    import gc
+
+    initial_size = len(c._capsule_destructors)
+    n_threads = 8
+    n_capsules_per_thread = 16
+
+    barrier = threading.Barrier(n_threads)
+
+    def churn():
+        # Synchronize start so the threads fight for the lock.
+        barrier.wait(timeout=5.0)
+        # Each thread allocates its own fake DLManagedTensors and creates
+        # / drops capsules over them. The deleter slot is NULL, so the
+        # destructor's "consumed" path is never exercised — we're only
+        # gating registry pin/release atomicity.
+        capsules = []
+        backing = []
+        for _ in range(n_capsules_per_thread):
+            mt = (ctypes.c_uint8 * 64)()
+            backing.append(mt)
+            capsules.append(c._make_dlpack_capsule(ctypes.addressof(mt)))
+        # Drop refs in reverse so the destructor calls don't all race
+        # with the thread's local frame teardown.
+        capsules.clear()
+        backing.clear()
+
+    threads = [threading.Thread(target=churn) for _ in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10.0)
+
+    # Pump GC so any straggling capsules are finalized.
+    for _ in range(3):
+        gc.collect()
+
+    assert len(c._capsule_destructors) == initial_size, (
+        f"Registry must drain back to {initial_size} entries after concurrent "
+        f"churn; found {len(c._capsule_destructors)}. Either the lock isn't "
+        f"actually serializing dict mutations or the destructor's release "
+        f"path raced against the create path."
+    )
