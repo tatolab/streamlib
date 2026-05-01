@@ -30,6 +30,7 @@ import {
   resolveEscalateFd,
   writeFrame as writeEscalateFrame,
 } from "./escalate_fd.ts";
+import * as clock from "./clock.ts";
 import * as log from "./log.ts";
 import type {
   ContinuousProcessor,
@@ -127,13 +128,31 @@ async function main(): Promise<void> {
 
   // Escalate channel — requests from the TS processor go out on stdout,
   // host responses arrive on stdin and are routed here from every stdin
-  // read site (outer loop + run-phase concurrent reader). Constructed
-  // BEFORE installing logging so `log.install` has a channel to drain to.
+  // read site (outer loop + run-phase concurrent reader).
   const escalateChannel = new EscalateChannel(bridgeSendJson);
   // Process-wide singleton so SDK helpers (e.g. `CpuReadbackContext`)
   // can reach the channel without it being threaded through every
   // call site. Mirrors the Python SDK's `install_channel`.
   installChannel(escalateChannel);
+
+  // Load the native library and wire the canonical monotonic clock
+  // BEFORE installing logging, so the very first log record's escalate
+  // request_id stamps with `monotonicNowNs()` and not the documented
+  // `Date.now()` fallback.
+  let lib: NativeLib;
+  try {
+    lib = loadNativeLib(nativeLibPath);
+  } catch (e) {
+    // Log channel isn't installed yet, so the failure can't go through
+    // `log.error`; surface to host via the bridge + raw stderr instead.
+    await bridgeSendJson({
+      rpc: "error",
+      error: `Failed to load native lib: ${e}`,
+    });
+    closeLibcHandle();
+    fatalPreInstall(`Failed to load native lib: ${e}`);
+  }
+  clock.install(lib);
 
   // Install unified logging: writer task + console / Deno.stdout/stderr
   // interceptors. After this point, `console.*` and `Deno.stdout.write`
@@ -150,21 +169,6 @@ async function main(): Promise<void> {
     native_lib: nativeLibPath,
     execution_mode: executionMode,
   });
-
-  // Load native library
-  let lib: NativeLib;
-  try {
-    lib = loadNativeLib(nativeLibPath);
-  } catch (e) {
-    log.error("Failed to load native lib", {
-      processor_id: processorId,
-      error: String(e),
-    });
-    await bridgeSendJson({ rpc: "error", error: `Failed to load native lib: ${e}` });
-    closeLibcHandle();
-    await log.shutdown();
-    Deno.exit(1);
-  }
 
   // Create native context
   const processorIdBuf = cString(processorId);

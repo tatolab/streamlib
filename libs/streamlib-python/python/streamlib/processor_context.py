@@ -126,8 +126,8 @@ def load_native_lib(lib_path):
     lib.slpn_context_create.restype = ctypes.c_void_p
     lib.slpn_context_destroy.argtypes = [ctypes.c_void_p]
     lib.slpn_context_destroy.restype = None
-    lib.slpn_context_time_ns.argtypes = [ctypes.c_void_p]
-    lib.slpn_context_time_ns.restype = ctypes.c_int64
+    lib.slpn_monotonic_now_ns.argtypes = []
+    lib.slpn_monotonic_now_ns.restype = ctypes.c_uint64
 
     # Input
     lib.slpn_input_subscribe.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
@@ -310,7 +310,7 @@ class NativeOutputs:
         import ctypes
 
         if timestamp_ns is None:
-            timestamp_ns = self._lib.slpn_context_time_ns(self._ctx_ptr)
+            timestamp_ns = self._lib.slpn_monotonic_now_ns()
 
         packed = msgpack.packb(data, use_bin_type=True)
         data_buf = (ctypes.c_uint8 * len(packed))(*packed)
@@ -600,8 +600,13 @@ class NativeProcessorState:
 
     @property
     def time(self) -> int:
-        """Current monotonic time in nanoseconds."""
-        return self._lib.slpn_context_time_ns(self._ctx_ptr)
+        """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
+
+        Comparable across processes — to host Rust `Instant` reads and to
+        the Deno SDK's `monotonicNowNs()`. Equivalent to the module-level
+        `streamlib.monotonic_now_ns()`.
+        """
+        return self._lib.slpn_monotonic_now_ns()
 
     def gpu_limited_access(self) -> NativeGpuContextLimitedAccess:
         """Return the limited-access GPU view (resolution only)."""

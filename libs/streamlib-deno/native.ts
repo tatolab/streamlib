@@ -18,9 +18,9 @@ const symbols = {
     parameters: ["pointer"] as const,
     result: "void" as const,
   },
-  sldn_context_time_ns: {
-    parameters: ["pointer"] as const,
-    result: "i64" as const,
+  sldn_monotonic_now_ns: {
+    parameters: [] as const,
+    result: "u64" as const,
   },
 
   // Input

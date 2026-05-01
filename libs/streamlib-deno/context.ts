@@ -163,8 +163,15 @@ export class NativeProcessorState {
     return this.escalate.releaseHandle(handleId);
   }
 
+  /**
+   * Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
+   *
+   * Comparable across processes — to host Rust `Instant` reads and to
+   * the Python SDK's `streamlib.monotonic_now_ns()`. Equivalent to the
+   * module-level `monotonicNowNs(lib)`.
+   */
   get timeNs(): bigint {
-    return this.lib.symbols.sldn_context_time_ns(this.ctxPtr) as bigint;
+    return this.lib.symbols.sldn_monotonic_now_ns() as bigint;
   }
 
   /** Construct a full-access GPU view (allocations + resolution). */

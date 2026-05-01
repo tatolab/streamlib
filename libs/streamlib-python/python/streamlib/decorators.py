@@ -10,6 +10,23 @@ to integrate with the Rust runtime.
 Schema decorators allow defining custom data schemas that are backed by
 Rust's DynamicDataFrameSchema, enabling seamless data flow between Python
 and Rust processors.
+
+Timestamps
+----------
+
+For any timestamp that crosses the host/subprocess boundary or is
+compared against another runtime's stamps — frame stamps, log
+correlation, escalate request IDs, anything similar — use
+``streamlib.monotonic_now_ns()``. It calls
+``clock_gettime(CLOCK_MONOTONIC)``, the same kernel syscall the host
+Rust runtime and the Deno SDK make, so values share a system-wide
+epoch and are directly comparable.
+
+Do NOT use ``time.time()``, ``datetime.now()``, or ``time.time_ns()``
+for cross-process timestamps — wall-clock APIs drift under NTP and
+reflect different epochs from one process to the next. Wall-clock
+APIs are still appropriate for ISO8601 formatting and other genuinely
+human-facing display.
 """
 
 from typing import Optional, Union, List, Type

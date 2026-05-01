@@ -105,13 +105,25 @@ pub unsafe extern "C" fn slpn_context_destroy(ctx: *mut PythonNativeContext) {
     }
 }
 
-/// Get current monotonic time in nanoseconds.
+/// Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
+///
+/// Values are comparable across processes on the same kernel — to host
+/// `Instant` reads and to the Deno cdylib's [`sldn_monotonic_now_ns`].
+/// The canonical timestamp source for ALL polyglot work; do not use
+/// wall-clock APIs (`time.time`, `Date.now`) for cross-process timing.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn slpn_context_time_ns(_ctx: *const PythonNativeContext) -> i64 {
-    let duration = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    duration.as_nanos() as i64
+pub unsafe extern "C" fn slpn_monotonic_now_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: ts is a valid stack slot. CLOCK_MONOTONIC is supported on
+    // every platform this cdylib targets (Linux, macOS); the only failure
+    // mode is EFAULT/EINVAL, which our arguments make unreachable.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    (ts.tv_sec as u64)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(ts.tv_nsec as u64)
 }
 
 // ============================================================================

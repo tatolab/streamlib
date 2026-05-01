@@ -1,6 +1,27 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+/**
+ * # Timestamps
+ *
+ * For any timestamp that crosses the host/subprocess boundary or is
+ * compared against another runtime's stamps — frame stamps (the
+ * `timestampNs` parameter on `OutputPorts.write` is the canonical case),
+ * log correlation, escalate request IDs, anything similar — use
+ * `monotonicNowNs()` from `mod.ts`. It calls
+ * `clock_gettime(CLOCK_MONOTONIC)`, the same kernel syscall the host
+ * Rust runtime and the Python SDK make, so values share a system-wide
+ * epoch and are directly comparable.
+ *
+ * Do NOT use `Date.now()` or `performance.now()` for cross-process
+ * timestamps. `Date.now()` is wall-clock and drifts under NTP;
+ * `performance.now()` is relative to the Deno process's
+ * `performance.timeOrigin` (process start), so two Deno subprocesses
+ * spawned at different instants get different "0" points. Wall-clock
+ * APIs remain appropriate for ISO8601 formatting and other genuinely
+ * human-facing display.
+ */
+
 import type { EscalateOkResponse } from "./escalate.ts";
 
 /**

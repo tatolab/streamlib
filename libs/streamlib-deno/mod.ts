@@ -33,3 +33,9 @@ export type { NativeLib } from "./native.ts";
 
 // Unified polyglot logging — see issue #444 / parent #430.
 export * as log from "./log.ts";
+
+// Canonical monotonic timestamp source — `clock_gettime(CLOCK_MONOTONIC)`.
+// Use for any timestamp that crosses the host/subprocess boundary or is
+// compared against another runtime's stamps.
+export { monotonicNowNs } from "./clock.ts";
+export * as clock from "./clock.ts";

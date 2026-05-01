@@ -32,6 +32,11 @@ class PixelFormat:
 # Routes through the escalate-IPC `{op:"log"}` path to the host JSONL.
 from . import log
 
+# Canonical monotonic timestamp source — `clock_gettime(CLOCK_MONOTONIC)`.
+# Use for any timestamp that crosses the host/subprocess boundary or is
+# compared against another runtime's stamps.
+from .clock import monotonic_now_ns
+
 # Re-export decorators and schema API
 from .decorators import (
     # Processor decorators
@@ -71,6 +76,8 @@ GpuContextLimitedAccess = NativeGpuContextLimitedAccess
 __all__ = [
     # Unified logging
     "log",
+    # Canonical timestamp source
+    "monotonic_now_ns",
     # Processor decorators
     "processor",
     "input",

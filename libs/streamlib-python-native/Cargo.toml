@@ -17,13 +17,13 @@ crate-type = ["cdylib"]
 [dependencies]
 streamlib-ipc-types = { path = "../streamlib-ipc-types" }
 iceoryx2 = "0.8.1"
+libc.workspace = true
 rmp-serde = "1.3"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-libc.workspace = true
 streamlib-surface-client = { path = "../streamlib-surface-client" }
 # Subprocess-side OpenGl runtime (#530). Reuses the host adapter crate's
 # EglRuntime + OpenGlSurfaceAdapter so subprocess code never re-derives EGL
