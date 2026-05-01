@@ -1,0 +1,15 @@
+package:
+  name: polyglot-cuda-inference-deno
+  version: "0.1.0"
+  description: "Polyglot CUDA adapter inference (#591) — Deno DLPack-capsule structural validation against host OPAQUE_FD VkBuffer"
+
+processors:
+  - name: com.tatolab.cuda_inference_deno
+    version: "1.0.0"
+    description: "Acquires a host-pre-registered cuda OPAQUE_FD surface, validates the DLPack capsule shape, logs VALIDATION_PASSED / VALIDATION_FAILED to stderr"
+    runtime: deno
+    execution: reactive
+    entrypoint: "cuda_inference.ts:default"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0

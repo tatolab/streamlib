@@ -4471,9 +4471,9 @@ mod cuda {
         /// `*mut DLManagedTensor` — heap-allocated, ownership transfers
         /// to the caller. The caller MUST eventually call the capsule's
         /// `deleter` (typically by handing the pointer to Python's
-        /// `PyCapsule` constructor with a name `"dl_managed_tensor"` and
-        /// `deleter` set to the spec-mandated trampoline that calls
-        /// `(*mt).deleter(mt)`).
+        /// `PyCapsule` constructor with a name `"dltensor"` per the
+        /// DLPack v0.8 spec, and `deleter` set to the spec-mandated
+        /// trampoline that calls `(*mt).deleter(mt)`).
         pub dlpack_managed_tensor: *mut c_void,
     }
 
