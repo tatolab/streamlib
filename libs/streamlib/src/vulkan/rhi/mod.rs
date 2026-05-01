@@ -72,6 +72,11 @@ pub use vulkan_blending_compositor::{
     BlendingCompositorPushConstants, VulkanBlendingCompositor,
 };
 
+mod vulkan_crt_film_grain;
+pub use vulkan_crt_film_grain::{
+    CrtFilmGrainInputs, CrtFilmGrainPushConstants, VulkanCrtFilmGrain,
+};
+
 #[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;
 
