@@ -56,6 +56,26 @@ def test_constants_match_dlpack_spec():
     assert c._DLPACK_DELETER_OFFSET == 56
 
 
+def test_dlpack_capsule_name_matches_pytorch_consumer():
+    # PyTorch's `torch.from_dlpack` checks the PyCapsule's name via
+    # `PyCapsule_IsValid(capsule, "dltensor")`. An earlier draft of
+    # this module used `"dl_managed_tensor"`, which torch silently
+    # rejects with `from_dlpack received an invalid capsule. Note that
+    # DLTensor capsules can be consumed only once`. The name is part
+    # of the DLPack v0.8 spec — pin it here so a regression turns into
+    # a unit-test failure rather than an E2E-only hang. See #591.
+    assert c._DLPACK_CAPSULE_NAME == b"dltensor"
+    assert c._DLPACK_CAPSULE_NAME_USED == b"used_dltensor"
+    # And the produced capsule must report the right name to a
+    # consumer probing it via `PyCapsule_IsValid`.
+    fake_mt = (ctypes.c_uint8 * 100)()
+    capsule = c._make_dlpack_capsule(ctypes.addressof(fake_mt))
+    ctypes.pythonapi.PyCapsule_IsValid.argtypes = [ctypes.py_object, ctypes.c_char_p]
+    ctypes.pythonapi.PyCapsule_IsValid.restype = ctypes.c_int
+    assert ctypes.pythonapi.PyCapsule_IsValid(capsule, b"dltensor") == 1
+    assert ctypes.pythonapi.PyCapsule_IsValid(capsule, b"dl_managed_tensor") == 0
+
+
 def test_cuda_views_round_trip_dataclass_construction():
     # Use a `c_uint8 * 0` as a stand-in PyCapsule; the dataclass just
     # holds the reference — it doesn't dereference.

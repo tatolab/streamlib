@@ -1,0 +1,15 @@
+package:
+  name: polyglot-cuda-inference
+  version: "0.1.0"
+  description: "Polyglot CUDA adapter inference (#591) — YOLOv8n on a host OPAQUE_FD VkBuffer via DLPack zero-copy"
+
+processors:
+  - name: com.tatolab.cuda_inference
+    version: "1.0.0"
+    description: "Acquires a host-pre-registered cuda OPAQUE_FD surface, uploads a test image, runs YOLOv8n via torch.from_dlpack, writes annotated PNG"
+    runtime: python
+    execution: reactive
+    entrypoint: "cuda_inference:CudaInferenceProcessor"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0

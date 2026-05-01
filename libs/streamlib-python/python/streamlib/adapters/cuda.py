@@ -24,7 +24,7 @@ Per-acquire control flow:
    timeline (Vulkan-side via the adapter; CUDA-side via
    ``cudaWaitExternalSemaphoresAsync_v2`` so CUDA driver state is in
    sync with Vulkan's view of the kernel timeline) and hands back a
-   DLPack PyCapsule named ``"dl_managed_tensor"`` consumable by
+   DLPack PyCapsule named ``"dltensor"`` consumable by
    ``torch.from_dlpack`` zero-copy.
 
 There is no per-acquire IPC — the host's pipeline is expected to write
@@ -105,10 +105,10 @@ class _SlpnCudaView(ctypes.Structure):
 # The DLPack v0.8 spec defines a producer/consumer handoff via PyCapsule:
 #
 # 1. Producer creates a heap-allocated ``DLManagedTensor*``, wraps it in
-#    ``PyCapsule_New(mt, "dl_managed_tensor", destructor)``.
+#    ``PyCapsule_New(mt, "dltensor", destructor)``.
 # 2. Consumer (e.g. PyTorch) calls ``PyCapsule_GetPointer(capsule,
-#    "dl_managed_tensor")`` to take ownership, then renames the capsule
-#    to ``"used_dl_managed_tensor"``. The consumer is now responsible
+#    "dltensor")`` to take ownership, then renames the capsule
+#    to ``"used_dltensor"``. The consumer is now responsible
 #    for eventually calling ``mt->deleter(mt)``.
 # 3. If the consumer never takes the capsule (e.g. an exception fires
 #    before ``torch.from_dlpack`` runs), the capsule's destructor must
@@ -136,8 +136,18 @@ _DLPACK_DELETER_OFFSET = 56
 _DLPACK_DELETER_TYPE = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
 
 # Capsule name shipped to consumers. Must be byte-string for the C API.
-_DLPACK_CAPSULE_NAME = b"dl_managed_tensor"
-_DLPACK_CAPSULE_NAME_USED = b"used_dl_managed_tensor"
+#
+# DLPack v0.8 spec defines `"dltensor"` for unversioned `DLManagedTensor`
+# capsules and `"dltensor_versioned"` for `DLManagedTensorVersioned`.
+# `streamlib-adapter-cuda::dlpack::build_byte_buffer_managed_tensor`
+# emits the unversioned shape, so the right name is `"dltensor"`.
+# PyTorch's `from_dlpack` only consumes capsules with one of these two
+# names; an earlier draft of this file used `"dl_managed_tensor"`,
+# which torch rejects with `from_dlpack received an invalid capsule`.
+# Surfaced end-to-end by #591's polyglot scenario (the first run that
+# actually round-tripped a real cdylib capsule into torch).
+_DLPACK_CAPSULE_NAME = b"dltensor"
+_DLPACK_CAPSULE_NAME_USED = b"used_dltensor"
 
 
 def _wire_pythonapi():
@@ -178,9 +188,9 @@ def _make_dlpack_capsule(mt_ptr: int) -> object:
     by ``torch.from_dlpack``.
 
     Capsule destructor: if the consumer didn't claim the capsule (name
-    still ``"dl_managed_tensor"``), reach into the ``DLManagedTensor``
+    still ``"dltensor"``), reach into the ``DLManagedTensor``
     layout and call the producer-supplied deleter so resources don't
-    leak. If the consumer claimed it (name ``"used_dl_managed_tensor"``),
+    leak. If the consumer claimed it (name ``"used_dltensor"``),
     the consumer is responsible — do nothing.
     """
     if not mt_ptr:
@@ -287,7 +297,7 @@ def _release_destructor(destructor: object) -> None:
 class CudaReadView:
     """View handed back inside an ``acquire_read`` scope.
 
-    ``dlpack`` is a PyCapsule named ``"dl_managed_tensor"`` consumable
+    ``dlpack`` is a PyCapsule named ``"dltensor"`` consumable
     by ``torch.from_dlpack`` zero-copy. The capsule references the
     cdylib-imported CUDA memory; the underlying memory stays alive
     until the consumer (or the capsule's destructor) invokes the

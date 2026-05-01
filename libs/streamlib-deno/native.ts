@@ -287,6 +287,56 @@ const symbols = {
     parameters: ["pointer", "u64"] as const,
     result: "i32" as const,
   },
+
+  // cuda adapter runtime (#590, Linux). The cdylib instantiates
+  // `CudaSurfaceAdapter<ConsumerVulkanDevice>` plus the CUDA driver
+  // imports (`cudaImportExternalMemory(OPAQUE_FD)` /
+  // `cudaImportExternalSemaphore`). Per-acquire control flow is the
+  // adapter's Vulkan-side timeline wait + a `cudaWaitExternalSemaphoresAsync`
+  // sync; no host-side bridge / IPC / trigger callback is needed.
+  // Surfaced end-to-end by #591's polyglot scenario; the symbol set
+  // was missing here in #590 and added when #591 first tried to
+  // dlopen it.
+  sldn_cuda_runtime_new: {
+    parameters: [] as const,
+    result: "pointer" as const,
+  },
+  sldn_cuda_runtime_free: {
+    parameters: ["pointer"] as const,
+    result: "void" as const,
+  },
+  sldn_cuda_register_surface: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_unregister_surface: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_acquire_read: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_acquire_write: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_try_acquire_read: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_try_acquire_write: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_release_read: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_release_write: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
 } as const;
 
 export type NativeLib = Deno.DynamicLibrary<typeof symbols>;

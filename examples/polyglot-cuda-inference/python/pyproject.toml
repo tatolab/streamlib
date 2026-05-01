@@ -1,0 +1,44 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[project]
+name = "polyglot-cuda-inference"
+version = "0.1.0"
+description = "Polyglot CUDA adapter — Python YOLOv8n inference via DLPack zero-copy on host-allocated OPAQUE_FD GPU memory"
+requires-python = ">=3.10"
+dependencies = [
+    "iceoryx2>=0.8.1",
+    "msgpack>=1.0",
+    "numpy>=1.24.0",
+    # Inference stack. ultralytics pulls torch + torchvision +
+    # opencv-python transitively. The torch / torchvision wheels are
+    # explicitly routed through PyTorch's `cu128` index below — the
+    # default PyPI torch is built against CUDA 13, which trips
+    # `CUDA initialization: The NVIDIA driver on your system is too
+    # old (found version 12080)` on a driver that supports CUDA 12.8
+    # max. cu128 wheels cover the local 570.x driver / CUDA 12.8
+    # runtime.
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "ultralytics>=8.3",
+]
+
+# Route torch/torchvision through PyTorch's cu128 wheel index so uv
+# resolves a CUDA-12.8-built wheel instead of the PyPI default cu130.
+# `explicit = true` keeps the index out of the resolver for any
+# package not in `tool.uv.sources`.
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
