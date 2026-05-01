@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
+use std::sync::Mutex;
 
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::notifier::Notifier;
@@ -30,9 +31,25 @@ const READ_MODE_SKIP_TO_LATEST: i32 = 0;
 const READ_MODE_READ_NEXT_IN_ORDER: i32 = 1;
 
 /// Per-processor native context holding iceoryx2 node and port state.
+///
+/// Mutable interior state lives behind [`Self::inner`]'s [`Mutex`] so that
+/// concurrent FFI calls from different Python threads cannot alias `&mut`
+/// against each other (#604). Python's `ctypes` releases the GIL on FFI
+/// dispatch by default — without this lock, two threads in
+/// `slpn_output_write` against the same context would each materialize a
+/// `&mut PythonNativeContext` and instantly violate Rust's aliasing rules.
+///
+/// `node` is immutable after construction (its `service_builder` only
+/// borrows `&self`) so it sits outside the lock to keep the locked region
+/// small.
 pub struct PythonNativeContext {
     processor_id: String,
     node: Node<ipc::Service>,
+    inner: Mutex<PythonNativeContextInner>,
+}
+
+/// Mutable iceoryx2 port state guarded by [`PythonNativeContext::inner`].
+struct PythonNativeContextInner {
     subscribers: HashMap<String, SubscriberState>,
     publishers: HashMap<String, PublisherState>,
     /// Per-port read mode (port_name → READ_MODE_*). Default is SkipToLatest.
@@ -63,10 +80,12 @@ impl PythonNativeContext {
         Ok(Self {
             processor_id: processor_id.to_string(),
             node,
-            subscribers: HashMap::new(),
-            publishers: HashMap::new(),
-            port_read_modes: HashMap::new(),
-            notify_listener: None,
+            inner: Mutex::new(PythonNativeContextInner {
+                subscribers: HashMap::new(),
+                publishers: HashMap::new(),
+                port_read_modes: HashMap::new(),
+                notify_listener: None,
+            }),
         })
     }
 }
@@ -308,7 +327,7 @@ pub unsafe extern "C" fn slpn_input_subscribe(
     ctx: *mut PythonNativeContext,
     service_name: *const c_char,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -357,7 +376,11 @@ pub unsafe extern "C" fn slpn_input_subscribe(
         }
     };
 
-    ctx.subscribers.insert(
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    inner.subscribers.insert(
         service_name.to_string(),
         SubscriberState {
             subscriber,
@@ -380,7 +403,7 @@ pub unsafe extern "C" fn slpn_input_set_read_mode(
     port_name: *const c_char,
     mode: i32,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -389,7 +412,11 @@ pub unsafe extern "C" fn slpn_input_set_read_mode(
         None => return -1,
     };
 
-    ctx.port_read_modes.insert(port_name.to_string(), mode);
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    inner.port_read_modes.insert(port_name.to_string(), mode);
     0
 }
 
@@ -398,14 +425,19 @@ pub unsafe extern "C" fn slpn_input_set_read_mode(
 /// Returns 1 if any data was received, 0 if none, -1 on error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
 
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+
     let mut has_data = false;
 
-    for (_service_name, state) in ctx.subscribers.iter_mut() {
+    for (_service_name, state) in inner.subscribers.iter_mut() {
         while let Ok(Some(sample)) = state.subscriber.receive() {
             let buf: &[u8] = sample.payload();
             if buf.len() < FRAME_HEADER_SIZE {
@@ -453,7 +485,7 @@ pub unsafe extern "C" fn slpn_input_read(
     out_len: *mut u32,
     out_ts: *mut i64,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -462,14 +494,19 @@ pub unsafe extern "C" fn slpn_input_read(
         None => return -1,
     };
 
-    let read_mode = ctx
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+
+    let read_mode = inner
         .port_read_modes
         .get(port_name)
         .copied()
         .unwrap_or(READ_MODE_SKIP_TO_LATEST);
 
     // Search all subscribers for pending data on this port
-    for (_service_name, state) in ctx.subscribers.iter_mut() {
+    for (_service_name, state) in inner.subscribers.iter_mut() {
         if let Some(queue) = state.pending.get_mut(port_name) {
             if queue.is_empty() {
                 continue;
@@ -530,7 +567,7 @@ pub unsafe extern "C" fn slpn_output_publish(
     max_payload_bytes: usize,
     notify_service_name: *const c_char,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -630,7 +667,11 @@ pub unsafe extern "C" fn slpn_output_publish(
         _ => None,
     };
 
-    ctx.publishers.insert(
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    inner.publishers.insert(
         port_name.to_string(),
         PublisherState {
             publisher,
@@ -645,6 +686,12 @@ pub unsafe extern "C" fn slpn_output_publish(
 
 /// Write data to a specific output port.
 ///
+/// Safe to call from any thread, including concurrently with other
+/// `slpn_*` ops on the same context — the inner [`Mutex`] serializes
+/// access to the iceoryx2 publisher map (#604). The lock is held through
+/// `loan_slice_uninit` + `send` + `notify`; iceoryx2's publisher path is
+/// lock-free zero-copy so the held duration is short.
+///
 /// Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_output_write(
@@ -654,7 +701,7 @@ pub unsafe extern "C" fn slpn_output_write(
     data_len: u32,
     timestamp_ns: i64,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
@@ -663,7 +710,12 @@ pub unsafe extern "C" fn slpn_output_write(
         None => return -1,
     };
 
-    let state = match ctx.publishers.get(port_name) {
+    let inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+
+    let state = match inner.publishers.get(port_name) {
         Some(s) => s,
         None => {
             tracing::error!(
@@ -732,12 +784,18 @@ pub unsafe extern "C" fn slpn_event_subscribe(
     ctx: *mut PythonNativeContext,
     notify_service_name: *const c_char,
 ) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
-    if ctx.notify_listener.is_some() {
-        return 0;
+    {
+        let inner = match ctx.inner.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        if inner.notify_listener.is_some() {
+            return 0;
+        }
     }
     let name = match unsafe { c_str_to_str(notify_service_name) } {
         Some(s) if !s.is_empty() => s,
@@ -780,18 +838,29 @@ pub unsafe extern "C" fn slpn_event_subscribe(
             return -1;
         }
     };
-    ctx.notify_listener = Some(listener);
+    let mut inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    // Re-check under the lock — another thread may have raced ahead.
+    if inner.notify_listener.is_none() {
+        inner.notify_listener = Some(listener);
+    }
     0
 }
 
 /// Returns the underlying listener fd for `select`/`poll`, or -1 if not subscribed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_event_listener_fd(ctx: *mut PythonNativeContext) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
-    match ctx.notify_listener.as_ref() {
+    let inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    match inner.notify_listener.as_ref() {
         // SAFETY: native_handle() is unsafe per iceoryx2-bb-posix because the
         // returned int must not outlive the Listener. We hand it to Python
         // which uses it transiently inside select(); the Listener stays alive
@@ -807,11 +876,15 @@ pub unsafe extern "C" fn slpn_event_listener_fd(ctx: *mut PythonNativeContext) -
 /// Returns 0 on success, -1 if no listener is subscribed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_event_drain(ctx: *mut PythonNativeContext) -> i32 {
-    let ctx = match unsafe { ctx.as_mut() } {
+    let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
-    let Some(listener) = ctx.notify_listener.as_ref() else {
+    let inner = match ctx.inner.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let Some(listener) = inner.notify_listener.as_ref() else {
         return -1;
     };
     if let Err(e) = listener.try_wait_all(|_id| {}) {

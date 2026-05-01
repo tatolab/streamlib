@@ -2,73 +2,81 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 /**
- * Polyglot manual source — Deno reference example for issue #542.
+ * Polyglot manual source — Deno reference example for issues #542 + #604.
  *
  * Demonstrates the canonical `execution: manual` worker-loop idiom in
  * Deno — symmetrical to `python/manual_source.py`:
  *
- * 1. `start()` spawns a worker via async IIFE and returns promptly.
+ * 1. `start()` spawns a worker via async IIFE and returns promptly so
+ *    lifecycle commands (`stop`/`teardown`) can land.
  * 2. The worker uses `MonotonicTimer` for drift-free pacing
  *    (NOT `setTimeout`).
- * 3. Each tick, the worker writes an incrementing frame counter
- *    into a host-visible output file (atomic: write tmp + rename).
- *    The host reads this file post-stop to verify frames flowed.
+ * 3. Each tick, the worker calls `ctx.outputs.write(...)` to publish a
+ *    `Videoframe` over iceoryx2. The Rust counting-sink plugin
+ *    subscribes to the same iceoryx2 service and counts frames; the
+ *    scenario binary reads the sink's stats file post-stop to verify
+ *    frames flowed.
  * 4. `stop()` flips a shutdown flag and awaits the worker.
  *
- * If `start()` instead held a synchronous CPU loop, the subprocess
- * runner's _stdinReader couldn't deliver lifecycle messages and
- * teardown would hang. That's the failure mode this example exists
- * to rule out.
+ * Pre-#604, the Deno cdylib's `sldn_output_write` aliased `&mut`
+ * against the context (mirror of the Python issue). #604 moves the
+ * iceoryx2 publisher map behind a `Mutex` so concurrent
+ * `sldn_output_write` calls serialize. Combined with the runner's
+ * always-on `_stdinReader` (now wired in manual mode too), worker
+ * tasks can publish without deadlocking against the FD demuxer.
  *
- * Why a file and not the iceoryx2 output port: a polyglot source
- * that publishes Videoframe payloads needs to allocate pixel buffers
- * via escalate IPC `acquire_pixel_buffer` and call `outputs.write`
- * from a thread the host reads — concurrent escalate IPC from a
- * worker is not safe under the current bridge protocol. A
- * host-visible file sidesteps that out-of-scope plumbing and keeps
- * the example focused on the worker idiom.
+ * If `start()` instead held a synchronous CPU loop, the subprocess
+ * runner's `_stdinReader` couldn't deliver lifecycle messages and
+ * teardown would hang. That's the failure mode this example exists to
+ * rule out.
  */
 
 import {
   type ManualProcessor,
+  monotonicNowNs,
   MonotonicTimer,
   log,
   type RuntimeContextFullAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
+import type { OutputPorts } from "../../../libs/streamlib-deno/types.ts";
 
 export default class PolyglotManualSource implements ManualProcessor {
-  private outputFile = "";
   private intervalNs = 33n * 1_000_000n;
+  private width = 32;
+  private height = 32;
+  private surfaceIdPrefix = "polyglot-manual-source-deno";
   private frameCount = 0;
   private stopFlag = false;
   private worker: Promise<void> | null = null;
+  // Captured in setup() so the worker task can publish without the
+  // lifecycle ctx. NativeOutputPorts is a thin FFI shim — capturing it
+  // is safe across tasks.
+  private outputs: OutputPorts | null = null;
 
   setup(ctx: RuntimeContextFullAccess): void {
     const cfg = ctx.config;
-    const outRaw = cfg["output_file"];
-    if (typeof outRaw !== "string") {
-      throw new Error(
-        `output_file must be a string, got ${typeof outRaw}`,
-      );
-    }
-    this.outputFile = outRaw;
     const intMsRaw = cfg["interval_ms"];
     const intervalMs = typeof intMsRaw === "number" ? intMsRaw : 33;
     this.intervalNs = BigInt(intervalMs) * 1_000_000n;
-    // Initialize the file so the host always finds something to read.
-    this.writeCountAtomic(0);
+    if (typeof cfg["width"] === "number") this.width = cfg["width"];
+    if (typeof cfg["height"] === "number") this.height = cfg["height"];
+    if (typeof cfg["surface_id_prefix"] === "string") {
+      this.surfaceIdPrefix = cfg["surface_id_prefix"];
+    }
+    this.outputs = ctx.outputs;
     log.info("PolyglotManualSource setup", {
-      output_file: this.outputFile,
       interval_ns: String(this.intervalNs),
+      width: this.width,
+      height: this.height,
     });
   }
 
   start(_ctx: RuntimeContextFullAccess): void {
     // SHARP EDGE: this method MUST return promptly. The subprocess
-    // runner's outer command loop only iterates after start() returns;
-    // a long-running synchronous start() means lifecycle messages
-    // queue up and shutdown never happens. Spawn an async worker,
-    // return immediately.
+    // runner awaits start() inline; a synchronous CPU loop here means
+    // the `_stdinReader` IIFE that demuxes lifecycle commands never
+    // sees them and shutdown hangs. Spawn an async worker, return
+    // immediately.
     this.stopFlag = false;
     this.worker = this.workerLoop();
     log.info("PolyglotManualSource start: worker spawned");
@@ -87,21 +95,31 @@ export default class PolyglotManualSource implements ManualProcessor {
       }
       if (expirations === 0n) continue;
       for (let i = 0n; i < expirations && !this.stopFlag; i++) {
-        this.frameCount += 1;
-        this.writeCountAtomic(this.frameCount);
+        this.publishFrame();
       }
     }
   }
 
-  private writeCountAtomic(count: number): void {
+  private publishFrame(): void {
+    /** Publish one Videoframe on the `frame_out` port from this worker
+     * task. Exercises the Deno cdylib's `Mutex` around the iceoryx2
+     * publisher map (#604). */
+    if (this.outputs === null) return;
+    this.frameCount += 1;
+    const tsNs = monotonicNowNs();
+    const frame = {
+      surface_id: `${this.surfaceIdPrefix}-${this.frameCount}`,
+      width: this.width,
+      height: this.height,
+      timestamp_ns: String(tsNs),
+      frame_index: String(this.frameCount),
+    };
     try {
-      const tmp = `${this.outputFile}.tmp`;
-      Deno.writeTextFileSync(tmp, String(count));
-      Deno.renameSync(tmp, this.outputFile);
+      this.outputs.write("frame_out", frame, tsNs);
     } catch (e) {
-      log.warn("PolyglotManualSource write failed", {
+      log.warn("PolyglotManualSource publish failed", {
         error: String(e),
-        count,
+        frame_count: this.frameCount,
       });
     }
   }
@@ -117,8 +135,6 @@ export default class PolyglotManualSource implements ManualProcessor {
         });
       }
     }
-    // Final write so the host always sees the last value.
-    this.writeCountAtomic(this.frameCount);
     log.info("PolyglotManualSource stop: worker joined", {
       frames_emitted: this.frameCount,
     });

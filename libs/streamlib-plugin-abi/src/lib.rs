@@ -117,7 +117,7 @@ macro_rules! export_plugin {
             )*
         }
 
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub static STREAMLIB_PLUGIN: $crate::PluginDeclaration = $crate::PluginDeclaration {
             abi_version: $crate::STREAMLIB_ABI_VERSION,
             register: __streamlib_plugin_register,

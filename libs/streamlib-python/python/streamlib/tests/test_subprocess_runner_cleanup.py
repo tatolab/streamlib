@@ -14,16 +14,21 @@ teardown), mock the FFI lib so the cleanup symbols are countable, and assert
 each FFI cleanup symbol is called *exactly once*. Reverting the fix (re-adding
 the inline `_cleanup_native(...)` in the outer teardown branch) makes both
 counts equal 2 and these tests fail.
+
+Updated for #604 — the runner now reads lifecycle messages from a queue
+filled by `BridgeReaderThread` instead of polling stdin directly. The mock
+reader thread replaces the real one and hands the scripted messages into
+the same queue.
 """
 
 from __future__ import annotations
 
-import sys
 from typing import Any
 
 import pytest
 
 from streamlib import subprocess_runner
+from streamlib.escalate import BridgeReaderThread
 
 
 # ============================================================================
@@ -112,7 +117,7 @@ def _patch_runner(
     scripted messages against the mock FFI without touching real fds."""
 
     # Stub the escalate fd / channel — the runner never actually reads from
-    # them in this test because we replace `bridge_read_message` below.
+    # them in this test because we replace the bridge reader thread below.
     class _DummyStream:
         def write(self, _b: bytes) -> int:
             return 0
@@ -138,16 +143,36 @@ def _patch_runner(
         def __init__(self, *_a: Any, **_kw: Any) -> None:
             pass
 
-        def has_deferred_lifecycle_messages(self) -> bool:
-            return False
-
     monkeypatch.setattr(subprocess_runner, "EscalateChannel", _DummyChannel)
     monkeypatch.setattr(subprocess_runner, "install_channel", lambda _c: None)
+
+    # Replace BridgeReaderThread with a stub that synchronously enqueues the
+    # scripted messages plus the EOF sentinel as soon as `start()` is called.
+    # The runner's outer loop drains the queue exactly as if a real reader
+    # thread had read them off the wire.
+    class _ScriptedBridgeReader:
+        def __init__(self, _stdin: Any, _channel: Any, lifecycle_queue: Any) -> None:
+            self._queue = lifecycle_queue
+
+        def start(self) -> None:
+            for msg in scripted_messages:
+                self._queue.put(msg)
+            self._queue.put(BridgeReaderThread.EOF_SENTINEL)
+
+        def stop(self, *, join_timeout: float = 1.0) -> None:
+            pass
+
+    monkeypatch.setattr(subprocess_runner, "BridgeReaderThread", _ScriptedBridgeReader)
 
     # Logging — the runner installs interceptors that hijack stdout. Skip them.
     monkeypatch.setattr(subprocess_runner.log, "set_processor_id", lambda _p: None)
     monkeypatch.setattr(subprocess_runner.log, "install", lambda _c: None)
     monkeypatch.setattr(subprocess_runner.log, "shutdown", lambda: None)
+    # `_setup_native_state` calls `clock.install_timerfd(lib)` to wire the
+    # MonotonicTimer FFI. The mock doesn't expose ctypes-shaped function
+    # attributes, so skip the install — these tests don't exercise
+    # MonotonicTimer.
+    monkeypatch.setattr(subprocess_runner.clock, "install_timerfd", lambda _lib: None)
 
     monkeypatch.setattr(
         subprocess_runner, "_load_processor_class", lambda _e, _p: _NoopProcessor
@@ -161,23 +186,13 @@ def _patch_runner(
     monkeypatch.setattr(subprocess_runner, "load_native_lib", lambda _path: mock_lib)
     monkeypatch.setattr(pc, "load_native_lib", lambda _path: mock_lib)
 
-    # Script the bridge message sequence.
-    msg_iter = iter(scripted_messages)
-
-    def _fake_read(_stdin: Any) -> dict[str, Any]:
-        try:
-            return next(msg_iter)
-        except StopIteration as e:
-            # Loop is supposed to exit before we run out — surfacing as
-            # EOFError mimics the host closing stdin.
-            raise EOFError("scripted messages exhausted") from e
-
+    # Capture bridge replies the runner sends. The runner uses the imported
+    # `bridge_send_message` symbol re-exported from `processor_context`.
     sent: list[dict[str, Any]] = []
 
     def _fake_send(_stdout: Any, msg: dict[str, Any]) -> None:
         sent.append(msg)
 
-    monkeypatch.setattr(subprocess_runner, "bridge_read_message", _fake_read)
     monkeypatch.setattr(subprocess_runner, "bridge_send_message", _fake_send)
 
 
