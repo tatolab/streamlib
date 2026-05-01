@@ -33,6 +33,10 @@ fn compile_compute_shaders() {
             "src/vulkan/rhi/shaders/blending_compositor.comp",
             "blending_compositor.spv",
         ),
+        (
+            "src/vulkan/rhi/shaders/crt_film_grain.comp",
+            "crt_film_grain.spv",
+        ),
     ];
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
