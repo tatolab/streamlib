@@ -9,9 +9,9 @@
  * a host-allocated OPAQUE_FD `VkBuffer`, Deno opens the cdylib,
  * `sldn_cuda_acquire_read` → `Deno.UnsafePointerView` over the DLPack
  * capsule → byte-equal assertion against the host pattern) requires a
- * polyglot test harness that doesn't yet exist in tree — filed as a
- * follow-up. This file exercises the Deno module's contract against
- * the cdylib's documented FFI ABI.
+ * polyglot test harness that doesn't yet exist in tree — filed as
+ * #596. This file exercises the Deno module's contract against the
+ * cdylib's documented FFI ABI.
  */
 
 import { assertEquals, assertExists } from "@std/assert";

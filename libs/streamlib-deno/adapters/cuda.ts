@@ -85,9 +85,9 @@ const DLPACK_DELETER_OFFSET = 56;
  * lives until either (a) the consumer calls the deleter or (b) the
  * dispose path calls it on consumer-less drops.
  *
- * The view is valid only inside the `await using` scope — after the
- * scope exits, the adapter releases its guard and the host pipeline
- * is free to overwrite the buffer. If you need to retain the tensor
+ * The view is valid only inside the `using` scope — after the scope
+ * exits, the adapter releases its guard and the host pipeline is
+ * free to overwrite the buffer. If you need to retain the tensor
  * beyond the scope, hand the `dlpackPtr` to a consumer that copies
  * the data out (or that itself outlives the scope and accepts
  * ownership).

@@ -11,8 +11,8 @@ A real subprocess test (host registers a host-allocated OPAQUE_FD
 ``VkBuffer``, Python opens the cdylib, ``slpn_cuda_acquire_read`` →
 ``torch.from_dlpack`` → byte-equal assertion against the host pattern)
 requires a polyglot test harness that doesn't yet exist in tree —
-filed as a follow-up. This file exercises the Python module's
-contract against the cdylib's documented FFI ABI.
+filed as #596. This file exercises the Python module's contract
+against the cdylib's documented FFI ABI.
 """
 
 from __future__ import annotations
@@ -168,12 +168,23 @@ def test_capsule_destructor_registry_survives_concurrent_create_drop():
     """Stress the lock-guarded registry across many threads creating
     and dropping capsules concurrently.
 
-    Locks in the no-GIL-readiness property (review #5 from the
-    pr-review-gate): the registry must end up empty after every
-    capsule has been dropped + collected, regardless of interleaving.
-    Under PEP 703 free-threaded Python, dict mutations need explicit
-    locking — `threading.Lock` around `_retain_destructor` /
-    `_release_destructor` covers that.
+    On standard (GIL-protected) CPython this test passes whether the
+    `threading.Lock` is present or not — the GIL serializes dict ops
+    at the bytecode level, so the test alone can't catch a
+    missing-lock regression on a typical CI runner.
+
+    Where the test earns its keep is **PEP 703 free-threaded Python
+    (3.13t+)**: there, `_retain_destructor` and `_release_destructor`
+    can interleave on the dict and the explicit lock is what keeps
+    the registry coherent. Treating this as a no-GIL-readiness gate
+    means free-threaded CI (when we add it) catches a regression that
+    standard CI can't see.
+
+    The test still has standalone value on GIL-CPython: it confirms
+    the registry drains end-to-end across a many-threads churn
+    pattern (no leaked entries from a thread that didn't get cleaned
+    up; no double-pop crashes from a destructor running while
+    another thread is creating a new capsule).
     """
     import threading
     import gc
