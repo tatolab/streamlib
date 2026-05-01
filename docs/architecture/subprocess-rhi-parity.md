@@ -212,9 +212,10 @@ three flow through the same `consumer-rhi` types.
   the full `streamlib` crate" plus "no adapter crate's runtime
   `[dependencies]` lists `streamlib`" — covers cpu-readback once it
   lands the rewire.~~ Closed 2026-04-29 (#570 + tightening in #574).
-- **#556** [P1] — adapter-authoring blueprint, codifies the
+- ~~**#556** [P1] — adapter-authoring blueprint, codifies the
   single-pattern shape so future adapters land on the right shape
-  by default.
+  by default.~~ Landed 2026-04-30 — see
+  [`adapter-authoring.md`](adapter-authoring.md).
 - **#513** (skia adapter), **#515** (processor-port refactor) —
   ~~`frozen` until the P0s above land.~~ Unfrozen 2026-04-29 once
   the P0 chain closed. Skia must follow the single-pattern shape
@@ -239,7 +240,8 @@ Milestone *Surface Adapter Architecture* (#16):
 - ~~**#552** [P0] — promote `streamlib::adapter_support` → `streamlib-consumer-rhi` crate.~~ Closed 2026-04-28.
 - ~~**#553** [P0] — retire `surface_share_vulkan_linux` from natives.~~ Closed 2026-04-29 (#573).
 - ~~**#555** [P0] — boundary-grep CI check.~~ Closed 2026-04-29 (#570 + #574).
-- **#556** [P1] — adapter authoring blueprint.
+- ~~**#556** [P1] — adapter authoring blueprint.~~ Landed 2026-04-30
+  — see [`adapter-authoring.md`](adapter-authoring.md).
 - **#558** — dedicated `AdapterError::SurfaceAlreadyRegistered` variant.
 - **#565** — CUDA surface adapter.
 - **#513** (skia adapter), **#515** (processor-port refactor) — ~~`frozen` until P0s land.~~ Unfrozen 2026-04-29 — eligible to start.
@@ -247,7 +249,9 @@ Milestone *Surface Adapter Architecture* (#16):
 ## Related
 
 - [adapter-runtime-integration.md](adapter-runtime-integration.md) — *how* a subprocess obtains an adapter context.
+- [adapter-authoring.md](adapter-authoring.md) — implementation contract for new surface adapters.
 - [compute-kernel.md](compute-kernel.md) — host's `VulkanComputeKernel`.
 - [`.claude/workflows/polyglot.md`](../../.claude/workflows/polyglot.md) — workflow rule the carve-out lives under.
+- [`.claude/workflows/adapter.md`](../../.claude/workflows/adapter.md) — auto-loaded by `/amos:next` for `adapter`-labeled work.
 - [`docs/learnings/`](../learnings/) — bug evidence motivating one host VkDevice.
 - #525 — research issue this doc closes.

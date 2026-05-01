@@ -4,8 +4,8 @@
 //! Public ABI for StreamLib surface adapters.
 //!
 //! See `docs/architecture/surface-adapter.md` for the architecture
-//! brief and `docs/adapter-authoring.md` for the 3rd-party adapter
-//! author guide.
+//! brief and `docs/architecture/adapter-authoring.md` for the 3rd-party
+//! adapter author guide.
 
 mod adapter;
 mod conformance;
