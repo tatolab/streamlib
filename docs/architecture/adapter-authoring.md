@@ -145,7 +145,9 @@ The pattern every in-tree adapter follows:
   Arc, current layout, image handle).
 - `finalize_*` does the timeline wait + layout transition outside
   the lock, with a rollback path on failure.
-- `acquire_*` returns `WriteContended` / `ReadContended` when
+- `acquire_*` returns `AdapterError::WriteContended` (with a
+  `holder` string identifying who's holding it — `"writer"` from a
+  blocked read, the contender's role from a blocked write) when
   `try_begin_*` returns `Ok(None)`; `try_acquire_*` returns
   `Ok(None)` instead.
 - `end_read_access` / `end_write_access` (sealed methods called
