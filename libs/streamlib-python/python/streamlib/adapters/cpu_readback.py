@@ -105,19 +105,29 @@ class CpuReadbackPlaneView:
     ``(height, width, bytes_per_pixel)``, dtype ``numpy.uint8``).
     Plane dimensions are in plane texels — for NV12's UV plane that
     means half the surface width × half the surface height.
+
+    ``.numpy`` lazy-imports ``numpy`` on access; consumers that only
+    touch ``.bytes`` (a ``memoryview``) don't need numpy installed.
+    Accessing ``.numpy`` without numpy on the path raises
+    ``ModuleNotFoundError``.
     """
 
     width: int
     height: int
     bytes_per_pixel: int
     bytes: memoryview
-    numpy: "np.ndarray"
 
     @property
     def row_stride(self) -> int:
         """Tightly-packed row stride in bytes
         (``width * bytes_per_pixel``)."""
         return self.width * self.bytes_per_pixel
+
+    @property
+    def numpy(self) -> "np.ndarray":
+        return _build_ndarray_view(
+            self.bytes, self.height, self.width, self.bytes_per_pixel
+        )
 
 
 @dataclass(frozen=True)
@@ -128,17 +138,36 @@ class CpuReadbackPlaneViewMut:
     ``numpy.ndarray`` aliasing the same memory. Edits to any plane are
     flushed back to the host ``VkImage`` via per-plane
     ``vkCmdCopyBufferToImage`` on guard drop.
+
+    ``.numpy`` lazy-imports ``numpy`` on access; consumers that only
+    touch ``.bytes`` (a writable ``memoryview``) don't need numpy
+    installed.
     """
 
     width: int
     height: int
     bytes_per_pixel: int
     bytes: memoryview
-    numpy: "np.ndarray"
 
     @property
     def row_stride(self) -> int:
         return self.width * self.bytes_per_pixel
+
+    @property
+    def numpy(self) -> "np.ndarray":
+        return _build_ndarray_view(
+            self.bytes, self.height, self.width, self.bytes_per_pixel
+        )
+
+
+def _build_ndarray_view(
+    buf: memoryview, height: int, width: int, bytes_per_pixel: int
+) -> "np.ndarray":
+    import numpy as np
+
+    return np.frombuffer(buf, dtype=np.uint8).reshape(
+        height, width, bytes_per_pixel
+    )
 
 
 @dataclass(frozen=True)
@@ -532,8 +561,6 @@ class CpuReadbackContext:
             release_fn(self._rt, ctypes.c_uint64(surface_id))
 
     def _build_view(self, view_struct: _SlpnCpuReadbackView, writable: bool):
-        import numpy as np
-
         plane_count = int(view_struct.plane_count)
         if plane_count == 0:
             raise RuntimeError("cpu-readback acquire returned zero planes")
@@ -552,16 +579,6 @@ class CpuReadbackContext:
             mv = memoryview(raw).cast("B")
             if not writable:
                 mv = mv.toreadonly()
-            arr = np.ndarray(
-                shape=(int(p.height), int(p.width), int(p.bytes_per_pixel)),
-                dtype=np.uint8,
-                buffer=raw,
-                strides=(
-                    int(p.width) * int(p.bytes_per_pixel),
-                    int(p.bytes_per_pixel),
-                    1,
-                ),
-            )
             if writable:
                 plane_views.append(
                     CpuReadbackPlaneViewMut(
@@ -569,7 +586,6 @@ class CpuReadbackContext:
                         height=int(p.height),
                         bytes_per_pixel=int(p.bytes_per_pixel),
                         bytes=mv,
-                        numpy=arr,
                     )
                 )
             else:
@@ -579,7 +595,6 @@ class CpuReadbackContext:
                         height=int(p.height),
                         bytes_per_pixel=int(p.bytes_per_pixel),
                         bytes=mv,
-                        numpy=arr,
                     )
                 )
         if writable:
