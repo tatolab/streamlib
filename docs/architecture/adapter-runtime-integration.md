@@ -486,8 +486,13 @@ doc's recommendation.
 
 - `docs/architecture/surface-adapter.md` — the customer-facing
   brief for the adapter trait shape
+- `docs/architecture/adapter-authoring.md` — implementation
+  contract for new surface adapters (checklist, crate skeleton,
+  trip-wires, hypothetical walkthrough)
 - `.claude/workflows/polyglot.md` — the polyglot rule, including
   the import-side carve-out
+- `.claude/workflows/adapter.md` — auto-loaded by `/amos:next` for
+  `adapter`-labeled work
 - `docs/learnings/nvidia-egl-dmabuf-render-target.md` —
   modifier-vs-`external_only` constraint that must be solved on
   host

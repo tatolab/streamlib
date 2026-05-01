@@ -6,8 +6,8 @@ Skia, CPU readback, custom RHI — without ever exposing DMA-BUF fds,
 DRM modifiers, or timeline semaphores.
 
 This doc is the customer-facing brief. Adapter authors should also
-read [`docs/adapter-authoring.md`](../adapter-authoring.md) for the
-implementation contract.
+read [`docs/architecture/adapter-authoring.md`](adapter-authoring.md)
+for the implementation contract.
 
 ## The two-layer shape
 

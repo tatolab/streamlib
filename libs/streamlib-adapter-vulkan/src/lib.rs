@@ -11,7 +11,8 @@
 //! modifiers, or timeline-semaphore handles directly.
 //!
 //! See `docs/architecture/surface-adapter.md` for the architecture brief
-//! and `docs/adapter-authoring.md` for the 3rd-party authoring guide.
+//! and `docs/architecture/adapter-authoring.md` for the 3rd-party
+//! authoring guide.
 
 #![cfg(target_os = "linux")]
 
