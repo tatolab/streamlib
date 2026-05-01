@@ -4740,10 +4740,6 @@ mod cuda {
 
         // ── Step 3: import the OPAQUE_FD memory into CUDA ───────────────
         // CUDA takes ownership of the cuda-side dup on successful import.
-        let cuda_mem_fd = unsafe { libc::dup(raw_sync_fd) }; // placeholder — dup the BUFFER fd
-        // The above is a typo guard — the cuda-side memory fd is the
-        // BUFFER fd, not the sync fd. Redo cleanly:
-        unsafe { libc::close(cuda_mem_fd) };
         let cuda_mem_fd = unsafe { libc::dup(gpu.fds[0]) };
         if cuda_mem_fd < 0 {
             tracing::error!(
@@ -5032,14 +5028,13 @@ mod cuda {
         if let Err(e) = unsafe { sys::cudaStreamSynchronize(entry.stream) }.result() {
             return Err(format!("cudaStreamSynchronize: {e:?}"));
         }
-        // SAFETY guard: the timeline can advance further between
-        // `current_value()` and `cudaWaitExternalSemaphoresAsync_v2`. That's
-        // fine — CUDA's wait-at-or-above semantics mean a stale `wait_value`
-        // is still valid (we just wait less). Underflow isn't possible:
-        // `current_value()` returns the present counter, never zero on a
-        // post-acquire path because the host adapter only signals values
-        // >= 1 on every release.
-        let _ = wait_value;
+        // Race note: the timeline can advance further between
+        // `current_value()` (above) and `cudaWaitExternalSemaphoresAsync_v2`
+        // returning. CUDA's wait-at-or-above semantics make a stale
+        // `wait_value` still valid (we just wait less). Underflow isn't
+        // possible: `current_value()` returns the present counter, never
+        // zero on a post-acquire path because the host adapter only
+        // signals values >= 1 on every release.
         Ok(())
     }
 
