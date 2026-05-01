@@ -9,6 +9,19 @@
  * reworked in this issue to use `MonotonicTimer` (timerfd) instead
  * of `setTimeout`. This processor is the in-tree exemplar that
  * exercises that path.
+ *
+ * Each `process()` call records `monotonicNowNs()`, increments a
+ * tick counter, and updates first/last-tick timestamps — all
+ * in-memory, NO per-tick IO. On `teardown()` the final stats are
+ * written to a host-visible output file as JSON.
+ *
+ * Why no cpu-readback / per-tick IO: the goal here is to measure
+ * the runner's pacing accuracy. Per-tick escalate IPC or GPU
+ * readback adds ~1–2ms of overhead that masks the timerfd's
+ * drift-free behavior in the measurements. A real polyglot
+ * continuous processor doing GPU work would use the Vulkan or
+ * OpenGL adapter, not cpu-readback — cpu-readback is a last-resort
+ * tool, not a hot-path one.
  */
 
 import {
@@ -18,66 +31,66 @@ import {
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import { CpuReadbackContext } from "../../../libs/streamlib-deno/adapters/cpu_readback.ts";
 
 export default class PolyglotContinuousProcessor
   implements ContinuousProcessor {
-  private surfaceId = 0n;
-  private cpuReadback: CpuReadbackContext | null = null;
+  private outputFile = "";
   private tickCount = 0;
   private firstTickNs = 0n;
   private lastTickNs = 0n;
 
   setup(ctx: RuntimeContextFullAccess): void {
     const cfg = ctx.config;
-    const sidRaw = cfg["cpu_readback_surface_id"];
-    if (typeof sidRaw !== "number" && typeof sidRaw !== "bigint") {
+    const outRaw = cfg["output_file"];
+    if (typeof outRaw !== "string") {
       throw new Error(
-        `cpu_readback_surface_id must be a number, got ${typeof sidRaw}`,
+        `output_file must be a string, got ${typeof outRaw}`,
       );
     }
-    this.surfaceId = typeof sidRaw === "bigint" ? sidRaw : BigInt(sidRaw);
-    this.cpuReadback = CpuReadbackContext.fromRuntime(ctx);
+    this.outputFile = outRaw;
+    // Initialize the file so the host always finds something to read.
+    this.writeStats();
     log.info("PolyglotContinuousProcessor setup", {
-      surface_id: String(this.surfaceId),
+      output_file: this.outputFile,
     });
   }
 
-  async process(_ctx: RuntimeContextLimitedAccess): Promise<void> {
+  process(_ctx: RuntimeContextLimitedAccess): void {
+    // Hot path: pure in-memory state update. No IO, no IPC. The
+    // whole point of the example is to measure the runner's
+    // MonotonicTimer pacing accuracy without confounding overhead.
     const nowNs = monotonicNowNs();
     if (this.tickCount === 0) {
       this.firstTickNs = nowNs;
     }
     this.lastTickNs = nowNs;
-    this.tickCount = (this.tickCount + 1) & 0xFFFFFFFF;
+    this.tickCount += 1;
+  }
 
-    if (!this.cpuReadback) return;
+  teardown(_ctx: RuntimeContextFullAccess): void {
+    this.writeStats();
+    log.info("PolyglotContinuousProcessor teardown", {
+      ticks: this.tickCount,
+      first_ns: String(this.firstTickNs),
+      last_ns: String(this.lastTickNs),
+    });
+  }
+
+  private writeStats(): void {
     try {
-      await using guard = await this.cpuReadback.acquireWrite(this.surfaceId);
-      const plane = guard.view.plane(0);
-      // Layout: u32 count, _pad (4B), u64 first_ns, u64 last_ns.
-      const view = new DataView(
-        plane.bytes.buffer,
-        plane.bytes.byteOffset,
-        plane.bytes.byteLength,
-      );
-      view.setUint32(0, this.tickCount, true);
-      view.setUint32(4, 0, true); // padding
-      view.setBigUint64(8, this.firstTickNs, true);
-      view.setBigUint64(16, this.lastTickNs, true);
+      const payload = JSON.stringify({
+        tick_count: this.tickCount,
+        first_tick_ns: String(this.firstTickNs),
+        last_tick_ns: String(this.lastTickNs),
+      });
+      const tmp = `${this.outputFile}.tmp`;
+      Deno.writeTextFileSync(tmp, payload);
+      Deno.renameSync(tmp, this.outputFile);
     } catch (e) {
       log.warn("PolyglotContinuousProcessor write failed", {
         error: String(e),
         tick: this.tickCount,
       });
     }
-  }
-
-  teardown(_ctx: RuntimeContextFullAccess): void {
-    log.info("PolyglotContinuousProcessor teardown", {
-      ticks: this.tickCount,
-      first_ns: String(this.firstTickNs),
-      last_ns: String(this.lastTickNs),
-    });
   }
 }

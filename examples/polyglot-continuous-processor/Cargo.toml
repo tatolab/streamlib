@@ -9,6 +9,4 @@ publish = false
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib" }
-streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
-streamlib-adapter-cpu-readback = { path = "../../libs/streamlib-adapter-cpu-readback" }
 serde_json = "1.0"

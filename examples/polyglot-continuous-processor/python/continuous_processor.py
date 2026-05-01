@@ -9,79 +9,86 @@ in this issue to use `MonotonicTimer` (timerfd) instead of
 `time.sleep`. This processor is the in-tree exemplar that exercises
 that path.
 
-Each ``process()`` call:
+Each `process()` call:
 
 1. Records `streamlib.monotonic_now_ns()` as the tick timestamp.
 2. Increments the tick counter.
-3. Writes (counter, first_tick_ns, last_tick_ns) into the first 24
-   bytes of a host-pre-registered cpu-readback surface.
+3. Updates first/last-tick timestamps in memory — NO per-tick IO.
 
-After the runtime stops, the host reads the surface back and asserts
-both that the counter is in the expected range AND that the implied
-average inter-tick interval is bounded — i.e. the runner's new
-timerfd dispatch paces correctly, neither faster nor much slower than
-the manifest's `interval_ms`.
+On `teardown()` the final stats (count, first_ns, last_ns) are
+written to a host-visible output file as JSON. The host reads that
+post-stop and asserts both that the count is in the expected range
+AND that the implied average inter-tick interval is bounded.
+
+Why no cpu-readback / per-tick IO: the goal here is to measure the
+runner's pacing accuracy. Per-tick escalate IPC or GPU readback adds
+~1–2ms of overhead that masks the timerfd's drift-free behavior in
+the measurements. A real polyglot continuous processor doing GPU
+work would use the Vulkan or OpenGL adapter, not cpu-readback —
+cpu-readback is a last-resort tool, not a hot-path one.
 
 Config keys:
-    cpu_readback_surface_id (int, required): host-assigned u64
-        surface id.
+    output_file (str, required): host-visible file path to write
+        final tick stats into on teardown.
 """
 
 from __future__ import annotations
 
-import struct
+import json
+import os
+from pathlib import Path
 
 import streamlib
 from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
-from streamlib.adapters.cpu_readback import CpuReadbackContext
 
 
 class PolyglotContinuousProcessor:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         cfg = ctx.config
-        self._surface_id = int(cfg["cpu_readback_surface_id"])
-        self._cpu_readback = CpuReadbackContext.from_runtime(ctx)
+        self._output_file = Path(str(cfg["output_file"]))
         self._tick_count = 0
         self._first_tick_ns = 0
         self._last_tick_ns = 0
+        # Initialize the file so the host always finds something to read.
+        self._write_stats()
         streamlib.log.info(
             "PolyglotContinuousProcessor setup",
-            surface_id=self._surface_id,
+            output_file=str(self._output_file),
         )
 
     def process(self, _ctx: RuntimeContextLimitedAccess) -> None:
+        # Hot path: pure in-memory state update. No IO, no IPC. The
+        # whole point of the example is to measure the runner's
+        # MonotonicTimer pacing accuracy without confounding overhead.
         now_ns = streamlib.monotonic_now_ns()
         if self._tick_count == 0:
             self._first_tick_ns = now_ns
         self._last_tick_ns = now_ns
         self._tick_count += 1
 
-        try:
-            with self._cpu_readback.acquire_write(self._surface_id) as view:
-                plane = view.plane(0)
-                # Layout: u32 count, _padding (4B for alignment), u64
-                # first_tick_ns, u64 last_tick_ns. 24 bytes total.
-                # Use memoryview directly — no numpy dep needed.
-                struct.pack_into(
-                    "<IIQQ",
-                    plane.bytes,
-                    0,
-                    self._tick_count & 0xFFFFFFFF,
-                    0,
-                    self._first_tick_ns,
-                    self._last_tick_ns,
-                )
-        except Exception as e:
-            streamlib.log.warn(
-                "PolyglotContinuousProcessor write failed",
-                error=str(e),
-                tick=self._tick_count,
-            )
-
     def teardown(self, _ctx: RuntimeContextFullAccess) -> None:
+        self._write_stats()
         streamlib.log.info(
             "PolyglotContinuousProcessor teardown",
             ticks=self._tick_count,
             first_ns=self._first_tick_ns,
             last_ns=self._last_tick_ns,
         )
+
+    def _write_stats(self) -> None:
+        """Atomically write tick stats to the output file (write tmp + rename)."""
+        try:
+            payload = json.dumps({
+                "tick_count": self._tick_count,
+                "first_tick_ns": self._first_tick_ns,
+                "last_tick_ns": self._last_tick_ns,
+            })
+            tmp = self._output_file.with_suffix(self._output_file.suffix + ".tmp")
+            tmp.write_text(payload)
+            os.replace(tmp, self._output_file)
+        except Exception as e:
+            streamlib.log.warn(
+                "PolyglotContinuousProcessor write failed",
+                error=str(e),
+                tick=self._tick_count,
+            )

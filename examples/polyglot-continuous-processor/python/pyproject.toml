@@ -9,11 +9,6 @@ requires-python = ">=3.10"
 dependencies = [
     "iceoryx2>=0.8.1",
     "msgpack>=1.0",
-    # Required transitively by streamlib's CpuReadbackContext, which
-    # eagerly constructs numpy ndarray views even when the processor
-    # only reads plane.bytes (memoryview). Removing this would crash
-    # at acquire_write/acquire_read time with `No module named 'numpy'`.
-    "numpy>=1.24.0",
 ]
 
 [build-system]
