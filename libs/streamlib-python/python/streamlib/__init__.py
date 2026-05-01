@@ -34,8 +34,10 @@ from . import log
 
 # Canonical monotonic timestamp source — `clock_gettime(CLOCK_MONOTONIC)`.
 # Use for any timestamp that crosses the host/subprocess boundary or is
-# compared against another runtime's stamps.
-from .clock import monotonic_now_ns
+# compared against another runtime's stamps. `MonotonicTimer` is the
+# drift-free periodic timer (timerfd) for continuous-mode dispatch.
+from . import clock
+from .clock import MonotonicTimer, monotonic_now_ns
 
 # Re-export decorators and schema API
 from .decorators import (
@@ -76,8 +78,10 @@ GpuContextLimitedAccess = NativeGpuContextLimitedAccess
 __all__ = [
     # Unified logging
     "log",
-    # Canonical timestamp source
+    # Canonical timestamp source + drift-free periodic timer
+    "clock",
     "monotonic_now_ns",
+    "MonotonicTimer",
     # Processor decorators
     "processor",
     "input",

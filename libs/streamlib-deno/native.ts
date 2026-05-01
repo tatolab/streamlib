@@ -23,6 +23,24 @@ const symbols = {
     result: "u64" as const,
   },
 
+  // Periodic monotonic timer via timerfd (Linux). `wait` is nonblocking so
+  // the JS event loop stays responsive while a worker thread blocks on
+  // `epoll_wait`. Used by subprocess_runner's continuous-mode dispatch to
+  // replace `setTimeout`-based pacing.
+  sldn_timerfd_create: {
+    parameters: ["u64"] as const,
+    result: "pointer" as const,
+  },
+  sldn_timerfd_wait: {
+    parameters: ["pointer", "i32"] as const,
+    result: "i64" as const,
+    nonblocking: true,
+  },
+  sldn_timerfd_close: {
+    parameters: ["pointer"] as const,
+    result: "void" as const,
+  },
+
   // Input
   sldn_input_subscribe: {
     parameters: ["pointer", "buffer"] as const,

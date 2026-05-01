@@ -131,6 +131,14 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 .arg("--allow-read")
                 .arg("--allow-env")
                 .arg("--allow-net")
+                // Match Python's effective filesystem capability — Python's
+                // subprocess has no permission gate at all, so polyglot
+                // examples (e.g. polyglot-manual-source) writing artifacts
+                // to /tmp need the same affordance from Deno. Scoped to
+                // /tmp so the gate still meaningfully restricts everything
+                // else; --allow-ffi is already the dominant escape hatch
+                // for any subprocess that genuinely needs more.
+                .arg("--allow-write=/tmp")
                 .arg("--no-prompt")
                 .arg("--unstable-webgpu")
                 .arg(runner_path.to_str().unwrap_or(""))

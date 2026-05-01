@@ -204,14 +204,28 @@ export interface ReactiveProcessor extends ProcessorLifecycle {
 }
 
 /**
- * Continuous processor: process() is called in a loop.
+ * Continuous processor: process() is called at the manifest's
+ * declared `interval_ms` cadence. The subprocess runner paces calls
+ * through a monotonic-clock timerfd (`MonotonicTimer`) — do NOT use
+ * `setTimeout` inside `process()` to extend the wait, return promptly
+ * and let the runner drive the next tick.
  */
 export interface ContinuousProcessor extends ProcessorLifecycle {
   process(ctx: RuntimeContextLimitedAccess): void | Promise<void>;
 }
 
 /**
- * Manual processor: start()/stop() control execution.
+ * Manual processor: `start()`/`stop()` control execution.
+ *
+ * **`start()` MUST return promptly.** The subprocess runner reads
+ * lifecycle messages on a separate concurrent task, but only
+ * yielding awaits give the JS event loop a chance to deliver them.
+ * A synchronous CPU loop in `start()` will hang teardown until the
+ * host SIGKILLs the subprocess. Spawn an async worker for any
+ * ongoing work — see `examples/polyglot-manual-source/` for the
+ * canonical pattern (`MonotonicTimer.create(...)` for drift-free
+ * pacing inside the worker, `stop()` flips a shutdown flag and
+ * awaits the worker).
  */
 export interface ManualProcessor extends ProcessorLifecycle {
   start(ctx: RuntimeContextFullAccess): void | Promise<void>;

@@ -29,10 +29,9 @@ import os
 import select
 import socket
 import sys
-import time
 import traceback
 
-from . import log
+from . import clock, log
 from .escalate import EscalateChannel, install_channel
 from .processor_context import (
     NativeProcessorState,
@@ -93,6 +92,11 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
     ports = msg.get("ports", {})
 
     lib = load_native_lib(native_lib_path)
+
+    # Wire the cdylib for streamlib.clock.MonotonicTimer. Done here, before
+    # any processor lifecycle method runs, so user `start()` callbacks can
+    # construct timers freely.
+    clock.install_timerfd(lib)
 
     # Create native context
     ctx_ptr = lib.slpn_context_create(processor_id.encode("utf-8"))
@@ -471,34 +475,69 @@ def main():
                             bridge_send_message(stdout, {"rpc": "stopped"})
 
                 elif execution_mode == "continuous":
-                    while running:
-                        native_lib.slpn_input_poll(native_ctx_ptr)
+                    # Drift-free monotonic-clock dispatch via timerfd. Replaces
+                    # the previous `time.sleep(interval_ms/1000)` loop, which
+                    # accumulated drift and didn't match streamlib's pacing
+                    # philosophy. interval_ms <= 0 falls through to a yielding
+                    # busy loop matching the old "yield" semantics.
+                    interval_ns = int(interval_ms) * 1_000_000 if interval_ms and interval_ms > 0 else 0
+                    timer = None
+                    if interval_ns > 0:
                         try:
-                            if hasattr(processor, "process"):
-                                processor.process(limited_ctx)
-                        except Exception as e:
-                            log.error("process() error", error=str(e))
-                        if interval_ms > 0:
-                            time.sleep(interval_ms / 1000.0)
-                        else:
-                            time.sleep(0)  # yield
+                            timer = clock.MonotonicTimer(interval_ns)
+                        except RuntimeError as e:
+                            log.error(
+                                "MonotonicTimer unavailable for continuous mode",
+                                error=str(e),
+                                interval_ms=interval_ms,
+                            )
+                            running = False
 
-                        lifecycle_cmd = _handle_stdin_during_run(
-                            stdin, stdout, processor, full_ctx, limited_ctx,
-                            processor_id, escalate_channel=escalate_channel,
-                        )
-                        if lifecycle_cmd == "teardown":
-                            running = False
-                            if hasattr(processor, "teardown"):
-                                try:
-                                    processor.teardown(full_ctx)
-                                except Exception as e:
-                                    log.error("teardown() error", error=str(e))
-                            bridge_send_message(stdout, {"rpc": "done"})
-                            return
-                        elif lifecycle_cmd == "stop":
-                            running = False
-                            bridge_send_message(stdout, {"rpc": "stopped"})
+                    try:
+                        while running:
+                            native_lib.slpn_input_poll(native_ctx_ptr)
+                            try:
+                                if hasattr(processor, "process"):
+                                    processor.process(limited_ctx)
+                            except Exception as e:
+                                log.error("process() error", error=str(e))
+
+                            if timer is not None:
+                                # Block until the next tick or 100ms timeout —
+                                # the timeout bounds teardown latency without
+                                # reaching for time.sleep.
+                                expirations = timer.wait(100)
+                                if expirations < 0:
+                                    log.error("timer wait failed; exiting continuous loop")
+                                    running = False
+                                    break
+                                # expirations == 0 -> timeout, fall through to
+                                # the stdin poll. expirations >= 1 -> tick(s)
+                                # consumed; the loop body already ran once for
+                                # this iteration so missed-tick catch-up is
+                                # naturally skipped (drift-free, not catch-up).
+                            # interval_ms <= 0: no timer; loop runs as fast as
+                            # process() returns, polling stdin between iterations.
+
+                            lifecycle_cmd = _handle_stdin_during_run(
+                                stdin, stdout, processor, full_ctx, limited_ctx,
+                                processor_id, escalate_channel=escalate_channel,
+                            )
+                            if lifecycle_cmd == "teardown":
+                                running = False
+                                if hasattr(processor, "teardown"):
+                                    try:
+                                        processor.teardown(full_ctx)
+                                    except Exception as e:
+                                        log.error("teardown() error", error=str(e))
+                                bridge_send_message(stdout, {"rpc": "done"})
+                                return
+                            elif lifecycle_cmd == "stop":
+                                running = False
+                                bridge_send_message(stdout, {"rpc": "stopped"})
+                    finally:
+                        if timer is not None:
+                            timer.close()
 
                 elif execution_mode == "manual":
                     # Manual mode: start() is a resource-lifecycle op → full access
