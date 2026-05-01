@@ -30,6 +30,7 @@ import {
   resolveEscalateFd,
   writeFrame as writeEscalateFrame,
 } from "./escalate_fd.ts";
+import * as clock from "./clock.ts";
 import * as log from "./log.ts";
 import type {
   ContinuousProcessor,
@@ -165,6 +166,10 @@ async function main(): Promise<void> {
     await log.shutdown();
     Deno.exit(1);
   }
+
+  // Wire the canonical monotonic clock to the FFI before any code that
+  // might call `monotonicNowNs()` runs.
+  clock.install(lib);
 
   // Create native context
   const processorIdBuf = cString(processorId);

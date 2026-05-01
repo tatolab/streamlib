@@ -38,6 +38,7 @@ import type {
   EscalateResponseErr,
   EscalateResponseOk,
 } from "./_generated_/com_streamlib_escalate_response.ts";
+import { monotonicNowNs } from "./clock.ts";
 
 export type {
   EscalateRequest,
@@ -358,8 +359,18 @@ export class EscalateChannel {
   private nextRequestId(): string {
     this.counter += 1;
     // Short correlation id is enough — request_id only has to be unique
-    // within this subprocess's escalate channel.
-    return `dn-${Date.now().toString(36)}-${this.counter}`;
+    // within this subprocess's escalate channel. Stamps with the
+    // canonical monotonic clock for cross-process consistency; falls
+    // back to `Date.now()` only if the clock isn't installed yet (which
+    // can happen during early bridge handshakes before subprocess_runner
+    // wires the FFI lib).
+    let stamp: number;
+    try {
+      stamp = Number(monotonicNowNs() & 0xffffffffn);
+    } catch {
+      stamp = Date.now();
+    }
+    return `dn-${stamp.toString(36)}-${this.counter}`;
   }
 }
 
