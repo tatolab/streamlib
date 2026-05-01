@@ -45,7 +45,10 @@ fn main() {
     std::process::exit(2);
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
+// `blending_compositor` is cross-platform (macOS Metal + Linux Vulkan); the
+// rest of the example pipeline still requires macOS until #483 (CRT/film-
+// grain), #484 (AvatarCharacter), #485 (Skia overlays), and #486 (Glitch)
+// land for Linux.
 mod blending_compositor;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod crt_film_grain;

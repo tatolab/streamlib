@@ -29,6 +29,10 @@ fn compile_compute_shaders() {
     // Add new compute kernels here.
     let shaders: &[(&str, &str)] = &[
         ("src/vulkan/rhi/shaders/nv12_to_bgra.comp", "nv12_to_bgra.spv"),
+        (
+            "src/vulkan/rhi/shaders/blending_compositor.comp",
+            "blending_compositor.spv",
+        ),
     ];
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
