@@ -304,4 +304,151 @@ mod tests {
             .expect_err("size mismatch must error");
         assert!(matches!(err, StreamError::GpuError(_)));
     }
+
+    /// Visual smoke for the 4-layer composite. Builds synthetic inputs
+    /// (gradient video, semi-transparent magenta lower-third strip,
+    /// opaque cyan watermark in the upper-left, checkerboard PiP),
+    /// dispatches the kernel, writes the result as a PNG to
+    /// `STREAMLIB_BLENDING_COMPOSITOR_PNG_OUT` (or
+    /// `target/blending_compositor_smoke.png` by default), and asserts
+    /// the dispatch succeeded. The PNG is for human review (and PR
+    /// embedding via `attach-images`); the test passes on any
+    /// successful kernel run + well-formed PNG write.
+    ///
+    /// **Scope.** This is a smoke test, not a fixture-locked one. It
+    /// catches kernel-construction regressions and gross
+    /// alpha-over / PiP-geometry breakage that would render an
+    /// obviously-wrong image. A bit-exact fixture comparison (cf.
+    /// `nv12_to_bgra_matches_committed_png_fixture`) is a follow-up
+    /// once the layer composition has settled.
+    #[test]
+    fn visual_smoke_emits_png() {
+        let device = match try_vulkan_device() { Some(d) => d, None => return };
+        let compositor = VulkanBlendingCompositor::new(&device).expect("compositor");
+
+        let w: u32 = 320;
+        let h: u32 = 240;
+        let pip_w: u32 = 96;
+        let pip_h: u32 = 64;
+
+        let video = make_buf(&device, w, h);
+        let lower_third = make_buf(&device, w, h);
+        let watermark = make_buf(&device, w, h);
+        let pip = make_buf(&device, pip_w, pip_h);
+        let out = make_buf(&device, w, h);
+
+        // ---- video: BGRA gradient. R varies left→right, G varies
+        // top→bottom, B fixed at 64, opaque alpha. -----------------
+        unsafe {
+            let ptr = video.buffer_ref().inner.mapped_ptr() as *mut u32;
+            for y in 0..h {
+                for x in 0..w {
+                    let r = ((x * 255 / w.saturating_sub(1).max(1)) & 0xFF) as u32;
+                    let g = ((y * 255 / h.saturating_sub(1).max(1)) & 0xFF) as u32;
+                    let b: u32 = 64;
+                    let a: u32 = 255;
+                    *ptr.add((y * w + x) as usize) = b | (g << 8) | (r << 16) | (a << 24);
+                }
+            }
+        }
+
+        // ---- lower_third: semi-transparent magenta strip across the
+        // bottom 25% (premultiplied alpha — α=0.5, BGRA = 64,0,64,128).
+        unsafe {
+            let ptr = lower_third.buffer_ref().inner.mapped_ptr() as *mut u32;
+            // Default to fully transparent.
+            for i in 0..(w * h) as usize {
+                *ptr.add(i) = 0;
+            }
+            let strip_top = (h * 75) / 100;
+            // Premultiplied: rgb = source_rgb * α. α=0.5, magenta source
+            // (255, 0, 255) → premul (128, 0, 128).
+            let pixel: u32 = 128 | (0 << 8) | (128 << 16) | (128 << 24);
+            for y in strip_top..h {
+                for x in 0..w {
+                    *ptr.add((y * w + x) as usize) = pixel;
+                }
+            }
+        }
+
+        // ---- watermark: opaque cyan square (32×32) in the upper-left
+        // corner (mirrors a brand-mark in the corner). -----------
+        unsafe {
+            let ptr = watermark.buffer_ref().inner.mapped_ptr() as *mut u32;
+            for i in 0..(w * h) as usize {
+                *ptr.add(i) = 0;
+            }
+            let pixel: u32 = 255 | (255 << 8) | (0 << 16) | (255 << 24); // BGRA cyan
+            for y in 8..40 {
+                for x in 8..40 {
+                    *ptr.add((y * w + x) as usize) = pixel;
+                }
+            }
+        }
+
+        // ---- PiP: 8×8 checkerboard, opaque white / transparent. ----
+        unsafe {
+            let ptr = pip.buffer_ref().inner.mapped_ptr() as *mut u32;
+            for y in 0..pip_h {
+                for x in 0..pip_w {
+                    let cell_x = x / 8;
+                    let cell_y = y / 8;
+                    let on = (cell_x + cell_y) % 2 == 0;
+                    let pixel = if on {
+                        0xFFFFFFFFu32 // opaque white (BGRA: 255,255,255,255)
+                    } else {
+                        0
+                    };
+                    *ptr.add((y * pip_w + x) as usize) = pixel;
+                }
+            }
+        }
+
+        compositor
+            .dispatch(BlendingCompositorInputs {
+                video: Some(&video),
+                lower_third: Some(&lower_third),
+                watermark: Some(&watermark),
+                pip: Some(&pip),
+                output: &out,
+                pip_slide_progress: 1.0,
+            })
+            .expect("dispatch must succeed");
+
+        // Read back BGRA and convert to RGBA for the PNG encoder.
+        let bgra_size = (w * h * 4) as usize;
+        let mut bgra_bytes = vec![0u8; bgra_size];
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                out.buffer_ref().inner.mapped_ptr(),
+                bgra_bytes.as_mut_ptr(),
+                bgra_size,
+            );
+        }
+        let mut rgba = vec![0u8; bgra_size];
+        for chunk in 0..(bgra_size / 4) {
+            let i = chunk * 4;
+            rgba[i] = bgra_bytes[i + 2];
+            rgba[i + 1] = bgra_bytes[i + 1];
+            rgba[i + 2] = bgra_bytes[i];
+            rgba[i + 3] = bgra_bytes[i + 3];
+        }
+
+        let out_path = std::env::var("STREAMLIB_BLENDING_COMPOSITOR_PNG_OUT")
+            .unwrap_or_else(|_| "target/blending_compositor_smoke.png".to_string());
+        let _ = std::fs::create_dir_all(
+            std::path::Path::new(&out_path)
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new(".")),
+        );
+        let file = std::fs::File::create(&out_path)
+            .unwrap_or_else(|e| panic!("create {out_path}: {e}"));
+        let bw = std::io::BufWriter::new(file);
+        let mut encoder = png::Encoder::new(bw, w, h);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("PNG header");
+        writer.write_image_data(&rgba).expect("PNG data");
+        eprintln!("blending_compositor visual smoke wrote {out_path}");
+    }
 }
