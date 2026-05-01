@@ -127,12 +127,17 @@ export interface CudaWriteView {
   consume(): void;
 }
 
-/** Async-disposable guard returned by `acquireRead` / `acquireWrite`.
- * `await using` runs `[Symbol.asyncDispose]` at scope exit, which
- * releases the adapter guard (so the timeline can advance) and
- * conditionally calls the DLPack deleter (only if `consume()` was
- * NOT invoked on the view). */
-export interface CudaAccessGuard<V> extends AsyncDisposable {
+/** Disposable guard returned by `acquireRead` / `acquireWrite`.
+ * `using` runs `[Symbol.dispose]` at scope exit, which releases the
+ * adapter guard (so the timeline can advance) and conditionally calls
+ * the DLPack deleter (only if `consume()` was NOT invoked on the view).
+ *
+ * Sync-disposable rather than async-disposable because the cuda
+ * adapter has no per-acquire IPC — the cdylib's `sldn_cuda_*` calls
+ * are synchronous all the way down. (Contrast with `cpu_readback`,
+ * which goes async because every acquire round-trips an escalate-IPC
+ * trigger.) */
+export interface CudaAccessGuard<V> extends Disposable {
   readonly view: V;
 }
 
@@ -209,7 +214,7 @@ function callDlpackDeleter(dlpackPtr: Deno.PointerObject): void {
 
 /** Customer-facing context for the Deno subprocess SDK.
  *
- *     await using guard = await ctx.acquireRead(surface);
+ *     using guard = ctx.acquireRead(surface);
  *     // Hand guard.view.dlpackPtr to a native consumer if one exists.
  *     // Otherwise leave it to the dispose path to clean up.
  */
@@ -290,115 +295,102 @@ export class CudaContext {
 
   acquireRead(
     surface: StreamlibSurface | string | bigint | number,
-  ): Promise<CudaAccessGuard<CudaReadView>> {
-    return this._acquire(surface, false, true) as Promise<
-      CudaAccessGuard<CudaReadView>
+  ): CudaAccessGuard<CudaReadView> {
+    return this._acquire(surface, false, true) as CudaAccessGuard<
+      CudaReadView
     >;
   }
 
   acquireWrite(
     surface: StreamlibSurface | string | bigint | number,
-  ): Promise<CudaAccessGuard<CudaWriteView>> {
-    return this._acquire(surface, true, true) as Promise<
-      CudaAccessGuard<CudaWriteView>
+  ): CudaAccessGuard<CudaWriteView> {
+    return this._acquire(surface, true, true) as CudaAccessGuard<
+      CudaWriteView
     >;
   }
 
   tryAcquireRead(
     surface: StreamlibSurface | string | bigint | number,
-  ): Promise<CudaAccessGuard<CudaReadView> | null> {
-    return this._acquire(surface, false, false) as Promise<
-      CudaAccessGuard<CudaReadView> | null
-    >;
+  ): CudaAccessGuard<CudaReadView> | null {
+    return this._acquire(surface, false, false) as
+      | CudaAccessGuard<CudaReadView>
+      | null;
   }
 
   tryAcquireWrite(
     surface: StreamlibSurface | string | bigint | number,
-  ): Promise<CudaAccessGuard<CudaWriteView> | null> {
-    return this._acquire(surface, true, false) as Promise<
-      CudaAccessGuard<CudaWriteView> | null
-    >;
+  ): CudaAccessGuard<CudaWriteView> | null {
+    return this._acquire(surface, true, false) as
+      | CudaAccessGuard<CudaWriteView>
+      | null;
   }
 
   private _acquire(
     surface: StreamlibSurface | string | bigint | number,
     write: boolean,
     blocking: boolean,
-  ): Promise<CudaAccessGuard<CudaReadView | CudaWriteView> | null> {
-    // The cdylib's acquire is synchronous (no per-acquire IPC) — wrap
-    // in a Promise so the API mirrors cpu_readback's `await using` shape.
-    return new Promise((resolve, reject) => {
-      try {
-        const poolId = surfacePoolId(surface);
-        const format = surfaceFormatFrom(surface);
-        const surfaceId = this.resolveAndRegister(poolId);
-        const buf = new Uint8Array(VIEW_STRUCT_SIZE);
-        const fn = blocking
-          ? (write
-            ? this.symbols.sldn_cuda_acquire_write
-            : this.symbols.sldn_cuda_acquire_read)
-          : (write
-            ? this.symbols.sldn_cuda_try_acquire_write
-            : this.symbols.sldn_cuda_try_acquire_read);
-        const rc: number = fn(this.rt, surfaceId, Deno.UnsafePointer.of(buf));
-        if (rc === RC_CONTENDED) {
-          resolve(null);
-          return;
-        }
-        if (rc !== RC_OK) {
-          reject(
-            new Error(
-              `CudaContext.${blocking ? "" : "try_"}acquire_${
-                write ? "write" : "read"
-              }: rc=${rc} for surface '${poolId}'`,
-            ),
-          );
-          return;
-        }
+  ): CudaAccessGuard<CudaReadView | CudaWriteView> | null {
+    const poolId = surfacePoolId(surface);
+    const format = surfaceFormatFrom(surface);
+    const surfaceId = this.resolveAndRegister(poolId);
+    const buf = new Uint8Array(VIEW_STRUCT_SIZE);
+    const fn = blocking
+      ? (write
+        ? this.symbols.sldn_cuda_acquire_write
+        : this.symbols.sldn_cuda_acquire_read)
+      : (write
+        ? this.symbols.sldn_cuda_try_acquire_write
+        : this.symbols.sldn_cuda_try_acquire_read);
+    const rc: number = fn(this.rt, surfaceId, Deno.UnsafePointer.of(buf));
+    if (rc === RC_CONTENDED) {
+      return null;
+    }
+    if (rc !== RC_OK) {
+      throw new Error(
+        `CudaContext.${blocking ? "" : "try_"}acquire_${
+          write ? "write" : "read"
+        }: rc=${rc} for surface '${poolId}'`,
+      );
+    }
 
-        const view = this.parseView(buf, format, write);
-        const surfaceIdSnapshot = surfaceId;
-        const symbols = this.symbols;
-        const rt = this.rt;
-        const writeMode = write;
-        const dlpackPtr = view.dlpackPtr;
-        let consumed = false;
-        // The view's `consume()` flips the consumed flag — must be set
-        // BEFORE constructing the returned guard so JS code that does
-        // `view.consume()` inside the scope flows correctly through the
-        // dispose path.
-        (view as { consume: () => void }).consume = () => {
-          consumed = true;
-        };
+    const view = this.parseView(buf, format, write);
+    const surfaceIdSnapshot = surfaceId;
+    const symbols = this.symbols;
+    const rt = this.rt;
+    const writeMode = write;
+    const dlpackPtr = view.dlpackPtr;
+    let consumed = false;
+    // The view's `consume()` flips the consumed flag — must be set
+    // BEFORE constructing the returned guard so JS code that does
+    // `view.consume()` inside the scope flows correctly through the
+    // dispose path.
+    (view as { consume: () => void }).consume = () => {
+      consumed = true;
+    };
 
-        resolve({
-          view,
-          [Symbol.asyncDispose]: () => {
-            // Free the DLManagedTensor heap allocation only if the
-            // consumer didn't claim it. After `consume()`, the consumer
-            // is responsible — calling the deleter here would
-            // double-free the producer-side state.
-            if (!consumed) {
-              try {
-                callDlpackDeleter(dlpackPtr);
-              } catch (_e) {
-                // Deleter failure is logged on the cdylib side; we
-                // can't propagate from a dispose path without breaking
-                // the scope contract.
-              }
-            }
-            if (writeMode) {
-              symbols.sldn_cuda_release_write(rt, surfaceIdSnapshot);
-            } else {
-              symbols.sldn_cuda_release_read(rt, surfaceIdSnapshot);
-            }
-            return Promise.resolve();
-          },
-        });
-      } catch (e) {
-        reject(e);
-      }
-    });
+    return {
+      view,
+      [Symbol.dispose]: () => {
+        // Free the DLManagedTensor heap allocation only if the
+        // consumer didn't claim it. After `consume()`, the consumer
+        // is responsible — calling the deleter here would double-free
+        // the producer-side state.
+        if (!consumed) {
+          try {
+            callDlpackDeleter(dlpackPtr);
+          } catch (_e) {
+            // Deleter failure is logged on the cdylib side; we can't
+            // propagate from a dispose path without breaking the
+            // scope contract.
+          }
+        }
+        if (writeMode) {
+          symbols.sldn_cuda_release_write(rt, surfaceIdSnapshot);
+        } else {
+          symbols.sldn_cuda_release_read(rt, surfaceIdSnapshot);
+        }
+      },
+    };
   }
 
   private parseView(

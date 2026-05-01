@@ -72,7 +72,11 @@ Deno.test("CudaReadView / CudaWriteView shapes round-trip dataclass-style", () =
   assertEquals(wv.deviceId, 1);
 });
 
-Deno.test("CudaAccessGuard satisfies AsyncDisposable", () => {
+Deno.test("CudaAccessGuard satisfies sync Disposable", () => {
+  // Sync `using` semantics: the cuda adapter has no per-acquire IPC,
+  // so the cdylib FFI is blocking but synchronous all the way down.
+  // Tracking #590's exit criterion verbatim ("`using` (Symbol.dispose)
+  // support") rather than mirroring cpu_readback's `await using` shape.
   const fakeCapsule = { _stub: true } as unknown as Deno.PointerObject;
   const view: CudaReadView = {
     format: 0 as unknown as CudaReadView["format"],
@@ -85,8 +89,8 @@ Deno.test("CudaAccessGuard satisfies AsyncDisposable", () => {
   };
   const guard: CudaAccessGuard<CudaReadView> = {
     view,
-    [Symbol.asyncDispose]: () => Promise.resolve(),
+    [Symbol.dispose]: () => {},
   };
   assertExists(guard.view);
-  assertExists(guard[Symbol.asyncDispose]);
+  assertExists(guard[Symbol.dispose]);
 });
