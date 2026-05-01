@@ -52,11 +52,15 @@ The canonical recipe:
 
 3. **Subprocess setup looks up the registration** via surface-share
    and **imports the FDs through `streamlib-consumer-rhi`** —
-   `ConsumerVulkanTexture::from_dma_buf`,
-   `ConsumerVulkanPixelBuffer::from_dma_buf` (or `from_opaque_fd`),
-   `ConsumerVulkanTimelineSemaphore::from_imported_*_fd`. Then
-   instantiates the **same** adapter type against a
-   `ConsumerVulkanDevice`.
+   `ConsumerVulkanTexture::from_dma_buf_fd`,
+   `ConsumerVulkanPixelBuffer::from_dma_buf_fd` (single-plane) /
+   `from_dma_buf_fds` (multi-plane) / `from_opaque_fd` (cuda's
+   OPAQUE_FD path), and
+   `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`
+   (timeline semaphores cross processes via OPAQUE_FD only,
+   regardless of whether the data resource is DMA-BUF or
+   OPAQUE_FD). Then instantiates the **same** adapter type against
+   a `ConsumerVulkanDevice`.
 
 4. **Per-acquire is timeline-wait + layout-transition**. Both run
    through traits the carve-out exposes — no privileged ops. If
@@ -171,10 +175,11 @@ expose the native handle on the view directly.
 
 Every adapter ships, at minimum:
 
-- `tests/conformance.rs` — runs the conformance suite from
-  `streamlib_adapter_abi::conformance`. Non-negotiable; the suite
-  exercises blocking and non-blocking acquires, RW exclusion,
-  contention errors, and surface lifetime.
+- `tests/conformance.rs` — calls
+  `streamlib_adapter_abi::testing::run_conformance(adapter, factory)`.
+  Non-negotiable; the suite exercises blocking and non-blocking
+  acquires, RW exclusion, contention errors, and surface
+  lifetime.
 - `tests/round_trip_*.rs` — host writes, subprocess reads (and
   vice versa for write-capable adapters). Uses the
   `streamlib-adapter-<name>-helpers` bin to spawn a real
@@ -469,22 +474,32 @@ subprocesses (which is the default for any new adapter), follow
 
 ## Conformance & tests
 
-Every adapter passes the conformance suite. Wire it as
-`tests/conformance.rs`:
+Every adapter passes the conformance suite. The entry point is
+`streamlib_adapter_abi::testing::run_conformance(adapter, factory)`
+— it takes the adapter and a `Fn(SurfaceId) -> StreamlibSurface`
+factory the suite calls per scenario to mint fresh surface
+descriptors. Wire it as `tests/conformance.rs`:
 
 ```rust
-use streamlib_adapter_abi::conformance::{run_conformance_suite, ConformanceConfig};
+use streamlib_adapter_abi::testing::run_conformance;
 use streamlib_adapter_<name>::<Name>SurfaceAdapter;
 
 #[test]
 fn conformance() {
-    // Bring up a host VkDevice + register one surface; the
-    // suite drives acquire/release + contention scenarios.
+    // Bring up the adapter + a per-surface factory closure that
+    // registers each id with the adapter and returns a matching
+    // StreamlibSurface descriptor. See
+    // `streamlib-adapter-vulkan/tests/conformance.rs` for the
+    // canonical wiring (host VkDevice setup, render-target
+    // allocation, timeline construction).
     let adapter = build_test_adapter();
-    let surface = build_test_surface();
-    run_conformance_suite(&adapter, &surface, ConformanceConfig::default());
+    run_conformance(&adapter, |id| register_one(&adapter, id));
 }
 ```
+
+If your adapter only needs the simplest CPU-empty surface
+descriptor, `streamlib_adapter_abi::testing::empty_surface` is the
+ready-made factory.
 
 Round-trip tests live next to it; the `streamlib-adapter-<name>-helpers`
 bin is the subprocess spawn target. See

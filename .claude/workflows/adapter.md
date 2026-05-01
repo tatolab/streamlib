@@ -66,9 +66,10 @@ cpu-readback, cuda, …).
   crate (existing pattern — see
   `streamlib-adapter-vulkan-helpers/Cargo.toml`).
 - **Conformance suite is non-negotiable.** Wire
-  `tests/conformance.rs` from
-  `streamlib_adapter_abi::conformance::run_conformance_suite` for
-  every adapter.
+  `tests/conformance.rs` to call
+  `streamlib_adapter_abi::testing::run_conformance(adapter, factory)`
+  for every adapter (`empty_surface` from the same module is the
+  ready-made factory for CPU-empty surfaces).
 
 ## Testing adapter changes
 
