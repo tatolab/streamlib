@@ -51,7 +51,7 @@ fn try_consumer() -> Option<Arc<ConsumerVulkanDevice>> {
 
 fn try_host() -> Option<Arc<HostVulkanDevice>> {
     match HostVulkanDevice::new() {
-        Ok(d) => Some(Arc::new(d)),
+        Ok(d) => Some(d),
         Err(e) => {
             println!("skip: HostVulkanDevice::new failed: {e}");
             None

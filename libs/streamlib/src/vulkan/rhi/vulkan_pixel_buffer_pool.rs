@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn test_pool_acquire_returns_buffer() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn test_pool_exhaustion_returns_error() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_pool_reuses_buffer_after_release() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;

@@ -774,7 +774,7 @@ mod tests {
     #[test]
     fn test_pool_buffer_creation_1920x1080_bgra32() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -803,7 +803,7 @@ mod tests {
     #[test]
     fn test_buffer_write_and_readback() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -841,7 +841,7 @@ mod tests {
     #[test]
     fn test_dma_buf_export() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -867,7 +867,7 @@ mod tests {
     #[test]
     fn opaque_fd_export_round_trip_and_cross_flavor_rejection() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -920,7 +920,7 @@ mod tests {
     #[test]
     fn opaque_fd_device_local_export_round_trip() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -963,7 +963,7 @@ mod tests {
         use crate::core::rhi::RhiExternalHandle;
 
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1016,7 +1016,7 @@ mod tests {
     #[test]
     fn physical_device_uuid_is_populated() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1050,7 +1050,7 @@ mod tests {
     #[test]
     fn test_multiple_buffers_coexist() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1084,7 +1084,7 @@ mod tests {
     #[test]
     fn test_drop_frees_without_panic() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1101,7 +1101,7 @@ mod tests {
     #[test]
     fn test_dma_buf_import_round_trip() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1165,7 +1165,7 @@ mod tests {
     #[test]
     fn test_dma_buf_import_multi_plane_round_trip() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1256,7 +1256,7 @@ mod tests {
     #[test]
     fn test_dma_buf_import_rejects_oversize_plane_vec() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;

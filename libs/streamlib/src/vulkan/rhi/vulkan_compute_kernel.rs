@@ -1101,7 +1101,7 @@ mod tests {
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
-            Ok(d) => Some(Arc::new(d)),
+            Ok(d) => Some(d),
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 None

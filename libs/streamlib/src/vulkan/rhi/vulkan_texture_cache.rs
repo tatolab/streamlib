@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn test_creates_image_view_for_valid_image() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn test_returns_cached_view_for_same_image() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -166,7 +166,7 @@ mod tests {
     #[test]
     fn test_flush_destroys_all_cached_views() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
