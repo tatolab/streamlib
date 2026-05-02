@@ -3080,8 +3080,15 @@ mod opengl {
 
     fn drm_fourcc_for_format(format: &str) -> Option<u32> {
         match format {
+            // TextureFormat-derived strings (host-allocated render-target
+            // surfaces emit these in the surface-share wire format).
             "Bgra8Unorm" | "Bgra8UnormSrgb" => Some(DRM_FORMAT_ARGB8888),
             "Rgba8Unorm" | "Rgba8UnormSrgb" => Some(DRM_FORMAT_ABGR8888),
+            // PixelFormat-derived strings (host-allocated HOST_VISIBLE
+            // pixel buffers emit these — camera ring `acquire_pixel_buffer`,
+            // CPU-readback adapter, etc.).
+            "Bgra32" | "Argb32" => Some(DRM_FORMAT_ARGB8888),
+            "Rgba32" => Some(DRM_FORMAT_ABGR8888),
             _ => None,
         }
     }

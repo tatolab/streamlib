@@ -196,17 +196,18 @@ fn sample_external_oes_round_trip() {
             .lock_make_current()
             .expect("lock_make_current");
         unsafe {
-            let prog = match compile_program(FRAGMENT_SRC_EXTERNAL_OES) {
-                Ok(p) => p,
-                Err(e) => {
-                    println!(
-                        "sample_external_oes_round_trip: skipping — driver \
-                         rejected GL_OES_EGL_image_external in #version 330 \
-                         core fragment shader: {e}"
-                    );
-                    return;
-                }
-            };
+            // The shader uses `texture2D(samplerExternalOES, vec2)` — the
+            // GLES2-era overload that NVIDIA's desktop-GL driver honors in
+            // `#version 330 core`. A compile failure here means a real
+            // regression in either the test shader or the adapter's
+            // EXTERNAL_OES contract; do NOT skip past it. Drivers that
+            // genuinely lack `GL_OES_EGL_image_external` would already have
+            // rejected `EglRuntime::new` upstream of this point.
+            let prog = compile_program(FRAGMENT_SRC_EXTERNAL_OES)
+                .expect("FRAGMENT_SRC_EXTERNAL_OES must compile on a driver \
+                         that exposed GL_OES_EGL_image_external during EglRuntime \
+                         construction — failure here is a regression in either \
+                         the shader or the adapter's EXTERNAL_OES contract");
 
             // Build a probe RGBA8 texture + FBO of width×height.
             let mut probe_tex: u32 = 0;

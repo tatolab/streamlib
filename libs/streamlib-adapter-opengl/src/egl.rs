@@ -260,6 +260,20 @@ impl EglRuntime {
     /// detect same-thread reentrance and skip the lock + make-current
     /// + release dance that would otherwise deadlock or tear down the
     /// outer holder's context state.
+    ///
+    /// **Invariant load-bearing for the reentrance fast-path.** This
+    /// shortcut is sound only because *every path in the streamlib
+    /// codebase that makes this runtime's context current goes
+    /// through* [`Self::lock_make_current`] /
+    /// [`Self::arc_lock_make_current`]. Under that invariant
+    /// "context-is-current on this thread" implies "this thread owns
+    /// the `make_current_lock`," so the fast-path can elide the
+    /// re-lock without breaking the single-current-thread contract
+    /// EGL imposes. Third-party code that directly calls
+    /// `eglMakeCurrent` on this runtime's context outside the lock
+    /// would invalidate that implication and let a concurrent thread
+    /// race in to lock + make-current — don't do that, and don't
+    /// expose a public API that lets a caller do it.
     fn is_current_on_this_thread(&self) -> bool {
         match self.egl.get_current_context() {
             Some(ctx) => ctx == self.context,
