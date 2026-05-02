@@ -305,27 +305,6 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
             }
         };
 
-        // Pre-allocate the pixel buffer pool BEFORE the display has a chance to
-        // create its swapchain. NVIDIA limits DMA-BUF exportable allocations
-        // after swapchain creation; pre-allocating here ensures the pool buffers
-        // are created while DMA-BUF allocations are still freely available.
-        match gpu_context.acquire_pixel_buffer(capture_width, capture_height, PixelFormat::Rgba32) {
-            Ok((pool_id, buffer)) => {
-                tracing::info!(
-                    "Camera {}: pre-allocated pixel buffer pool ({}x{} RGBA32) — pool_id={}",
-                    self.camera_name, capture_width, capture_height, pool_id
-                );
-                drop(buffer);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Camera {}: failed to pre-allocate pixel buffer pool: {} \
-                     (will retry from capture thread)",
-                    self.camera_name, e
-                );
-            }
-        }
-
         self.is_capturing.store(true, Ordering::Release);
 
         let is_capturing = Arc::clone(&self.is_capturing);

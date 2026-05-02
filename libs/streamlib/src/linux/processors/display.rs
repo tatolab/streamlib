@@ -116,29 +116,6 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
             .clone()
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
 
-        // Pre-warm the tiled DMA-BUF VMA pool BEFORE spawning the render
-        // thread that creates the swapchain. NVIDIA caps DMA-BUF
-        // exportable allocations after swapchain creation; pre-warming the
-        // pool now ensures the first VMA block lands while DMA-BUF
-        // allocations are still freely available.
-        // See `docs/learnings/nvidia-dma-buf-after-swapchain.md` and
-        // `docs/learnings/nvidia-egl-dmabuf-render-target.md`.
-        // Failure here is non-fatal: the EGL probe may have returned no
-        // RT-capable modifiers in headless / no-display environments, in
-        // which case render-target adapters will fail loudly with a clear
-        // message at acquire time rather than silently fall back to
-        // sampler-only LINEAR.
-        if let Err(e) = ctx
-            .gpu_full_access()
-            .pre_warm_render_target_dma_buf_pool(crate::core::rhi::TextureFormat::Bgra8Unorm)
-        {
-            tracing::warn!(
-                "Display {}: render-target DMA-BUF pool pre-warm failed: {} \
-                 — surface adapter consumers will see allocation errors",
-                self.window_id.0, e
-            );
-        }
-
         // Pull the Vulkan device handle from the FullAccess lifecycle ctx.
         // The render thread uses it to build its swapchain and rendering
         // pipeline at startup; the Sandbox clone is what the thread keeps
