@@ -367,6 +367,86 @@ impl HostVulkanPixelBuffer {
         })
     }
 
+    /// Allocate an OPAQUE_FD-exportable, **DEVICE_LOCAL** `VkBuffer` from
+    /// the device's [`HostVulkanDevice::opaque_fd_buffer_pool_device_local`].
+    ///
+    /// GPU-resident sibling of [`Self::new_opaque_fd_export`]: same
+    /// OPAQUE_FD export semantics, same usage flags, but the underlying
+    /// memory lives in VRAM rather than pinned host. The returned buffer's
+    /// [`Self::mapped_ptr`] is `null` — callers must populate it via
+    /// `vkCmdCopyImageToBuffer` / `vkCmdBlitImage` from a host-side
+    /// pipeline step before signaling the consumer's timeline.
+    ///
+    /// Use this for hot-path camera→cuda flows where pinned-host PCIe
+    /// bandwidth is the bottleneck. CUDA classifies the imported memory
+    /// as `cudaMemoryTypeDevice` (DLPack `kDLCUDA`) automatically via
+    /// `cudaPointerGetAttributes` on `cudaExternalMemoryGetMappedBuffer`'s
+    /// returned pointer, so no separate handle-type wire flag is needed.
+    pub fn new_opaque_fd_export_device_local(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        format: PixelFormat,
+    ) -> Result<Self> {
+        let size = (width as vk::DeviceSize)
+            * (height as vk::DeviceSize)
+            * (bytes_per_pixel as vk::DeviceSize);
+
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .build();
+
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(
+                vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut external_buffer_info);
+
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+
+        let pool = vulkan_device
+            .opaque_fd_buffer_pool_device_local()
+            .ok_or_else(|| {
+                StreamError::GpuError(
+                    "DEVICE_LOCAL OPAQUE_FD buffer pool unavailable — external memory \
+                     unsupported or pool construction failed; GPU-resident CUDA interop \
+                     requires this pool"
+                        .into(),
+                )
+            })?;
+        let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
+            .map_err(|e| {
+                StreamError::GpuError(format!(
+                    "Failed to create DEVICE_LOCAL OPAQUE_FD exportable buffer: {e}"
+                ))
+            })?;
+
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer,
+            allocation: Some(allocation),
+            imported_memory: None,
+            imported_from_dma_buf: false,
+            is_opaque_fd_export: true,
+            mapped_ptr: std::ptr::null_mut(),
+            extra_imported_planes: Vec::new(),
+            width,
+            height,
+            bytes_per_pixel,
+            format,
+            size,
+        })
+    }
+
     /// Export the buffer's memory as an OPAQUE_FD file descriptor.
     ///
     /// Only valid for buffers created via [`Self::new_opaque_fd_export`];
@@ -829,6 +909,50 @@ mod tests {
                 "expected cross-flavor rejection on DMA-BUF buffer, got {other:?}"
             ),
         }
+    }
+
+    /// `new_opaque_fd_export_device_local` allocates from the dedicated
+    /// DEVICE_LOCAL pool, returns a non-mappable buffer (mapped_ptr null
+    /// by construction), and exports an OPAQUE_FD fd. Sibling of
+    /// `opaque_fd_export_round_trip_and_cross_flavor_rejection` covering
+    /// the GPU-resident path.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn opaque_fd_device_local_export_round_trip() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => Arc::new(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_buffer_pool_device_local().is_none() {
+            println!(
+                "Skipping - DEVICE_LOCAL OPAQUE_FD buffer pool unavailable on this driver"
+            );
+            return;
+        }
+
+        let buf = HostVulkanPixelBuffer::new_opaque_fd_export_device_local(
+            &device,
+            128,
+            128,
+            4,
+            PixelFormat::Bgra32,
+        )
+        .expect("new_opaque_fd_export_device_local failed");
+        // DEVICE_LOCAL allocations are not host-mapped.
+        assert!(
+            buf.mapped_ptr().is_null(),
+            "DEVICE_LOCAL OPAQUE_FD buffers must not expose a host pointer; \
+             callers populate via vkCmdCopyImageToBuffer / vkCmdBlitImage"
+        );
+        assert_eq!(buf.size(), (128 * 128 * 4) as vk::DeviceSize);
+        let fd = buf
+            .export_opaque_fd_memory()
+            .expect("export_opaque_fd_memory failed");
+        assert!(fd >= 0, "OPAQUE_FD fd must be non-negative");
+        unsafe { libc::close(fd) };
     }
 
     /// `export_external_handle` dispatches to the correct

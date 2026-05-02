@@ -3,14 +3,14 @@
 
 //! Linux path for camera-python-display (#484 AvatarCharacter).
 //!
-//! First in-tree consumer of TWO surface adapters against the same
-//! camera-frame production lifecycle inside a single subprocess
-//! processor. Wires:
+//! Wires two surface adapters around AvatarCharacter:
 //!
-//! - `streamlib-adapter-cuda` — pre-registers a HOST_VISIBLE OPAQUE_FD
-//!   `VkBuffer` + exportable timeline so the AvatarCharacter Python
-//!   processor can `acquire_write` the camera frame and `acquire_read`
-//!   it as a DLPack tensor for PyTorch pose detection.
+//! - `streamlib-adapter-cuda` — the camera frame is copied GPU-side into
+//!   a DEVICE_LOCAL OPAQUE_FD `VkBuffer` by [`CameraToCudaCopyProcessor`]
+//!   (a host-pipeline processor inserted between the camera and avatar)
+//!   so AvatarCharacter Python's `_process_linux` can `acquire_read` a
+//!   GPU-resident DLPack tensor straight into PyTorch — no CPU staging
+//!   round-trip on the inference path. Per #612.
 //! - `streamlib-adapter-opengl` — pre-registers a render-target-capable
 //!   tiled DMA-BUF `VkImage` so AvatarCharacter can `acquire_write` it
 //!   and ModernGL renders the skinned mesh into it. The display
@@ -19,8 +19,8 @@
 //! Pipeline shape (#485 / #486 will extend the right side):
 //!
 //! ```text
-//!   Camera ──→ AvatarCharacter ──→ Display
-//!              (cuda + opengl)
+//!   Camera ──→ CameraToCudaCopy ──→ AvatarCharacter ──→ Display
+//!                                  (cuda read + opengl write)
 //! ```
 //!
 //! See `docs/architecture/adapter-runtime-integration.md` for the
@@ -29,24 +29,21 @@
 //! cdylib's consumer-rhi import path stays inside.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
+use streamlib::core::rhi::TextureFormat;
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 use streamlib::{
     CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
 };
 use streamlib_adapter_abi::SurfaceId;
-use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
-/// Surface ID for the camera-input cuda OPAQUE_FD buffer.
-///
-/// Numerically distinct from the surface UUIDs used by sibling polyglot
-/// scenarios so multiple runtimes in the same process can coexist (none
-/// today, but the cost is one constant).
-const AVATAR_CAMERA_CUDA_SURFACE_ID: SurfaceId = 484_001;
+use crate::camera_to_cuda_copy::{CameraToCudaCopyProcessor, CUDA_CAMERA_SURFACE_ID};
+
+/// Re-exported alias so the Python avatar's JSON config and other
+/// pipeline wiring keep using the historical name; the processor's
+/// own [`CUDA_CAMERA_SURFACE_ID`] is the single source of truth.
+const AVATAR_CAMERA_CUDA_SURFACE_ID: SurfaceId = CUDA_CAMERA_SURFACE_ID;
 
 /// Surface UUID for the avatar mesh-render output (tiled DMA-BUF
 /// `VkImage`). The Python processor renders into it via
@@ -61,8 +58,6 @@ const SURFACE_WIDTH: u32 = 1920;
 const SURFACE_HEIGHT: u32 = 1080;
 const BYTES_PER_PIXEL: u32 = 4;
 
-type HostAdapter = CudaSurfaceAdapter<streamlib::host_rhi::HostVulkanDevice>;
-
 pub fn main() -> Result<()> {
     println!("=== AvatarCharacter (Linux, #484 cuda + opengl adapters) ===\n");
 
@@ -76,49 +71,28 @@ pub fn main() -> Result<()> {
     runtime.load_project(&project_path)?;
     println!("✓ Loaded processor package from streamlib.yaml\n");
 
-    // Slot keeping the cuda adapter `Arc` alive for the runtime's
-    // start→stop window. The CUDA adapter has no per-acquire host work
-    // (#588 / `subprocess-rhi-parity.md`) — keeping the adapter alive
-    // is about preserving the OPAQUE_FD `VkBuffer` + timeline `Arc`s
-    // surface-share's daemon dup'd from at registration time.
-    let cuda_adapter_slot: Arc<Mutex<Option<Arc<HostAdapter>>>> =
-        Arc::new(Mutex::new(None));
-
-    {
-        let cuda_adapter_slot = Arc::clone(&cuda_adapter_slot);
-        runtime.install_setup_hook(move |gpu| {
-            // 1. CUDA OPAQUE_FD camera-input surface ----------------------
-            let host_device = Arc::clone(gpu.device().vulkan_device());
-            let adapter: Arc<HostAdapter> =
-                Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
-            register_cuda_camera_surface(&adapter, gpu).map_err(|e| {
-                StreamError::Configuration(format!(
-                    "register_cuda_camera_surface: {e}"
-                ))
-            })?;
-            *cuda_adapter_slot.lock().unwrap() = Some(adapter);
-
-            // 2. OpenGL DMA-BUF mesh-render output surface ----------------
-            register_opengl_output_surface(gpu).map_err(|e| {
-                StreamError::Configuration(format!(
-                    "register_opengl_output_surface: {e}"
-                ))
-            })?;
-
-            println!(
-                "✓ AvatarCharacter setup hooks installed: \
-                 cuda OPAQUE_FD camera surface_id={AVATAR_CAMERA_CUDA_SURFACE_ID}, \
-                 opengl DMA-BUF output uuid={AVATAR_OUTPUT_SURFACE_UUID}"
-            );
-            Ok(())
-        });
-    }
+    // OpenGL DMA-BUF mesh-render output surface stays as a setup hook
+    // (one-shot pre-allocation; no per-frame host work). The cuda
+    // surface used to ride a setup hook too — that's now owned by the
+    // CameraToCudaCopyProcessor below, which also issues the per-frame
+    // GPU-side copy.
+    runtime.install_setup_hook(move |gpu| {
+        register_opengl_output_surface(gpu).map_err(|e| {
+            StreamError::Configuration(format!(
+                "register_opengl_output_surface: {e}"
+            ))
+        })?;
+        println!(
+            "✓ OpenGL DMA-BUF output surface registered: uuid={AVATAR_OUTPUT_SURFACE_UUID}"
+        );
+        Ok(())
+    });
 
     // Camera processor (V4L2 on Linux). The camera config doesn't
     // expose width/height — the camera processor picks based on the
-    // device's supported formats. The Python processor resizes
-    // incoming camera bytes to the pre-registered host surface
-    // dimensions.
+    // device's supported formats. The host pipeline expects 1920x1080
+    // BGRA-shaped ring textures; mismatched sizes are rejected by the
+    // copy processor at the first frame.
     println!("📷 Adding camera processor...");
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
         device_id: None,
@@ -126,10 +100,24 @@ pub fn main() -> Result<()> {
     }))?;
     println!("✓ Camera added: {camera}\n");
 
-    // AvatarCharacter (Python subprocess). Reads camera frame, copies
-    // bytes into the cuda OPAQUE_FD surface, runs PyTorch pose
-    // detection, renders skinned mesh into the opengl DMA-BUF surface,
-    // emits the surface UUID downstream.
+    // Camera → CUDA copy processor (#612). Sits between the camera
+    // and avatar in the DAG; allocates the cuda DEVICE_LOCAL OPAQUE_FD
+    // VkBuffer, registers it under AVATAR_CAMERA_CUDA_SURFACE_ID, and
+    // issues a per-frame vkCmdCopyImageToBuffer + timeline GPU signal.
+    // AvatarCharacter Python's `cuda.acquire_read(...)` waits on the
+    // same timeline value.
+    // Default config matches the camera processor's 1920x1080 output;
+    // the cuda surface id is a hardcoded constant on the processor
+    // module re-exported here as `AVATAR_CAMERA_CUDA_SURFACE_ID` so
+    // the Python config below pins to the same value.
+    println!("🚛 Adding camera→cuda copy processor (host-pipeline producer)...");
+    let camera_to_cuda =
+        runtime.add_processor(CameraToCudaCopyProcessor::node(Default::default()))?;
+    println!("✓ Camera→CUDA copy added: {camera_to_cuda}\n");
+
+    // AvatarCharacter (Python subprocess). Reads the cuda surface for
+    // GPU-resident YOLO inference, renders skinned mesh into the
+    // opengl DMA-BUF surface, emits the surface UUID downstream.
     println!("🐍 Adding Python avatar character (subprocess, PyTorch pose + ModernGL)...");
     let avatar = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.avatar_character",
@@ -155,15 +143,21 @@ pub fn main() -> Result<()> {
     }))?;
     println!("✓ Display added: {display}\n");
 
-    // Wire camera → avatar → display. The full Breaking-News-PiP
-    // pipeline (compositor + CRT + glitch + lower third + watermark)
-    // is gated on #485/#486 landing the remaining Linux Python ports.
+    // Wire camera → camera_to_cuda → avatar → display. The full
+    // Breaking-News-PiP pipeline (compositor + CRT + glitch + lower
+    // third + watermark) is gated on #485/#486 landing the remaining
+    // Linux Python ports.
     println!("🔗 Connecting pipeline...");
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
+        InputLinkPortRef::new(&camera_to_cuda, "video_in"),
+    )?;
+    println!("   ✓ Camera → CameraToCudaCopy");
+    runtime.connect(
+        OutputLinkPortRef::new(&camera_to_cuda, "video_out"),
         InputLinkPortRef::new(&avatar, "video_in"),
     )?;
-    println!("   ✓ Camera → AvatarCharacter");
+    println!("   ✓ CameraToCudaCopy → AvatarCharacter");
     runtime.connect(
         OutputLinkPortRef::new(&avatar, "video_out"),
         InputLinkPortRef::new(&display, "video"),
@@ -171,9 +165,9 @@ pub fn main() -> Result<()> {
     println!("   ✓ AvatarCharacter → Display\n");
 
     println!("▶️  Starting pipeline...");
-    println!("   Architecture (Linux, #484):");
-    println!("     Camera ──→ AvatarCharacter ──→ Display");
-    println!("                (cuda OPAQUE_FD + opengl DMA-BUF)");
+    println!("   Architecture (Linux, #484 + #612):");
+    println!("     Camera ──→ CameraToCudaCopy ──→ AvatarCharacter ──→ Display");
+    println!("                (cuda DEVICE_LOCAL OPAQUE_FD)   (opengl DMA-BUF)");
     println!();
     println!("   Press Ctrl+C to stop\n");
 
@@ -181,78 +175,6 @@ pub fn main() -> Result<()> {
     runtime.wait_for_signal()?;
 
     println!("\n✓ Pipeline stopped gracefully");
-    Ok(())
-}
-
-/// Allocate the OPAQUE_FD HOST_VISIBLE staging `VkBuffer` for the
-/// camera frame, allocate an exportable timeline semaphore, register
-/// the pair via surface-share so the subprocess can import them in one
-/// `check_out`, and register the result with the cuda adapter under
-/// [`AVATAR_CAMERA_CUDA_SURFACE_ID`].
-fn register_cuda_camera_surface(
-    adapter: &Arc<HostAdapter>,
-    gpu: &GpuContext,
-) -> std::result::Result<(), String> {
-    let host_device = adapter.device();
-    let buffer_size = (SURFACE_WIDTH * SURFACE_HEIGHT * BYTES_PER_PIXEL) as usize;
-
-    // OPAQUE_FD (not DMA-BUF) is required because DLPack consumers
-    // (`torch.from_dlpack`) need a flat `void*` device pointer from
-    // `cudaExternalMemoryGetMappedBuffer`, which only works when the
-    // source memory is a `VkBuffer` exported as OPAQUE_FD. See
-    // `docs/architecture/subprocess-rhi-parity.md` →
-    // "OPAQUE_FD VkBuffer import (cuda — #588)".
-    let pixel_buffer = HostVulkanPixelBuffer::new_opaque_fd_export(
-        host_device,
-        SURFACE_WIDTH,
-        SURFACE_HEIGHT,
-        BYTES_PER_PIXEL,
-        PixelFormat::Bgra32,
-    )
-    .map_err(|e| format!("HostVulkanPixelBuffer::new_opaque_fd_export: {e}"))?;
-    let pixel_buffer_arc = Arc::new(pixel_buffer);
-    let pixel_buffer_rhi =
-        RhiPixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&pixel_buffer_arc));
-
-    let timeline = Arc::new(
-        HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                format!("HostVulkanTimelineSemaphore::new_exportable: {e}")
-            })?,
-    );
-
-    // Pre-fill the buffer with zeros so a deterministic baseline
-    // exists if the subprocess `acquire_read` ever fires before any
-    // `acquire_write` upload. SAFETY: the OPAQUE_FD buffer is
-    // HOST_VISIBLE | HOST_COHERENT and the mapped pointer stays valid
-    // for the buffer's lifetime; no other owner has a handle yet —
-    // surface-share registration is what publishes it to the daemon.
-    unsafe {
-        std::ptr::write_bytes(pixel_buffer_arc.mapped_ptr(), 0u8, buffer_size);
-    }
-
-    let surface_store = gpu
-        .surface_store()
-        .ok_or_else(|| "GpuContext has no surface_store".to_string())?;
-    surface_store
-        .register_pixel_buffer_with_timeline(
-            &AVATAR_CAMERA_CUDA_SURFACE_ID.to_string(),
-            &pixel_buffer_rhi,
-            Some(timeline.as_ref()),
-        )
-        .map_err(|e| format!("register_pixel_buffer_with_timeline: {e}"))?;
-
-    adapter
-        .register_host_surface(
-            AVATAR_CAMERA_CUDA_SURFACE_ID,
-            HostSurfaceRegistration::<HostMarker> {
-                pixel_buffer: pixel_buffer_arc,
-                timeline,
-                initial_layout: VulkanLayout::UNDEFINED,
-            },
-        )
-        .map_err(|e| format!("register_host_surface: {e:?}"))?;
-
     Ok(())
 }
 

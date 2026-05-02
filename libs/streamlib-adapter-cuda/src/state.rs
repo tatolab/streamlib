@@ -24,16 +24,21 @@ use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 
 /// Inputs handed to [`crate::CudaSurfaceAdapter::register_host_surface`].
 ///
-/// On the host side `pixel_buffer` is a fresh
-/// `Arc<HostVulkanPixelBuffer>` from `HostVulkanPixelBuffer::new_opaque_fd_export`
-/// (the OPAQUE_FD-exportable HOST_VISIBLE staging buffer the CUDA carve-out
-/// test imports via `cudaImportExternalMemory`). The adapter holds the
-/// `Arc` for the surface's lifetime so the underlying GPU memory stays
-/// alive while CUDA references the imported handle.
+/// On the host side `pixel_buffer` is a fresh `Arc<HostVulkanPixelBuffer>`
+/// allocated via either `HostVulkanPixelBuffer::new_opaque_fd_export`
+/// (HOST_VISIBLE — Python writes via CPU mmap; the carve-out test path)
+/// or `HostVulkanPixelBuffer::new_opaque_fd_export_device_local`
+/// (DEVICE_LOCAL — host pipeline writes via `vkCmdCopyImageToBuffer`;
+/// hot-path camera→inference flows). The adapter holds the `Arc` for the
+/// surface's lifetime so the underlying GPU memory stays alive while
+/// CUDA references the imported handle.
 pub struct HostSurfaceRegistration<P: DevicePrivilege> {
-    /// OPAQUE_FD-exportable HOST_VISIBLE staging buffer — the resource
-    /// CUDA imports via `cudaImportExternalMemory`. Host- or consumer-
-    /// flavored per `P`.
+    /// OPAQUE_FD-exportable staging buffer — the resource CUDA imports
+    /// via `cudaImportExternalMemory`. Either HOST_VISIBLE (CPU-write
+    /// flow) or DEVICE_LOCAL (host-pipeline-write flow); CUDA classifies
+    /// the imported pointer automatically via
+    /// `cudaPointerGetAttributes` so the adapter doesn't need to know.
+    /// Host- or consumer-flavored per `P`.
     pub pixel_buffer: Arc<P::PixelBuffer>,
     /// Timeline semaphore — host- or consumer-flavored per `P`. Both
     /// flavors implement

@@ -46,6 +46,12 @@ fn main() {
 mod blending_compositor;
 mod crt_film_grain;
 
+// Linux-only — host-pipeline producer for the AvatarCharacter cuda
+// inference path (#612). The proc-macro must see the module
+// unconditionally on Linux to register the processor.
+#[cfg(target_os = "linux")]
+mod camera_to_cuda_copy;
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 mod macos;
 #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -74,6 +74,15 @@ pub struct HostVulkanDevice {
     /// can carry only one chained `pNext`.
     #[cfg(target_os = "linux")]
     opaque_fd_buffer_pool: Option<vma::Pool>,
+    /// VMA pool for OPAQUE_FD exportable DEVICE_LOCAL buffers — the
+    /// GPU-resident sibling of [`Self::opaque_fd_buffer_pool`]. CUDA imports
+    /// the same OPAQUE_FD handle type, but the underlying memory lives in
+    /// VRAM (~600 GB/s on RTX 3090) instead of pinned host (~16-32 GB/s
+    /// PCIe), which matters for hot-path camera→inference flows. Separate
+    /// pool because VMA pools are pinned to a single memory-type-index and
+    /// DEVICE_LOCAL types differ from HOST_VISIBLE ones.
+    #[cfg(target_os = "linux")]
+    opaque_fd_buffer_pool_device_local: Option<vma::Pool>,
     /// Backing storage for the buffer pool's VkExportMemoryAllocateInfo. VMA stores
     /// a raw pointer to this struct via pMemoryAllocateNext, so we must keep it
     /// alive for the pool's entire lifetime.
@@ -88,6 +97,10 @@ pub struct HostVulkanDevice {
     /// Backing storage for the OPAQUE_FD buffer pool's VkExportMemoryAllocateInfo.
     #[cfg(target_os = "linux")]
     _opaque_fd_buffer_export_info: Option<Box<vk::ExportMemoryAllocateInfo>>,
+    /// Backing storage for the DEVICE_LOCAL OPAQUE_FD buffer pool's
+    /// VkExportMemoryAllocateInfo.
+    #[cfg(target_os = "linux")]
+    _opaque_fd_buffer_export_info_device_local: Option<Box<vk::ExportMemoryAllocateInfo>>,
     /// `VkPhysicalDeviceIDProperties::deviceUUID` queried at construction.
     /// Required by CUDA-Vulkan interop on multi-GPU rigs to match the
     /// CUDA device whose `cudaDeviceProp::uuid` equals this value;
@@ -749,6 +762,28 @@ impl HostVulkanDevice {
             (None, None)
         };
 
+        // DEVICE_LOCAL OPAQUE_FD pool — the GPU-resident sibling. Pool
+        // construction failure is non-fatal in the same way as the
+        // HOST_VISIBLE pool: callers refuse the allocation when the pool
+        // isn't available. Older drivers without external-memory support
+        // skip this entirely.
+        #[cfg(target_os = "linux")]
+        let (opaque_fd_buffer_pool_device_local, opaque_fd_buffer_export_info_device_local) =
+            if supports_external_memory {
+                match Self::create_opaque_fd_buffer_pool_device_local(&allocator) {
+                    Ok((pool, export_info)) => (Some(pool), Some(export_info)),
+                    Err(e) => {
+                        tracing::warn!(
+                            "DEVICE_LOCAL OPAQUE_FD buffer pool creation failed — \
+                             GPU-resident CUDA interop will be unavailable: {e}"
+                        );
+                        (None, None)
+                    }
+                }
+            } else {
+                (None, None)
+            };
+
         // Build DMA-BUF export pools on Linux when external memory is supported.
         // The tiled pool is built only when the EGL probe found at least one
         // RT-capable modifier for BGRA — that's the probe shape.
@@ -836,7 +871,12 @@ impl HostVulkanDevice {
             #[cfg(target_os = "linux")]
             opaque_fd_buffer_pool,
             #[cfg(target_os = "linux")]
+            opaque_fd_buffer_pool_device_local,
+            #[cfg(target_os = "linux")]
             _opaque_fd_buffer_export_info: opaque_fd_buffer_export_info,
+            #[cfg(target_os = "linux")]
+            _opaque_fd_buffer_export_info_device_local:
+                opaque_fd_buffer_export_info_device_local,
             physical_device_uuid,
             #[cfg(target_os = "linux")]
             drm_modifier_table,
@@ -1191,6 +1231,69 @@ impl HostVulkanDevice {
 
         tracing::info!(
             "OPAQUE_FD VMA buffer pool created — mem_type={}",
+            mem_type_idx
+        );
+        Ok((pool, export_info))
+    }
+
+    /// Build a VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL
+    /// buffers (GPU-resident sibling of [`Self::create_opaque_fd_buffer_pool`]).
+    ///
+    /// Same `VkExportMemoryAllocateInfo::handleTypes = OPAQUE_FD`, but the
+    /// memory-type probe excludes HOST_VISIBLE so VMA picks a true VRAM
+    /// type instead of the BAR aperture or pinned-host fallback. Used by
+    /// hot-path camera→cuda flows where pinned-host PCIe bandwidth is a
+    /// real bottleneck (~16-32 GB/s vs ~600 GB/s on VRAM, RTX 3090).
+    /// Pool storage is single-memory-type-index by VMA contract — that's
+    /// why this is a separate pool from the HOST_VISIBLE one.
+    #[cfg(target_os = "linux")]
+    fn create_opaque_fd_buffer_pool_device_local(
+        allocator: &Arc<vma::Allocator>,
+    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
+        let mut probe_external_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+        let probe_buffer_info = vk::BufferCreateInfo::builder()
+            .size(64 * 1024)
+            .usage(
+                vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut probe_external_info);
+        let probe_alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+        let mem_type_idx = unsafe {
+            allocator.find_memory_type_index_for_buffer_info(
+                probe_buffer_info,
+                &probe_alloc_opts,
+            )
+        }
+        .map_err(|e| {
+            StreamError::GpuError(format!(
+                "find memory type for DEVICE_LOCAL OPAQUE_FD buffer pool: {e}"
+            ))
+        })?;
+
+        let mut export_info = Box::new(
+            vk::ExportMemoryAllocateInfo::builder()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+                .build(),
+        );
+        let mut pool_options = vma::PoolOptions::default();
+        pool_options = pool_options.push_next(export_info.as_mut());
+        pool_options.memory_type_index = mem_type_idx;
+        let pool = allocator.create_pool(&pool_options).map_err(|e| {
+            StreamError::GpuError(format!(
+                "create DEVICE_LOCAL OPAQUE_FD buffer pool: {e}"
+            ))
+        })?;
+
+        tracing::info!(
+            "OPAQUE_FD VMA buffer pool (DEVICE_LOCAL) created — mem_type={}",
             mem_type_idx
         );
         Ok((pool, export_info))
@@ -1694,6 +1797,18 @@ impl HostVulkanDevice {
         self.opaque_fd_buffer_pool.as_ref()
     }
 
+    /// VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL buffers
+    /// (GPU-resident sibling of [`Self::opaque_fd_buffer_pool`]).
+    ///
+    /// Returns `None` when external memory isn't supported or the
+    /// DEVICE_LOCAL probe failed at construction. Used by GPU-resident
+    /// CUDA interop paths — see
+    /// [`super::HostVulkanPixelBuffer::new_opaque_fd_export_device_local`].
+    #[cfg(target_os = "linux")]
+    pub fn opaque_fd_buffer_pool_device_local(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_buffer_pool_device_local.as_ref()
+    }
+
     /// `VkPhysicalDeviceIDProperties::deviceUUID` queried at construction.
     ///
     /// 16-byte big-endian UUID identifying this physical device.
@@ -1772,6 +1887,7 @@ impl Drop for HostVulkanDevice {
             drop(self.dma_buf_image_pool.take());
             drop(self.dma_buf_image_pool_tiled.take());
             drop(self.opaque_fd_buffer_pool.take());
+            drop(self.opaque_fd_buffer_pool_device_local.take());
         }
 
         drop(self.allocator.take());
@@ -1782,6 +1898,7 @@ impl Drop for HostVulkanDevice {
             drop(self._dma_buf_image_export_info.take());
             drop(self._dma_buf_image_tiled_export_info.take());
             drop(self._opaque_fd_buffer_export_info.take());
+            drop(self._opaque_fd_buffer_export_info_device_local.take());
         }
 
         unsafe {
