@@ -38,8 +38,10 @@ export const GL_TEXTURE_2D = 0x0DE1 as const;
 /** `GL_TEXTURE_EXTERNAL_OES` enumerant from `GL_OES_EGL_image_external`.
  * Returned in `view.target` for surfaces acquired via
  * `OpenGLContext.acquireReadExternalOes` — the consumer's GLSL must
- * `#extension GL_OES_EGL_image_external_essl3 : require` and sample
- * via `samplerExternalOES`. */
+ * `#extension GL_OES_EGL_image_external : require` and sample via
+ * `texture2D(samplerExternalOES, vec2)` (the adapter's desktop-GL
+ * context does not provide the ESSL3 unified `texture(...)` overload).
+ * See `OpenGLContext.acquireReadExternalOes` for the full reasoning. */
 export const GL_TEXTURE_EXTERNAL_OES = 0x8D65 as const;
 
 /** Read-side view inside an `acquireRead` / `acquireReadExternalOes`
@@ -305,8 +307,14 @@ export class OpenGLContext {
    *
    * `view.target` is `GL_TEXTURE_EXTERNAL_OES` — bind manually via
    * `glBindTexture(GL_TEXTURE_EXTERNAL_OES, view.glTextureId)` and
-   * sample via `samplerExternalOES` in GLSL with
-   * `#extension GL_OES_EGL_image_external_essl3 : require`. */
+   * sample via `samplerExternalOES` in GLSL. On the adapter's desktop-
+   * GL context, declare `#extension GL_OES_EGL_image_external : require`
+   * and use the `texture2D(samplerExternalOES, vec2)` overload —
+   * NVIDIA's desktop-GL driver does NOT register the unified
+   * `texture(...)` overload for `samplerExternalOES` in
+   * `#version 330 core`; that overload comes from
+   * `GL_OES_EGL_image_external_essl3`, which requires a GLES context
+   * (which this adapter does not create). */
   acquireReadExternalOes(
     surface: StreamlibSurface | string | bigint,
   ): OpenGLAccessGuard<OpenGLReadView> {

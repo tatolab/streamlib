@@ -102,11 +102,16 @@ uniform float u_time;
 
 void main() {
     // Subtle chromatic aberration: shift R and B channels horizontally.
+    // Use the GL_OES_EGL_image_external `texture2D(samplerExternalOES,
+    // vec2)` overload — NVIDIA's desktop-GL driver does not register the
+    // unified `texture(samplerExternalOES, vec2)` overload in
+    // `#version 330 core`; that overload is ESSL3-only (would require
+    // `_essl3` + an actual GLES context).
     float shift = 0.0025;
     vec3 col;
-    col.r = texture(u_camera, v_texcoord + vec2(shift, 0.0)).r;
-    col.g = texture(u_camera, v_texcoord).g;
-    col.b = texture(u_camera, v_texcoord - vec2(shift, 0.0)).b;
+    col.r = texture2D(u_camera, v_texcoord + vec2(shift, 0.0)).r;
+    col.g = texture2D(u_camera, v_texcoord).g;
+    col.b = texture2D(u_camera, v_texcoord - vec2(shift, 0.0)).b;
 
     // Cyberpunk grade: lift mids towards cyan, push shadows slightly violet.
     vec3 graded = mix(col, col * vec3(0.78, 1.05, 1.18), 0.55);

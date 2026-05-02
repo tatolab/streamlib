@@ -1011,7 +1011,7 @@ impl DisplayEventLoopHandler {
         frame_idx: u64,
         input_frame_index: u64,
     ) {
-        use crate::core::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
+        use crate::core::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
 
         let format = texture.format();
         let width = texture.width();
@@ -1085,8 +1085,29 @@ impl DisplayEventLoopHandler {
                 return;
             }
         };
+        // VulkanTextureReadback hands the staging bytes back in the
+        // texture's native channel order. The PNG writer treats every
+        // input as RGBA-in-memory, so source textures whose memory
+        // layout is BGRA need an R↔B swizzle before the PNG encode —
+        // otherwise blue and red swap and (e.g.) a dark blue wall
+        // renders as orange. The OpenGL adapter picks Bgra8Unorm for
+        // its render-target DMA-BUFs to match the swapchain's native
+        // format and avoid a swizzle in the display path; that
+        // optimization just doesn't carry to the PNG export.
+        let needs_swizzle = matches!(
+            format,
+            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb,
+        );
         let result = readback.wait_and_read_with(ticket, u64::MAX, |bytes| {
-            write_png_rgba(path, width, height, bytes)
+            if needs_swizzle {
+                let mut rgba = bytes.to_vec();
+                for chunk in rgba.chunks_exact_mut(4) {
+                    chunk.swap(0, 2);
+                }
+                write_png_rgba(path, width, height, &rgba)
+            } else {
+                write_png_rgba(path, width, height, bytes)
+            }
         });
         match result {
             Ok(Ok(())) => {

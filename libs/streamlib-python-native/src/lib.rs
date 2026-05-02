@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::notifier::Notifier;
@@ -20,6 +20,30 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use streamlib_ipc_types::{FrameHeader, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
+
+// ============================================================================
+// Tracing subscriber init
+// ============================================================================
+
+/// Install a fmt subscriber on first FFI entry so the cdylib's
+/// `tracing::error!` / `tracing::warn!` events surface to subprocess
+/// stderr, where the host's `spawn_fd_line_reader` picks them up and
+/// forwards them under the `[/python]` log namespace via fd2.
+///
+/// Idempotent — subsequent calls hit the `OnceLock` and no-op. Filter
+/// honors `RUST_LOG` if set, otherwise defaults to `info`.
+fn init_subprocess_logging() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .try_init();
+    });
+}
 
 // ============================================================================
 // Context
@@ -101,6 +125,7 @@ impl PythonNativeContext {
 pub unsafe extern "C" fn slpn_context_create(
     processor_id: *const c_char,
 ) -> *mut PythonNativeContext {
+    init_subprocess_logging();
     let id = if processor_id.is_null() {
         "unknown"
     } else {
@@ -2922,6 +2947,7 @@ mod opengl {
     /// driver doesn't support `EGL_EXT_image_dma_buf_import_modifiers`).
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_opengl_runtime_new() -> *mut OpenGlRuntimeHandle {
+        super::init_subprocess_logging();
         let egl = match EglRuntime::new() {
             Ok(r) => r,
             Err(e) => {
@@ -3038,11 +3064,18 @@ mod opengl {
     /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`); typical
     /// consumer is a per-frame camera ring texture.
     ///
-    /// The customer's GLSL must `#extension GL_OES_EGL_image_external_essl3 :
-    /// require` and sample via `samplerExternalOES`. Acquire/release uses
-    /// the same [`slpn_opengl_acquire_read`] / [`slpn_opengl_release_read`]
-    /// pair as the 2D path; only `acquire_write` is rejected (the
-    /// EXTERNAL_OES binding is sample-only by GL spec).
+    /// The customer's GLSL must enable `samplerExternalOES`. On the
+    /// adapter's desktop-GL context, declare
+    /// `#extension GL_OES_EGL_image_external : require` and sample via
+    /// `texture2D(samplerExternalOES, vec2)` — NVIDIA's desktop-GL
+    /// driver does NOT register the unified `texture(...)` overload
+    /// for `samplerExternalOES` in `#version 330 core`; that overload
+    /// comes from `GL_OES_EGL_image_external_essl3`, which requires a
+    /// GLES context (not what this adapter creates). Acquire/release
+    /// uses the same [`slpn_opengl_acquire_read`] /
+    /// [`slpn_opengl_release_read`] pair as the 2D path; only
+    /// `acquire_write` is rejected (the EXTERNAL_OES binding is
+    /// sample-only by GL spec).
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_opengl_register_external_oes_surface(
         rt: *mut OpenGlRuntimeHandle,
@@ -3071,6 +3104,11 @@ mod opengl {
             Some(f) if f >= 0 => f,
             _ => {
                 tracing::error!(
+                    fds = ?gpu.fds,
+                    format = %gpu.format,
+                    width = gpu.width,
+                    height = gpu.height,
+                    modifier = format_args!("0x{:016x}", gpu.drm_format_modifier),
                     "slpn_opengl_register_external_oes_surface: surface has no DMA-BUF fd"
                 );
                 return -1;
@@ -3080,8 +3118,8 @@ mod opengl {
             Some(c) => c,
             None => {
                 tracing::error!(
-                    "slpn_opengl_register_external_oes_surface: unsupported format '{}'",
-                    gpu.format
+                    format = %gpu.format,
+                    "slpn_opengl_register_external_oes_surface: unsupported format"
                 );
                 return -1;
             }
@@ -3109,8 +3147,16 @@ mod opengl {
             Ok(()) => 0,
             Err(e) => {
                 tracing::error!(
-                    "slpn_opengl_register_external_oes_surface: register_external_oes_host_surface failed: {:?}",
-                    e
+                    surface_id,
+                    fourcc = format_args!("0x{:08x}", drm_fourcc),
+                    modifier = format_args!("0x{:016x}", gpu.drm_format_modifier),
+                    width = gpu.width,
+                    height = gpu.height,
+                    fd,
+                    stride,
+                    offset,
+                    error = ?e,
+                    "slpn_opengl_register_external_oes_surface: register_external_oes_host_surface failed"
                 );
                 -1
             }
@@ -3304,8 +3350,15 @@ mod opengl {
     /// is bytes `[B, G, R, A]` in memory, which is `DRM_FORMAT_ARGB8888`.
     fn drm_fourcc_for_format(format: &str) -> Option<u32> {
         match format {
+            // TextureFormat-derived strings (host-allocated render-target
+            // surfaces emit these in the surface-share wire format).
             "Bgra8Unorm" | "Bgra8UnormSrgb" => Some(DRM_FORMAT_ARGB8888),
             "Rgba8Unorm" | "Rgba8UnormSrgb" => Some(DRM_FORMAT_ABGR8888),
+            // PixelFormat-derived strings (host-allocated HOST_VISIBLE
+            // pixel buffers emit these — camera ring `acquire_pixel_buffer`,
+            // CPU-readback adapter, etc.).
+            "Bgra32" | "Argb32" => Some(DRM_FORMAT_ARGB8888),
+            "Rgba32" => Some(DRM_FORMAT_ABGR8888),
             _ => None,
         }
     }
@@ -3495,6 +3548,7 @@ mod vulkan {
     /// DMA-BUF / external-semaphore extensions).
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_vulkan_runtime_new() -> *mut VulkanRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
@@ -4120,6 +4174,7 @@ mod cpu_readback {
     /// the first acquire; until then every acquire returns -1.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_cpu_readback_runtime_new() -> *mut CpuReadbackRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
@@ -4905,6 +4960,7 @@ mod cuda {
     #[unsafe(no_mangle)]
     #[tracing::instrument(level = "info")]
     pub unsafe extern "C" fn slpn_cuda_runtime_new() -> *mut CudaRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {

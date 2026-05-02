@@ -51,13 +51,19 @@ void main() {
 }
 "#;
 
+// `texture2D(samplerExternalOES, vec2)` — the GL_OES_EGL_image_external
+// (GLES2-era) overload, which NVIDIA's desktop-GL driver honors in
+// `#version 330 core`. The unified `texture(samplerExternalOES, vec2)`
+// overload is ESSL3-only (`_essl3` extension + GLES context), and the
+// adapter binds `EGL_OPENGL_API`, not `EGL_OPENGL_ES_API` — so consumers
+// targeting this adapter must use `texture2D` for EXTERNAL_OES samples.
 const FRAGMENT_SRC_EXTERNAL_OES: &str = r#"#version 330 core
 #extension GL_OES_EGL_image_external : require
 in vec2 v_uv;
 out vec4 frag_color;
 uniform samplerExternalOES u_tex;
 void main() {
-    frag_color = texture(u_tex, v_uv);
+    frag_color = texture2D(u_tex, v_uv);
 }
 "#;
 
@@ -190,17 +196,18 @@ fn sample_external_oes_round_trip() {
             .lock_make_current()
             .expect("lock_make_current");
         unsafe {
-            let prog = match compile_program(FRAGMENT_SRC_EXTERNAL_OES) {
-                Ok(p) => p,
-                Err(e) => {
-                    println!(
-                        "sample_external_oes_round_trip: skipping — driver \
-                         rejected GL_OES_EGL_image_external in #version 330 \
-                         core fragment shader: {e}"
-                    );
-                    return;
-                }
-            };
+            // The shader uses `texture2D(samplerExternalOES, vec2)` — the
+            // GLES2-era overload that NVIDIA's desktop-GL driver honors in
+            // `#version 330 core`. A compile failure here means a real
+            // regression in either the test shader or the adapter's
+            // EXTERNAL_OES contract; do NOT skip past it. Drivers that
+            // genuinely lack `GL_OES_EGL_image_external` would already have
+            // rejected `EglRuntime::new` upstream of this point.
+            let prog = compile_program(FRAGMENT_SRC_EXTERNAL_OES)
+                .expect("FRAGMENT_SRC_EXTERNAL_OES must compile on a driver \
+                         that exposed GL_OES_EGL_image_external during EglRuntime \
+                         construction — failure here is a regression in either \
+                         the shader or the adapter's EXTERNAL_OES contract");
 
             // Build a probe RGBA8 texture + FBO of width×height.
             let mut probe_tex: u32 = 0;

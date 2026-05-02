@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use iceoryx2::port::listener::Listener;
@@ -21,6 +21,30 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use streamlib_ipc_types::{FrameHeader, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
+
+// ============================================================================
+// Tracing subscriber init
+// ============================================================================
+
+/// Install a fmt subscriber on first FFI entry so the cdylib's
+/// `tracing::error!` / `tracing::warn!` events surface to subprocess
+/// stderr, where the host's `spawn_fd_line_reader` picks them up and
+/// forwards them under the `[/deno]` log namespace via fd2.
+///
+/// Idempotent — subsequent calls hit the `OnceLock` and no-op. Filter
+/// honors `RUST_LOG` if set, otherwise defaults to `info`.
+fn init_subprocess_logging() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .try_init();
+    });
+}
 
 // ============================================================================
 // Context
@@ -99,6 +123,7 @@ impl DenoNativeContext {
 pub unsafe extern "C" fn sldn_context_create(
     processor_id: *const c_char,
 ) -> *mut DenoNativeContext {
+    init_subprocess_logging();
     let id = if processor_id.is_null() {
         "unknown"
     } else {
@@ -2728,6 +2753,7 @@ mod opengl {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_opengl_runtime_new() -> *mut OpenGlRuntimeHandle {
+        super::init_subprocess_logging();
         let egl = match EglRuntime::new() {
             Ok(r) => r,
             Err(e) => {
@@ -2830,11 +2856,18 @@ mod opengl {
     /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`); typical
     /// consumer is a per-frame camera ring texture.
     ///
-    /// The customer's GLSL must `#extension GL_OES_EGL_image_external_essl3 :
-    /// require` and sample via `samplerExternalOES`. Acquire/release uses
-    /// the same [`sldn_opengl_acquire_read`] / [`sldn_opengl_release_read`]
-    /// pair as the 2D path; only `acquire_write` is rejected (the
-    /// EXTERNAL_OES binding is sample-only by GL spec).
+    /// The customer's GLSL must enable `samplerExternalOES`. On the
+    /// adapter's desktop-GL context, declare
+    /// `#extension GL_OES_EGL_image_external : require` and sample via
+    /// `texture2D(samplerExternalOES, vec2)` — NVIDIA's desktop-GL
+    /// driver does NOT register the unified `texture(...)` overload
+    /// for `samplerExternalOES` in `#version 330 core`; that overload
+    /// comes from `GL_OES_EGL_image_external_essl3`, which requires a
+    /// GLES context (not what this adapter creates). Acquire/release
+    /// uses the same [`sldn_opengl_acquire_read`] /
+    /// [`sldn_opengl_release_read`] pair as the 2D path; only
+    /// `acquire_write` is rejected (the EXTERNAL_OES binding is
+    /// sample-only by GL spec).
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_opengl_register_external_oes_surface(
         rt: *mut OpenGlRuntimeHandle,
@@ -3073,8 +3106,15 @@ mod opengl {
 
     fn drm_fourcc_for_format(format: &str) -> Option<u32> {
         match format {
+            // TextureFormat-derived strings (host-allocated render-target
+            // surfaces emit these in the surface-share wire format).
             "Bgra8Unorm" | "Bgra8UnormSrgb" => Some(DRM_FORMAT_ARGB8888),
             "Rgba8Unorm" | "Rgba8UnormSrgb" => Some(DRM_FORMAT_ABGR8888),
+            // PixelFormat-derived strings (host-allocated HOST_VISIBLE
+            // pixel buffers emit these — camera ring `acquire_pixel_buffer`,
+            // CPU-readback adapter, etc.).
+            "Bgra32" | "Argb32" => Some(DRM_FORMAT_ARGB8888),
+            "Rgba32" => Some(DRM_FORMAT_ABGR8888),
             _ => None,
         }
     }
@@ -3213,6 +3253,7 @@ mod vulkan {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_vulkan_runtime_new() -> *mut VulkanRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
@@ -3696,6 +3737,7 @@ mod cpu_readback {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_cpu_readback_runtime_new() -> *mut CpuReadbackRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
@@ -4453,6 +4495,7 @@ mod cuda {
     #[unsafe(no_mangle)]
     #[tracing::instrument(level = "info")]
     pub unsafe extern "C" fn sldn_cuda_runtime_new() -> *mut CudaRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {

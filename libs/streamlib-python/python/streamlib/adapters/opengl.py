@@ -81,9 +81,12 @@ GL_TEXTURE_2D: int = 0x0DE1
 # `GL_TEXTURE_EXTERNAL_OES` enumerant from `GL_OES_EGL_image_external`.
 # Returned in `view.target` for surfaces acquired via
 # :meth:`OpenGLContext.acquire_read_external_oes` — the consumer's GLSL
-# must `#extension GL_OES_EGL_image_external_essl3 : require` and
-# sample via `samplerExternalOES`. Matches the Rust crate's
-# `GL_TEXTURE_EXTERNAL_OES` constant.
+# must `#extension GL_OES_EGL_image_external : require` and sample via
+# `texture2D(samplerExternalOES, vec2)` (the adapter's desktop-GL
+# context does not provide the ESSL3 unified `texture(...)` overload).
+# See :meth:`OpenGLContext.acquire_read_external_oes` for the full
+# reasoning. Matches the Rust crate's `GL_TEXTURE_EXTERNAL_OES`
+# constant.
 GL_TEXTURE_EXTERNAL_OES: int = 0x8D65
 
 
@@ -414,10 +417,15 @@ class OpenGLContext:
                 GL.glBindTexture(view.target, view.gl_texture_id)
                 # ... draw with samplerExternalOES shader ...
 
-        The shader must declare
-        ``#extension GL_OES_EGL_image_external_essl3 : require`` (or
-        ``GL_OES_EGL_image_external`` for older GLSL profiles) and
-        sample the texture via ``samplerExternalOES``.
+        The shader must enable ``samplerExternalOES``. On the adapter's
+        desktop-GL context, declare
+        ``#extension GL_OES_EGL_image_external : require`` and sample
+        via ``texture2D(samplerExternalOES, vec2)`` — NVIDIA's desktop-
+        GL driver does NOT register the unified ``texture(...)``
+        overload for ``samplerExternalOES`` in ``#version 330 core``;
+        that overload comes from ``GL_OES_EGL_image_external_essl3``,
+        which requires a GLES context (which this adapter does not
+        create).
         """
         pool_id = self._surface_pool_id(surface)
         surface_id = self._resolve_and_register(pool_id, GL_TEXTURE_EXTERNAL_OES)
