@@ -57,8 +57,10 @@ yarn-debug.log*
 yarn-error.log*
 examples/camera-display/no_window_camera.log
 
-# Example assets (user-specific)
-examples/camera-python-display/assets/
+# Example assets (user-specific) — README is tracked, the GLB / image
+# files referenced by the macOS path are not redistributable.
+examples/camera-python-display/assets/*
+!examples/camera-python-display/assets/README.md
 
 # Claude Code project files (except versioned items)
 # Claude Code — ephemeral only
