@@ -90,10 +90,11 @@ fn nested_arc_lock_make_current_does_not_deadlock() {
         .expect("inner lock_make_current after arc outer");
     drop(inner_borrowed);
 
-    // And the symmetric inner: arc-style after a borrowed outer.
-    // (The avatar's path is technically only the outer-arc + inner-borrowed
-    // direction, but pinning both directions keeps the contract symmetric
-    // for future refactors.)
+    // Now arc-style inner under the same arc-style outer (still
+    // owned). The avatar's path is technically only the
+    // outer-arc + inner-borrowed direction we just exercised, but
+    // pinning the arc-on-arc nest covers the second guard flavor's
+    // reentrance and keeps the contract symmetric for future refactors.
     let inner_arc = fixture
         .egl
         .arc_lock_make_current()
