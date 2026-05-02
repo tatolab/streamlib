@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.26](https://github.com/tatolab/streamlib/compare/v0.4.25...v0.4.26) (2026-05-01)
+
+
+### Features
+
+* **adapter-cuda:** host-flavor crate scaffold + carve-out test ([#587](https://github.com/tatolab/streamlib/issues/587)) ([#592](https://github.com/tatolab/streamlib/issues/592)) ([0092e03](https://github.com/tatolab/streamlib/commit/0092e032f8200bfa518e149ba0372a06e72d0350))
+* **adapter-cuda:** OPAQUE_FD plumbing chain for CUDA cdylib runtimes ([#588](https://github.com/tatolab/streamlib/issues/588)) ([#594](https://github.com/tatolab/streamlib/issues/594)) ([ed372da](https://github.com/tatolab/streamlib/commit/ed372da61367253f849fb3a13f7414ede2f78687))
+* **adapter-cuda:** polyglot E2E with concrete CUDA inference ([#591](https://github.com/tatolab/streamlib/issues/591)) ([#598](https://github.com/tatolab/streamlib/issues/598)) ([156b29b](https://github.com/tatolab/streamlib/commit/156b29bda3e9b340dd1e992feb829702e4b4ed64))
+* **adapter-cuda:** subprocess CUDA runtimes for Python + Deno cdylibs ([#589](https://github.com/tatolab/streamlib/issues/589) + [#590](https://github.com/tatolab/streamlib/issues/590)) ([#597](https://github.com/tatolab/streamlib/issues/597)) ([5f7a0d8](https://github.com/tatolab/streamlib/commit/5f7a0d825c61c02ffabe00e68af2033c4fe68d97))
+* **linux:** VulkanBlendingCompositor + manual-mode vsync render loop + display_info helper ([#607](https://github.com/tatolab/streamlib/issues/607)) ([87f0eef](https://github.com/tatolab/streamlib/commit/87f0eefdad9efb38deabeb004e394209d05ca69e))
+* **linux:** VulkanCrtFilmGrain Metal→Vulkan compute port ([#608](https://github.com/tatolab/streamlib/issues/608)) ([9ca916c](https://github.com/tatolab/streamlib/commit/9ca916c92cfba1d8f0c8884e9aed0ee621ea5e6b)), closes [#483](https://github.com/tatolab/streamlib/issues/483)
+* **polyglot:** manual + continuous execution mode examples + tests + docs ([#602](https://github.com/tatolab/streamlib/issues/602)) ([3cd02c1](https://github.com/tatolab/streamlib/commit/3cd02c1abbb518d678e097d467508822c9b2aad9))
+* **polyglot:** thread-safe escalate IPC + worker-thread iceoryx2 publishing ([#606](https://github.com/tatolab/streamlib/issues/606)) ([11dd780](https://github.com/tatolab/streamlib/commit/11dd780e80bc66a86d6e6f3b38f72f935aef90da))
+* **polyglot:** uniform monotonic_now_ns() API across Python + Deno SDKs ([#601](https://github.com/tatolab/streamlib/issues/601)) ([e49b601](https://github.com/tatolab/streamlib/commit/e49b601b7c7e69034d80d5c892b8e1d582dd93db))
+
+
+### Bug Fixes
+
+* **adapter-cpu-readback:** lazy numpy import on plane views ([#605](https://github.com/tatolab/streamlib/issues/605)) ([3ffca17](https://github.com/tatolab/streamlib/commit/3ffca17ad78b862374c07c9a1e135cc99cba1317))
+
 ## [0.4.25](https://github.com/tatolab/streamlib/compare/v0.4.24...v0.4.25) (2026-04-30)
 
 
