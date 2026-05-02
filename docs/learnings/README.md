@@ -47,6 +47,9 @@ Avoid the two failure modes:
 - [@docs/learnings/nvidia-dma-buf-after-swapchain.md](nvidia-dma-buf-after-swapchain.md) —
   `VK_ERROR_OUT_OF_DEVICE_MEMORY` from `vmaCreateImage`/`vkAllocateMemory`
   on NVIDIA Linux when a swapchain exists
+- [@docs/learnings/nvidia-opaque-fd-after-swapchain.md](nvidia-opaque-fd-after-swapchain.md) —
+  Same NVIDIA cap as DMA-BUF, but for OPAQUE_FD allocations (CUDA / OpenCL
+  interop); engine pre-warms every export pool at `HostVulkanDevice` construction
 - [@docs/learnings/nvidia-egl-dmabuf-render-target.md](nvidia-egl-dmabuf-render-target.md) —
   Linear DMA-BUFs on NVIDIA are EGL `external_only=TRUE` (sampler-only); FBO color attachments require a tiled DRM modifier from `eglQueryDmaBufModifiersEXT`
 - [@docs/learnings/vma-export-pools.md](vma-export-pools.md) —

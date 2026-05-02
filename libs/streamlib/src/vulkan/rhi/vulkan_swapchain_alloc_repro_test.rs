@@ -748,7 +748,7 @@ fn create_swapchain(
 
 fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
     match HostVulkanDevice::new() {
-        Ok(d) => Some(Arc::new(d)),
+        Ok(d) => Some(d),
         Err(e) => {
             println!("Skipping — Vulkan device unavailable: {e}");
             None

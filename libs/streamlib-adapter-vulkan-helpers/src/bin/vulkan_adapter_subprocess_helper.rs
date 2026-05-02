@@ -127,7 +127,7 @@ fn run() -> ExitCode {
     // Build our own VkDevice. The parent has no GPU work in flight when
     // it spawns us, so the dual-VkDevice crash on NVIDIA does not apply.
     let device = match HostVulkanDevice::new() {
-        Ok(d) => Arc::new(d),
+        Ok(d) => d,
         Err(e) => return die(Some(&socket), format!("HostVulkanDevice::new: {e}")),
     };
 

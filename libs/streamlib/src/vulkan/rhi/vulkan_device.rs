@@ -133,7 +133,18 @@ impl HostVulkanDevice {
     ///
     /// On macOS/iOS, this loads MoltenVK and enables VK_EXT_metal_objects
     /// for Metal interoperability.
-    pub fn new() -> Result<Self> {
+    ///
+    /// Returns the device wrapped in [`Arc`] because construction runs
+    /// engine init-time invariants that need [`Arc<Self>`] to call back
+    /// into the public RHI constructors — most importantly, every
+    /// export-capable VMA pool (DMA-BUF + OPAQUE_FD) is pre-warmed so
+    /// the underlying [`vk::DeviceMemory`] block exists before any
+    /// swapchain is created. NVIDIA's Linux driver caps fresh
+    /// exportable allocations after a swapchain has been bound (see
+    /// [`docs/learnings/nvidia-dma-buf-after-swapchain.md`]
+    /// and `nvidia-opaque-fd-after-swapchain.md`); pre-warming here
+    /// removes that footgun for every consumer at the engine layer.
+    pub fn new() -> Result<Arc<Self>> {
         // 1. Load Vulkan entry points via libloading
         let loader = unsafe { LibloadingLoader::new(LIBRARY) }.map_err(|e| {
             StreamError::GpuError(format!("Failed to load Vulkan library: {e}"))
@@ -835,7 +846,7 @@ impl HostVulkanDevice {
             }
         );
 
-        Ok(Self {
+        let device = Self {
             entry,
             instance,
             physical_device,
@@ -887,7 +898,163 @@ impl HostVulkanDevice {
             video_decode_queue_mutex: Mutex::new(()),
             compute_queue_mutex: Mutex::new(()),
             device_mutex: Mutex::new(()),
-        })
+        };
+
+        // Wrap in `Arc` before pre-warming so the export-pool probes
+        // can call back through the public RHI constructors (which
+        // take `&Arc<HostVulkanDevice>`).
+        let device = Arc::new(device);
+
+        #[cfg(target_os = "linux")]
+        Self::prewarm_export_pools(&device)?;
+
+        Ok(device)
+    }
+
+    /// Allocate-then-drop a small probe through every export-capable
+    /// VMA pool **before any swapchain is bound** so subsequent
+    /// post-swapchain allocations through the same pool don't hit
+    /// NVIDIA's exportable-memory cap.
+    ///
+    /// **What this does empirically:** Run the export-pool allocation
+    /// codepath (`vmaCreateBuffer` / `vmaCreateImage` with the pool's
+    /// chained `VkExportMemoryAllocateInfo`) once per pool, before
+    /// `HostVulkanDevice::new` returns — i.e., before any caller can
+    /// build a `VkSwapchainKHR`. With pre-warm: post-swapchain
+    /// allocations through the same pools succeed. Without pre-warm:
+    /// `CameraToCudaCopyProcessor::setup_inner` (and any equivalent
+    /// post-swapchain allocator) fails with
+    /// `VK_ERROR_OUT_OF_DEVICE_MEMORY` (issue #624).
+    ///
+    /// **What this does NOT do:** Retain a long-lived VMA block that
+    /// subsequent real allocations sub-allocate from. Every export-
+    /// pool consumer in tree (host RHI pixel buffers + textures,
+    /// see `vulkan_pixel_buffer.rs` / `vulkan_texture.rs`) sets
+    /// `vma::AllocationCreateFlags::DEDICATED_MEMORY`, so each
+    /// allocation gets its own `VkDeviceMemory` regardless of pool
+    /// configuration. Dropping the probe issues a real
+    /// `vkFreeMemory` and frees the block.
+    ///
+    /// **Why it works anyway:** The exact mechanism is internal to
+    /// NVIDIA's Linux driver and is not publicly documented. Empirical
+    /// observation from issue #624: a successful `vkAllocateMemory`
+    /// for an exportable handle type *before* `vkCreateSwapchainKHR`
+    /// is enough to keep the post-swapchain allocation path open for
+    /// that handle type, even after the probe is freed. The
+    /// reservation appears to be one-way — first export allocation
+    /// initializes some driver state that survives the free.
+    ///
+    /// Probe sizes are tiny (8×8 images, 64-KiB buffers); the cost is
+    /// dominated by `vkAllocateMemory` round-trips, not memory
+    /// footprint.
+    ///
+    /// Pools that weren't created (external memory unsupported, EGL
+    /// probe failed, etc.) are skipped — the engine never produces a
+    /// device that exposes a pool but won't pre-warm it.
+    ///
+    /// **Verification:** `examples/camera-python-display` reproduces
+    /// the post-swapchain failure deterministically when this
+    /// function is bypassed and runs cleanly when it isn't. See
+    /// `docs/learnings/nvidia-opaque-fd-after-swapchain.md` for the
+    /// run-and-revert protocol.
+    #[cfg(target_os = "linux")]
+    fn prewarm_export_pools(device: &Arc<Self>) -> Result<()> {
+        use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+        use streamlib_consumer_rhi::PixelFormat;
+        use super::{HostVulkanPixelBuffer, HostVulkanTexture};
+
+        const PROBE_W: u32 = 8;
+        const PROBE_H: u32 = 8;
+        const PROBE_BPP: u32 = 4;
+
+        // 1. DMA-BUF buffer pool — HOST_VISIBLE exportable buffer.
+        if device.dma_buf_buffer_pool().is_some() {
+            let probe = HostVulkanPixelBuffer::new(
+                device, PROBE_W, PROBE_H, PROBE_BPP, PixelFormat::Bgra32,
+            )
+            .map_err(|e| {
+                StreamError::GpuError(format!(
+                    "DMA-BUF buffer pool pre-warm failed: {e}"
+                ))
+            })?;
+            drop(probe);
+        }
+
+        // 2. DMA-BUF image pool (linear, OPTIMAL tiling).
+        if device.dma_buf_image_pool().is_some() {
+            let desc = TextureDescriptor::new(PROBE_W, PROBE_H, TextureFormat::Bgra8Unorm)
+                .with_usage(
+                    TextureUsages::TEXTURE_BINDING
+                        | TextureUsages::COPY_SRC
+                        | TextureUsages::COPY_DST,
+                );
+            let probe = HostVulkanTexture::new(device, &desc).map_err(|e| {
+                StreamError::GpuError(format!(
+                    "DMA-BUF image pool pre-warm failed: {e}"
+                ))
+            })?;
+            drop(probe);
+        }
+
+        // 3. Tiled DMA-BUF image pool (DRM modifier). Only when the
+        //    EGL probe found at least one render-target-capable
+        //    modifier for ARGB8888 — that's the same gating
+        //    `create_dma_buf_pools` uses for the tiled pool itself.
+        if device.dma_buf_image_pool_tiled().is_some() {
+            let bgra_modifiers = device
+                .drm_modifier_table()
+                .rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
+            if !bgra_modifiers.is_empty() {
+                let desc =
+                    TextureDescriptor::new(PROBE_W, PROBE_H, TextureFormat::Bgra8Unorm)
+                        .with_usage(
+                            TextureUsages::RENDER_ATTACHMENT
+                                | TextureUsages::TEXTURE_BINDING
+                                | TextureUsages::COPY_SRC
+                                | TextureUsages::COPY_DST,
+                        );
+                let probe = HostVulkanTexture::new_render_target_dma_buf(
+                    device,
+                    &desc,
+                    bgra_modifiers,
+                )
+                .map_err(|e| {
+                    StreamError::GpuError(format!(
+                        "tiled DMA-BUF image pool pre-warm failed: {e}"
+                    ))
+                })?;
+                drop(probe);
+            }
+        }
+
+        // 4. OPAQUE_FD HOST_VISIBLE buffer pool.
+        if device.opaque_fd_buffer_pool().is_some() {
+            let probe = HostVulkanPixelBuffer::new_opaque_fd_export(
+                device, PROBE_W, PROBE_H, PROBE_BPP, PixelFormat::Bgra32,
+            )
+            .map_err(|e| {
+                StreamError::GpuError(format!(
+                    "OPAQUE_FD HOST_VISIBLE buffer pool pre-warm failed: {e}"
+                ))
+            })?;
+            drop(probe);
+        }
+
+        // 5. OPAQUE_FD DEVICE_LOCAL buffer pool.
+        if device.opaque_fd_buffer_pool_device_local().is_some() {
+            let probe = HostVulkanPixelBuffer::new_opaque_fd_export_device_local(
+                device, PROBE_W, PROBE_H, PROBE_BPP, PixelFormat::Bgra32,
+            )
+            .map_err(|e| {
+                StreamError::GpuError(format!(
+                    "OPAQUE_FD DEVICE_LOCAL buffer pool pre-warm failed: {e}"
+                ))
+            })?;
+            drop(probe);
+        }
+
+        tracing::info!("HostVulkanDevice export pools pre-warmed");
+        Ok(())
     }
 
 }
@@ -1919,7 +2086,7 @@ mod tests {
     /// Try to create a HostVulkanDevice; return None if GPU/Vulkan is unavailable (CI).
     fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
-            Ok(d) => Some(Arc::new(d)),
+            Ok(d) => Some(d),
             Err(e) => {
                 println!("Skipping test — Vulkan not available: {e}");
                 None

@@ -205,7 +205,7 @@ mod tests {
     #[test]
     fn test_blit_copy_between_equal_size_buffers() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_blit_copy_rejects_mismatched_buffer_sizes() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;

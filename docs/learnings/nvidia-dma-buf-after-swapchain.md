@@ -42,16 +42,44 @@ compositor DMA-BUF imports — not just a swapchain in idle state.
 Don't waste time trying to reproduce in pure unit tests. Validate the fix
 end-to-end via @docs/learnings/camera-display-e2e-validation.md.
 
-## Fix (combine all three)
+## Fix
 
 1. **Don't set VMA `pTypeExternalMemoryHandleTypes` globally.** Use VMA
    custom pools with `pMemoryAllocateNext` for the specific allocations
    that need DMA-BUF export. See @docs/learnings/vma-export-pools.md.
 
-2. **Pre-allocate exportable resources BEFORE creating the swapchain.**
-   Camera processors should acquire-and-release a pixel buffer in their
-   `start()` to trigger lazy pool creation while the budget is freely
-   available. See `LinuxCameraProcessor::start()` for the exact pattern.
+2. **The engine pre-warms every export-capable VMA pool at
+   `HostVulkanDevice::new()` time** (DMA-BUF buffers, DMA-BUF images
+   linear and tiled, OPAQUE_FD HOST_VISIBLE and DEVICE_LOCAL buffers)
+   by allocating a tiny probe through each pool and dropping it,
+   strictly before any caller can build a `VkSwapchainKHR`. Empirical
+   observation from issue #624: this keeps the post-swapchain
+   allocation path open for that handle type. Note that the host RHI
+   pixel-buffer and texture constructors all set
+   `vma::AllocationCreateFlags::DEDICATED_MEMORY`, so every export
+   allocation is its own `VkDeviceMemory` and dropping the probe
+   actually issues `vkFreeMemory` — VMA does not "retain a block"
+   for subsequent allocations. The cap-bypass mechanism is internal
+   to NVIDIA's driver (one-way reservation initialized by the first
+   export allocation, surviving the free) rather than VMA-side block
+   retention. Construction either yields a fully pre-warmed
+   `Arc<HostVulkanDevice>` or fails — there is no half-formed
+   instance for callers to observe. Companion learning for
+   OPAQUE_FD: @docs/learnings/nvidia-opaque-fd-after-swapchain.md.
+
+   > ~~**Pre-allocate exportable resources BEFORE creating the
+   > swapchain.** Camera processors should acquire-and-release a
+   > pixel buffer in their `start()` to trigger lazy pool creation
+   > while the budget is freely available. See
+   > `LinuxCameraProcessor::start()` for the exact pattern.~~ —
+   > Superseded 2026-05-02 by engine-level pre-warm in
+   > `HostVulkanDevice::new()` (issue #624). The consumer-level
+   > pattern was load-bearing only because the engine deferred
+   > block materialization to first use; once the engine pre-warms,
+   > consumers no longer need to. The previous pattern persisted in
+   > `camera.rs`, `display.rs`, `h264_decoder.rs`, and `h265_decoder.rs`
+   > and was swept out in the same PR per the "no bad patterns left
+   > behind on engine changes" rule in CLAUDE.md.
 
 3. **Size per-frame Vulkan resources to MAX_FRAMES_IN_FLIGHT (2), not
    swapchain image_count.** See @docs/learnings/vulkan-frames-in-flight.md.
@@ -59,5 +87,6 @@ end-to-end via @docs/learnings/camera-display-e2e-validation.md.
 ## References
 - Bug fix: `cab6a00` `fix(vulkan): VMA pool isolation for DMA-BUF allocations`
 - Refactor: `6816f54` `refactor(display): decouple frames-in-flight from swapchain image count`
+- Engine pre-warm: issue #624, `fix(rhi): pre-warm export VMA pools at HostVulkanDevice construction`
 - Repro test (does NOT trigger bug, documents attempt):
   `libs/streamlib/src/vulkan/rhi/vulkan_swapchain_alloc_repro_test.rs`

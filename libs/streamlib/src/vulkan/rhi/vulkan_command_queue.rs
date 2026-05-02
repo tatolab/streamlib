@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn test_creates_command_buffer() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn test_empty_command_buffer_commit_and_wait_completes() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;

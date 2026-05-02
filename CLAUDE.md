@@ -60,6 +60,7 @@ The principles:
 - **Bias toward supporting use-case classes, not single examples.** Real-time engines (Unreal, Bevy, Granite) serve classes — render targets, compute, video decode, audio, IPC. When designing or extending a core system, ask "what shape supports the *class* of use case this system is responsible for?", not "what's the smallest thing that makes the example in front of me work?".
 - **Observability is a design-time concern, not a retrofit.** `tracing::instrument` + metric hooks at trait birth is one line per method; added later it's a refactor across every implementor. Put hooks in when the trait is born.
 - **Concrete consumers are known requirements.** A future consumer is *hypothetical* only when unattested. A filed issue in the same milestone, a documented use case, an in-tree caller in a sibling file — these are *known*, and must be designed for now. The system-prompt's "don't design for hypothetical futures" rule still applies; it does *not* license under-shipping for known concrete futures.
+- **Engine-wide bugs get fixed at the engine layer, not in the consumer that surfaced them.** When debugging surfaces a defect in an engine primitive (RHI, `GpuContext`, runtime hooks, IPC surfaces, escalate ops) that *any* consumer of that primitive would hit — fix it at the engine layer, even when the symptom showed up in one example or processor. Examples are integration tests, not first-class consumers; an example-level bandaid removes the symptom for that example while leaving the bug in the engine for the next consumer (a future composition, a new processor, a third-party adapter) to rediscover. "I'll fix it for me; if you encounter it later, re-derive it" is a footgun. Lead recommendations with the engine-level fix; bandaids only appear when there is an explicit scope-cutting reason and the user gets the call. Restraint still applies (don't refactor neighboring systems just because the engine is now in scope), but the bar is: defect at engine layer ⇒ fix at engine layer.
 
 What this means concretely when designing or extending a core system (RHI, IPC, processor model, public ABI, surface adapters, escalate ops):
 
@@ -91,6 +92,8 @@ When presenting design choices for engine work, recommend the production-grade o
    - Rewriting a file or large section: summarize the plan first.
    - Adding new public API or changing existing signatures: get approval.
    - **Engine-core changes** (RHI, IPC wire format, processor model, public ABI crates, escalate ops): a written plan is required, not optional. The plan covers trait shape, error taxonomy, observability hooks, polyglot mirrors, and tests, before any code lands.
+
+4. **No bad patterns left behind on engine changes.** When an engine change establishes a new canonical way to do something, sweep the repo and migrate every consumer of the old pattern in the same PR — Rust + Python + Deno code, examples, processors, tests, docs, learnings. This is an explicit exception to "files outside scope: ask before editing." The codebase must always encourage the right pattern at every read site, because future AI agents (and humans) read existing code to learn patterns; if half the codebase uses the old shape, the old shape survives forever in onboarding. Examples especially matter: agents treat example code as canonical "how to use the engine." Update every doc/learning that endorsed the old pattern with a strikethrough + dated note per the markdown editing rules. "Scope discipline" still applies (don't refactor *unrelated* systems just because the engine moved) — but every consumer of the old pattern is *related*, not unrelated, when the engine moves.
 
 ### Work Tracking
 
@@ -454,6 +457,10 @@ make sense if the surrounding files were renamed or restructured.
 - @docs/learnings/nvidia-dma-buf-after-swapchain.md — `VK_ERROR_OUT_OF_DEVICE_MEMORY`
   from `vmaCreateImage`/`vkAllocateMemory` on NVIDIA Linux when a swapchain
   has been created. NOT real OOM.
+- @docs/learnings/nvidia-opaque-fd-after-swapchain.md — Same NVIDIA cap as
+  DMA-BUF but for the OPAQUE_FD path used by CUDA / OpenCL interop. The
+  engine pre-warms every export-capable VMA pool at
+  `HostVulkanDevice::new()`; consumers don't need to (and shouldn't) pre-warm.
 - @docs/learnings/nvidia-egl-dmabuf-render-target.md — Linear DMA-BUFs on
   NVIDIA Linux are sampler-only (EGL `external_only=TRUE`); FBO color
   attachments require a tiled DRM modifier from `eglQueryDmaBufModifiersEXT`.

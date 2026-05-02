@@ -74,23 +74,13 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             StreamError::Runtime(format!("Failed to pre-initialize H.265 decoder session: {e}"))
         })?;
 
-        // Eagerly allocate the NV12→RGBA converter before the display swapchain
-        // consumes NVIDIA's post-swapchain DEVICE_LOCAL / DMA-BUF allocation budget
-        // (docs/learnings/nvidia-dma-buf-after-swapchain.md).
+        // Eagerly allocate the NV12→RGBA converter. Decode-side resources
+        // are real allocations the decoder needs; the engine pre-warms the
+        // exportable VMA pools at `HostVulkanDevice` construction so this
+        // no longer races NVIDIA's post-swapchain exportable cap.
         decoder.prepare_gpu_decode_resources().map_err(|e| {
             StreamError::Runtime(format!("Failed to pre-allocate H.265 decode resources: {e}"))
         })?;
-
-        // Pre-allocate the output pixel buffer pool at the codec-aligned extent
-        // derived from the decoder config, also before the swapchain. The pool
-        // is DMA-BUF exportable; sizing it to the decoder's max extent ensures
-        // the underlying VMA block is large enough for any SPS up to that cap.
-        let (aligned_w, aligned_h) = decoder.aligned_extent();
-        let (_probe_id, _probe_buffer) = ctx.gpu_full_access().acquire_pixel_buffer(
-            aligned_w,
-            aligned_h,
-            crate::core::rhi::PixelFormat::Rgba32,
-        )?;
 
         tracing::info!("[H265Decoder] Initialized (shared RHI device, Vulkan Video hardware)");
 

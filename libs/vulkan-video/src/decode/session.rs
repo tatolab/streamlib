@@ -43,10 +43,12 @@ impl SimpleDecoder {
     /// Eagerly allocate the GPU resources used during decode.
     ///
     /// Creates the NV12→RGBA compute converter now (when `rgba_output` is
-    /// enabled) instead of on the first `feed()` call. Callers should invoke
-    /// this during setup — before a display swapchain is created — so the
-    /// converter's DEVICE_LOCAL image isn't subject to NVIDIA's post-swapchain
-    /// allocation cap (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
+    /// enabled) instead of on the first `feed()` call. The exportable VMA
+    /// blocks the converter's DEVICE_LOCAL image rides through are
+    /// pre-warmed at `HostVulkanDevice::new()`
+    /// (see docs/learnings/nvidia-dma-buf-after-swapchain.md), so eager
+    /// allocation here is purely for first-frame latency, not for dodging
+    /// the post-swapchain export cap.
     ///
     /// Requires [`pre_initialize_session`](Self::pre_initialize_session) to
     /// have been called first (so `max_width`/`max_height` are known).

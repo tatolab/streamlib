@@ -94,7 +94,7 @@ impl GpuDevice {
             all(target_os = "linux", not(feature = "backend-metal"))
         ))]
         {
-            let device_arc = std::sync::Arc::new(crate::vulkan::rhi::HostVulkanDevice::new()?);
+            let device_arc = crate::vulkan::rhi::HostVulkanDevice::new()?;
             let vulkan_queue = device_arc.create_command_queue_wrapper();
 
             // On macOS/iOS with Vulkan backend, also create Metal device/queue for Apple services

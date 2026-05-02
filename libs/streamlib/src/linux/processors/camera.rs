@@ -305,27 +305,6 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
             }
         };
 
-        // Pre-allocate the pixel buffer pool BEFORE the display has a chance to
-        // create its swapchain. NVIDIA limits DMA-BUF exportable allocations
-        // after swapchain creation; pre-allocating here ensures the pool buffers
-        // are created while DMA-BUF allocations are still freely available.
-        match gpu_context.acquire_pixel_buffer(capture_width, capture_height, PixelFormat::Rgba32) {
-            Ok((pool_id, buffer)) => {
-                tracing::info!(
-                    "Camera {}: pre-allocated pixel buffer pool ({}x{} RGBA32) — pool_id={}",
-                    self.camera_name, capture_width, capture_height, pool_id
-                );
-                drop(buffer);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Camera {}: failed to pre-allocate pixel buffer pool: {} \
-                     (will retry from capture thread)",
-                    self.camera_name, e
-                );
-            }
-        }
-
         self.is_capturing.store(true, Ordering::Release);
 
         let is_capturing = Arc::clone(&self.is_capturing);
@@ -765,9 +744,10 @@ fn capture_thread_loop(
 
     // -----------------------------------------------------------------------
     // Create 2-texture DEVICE_LOCAL ring — DMA-BUF exportable for cross-process
-    // GPU-to-GPU sharing. Uses the isolated DMA-BUF image pool in VMA.
-    // Pre-allocated here (before display's swapchain) to get the NVIDIA DMA-BUF
-    // budget before the swapchain consumes it.
+    // GPU-to-GPU sharing. Uses the isolated DMA-BUF image pool in VMA, whose
+    // underlying VkDeviceMemory block is pre-warmed at
+    // `HostVulkanDevice::new()` so the NVIDIA post-swapchain export cap
+    // doesn't bite (see `docs/learnings/nvidia-dma-buf-after-swapchain.md`).
     // -----------------------------------------------------------------------
     let ring_texture_desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
         .with_usage(

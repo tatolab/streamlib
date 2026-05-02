@@ -90,7 +90,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
 
     // ── Phase 0: skip if Vulkan or OPAQUE_FD pool unavailable ──────────
     let host_device = match HostVulkanDevice::new() {
-        Ok(d) => Arc::new(d),
+        Ok(d) => d,
         Err(e) => {
             println!("stage6: no Vulkan host device — skipping ({e})");
             return;

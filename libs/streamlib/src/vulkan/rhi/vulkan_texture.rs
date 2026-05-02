@@ -371,9 +371,10 @@ impl HostVulkanTexture {
 
         // Prefer the dedicated tiled DMA-BUF image pool; fall back to the
         // default allocator (still with the export-info pNext chain) only
-        // when external memory isn't supported. The fallback path may fail
-        // on NVIDIA after swapchain creation — caller is expected to have
-        // pre-warmed the pool to avoid that.
+        // when external memory isn't supported. The pool's underlying
+        // `VkDeviceMemory` block is pre-warmed at `HostVulkanDevice::new()`
+        // (see `nvidia-dma-buf-after-swapchain.md`), so the post-swapchain
+        // NVIDIA cap doesn't apply to the pooled path.
         let (image, allocation) = if let Some(pool) =
             vulkan_device.dma_buf_image_pool_tiled()
         {
@@ -1128,7 +1129,7 @@ mod tests {
     #[test]
     fn test_pool_texture_creation_1920x1080_bgra8() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1154,7 +1155,7 @@ mod tests {
     #[test]
     fn test_texture_drop_frees_memory() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1171,7 +1172,7 @@ mod tests {
     #[test]
     fn test_multiple_textures_coexist() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1203,7 +1204,7 @@ mod tests {
     #[test]
     fn test_dma_buf_export() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1248,7 +1249,7 @@ mod tests {
     #[test]
     fn test_camera_display_allocation_pattern() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1384,7 +1385,7 @@ mod tests {
     #[test]
     fn test_various_formats() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1407,7 +1408,7 @@ mod tests {
     #[test]
     fn test_device_local_texture_creation() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1430,7 +1431,7 @@ mod tests {
     #[test]
     fn test_lazy_image_view() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
@@ -1464,7 +1465,7 @@ mod tests {
         use crate::vulkan::rhi::drm_modifier_probe::fourcc;
 
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(e) => {
                 println!("Skipping — no Vulkan device: {e}");
                 return;
@@ -1531,7 +1532,7 @@ mod tests {
     #[test]
     fn test_render_target_dma_buf_empty_modifiers_rejected() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(e) => {
                 println!("Skipping — no Vulkan device: {e}");
                 return;
@@ -1554,7 +1555,7 @@ mod tests {
     #[test]
     fn test_ring_texture_lifecycle() {
         let device = match HostVulkanDevice::new() {
-            Ok(d) => Arc::new(d),
+            Ok(d) => d,
             Err(_) => {
                 println!("Skipping - no Vulkan device available");
                 return;
