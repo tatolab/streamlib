@@ -35,12 +35,22 @@ export { STREAMLIB_ADAPTER_ABI_VERSION };
  * Rust crate's `GL_TEXTURE_2D` constant. */
 export const GL_TEXTURE_2D = 0x0DE1 as const;
 
-/** Read-side view inside an `acquireRead` scope. */
+/** `GL_TEXTURE_EXTERNAL_OES` enumerant from `GL_OES_EGL_image_external`.
+ * Returned in `view.target` for surfaces acquired via
+ * `OpenGLContext.acquireReadExternalOes` — the consumer's GLSL must
+ * `#extension GL_OES_EGL_image_external_essl3 : require` and sample
+ * via `samplerExternalOES`. */
+export const GL_TEXTURE_EXTERNAL_OES = 0x8D65 as const;
+
+/** Read-side view inside an `acquireRead` / `acquireReadExternalOes`
+ * scope. `target` is `GL_TEXTURE_2D` for the host render-target path
+ * or `GL_TEXTURE_EXTERNAL_OES` for the sampler-only EGL DMA-BUF path
+ * (linear surfaces, NVIDIA `external_only=TRUE` modifiers). */
 export interface OpenGLReadView {
   /** GL texture id the customer feeds into their GL stack. */
   readonly glTextureId: number;
-  /** Always `GL_TEXTURE_2D` — never `GL_TEXTURE_EXTERNAL_OES`. */
-  readonly target: typeof GL_TEXTURE_2D;
+  /** Either `GL_TEXTURE_2D` or `GL_TEXTURE_EXTERNAL_OES`. */
+  readonly target: typeof GL_TEXTURE_2D | typeof GL_TEXTURE_EXTERNAL_OES;
 }
 
 /** Write-side view inside an `acquireWrite` scope. */
@@ -113,6 +123,11 @@ export class OpenGLContext {
   private readonly symbols: any;
   private readonly rt: Deno.PointerObject;
   private readonly surfaceIds = new Map<string, bigint>();
+  /** Tracks the GL target each surface was registered under so a
+   * surface registered as `GL_TEXTURE_2D` can't be silently re-used as
+   * `GL_TEXTURE_EXTERNAL_OES` (or vice versa) — the underlying
+   * `SurfaceState` only carries one binding. */
+  private readonly surfaceTargets = new Map<string, number>();
   private readonly resolvedHandles = new Map<
     string,
     ReturnType<OpenGLGpuLimitedAccess["resolveSurface"]>
@@ -145,9 +160,24 @@ export class OpenGLContext {
     return _SHARED_INSTANCE;
   }
 
-  private resolveAndRegister(poolId: string): bigint {
+  private resolveAndRegister(
+    poolId: string,
+    target: number = GL_TEXTURE_2D,
+  ): bigint {
     const cached = this.surfaceIds.get(poolId);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      const cachedTarget = this.surfaceTargets.get(poolId);
+      if (cachedTarget !== target) {
+        throw new Error(
+          `OpenGLContext: surface '${poolId}' was already registered ` +
+            `under target 0x${cachedTarget?.toString(16).toUpperCase()}; ` +
+            `refusing to re-register under target 0x${
+              target.toString(16).toUpperCase()
+            }. Use the matching acquire method (acquireRead[ExternalOes]).`,
+        );
+      }
+      return cached;
+    }
     const handle = this.gpu.resolveSurface(poolId);
     const handlePtr = handle.nativeHandlePtr;
     if (handlePtr === null) {
@@ -156,20 +186,39 @@ export class OpenGLContext {
       );
     }
     const surfaceId = nextSurfaceId();
-    const rc: number = this.symbols.sldn_opengl_register_surface(
-      this.rt,
-      surfaceId,
-      handlePtr,
-    );
+    let rc: number;
+    let registerName: string;
+    if (target === GL_TEXTURE_EXTERNAL_OES) {
+      registerName = "register_external_oes_surface";
+      rc = this.symbols.sldn_opengl_register_external_oes_surface(
+        this.rt,
+        surfaceId,
+        handlePtr,
+      );
+    } else if (target === GL_TEXTURE_2D) {
+      registerName = "register_surface";
+      rc = this.symbols.sldn_opengl_register_surface(
+        this.rt,
+        surfaceId,
+        handlePtr,
+      );
+    } else {
+      throw new Error(
+        `OpenGLContext: unsupported registration target 0x${
+          target.toString(16).toUpperCase()
+        } (expected GL_TEXTURE_2D or GL_TEXTURE_EXTERNAL_OES)`,
+      );
+    }
     if (rc !== 0) {
       throw new Error(
-        `OpenGLContext: register_surface failed for pool_id ` +
+        `OpenGLContext: ${registerName} failed for pool_id ` +
           `'${poolId}' (rc=${rc}). Check the subprocess log for ` +
           `EGL/DMA-BUF import errors — typically a wrong DRM modifier ` +
           `or an unsupported pixel format.`,
       );
     }
     this.surfaceIds.set(poolId, surfaceId);
+    this.surfaceTargets.set(poolId, target);
     // Hold the SDK handle so its FDs stay alive for the runtime's life.
     this.resolvedHandles.set(poolId, handle);
     return surfaceId;
@@ -225,7 +274,7 @@ export class OpenGLContext {
     surface: StreamlibSurface | string | bigint,
   ): OpenGLAccessGuard<OpenGLReadView> {
     const poolId = OpenGLContext.surfacePoolId(surface);
-    const surfaceId = this.resolveAndRegister(poolId);
+    const surfaceId = this.resolveAndRegister(poolId, GL_TEXTURE_2D);
     const textureId = Number(
       this.symbols.sldn_opengl_acquire_read(this.rt, surfaceId),
     );
@@ -238,6 +287,44 @@ export class OpenGLContext {
     const rt = this.rt;
     return {
       view: { glTextureId: textureId, target: GL_TEXTURE_2D },
+      [Symbol.dispose]() {
+        symbols.sldn_opengl_release_read(rt, surfaceId);
+      },
+    };
+  }
+
+  /** Acquire read access against a surface registered under
+   * `GL_TEXTURE_EXTERNAL_OES` — the path for sampler-only DMA-BUFs
+   * (camera ring textures, linear surfaces on NVIDIA per
+   * `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+   *
+   * First call for a `pool_id` registers the surface as EXTERNAL_OES;
+   * subsequent calls return the same texture id. Mixing this with
+   * `acquireRead` for the same `pool_id` is rejected (one binding
+   * target per registration).
+   *
+   * `view.target` is `GL_TEXTURE_EXTERNAL_OES` — bind manually via
+   * `glBindTexture(GL_TEXTURE_EXTERNAL_OES, view.glTextureId)` and
+   * sample via `samplerExternalOES` in GLSL with
+   * `#extension GL_OES_EGL_image_external_essl3 : require`. */
+  acquireReadExternalOes(
+    surface: StreamlibSurface | string | bigint,
+  ): OpenGLAccessGuard<OpenGLReadView> {
+    const poolId = OpenGLContext.surfacePoolId(surface);
+    const surfaceId = this.resolveAndRegister(poolId, GL_TEXTURE_EXTERNAL_OES);
+    const textureId = Number(
+      this.symbols.sldn_opengl_acquire_read(this.rt, surfaceId),
+    );
+    if (textureId === 0) {
+      throw new Error(
+        `OpenGLContext.acquireReadExternalOes: sldn_opengl_acquire_read ` +
+          `returned 0 for surface '${poolId}'`,
+      );
+    }
+    const symbols = this.symbols;
+    const rt = this.rt;
+    return {
+      view: { glTextureId: textureId, target: GL_TEXTURE_EXTERNAL_OES },
       [Symbol.dispose]() {
         symbols.sldn_opengl_release_read(rt, surfaceId);
       },

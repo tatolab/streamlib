@@ -32,4 +32,4 @@ pub use egl::{
     DRM_FORMAT_ARGB8888,
 };
 pub use state::HostSurfaceRegistration;
-pub use view::{OpenGlReadView, OpenGlWriteView, GL_TEXTURE_2D};
+pub use view::{OpenGlReadView, OpenGlWriteView, GL_TEXTURE_2D, GL_TEXTURE_EXTERNAL_OES};

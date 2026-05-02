@@ -184,6 +184,10 @@ const symbols = {
     parameters: ["pointer", "u64", "pointer"] as const,
     result: "i32" as const,
   },
+  sldn_opengl_register_external_oes_surface: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
   sldn_opengl_unregister_surface: {
     parameters: ["pointer", "u64"] as const,
     result: "i32" as const,

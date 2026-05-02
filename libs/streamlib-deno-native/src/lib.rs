@@ -2820,6 +2820,95 @@ mod opengl {
         }
     }
 
+    /// Register a host surface as a sampler-only `GL_TEXTURE_EXTERNAL_OES`.
+    ///
+    /// Mirrors [`sldn_opengl_register_surface`] but routes through
+    /// `OpenGlSurfaceAdapter::register_external_oes_host_surface` so the
+    /// resulting GL texture is bound under `GL_TEXTURE_EXTERNAL_OES`.
+    /// Use this for surfaces whose modifier is reported `external_only=TRUE`
+    /// by `eglQueryDmaBufModifiersEXT` (NVIDIA + linear DMA-BUFs — see
+    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`); typical
+    /// consumer is a per-frame camera ring texture.
+    ///
+    /// The customer's GLSL must `#extension GL_OES_EGL_image_external_essl3 :
+    /// require` and sample via `samplerExternalOES`. Acquire/release uses
+    /// the same [`sldn_opengl_acquire_read`] / [`sldn_opengl_release_read`]
+    /// pair as the 2D path; only `acquire_write` is rejected (the
+    /// EXTERNAL_OES binding is sample-only by GL spec).
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_opengl_register_external_oes_surface(
+        rt: *mut OpenGlRuntimeHandle,
+        surface_id: u64,
+        gpu_handle: *const SurfaceHandle,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!(
+                    "sldn_opengl_register_external_oes_surface: null runtime"
+                );
+                return -1;
+            }
+        };
+        let gpu = match unsafe { gpu_handle.as_ref() } {
+            Some(g) => g,
+            None => {
+                tracing::error!(
+                    "sldn_opengl_register_external_oes_surface: null gpu_handle"
+                );
+                return -1;
+            }
+        };
+        let fd = match gpu.fds.first().copied() {
+            Some(f) if f >= 0 => f,
+            _ => {
+                tracing::error!(
+                    "sldn_opengl_register_external_oes_surface: surface has no DMA-BUF fd"
+                );
+                return -1;
+            }
+        };
+        let drm_fourcc = match drm_fourcc_for_format(&gpu.format) {
+            Some(c) => c,
+            None => {
+                tracing::error!(
+                    "sldn_opengl_register_external_oes_surface: unsupported format '{}'",
+                    gpu.format
+                );
+                return -1;
+            }
+        };
+        let stride = gpu
+            .plane_strides
+            .first()
+            .copied()
+            .filter(|s| *s > 0)
+            .unwrap_or(gpu.bytes_per_row as u64);
+        let offset = gpu.plane_offsets.first().copied().unwrap_or(0);
+        let registration = HostSurfaceRegistration {
+            dma_buf_fd: fd,
+            width: gpu.width,
+            height: gpu.height,
+            drm_fourcc,
+            drm_format_modifier: gpu.drm_format_modifier,
+            plane_offset: offset,
+            plane_stride: stride,
+        };
+        match rt
+            .adapter
+            .register_external_oes_host_surface(surface_id, registration)
+        {
+            Ok(()) => 0,
+            Err(e) => {
+                tracing::error!(
+                    "sldn_opengl_register_external_oes_surface: register_external_oes_host_surface failed: {:?}",
+                    e
+                );
+                -1
+            }
+        }
+    }
+
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_opengl_unregister_surface(
         rt: *mut OpenGlRuntimeHandle,
@@ -3006,6 +3095,15 @@ mod opengl {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_opengl_register_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _gpu_handle: *const c_void,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_opengl_register_external_oes_surface(
         _rt: *mut c_void,
         _surface_id: u64,
         _gpu_handle: *const c_void,

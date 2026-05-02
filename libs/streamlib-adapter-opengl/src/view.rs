@@ -4,11 +4,14 @@
 //! Read and write views handed back to consumers inside an acquire scope.
 //!
 //! The customer-facing payload is intentionally minimal: a
-//! `gl_texture_id: u32` and the constant target `GL_TEXTURE_2D`. The
-//! NVIDIA `external_only=TRUE` quirk for linear DMA-BUFs (see
-//! `docs/learnings/nvidia-egl-dmabuf-render-target.md`) is absorbed by
-//! the host allocator picking a tiled, render-target-capable modifier;
-//! the customer never types the words "modifier" or "external_only."
+//! `gl_texture_id: u32` plus the GL binding `target`. For host-allocated
+//! render-target-capable surfaces the target is `GL_TEXTURE_2D` (the
+//! adapter picks a tiled, render-target-capable modifier per the
+//! NVIDIA EGL DMA-BUF render-target learning). For sampler-only inputs
+//! imported via [`crate::OpenGlSurfaceAdapter::register_external_oes_host_surface`]
+//! the target is `GL_TEXTURE_EXTERNAL_OES` and the consumer's GLSL must
+//! sample via `samplerExternalOES` with the `GL_OES_EGL_image_external`
+//! family of extensions.
 
 use std::marker::PhantomData;
 
@@ -18,13 +21,22 @@ use streamlib_adapter_abi::GlWritable;
 /// `gl` crate import to compare `view.target`.
 pub const GL_TEXTURE_2D: u32 = 0x0DE1;
 
+/// `GL_TEXTURE_EXTERNAL_OES` enumerant from `GL_OES_EGL_image_external`.
+/// Returned by views over surfaces registered through
+/// [`crate::OpenGlSurfaceAdapter::register_external_oes_host_surface`] —
+/// typically camera frames or other linear / sampler-only DMA-BUFs that
+/// NVIDIA's EGL marks `external_only=TRUE`.
+pub const GL_TEXTURE_EXTERNAL_OES: u32 = 0x8D65;
+
 /// Read view of an acquired surface.
 ///
-/// `gl_texture_id` is bound to a render-target-capable
-/// `GL_TEXTURE_2D`; the customer can sample from it in a fragment
-/// shader (`sampler2D`) or attach it as an FBO color attachment.
+/// `gl_texture_id` is bound to either `GL_TEXTURE_2D` (the default
+/// host-render-target path) or `GL_TEXTURE_EXTERNAL_OES` (the
+/// sampler-only camera/linear DMA-BUF path); the consumer reads
+/// [`Self::target`] to choose the right GLSL sampler.
 pub struct OpenGlReadView<'g> {
     pub(crate) texture: u32,
+    pub(crate) target: u32,
     pub(crate) _marker: PhantomData<&'g ()>,
 }
 
@@ -34,11 +46,11 @@ impl OpenGlReadView<'_> {
         self.texture
     }
 
-    /// `GL_TEXTURE_2D` — never `GL_TEXTURE_RECTANGLE` or
-    /// `GL_TEXTURE_EXTERNAL_OES`. The host allocator's modifier
-    /// choice ensures the import lands as a regular 2D texture.
+    /// The GL binding target — `GL_TEXTURE_2D` for host-allocated
+    /// render targets, `GL_TEXTURE_EXTERNAL_OES` for surfaces
+    /// registered via the external-OES path.
     pub fn target(&self) -> u32 {
-        GL_TEXTURE_2D
+        self.target
     }
 }
 
@@ -50,10 +62,11 @@ impl GlWritable for OpenGlReadView<'_> {
 
 /// Write view of an acquired surface.
 ///
-/// Identical shape to [`OpenGlReadView`] — both expose a
-/// `GL_TEXTURE_2D` id. Distinguished only at the type level so the
-/// trait's typestate keeps "I have a read guard but tried to write" a
-/// compile error instead of a runtime one.
+/// Always backed by a `GL_TEXTURE_2D` — write-side acquires only apply
+/// to host-allocated render-target-capable surfaces. The
+/// external-OES path is read-only by construction (the underlying
+/// import is sampler-only on NVIDIA per
+/// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
 pub struct OpenGlWriteView<'g> {
     pub(crate) texture: u32,
     pub(crate) _marker: PhantomData<&'g ()>,

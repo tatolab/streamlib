@@ -215,6 +215,10 @@ def load_native_lib(lib_path):
         ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p,
     ]
     lib.slpn_opengl_register_surface.restype = ctypes.c_int32
+    lib.slpn_opengl_register_external_oes_surface.argtypes = [
+        ctypes.c_void_p, ctypes.c_uint64, ctypes.c_void_p,
+    ]
+    lib.slpn_opengl_register_external_oes_surface.restype = ctypes.c_int32
     lib.slpn_opengl_unregister_surface.argtypes = [
         ctypes.c_void_p, ctypes.c_uint64,
     ]

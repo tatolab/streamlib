@@ -63,6 +63,7 @@ from streamlib.surface_adapter import (
 __all__ = [
     "STREAMLIB_ADAPTER_ABI_VERSION",
     "GL_TEXTURE_2D",
+    "GL_TEXTURE_EXTERNAL_OES",
     "OpenGLReadView",
     "OpenGLWriteView",
     "OpenGLSurfaceAdapter",
@@ -77,15 +78,27 @@ __all__ = [
 # Rust crate's `GL_TEXTURE_2D` constant.
 GL_TEXTURE_2D: int = 0x0DE1
 
+# `GL_TEXTURE_EXTERNAL_OES` enumerant from `GL_OES_EGL_image_external`.
+# Returned in `view.target` for surfaces acquired via
+# :meth:`OpenGLContext.acquire_read_external_oes` — the consumer's GLSL
+# must `#extension GL_OES_EGL_image_external_essl3 : require` and
+# sample via `samplerExternalOES`. Matches the Rust crate's
+# `GL_TEXTURE_EXTERNAL_OES` constant.
+GL_TEXTURE_EXTERNAL_OES: int = 0x8D65
+
 
 @dataclass(frozen=True)
 class OpenGLReadView:
-    """View handed back inside an ``acquire_read`` scope.
+    """View handed back inside an ``acquire_read`` /
+    ``acquire_read_external_oes`` scope.
 
     ``gl_texture_id`` is an integer the customer feeds into PyOpenGL
-    / ModernGL: ``glBindTexture(GL_TEXTURE_2D, view.gl_texture_id)``.
-    The surface is sample-able for the guard's lifetime; the runtime
-    handles all underlying EGL/DMA-BUF plumbing.
+    / ModernGL: ``glBindTexture(view.target, view.gl_texture_id)``.
+    ``target`` is :data:`GL_TEXTURE_2D` for surfaces acquired via
+    :meth:`OpenGLContext.acquire_read` (host render-target-capable
+    DMA-BUFs) or :data:`GL_TEXTURE_EXTERNAL_OES` for surfaces acquired
+    via :meth:`OpenGLContext.acquire_read_external_oes` (sampler-only
+    DMA-BUFs, e.g. linear camera ring textures on NVIDIA).
     """
 
     gl_texture_id: int
@@ -221,6 +234,12 @@ class OpenGLContext:
         self._rt = ctypes.c_void_p(rt)
         # Map host pool_id (UUID) → local u64 surface_id.
         self._surface_ids: dict[str, int] = {}
+        # Map host pool_id (UUID) → GL target the surface was registered
+        # under (`GL_TEXTURE_2D` or `GL_TEXTURE_EXTERNAL_OES`). Used so
+        # acquire_*_external_oes can refuse a surface registered under
+        # the 2D path and vice versa, instead of silently mismatching
+        # the customer's GLSL.
+        self._surface_targets: dict[str, int] = {}
         # Pin the resolved gpu surface handles for the runtime's lifetime so
         # the underlying DMA-BUF FDs stay alive — the Rust adapter dups them
         # via EGL on register, but holding the handle Python-side keeps the
@@ -239,12 +258,26 @@ class OpenGLContext:
             cls._shared_instance = cls(runtime_context.gpu_limited_access)
         return cls._shared_instance
 
-    def _resolve_and_register(self, pool_id: str) -> int:
+    def _resolve_and_register(
+        self, pool_id: str, target: int = GL_TEXTURE_2D
+    ) -> int:
         """Resolve `pool_id` via surface-share, register with the OpenGL
-        adapter, and return the local u64 surface_id. Idempotent — repeat
-        calls return the cached id."""
+        adapter under the requested GL `target`, and return the local
+        u64 surface_id. Idempotent — repeat calls with the same `target`
+        return the cached id; calls with a different `target` raise
+        :class:`RuntimeError` (the registration target is fixed at
+        first-call time and the underlying `SurfaceState` only carries
+        one binding)."""
         cached = self._surface_ids.get(pool_id)
         if cached is not None:
+            cached_target = self._surface_targets.get(pool_id)
+            if cached_target != target:
+                raise RuntimeError(
+                    f"OpenGLContext: surface '{pool_id}' was already registered "
+                    f"under target 0x{cached_target:04X}; refusing to "
+                    f"re-register under target 0x{target:04X}. Use the "
+                    f"matching acquire method (acquire_read[_external_oes])."
+                )
             return cached
         handle = self._gpu.resolve_surface(pool_id)
         # Adapter pulls the underlying *mut SurfaceHandle pointer out of the
@@ -258,19 +291,31 @@ class OpenGLContext:
                 "with a null native pointer"
             )
         surface_id = next(_SURFACE_ID_COUNTER)
-        rc = self._lib.slpn_opengl_register_surface(
+        if target == GL_TEXTURE_EXTERNAL_OES:
+            register_fn = self._lib.slpn_opengl_register_external_oes_surface
+            register_name = "register_external_oes_surface"
+        elif target == GL_TEXTURE_2D:
+            register_fn = self._lib.slpn_opengl_register_surface
+            register_name = "register_surface"
+        else:
+            raise ValueError(
+                f"OpenGLContext: unsupported registration target 0x{target:04X} "
+                f"(expected GL_TEXTURE_2D or GL_TEXTURE_EXTERNAL_OES)"
+            )
+        rc = register_fn(
             self._rt,
             ctypes.c_uint64(surface_id),
             ctypes.c_void_p(handle_ptr),
         )
         if rc != 0:
             raise RuntimeError(
-                f"OpenGLContext: register_surface failed for pool_id "
+                f"OpenGLContext: {register_name} failed for pool_id "
                 f"'{pool_id}' (rc={rc}). Check the subprocess log for "
                 "EGL/DMA-BUF import errors — typically a wrong DRM modifier "
                 "or an unsupported pixel format."
             )
         self._surface_ids[pool_id] = surface_id
+        self._surface_targets[pool_id] = target
         # Hold the SDK handle so its FDs stay alive for the runtime's life.
         self._resolved_handles[pool_id] = handle
         return surface_id
@@ -325,7 +370,7 @@ class OpenGLContext:
         but the resulting texture is sample-only (multiple readers may
         coexist; no writer can be active)."""
         pool_id = self._surface_pool_id(surface)
-        surface_id = self._resolve_and_register(pool_id)
+        surface_id = self._resolve_and_register(pool_id, GL_TEXTURE_2D)
         texture_id = int(
             self._lib.slpn_opengl_acquire_read(self._rt, ctypes.c_uint64(surface_id))
         )
@@ -335,7 +380,60 @@ class OpenGLContext:
                 f"returned 0 for surface '{pool_id}'"
             )
         try:
-            yield OpenGLReadView(gl_texture_id=texture_id)
+            yield OpenGLReadView(
+                gl_texture_id=texture_id, target=GL_TEXTURE_2D,
+            )
+        finally:
+            self._lib.slpn_opengl_release_read(
+                self._rt, ctypes.c_uint64(surface_id)
+            )
+
+    @contextmanager
+    def acquire_read_external_oes(
+        self, surface
+    ) -> "Iterator[OpenGLReadView]":
+        """Acquire read access against a surface registered under
+        :data:`GL_TEXTURE_EXTERNAL_OES` — the path for sampler-only
+        DMA-BUFs (camera ring textures, linear surfaces on NVIDIA per
+        ``docs/learnings/nvidia-egl-dmabuf-render-target.md``).
+
+        First call for a `pool_id` registers the surface as
+        EXTERNAL_OES; subsequent calls return the same texture id.
+        Mixing this with :meth:`acquire_read` for the same `pool_id`
+        is rejected (one binding target per registration).
+
+        The returned ``view.target`` is :data:`GL_TEXTURE_EXTERNAL_OES`
+        — ModernGL's ``external_texture`` does not accept this target,
+        so customers bind manually via raw PyOpenGL or ctypes:
+
+        .. code-block:: python
+
+            from OpenGL import GL
+            with ctx.acquire_read_external_oes(surface) as view:
+                GL.glActiveTexture(GL.GL_TEXTURE0)
+                GL.glBindTexture(view.target, view.gl_texture_id)
+                # ... draw with samplerExternalOES shader ...
+
+        The shader must declare
+        ``#extension GL_OES_EGL_image_external_essl3 : require`` (or
+        ``GL_OES_EGL_image_external`` for older GLSL profiles) and
+        sample the texture via ``samplerExternalOES``.
+        """
+        pool_id = self._surface_pool_id(surface)
+        surface_id = self._resolve_and_register(pool_id, GL_TEXTURE_EXTERNAL_OES)
+        texture_id = int(
+            self._lib.slpn_opengl_acquire_read(self._rt, ctypes.c_uint64(surface_id))
+        )
+        if texture_id == 0:
+            raise RuntimeError(
+                f"OpenGLContext.acquire_read_external_oes: "
+                f"slpn_opengl_acquire_read returned 0 for surface '{pool_id}'"
+            )
+        try:
+            yield OpenGLReadView(
+                gl_texture_id=texture_id,
+                target=GL_TEXTURE_EXTERNAL_OES,
+            )
         finally:
             self._lib.slpn_opengl_release_read(
                 self._rt, ctypes.c_uint64(surface_id)
