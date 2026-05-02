@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::Videoframe;
+use crate::core::context::TextureRegistration;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
     RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool, StreamTexture, TextureDescriptor,
@@ -11,6 +12,8 @@ use crate::core::{Result, StreamError};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
+#[cfg(target_os = "linux")]
+use streamlib_consumer_rhi::VulkanLayout;
 
 /// Number of buffers to pre-allocate per pool.
 const POOL_PRE_ALLOCATE_COUNT: usize = 4;
@@ -378,8 +381,14 @@ pub struct GpuContext {
     surface_store: Arc<Mutex<Option<SurfaceStore>>>,
     /// GPU blitter for efficient buffer-to-buffer copies with texture caching.
     blitter: Arc<dyn RhiBlitter>,
-    /// Same-process texture cache — maps surface_id to StreamTexture.
-    texture_cache: Arc<Mutex<HashMap<String, StreamTexture>>>,
+    /// Same-process texture cache — maps surface_id to a registration
+    /// record carrying the texture plus per-surface lifecycle metadata
+    /// (e.g. last-known Vulkan image layout). Mirrors the per-surface
+    /// state pattern used by `streamlib-adapter-vulkan::SurfaceState`,
+    /// lifted to engine-wide scope so consumers reaching textures via
+    /// `resolve_videoframe_registration` get the same lifecycle metadata
+    /// adapter consumers do.
+    texture_cache: Arc<Mutex<HashMap<String, Arc<TextureRegistration>>>>,
     /// Cache of textures backing surface-share-registered pixel buffers
     /// (`escalate_acquire_pixel_buffer` flow). Refreshed on every resolve so
     /// rotating-pool producers don't render stale contents — kept separate
@@ -579,36 +588,74 @@ impl GpuContext {
     }
 
     /// Register a texture in the same-process texture cache.
+    ///
+    /// On Linux the texture is registered with `VulkanLayout::UNDEFINED`
+    /// as its initial layout — callers that know the texture's actual
+    /// post-allocation layout (e.g. camera ring textures left in
+    /// `SHADER_READ_ONLY_OPTIMAL` after compute) should use
+    /// [`Self::register_texture_with_layout`] instead so consumers
+    /// reaching the texture via [`Self::resolve_videoframe_registration`]
+    /// can issue correct layout transitions.
     pub fn register_texture(&self, id: &str, texture: StreamTexture) {
+        #[cfg(target_os = "linux")]
+        let registration = TextureRegistration::new(texture, VulkanLayout::UNDEFINED);
+        #[cfg(not(target_os = "linux"))]
+        let registration = TextureRegistration::new(texture);
         let mut cache = self.texture_cache.lock().unwrap();
-        cache.insert(id.to_string(), texture);
+        cache.insert(id.to_string(), registration);
     }
 
-    /// Resolve a Videoframe's texture — unified entry point for consumers.
+    /// Register a texture with a declared initial Vulkan image layout.
     ///
-    /// Tries the fastest available path in order:
-    /// 1. Same-process texture cache (zero-copy, direct ring texture)
-    /// 2. Cross-process DMA-BUF VkImage import via SurfaceStore (GPU-to-GPU)
-    /// 3. Cross-process pixel buffer fallback — copy buffer contents into a
-    ///    private cached texture every call so rotating-pool producers (polyglot
-    ///    subprocess processors using `escalate_acquire_pixel_buffer`) see fresh
-    ///    contents per frame.
-    pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
+    /// Producers call this when they know the layout the texture is in
+    /// at the moment it becomes visible to consumers — e.g. camera
+    /// processors that finish their compute pipeline with a transition
+    /// to `SHADER_READ_ONLY_OPTIMAL` (so the next display frame's
+    /// barrier source layout is correct), or adapter setup hooks that
+    /// pre-allocate a render target the adapter writes to without
+    /// transitioning the Vulkan layout (declare `UNDEFINED`).
+    #[cfg(target_os = "linux")]
+    pub fn register_texture_with_layout(
+        &self,
+        id: &str,
+        texture: StreamTexture,
+        initial_layout: VulkanLayout,
+    ) {
+        let registration = TextureRegistration::new(texture, initial_layout);
+        let mut cache = self.texture_cache.lock().unwrap();
+        cache.insert(id.to_string(), registration);
+    }
+
+    /// Resolve a Videoframe's full registration record (texture + layout).
+    ///
+    /// Same lookup path as [`Self::resolve_videoframe_texture`] but
+    /// returns the registration so consumers can read `current_layout`
+    /// for barrier-source correctness. Cross-process imports (Path 2/3)
+    /// synthesize a fresh registration with `VulkanLayout::UNDEFINED`
+    /// because Vulkan import semantics leave the layout unspecified;
+    /// the consumer's barrier discards prior contents and transitions
+    /// to its target layout.
+    pub fn resolve_videoframe_registration(
+        &self,
+        frame: &Videoframe,
+    ) -> Result<Arc<TextureRegistration>> {
         // Path 1: same-process texture cache (fastest)
         {
             let cache = self.texture_cache.lock().unwrap();
-            if let Some(texture) = cache.get(&frame.surface_id) {
-                return Ok(texture.clone());
+            if let Some(reg) = cache.get(&frame.surface_id) {
+                return Ok(Arc::clone(reg));
             }
         }
 
-        // Path 2: cross-process DMA-BUF VkImage import via surface-share service
+        // Path 2: cross-process DMA-BUF VkImage import via surface-share service.
+        // Synthesized registration is not cached — Path 2 reimports per-call by
+        // design, and caching would defeat that.
         #[cfg(target_os = "linux")]
         {
             let surface_store = self.surface_store.lock().unwrap();
             if let Some(store) = surface_store.as_ref() {
                 if let Ok(texture) = store.lookup_texture(&frame.surface_id) {
-                    return Ok(texture);
+                    return Ok(TextureRegistration::new(texture, VulkanLayout::UNDEFINED));
                 }
             }
         }
@@ -627,12 +674,18 @@ impl GpuContext {
                     .and_then(|store| store.lookup_buffer(&frame.surface_id).ok())
             };
             if let Some(buffer) = buffer {
-                return self.refresh_pixel_buffer_texture(
+                let texture = self.refresh_pixel_buffer_texture(
                     &frame.surface_id,
                     &buffer,
                     frame.width,
                     frame.height,
-                );
+                )?;
+                // upload_buffer_to_image leaves the texture in
+                // SHADER_READ_ONLY_OPTIMAL (see vulkan_device.rs:1851).
+                return Ok(TextureRegistration::new(
+                    texture,
+                    VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                ));
             }
         }
 
@@ -640,6 +693,17 @@ impl GpuContext {
             "No texture or pixel buffer found for surface_id '{}'",
             frame.surface_id
         )))
+    }
+
+    /// Resolve a Videoframe's texture — unified entry point for consumers
+    /// that don't need layout metadata.
+    ///
+    /// Thin projection over [`Self::resolve_videoframe_registration`].
+    /// Layout-aware consumers (display, future encoders) should call
+    /// `resolve_videoframe_registration` directly so they can issue
+    /// correct barriers.
+    pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
+        Ok(self.resolve_videoframe_registration(frame)?.texture().clone())
     }
 
     /// Acquire a new output texture with a UUID, register it in the cache.
@@ -752,7 +816,13 @@ impl GpuContext {
             )?;
         }
 
-        self.register_texture(surface_id, texture);
+        // upload_buffer_to_image leaves the image in SHADER_READ_ONLY_OPTIMAL
+        // (see vulkan_device.rs:1851).
+        self.register_texture_with_layout(
+            surface_id,
+            texture,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
         Ok(())
     }
 
@@ -1405,6 +1475,27 @@ impl GpuContextLimitedAccess {
         self.inner.register_texture(id, texture);
     }
 
+    /// Register a texture with a declared initial Vulkan image layout.
+    /// See [`GpuContext::register_texture_with_layout`].
+    #[cfg(target_os = "linux")]
+    pub fn register_texture_with_layout(
+        &self,
+        id: &str,
+        texture: StreamTexture,
+        initial_layout: VulkanLayout,
+    ) {
+        self.inner
+            .register_texture_with_layout(id, texture, initial_layout);
+    }
+
+    /// Resolve a [`Videoframe`]'s full registration record (texture + layout).
+    pub fn resolve_videoframe_registration(
+        &self,
+        frame: &Videoframe,
+    ) -> Result<Arc<TextureRegistration>> {
+        self.inner.resolve_videoframe_registration(frame)
+    }
+
     /// Resolve a [`Videoframe`]'s texture (Split: cache hit).
     pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
         self.inner.resolve_videoframe_texture(frame)
@@ -1525,6 +1616,27 @@ impl GpuContextFullAccess {
     /// Register a texture in the same-process texture cache.
     pub fn register_texture(&self, id: &str, texture: StreamTexture) {
         self.inner.register_texture(id, texture);
+    }
+
+    /// Register a texture with a declared initial Vulkan image layout.
+    /// See [`GpuContext::register_texture_with_layout`].
+    #[cfg(target_os = "linux")]
+    pub fn register_texture_with_layout(
+        &self,
+        id: &str,
+        texture: StreamTexture,
+        initial_layout: VulkanLayout,
+    ) {
+        self.inner
+            .register_texture_with_layout(id, texture, initial_layout);
+    }
+
+    /// Resolve a [`Videoframe`]'s full registration record (texture + layout).
+    pub fn resolve_videoframe_registration(
+        &self,
+        frame: &Videoframe,
+    ) -> Result<Arc<TextureRegistration>> {
+        self.inner.resolve_videoframe_registration(frame)
     }
 
     /// Resolve a [`Videoframe`]'s texture.
@@ -1723,6 +1835,82 @@ mod tests {
         assert_eq!(resolved.height(), 480);
 
         println!("Texture cache: register + resolve OK");
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn test_register_texture_with_layout_round_trip() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        let desc = TextureDescriptor::new(640, 480, TextureFormat::Rgba8Unorm)
+            .with_usage(TextureUsages::TEXTURE_BINDING);
+        let texture = gpu
+            .device()
+            .create_texture(&desc)
+            .expect("texture creation failed");
+        let surface_id = "test-surface-with-layout";
+
+        gpu.register_texture_with_layout(
+            surface_id,
+            texture,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        let frame = crate::_generated_::Videoframe {
+            surface_id: surface_id.to_string(),
+            width: 640,
+            height: 480,
+            timestamp_ns: "0".to_string(),
+            frame_index: "1".to_string(),
+            fps: None,
+        };
+
+        let registration = gpu
+            .resolve_videoframe_registration(&frame)
+            .expect("registration cache miss");
+        assert_eq!(
+            registration.current_layout(),
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            "declared initial layout should be visible to consumers"
+        );
+
+        // Update flow — consumer barriers transition + advance layout.
+        registration.update_layout(VulkanLayout::TRANSFER_SRC_OPTIMAL);
+        let registration2 = gpu
+            .resolve_videoframe_registration(&frame)
+            .expect("second resolve");
+        assert_eq!(
+            registration2.current_layout(),
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+            "later resolves see the updated layout (Arc share)"
+        );
+
+        // Default register_texture path declares UNDEFINED.
+        let texture2 = gpu
+            .device()
+            .create_texture(&desc)
+            .expect("second texture creation failed");
+        gpu.register_texture("test-surface-default-layout", texture2);
+        let frame2 = crate::_generated_::Videoframe {
+            surface_id: "test-surface-default-layout".to_string(),
+            ..frame
+        };
+        let registration3 = gpu
+            .resolve_videoframe_registration(&frame2)
+            .expect("default-layout resolve");
+        assert_eq!(
+            registration3.current_layout(),
+            VulkanLayout::UNDEFINED,
+            "register_texture without explicit layout defaults to UNDEFINED"
+        );
+
+        println!("register_texture_with_layout + resolve_videoframe_registration: OK");
     }
 
     #[test]

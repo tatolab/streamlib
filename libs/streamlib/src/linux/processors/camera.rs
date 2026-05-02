@@ -10,6 +10,7 @@ use crate::core::rhi::{PixelFormat, StreamTexture, TextureDescriptor, TextureFor
 use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 use crate::vulkan::rhi::HostVulkanTexture;
+use streamlib_consumer_rhi::VulkanLayout;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use v4l::buffer::Type;
@@ -834,7 +835,24 @@ fn capture_thread_loop(
             }
         }
 
-        gpu_context.register_texture(&texture_id, stream_texture.clone());
+        // Ring textures are left in SHADER_READ_ONLY_OPTIMAL after every
+        // compute submit (see the post-copy barrier near the end of
+        // process()) — declare that as the registration's initial layout so
+        // consumers reaching the texture via
+        // `GpuContext::resolve_videoframe_registration` issue correct
+        // barriers. The texture is technically UNDEFINED at the moment of
+        // this register call (no compute pass has run yet), but the camera
+        // only writes the corresponding Videoframe to its output port AFTER
+        // the post-compute barrier transitions the texture to
+        // SHADER_READ_ONLY_OPTIMAL — so by the time any consumer
+        // dereferences the surface_id, the registered layout matches
+        // reality. The cross-frame steady state is also SHADER_READ_ONLY
+        // (every compute submit ends with the same transition).
+        gpu_context.register_texture_with_layout(
+            &texture_id,
+            stream_texture.clone(),
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
         ring_texture_ids.push(texture_id);
         ring_textures.push(stream_texture);
     }
@@ -1312,8 +1330,16 @@ fn capture_thread_loop(
         let output_vk_buffer = pooled_buffer.buffer_ref().inner.buffer();
 
         // Register ring texture in cache under the pixel buffer's pool_id so
-        // display resolves the texture via the same surface_id used for pixel buffer IPC.
-        gpu_context.register_texture(&pool_id.to_string(), ring_textures[ring_index].clone());
+        // display resolves the texture via the same surface_id used for pixel
+        // buffer IPC. The same Arc<HostVulkanTexture> registered up-front
+        // with SHADER_READ_ONLY_OPTIMAL is published here under a fresh
+        // pool_id — re-declare the layout so the registration record under
+        // this pool_id matches the steady-state contract.
+        gpu_context.register_texture_with_layout(
+            &pool_id.to_string(),
+            ring_textures[ring_index].clone(),
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
 
         // ---- Step 3: Update descriptor set — input SSBO + ring texture ----
         let input_buffer_descriptor = vk::DescriptorBufferInfo::builder()
