@@ -37,6 +37,7 @@ use streamlib::{
     CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
 };
 use streamlib_adapter_abi::SurfaceId;
+use streamlib_consumer_rhi::VulkanLayout;
 
 use crate::camera_to_cuda_copy::{CameraToCudaCopyProcessor, CUDA_CAMERA_SURFACE_ID};
 
@@ -210,12 +211,31 @@ fn register_opengl_output_surface(
 
     // Mirror the texture into the GpuContext's local same-process cache
     // so downstream processors (in this case the display) hit Path 1 in
-    // `GpuContext::resolve_videoframe_texture` instead of the cross-
+    // `GpuContext::resolve_videoframe_registration` instead of the cross-
     // process daemon lookup. This matches what `LinuxCameraProcessor`
     // does for its own ring textures (see `linux/processors/camera.rs:857`)
     // — without it, same-process consumers can't find the texture by
     // UUID even though surface-share has it.
-    gpu.register_texture(AVATAR_OUTPUT_SURFACE_UUID, texture);
+    //
+    // Declare `UNDEFINED` as the registration's initial layout: the
+    // OpenGL adapter writes to this VkImage via EGL DMA-BUF import and
+    // does not transition the Vulkan-side layout (it issues `glFinish`
+    // on release; DMA-BUF kernel-fence semantics carry data visibility,
+    // but Vulkan's layout tracker stays at the image's `initialLayout`
+    // which is `UNDEFINED` from `acquire_render_target_dma_buf_image`).
+    // Display's first-frame barrier transitions UNDEFINED →
+    // SHADER_READ_ONLY_OPTIMAL — content is technically allowed to be
+    // discarded by the spec on this transition but NVIDIA preserves
+    // it (verified empirically on RTX 3090). After that first barrier,
+    // display's `update_layout` advances the registration to
+    // SHADER_READ_ONLY_OPTIMAL; subsequent GL writes don't change the
+    // Vulkan tracker, so steady-state barriers are SHADER_READ_ONLY
+    // → SHADER_READ_ONLY no-ops.
+    gpu.register_texture_with_layout(
+        AVATAR_OUTPUT_SURFACE_UUID,
+        texture,
+        VulkanLayout::UNDEFINED,
+    );
 
     Ok(())
 }

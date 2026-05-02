@@ -3,6 +3,7 @@
 
 use crate::_generated_::com_tatolab_display_config::ScalingMode;
 use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
+use streamlib_consumer_rhi::VulkanLayout;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 use vulkanalia::vk::KhrSurfaceExtensionInstanceCommands as _;
@@ -570,8 +571,15 @@ impl DisplayEventLoopHandler {
         // Unified texture resolution — GpuContext picks the fastest path:
         // 1. Same-process texture cache (zero-copy ring texture)
         // 2. Cross-process DMA-BUF VkImage import via surface-share service (GPU-to-GPU)
-        let camera_texture = match self.gpu_context.resolve_videoframe_texture(&ipc_frame) {
-            Ok(tex) => tex,
+        //
+        // We resolve the full registration (not just the texture) so we can
+        // read `current_layout` and issue a correct source-layout barrier
+        // before sampling — adapter-output textures (OpenGL, Skia, Vulkan
+        // adapter outputs) may arrive in a layout other than the descriptor
+        // binding's claimed `SHADER_READ_ONLY_OPTIMAL`, and the wrong
+        // claim is the bug #616 fixes.
+        let registration = match self.gpu_context.resolve_videoframe_registration(&ipc_frame) {
+            Ok(reg) => reg,
             Err(e) => {
                 tracing::warn!(
                     "Display {}: Failed to resolve texture for '{}': {}",
@@ -582,12 +590,23 @@ impl DisplayEventLoopHandler {
                 return;
             }
         };
+        let camera_texture = registration.texture().clone();
 
         let device = self.vulkan_device.device();
         let queue = self.vulkan_device.queue();
 
         let frame_index = state.current_frame;
 
+        let camera_image = match camera_texture.inner.image() {
+            Some(img) => img,
+            None => {
+                tracing::warn!(
+                    "Display {}: camera texture has no VkImage handle",
+                    self.window_id
+                );
+                return;
+            }
+        };
         let camera_image_view = match camera_texture.inner.image_view() {
             Ok(view) => view,
             Err(e) => {
@@ -708,31 +727,69 @@ impl DisplayEventLoopHandler {
                 return;
             }
 
-            // Camera texture is already in SHADER_READ_ONLY_OPTIMAL (set by camera
-            // after compute dispatch). Only need swapchain barrier.
-            // Camera timeline semaphore wait in queue_submit2 ensures the texture is ready.
+            // Swapchain image: UNDEFINED → COLOR_ATTACHMENT_OPTIMAL.
             // UNDEFINED old_layout: on first use each swapchain image is in UNDEFINED,
             // and on subsequent uses the previous contents are unconditionally discarded
             // by the CLEAR load_op below — so declaring UNDEFINED (which permits any
             // current layout) is valid for every frame and avoids a VUID-vkCmdDraw-None-09600
             // mismatch on the first submit for each image.
-            let swapchain_barrier = vk::ImageMemoryBarrier2::builder()
-                .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                .src_access_mask(vk::AccessFlags2::NONE)
-                .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-                .image(swapchain_image)
-                .subresource_range(color_subresource_range)
-                .build();
-            let swapchain_barriers = [swapchain_barrier];
+            //
+            // Camera-input texture: source layout depends on producer. Camera ring
+            // textures are left in SHADER_READ_ONLY_OPTIMAL after every compute submit;
+            // adapter-output textures (e.g. AvatarCharacter via streamlib-adapter-opengl)
+            // arrive in whatever layout the registration declares (typically UNDEFINED
+            // for adapters that don't transition the Vulkan tracker, or whatever the
+            // last consumer's `update_layout` set). The barrier here transitions from
+            // the registered current layout → SHADER_READ_ONLY_OPTIMAL so the
+            // descriptor binding's claimed `image_layout` matches reality. The camera
+            // timeline-semaphore wait in queue_submit2 covers the producer-finished
+            // GPU sync (independent of layout); this barrier covers the layout
+            // contract Vulkan validation enforces. Skipped when already in
+            // SHADER_READ_ONLY_OPTIMAL to avoid a no-op submission.
+            let camera_current_layout = registration.current_layout();
+            let mut image_barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(2);
+            image_barriers.push(
+                vk::ImageMemoryBarrier2::builder()
+                    .src_stage_mask(vk::PipelineStageFlags2::NONE)
+                    .src_access_mask(vk::AccessFlags2::NONE)
+                    .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                    .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
+                    .old_layout(vk::ImageLayout::UNDEFINED)
+                    .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(swapchain_image)
+                    .subresource_range(color_subresource_range)
+                    .build(),
+            );
+            if camera_current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+                image_barriers.push(
+                    vk::ImageMemoryBarrier2::builder()
+                        // ALL_COMMANDS / MEMORY_WRITE in the source masks is the
+                        // tolerant pattern that covers any producer (camera compute,
+                        // OpenGL adapter glFinish, future Vulkan/Skia adapters).
+                        // Mirrors the source-side masks `VulkanTextureReadback`
+                        // uses for the same producer-agnostic purpose.
+                        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+                        .dst_stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
+                        .dst_access_mask(vk::AccessFlags2::SHADER_SAMPLED_READ)
+                        .old_layout(camera_current_layout.as_vk())
+                        .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                        .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                        .image(camera_image)
+                        .subresource_range(color_subresource_range)
+                        .build(),
+                );
+            }
             let dep = vk::DependencyInfo::builder()
-                .image_memory_barriers(&swapchain_barriers)
+                .image_memory_barriers(&image_barriers)
                 .build();
             device.cmd_pipeline_barrier2(command_buffer, &dep);
+            if camera_current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+                registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
+            }
 
             // Begin dynamic rendering on swapchain image
             let color_attachment = vk::RenderingAttachmentInfo::builder()
