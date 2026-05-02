@@ -501,8 +501,28 @@ class AvatarCharacter:
             f"cuda:0 ({device_name})"
         )
 
+        # Pin YOLO weights to ~/.cache/ultralytics-streamlib so Ultralytics'
+        # default cwd-relative download doesn't litter the repo root with
+        # `yolov8n-pose.pt` on first run. Pre-fetch via urllib if absent;
+        # then load by absolute path so YOLO sees an existing file and
+        # skips its own download path entirely.
+        weights_dir = Path.home() / ".cache" / "ultralytics-streamlib"
+        weights_dir.mkdir(parents=True, exist_ok=True)
+        weights_path = weights_dir / "yolov8n-pose.pt"
+        if not weights_path.exists():
+            import urllib.request
+            url = (
+                "https://github.com/ultralytics/assets/releases/"
+                "download/v8.3.0/yolov8n-pose.pt"
+            )
+            logger.info(
+                f"AvatarCharacter/linux: downloading YOLOv8n-pose weights "
+                f"to {weights_path}..."
+            )
+            urllib.request.urlretrieve(url, weights_path)
+
         load_t0 = time.perf_counter()
-        self._pose_model = YOLO("yolov8n-pose.pt")
+        self._pose_model = YOLO(str(weights_path))
         self._pose_model.to("cuda")
         load_ms = (time.perf_counter() - load_t0) * 1000.0
         logger.info(
