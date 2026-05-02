@@ -51,13 +51,19 @@ void main() {
 }
 "#;
 
+// `texture2D(samplerExternalOES, vec2)` — the GL_OES_EGL_image_external
+// (GLES2-era) overload, which NVIDIA's desktop-GL driver honors in
+// `#version 330 core`. The unified `texture(samplerExternalOES, vec2)`
+// overload is ESSL3-only (`_essl3` extension + GLES context), and the
+// adapter binds `EGL_OPENGL_API`, not `EGL_OPENGL_ES_API` — so consumers
+// targeting this adapter must use `texture2D` for EXTERNAL_OES samples.
 const FRAGMENT_SRC_EXTERNAL_OES: &str = r#"#version 330 core
 #extension GL_OES_EGL_image_external : require
 in vec2 v_uv;
 out vec4 frag_color;
 uniform samplerExternalOES u_tex;
 void main() {
-    frag_color = texture(u_tex, v_uv);
+    frag_color = texture2D(u_tex, v_uv);
 }
 "#;
 

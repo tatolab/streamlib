@@ -94,8 +94,15 @@ impl OpenGlSurfaceAdapter {
     /// Same DMA-BUF import path as [`Self::register_host_surface`],
     /// but binds the resulting `EGLImage` via
     /// `glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, image)`.
-    /// The customer's GLSL must `#extension GL_OES_EGL_image_external_essl3 :
-    /// require` (or the older `_essl1`) and sample via `samplerExternalOES`.
+    /// The customer's GLSL must enable `samplerExternalOES`. On the
+    /// adapter's desktop-GL context (`EGL_OPENGL_API`, see
+    /// [`crate::EglRuntime`]), use `#extension GL_OES_EGL_image_external :
+    /// require` and sample via the `texture2D(samplerExternalOES, vec2)`
+    /// overload — NVIDIA's desktop-GL driver does NOT register the
+    /// unified `texture(samplerExternalOES, vec2)` overload in
+    /// `#version 330 core`. The unified `texture(...)` overload comes
+    /// from `GL_OES_EGL_image_external_essl3`, which requires a GLES
+    /// context and is not what this adapter creates.
     ///
     /// Use this for surfaces the host did not (or could not) allocate
     /// with a render-target-capable modifier — typically camera ring

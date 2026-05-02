@@ -10,8 +10,11 @@
 //! NVIDIA EGL DMA-BUF render-target learning). For sampler-only inputs
 //! imported via [`crate::OpenGlSurfaceAdapter::register_external_oes_host_surface`]
 //! the target is `GL_TEXTURE_EXTERNAL_OES` and the consumer's GLSL must
-//! sample via `samplerExternalOES` with the `GL_OES_EGL_image_external`
-//! family of extensions.
+//! `#extension GL_OES_EGL_image_external : require` and sample via
+//! `texture2D(samplerExternalOES, vec2)` — see
+//! [`crate::OpenGlSurfaceAdapter::register_external_oes_host_surface`]
+//! for why the unified `texture(...)` overload is not available on the
+//! adapter's desktop-GL context.
 
 use std::marker::PhantomData;
 

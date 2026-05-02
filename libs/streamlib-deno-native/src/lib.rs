@@ -2830,11 +2830,18 @@ mod opengl {
     /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`); typical
     /// consumer is a per-frame camera ring texture.
     ///
-    /// The customer's GLSL must `#extension GL_OES_EGL_image_external_essl3 :
-    /// require` and sample via `samplerExternalOES`. Acquire/release uses
-    /// the same [`sldn_opengl_acquire_read`] / [`sldn_opengl_release_read`]
-    /// pair as the 2D path; only `acquire_write` is rejected (the
-    /// EXTERNAL_OES binding is sample-only by GL spec).
+    /// The customer's GLSL must enable `samplerExternalOES`. On the
+    /// adapter's desktop-GL context, declare
+    /// `#extension GL_OES_EGL_image_external : require` and sample via
+    /// `texture2D(samplerExternalOES, vec2)` — NVIDIA's desktop-GL
+    /// driver does NOT register the unified `texture(...)` overload
+    /// for `samplerExternalOES` in `#version 330 core`; that overload
+    /// comes from `GL_OES_EGL_image_external_essl3`, which requires a
+    /// GLES context (not what this adapter creates). Acquire/release
+    /// uses the same [`sldn_opengl_acquire_read`] /
+    /// [`sldn_opengl_release_read`] pair as the 2D path; only
+    /// `acquire_write` is rejected (the EXTERNAL_OES binding is
+    /// sample-only by GL spec).
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_opengl_register_external_oes_surface(
         rt: *mut OpenGlRuntimeHandle,
