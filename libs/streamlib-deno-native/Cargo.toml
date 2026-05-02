@@ -21,6 +21,14 @@ rmp-serde = "1.3"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+# Cdylib runs in its own subprocess and has no host-side `tracing`
+# subscriber by default — `tracing::error!` events would otherwise be
+# silently dropped, leaving FFI rc=-1 returns unaccompanied by any
+# diagnostic in the host's intercepted `[/deno]` log namespace.
+# `init_subprocess_logging` (lib.rs) installs a stderr-writing fmt
+# subscriber once at first FFI entry; the host's stdio interceptor
+# then forwards it as fd2 lines.
+tracing-subscriber.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-surface-client = { path = "../streamlib-surface-client" }

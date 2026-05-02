@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::notifier::Notifier;
@@ -20,6 +20,30 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use streamlib_ipc_types::{FrameHeader, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
+
+// ============================================================================
+// Tracing subscriber init
+// ============================================================================
+
+/// Install a fmt subscriber on first FFI entry so the cdylib's
+/// `tracing::error!` / `tracing::warn!` events surface to subprocess
+/// stderr, where the host's `spawn_fd_line_reader` picks them up and
+/// forwards them under the `[/python]` log namespace via fd2.
+///
+/// Idempotent — subsequent calls hit the `OnceLock` and no-op. Filter
+/// honors `RUST_LOG` if set, otherwise defaults to `info`.
+fn init_subprocess_logging() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .try_init();
+    });
+}
 
 // ============================================================================
 // Context
@@ -101,6 +125,7 @@ impl PythonNativeContext {
 pub unsafe extern "C" fn slpn_context_create(
     processor_id: *const c_char,
 ) -> *mut PythonNativeContext {
+    init_subprocess_logging();
     let id = if processor_id.is_null() {
         "unknown"
     } else {
@@ -2922,6 +2947,7 @@ mod opengl {
     /// driver doesn't support `EGL_EXT_image_dma_buf_import_modifiers`).
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_opengl_runtime_new() -> *mut OpenGlRuntimeHandle {
+        super::init_subprocess_logging();
         let egl = match EglRuntime::new() {
             Ok(r) => r,
             Err(e) => {
@@ -3077,12 +3103,12 @@ mod opengl {
         let fd = match gpu.fds.first().copied() {
             Some(f) if f >= 0 => f,
             _ => {
-                eprintln!(
-                    "slpn_opengl_register_external_oes_surface: surface has no DMA-BUF fd \
-                     (fds={:?} format={} {}x{} modifier=0x{:016x})",
-                    gpu.fds, gpu.format, gpu.width, gpu.height, gpu.drm_format_modifier,
-                );
                 tracing::error!(
+                    fds = ?gpu.fds,
+                    format = %gpu.format,
+                    width = gpu.width,
+                    height = gpu.height,
+                    modifier = format_args!("0x{:016x}", gpu.drm_format_modifier),
                     "slpn_opengl_register_external_oes_surface: surface has no DMA-BUF fd"
                 );
                 return -1;
@@ -3091,13 +3117,9 @@ mod opengl {
         let drm_fourcc = match drm_fourcc_for_format(&gpu.format) {
             Some(c) => c,
             None => {
-                eprintln!(
-                    "slpn_opengl_register_external_oes_surface: unsupported format '{}'",
-                    gpu.format,
-                );
                 tracing::error!(
-                    "slpn_opengl_register_external_oes_surface: unsupported format '{}'",
-                    gpu.format
+                    format = %gpu.format,
+                    "slpn_opengl_register_external_oes_surface: unsupported format"
                 );
                 return -1;
             }
@@ -3124,27 +3146,17 @@ mod opengl {
         {
             Ok(()) => 0,
             Err(e) => {
-                // Subprocess has no `tracing_subscriber` by default, so
-                // `tracing::error!` events are dropped. Mirror to stderr
-                // so the host stdio interceptor surfaces the actual EGL
-                // failure instead of swallowing it behind rc=-1.
-                eprintln!(
-                    "slpn_opengl_register_external_oes_surface failed: \
-                     surface_id={} fourcc=0x{:08x} modifier=0x{:016x} \
-                     {}x{} fd={} stride={} offset={} err={:?}",
+                tracing::error!(
                     surface_id,
-                    drm_fourcc,
-                    gpu.drm_format_modifier,
-                    gpu.width,
-                    gpu.height,
+                    fourcc = format_args!("0x{:08x}", drm_fourcc),
+                    modifier = format_args!("0x{:016x}", gpu.drm_format_modifier),
+                    width = gpu.width,
+                    height = gpu.height,
                     fd,
                     stride,
                     offset,
-                    e,
-                );
-                tracing::error!(
-                    "slpn_opengl_register_external_oes_surface: register_external_oes_host_surface failed: {:?}",
-                    e
+                    error = ?e,
+                    "slpn_opengl_register_external_oes_surface: register_external_oes_host_surface failed"
                 );
                 -1
             }
@@ -3536,6 +3548,7 @@ mod vulkan {
     /// DMA-BUF / external-semaphore extensions).
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_vulkan_runtime_new() -> *mut VulkanRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
@@ -4161,6 +4174,7 @@ mod cpu_readback {
     /// the first acquire; until then every acquire returns -1.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_cpu_readback_runtime_new() -> *mut CpuReadbackRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
@@ -4946,6 +4960,7 @@ mod cuda {
     #[unsafe(no_mangle)]
     #[tracing::instrument(level = "info")]
     pub unsafe extern "C" fn slpn_cuda_runtime_new() -> *mut CudaRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {

@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, CStr};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use iceoryx2::port::listener::Listener;
@@ -21,6 +21,30 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use streamlib_ipc_types::{FrameHeader, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
+
+// ============================================================================
+// Tracing subscriber init
+// ============================================================================
+
+/// Install a fmt subscriber on first FFI entry so the cdylib's
+/// `tracing::error!` / `tracing::warn!` events surface to subprocess
+/// stderr, where the host's `spawn_fd_line_reader` picks them up and
+/// forwards them under the `[/deno]` log namespace via fd2.
+///
+/// Idempotent — subsequent calls hit the `OnceLock` and no-op. Filter
+/// honors `RUST_LOG` if set, otherwise defaults to `info`.
+fn init_subprocess_logging() {
+    static INIT: OnceLock<()> = OnceLock::new();
+    INIT.get_or_init(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            )
+            .try_init();
+    });
+}
 
 // ============================================================================
 // Context
@@ -99,6 +123,7 @@ impl DenoNativeContext {
 pub unsafe extern "C" fn sldn_context_create(
     processor_id: *const c_char,
 ) -> *mut DenoNativeContext {
+    init_subprocess_logging();
     let id = if processor_id.is_null() {
         "unknown"
     } else {
@@ -2728,6 +2753,7 @@ mod opengl {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_opengl_runtime_new() -> *mut OpenGlRuntimeHandle {
+        super::init_subprocess_logging();
         let egl = match EglRuntime::new() {
             Ok(r) => r,
             Err(e) => {
@@ -3227,6 +3253,7 @@ mod vulkan {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_vulkan_runtime_new() -> *mut VulkanRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
@@ -3710,6 +3737,7 @@ mod cpu_readback {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn sldn_cpu_readback_runtime_new() -> *mut CpuReadbackRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
@@ -4467,6 +4495,7 @@ mod cuda {
     #[unsafe(no_mangle)]
     #[tracing::instrument(level = "info")]
     pub unsafe extern "C" fn sldn_cuda_runtime_new() -> *mut CudaRuntimeHandle {
+        super::init_subprocess_logging();
         let device = match ConsumerVulkanDevice::new() {
             Ok(d) => Arc::new(d),
             Err(e) => {
