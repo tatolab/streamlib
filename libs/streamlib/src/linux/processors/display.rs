@@ -199,6 +199,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     png_sample_dir,
                     png_sample_every,
                     png_samples_saved: 0,
+                    png_texture_readback: None,
                 };
 
                 if let Err(e) = event_loop.run_app(&mut app) {
@@ -364,6 +365,10 @@ struct DisplayEventLoopHandler {
     png_sample_every: u64,
     /// Internal counter for next PNG sample.
     png_samples_saved: u64,
+    /// Lazily-built readback handle for the texture-surface PNG sampling path.
+    /// Pinned to the first sampled texture's format/extent; samples whose
+    /// texture disagrees are skipped with a warning.
+    png_texture_readback: Option<Arc<crate::vulkan::rhi::VulkanTextureReadback>>,
 }
 
 impl ApplicationHandler for DisplayEventLoopHandler {
@@ -938,8 +943,16 @@ impl DisplayEventLoopHandler {
         state.current_frame = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
         let frame_idx = self.frame_counter.fetch_add(1, Ordering::Relaxed);
 
-        // Debug feature: sample frame to PNG from HOST_VISIBLE pixel buffer.
-        // Resolve pixel buffer on-demand for sampling (not in hot path).
+        // Debug feature: sample frame to PNG. Two paths:
+        //   1. HOST_VISIBLE pixel-buffer fast path — zero-copy from CPU's
+        //      perspective, fires for surfaces registered as pixel buffers
+        //      (decoded frames, BgraFileSource).
+        //   2. Texture-surface fallback — for surfaces registered via
+        //      `surface_store.register_texture` (DMA-BUF VkImages from
+        //      adapter outputs: AvatarCharacter, Skia, Glitch). Routes
+        //      through the canonical `VulkanTextureReadback` RHI primitive
+        //      (Granite-style `copy_image_to_buffer + vkSemaphoreWaitKHR`,
+        //      reusable persistent staging buffer + command pool).
         //
         // Filename carries BOTH the displayed-frame counter (`frame_idx`)
         // and the INPUT frame index (from `ipc_frame.frame_index`). The
@@ -950,15 +963,15 @@ impl DisplayEventLoopHandler {
         // the same decoded frame while the decoder is stalled.
         if let Some(ref dir) = self.png_sample_dir {
             if frame_idx % self.png_sample_every == 0 {
+                let input_frame_index: u64 = ipc_frame.frame_index.parse().unwrap_or(frame_idx);
+                let path = dir.join(format!(
+                    "display_{:03}_frame_{:06}_input_{:06}.png",
+                    self.window_id, frame_idx, input_frame_index
+                ));
                 if let Ok(buf) = self.gpu_context.resolve_videoframe_buffer(&ipc_frame) {
                     let vk_buf = &buf.buffer_ref().inner;
                     let mapped_ptr = vk_buf.mapped_ptr();
                     if !mapped_ptr.is_null() {
-                        let input_frame_index: u64 = ipc_frame.frame_index.parse().unwrap_or(frame_idx);
-                        let path = dir.join(format!(
-                            "display_{:03}_frame_{:06}_input_{:06}.png",
-                            self.window_id, frame_idx, input_frame_index
-                        ));
                         let len = (src_width as usize) * (src_height as usize) * 4;
                         let rgba = unsafe { std::slice::from_raw_parts(mapped_ptr, len) };
                         if let Err(e) = write_png_rgba(&path, src_width, src_height, rgba) {
@@ -974,7 +987,135 @@ impl DisplayEventLoopHandler {
                             );
                         }
                     }
+                } else {
+                    self.sample_texture_to_png(
+                        &camera_texture,
+                        &path,
+                        frame_idx,
+                        input_frame_index,
+                    );
                 }
+            }
+        }
+    }
+
+    /// Capture an adapter-output texture into a PNG via the RHI's
+    /// `VulkanTextureReadback` primitive. Lazily constructs (and caches)
+    /// the readback handle on first use; format/extent are pinned to the
+    /// first texture sampled. Subsequent samples whose texture disagrees
+    /// are skipped with a warning rather than rebuilding the handle.
+    fn sample_texture_to_png(
+        &mut self,
+        texture: &crate::core::rhi::StreamTexture,
+        path: &std::path::Path,
+        frame_idx: u64,
+        input_frame_index: u64,
+    ) {
+        use crate::core::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
+
+        let format = texture.format();
+        let width = texture.width();
+        let height = texture.height();
+
+        // PNG writer assumes 4-byte RGBA-shape pixels. Skip exotic formats
+        // (NV12, fp16, fp32) — these are valid texture formats but the
+        // handwritten PNG writer can't render them.
+        if format.bytes_per_pixel() != 4 {
+            tracing::warn!(
+                "Display {}: skip PNG sample for input frame {} — texture format {:?} \
+                 (bpp={}) not supported by PNG writer",
+                self.window_id,
+                input_frame_index,
+                format,
+                format.bytes_per_pixel()
+            );
+            return;
+        }
+
+        // Lazy: build the readback handle on first sample.
+        if self.png_texture_readback.is_none() {
+            let descriptor = TextureReadbackDescriptor {
+                label: "display-png-sample",
+                format,
+                width,
+                height,
+            };
+            match crate::vulkan::rhi::VulkanTextureReadback::new_into_stream_error(
+                &self.vulkan_device,
+                &descriptor,
+            ) {
+                Ok(handle) => {
+                    tracing::info!(
+                        "Display {}: created texture-readback handle for PNG sampling \
+                         ({:?}, {}x{}, {} bytes)",
+                        self.window_id,
+                        format,
+                        width,
+                        height,
+                        descriptor.staging_size()
+                    );
+                    self.png_texture_readback = Some(Arc::new(handle));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Display {}: PNG texture-readback handle creation failed: {}",
+                        self.window_id,
+                        e
+                    );
+                    return;
+                }
+            }
+        }
+        let readback = self.png_texture_readback.as_ref().unwrap().clone();
+
+        // `TextureSourceLayout::General` covers adapter-output textures
+        // (OpenGL post-glFinish, Skia, compute kernels) — the canonical
+        // case this fallback exists to support. Native ring textures from
+        // the camera processor register as pixel buffers and take the
+        // fast path above, so they don't reach here in practice.
+        let ticket = match readback.submit(texture, TextureSourceLayout::General) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(
+                    "Display {}: PNG texture-readback submit failed for input frame {}: {}",
+                    self.window_id,
+                    input_frame_index,
+                    e
+                );
+                return;
+            }
+        };
+        let result = readback.wait_and_read_with(ticket, u64::MAX, |bytes| {
+            write_png_rgba(path, width, height, bytes)
+        });
+        match result {
+            Ok(Ok(())) => {
+                self.png_samples_saved += 1;
+                tracing::info!(
+                    "Display {}: saved PNG sample (texture path) {:?} \
+                     (input {}, displayed {}, total saved {})",
+                    self.window_id,
+                    path,
+                    input_frame_index,
+                    frame_idx,
+                    self.png_samples_saved
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    "Display {}: PNG sample (texture path) save failed for input frame {}: {}",
+                    self.window_id,
+                    input_frame_index,
+                    e
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Display {}: PNG texture-readback wait failed for input frame {}: {}",
+                    self.window_id,
+                    input_frame_index,
+                    e
+                );
             }
         }
     }
