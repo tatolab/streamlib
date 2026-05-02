@@ -34,3 +34,7 @@ mach2 = "0.4"
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
 streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }
+# `CameraToCudaCopyProcessor` (#612) does its own
+# `vk::Image` resolution + `vk::Extent3D` construction before
+# delegating into `streamlib-adapter-cuda`'s host-pipeline path.
+vulkanalia = { workspace = true }
