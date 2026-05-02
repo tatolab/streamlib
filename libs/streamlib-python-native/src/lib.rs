@@ -3077,6 +3077,11 @@ mod opengl {
         let fd = match gpu.fds.first().copied() {
             Some(f) if f >= 0 => f,
             _ => {
+                eprintln!(
+                    "slpn_opengl_register_external_oes_surface: surface has no DMA-BUF fd \
+                     (fds={:?} format={} {}x{} modifier=0x{:016x})",
+                    gpu.fds, gpu.format, gpu.width, gpu.height, gpu.drm_format_modifier,
+                );
                 tracing::error!(
                     "slpn_opengl_register_external_oes_surface: surface has no DMA-BUF fd"
                 );
@@ -3086,6 +3091,10 @@ mod opengl {
         let drm_fourcc = match drm_fourcc_for_format(&gpu.format) {
             Some(c) => c,
             None => {
+                eprintln!(
+                    "slpn_opengl_register_external_oes_surface: unsupported format '{}'",
+                    gpu.format,
+                );
                 tracing::error!(
                     "slpn_opengl_register_external_oes_surface: unsupported format '{}'",
                     gpu.format
@@ -3115,6 +3124,24 @@ mod opengl {
         {
             Ok(()) => 0,
             Err(e) => {
+                // Subprocess has no `tracing_subscriber` by default, so
+                // `tracing::error!` events are dropped. Mirror to stderr
+                // so the host stdio interceptor surfaces the actual EGL
+                // failure instead of swallowing it behind rc=-1.
+                eprintln!(
+                    "slpn_opengl_register_external_oes_surface failed: \
+                     surface_id={} fourcc=0x{:08x} modifier=0x{:016x} \
+                     {}x{} fd={} stride={} offset={} err={:?}",
+                    surface_id,
+                    drm_fourcc,
+                    gpu.drm_format_modifier,
+                    gpu.width,
+                    gpu.height,
+                    fd,
+                    stride,
+                    offset,
+                    e,
+                );
                 tracing::error!(
                     "slpn_opengl_register_external_oes_surface: register_external_oes_host_surface failed: {:?}",
                     e
@@ -3311,8 +3338,15 @@ mod opengl {
     /// is bytes `[B, G, R, A]` in memory, which is `DRM_FORMAT_ARGB8888`.
     fn drm_fourcc_for_format(format: &str) -> Option<u32> {
         match format {
+            // TextureFormat-derived strings (host-allocated render-target
+            // surfaces emit these in the surface-share wire format).
             "Bgra8Unorm" | "Bgra8UnormSrgb" => Some(DRM_FORMAT_ARGB8888),
             "Rgba8Unorm" | "Rgba8UnormSrgb" => Some(DRM_FORMAT_ABGR8888),
+            // PixelFormat-derived strings (host-allocated HOST_VISIBLE
+            // pixel buffers emit these — camera ring `acquire_pixel_buffer`,
+            // CPU-readback adapter, etc.).
+            "Bgra32" | "Argb32" => Some(DRM_FORMAT_ARGB8888),
+            "Rgba32" => Some(DRM_FORMAT_ABGR8888),
             _ => None,
         }
     }

@@ -224,15 +224,47 @@ impl EglRuntime {
     /// Lock + make-current; returns a guard that releases the context
     /// on drop. Every adapter operation that touches EGL or GL calls
     /// this before doing anything.
+    ///
+    /// **Same-thread reentrance.** If the EGL context is already current
+    /// on the calling thread (an outer `lock_make_current` /
+    /// `arc_lock_make_current` scope on this thread already locked the
+    /// mutex and made-current), this returns a no-op guard that does
+    /// NOT re-take the mutex and does NOT release the context on drop.
+    /// Without this, nested acquire patterns (e.g. an
+    /// `acquire_write` scope that calls into a re-registration path
+    /// which itself calls `lock_make_current`) would deadlock the
+    /// non-reentrant `Mutex`. Reentrance is keyed off
+    /// `eglGetCurrentContext` so it works across borrowed
+    /// (`MakeCurrentGuard`) and owned (`OwnedMakeCurrentGuard`) outer
+    /// holders identically.
     pub fn lock_make_current(&self) -> Result<MakeCurrentGuard<'_>, EglRuntimeError> {
+        if self.is_current_on_this_thread() {
+            return Ok(MakeCurrentGuard {
+                runtime: self,
+                _lock: None,
+            });
+        }
         let lock = self.make_current_lock.lock();
         self.egl
             .make_current(self.display, None, None, Some(self.context))
             .map_err(|e| EglRuntimeError::MakeCurrent(format!("acquire: {e}")))?;
         Ok(MakeCurrentGuard {
             runtime: self,
-            _lock: lock,
+            _lock: Some(lock),
         })
+    }
+
+    /// Returns `true` when the EGL context owned by this runtime is
+    /// currently bound on the calling thread. Used by
+    /// [`Self::lock_make_current`] / [`OwnedMakeCurrentGuard::new`] to
+    /// detect same-thread reentrance and skip the lock + make-current
+    /// + release dance that would otherwise deadlock or tear down the
+    /// outer holder's context state.
+    fn is_current_on_this_thread(&self) -> bool {
+        match self.egl.get_current_context() {
+            Some(ctx) => ctx == self.context,
+            None => false,
+        }
     }
 
     /// Owned-Arc variant of [`Self::lock_make_current`] returning a
@@ -332,14 +364,22 @@ impl Drop for EglRuntime {
 /// RAII guard that holds the runtime's make-current lock and the EGL
 /// current-context state. On drop the context is cleared so a
 /// different thread can re-make-current on its next call.
+///
+/// `_lock = None` is the no-op variant returned when the calling
+/// thread already had the context current (nested `lock_make_current`
+/// scope). The no-op variant intentionally skips the
+/// `eglMakeCurrent(NULL)` on drop so the outer holder's context state
+/// stays intact.
 pub struct MakeCurrentGuard<'r> {
     runtime: &'r EglRuntime,
-    _lock: parking_lot::MutexGuard<'r, ()>,
+    _lock: Option<parking_lot::MutexGuard<'r, ()>>,
 }
 
 impl Drop for MakeCurrentGuard<'_> {
     fn drop(&mut self) {
-        let _ = self.runtime.egl.make_current(self.runtime.display, None, None, None);
+        if self._lock.is_some() {
+            let _ = self.runtime.egl.make_current(self.runtime.display, None, None, None);
+        }
     }
 }
 
@@ -349,11 +389,18 @@ impl Drop for MakeCurrentGuard<'_> {
 /// release happen across separate FFI calls.
 pub struct OwnedMakeCurrentGuard {
     runtime: Arc<EglRuntime>,
-    lock: ManuallyDrop<MutexGuard<'static, ()>>,
+    /// `None` is the same-thread reentrance variant — the outer holder
+    /// already had the context current and the lock taken. We intentionally
+    /// did not re-lock or re-call `eglMakeCurrent`, so drop does nothing
+    /// to avoid clobbering the outer's state.
+    lock: Option<ManuallyDrop<MutexGuard<'static, ()>>>,
 }
 
 impl OwnedMakeCurrentGuard {
     fn new(runtime: Arc<EglRuntime>) -> Result<Self, EglRuntimeError> {
+        if runtime.is_current_on_this_thread() {
+            return Ok(Self { runtime, lock: None });
+        }
         let lock_borrowed = runtime.make_current_lock.lock();
         runtime
             .egl
@@ -374,21 +421,23 @@ impl OwnedMakeCurrentGuard {
         };
         Ok(Self {
             runtime,
-            lock: ManuallyDrop::new(lock),
+            lock: Some(ManuallyDrop::new(lock)),
         })
     }
 }
 
 impl Drop for OwnedMakeCurrentGuard {
     fn drop(&mut self) {
-        let _ = self
-            .runtime
-            .egl
-            .make_current(self.runtime.display, None, None, None);
-        // SAFETY: the lock has not yet been dropped (we never call
-        // `ManuallyDrop::drop` outside this Drop impl). Drop it here to
-        // release the mutex before our Arc reference goes away.
-        unsafe { ManuallyDrop::drop(&mut self.lock) };
+        if let Some(mut lock) = self.lock.take() {
+            let _ = self
+                .runtime
+                .egl
+                .make_current(self.runtime.display, None, None, None);
+            // SAFETY: the lock has not yet been dropped (we never call
+            // `ManuallyDrop::drop` outside this Drop impl). Drop it here to
+            // release the mutex before our Arc reference goes away.
+            unsafe { ManuallyDrop::drop(&mut lock) };
+        }
     }
 }
 
