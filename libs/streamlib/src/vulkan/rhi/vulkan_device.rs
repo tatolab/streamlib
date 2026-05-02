@@ -912,28 +912,51 @@ impl HostVulkanDevice {
     }
 
     /// Allocate-then-drop a small probe through every export-capable
-    /// VMA pool so the underlying [`vk::DeviceMemory`] block is
-    /// materialized while the per-process exportable-memory budget is
-    /// still freely available.
+    /// VMA pool **before any swapchain is bound** so subsequent
+    /// post-swapchain allocations through the same pool don't hit
+    /// NVIDIA's exportable-memory cap.
     ///
-    /// NVIDIA's Linux driver caps fresh `vkAllocateMemory` calls for
-    /// exportable handle types (DMA-BUF and OPAQUE_FD) after a
-    /// `VkSwapchainKHR` has been bound. VMA pools defer block
-    /// allocation to first use, so without this pre-warm the first
-    /// `vmaCreate{Buffer,Image}` from any export pool — wherever in
-    /// the codebase it lands — can hit the cap and return
-    /// `VK_ERROR_OUT_OF_DEVICE_MEMORY`. Materializing the block here,
-    /// before [`Self::new`] returns, removes that race for every
-    /// consumer.
+    /// **What this does empirically:** Run the export-pool allocation
+    /// codepath (`vmaCreateBuffer` / `vmaCreateImage` with the pool's
+    /// chained `VkExportMemoryAllocateInfo`) once per pool, before
+    /// `HostVulkanDevice::new` returns — i.e., before any caller can
+    /// build a `VkSwapchainKHR`. With pre-warm: post-swapchain
+    /// allocations through the same pools succeed. Without pre-warm:
+    /// `CameraToCudaCopyProcessor::setup_inner` (and any equivalent
+    /// post-swapchain allocator) fails with
+    /// `VK_ERROR_OUT_OF_DEVICE_MEMORY` (issue #624).
     ///
-    /// VMA retains the block when the probe allocation drops; later
-    /// real allocations sub-allocate from it. Probe sizes are tiny
-    /// (8×8 images, 64-KiB buffers); VMA picks the actual block size
-    /// by its own heuristic.
+    /// **What this does NOT do:** Retain a long-lived VMA block that
+    /// subsequent real allocations sub-allocate from. Every export-
+    /// pool consumer in tree (host RHI pixel buffers + textures,
+    /// see `vulkan_pixel_buffer.rs` / `vulkan_texture.rs`) sets
+    /// `vma::AllocationCreateFlags::DEDICATED_MEMORY`, so each
+    /// allocation gets its own `VkDeviceMemory` regardless of pool
+    /// configuration. Dropping the probe issues a real
+    /// `vkFreeMemory` and frees the block.
+    ///
+    /// **Why it works anyway:** The exact mechanism is internal to
+    /// NVIDIA's Linux driver and is not publicly documented. Empirical
+    /// observation from issue #624: a successful `vkAllocateMemory`
+    /// for an exportable handle type *before* `vkCreateSwapchainKHR`
+    /// is enough to keep the post-swapchain allocation path open for
+    /// that handle type, even after the probe is freed. The
+    /// reservation appears to be one-way — first export allocation
+    /// initializes some driver state that survives the free.
+    ///
+    /// Probe sizes are tiny (8×8 images, 64-KiB buffers); the cost is
+    /// dominated by `vkAllocateMemory` round-trips, not memory
+    /// footprint.
     ///
     /// Pools that weren't created (external memory unsupported, EGL
     /// probe failed, etc.) are skipped — the engine never produces a
     /// device that exposes a pool but won't pre-warm it.
+    ///
+    /// **Verification:** `examples/camera-python-display` reproduces
+    /// the post-swapchain failure deterministically when this
+    /// function is bypassed and runs cleanly when it isn't. See
+    /// `docs/learnings/nvidia-opaque-fd-after-swapchain.md` for the
+    /// run-and-revert protocol.
     #[cfg(target_os = "linux")]
     fn prewarm_export_pools(device: &Arc<Self>) -> Result<()> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
