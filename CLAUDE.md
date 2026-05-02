@@ -353,6 +353,26 @@ SPIR-V reflection (via `rspirv-reflect`) validates the declared layout
 against the shader at construction. See @docs/architecture/compute-kernel.md
 for the full recipe.
 
+#### TextureRegistration — single canonical per-surface state
+
+Every per-surface lifecycle field lives on `TextureRegistration`,
+keyed by `surface_id` in `GpuContext::texture_cache`. Producers
+declare state at registration (`register_texture_with_layout`);
+consumers read it via `resolve_videoframe_registration` and update on
+transitions. **Never create a parallel `HashMap<surface_id, ...>` for
+new per-surface metadata** — extend the `TextureRegistration` record
+instead. **Never bypass the registration with descriptor-side claims
+that don't match reality** (the bug class #616 fixed). The shape
+mirrors `streamlib-adapter-vulkan::SurfaceState::current_layout`
+lifted from adapter-scope to engine-scope; if you're tempted to
+duplicate that pattern in a third place, stop and read
+@docs/architecture/texture-registration.md before deciding.
+
+When in doubt about whether a new field belongs on `TextureRegistration`
+versus elsewhere (`Videoframe` IPC for per-frame state; adapter
+`SurfaceState` for adapter-internal state; RDG #631 for declared-usage
+hints), read the doc end-to-end first — the boundaries are deliberate.
+
 
 ### Custom Commands
 
@@ -507,5 +527,17 @@ make sense if the surrounding files were renamed or restructured.
   shift the bucketing. Read before adding subprocess-side Vulkan code
   beyond `vkImportMemoryFdInfoKHR` + `vkBindBufferMemory` +
   `vkMapMemory`.
+- @docs/architecture/texture-registration.md — Engine-wide per-surface
+  lifecycle state record (`TextureRegistration`) keyed by `surface_id`
+  in `GpuContext::texture_cache`. Producers declare state at
+  registration; consumers read it via `resolve_videoframe_registration`
+  and update on transitions. Read before adding any new per-surface
+  metadata, before tracking layout state, before wondering if there's a
+  better way than convention to coordinate handoff between a producer
+  and a consumer through a `surface_id`. Same-process consumers benefit
+  today; cross-process consumers wait on a polyglot schema lift (filed
+  as follow-up). Hard rule: never create a parallel
+  `HashMap<surface_id, ...>` for per-surface state; extend
+  `TextureRegistration` instead.
 
 Index: @docs/learnings/README.md
