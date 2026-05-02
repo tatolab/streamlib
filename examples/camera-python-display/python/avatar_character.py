@@ -13,19 +13,19 @@ Two platform-specific paths:
   character via `CharacterRenderer3D` rendered to an IOSurface. Standalone
   CGL context + IOSurface zero-copy texture binding.
 
-- **Linux** (#484 + #612): the host pipeline pre-copies the camera
-  ring `VkImage` into a DEVICE_LOCAL OPAQUE_FD `VkBuffer` via
+- **Linux** (#484 + #612 + #615): the host pipeline pre-copies the
+  camera ring `VkImage` into a DEVICE_LOCAL OPAQUE_FD `VkBuffer` via
   `CameraToCudaCopyProcessor` and signals the cuda adapter's timeline
   GPU-side. This processor's `acquire_read` waits on that timeline,
   then `torch.from_dlpack` exposes a zero-copy device tensor straight
   into Ultralytics YOLOv8n-pose — no CPU staging on the inference
-  path. The camera frame is *also* CPU-read to populate a ModernGL
-  background texture; a neon-cyan skeleton + magenta joint dots are
-  rendered over it via `PoseOverlayRenderer` into the
+  path. The camera frame is *also* sampled GPU-side via the OpenGL
+  adapter's `acquire_read_external_oes` (EGL DMA-BUF imported as
+  `GL_TEXTURE_EXTERNAL_OES`); a neon-cyan skeleton + magenta joint
+  dots are rendered over it via `PoseOverlayRenderer` into the
   `streamlib-adapter-opengl` DMA-BUF surface (no skinned mesh, no GLB
-  asset gating). Output is the pre-registered surface UUID. The
-  ModernGL CPU upload goes away once #615 lands EGL DMA-BUF
-  `GL_TEXTURE_EXTERNAL_OES` import for the camera-bg.
+  asset gating). Output is the pre-registered surface UUID — both
+  inference and bg are zero-CPU-copy on Linux.
 
 Linux config keys (set by `examples/camera-python-display/src/linux.rs`):
     cuda_camera_surface_id (int)   — pre-registered cuda OPAQUE_FD buffer.
@@ -33,7 +33,6 @@ Linux config keys (set by `examples/camera-python-display/src/linux.rs`):
     width, height, channels (int)  — surface dimensions.
 """
 
-import ctypes
 import logging
 import sys
 import time
@@ -59,7 +58,6 @@ VisionRunningMode = None
 
 # Linux pose-detection globals.
 torch = None
-cv2 = None
 YOLO = None
 
 
@@ -123,15 +121,15 @@ def _lazy_import_macos():
 
 
 def _lazy_import_linux():
-    """PyTorch + Ultralytics + cv2 (Linux path)."""
-    global torch, cv2, YOLO
+    """PyTorch + Ultralytics (Linux path). cv2 is no longer needed
+    since the camera-bg path moved to EGL DMA-BUF
+    `GL_TEXTURE_EXTERNAL_OES` import (#615) — no CPU-side resize."""
+    global torch, YOLO
     if torch is not None:
         return
     import torch as _torch  # CUDA-capable wheel required at install time
-    import cv2 as _cv2
     from ultralytics import YOLO as _YOLO
     torch = _torch
-    cv2 = _cv2
     YOLO = _YOLO
 
 
@@ -536,14 +534,6 @@ class AvatarCharacter:
             f"in {load_ms:.1f} ms"
         )
 
-        # Pre-allocate a CPU staging tensor + numpy view for the
-        # camera-bytes → cuda hop and the camera-bytes → ModernGL upload
-        # path. Same memory backs both.
-        self._cam_staging_cpu = torch.zeros(
-            (self._H, self._W, 4), dtype=torch.uint8
-        ).contiguous()
-        self._cam_staging_np = self._cam_staging_cpu.numpy()
-
         # ModernGL state — initialized lazily inside the first
         # `acquire_write` call, where the adapter's EGL context is current
         # on this thread.
@@ -599,60 +589,6 @@ class AvatarCharacter:
                 f"{gl_texture_id} {self._W}x{self._H})"
             )
 
-    def _read_camera_bytes_for_modergl(self, ctx, surface_id) -> bool:
-        """Resolve the camera DMA-BUF surface and copy its bytes into the
-        pre-allocated CPU staging tensor at surface dimensions. Used
-        only for the ModernGL camera-background upload — the cuda
-        inference path reads the buffer the host's
-        `CameraToCudaCopyProcessor` populated GPU-side. The CPU read
-        here goes away once #615 lands EGL DMA-BUF
-        `GL_TEXTURE_EXTERNAL_OES` import for the bg.
-        Returns True on success, False on resolve failure.
-        """
-        try:
-            handle = ctx.gpu_limited_access.resolve_surface(surface_id)
-        except Exception as e:
-            if self.frame_count % 60 == 0:
-                logger.warning(
-                    f"AvatarCharacter/linux: resolve_surface({surface_id!r}) "
-                    f"failed: {e}"
-                )
-            return False
-
-        try:
-            handle.lock(read_only=True)
-            try:
-                cam_w = int(handle.width)
-                cam_h = int(handle.height)
-                bpr = int(handle.bytes_per_row)
-                base = handle.base_address
-                if not base:
-                    raise RuntimeError("base_address null after lock")
-                row_stride_pixels = bpr // 4
-                buf_type = ctypes.c_uint8 * (bpr * cam_h)
-                cam_view = np.frombuffer(
-                    buf_type.from_address(base), dtype=np.uint8,
-                ).reshape(cam_h, row_stride_pixels, 4)[:, :cam_w, :]
-                if (cam_w, cam_h) != (self._W, self._H):
-                    cam_resized = cv2.resize(
-                        cam_view, (self._W, self._H),
-                        interpolation=cv2.INTER_LINEAR,
-                    )
-                else:
-                    cam_resized = np.ascontiguousarray(cam_view)
-                # Stage into the persistent torch tensor — `copy_` is
-                # contiguous so the next h2d DMA is a single transfer.
-                # The numpy view (`_cam_staging_np`) aliases the same
-                # memory and is what ModernGL uploads.
-                self._cam_staging_cpu.copy_(
-                    torch.from_numpy(cam_resized), non_blocking=False,
-                )
-            finally:
-                handle.unlock(read_only=True)
-        finally:
-            handle.release()
-        return True
-
     def _process_linux(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_in")
         if frame is None:
@@ -662,17 +598,7 @@ class AvatarCharacter:
         if upstream_id is None:
             return
 
-        # 1. Camera bytes → CPU staging tensor for the ModernGL bg
-        #    upload only. The cuda inference path below does NOT read
-        #    these CPU bytes — the host's CameraToCudaCopyProcessor
-        #    has already issued a GPU-side `vkCmdCopyImageToBuffer`
-        #    and signaled the cuda timeline. Drop this step entirely
-        #    once #615 lands EGL DMA-BUF GL_TEXTURE_EXTERNAL_OES
-        #    import for the ModernGL bg.
-        if not self._read_camera_bytes_for_modergl(ctx, upstream_id):
-            return
-
-        # 2. cuda buffer → YOLOv8n-pose inference (zero-copy CUDA tensor).
+        # 1. cuda buffer → YOLOv8n-pose inference (zero-copy CUDA tensor).
         # YOLO requires HxW divisible by stride 32 — we resize on-GPU to
         # 640×640 (native imgsz) before inference, then rescale the
         # returned keypoints back into surface-space for the overlay.
@@ -716,22 +642,32 @@ class AvatarCharacter:
             )  # (17, 3)
             self._last_keypoints = person_xyc
 
-        # 3. ModernGL render: cyberpunk-tinted camera bg + neon skeleton.
+        # 2. ModernGL render: cyberpunk-tinted camera bg (sampled
+        #    directly from the camera DMA-BUF via EGL EXTERNAL_OES,
+        #    #615) + neon skeleton.
+        #
+        #    Acquire ordering: opengl `acquire_write` brings the
+        #    adapter's EGL context current on this thread; the nested
+        #    `acquire_read_external_oes` reuses the same context for
+        #    the camera DMA-BUF import (single make-current mutex
+        #    serializes both).
         try:
-            with self._opengl.acquire_write(self._opengl_uuid) as view:
-                self._ensure_linux_render_state(view.gl_texture_id)
-                # Upload camera bytes as the background sampler texture.
-                self._overlay_renderer.update_camera_texture(
-                    self._cam_staging_np
-                )
-                t = time.monotonic() - self._wallclock_t0
-                self._overlay_renderer.render(
-                    self._mgl_output_fbo, self._last_keypoints, t,
-                )
+            with self._opengl.acquire_write(self._opengl_uuid) as out_view:
+                self._ensure_linux_render_state(out_view.gl_texture_id)
+                with self._opengl.acquire_read_external_oes(
+                    upstream_id
+                ) as cam_view:
+                    t = time.monotonic() - self._wallclock_t0
+                    self._overlay_renderer.render(
+                        self._mgl_output_fbo,
+                        cam_view.gl_texture_id,
+                        self._last_keypoints,
+                        t,
+                    )
         except Exception as e:
             if self.frame_count % 60 == 0:
                 logger.warning(
-                    f"AvatarCharacter/linux: opengl acquire_write / render failed: {e}"
+                    f"AvatarCharacter/linux: opengl acquire / render failed: {e}"
                 )
             return
 

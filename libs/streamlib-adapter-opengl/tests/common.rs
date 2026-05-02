@@ -51,12 +51,38 @@ impl HostFixture {
 
     /// Allocate a host-side render-target VkImage, export its
     /// DMA-BUF + DRM modifier, register both with the OpenGL
-    /// adapter, and return everything the test needs.
+    /// adapter as a `GL_TEXTURE_2D`, and return everything the test
+    /// needs.
     pub fn register_surface(
         &self,
         surface_id: SurfaceId,
         width: u32,
         height: u32,
+    ) -> RegisteredSurface {
+        self.register_surface_inner(surface_id, width, height, /*external_oes=*/ false)
+    }
+
+    /// Same as [`Self::register_surface`] but registers via
+    /// [`OpenGlSurfaceAdapter::register_external_oes_host_surface`]
+    /// so the resulting GL texture is bound under
+    /// `GL_TEXTURE_EXTERNAL_OES`. The underlying VkImage is identical
+    /// (render-target-capable tiled DMA-BUF) — the difference is
+    /// purely in the GL binding target.
+    pub fn register_external_oes_surface(
+        &self,
+        surface_id: SurfaceId,
+        width: u32,
+        height: u32,
+    ) -> RegisteredSurface {
+        self.register_surface_inner(surface_id, width, height, /*external_oes=*/ true)
+    }
+
+    fn register_surface_inner(
+        &self,
+        surface_id: SurfaceId,
+        width: u32,
+        height: u32,
+        external_oes: bool,
     ) -> RegisteredSurface {
         let texture = self
             .gpu
@@ -91,9 +117,15 @@ impl HostFixture {
             plane_stride: plane_layout[0].1,
         };
 
-        self.adapter
-            .register_host_surface(surface_id, registration)
-            .expect("register_host_surface");
+        if external_oes {
+            self.adapter
+                .register_external_oes_host_surface(surface_id, registration)
+                .expect("register_external_oes_host_surface");
+        } else {
+            self.adapter
+                .register_host_surface(surface_id, registration)
+                .expect("register_host_surface");
+        }
 
         let descriptor = StreamlibSurface::new(
             surface_id,

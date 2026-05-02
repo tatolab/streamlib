@@ -39,11 +39,17 @@ pub struct HostSurfaceRegistration {
 /// `Mutex<HashMap<SurfaceId, _>>`. The registry mutex owns
 /// the EGLImage / GL texture lifetime — neither can outlive the
 /// registry entry.
+///
+/// `target` is the GL binding the texture was bound to at registration
+/// (`GL_TEXTURE_2D` or `GL_TEXTURE_EXTERNAL_OES`); the adapter forwards
+/// it through to the read view so the consumer's GLSL knows which
+/// sampler type to use.
 pub(crate) struct SurfaceState {
     #[allow(dead_code)] // tracing / debug only
     pub(crate) surface_id: SurfaceId,
     pub(crate) image: egl::Image,
     pub(crate) texture: u32,
+    pub(crate) target: u32,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,
 }

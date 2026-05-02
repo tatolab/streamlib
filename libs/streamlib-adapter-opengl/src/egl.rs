@@ -286,15 +286,18 @@ impl EglRuntime {
         }
     }
 
-    /// Bind `image` to the currently-bound `GL_TEXTURE_2D` of the
-    /// active context. The caller MUST be holding a
+    /// Bind `image` to the currently-bound texture of the active
+    /// context under the given GL `target` (`GL_TEXTURE_2D` or
+    /// `GL_TEXTURE_EXTERNAL_OES`). The caller MUST be holding a
     /// [`MakeCurrentGuard`] when invoking this.
     ///
     /// # Safety
     /// `image` must be a non-null `EGLImage` obtained from
-    /// [`Self::create_dma_buf_image`].
-    pub unsafe fn image_target_texture_2d(&self, image: egl::Image) {
-        unsafe { (self.image_target_texture_2d_oes)(gl::TEXTURE_2D, image.as_ptr()) };
+    /// [`Self::create_dma_buf_image`]. `target` must be a target the
+    /// underlying `glEGLImageTargetTexture2DOES` driver entrypoint
+    /// accepts (today: `GL_TEXTURE_2D` or `GL_TEXTURE_EXTERNAL_OES`).
+    pub unsafe fn image_target_texture(&self, target: u32, image: egl::Image) {
+        unsafe { (self.image_target_texture_2d_oes)(target, image.as_ptr()) };
     }
 
     /// Resolve a GL/EGL function pointer by name via

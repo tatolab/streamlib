@@ -1,12 +1,14 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Cyberpunk pose-overlay renderer (#484, Linux).
+"""Cyberpunk pose-overlay renderer (#484 / #615, Linux).
 
 A lightweight TikTok-filter-style renderer that:
 
-- Uploads the current camera frame as a 2D texture and draws it as a
-  full-screen cyberpunk-tinted background.
+- Samples the camera DMA-BUF directly via `samplerExternalOES` (zero
+  CPU bounce — the camera frame is bound by the caller as a
+  `GL_TEXTURE_EXTERNAL_OES` immediately before `render()`) and draws
+  it as a full-screen cyberpunk-tinted background.
 - Draws a neon-cyan skeleton connecting YOLOv8 COCO-17 keypoints, with
   glowing magenta circles at each visible joint.
 - Applies a soft chromatic-aberration / scanline pass for the
@@ -19,12 +21,31 @@ context (`standalone=False`), the imported `GL_TEXTURE_2D` becomes the
 output framebuffer attachment via `mgl_ctx.external_texture(...)`.
 """
 
+import ctypes
 import logging
 
 import moderngl
 import numpy as np
 
+from streamlib.adapters.opengl import GL_TEXTURE_EXTERNAL_OES
+
 logger = logging.getLogger(__name__)
+
+
+# We need exactly two raw-GL calls (`glActiveTexture` + `glBindTexture`)
+# to bind the camera DMA-BUF on `GL_TEXTURE_EXTERNAL_OES` immediately
+# before the bg draw — ModernGL doesn't expose the binding target on
+# its `external_texture` / `Texture.use` paths. Both functions are
+# core GL entry points always exported by libGL; resolve via ctypes
+# rather than dragging in PyOpenGL as a new Linux dep (matches
+# CLAUDE.md's "extend core systems" rule — the OS GL loader is
+# already what ModernGL uses internally).
+_GL_LIB = ctypes.CDLL("libGL.so.1")
+_GL_LIB.glActiveTexture.argtypes = [ctypes.c_uint]
+_GL_LIB.glActiveTexture.restype = None
+_GL_LIB.glBindTexture.argtypes = [ctypes.c_uint, ctypes.c_uint]
+_GL_LIB.glBindTexture.restype = None
+_GL_TEXTURE0 = 0x84C0
 
 
 # COCO 17 → bone connectivity (skeleton edges to draw between joints).
@@ -53,8 +74,12 @@ MAX_KEYPOINTS = 17
 # Shaders
 # =============================================================================
 
-# Background pass — full-screen quad sampling the camera texture, with a
-# subtle cyberpunk color grade and corner vignette.
+# Background pass — full-screen quad sampling the camera DMA-BUF
+# imported as `GL_TEXTURE_EXTERNAL_OES`, with a subtle cyberpunk color
+# grade and corner vignette. The sampler type is `samplerExternalOES`
+# (from `GL_OES_EGL_image_external`); the caller binds the camera GL
+# id to `GL_TEXTURE_EXTERNAL_OES` on texture unit 0 immediately before
+# `_bg_vao.render(...)`.
 _BACKGROUND_VS = """
 #version 330 core
 in vec2 in_position;
@@ -68,10 +93,11 @@ void main() {
 
 _BACKGROUND_FS = """
 #version 330 core
+#extension GL_OES_EGL_image_external : require
 in vec2 v_texcoord;
 out vec4 frag_color;
 
-uniform sampler2D u_camera;
+uniform samplerExternalOES u_camera;
 uniform float u_time;
 
 void main() {
@@ -169,8 +195,9 @@ class PoseOverlayRenderer:
     """Render a cyberpunk-tinted camera background + neon pose overlay.
 
     All rendering targets the FBO passed to ``render(output_fbo, ...)``.
-    The renderer owns the camera-background texture; callers update it
-    via ``update_camera_texture(rgba_bytes_or_array)`` each frame.
+    The camera background is sampled directly from a
+    ``GL_TEXTURE_EXTERNAL_OES`` GL texture id passed into ``render()``
+    each frame — no CPU upload step.
     """
 
     # Cyberpunk palette (David Martinez / Edgerunners adjacent).
@@ -187,13 +214,9 @@ class PoseOverlayRenderer:
         self.H = height
 
         # 1. Camera background --------------------------------------------
-        # Allocate the camera texture at surface dimensions; uploads on
-        # each frame replace the full content.
-        self._camera_tex = ctx.texture((width, height), 4, dtype="f1")
-        self._camera_tex.repeat_x = False
-        self._camera_tex.repeat_y = False
-        self._camera_tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
-
+        # The camera texture lives on the OpenGL adapter's
+        # `GL_TEXTURE_EXTERNAL_OES` import; the caller binds it onto
+        # texture unit 0 immediately before each `render()` call.
         self._bg_program = ctx.program(
             vertex_shader=_BACKGROUND_VS, fragment_shader=_BACKGROUND_FS,
         )
@@ -255,31 +278,6 @@ class PoseOverlayRenderer:
             f"PoseOverlayRenderer: initialized {width}x{height} "
             f"GL {self.ctx.version_code}"
         )
-
-    # =====================================================================
-    # Camera background upload
-    # =====================================================================
-
-    def update_camera_texture(self, rgba_array: np.ndarray) -> None:
-        """Upload the camera frame to the background sampler texture.
-
-        Expects a contiguous ``(H, W, 4)`` ``uint8`` numpy array in
-        BGRA byte order. The shader interprets it as RGBA (the
-        chromatic-aberration grade re-shifts color anyway, so the
-        BGRA→RGBA semantic flip just gets baked into the look).
-        """
-        if rgba_array.shape != (self.H, self.W, 4):
-            raise ValueError(
-                f"PoseOverlayRenderer.update_camera_texture: expected "
-                f"({self.H}, {self.W}, 4), got {rgba_array.shape}"
-            )
-        if rgba_array.dtype != np.uint8:
-            raise ValueError(
-                f"PoseOverlayRenderer.update_camera_texture: expected "
-                f"uint8, got {rgba_array.dtype}"
-            )
-        # ModernGL `Texture.write` accepts bytes-like.
-        self._camera_tex.write(rgba_array.tobytes())
 
     # =====================================================================
     # Geometry generation
@@ -388,6 +386,7 @@ class PoseOverlayRenderer:
     def render(
         self,
         output_fbo: moderngl.Framebuffer,
+        camera_external_oes_tex_id: int,
         keypoints_xyc: np.ndarray | None,
         time_seconds: float,
     ) -> None:
@@ -396,6 +395,11 @@ class PoseOverlayRenderer:
         Args:
             output_fbo: ModernGL framebuffer wrapping the imported
                 opengl-adapter `GL_TEXTURE_2D`.
+            camera_external_oes_tex_id: GL texture id from
+                ``OpenGLContext.acquire_read_external_oes(camera_uuid)``.
+                Must be valid for the duration of this call (the
+                caller's ``acquire_read_external_oes`` scope must cover
+                ``render``).
             keypoints_xyc: ``(17, 3)`` float array of (x_px, y_px, conf),
                 or ``None`` if YOLO produced no detection. When ``None``,
                 only the camera background renders.
@@ -406,13 +410,19 @@ class PoseOverlayRenderer:
         output_fbo.clear(0.05, 0.04, 0.10, 1.0)
 
         # ---- Background camera pass -------------------------------------
+        # Bind the EXTERNAL_OES camera texture on unit 0 by raw GL —
+        # ModernGL's `Texture.use` and `external_texture` only handle
+        # `GL_TEXTURE_2D` (no `target` argument in the moderngl 5.x
+        # signature), so the OES binding has to be issued by hand.
         self.ctx.disable(moderngl.DEPTH_TEST)
         self.ctx.disable(moderngl.CULL_FACE)
-        self._camera_tex.use(0)
+        _GL_LIB.glActiveTexture(_GL_TEXTURE0)
+        _GL_LIB.glBindTexture(GL_TEXTURE_EXTERNAL_OES, camera_external_oes_tex_id)
         self._bg_program["u_camera"].value = 0
         if "u_time" in self._bg_program:
             self._bg_program["u_time"].value = float(time_seconds)
         self._bg_vao.render(moderngl.TRIANGLE_STRIP)
+        _GL_LIB.glBindTexture(GL_TEXTURE_EXTERNAL_OES, 0)
 
         if keypoints_xyc is None:
             return
@@ -450,7 +460,6 @@ class PoseOverlayRenderer:
             "_bg_vao", "_bg_vbo", "_bg_program",
             "_line_vao", "_line_vbo", "_line_program",
             "_dot_vao", "_dot_vbo", "_dot_program",
-            "_camera_tex",
         ):
             obj = getattr(self, obj_name, None)
             if obj is not None:

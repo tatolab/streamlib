@@ -30,7 +30,7 @@ use crate::egl::{
     EGL_DMA_BUF_PLANE0_PITCH_EXT, EGL_HEIGHT, EGL_LINUX_DRM_FOURCC_EXT, EGL_WIDTH,
 };
 use crate::state::{HostSurfaceRegistration, SurfaceState};
-use crate::view::{OpenGlReadView, OpenGlWriteView};
+use crate::view::{OpenGlReadView, OpenGlWriteView, GL_TEXTURE_2D, GL_TEXTURE_EXTERNAL_OES};
 
 /// OpenGL/EGL [`SurfaceAdapter`] implementation.
 ///
@@ -59,13 +59,22 @@ impl OpenGlSurfaceAdapter {
         &self.runtime
     }
 
-    /// Register a host-allocated surface with this adapter.
+    /// Register a host-allocated surface with this adapter as a
+    /// render-target-capable `GL_TEXTURE_2D`.
     ///
     /// Imports the DMA-BUF as an `EGLImage` with the host-chosen DRM
     /// modifier and binds it to a freshly-generated `GL_TEXTURE_2D`.
     /// The texture id is stable for the lifetime of the registration —
     /// every `acquire_*` returns the same id, so customers can hold
     /// long-lived FBOs / VAOs / shader bindings across acquires.
+    ///
+    /// Use this for host-allocated surfaces the host meant to be
+    /// rendered into (`GpuContext::acquire_render_target_dma_buf_image`,
+    /// where the modifier is render-target-capable). For sampler-only
+    /// inputs (camera ring textures whose modifier is `external_only=TRUE`
+    /// on NVIDIA — see
+    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`) use
+    /// [`Self::register_external_oes_host_surface`] instead.
     ///
     /// `id` MUST be unique across the adapter's lifetime; double-
     /// registration returns [`AdapterError::SurfaceAlreadyRegistered`]
@@ -75,6 +84,38 @@ impl OpenGlSurfaceAdapter {
         &self,
         id: SurfaceId,
         registration: HostSurfaceRegistration,
+    ) -> Result<(), AdapterError> {
+        self.register_host_surface_inner(id, registration, GL_TEXTURE_2D)
+    }
+
+    /// Register a host-allocated surface for sampler-only consumption
+    /// via `GL_TEXTURE_EXTERNAL_OES`.
+    ///
+    /// Same DMA-BUF import path as [`Self::register_host_surface`],
+    /// but binds the resulting `EGLImage` via
+    /// `glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, image)`.
+    /// The customer's GLSL must `#extension GL_OES_EGL_image_external_essl3 :
+    /// require` (or the older `_essl1`) and sample via `samplerExternalOES`.
+    ///
+    /// Use this for surfaces the host did not (or could not) allocate
+    /// with a render-target-capable modifier — typically camera ring
+    /// textures whose underlying modifier is reported `external_only=TRUE`
+    /// by `eglQueryDmaBufModifiersEXT`. The resulting GL texture is
+    /// sample-only; FBO color-attachment binding is unsupported by GL.
+    #[instrument(level = "debug", skip(self, registration), fields(surface_id = id))]
+    pub fn register_external_oes_host_surface(
+        &self,
+        id: SurfaceId,
+        registration: HostSurfaceRegistration,
+    ) -> Result<(), AdapterError> {
+        self.register_host_surface_inner(id, registration, GL_TEXTURE_EXTERNAL_OES)
+    }
+
+    fn register_host_surface_inner(
+        &self,
+        id: SurfaceId,
+        registration: HostSurfaceRegistration,
+        target: u32,
     ) -> Result<(), AdapterError> {
         // Reject duplicates up-front via the Registry's atomic insert
         // below; build the EGLImage + GL texture without holding the
@@ -114,41 +155,57 @@ impl OpenGlSurfaceAdapter {
         let mut texture: u32 = 0;
         unsafe {
             gl::GenTextures(1, &mut texture);
-            gl::BindTexture(gl::TEXTURE_2D, texture);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
-            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
+            gl::BindTexture(target, texture);
+            gl::TexParameteri(target, gl::TEXTURE_MIN_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(target, gl::TEXTURE_MAG_FILTER, gl::LINEAR as i32);
+            gl::TexParameteri(target, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as i32);
+            gl::TexParameteri(target, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
             // SAFETY: image was produced by create_image above and is
             // non-null. GL texture is bound. This binds the EGLImage's
-            // backing storage to texture; on success the texture
-            // becomes a real GL_TEXTURE_2D (not GL_TEXTURE_EXTERNAL_OES).
-            self.runtime.image_target_texture_2d(image);
+            // backing storage to texture under the chosen target.
+            self.runtime.image_target_texture(target, image);
 
-            // Drain GL errors. A non-zero error here indicates the
-            // EGLImage was external-only (sampler-only) — the host
-            // allocator picked the wrong modifier.
+            // Drain GL errors. For `GL_TEXTURE_2D`, a non-zero error
+            // here indicates the EGLImage was external-only
+            // (sampler-only) — the host allocator picked the wrong
+            // modifier. For `GL_TEXTURE_EXTERNAL_OES`, the EGL spec
+            // accepts every importable modifier, so a failure here
+            // points at a missing extension or a malformed
+            // modifier/fourcc.
             let err = gl::GetError();
             if err != gl::NO_ERROR {
                 gl::DeleteTextures(1, &texture);
                 self.runtime.destroy_image(image);
+                let target_name = match target {
+                    GL_TEXTURE_EXTERNAL_OES => "GL_TEXTURE_EXTERNAL_OES",
+                    _ => "GL_TEXTURE_2D",
+                };
+                let hint = if target == GL_TEXTURE_2D {
+                    " — likely external_only modifier (host should pick a \
+                     render-target-capable tiled modifier, or call \
+                     register_external_oes_host_surface for sampler-only \
+                     consumption)"
+                } else {
+                    " — verify GL_OES_EGL_image_external is exposed by the \
+                     GL implementation and the DRM modifier / fourcc are \
+                     valid"
+                };
                 return Err(AdapterError::BackendRejected {
                     reason: format!(
-                        "glEGLImageTargetTexture2DOES failed: GL error 0x{:x}; \
-                         likely external_only modifier (host should pick a \
-                         render-target-capable tiled modifier)",
-                        err
+                        "glEGLImageTargetTexture2DOES({}) failed: GL error 0x{:x}{}",
+                        target_name, err, hint
                     ),
                 });
             }
 
-            gl::BindTexture(gl::TEXTURE_2D, 0);
+            gl::BindTexture(target, 0);
         }
 
         let state = SurfaceState {
             surface_id: id,
             image,
             texture,
+            target,
             read_holders: 0,
             write_held: false,
         };
@@ -200,17 +257,33 @@ impl OpenGlSurfaceAdapter {
     fn try_begin_read(
         &self,
         surface: &StreamlibSurface,
-    ) -> Result<Option<u32>, AdapterError> {
+    ) -> Result<Option<(u32, u32)>, AdapterError> {
         self.surfaces
-            .try_begin_read(surface.id, |state| Ok(state.texture))
+            .try_begin_read(surface.id, |state| Ok((state.texture, state.target)))
     }
 
     fn try_begin_write(
         &self,
         surface: &StreamlibSurface,
     ) -> Result<Option<u32>, AdapterError> {
-        self.surfaces
-            .try_begin_write(surface.id, |state| Ok(state.texture))
+        // Write acquires only apply to render-target-capable
+        // (`GL_TEXTURE_2D`) surfaces; the external-OES path is
+        // sample-only by construction (FBO color-attachment binding
+        // unsupported by GL on `GL_TEXTURE_EXTERNAL_OES`).
+        self.surfaces.try_begin_write(surface.id, |state| {
+            if state.target != GL_TEXTURE_2D {
+                return Err(AdapterError::BackendRejected {
+                    reason: format!(
+                        "acquire_write rejected: surface {} was registered as \
+                         GL_TEXTURE_EXTERNAL_OES (sampler-only); use \
+                         acquire_read or register the surface via \
+                         register_host_surface for write access",
+                        surface.id
+                    ),
+                });
+            }
+            Ok(state.texture)
+        })
     }
 }
 
@@ -247,11 +320,12 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
         surface: &StreamlibSurface,
     ) -> Result<ReadGuard<'g, Self>, AdapterError> {
         match self.try_begin_read(surface)? {
-            Some(texture) => Ok(ReadGuard::new(
+            Some((texture, target)) => Ok(ReadGuard::new(
                 self,
                 surface.id,
                 OpenGlReadView {
                     texture,
+                    target,
                     _marker: PhantomData,
                 },
             )),
@@ -287,11 +361,12 @@ impl SurfaceAdapter for OpenGlSurfaceAdapter {
         surface: &StreamlibSurface,
     ) -> Result<Option<ReadGuard<'g, Self>>, AdapterError> {
         match self.try_begin_read(surface)? {
-            Some(texture) => Ok(Some(ReadGuard::new(
+            Some((texture, target)) => Ok(Some(ReadGuard::new(
                 self,
                 surface.id,
                 OpenGlReadView {
                     texture,
+                    target,
                     _marker: PhantomData,
                 },
             ))),
