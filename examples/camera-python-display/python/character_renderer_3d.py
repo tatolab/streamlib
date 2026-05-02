@@ -1332,37 +1332,43 @@ class CharacterRenderer3D:
     def render(self, output_fbo: Optional[moderngl.Framebuffer] = None):
         """Render the scene (background + character) with bloom post-processing.
 
+        If no character GLB has been loaded, the renderer still produces a
+        background-only frame (or a solid cyberpunk-tinted clear if no
+        background is loaded either) so the pipeline always emits a
+        well-defined output. See ``assets/README.md`` for the steps to
+        drop in a real Mixamo-rigged character.
+
         Args:
             output_fbo: Target framebuffer. If None, renders to current context FBO.
         """
-        if not self._is_loaded:
-            return
-
-        # Render scene to internal FBO for bloom processing
+        # Render scene to internal FBO for bloom processing.
         self.scene_fbo.use()
         self.scene_fbo.viewport = (0, 0, self.width, self.height)
-        self.scene_fbo.clear(0.1, 0.1, 0.15, 1.0)
+        # Cyberpunk dark-violet clear — visible if neither background nor
+        # character is loaded.
+        self.scene_fbo.clear(0.05, 0.04, 0.10, 1.0)
 
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.enable(moderngl.CULL_FACE)
 
-        # Get matrices
-        view = self.scene.get_view_matrix()
-        projection = self.scene.get_projection_matrix()
-        model = self.get_model_matrix()
-
-        # Render background first
+        # Background renders if loaded; otherwise the clear color above
+        # carries through.
         self.scene.render_background()
 
-        # Render character
-        self.mesh_renderer.render(
-            view=view,
-            projection=projection,
-            model=model,
-            camera_pos=self.scene.camera_pos,
-        )
+        # Skinned character renders only if a GLB was loaded.
+        if self._is_loaded:
+            view = self.scene.get_view_matrix()
+            projection = self.scene.get_projection_matrix()
+            model = self.get_model_matrix()
+            self.mesh_renderer.render(
+                view=view,
+                projection=projection,
+                model=model,
+                camera_pos=self.scene.camera_pos,
+            )
 
-        # Apply bloom post-processing
+        # Apply bloom post-processing — always runs so the output FBO is
+        # well-defined even on the no-character path.
         if output_fbo is not None:
             self.ctx.disable(moderngl.DEPTH_TEST)
             self.ctx.disable(moderngl.CULL_FACE)
