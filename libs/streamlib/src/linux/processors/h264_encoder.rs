@@ -54,9 +54,10 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             ..Default::default()
         };
 
-        // Create encoder in setup() — MUST happen before the display swapchain.
-        // NVIDIA limits DMA-BUF exportable allocations after swapchain creation
-        // (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
+        // Create the encoder in setup(). The engine pre-warms every
+        // export-capable VMA pool at `HostVulkanDevice` construction
+        // (see docs/learnings/nvidia-dma-buf-after-swapchain.md), so
+        // encoder allocations no longer race the display's swapchain.
         let vulkan_device = &ctx.gpu_full_access().device().inner;
 
         let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
@@ -86,11 +87,11 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             StreamError::Runtime(format!("Failed to create H.264 encoder: {e}"))
         })?;
 
-        // Pre-allocate the RGB→NV12 converter (NV12 DEVICE_LOCAL VkImage + per-plane
-        // views + compute pipeline) now, before the display's swapchain is created.
-        // On NVIDIA Linux, new DEVICE_LOCAL allocations can fail with
-        // ERROR_OUT_OF_DEVICE_MEMORY once a swapchain has been created and the
-        // DMA-BUF budget is consumed (see docs/learnings/nvidia-dma-buf-after-swapchain.md).
+        // Allocate the RGB→NV12 converter (NV12 DEVICE_LOCAL VkImage +
+        // per-plane views + compute pipeline) eagerly in setup. These are
+        // real resources the encoder needs at first frame; engine pre-warm
+        // already materialized the underlying VMA blocks so this no longer
+        // races NVIDIA's post-swapchain export cap.
         encoder.prepare_gpu_encode_resources().map_err(|e| {
             StreamError::Runtime(format!("Failed to pre-allocate H.264 encode resources: {e}"))
         })?;

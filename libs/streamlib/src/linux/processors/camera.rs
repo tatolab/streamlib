@@ -744,9 +744,10 @@ fn capture_thread_loop(
 
     // -----------------------------------------------------------------------
     // Create 2-texture DEVICE_LOCAL ring — DMA-BUF exportable for cross-process
-    // GPU-to-GPU sharing. Uses the isolated DMA-BUF image pool in VMA.
-    // Pre-allocated here (before display's swapchain) to get the NVIDIA DMA-BUF
-    // budget before the swapchain consumes it.
+    // GPU-to-GPU sharing. Uses the isolated DMA-BUF image pool in VMA, whose
+    // underlying VkDeviceMemory block is pre-warmed at
+    // `HostVulkanDevice::new()` so the NVIDIA post-swapchain export cap
+    // doesn't bite (see `docs/learnings/nvidia-dma-buf-after-swapchain.md`).
     // -----------------------------------------------------------------------
     let ring_texture_desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm)
         .with_usage(
