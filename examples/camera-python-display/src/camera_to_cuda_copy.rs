@@ -248,7 +248,6 @@ impl CameraToCudaCopyProcessor::Processor {
 
     #[cfg(target_os = "linux")]
     fn process_frame_inner(&mut self, frame: &Videoframe) -> Result<()> {
-        use vulkanalia::vk;
         let backend = self.backend.as_ref().ok_or_else(|| {
             StreamError::Configuration("CameraToCudaCopy: backend not initialized".into())
         })?;
@@ -264,18 +263,13 @@ impl CameraToCudaCopyProcessor::Processor {
             ))
         })?;
         let host_texture = texture.vulkan_inner();
-        let image = host_texture.image().ok_or_else(|| {
-            StreamError::Configuration(
-                "CameraToCudaCopy: camera texture has no VkImage (uninitialized?)".into(),
-            )
-        })?;
         let cam_w = host_texture.width();
         let cam_h = host_texture.height();
         if cam_w != backend.width || cam_h != backend.height {
             return Err(StreamError::Configuration(format!(
                 "CameraToCudaCopy: camera resolution {cam_w}x{cam_h} differs from \
                  cuda surface {}x{}; GPU-side resize is not implemented in this processor \
-                 (the cuda buffer is a flat `VkBuffer`, not a `VkImage`, so vkCmdBlitImage \
+                 (the cuda buffer is a flat VkBuffer, not a VkImage, so vkCmdBlitImage \
                  cannot target it). Configure the camera at the same resolution.",
                 backend.width, backend.height
             )));
@@ -285,18 +279,15 @@ impl CameraToCudaCopyProcessor::Processor {
         // layout (storage|sampled). Tell the cuda adapter to copy
         // out and restore the same layout — the camera processor
         // and any downstream sampler keep their layout invariant
-        // over the copy window.
+        // over the copy window. The adapter handles the VkImage /
+        // extent extraction internally so this crate stays out of
+        // `vulkanalia` per the engine boundary rule.
         backend
             .adapter
             .submit_host_copy_image_to_buffer(
                 backend.surface_id,
-                image,
-                vk::ImageLayout::GENERAL,
-                vk::Extent3D {
-                    width: cam_w,
-                    height: cam_h,
-                    depth: 1,
-                },
+                host_texture.as_ref(),
+                VulkanLayout::GENERAL,
             )
             .map_err(|e| {
                 StreamError::Configuration(format!(

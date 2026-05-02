@@ -41,7 +41,8 @@ use streamlib_adapter_abi::{
     SurfaceRegistration, WriteGuard,
 };
 use streamlib_consumer_rhi::{
-    DevicePrivilege, VulkanPixelBufferLike, VulkanRhiDevice, VulkanTimelineSemaphoreLike,
+    DevicePrivilege, VulkanLayout, VulkanPixelBufferLike, VulkanRhiDevice, VulkanTextureLike,
+    VulkanTimelineSemaphoreLike,
 };
 #[cfg(target_os = "linux")]
 use vulkanalia::prelude::v1_4::*;
@@ -158,7 +159,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     }
 
     /// Host-pipeline producer path: submit a `vkCmdCopyImageToBuffer`
-    /// from `image` into the surface's registered buffer, with the
+    /// from `texture` into the surface's registered buffer, with the
     /// timeline GPU-signaled at completion.
     ///
     /// Atomically takes the write lock, computes the next release
@@ -171,24 +172,46 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     /// AI-inference customer can `acquire_read` them without a CPU
     /// round-trip.
     ///
-    /// `image_layout` is both the layout the source image is currently
-    /// in AND the layout it will be returned to after the copy — the
-    /// caller's pipeline keeps full ownership of the layout outside
-    /// the copy window.
+    /// `texture` is read via [`VulkanTextureLike`] so the caller doesn't
+    /// have to import `vulkanalia` — host- and consumer-flavor textures
+    /// both implement the trait. `image_layout` is both the layout the
+    /// source image is currently in AND the layout it will be returned
+    /// to after the copy — the caller's pipeline keeps full ownership
+    /// of the layout outside the copy window.
+    ///
+    /// **Concurrency contract**: the caller must guarantee no other
+    /// pipeline stage is operating on `texture` while this method runs.
+    /// Camera ring-texture producers satisfy this trivially because each
+    /// ring slot is written exactly once per frame and re-used only
+    /// after a full ring rotation.
     ///
     /// Errors:
     /// - [`AdapterError::SurfaceNotFound`] — `id` not registered.
     /// - [`AdapterError::WriteContended`] — another writer or reader
     ///   holds the surface. Host writers serialize through this method.
-    /// - [`AdapterError::BackendRejected`] — driver refused the submit.
+    /// - [`AdapterError::BackendRejected`] — driver refused the submit
+    ///   or the texture has no `VkImage`.
     #[cfg(target_os = "linux")]
-    pub fn submit_host_copy_image_to_buffer(
+    pub fn submit_host_copy_image_to_buffer<T>(
         &self,
         id: SurfaceId,
-        image: vk::Image,
-        image_layout: vk::ImageLayout,
-        image_extent: vk::Extent3D,
-    ) -> Result<u64, AdapterError> {
+        texture: &T,
+        image_layout: VulkanLayout,
+    ) -> Result<u64, AdapterError>
+    where
+        T: VulkanTextureLike + ?Sized,
+    {
+        let image = texture.image().ok_or_else(|| AdapterError::BackendRejected {
+            reason:
+                "submit_host_copy_image_to_buffer: source texture has no VkImage (placeholder?)"
+                    .into(),
+        })?;
+        let image_extent = vk::Extent3D {
+            width: texture.width(),
+            height: texture.height(),
+            depth: 1,
+        };
+
         let session: HostCopySession<D::Privilege> = self
             .surfaces
             .try_begin_write(id, |state| {
@@ -196,7 +219,6 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                 Ok(HostCopySession {
                     timeline: Arc::clone(&state.timeline),
                     buffer: state.pixel_buffer.buffer(),
-                    buffer_size: state.pixel_buffer.size(),
                     signal_value,
                 })
             })?
@@ -208,9 +230,8 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         if let Err(e) = submit_image_to_buffer_copy_signal_timeline::<D>(
             self.device.as_ref(),
             image,
-            image_layout,
+            image_layout.as_vk(),
             session.buffer,
-            session.buffer_size,
             image_extent,
             session.timeline.as_ref(),
             session.signal_value,
@@ -323,7 +344,6 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
 struct HostCopySession<P: DevicePrivilege> {
     timeline: Arc<P::TimelineSemaphore>,
     buffer: vk::Buffer,
-    buffer_size: vk::DeviceSize,
     signal_value: u64,
 }
 
@@ -343,7 +363,6 @@ fn submit_image_to_buffer_copy_signal_timeline<D>(
     image: vk::Image,
     image_layout: vk::ImageLayout,
     buffer: vk::Buffer,
-    _buffer_size: vk::DeviceSize,
     image_extent: vk::Extent3D,
     timeline: &<D::Privilege as DevicePrivilege>::TimelineSemaphore,
     signal_value: u64,
