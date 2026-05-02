@@ -74,11 +74,12 @@ fn nested_arc_lock_make_current_does_not_deadlock() {
         }
     };
 
-    // Mixed-style nesting: outer borrowed, inner owned. The cdylib
-    // takes the outer via `arc_lock_make_current` (returns an owned
-    // 'static guard for FFI scope spans); the inner adapter register
-    // path takes a borrowed `lock_make_current`. The reentrance check
-    // must work across the two guard flavors identically.
+    // Mixed-style nesting: outer owned, inner borrowed — matches the
+    // avatar's failing path. The cdylib takes the outer via
+    // `arc_lock_make_current` (returns an owned `'static` guard for
+    // FFI scope spans), then the inner adapter register path takes a
+    // borrowed `lock_make_current`. The reentrance check must work
+    // across the two guard flavors identically.
     let outer = fixture
         .egl
         .arc_lock_make_current()
