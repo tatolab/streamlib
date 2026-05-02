@@ -31,7 +31,7 @@ use streamlib::core::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use streamlib::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 #[cfg(target_os = "linux")]
-use streamlib_adapter_abi::SurfaceId;
+use streamlib_adapter_abi::{AdapterError, SurfaceId};
 #[cfg(target_os = "linux")]
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
@@ -282,18 +282,33 @@ impl CameraToCudaCopyProcessor::Processor {
         // over the copy window. The adapter handles the VkImage /
         // extent extraction internally so this crate stays out of
         // `vulkanalia` per the engine boundary rule.
-        backend
-            .adapter
-            .submit_host_copy_image_to_buffer(
-                backend.surface_id,
-                host_texture.as_ref(),
-                VulkanLayout::GENERAL,
-            )
-            .map_err(|e| {
-                StreamError::Configuration(format!(
+        //
+        // `WriteContended` is the expected race when AvatarCharacter
+        // Python's `cuda.acquire_read` is mid-YOLO-inference (~30 ms
+        // at 640x640 on Jetson-class GPUs); the camera frame is
+        // dropped on this tick and the next ring slot will succeed.
+        // Tearing down the pipeline on this error would defeat the
+        // whole point of the host pipeline shape.
+        match backend.adapter.submit_host_copy_image_to_buffer(
+            backend.surface_id,
+            host_texture.as_ref(),
+            VulkanLayout::GENERAL,
+        ) {
+            Ok(_) => {}
+            Err(AdapterError::WriteContended { .. }) => {
+                if self.frame_count.load(Ordering::Relaxed) % 60 == 0 {
+                    tracing::debug!(
+                        "CameraToCudaCopy: write contended (subprocess reader still \
+                         holding the cuda surface) — dropping this camera tick"
+                    );
+                }
+            }
+            Err(e) => {
+                return Err(StreamError::Configuration(format!(
                     "CameraToCudaCopy: submit_host_copy_image_to_buffer: {e:?}"
-                ))
-            })?;
+                )));
+            }
+        }
         Ok(())
     }
 

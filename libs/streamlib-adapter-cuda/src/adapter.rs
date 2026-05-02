@@ -212,9 +212,36 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
             depth: 1,
         };
 
+        // Conservative dst-bound check: the source texture's pixel
+        // count must fit in the destination buffer. We don't know the
+        // pixel buffer's bytes-per-pixel from inside the registry
+        // closure (the trait doesn't expose it), so we use the buffer
+        // size in bytes vs. width*height*4 — Bgra32 is the only
+        // OPAQUE_FD format the host allocator emits today
+        // (vulkan_pixel_buffer.rs::new_opaque_fd_export_device_local
+        // hardcodes bytes_per_pixel=4 in the example caller). If a
+        // future caller uses a non-4-bpp format, extend this check.
+        let required_bytes = (image_extent.width as u64)
+            .saturating_mul(image_extent.height as u64)
+            .saturating_mul(4);
+
         let session: HostCopySession<D::Privilege> = self
             .surfaces
             .try_begin_write(id, |state| {
+                let buffer_size = state.pixel_buffer.size();
+                if buffer_size < required_bytes {
+                    return Err(AdapterError::BackendRejected {
+                        reason: format!(
+                            "submit_host_copy_image_to_buffer: source texture is \
+                             {}x{}x4 = {} bytes; destination cuda buffer size is \
+                             {} bytes (texture would overrun)",
+                            image_extent.width,
+                            image_extent.height,
+                            required_bytes,
+                            buffer_size,
+                        ),
+                    });
+                }
                 let signal_value = state.next_release_value();
                 Ok(HostCopySession {
                     timeline: Arc::clone(&state.timeline),
