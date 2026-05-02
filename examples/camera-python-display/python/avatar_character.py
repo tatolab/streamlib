@@ -484,9 +484,6 @@ class AvatarCharacter:
             )
 
         self.frame_count = 0
-        self._is_ready = False
-        self._setup_complete_time = None
-        self._ready_delay_seconds = 1.5
         self._last_keypoints = None  # (17, 3) numpy array (x_px, y_px, conf)
 
         self._cuda = CudaContext.from_runtime(ctx)
@@ -553,7 +550,6 @@ class AvatarCharacter:
             self._overlay_renderer = PoseOverlayRenderer(
                 self._mgl_ctx, self._W, self._H
             )
-            self._setup_complete_time = time.monotonic()
 
         if self._mgl_output_fbo is None:
             # Wrap the imported GL_TEXTURE_2D as a ModernGL external_texture
@@ -716,24 +712,16 @@ class AvatarCharacter:
                 )
             return
 
-        # 5. Ready-state gate (matches macOS behavior).
-        if not self._is_ready and self._setup_complete_time is not None:
-            elapsed = time.monotonic() - self._setup_complete_time
-            if elapsed >= self._ready_delay_seconds:
-                self._is_ready = True
-                logger.info(
-                    f"AvatarCharacter/linux: Ready after {elapsed:.1f}s"
-                )
-
-        # 6. Publish output frame referencing the pre-registered output
+        # 5. Publish output frame referencing the pre-registered output
         # surface UUID. Display resolves the same UUID via surface-share +
-        # the local GpuContext texture cache.
-        if self._is_ready:
-            out_frame = dict(frame)
-            out_frame["surface_id"] = self._opengl_uuid
-            out_frame["width"] = self._W
-            out_frame["height"] = self._H
-            ctx.outputs.write("video_out", out_frame)
+        # the local GpuContext texture cache. No ready-delay on Linux —
+        # the macOS path's 1.5s gate was for a Breaking-News-PiP slide-in
+        # animation that doesn't apply here; output flows from frame 0.
+        out_frame = dict(frame)
+        out_frame["surface_id"] = self._opengl_uuid
+        out_frame["width"] = self._W
+        out_frame["height"] = self._H
+        ctx.outputs.write("video_out", out_frame)
 
         self.frame_count += 1
         if self.frame_count == 1:
@@ -743,8 +731,7 @@ class AvatarCharacter:
             )
         if self.frame_count % 300 == 0:
             logger.debug(
-                f"AvatarCharacter/linux: {self.frame_count} frames "
-                f"(ready={self._is_ready})"
+                f"AvatarCharacter/linux: {self.frame_count} frames"
             )
 
     def _teardown_linux(self, ctx: RuntimeContextFullAccess) -> None:
@@ -761,6 +748,5 @@ class AvatarCharacter:
         # The external_texture wrapper does NOT own the GL name; releasing
         # it only frees ModernGL's bookkeeping and is safe to skip.
         logger.info(
-            f"AvatarCharacter/linux: Shutdown ({self.frame_count} frames, "
-            f"ready={self._is_ready})"
+            f"AvatarCharacter/linux: Shutdown ({self.frame_count} frames)"
         )
