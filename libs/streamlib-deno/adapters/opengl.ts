@@ -27,6 +27,7 @@ import {
   type StreamlibSurface,
   type SurfaceAccessGuard,
 } from "../surface_adapter.ts";
+import { VulkanContext } from "./vulkan.ts";
 
 export { STREAMLIB_ADAPTER_ABI_VERSION };
 
@@ -293,6 +294,52 @@ export class OpenGLContext {
         symbols.sldn_opengl_release_read(rt, surfaceId);
       },
     };
+  }
+
+  /** Publish a producer-side cross-process release for a surface this
+   * OpenGL context has been writing to via `acquireWrite`.
+   *
+   * OpenGL writes don't touch the underlying `VkImage`'s Vulkan
+   * tracker — and the OpenGL adapter has no Vulkan device handle of
+   * its own. The engine-model answer (per
+   * `docs/architecture/adapter-authoring.md` → Cross-process producer
+   * composition) is to let the canonical Vulkan adapter own the QFOT
+   * release barrier: the customer dual-registers the same surface
+   * with both adapters, and OpenGL's release path delegates to
+   * `VulkanContext.releaseForCrossProcess`.
+   *
+   * `vulkanCtx` is the subprocess's `VulkanContext` — typically
+   * obtained alongside this `OpenGLContext` from the same runtime
+   * context inside `setup`. The runtime must have been started with
+   * surface-share registration carrying an exportable timeline
+   * OPAQUE_FD per the host-side
+   * `register_texture(... Some(timeline.as_ref()), ...)` pattern.
+   *
+   * Sequencing — call this *after* the `acquireWrite` `using` block
+   * has exited so the adapter's `glFinish` on release has drained GL
+   * writes through the DMA-BUF kernel backing. The Vulkan adapter's
+   * QFOT release then issues a barrier on its imported `VkImage`
+   * (bound to the same DMA-BUF) and publishes the layout via
+   * surface-share, so any subsequent host-side consumer reaching
+   * this surface through `GpuContext::resolve_videoframe_registration`
+   * Path 2 sees the right source layout.
+   *
+   * `postReleaseLayout` is a Vulkan `VkImageLayout` enumerant as a
+   * number. `GENERAL` is the right choice for OpenGL-backed surfaces.
+   *
+   * See `docs/learnings/cross-process-vkimage-layout.md` for the QFOT
+   * vs bridging-fallback story; on NVIDIA Linux the host consumer
+   * side rides the bridging fallback. */
+  releaseForCrossProcess(
+    surface: StreamlibSurface | string | bigint,
+    vulkanCtx: VulkanContext,
+    postReleaseLayout: number,
+  ): void {
+    // Delegate to VulkanContext.releaseForCrossProcess — that's where
+    // release_to_foreign + surface-share update_layout already live
+    // (#647). VulkanContext lazily registers the surface on its first
+    // reference, so the customer doesn't need a no-op acquire first.
+    vulkanCtx.releaseForCrossProcess(surface, postReleaseLayout);
   }
 
   /** Acquire read access against a surface registered under

@@ -34,7 +34,7 @@ use streamlib::core::rhi::{
     TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
 };
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::host_rhi::VulkanTextureReadback;
+use streamlib::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 /// UUID the host registers the render-target surface under. The
@@ -111,11 +111,14 @@ fn main() -> Result<()> {
     let texture_slot: Arc<
         Mutex<Option<streamlib::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
+    let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
+        Arc::new(Mutex::new(None));
     let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
         Arc::new(Mutex::new(None));
 
     {
         let texture_slot = Arc::clone(&texture_slot);
+        let timeline_slot = Arc::clone(&timeline_slot);
         let readback_slot = Arc::clone(&readback_slot);
         runtime.install_setup_hook(move |gpu| {
             let texture = gpu.acquire_render_target_dma_buf_image(
@@ -134,22 +137,47 @@ fn main() -> Result<()> {
                         .into(),
                 )
             })?;
-            // OpenGL adapter doesn't need an explicit Vulkan timeline:
+
+            // The OpenGL adapter itself doesn't need a Vulkan timeline:
             // `glFinish` on release plus DMA-BUF kernel-fence semantics
-            // carry visibility for the host's pre-stop readback.
-            //
+            // carry visibility for the host's pre-stop readback. We
+            // register one anyway so the subprocess can dual-register
+            // the same surface with its `VulkanSurfaceAdapter` (#644)
+            // for producer-side QFOT release publishing — the engine-
+            // model answer for cross-process content preservation per
+            // `docs/architecture/adapter-authoring.md`. The Vulkan
+            // adapter's `register_host_surface` requires a timeline,
+            // so the host must allocate one even when the producer is
+            // OpenGL-only.
+            let host_device = Arc::clone(gpu.device().vulkan_device());
+            let timeline = Arc::new(
+                HostVulkanTimelineSemaphore::new_exportable(
+                    host_device.device(),
+                    0,
+                )
+                .map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "HostVulkanTimelineSemaphore::new_exportable: {e}"
+                    ))
+                })?,
+            );
+
             // GL writes leave the underlying DMA-BUF in GENERAL from
             // Vulkan's point of view (mirrors the host's hard-coded
             // `TextureSourceLayout::General` assumption at the
             // post-stop readback site). Declaring it here means
             // cross-process consumers reaching the surface via Path 2
             // get the right source layout for their first QFOT acquire
-            // barrier (#633).
+            // barrier (#633), AND it sets the subprocess Vulkan
+            // adapter's `current_layout` to GENERAL at registration
+            // time so the producer-side QFOT release barrier issued
+            // via `OpenGLContext.release_for_cross_process` (#644)
+            // pairs from the right source.
             store
                 .register_texture(
                     SCENARIO_SURFACE_UUID,
                     &texture,
-                    None,
+                    Some(timeline.as_ref()),
                     streamlib::core::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
@@ -169,9 +197,10 @@ fn main() -> Result<()> {
             })?;
 
             *texture_slot.lock().unwrap() = Some(texture);
+            *timeline_slot.lock().unwrap() = Some(timeline);
             *readback_slot.lock().unwrap() = Some(readback);
             println!(
-                "✓ render-target DMA-BUF surface registered as '{}'",
+                "✓ render-target DMA-BUF + timeline registered as '{}'",
                 SCENARIO_SURFACE_UUID
             );
             Ok(())

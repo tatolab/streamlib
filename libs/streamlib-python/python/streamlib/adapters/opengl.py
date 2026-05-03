@@ -391,6 +391,62 @@ class OpenGLContext:
                 self._rt, ctypes.c_uint64(surface_id)
             )
 
+    def release_for_cross_process(
+        self, surface, vulkan_ctx, post_release_layout: int
+    ) -> None:
+        """Publish a producer-side cross-process release for a surface
+        this OpenGL context has been writing to via
+        :meth:`acquire_write`.
+
+        OpenGL writes don't touch the underlying ``VkImage``'s Vulkan
+        tracker — and the OpenGL adapter has no Vulkan device handle
+        of its own. The engine-model answer (per
+        ``docs/architecture/adapter-authoring.md`` → Cross-process
+        producer composition) is to let the canonical Vulkan adapter
+        own the QFOT release barrier: the customer dual-registers the
+        same surface with both adapters, and OpenGL's release path
+        delegates to ``VulkanContext.release_for_cross_process``.
+
+        ``vulkan_ctx`` is the subprocess's
+        :class:`streamlib.adapters.vulkan.VulkanContext` — typically
+        obtained alongside this :class:`OpenGLContext` from the same
+        runtime context inside ``setup``. It must be present (the
+        runtime must have been started with surface-share registration
+        carrying an exportable timeline OPAQUE_FD per the
+        ``register_texture(... Some(timeline.as_ref()), ...)`` host
+        pattern).
+
+        Sequencing — call this *after* the :meth:`acquire_write`
+        ``with`` block has exited so the adapter's ``glFinish`` on
+        release has drained GL writes through the DMA-BUF kernel
+        backing. The Vulkan adapter's QFOT release then issues a
+        barrier on its imported ``VkImage`` (bound to the same
+        DMA-BUF) and publishes the layout via surface-share, so any
+        subsequent host-side consumer reaching this surface through
+        ``GpuContext::resolve_videoframe_registration`` Path 2 sees
+        the right source layout.
+
+        ``post_release_layout`` is a Vulkan ``VkImageLayout``
+        enumerant as an integer (use
+        :class:`streamlib.adapters.vulkan.VkImageLayout` constants).
+        ``GENERAL`` is the right choice for OpenGL-backed surfaces
+        — the host doesn't observe the GL writes' "Vulkan layout" in
+        any meaningful sense, so GENERAL-as-source-of-truth gives the
+        consumer maximum flexibility.
+
+        See ``docs/learnings/cross-process-vkimage-layout.md`` for
+        the full QFOT vs bridging-fallback story; on NVIDIA Linux the
+        host consumer side rides the bridging fallback (NVIDIA does
+        not expose ``VK_EXT_external_memory_acquire_unmodified``) and
+        kernel-side DMA-BUF contents are empirically preserved.
+        """
+        # Delegate to VulkanContext.release_for_cross_process — that's
+        # where release_to_foreign + surface-share update_layout
+        # already live (#647). VulkanContext lazily registers the
+        # surface on its first reference, so the customer doesn't
+        # need a no-op acquire first.
+        vulkan_ctx.release_for_cross_process(surface, post_release_layout)
+
     @contextmanager
     def acquire_read_external_oes(
         self, surface

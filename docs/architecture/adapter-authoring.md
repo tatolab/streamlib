@@ -474,6 +474,163 @@ subprocesses (which is the default for any new adapter), follow
   language-specific by construction; document the reason in the
   PR if you split.
 
+## Cross-process producer composition
+
+When the producer side (subprocess writing into a host-allocated
+surface) needs spec-correct cross-process layout coordination
+(#633) AND the adapter is **not** the Vulkan adapter, **don't** add
+a Vulkan device handle to the adapter. Compose: the customer
+dual-registers the same surface with the producer adapter (e.g.
+`OpenGlSurfaceAdapter`, `streamlib-adapter-skia` GL backend) AND
+the canonical `VulkanSurfaceAdapter`, and the producer's release
+path delegates to `VulkanSurfaceAdapter::release_to_foreign` for
+the QFOT release barrier + the surface-share `update_image_layout`
+publish.
+
+This is the engine-model answer (per CLAUDE.md → "The RHI is the
+single gateway"): there is one canonical place per API for that
+API's state. The OpenGL adapter does GL only; the Vulkan adapter
+does Vulkan only; cross-API composition lives at the SDK / customer
+layer. Dawn/Chromium's `SharedImageBacking` + per-API
+`*ImageRepresentation` pattern is the same shape; we adopted it
+deliberately rather than rederive it under a different name.
+
+### When this applies
+
+A surface adapter needs producer-side cross-process release wiring
+when **all three** are true:
+
+1. The adapter writes into a host-allocated DMA-BUF / OPAQUE_FD
+   resource. (Read-only adapters never publish layout — they
+   consume it.)
+2. The adapter's underlying API has no native concept of
+   `VkImageLayout` (OpenGL, Skia, future ANGLE/DirectComposition,
+   etc.). The Vulkan adapter trivially handles its own QFOT
+   release; CUDA's path is buffer-only and structurally has no
+   layout to publish (see [CUDA exclusion](#cuda-exclusion)).
+3. Cross-process consumers exist that read the surface via Path 2
+   `acquire_from_foreign`. Same-process consumers go through Path
+   1 and don't need this.
+
+### Implementation pattern
+
+**Host setup hook** — register the surface with surface-share
+**including** an exportable `HostVulkanTimelineSemaphore`, even
+when the producer adapter doesn't use the timeline itself. The
+subprocess's `VulkanSurfaceAdapter::register_host_surface` requires
+a timeline; without it the dual-registration call fails:
+
+```rust
+let timeline = Arc::new(
+    HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)?,
+);
+store.register_texture(
+    SCENARIO_SURFACE_UUID,
+    &texture,
+    Some(timeline.as_ref()),  // required for dual-registration
+    VulkanLayout::GENERAL,    // the producer's post-write layout
+)?;
+```
+
+The `initial_layout` becomes the Vulkan adapter's `current_layout`
+at registration time on the cdylib side, so the QFOT release
+barrier issues from the right source layout.
+
+**Subprocess customer** — obtain both contexts from the same
+runtime in `setup`, then call the producer adapter's
+`release_for_cross_process` after the write block exits:
+
+```python
+# Python
+self._opengl = OpenGLContext.from_runtime(ctx)
+self._vulkan = VulkanContext.from_runtime(ctx)
+# ...
+with self._opengl.acquire_write(uuid) as view:
+    # ... GL writes ...
+# acquire_write's __exit__ runs glFinish — writes drained.
+self._opengl.release_for_cross_process(uuid, self._vulkan, VkImageLayout.GENERAL)
+```
+
+```typescript
+// Deno
+this.opengl = OpenGLContext.fromRuntime(ctx);
+this.vulkan = VulkanContext.fromRuntime(ctx);
+// ...
+{
+  using guard = this.opengl.acquireWrite(uuid);
+  // ... GL writes ...
+}  // dispose runs glFinish — writes drained.
+this.opengl.releaseForCrossProcess(uuid, this.vulkan, VkImageLayout.General);
+```
+
+**Producer adapter SDK method** — a thin delegating wrapper:
+
+```python
+def release_for_cross_process(self, surface, vulkan_ctx, post_release_layout):
+    vulkan_ctx.release_for_cross_process(surface, post_release_layout)
+```
+
+That's the entire implementation. The adapter crate (Rust) doesn't
+change.
+
+**`VulkanContext.release_for_cross_process` lazily registers** the
+surface on its first reference, so the customer doesn't need a
+no-op `acquire_*` first to populate the cdylib's surface-id map.
+The Vulkan adapter's `register_host_surface` consumes the sync_fd
+from the resolved SurfaceHandle and dups its own copies of the
+DMA-BUF FDs — the producer adapter's earlier registration is not
+disturbed (`SurfaceHandle::sync_fd` is `take`n by the Vulkan
+register; the OpenGL register reads only the DMA-BUF FDs and never
+touches the sync_fd).
+
+### Why not add a Vulkan device handle to the producer adapter
+
+Two alternatives were considered and rejected:
+
+- **Construction-time** `OpenGlSurfaceAdapter::new(runtime, device)`
+  — forces every OpenGL adapter user to wire a Vulkan device, even
+  ones that don't need cross-process. Conflates "GL access" with
+  "Vulkan release" at the type level.
+- **Per-call threaded device**
+  `release_for_cross_process<D>(surface, device, …)` — moves the
+  device threading to the API surface and still requires the
+  adapter to stash a `VkImage` (extra `Arc<dyn VulkanTextureLike>`
+  on `HostSurfaceRegistration`). Adapter still has Vulkan
+  obligations.
+
+Both options put Vulkan responsibilities on the OpenGL adapter,
+which is wrong-shaped per the engine-model rule. Composition is
+free; rederivation is expensive.
+
+### CUDA exclusion
+
+The CUDA adapter (`streamlib-adapter-cuda`) does NOT need this
+pattern. CUDA's interop is buffer-only by structural constraint:
+DLPack requires a flat `void*` device pointer, which forces
+`cudaImportExternalMemory(OPAQUE_FD)` →
+`cudaExternalMemoryGetMappedBuffer`, which only accepts a
+`VkBuffer`. `VkBuffer`s have no `VkImageLayout`, so QFOT-for-layout
+is structurally meaningless for CUDA. Cross-process correctness
+is provided by the timeline-semaphore alone (the cuda.py
+docstring: *"there is no per-acquire IPC — the host's pipeline is
+expected to write into the OPAQUE_FD buffer and signal the shared
+timeline ambiently."*).
+
+If a future CUDA-on-VkImage path lands (currently unscoped — no
+open issue contemplates it), it would inherit this dual-
+registration pattern from this section automatically.
+
+### Reference
+
+Implementation: `examples/polyglot-opengl-fragment-shader/`
+demonstrates the pattern end-to-end for both Python and Deno
+runtimes. The host main.rs allocates and registers the timeline;
+the python/deno scenario binaries dual-register and call
+`release_for_cross_process` after each GL write block.
+
+Sibling tickets: #644 (OpenGL, this section's source), #645
+(Skia GL, inherits the pattern when its host crate ships).
+
 ## Conformance & tests
 
 Every adapter passes the conformance suite. The entry point is

@@ -41,6 +41,10 @@ import type {
   RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 import { OpenGLContext } from "../../../libs/streamlib-deno/adapters/opengl.ts";
+import {
+  VkImageLayout,
+  VulkanContext,
+} from "../../../libs/streamlib-deno/adapters/vulkan.ts";
 
 // =============================================================================
 // Minimal libGL.so.1 binding via Deno.dlopen
@@ -269,6 +273,13 @@ export default class OpenGlFragmentShaderProcessor implements ReactiveProcessor 
   private width = 0;
   private height = 0;
   private opengl: OpenGLContext | null = null;
+  // Dual-register the surface with the Vulkan adapter too so the
+  // producer-side QFOT release barrier (#644) can publish layout to
+  // host consumers via OpenGLContext.releaseForCrossProcess. OpenGL
+  // itself does GL writes; the Vulkan adapter owns the cross-process
+  // release barrier — engine-model composition per
+  // docs/architecture/adapter-authoring.md.
+  private vulkan: VulkanContext | null = null;
   private rendered = false;
   private errorMessage: string | null = null;
 
@@ -278,6 +289,7 @@ export default class OpenGlFragmentShaderProcessor implements ReactiveProcessor 
     this.width = Number(cfg["width"] ?? 0);
     this.height = Number(cfg["height"] ?? 0);
     this.opengl = OpenGLContext.fromRuntime(ctx);
+    this.vulkan = VulkanContext.fromRuntime(ctx);
     console.error(
       `[OpenGlFragmentShader/deno] setup uuid=${this.uuid} ` +
         `size=${this.width}x${this.height}`,
@@ -303,91 +315,124 @@ export default class OpenGlFragmentShaderProcessor implements ReactiveProcessor 
   }
 
   private renderOnce(): void {
-    if (this.opengl === null) {
-      throw new Error("OpenGLContext was not initialized in setup");
+    if (this.opengl === null || this.vulkan === null) {
+      throw new Error(
+        "OpenGLContext / VulkanContext were not initialized in setup",
+      );
     }
-    using guard = this.opengl.acquireWrite(this.uuid);
-    const textureId = guard.view.glTextureId;
-    const gl = loadLibGL();
+    // Wrap the GL block in `{ … }` so the `using guard` disposes
+    // (running the adapter's `end_write_access` → `glFinish`) BEFORE
+    // the cross-process release call below — the QFOT release barrier
+    // assumes producer-side hazard coverage upstream.
+    {
+      using guard = this.opengl.acquireWrite(this.uuid);
+      const textureId = guard.view.glTextureId;
+      const gl = loadLibGL();
 
-    // Empty VAO — desktop core requires one bound; geometry comes from
-    // gl_VertexID in the vertex shader.
-    const vao = new Uint32Array(1);
-    gl.symbols.glGenVertexArrays(1, new Uint8Array(vao.buffer));
-    gl.symbols.glBindVertexArray(vao[0]);
-    try {
-      const vs = compileShader(gl, VERTEX_SHADER, GL_VERTEX_SHADER, "vertex");
-      let program: number;
+      // Empty VAO — desktop core requires one bound; geometry comes
+      // from gl_VertexID in the vertex shader.
+      const vao = new Uint32Array(1);
+      gl.symbols.glGenVertexArrays(1, new Uint8Array(vao.buffer));
+      gl.symbols.glBindVertexArray(vao[0]);
       try {
-        const fs = compileShader(
+        const vs = compileShader(
           gl,
-          FRAGMENT_SHADER,
-          GL_FRAGMENT_SHADER,
-          "fragment",
+          VERTEX_SHADER,
+          GL_VERTEX_SHADER,
+          "vertex",
         );
+        let program: number;
         try {
-          program = linkProgram(gl, vs, fs);
+          const fs = compileShader(
+            gl,
+            FRAGMENT_SHADER,
+            GL_FRAGMENT_SHADER,
+            "fragment",
+          );
+          try {
+            program = linkProgram(gl, vs, fs);
+          } finally {
+            gl.symbols.glDeleteShader(fs);
+          }
         } finally {
-          gl.symbols.glDeleteShader(fs);
+          gl.symbols.glDeleteShader(vs);
+        }
+
+        try {
+          // FBO with the imported texture as color attachment.
+          const fbo = new Uint32Array(1);
+          gl.symbols.glGenFramebuffers(1, new Uint8Array(fbo.buffer));
+          gl.symbols.glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
+          gl.symbols.glFramebufferTexture2D(
+            GL_FRAMEBUFFER,
+            GL_COLOR_ATTACHMENT0,
+            GL_TEXTURE_2D,
+            textureId,
+            0,
+          );
+          const status = gl.symbols.glCheckFramebufferStatus(GL_FRAMEBUFFER);
+          if (status !== GL_FRAMEBUFFER_COMPLETE) {
+            throw new Error(
+              `FBO incomplete (status=0x${
+                status.toString(16)
+              }) — the imported texture may have been bound with an ` +
+                `external_only modifier; the host allocator should pick ` +
+                `a tiled, render-target-capable DRM modifier`,
+            );
+          }
+
+          gl.symbols.glViewport(0, 0, this.width, this.height);
+          gl.symbols.glUseProgram(program);
+
+          const resolutionName = new TextEncoder().encode("resolution\0");
+          const loc = gl.symbols.glGetUniformLocation(program, resolutionName);
+          if (loc >= 0) {
+            gl.symbols.glUniform2f(loc, this.width, this.height);
+          }
+
+          gl.symbols.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+          gl.symbols.glFinish();
+
+          const glErr = gl.symbols.glGetError();
+          if (glErr !== GL_NO_ERROR) {
+            throw new Error(
+              `GL error 0x${glErr.toString(16)} after draw — see ` +
+                `docs/learnings/nvidia-egl-dmabuf-render-target.md`,
+            );
+          }
+
+          gl.symbols.glBindFramebuffer(GL_FRAMEBUFFER, 0);
+          gl.symbols.glDeleteFramebuffers(1, new Uint8Array(fbo.buffer));
+        } finally {
+          gl.symbols.glDeleteProgram(program);
         }
       } finally {
-        gl.symbols.glDeleteShader(vs);
+        gl.symbols.glBindVertexArray(0);
+        gl.symbols.glDeleteVertexArrays(1, new Uint8Array(vao.buffer));
       }
-
-      try {
-        // FBO with the imported texture as color attachment.
-        const fbo = new Uint32Array(1);
-        gl.symbols.glGenFramebuffers(1, new Uint8Array(fbo.buffer));
-        gl.symbols.glBindFramebuffer(GL_FRAMEBUFFER, fbo[0]);
-        gl.symbols.glFramebufferTexture2D(
-          GL_FRAMEBUFFER,
-          GL_COLOR_ATTACHMENT0,
-          GL_TEXTURE_2D,
-          textureId,
-          0,
-        );
-        const status = gl.symbols.glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (status !== GL_FRAMEBUFFER_COMPLETE) {
-          throw new Error(
-            `FBO incomplete (status=0x${status.toString(16)}) — the imported ` +
-              `texture may have been bound with an external_only modifier; ` +
-              `the host allocator should pick a tiled, render-target-capable ` +
-              `DRM modifier`,
-          );
-        }
-
-        gl.symbols.glViewport(0, 0, this.width, this.height);
-        gl.symbols.glUseProgram(program);
-
-        const resolutionName = new TextEncoder().encode("resolution\0");
-        const loc = gl.symbols.glGetUniformLocation(program, resolutionName);
-        if (loc >= 0) {
-          gl.symbols.glUniform2f(loc, this.width, this.height);
-        }
-
-        gl.symbols.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        gl.symbols.glFinish();
-
-        const glErr = gl.symbols.glGetError();
-        if (glErr !== GL_NO_ERROR) {
-          throw new Error(
-            `GL error 0x${glErr.toString(16)} after draw — see ` +
-              `docs/learnings/nvidia-egl-dmabuf-render-target.md`,
-          );
-        }
-
-        gl.symbols.glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        gl.symbols.glDeleteFramebuffers(1, new Uint8Array(fbo.buffer));
-      } finally {
-        gl.symbols.glDeleteProgram(program);
-      }
-    } finally {
-      gl.symbols.glBindVertexArray(0);
-      gl.symbols.glDeleteVertexArrays(1, new Uint8Array(vao.buffer));
+      // `using guard` runs adapter `end_write_access` at scope exit
+      // which drains GL via glFinish so the host's DMA-BUF readback
+      // sees a fully-flushed image AND the cross-process release
+      // barrier below sees coherent contents through the DMA-BUF.
     }
-    // `using guard` runs adapter `end_write_access` at scope exit which
-    // drains GL via glFinish so the host's DMA-BUF readback sees a
-    // fully-flushed image.
+
+    // Producer-side cross-process release (#644). The OpenGL adapter
+    // has no Vulkan device of its own and never issues a release
+    // barrier on the imported VkImage — delegate to the Vulkan
+    // adapter (dual-registration). General is the right choice for
+    // OpenGL-backed surfaces (the host's pre-stop readback also reads
+    // with TextureSourceLayout::General). Pairs with any future host
+    // consumer's `acquire_from_foreign` via the bridging fallback on
+    // NVIDIA / QFOT-acquire on Mesa.
+    this.opengl.releaseForCrossProcess(
+      this.uuid,
+      this.vulkan,
+      VkImageLayout.General,
+    );
+    console.error(
+      `[OpenGlFragmentShader/deno] published cross-process release ` +
+        `layout=General for surface '${this.uuid}'`,
+    );
   }
 
   teardown(_ctx: RuntimeContextFullAccess): void {
