@@ -535,9 +535,15 @@ make sense if the surrounding files were renamed or restructured.
   metadata, before tracking layout state, before wondering if there's a
   better way than convention to coordinate handoff between a producer
   and a consumer through a `surface_id`. Same-process consumers benefit
-  today; cross-process consumers wait on a polyglot schema lift (filed
-  as follow-up). Hard rule: never create a parallel
-  `HashMap<surface_id, ...>` for per-surface state; extend
-  `TextureRegistration` instead.
+  today; cross-process consumers wait on the IPC schema lift (#633) —
+  to the best of our current knowledge subprocess code does NOT need
+  to construct `TextureRegistration` itself (the speculation tracked
+  as #634 was closed without code change after research showed cross-
+  process layouts are independent state machines per Vulkan spec; see
+  the doc's "Why no sandbox-side mirror" section). Working rule: don't
+  create a parallel engine-wide `HashMap<surface_id, ...>` alongside
+  `texture_cache` — extend `TextureRegistration`. Adapter-internal
+  `SurfaceState<P>` lives at a different scope and is not the failure
+  mode this rule prevents.
 
 Index: @docs/learnings/README.md
