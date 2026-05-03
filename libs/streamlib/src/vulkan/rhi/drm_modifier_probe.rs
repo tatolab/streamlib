@@ -250,6 +250,32 @@ const DEFAULT_PROBE_FORMATS: &[u32] = &[
     fourcc::DRM_FORMAT_NV12,
 ];
 
+/// Partition the EGL `eglQueryDmaBufModifiersEXT` output into render-target
+/// (`external_only=FALSE`) and sampler-only (`external_only=TRUE`) lists.
+/// Pure function so the partitioning is unit-testable without driving a
+/// live EGL display — locks the contract structurally rather than only
+/// empirically against the local driver.
+fn partition_modifiers_by_external_only(
+    modifiers: &[u64],
+    external_only: &[egl::EGLBoolean],
+    returned: usize,
+) -> (Vec<u64>, Vec<u64>) {
+    let mut rt: Vec<u64> = Vec::new();
+    let mut sampler_only: Vec<u64> = Vec::new();
+    for (m, ext) in modifiers
+        .iter()
+        .zip(external_only.iter())
+        .take(returned)
+    {
+        if *ext == egl::EGL_FALSE {
+            rt.push(*m);
+        } else {
+            sampler_only.push(*m);
+        }
+    }
+    (rt, sampler_only)
+}
+
 /// Run the EGL probe on `EGL_DEFAULT_DISPLAY` and return a populated
 /// [`DrmModifierTable`].
 ///
@@ -366,23 +392,11 @@ pub fn probe_with_formats(formats: &[u32]) -> Result<DrmModifierTable, ProbeErro
             return Err(ProbeError::QueryFailed(fourcc, err));
         }
 
-        // Partition by external_only: EGL_FALSE → render-target-capable
-        // (`GL_TEXTURE_2D` + FBO color attachment), EGL_TRUE → sampler-only
-        // (`GL_TEXTURE_EXTERNAL_OES` + `samplerExternalOES`). The two lists
-        // are disjoint and together cover every modifier EGL returned.
-        let mut rt: Vec<u64> = Vec::new();
-        let mut sampler_only: Vec<u64> = Vec::new();
-        for (m, ext) in modifiers
-            .iter()
-            .zip(external_only.iter())
-            .take(returned as usize)
-        {
-            if *ext == egl::EGL_FALSE {
-                rt.push(*m);
-            } else {
-                sampler_only.push(*m);
-            }
-        }
+        let (rt, sampler_only) = partition_modifiers_by_external_only(
+            &modifiers,
+            &external_only,
+            returned as usize,
+        );
 
         tracing::info!(
             "drm_modifier_probe: fourcc 0x{:08x} → {} modifier(s) total, {} render-target-capable, {} sampler-only",
@@ -434,6 +448,59 @@ mod tests {
         assert!(table
             .sampler_only_modifiers(fourcc::DRM_FORMAT_ABGR8888)
             .is_empty());
+    }
+
+    /// Synthetic-input partition test: exercises the
+    /// `partition_modifiers_by_external_only` helper directly with a fake
+    /// EGL output stream so the partitioning's `else` branch is locked
+    /// structurally — independent of which driver the test runs on. A
+    /// regression that drops `external_only=TRUE` entries instead of
+    /// routing them to the sampler-only list would fail this test even on
+    /// Mesa / headless CI, where the live-probe paths skip vacuously.
+    #[test]
+    fn partition_modifiers_routes_external_only_true_to_sampler_only_list() {
+        let modifiers: [u64; 4] = [
+            DRM_FORMAT_MOD_LINEAR,        // sampler-only on NVIDIA
+            0x0030_0000_0000_0000,        // arbitrary tiled — RT
+            0x0030_0000_1234_5678,        // arbitrary tiled — RT
+            0x0030_0000_dead_beef,        // arbitrary — sampler-only
+        ];
+        let external_only = [
+            egl::EGL_TRUE,
+            egl::EGL_FALSE,
+            egl::EGL_FALSE,
+            egl::EGL_TRUE,
+        ];
+        let (rt, sampler_only) =
+            partition_modifiers_by_external_only(&modifiers, &external_only, 4);
+        assert_eq!(
+            rt,
+            vec![0x0030_0000_0000_0000, 0x0030_0000_1234_5678],
+            "external_only=FALSE entries must land in the RT list, in order"
+        );
+        assert_eq!(
+            sampler_only,
+            vec![DRM_FORMAT_MOD_LINEAR, 0x0030_0000_dead_beef],
+            "external_only=TRUE entries must land in the sampler-only list, in order"
+        );
+    }
+
+    /// `returned` truncates the partition pass — EGL may report fewer
+    /// modifiers than the buffer length on a second-pass query, and the
+    /// helper must honor that count.
+    #[test]
+    fn partition_modifiers_honors_returned_count() {
+        let modifiers: [u64; 4] = [1, 2, 3, 4];
+        let external_only = [
+            egl::EGL_FALSE,
+            egl::EGL_TRUE,
+            egl::EGL_FALSE, // ignored
+            egl::EGL_TRUE,  // ignored
+        ];
+        let (rt, sampler_only) =
+            partition_modifiers_by_external_only(&modifiers, &external_only, 2);
+        assert_eq!(rt, vec![1]);
+        assert_eq!(sampler_only, vec![2]);
     }
 
     /// Live EGL probe — when the probe runs, the RT and sampler-only lists
