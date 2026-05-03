@@ -973,10 +973,12 @@ impl HostVulkanDevice {
     /// equivalent live OPAQUE_FD allocation in the kernel, so dropping
     /// the probe leaves the per-handle-type state vulnerable to
     /// reclaim/decay; subsequent post-swapchain allocations then flake
-    /// intermittently. The DEVICE_LOCAL OPAQUE_FD sentinel is sized to
-    /// the consumer's realistic resolution (1920×1080×4 ≈ 8 MiB) so it
-    /// covers any size-class accounting NVIDIA may apply on top of the
-    /// per-handle-type state. Issue #637.
+    /// intermittently. Sentinels are intentionally tiny (8×8×4 = 256
+    /// bytes): empirical E2E on Cam Link 4K showed that a same-size
+    /// (1920×1080×4 ≈ 8 MiB) sentinel *deterministically* blocked the
+    /// consumer's post-swapchain allocation, indicating NVIDIA tracks
+    /// a cumulative byte budget for OPAQUE_FD and the sentinel must
+    /// not compete with consumer-class allocations. Issue #637.
     ///
     /// Pools that weren't created (external memory unsupported, EGL
     /// probe failed, etc.) are skipped — the engine never produces a
@@ -997,14 +999,6 @@ impl HostVulkanDevice {
         const PROBE_W: u32 = 8;
         const PROBE_H: u32 = 8;
         const PROBE_BPP: u32 = 4;
-
-        // Sentinel size for the DEVICE_LOCAL OPAQUE_FD pool. Sized to
-        // cover the canonical camera→cuda consumer
-        // (`CameraToCudaCopyProcessor` at 1920×1080) so NVIDIA's
-        // size-class accounting (if any) is initialized at the same
-        // class the consumer will request.
-        const OPAQUE_FD_DEVICE_LOCAL_SENTINEL_W: u32 = 1920;
-        const OPAQUE_FD_DEVICE_LOCAL_SENTINEL_H: u32 = 1080;
 
         let mut sentinels: Vec<ExportPoolSentinel> = Vec::new();
 
@@ -1097,8 +1091,6 @@ impl HostVulkanDevice {
         //    *deterministically* blocked the consumer's same-size
         //    allocation post-swapchain, indicating NVIDIA tracks a
         //    cumulative byte budget — so the sentinel must be tiny.
-        let _ = OPAQUE_FD_DEVICE_LOCAL_SENTINEL_W;
-        let _ = OPAQUE_FD_DEVICE_LOCAL_SENTINEL_H;
         if let Some(pool) = device.opaque_fd_buffer_pool_device_local() {
             let sentinel = make_opaque_fd_buffer_sentinel(
                 pool,

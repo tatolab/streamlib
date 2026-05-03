@@ -142,7 +142,7 @@ Deterministic on vivid (`/dev/video2`):
    new_opaque_fd_export_device_local: ... A device memory allocation
    has failed.`
 5. Re-enable, rebuild, re-run: log shows `HostVulkanDevice export
-   pool sentinel retained: opaque_fd_device_local (8294400 bytes)`
+   pool sentinel retained: opaque_fd_device_local (256 bytes)`
    plus `HostVulkanDevice export pools pre-warmed`, followed by
    `CameraToCudaCopy: registered cuda OPAQUE_FD DEVICE_LOCAL
    surface_id=...` — no setup failure.
