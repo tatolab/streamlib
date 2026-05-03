@@ -1068,7 +1068,7 @@ impl DisplayEventLoopHandler {
         frame_idx: u64,
         input_frame_index: u64,
     ) {
-        use crate::core::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
+        use crate::core::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
 
         let format = texture.format();
         let width = texture.width();
@@ -1142,29 +1142,9 @@ impl DisplayEventLoopHandler {
                 return;
             }
         };
-        // VulkanTextureReadback hands the staging bytes back in the
-        // texture's native channel order. The PNG writer treats every
-        // input as RGBA-in-memory, so source textures whose memory
-        // layout is BGRA need an R↔B swizzle before the PNG encode —
-        // otherwise blue and red swap and (e.g.) a dark blue wall
-        // renders as orange. The OpenGL adapter picks Bgra8Unorm for
-        // its render-target DMA-BUFs to match the swapchain's native
-        // format and avoid a swizzle in the display path; that
-        // optimization just doesn't carry to the PNG export.
-        let needs_swizzle = matches!(
-            format,
-            TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb,
-        );
         let result = readback.wait_and_read_with(ticket, u64::MAX, |bytes| {
-            if needs_swizzle {
-                let mut rgba = bytes.to_vec();
-                for chunk in rgba.chunks_exact_mut(4) {
-                    chunk.swap(0, 2);
-                }
-                write_png_rgba(path, width, height, &rgba)
-            } else {
-                write_png_rgba(path, width, height, bytes)
-            }
+            let rgba = maybe_swizzle_bgra_to_rgba(format, bytes);
+            write_png_rgba(path, width, height, &rgba)
         });
         match result {
             Ok(Ok(())) => {
@@ -1196,6 +1176,36 @@ impl DisplayEventLoopHandler {
                 );
             }
         }
+    }
+}
+
+/// Reorder bytes to RGBA-in-memory before PNG encode.
+///
+/// `VulkanTextureReadback` hands the staging bytes back in the texture's
+/// native channel order. The PNG writer treats every input as
+/// RGBA-in-memory, so source textures whose memory layout is BGRA need
+/// an R↔B swap before the encode — otherwise blue and red swap and a
+/// dark blue wall renders as orange. The OpenGL adapter picks
+/// `Bgra8Unorm` for its render-target DMA-BUFs to match the swapchain's
+/// native format and avoid a swizzle in the display path; that
+/// optimization just doesn't carry to the PNG export.
+fn maybe_swizzle_bgra_to_rgba(
+    format: crate::core::rhi::TextureFormat,
+    bytes: &[u8],
+) -> std::borrow::Cow<'_, [u8]> {
+    use crate::core::rhi::TextureFormat;
+    let needs_swizzle = matches!(
+        format,
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb,
+    );
+    if needs_swizzle {
+        let mut rgba = bytes.to_vec();
+        for chunk in rgba.chunks_exact_mut(4) {
+            chunk.swap(0, 2);
+        }
+        std::borrow::Cow::Owned(rgba)
+    } else {
+        std::borrow::Cow::Borrowed(bytes)
     }
 }
 
@@ -1972,5 +1982,74 @@ fn destroy_swapchain_state(
         device.destroy_command_pool(state.command_pool, None);
         device.destroy_swapchain_khr(state.swapchain, None);
         instance.destroy_surface_khr(state.surface, None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::maybe_swizzle_bgra_to_rgba;
+    use crate::core::rhi::TextureFormat;
+
+    /// `Rgba8Unorm` is already RGBA-in-memory; helper must borrow input
+    /// unchanged so the no-swizzle branch stays a zero-copy pass-through.
+    #[test]
+    fn rgba_source_passes_through_unchanged() {
+        let bytes = [0x10, 0x20, 0x30, 0xFF, 0x40, 0x50, 0x60, 0x80];
+        let out = maybe_swizzle_bgra_to_rgba(TextureFormat::Rgba8Unorm, &bytes);
+        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+        assert_eq!(&*out, &bytes);
+    }
+
+    /// `Rgba8UnormSrgb` follows the same no-swizzle branch as the linear
+    /// variant — the sRGB tag affects sampling, not memory layout.
+    #[test]
+    fn rgba_srgb_source_passes_through_unchanged() {
+        let bytes = [0x10, 0x20, 0x30, 0xFF];
+        let out = maybe_swizzle_bgra_to_rgba(TextureFormat::Rgba8UnormSrgb, &bytes);
+        assert_eq!(&*out, &bytes);
+    }
+
+    /// `Bgra8Unorm` memory holds bytes in B,G,R,A order. After swizzle
+    /// they must come out in R,G,B,A order so the PNG encode (which
+    /// treats input as RGBA-in-memory) channels-correctly.
+    #[test]
+    fn bgra_source_swaps_red_and_blue_per_pixel() {
+        // Two pixels: pure-blue then pure-red, both in BGRA-in-memory.
+        let bgra_bytes = [
+            0xFF, 0x00, 0x00, 0xFF, // B=255, G=0, R=0, A=255 → blue
+            0x00, 0x00, 0xFF, 0xFF, // B=0, G=0, R=255, A=255 → red
+        ];
+        let out = maybe_swizzle_bgra_to_rgba(TextureFormat::Bgra8Unorm, &bgra_bytes);
+        let expected = [
+            0x00, 0x00, 0xFF, 0xFF, // R=0, G=0, B=255, A=255 (RGBA blue)
+            0xFF, 0x00, 0x00, 0xFF, // R=255, G=0, B=0, A=255 (RGBA red)
+        ];
+        assert_eq!(&*out, &expected);
+    }
+
+    /// `Bgra8UnormSrgb` must take the same swizzle path as the linear
+    /// variant — both are BGRA-in-memory and the PNG writer can't
+    /// disambiguate sRGB from linear bytes anyway.
+    #[test]
+    fn bgra_srgb_source_swaps_red_and_blue() {
+        let bgra_bytes = [0xFF, 0x00, 0x00, 0xFF];
+        let out = maybe_swizzle_bgra_to_rgba(TextureFormat::Bgra8UnormSrgb, &bgra_bytes);
+        assert_eq!(&*out, &[0x00, 0x00, 0xFF, 0xFF]);
+    }
+
+    /// Counter-test: feeding BGRA-in-memory bytes through the no-swizzle
+    /// branch leaves them BGRA-ordered. Mentally reverting the swizzle
+    /// (or dropping `Bgra8Unorm` from the `matches!`) routes BGRA bytes
+    /// through this branch — the output bytes match the input verbatim,
+    /// which would mis-channel the PNG. Locks in that the swizzle is
+    /// actually doing the swap, not silently coincidental.
+    #[test]
+    fn unsorted_branch_does_not_swap_proves_swizzle_is_load_bearing() {
+        let bgra_bytes = [0xFF, 0x00, 0x00, 0xFF];
+        let out = maybe_swizzle_bgra_to_rgba(TextureFormat::Rgba8Unorm, &bgra_bytes);
+        // Bytes preserved verbatim — would render blue as red in PNG.
+        assert_eq!(&*out, &bgra_bytes);
+        // Sanity: the would-be-correct RGBA encoding does NOT match.
+        assert_ne!(&*out, &[0x00, 0x00, 0xFF, 0xFF]);
     }
 }
