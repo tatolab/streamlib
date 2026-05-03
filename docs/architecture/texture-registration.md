@@ -3,6 +3,9 @@
 > **Living document.** Validate, update, critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
 > Reflects code state as of 2026-05-02 (PR #632, issue #616).
+> Cross-process section + scope clarification revised 2026-05-02
+> (issue #634) based on Vulkan spec, Khronos guidance, and
+> sandboxed-host precedent research.
 
 ## What this is
 
@@ -51,6 +54,39 @@ layer"](../../CLAUDE.md#core-operating-principles--read-first)) was to
 make the handoff contract **explicit and typed at the engine
 layer**, not patched at the consumer that surfaced the symptom. That's
 what `TextureRegistration` is.
+
+## Scope: this record vs. adapter-internal `SurfaceState<P>`
+
+`TextureRegistration` (engine-wide, in `GpuContext::texture_cache`)
+and the adapter crates' `SurfaceState<P>` records (in
+`streamlib-adapter-vulkan`, `-opengl`, `-cuda`, `-cpu-readback`)
+are at **different scopes by deliberate design**, not redundant
+maps. They look superficially similar (both keyed by `surface_id`,
+both can carry a `current_layout` field) but hold different state
+for different consumers:
+
+| Scope | Record | What it carries | Who reads it |
+|---|---|---|---|
+| Engine-wide | `TextureRegistration` | Same-process handoff state for disjoint producers/consumers (camera → display, OpenGL adapter → display): texture handle, last-known layout. | In-tree pipeline code via `resolve_videoframe_registration`. |
+| Adapter-internal | `SurfaceState<P>` | Adapter's acquire/release state machine: `read_holders`, `write_held`, timeline values, framework-specific handles (e.g. EGL image, GL texture id, CUDA external memory mapping). | Only the adapter's own `acquire_*` / `release_*` paths. |
+
+This mirrors Unreal Engine 5's deliberate scope split between
+`FRDGSubresourceState` (per-pass handoff state read by the next
+consumer) and `FPooledRenderTarget` (allocator-internal pool /
+refcount state) — two records, two scopes, zero conflation. To the
+best of our current knowledge the same shape applies in Granite
+(typed identity record on `Vulkan::Image` plus per-pass transient
+state in the render graph) and The-Forge (persistent props on
+`Texture`, transitional state on call-site `TextureBarrier`).
+Verify against current code at pickup if revisiting.
+
+The Anti-pattern #1 rule below (no parallel `HashMap<surface_id, …>`)
+applies **within scope**: don't create a second engine-wide map
+alongside `texture_cache`, and don't create a second adapter-
+internal map alongside an adapter's `Registry`. Different-scope
+records that share a key but hold disjoint field sets and serve
+disjoint consumers are **not** the failure mode the rule exists
+to prevent.
 
 ## How it works
 
@@ -218,11 +254,16 @@ These are the failure modes the engine-model rule exists to prevent.
 Each was either tried and rejected, or is the foreseeable workaround
 that future agents would attempt without this doc.
 
-1. **Parallel `HashMap<surface_id, FooState>`.** If you find yourself
-   wanting to track new per-surface metadata in a separate HashMap,
-   stop. Extend `TextureRegistration`. The whole point of the engine-
-   wide cache is that there's *one* keyed registry; multiple parallel
-   ones recreate the implicit-convention problem one layer up.
+1. **Parallel `HashMap<surface_id, FooState>` *within scope*.** If
+   you find yourself wanting to track new engine-wide per-surface
+   metadata in a separate HashMap alongside `texture_cache`, stop.
+   Extend `TextureRegistration`. The whole point of the engine-wide
+   cache is that there's *one* keyed registry at engine scope;
+   multiple parallel engine-wide ones recreate the implicit-
+   convention problem one layer up. (See
+   [Scope](#scope-this-record-vs-adapter-internal-surfacestatep)
+   above — adapter-internal `SurfaceState<P>` lives at a different
+   scope and does not violate this rule.)
 
 2. **Descriptor-side claims that don't match registration.** Display's
    pre-#632 bug was claiming `SHADER_READ_ONLY_OPTIMAL` in a
@@ -334,19 +375,89 @@ shapes are possible (and probably both belong long-term):
    [`.claude/workflows/polyglot.md`](../../.claude/workflows/polyglot.md).
 
 The "right" shape is probably both — registration carries a default,
-`Videoframe` overrides per-frame. Tracked as follow-up issues; see
-the [Reference](#reference) section.
+`Videoframe` overrides per-frame. Tracked as #633.
 
-There's also a quieter constraint: cdylibs depend on
-`streamlib-consumer-rhi`, NOT the full `streamlib`, so they can't
-construct `TextureRegistration` directly (it lives in
-`streamlib::core::context`). To give subprocess producers the same
-typed contract, the registration record itself probably needs to live
-in `consumer-rhi`. Separate ticket.
+> ~~There's also a quieter constraint: cdylibs depend on
+> `streamlib-consumer-rhi`, NOT the full `streamlib`, so they can't
+> construct `TextureRegistration` directly (it lives in
+> `streamlib::core::context`). To give subprocess producers the
+> same typed contract, the registration record itself probably
+> needs to live in `consumer-rhi`. Separate ticket.~~ —
+> **Superseded 2026-05-02** (issue #634, closed without code
+> change). The speculation that subprocess producers need to
+> construct `TextureRegistration` themselves doesn't survive the
+> spec evidence: layouts across DMA-BUF imports into a second
+> `VkDevice` are independent state machines by Vulkan
+> construction, not stale mirrors of the host's record. The
+> architecturally correct cross-process work is the IPC schema
+> lift (#633), not a type relocation. See [Why no sandbox-side
+> mirror](#why-no-sandbox-side-mirror) below.
 
-**Until those land, cross-process consumers should keep barriering
-defensively from `UNDEFINED`** — don't paper over the gap consumer-
-side.
+### Why no sandbox-side mirror
+
+Three independent lines of evidence converged in the #634
+research and pointed the same way:
+
+1. **Vulkan spec.** `VkImageCreateInfo::initialLayout` must be
+   `UNDEFINED` or `PREINITIALIZED`. There is no "import this
+   in layout L" form. Every freshly-created `VkImage` in the
+   consumer process — even one bound to imported memory — starts
+   at its declared `initialLayout`. The consumer's layout state
+   is its own state machine, **independent of the producer's by
+   spec construction**, not a stale view of it.
+
+   Khronos's `VK_EXT_external_memory_acquire_unmodified`
+   proposal states this directly: *"The solution should not
+   require the implementation to internally track the
+   `VkImageLayout` of external images, as such tracking can be
+   complex to implement and cause performance overhead."*
+   Cross-process layout is communicated by **application
+   protocol** (release/acquire barriers via
+   `VK_QUEUE_FAMILY_EXTERNAL`, or in our case the IPC schema),
+   not by shared mutable state.
+
+2. **Sandboxed-host architecture precedent.** Every closely-
+   analogous system mirrors only **immutable descriptor metadata**
+   (size, format, usage) on the sandbox side; mutable lifecycle
+   state stays server-side. To the best of our current knowledge:
+
+   - Dawn Wire client `Texture.h` caches descriptor shape only;
+     no `current_layout`, no barrier scope.
+   - Chromium SharedImage hands renderers an opaque 16-byte
+     `gpu::Mailbox` with **zero embedded metadata**; the backing
+     lives in the GPU process.
+   - wgpu-core's `TextureTracker` / `TextureUsageScope` live in
+     the hub (server); user-facing `wgpu` holds only
+     `Arc<Texture>` resource handles.
+   - WebGPU spec §3.4 explicitly splits "content timeline"
+     (client-visible, immutable descriptor) from "device
+     timeline" (server-side, mutable, accessed asynchronously
+     via `GPUError`).
+
+   Verify the patterns against current upstream source if
+   revisiting — these are pinned to the snapshot evaluated in
+   the #634 research.
+
+3. **In-tree evidence.** No subprocess code constructs
+   `TextureRegistration` today. Cdylibs use
+   `HostSurfaceRegistration<P>` (an adapter-scope record at the
+   adapter crate, generic over `DevicePrivilege`) plus the
+   `VulkanLayout` enum (already in `streamlib-consumer-rhi`).
+   The "subprocess needs typed-contract for layout" concern is
+   already covered at the adapter scope, where it belongs per
+   the [Scope](#scope-this-record-vs-adapter-internal-surfacestatep)
+   section.
+
+The architecturally correct cross-process work is the **IPC
+schema lift (#633)**: the producer's *published layout* travels
+in the surface-share / `Videoframe` schema as a typed protocol
+field; the host consumer reads it once at acquire time and
+barriers from there. No mirror, no shared mutable record across
+the boundary.
+
+**Until #633 lands, cross-process consumers should keep
+barriering defensively from `UNDEFINED`** — don't paper over the
+gap consumer-side.
 
 ## Tests
 
@@ -378,9 +489,26 @@ When a new field lands on `TextureRegistration`:
   in `examples/camera-python-display/src/linux.rs`.
 - **First in-tree producer**: `LinuxCameraProcessor` in
   `libs/streamlib/src/linux/processors/camera.rs`.
-- **Mirror pattern**: `streamlib-adapter-vulkan::SurfaceState` in
-  `libs/streamlib-adapter-vulkan/src/state.rs:48` (and the parallel
-  cuda + cpu-readback adapter state structs).
+- **Adapter-scope sibling**: `streamlib-adapter-vulkan::SurfaceState`
+  in `libs/streamlib-adapter-vulkan/src/state.rs:48` (and the
+  same-shape cuda + cpu-readback adapter state structs). These are
+  at adapter scope, **not** parallel maps to `texture_cache` — see
+  the [Scope](#scope-this-record-vs-adapter-internal-surfacestatep)
+  section.
 - **PR**: #632.
 - **Issue**: #616.
+- **Closed without code change**: #634 (lift `TextureRegistration`
+  into `streamlib-consumer-rhi`) — see [Why no sandbox-side
+  mirror](#why-no-sandbox-side-mirror) for the spec + precedent
+  evidence.
+- **Cross-process follow-up**: #633 (IPC schema lift for
+  producer-published layout).
 - **Future research**: #631 (RDG / automatic barrier inference).
+- **External references** (consulted during the #634 research):
+  - [Khronos `VK_EXT_external_memory_acquire_unmodified` proposal](https://docs.vulkan.org/features/latest/features/proposals/VK_EXT_external_memory_acquire_unmodified.html)
+  - [Vulkan synchronization & queue-transfer chapter](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)
+  - [Dawn wire client Texture.h](https://dawn.googlesource.com/dawn/+/refs/heads/main/src/dawn/wire/client/Texture.h)
+  - [Chromium SharedImageBacking](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/gpu/command_buffer/service/shared_image/shared_image_backing.h)
+  - [wgpu-core track/texture.rs](https://github.com/gfx-rs/wgpu/blob/trunk/wgpu-core/src/track/texture.rs)
+  - [WebGPU spec §3.4 (Programming Model)](https://www.w3.org/TR/webgpu/)
+  - [UE5 `FRDGSubresourceState`](https://dev.epicgames.com/documentation/en-us/unreal-engine/API/Runtime/RenderCore/FRDGSubresourceState/IsUsedBy)
