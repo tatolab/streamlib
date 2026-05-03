@@ -33,7 +33,8 @@
 //! is GPU-signaled and stays out of the per-acquire codepath.
 
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use streamlib_adapter_abi::{
@@ -66,6 +67,20 @@ pub struct CudaSurfaceAdapter<D: VulkanRhiDevice> {
     /// Per-acquire timeline-wait timeout. Adjustable via
     /// [`Self::with_acquire_timeout`].
     acquire_timeout: Duration,
+    /// Persistent command pool + buffer + completion fence for the
+    /// host-pipeline producer copy path
+    /// ([`Self::submit_host_copy_image_to_buffer`]). Lazy-init on
+    /// first submit; reused with `vkResetCommandPool` after each
+    /// submission's fence has signaled. See
+    /// [`AdapterPersistentSubmitContext`] for the full contract.
+    /// Single-threaded caller convention; multi-threaded callers
+    /// serialize through this mutex.
+    #[cfg(target_os = "linux")]
+    submit_ctx: Mutex<Option<AdapterPersistentSubmitContext>>,
+    /// Counts how many times the persistent submit context was
+    /// (re)created — used by tests to lock the amortisation invariant
+    /// from #620 (steady-state submits must not grow live pools).
+    submit_ctx_create_count: AtomicUsize,
 }
 
 impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
@@ -75,7 +90,23 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
             device,
             surfaces: Registry::new(),
             acquire_timeout: DEFAULT_TIMELINE_WAIT,
+            #[cfg(target_os = "linux")]
+            submit_ctx: Mutex::new(None),
+            submit_ctx_create_count: AtomicUsize::new(0),
         }
+    }
+
+    /// Number of times the adapter has materialised its persistent
+    /// command pool. Stays at 0 before the first
+    /// [`Self::submit_host_copy_image_to_buffer`] call, becomes 1 on
+    /// first invocation, and stays at 1 across every subsequent
+    /// submit.
+    ///
+    /// Hidden from the public docs because callers shouldn't depend
+    /// on it; tests use it to lock #620's amortisation invariant.
+    #[doc(hidden)]
+    pub fn submit_pool_create_count(&self) -> usize {
+        self.submit_ctx_create_count.load(Ordering::Relaxed)
     }
 
     /// Override the per-acquire timeline-wait timeout. Default 5 s.
@@ -254,8 +285,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                 holder: self.surfaces.describe_contention(id),
             })?;
 
-        if let Err(e) = submit_image_to_buffer_copy_signal_timeline::<D>(
-            self.device.as_ref(),
+        if let Err(e) = self.submit_image_to_buffer_copy_signal_timeline(
             image,
             image_layout.as_vk(),
             session.buffer,
@@ -374,10 +404,12 @@ struct HostCopySession<P: DevicePrivilege> {
     signal_value: u64,
 }
 
-/// Build a one-shot command buffer that transitions `image` into
-/// `TRANSFER_SRC_OPTIMAL`, copies its full color plane into `buffer`,
-/// transitions back to `image_layout`, and submits with a GPU-side
-/// timeline signal at `signal_value`.
+/// Records and submits the host-pipeline producer copy
+/// (`vkCmdCopyImageToBuffer`) using the adapter's persistent command
+/// pool ([`AdapterPersistentSubmitContext`]). Transitions `image`
+/// into `TRANSFER_SRC_OPTIMAL`, copies its full color plane into
+/// `buffer`, transitions back to `image_layout`, and submits with a
+/// GPU-side timeline signal at `signal_value`.
 ///
 /// The post-copy buffer barrier is intentionally absent: cuda imports
 /// the buffer's memory once at registration and reads it through
@@ -385,116 +417,230 @@ struct HostCopySession<P: DevicePrivilege> {
 /// `vkMapMemory`, so a HOST_READ barrier would be both unnecessary
 /// and wrong.
 #[cfg(target_os = "linux")]
-fn submit_image_to_buffer_copy_signal_timeline<D>(
-    device: &D,
-    image: vk::Image,
-    image_layout: vk::ImageLayout,
-    buffer: vk::Buffer,
-    image_extent: vk::Extent3D,
-    timeline: &<D::Privilege as DevicePrivilege>::TimelineSemaphore,
-    signal_value: u64,
-) -> Result<(), AdapterError>
+impl<D> CudaSurfaceAdapter<D>
 where
     D: VulkanRhiDevice,
 {
-    let vk_device = device.device();
-    let queue = device.queue();
-    let qf = device.queue_family_index();
-    let transfer_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+    fn submit_image_to_buffer_copy_signal_timeline(
+        &self,
+        image: vk::Image,
+        image_layout: vk::ImageLayout,
+        buffer: vk::Buffer,
+        image_extent: vk::Extent3D,
+        timeline: &<D::Privilege as DevicePrivilege>::TimelineSemaphore,
+        signal_value: u64,
+    ) -> Result<(), AdapterError> {
+        let vk_device = self.device.device();
+        let queue = self.device.queue();
+        let qf = self.device.queue_family_index();
+        let transfer_layout = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
 
-    let pool_info = vk::CommandPoolCreateInfo::builder()
-        .queue_family_index(qf)
-        .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-        .build();
-    let pool = unsafe { vk_device.create_command_pool(&pool_info, None) }.map_err(|e| {
-        AdapterError::BackendRejected {
-            reason: format!("create_command_pool: {e}"),
+        let mut guard = self
+            .submit_ctx
+            .lock()
+            .map_err(|_| AdapterError::BackendRejected {
+                reason:
+                    "submit_image_to_buffer_copy_signal_timeline: persistent submit context mutex poisoned"
+                        .into(),
+            })?;
+        if guard.is_none() {
+            *guard = Some(AdapterPersistentSubmitContext::new(vk_device, qf)?);
+            self.submit_ctx_create_count.fetch_add(1, Ordering::Relaxed);
         }
-    })?;
+        let submit_ctx = guard.as_ref().expect("submit_ctx populated above");
+        let cmd = submit_ctx.cmd;
 
-    let alloc_info = vk::CommandBufferAllocateInfo::builder()
-        .command_pool(pool)
-        .level(vk::CommandBufferLevel::PRIMARY)
-        .command_buffer_count(1)
-        .build();
-    let cmd = match unsafe { vk_device.allocate_command_buffers(&alloc_info) } {
-        Ok(v) => v[0],
-        Err(e) => {
-            unsafe { vk_device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::BackendRejected {
-                reason: format!("allocate_command_buffers: {e}"),
-            });
+        submit_ctx.reset_for_recording(vk_device)?;
+
+        let begin_info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
+        unsafe { vk_device.begin_command_buffer(cmd, &begin_info) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("begin_command_buffer: {e}"),
+            }
+        })?;
+
+        let pre_barrier = build_color_image_barrier(image, qf, image_layout, transfer_layout);
+        let pre_barriers = [pre_barrier];
+        let pre_dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&pre_barriers)
+            .build();
+        unsafe { vk_device.cmd_pipeline_barrier2(cmd, &pre_dep) };
+
+        let copy_region = vk::BufferImageCopy::builder()
+            .buffer_offset(0)
+            .buffer_row_length(image_extent.width)
+            .buffer_image_height(image_extent.height)
+            .image_subresource(
+                vk::ImageSubresourceLayers::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .mip_level(0)
+                    .base_array_layer(0)
+                    .layer_count(1)
+                    .build(),
+            )
+            .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .image_extent(image_extent)
+            .build();
+        unsafe {
+            vk_device.cmd_copy_image_to_buffer(
+                cmd,
+                image,
+                transfer_layout,
+                buffer,
+                &[copy_region],
+            );
         }
-    };
 
-    let begin_info = vk::CommandBufferBeginInfo::builder()
-        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-        .build();
-    if let Err(e) = unsafe { vk_device.begin_command_buffer(cmd, &begin_info) } {
-        unsafe { vk_device.destroy_command_pool(pool, None) };
-        return Err(AdapterError::BackendRejected {
-            reason: format!("begin_command_buffer: {e}"),
-        });
+        let post_barrier = build_color_image_barrier(image, qf, transfer_layout, image_layout);
+        let post_barriers = [post_barrier];
+        let post_dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&post_barriers)
+            .build();
+        unsafe { vk_device.cmd_pipeline_barrier2(cmd, &post_dep) };
+
+        unsafe { vk_device.end_command_buffer(cmd) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("end_command_buffer: {e}"),
+            }
+        })?;
+
+        let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(cmd)
+            .build()];
+        let signal_infos = [vk::SemaphoreSubmitInfo::builder()
+            .semaphore(timeline.semaphore())
+            .value(signal_value)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .build()];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cmd_infos)
+            .signal_semaphore_infos(&signal_infos)
+            .build();
+
+        unsafe { self.device.submit_to_queue(queue, &[submit], submit_ctx.fence) }.map_err(
+            |e| AdapterError::BackendRejected {
+                reason: format!("submit_to_queue: {e}"),
+            },
+        )?;
+
+        Ok(())
+    }
+}
+
+/// Persistent per-adapter command pool, command buffer, and
+/// completion fence — replaces the create-and-destroy-per-submit
+/// pattern that used to churn `vkCreateCommandPool` /
+/// `vkDestroyCommandPool` on every host-pipeline copy. Same shape
+/// lives in
+/// `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
+/// and `streamlib-adapter-vulkan::adapter::AdapterPersistentSubmitContext`;
+/// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
+/// Notes — `streamlib-adapter-abi` deliberately does not depend on
+/// `vulkanalia`, so duplication is the project pattern here).
+///
+/// The fence is created signaled so the first submit doesn't block.
+/// Subsequent submits wait on it (instant when the prior submit has
+/// already drained, which is the steady state). `vkResetCommandPool`
+/// is the cheap path per Vulkan spec — recycles every command
+/// buffer's memory in one call.
+#[cfg(target_os = "linux")]
+struct AdapterPersistentSubmitContext {
+    pool: vk::CommandPool,
+    cmd: vk::CommandBuffer,
+    fence: vk::Fence,
+}
+
+#[cfg(target_os = "linux")]
+impl AdapterPersistentSubmitContext {
+    fn new(device: &vulkanalia::Device, qf: u32) -> Result<Self, AdapterError> {
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(qf)
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+            .build();
+        let pool =
+            unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
+                AdapterError::BackendRejected {
+                    reason: format!("create_command_pool: {e}"),
+                }
+            })?;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1)
+            .build();
+        let cmd = match unsafe { device.allocate_command_buffers(&alloc_info) } {
+            Ok(v) => v[0],
+            Err(e) => {
+                unsafe { device.destroy_command_pool(pool, None) };
+                return Err(AdapterError::BackendRejected {
+                    reason: format!("allocate_command_buffers: {e}"),
+                });
+            }
+        };
+
+        let fence_info = vk::FenceCreateInfo::builder()
+            .flags(vk::FenceCreateFlags::SIGNALED)
+            .build();
+        let fence = match unsafe { device.create_fence(&fence_info, None) } {
+            Ok(f) => f,
+            Err(e) => {
+                unsafe { device.destroy_command_pool(pool, None) };
+                return Err(AdapterError::BackendRejected {
+                    reason: format!("create_fence: {e}"),
+                });
+            }
+        };
+
+        Ok(Self { pool, cmd, fence })
     }
 
-    let pre_barrier = build_color_image_barrier(image, qf, image_layout, transfer_layout);
-    let pre_barriers = [pre_barrier];
-    let pre_dep = vk::DependencyInfo::builder()
-        .image_memory_barriers(&pre_barriers)
-        .build();
-    unsafe { vk_device.cmd_pipeline_barrier2(cmd, &pre_dep) };
-
-    let copy_region = vk::BufferImageCopy::builder()
-        .buffer_offset(0)
-        .buffer_row_length(image_extent.width)
-        .buffer_image_height(image_extent.height)
-        .image_subresource(
-            vk::ImageSubresourceLayers::builder()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .mip_level(0)
-                .base_array_layer(0)
-                .layer_count(1)
-                .build(),
-        )
-        .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
-        .image_extent(image_extent)
-        .build();
-    unsafe {
-        vk_device.cmd_copy_image_to_buffer(cmd, image, transfer_layout, buffer, &[copy_region]);
+    /// Wait for the previous submit's fence, reset it, then reset the
+    /// command pool so the single command buffer is ready to be
+    /// re-recorded. Steady-state cost is the wait, which is instant
+    /// when the prior submit has already drained.
+    fn reset_for_recording(&self, device: &vulkanalia::Device) -> Result<(), AdapterError> {
+        unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("wait_for_fences (persistent submit fence): {e}"),
+            }
+        })?;
+        unsafe { device.reset_fences(&[self.fence]) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("reset_fences (persistent submit fence): {e}"),
+            }
+        })?;
+        unsafe { device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty()) }
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("reset_command_pool (persistent submit pool): {e}"),
+            })?;
+        Ok(())
     }
 
-    let post_barrier = build_color_image_barrier(image, qf, transfer_layout, image_layout);
-    let post_barriers = [post_barrier];
-    let post_dep = vk::DependencyInfo::builder()
-        .image_memory_barriers(&post_barriers)
-        .build();
-    unsafe { vk_device.cmd_pipeline_barrier2(cmd, &post_dep) };
-
-    if let Err(e) = unsafe { vk_device.end_command_buffer(cmd) } {
-        unsafe { vk_device.destroy_command_pool(pool, None) };
-        return Err(AdapterError::BackendRejected {
-            reason: format!("end_command_buffer: {e}"),
-        });
+    /// Tear down the pool + fence. Waits on the fence first to drain
+    /// any pending GPU work so destruction is safe.
+    fn destroy(self, device: &vulkanalia::Device) {
+        let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
+        unsafe {
+            device.destroy_fence(self.fence, None);
+            device.destroy_command_pool(self.pool, None);
+        }
     }
+}
 
-    let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
-        .command_buffer(cmd)
-        .build()];
-    let signal_infos = [vk::SemaphoreSubmitInfo::builder()
-        .semaphore(timeline.semaphore())
-        .value(signal_value)
-        .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-        .build()];
-    let submit = vk::SubmitInfo2::builder()
-        .command_buffer_infos(&cmd_infos)
-        .signal_semaphore_infos(&signal_infos)
-        .build();
-
-    let submit_result = unsafe { device.submit_to_queue(queue, &[submit], vk::Fence::null()) };
-    unsafe { vk_device.destroy_command_pool(pool, None) };
-    submit_result.map_err(|e| AdapterError::BackendRejected {
-        reason: format!("submit_to_queue: {e}"),
-    })
+#[cfg(target_os = "linux")]
+impl<D: VulkanRhiDevice> Drop for CudaSurfaceAdapter<D> {
+    fn drop(&mut self) {
+        let mut guard = match self.submit_ctx.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(ctx) = guard.take() {
+            ctx.destroy(self.device.device());
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

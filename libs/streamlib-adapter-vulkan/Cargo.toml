@@ -73,6 +73,10 @@ path = "tests/concurrent_reads_two_subprocesses.rs"
 name = "subprocess_crash_mid_write"
 path = "tests/subprocess_crash_mid_write.rs"
 
+[[test]]
+name = "persistent_command_pool"
+path = "tests/persistent_command_pool.rs"
+
 # Subprocess test helper lives in `streamlib-adapter-vulkan-helpers`
 # (a dev-dependency of this crate). Tests reach it via
 # `env!("CARGO_BIN_EXE_vulkan_adapter_subprocess_helper")` — Cargo

@@ -60,6 +60,11 @@ pub struct HostFixture {
     pub gpu: Arc<GpuContext>,
     pub adapter: Arc<HostAdapter>,
     pub ctx: HostContext,
+    /// Typed handle to the in-process trigger so tests can read its
+    /// `submit_pool_create_count()` (e.g. for #620's amortisation
+    /// invariant). The adapter holds the `dyn`-erased `Arc`; this
+    /// keeps the typed `Arc` alongside it.
+    pub trigger: Arc<InProcessCpuReadbackCopyTrigger<HostVulkanDevice>>,
 }
 
 impl HostFixture {
@@ -68,13 +73,19 @@ impl HostFixture {
         let host_device = Arc::clone(gpu.device().vulkan_device());
         let trigger = Arc::new(InProcessCpuReadbackCopyTrigger::new(Arc::clone(
             &host_device,
-        ))) as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
+        )));
+        let trigger_dyn = Arc::clone(&trigger) as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>;
         let adapter = Arc::new(CpuReadbackSurfaceAdapter::new(
             Arc::clone(&host_device),
-            trigger,
+            trigger_dyn,
         ));
         let ctx = CpuReadbackContext::new(Arc::clone(&adapter));
-        Some(Self { gpu, adapter, ctx })
+        Some(Self {
+            gpu,
+            adapter,
+            ctx,
+            trigger,
+        })
     }
 
     /// Allocate a host BGRA8 `VkImage` + per-plane staging buffer +

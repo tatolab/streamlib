@@ -63,5 +63,9 @@ tracing-subscriber.workspace = true
 name = "conformance"
 path = "tests/conformance.rs"
 
+[[test]]
+name = "persistent_command_pool"
+path = "tests/persistent_command_pool.rs"
+
 [lints]
 workspace = true
