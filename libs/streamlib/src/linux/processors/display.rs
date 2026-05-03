@@ -229,17 +229,10 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
                     destroy_swapchain_state(&app.vulkan_device, &state);
                 }
 
-                // Clean up persistent pipeline resources
-                if let Some(ps) = app.pipeline_state.take() {
-                    let device = app.vulkan_device.device();
-                    unsafe {
-                        device.destroy_pipeline(ps.graphics_pipeline, None);
-                        device.destroy_pipeline_layout(ps.pipeline_layout, None);
-                        device.destroy_descriptor_pool(ps.descriptor_pool, None);
-                        device.destroy_descriptor_set_layout(ps.descriptor_set_layout, None);
-                        device.destroy_sampler(ps.sampler, None);
-                    }
-                }
+                // Clean up persistent pipeline resources — VulkanGraphicsKernel
+                // owns its pipeline, layout, descriptor pool, and default
+                // sampler; dropping the kernel tears them down.
+                drop(app.pipeline_state.take());
 
                 tracing::debug!("Display {}: Render thread exiting", window_id);
             })
@@ -327,14 +320,14 @@ struct SwapchainState {
     swapchain_image_views: Vec<vk::ImageView>,
 }
 
-/// Persistent render pipeline objects that survive swapchain recreation.
+/// Persistent render pipeline state that survives swapchain recreation.
+///
+/// The single graphics-pipeline VkPipeline + VkPipelineLayout +
+/// VkDescriptorSetLayout + VkDescriptorPool + per-frame VkDescriptorSet ring
+/// + default sampler are all owned by [`VulkanGraphicsKernel`]; dropping the
+/// kernel tears them down in the right order.
 struct PersistentPipelineState {
-    graphics_pipeline: vk::Pipeline,
-    pipeline_layout: vk::PipelineLayout,
-    descriptor_set_layout: vk::DescriptorSetLayout,
-    descriptor_pool: vk::DescriptorPool,
-    descriptor_sets: Vec<vk::DescriptorSet>,
-    sampler: vk::Sampler,
+    graphics_kernel: Arc<crate::vulkan::rhi::VulkanGraphicsKernel>,
 }
 
 /// Device-local VkImage used as the camera texture for fragment shader sampling.
@@ -607,13 +600,6 @@ impl DisplayEventLoopHandler {
                 return;
             }
         };
-        let camera_image_view = match camera_texture.inner.image_view() {
-            Ok(view) => view,
-            Err(e) => {
-                tracing::warn!("Display {}: camera texture image view error: {}", self.window_id, e);
-                return;
-            }
-        };
         let src_width = camera_texture.width();
         let src_height = camera_texture.height();
 
@@ -631,20 +617,20 @@ impl DisplayEventLoopHandler {
             None
         };
 
-        // Update descriptor set with camera texture
-        let desc_image_info = vk::DescriptorImageInfo::builder()
-            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-            .image_view(camera_image_view)
-            .sampler(ps.sampler)
-            .build();
-        let desc_image_infos = [desc_image_info];
-        let descriptor_write = vk::WriteDescriptorSet::builder()
-            .dst_set(ps.descriptor_sets[frame_index])
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&desc_image_infos)
-            .build();
-        unsafe { device.update_descriptor_sets(&[descriptor_write], &[] as &[vk::CopyDescriptorSet]) };
+        // Stage the camera texture binding for this frame's descriptor-set
+        // ring slot. The kernel flushes the write at cmd_bind_and_draw time.
+        if let Err(e) = ps.graphics_kernel.set_sampled_texture(
+            frame_index as u32,
+            0,
+            &camera_texture,
+        ) {
+            tracing::warn!(
+                "Display {}: failed to set camera texture binding: {}",
+                self.window_id,
+                e
+            );
+            return;
+        }
 
         // Timeline semaphore wait: ensure frame N-MAX_FRAMES_IN_FLIGHT completed
         // before reusing slot N. On the first MAX_FRAMES_IN_FLIGHT frames,
@@ -815,42 +801,10 @@ impl DisplayEventLoopHandler {
 
             device.cmd_begin_rendering(command_buffer, &rendering_info);
 
-            // Set dynamic viewport and scissor
-            let viewport = vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: state.swapchain_extent.width as f32,
-                height: state.swapchain_extent.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            };
-            let scissor = vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: state.swapchain_extent,
-            };
-            device.cmd_set_viewport(command_buffer, 0, &[viewport]);
-            device.cmd_set_scissor(command_buffer, 0, &[scissor]);
-
-            // Bind graphics pipeline and descriptor set
-            device.cmd_bind_pipeline(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                ps.graphics_pipeline,
-            );
-            device.cmd_bind_descriptor_sets(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                ps.pipeline_layout,
-                0,
-                &[ps.descriptor_sets[frame_index]],
-                &[],
-            );
-
-            // Push constants for scaling based on configured mode
+            // Compute aspect-ratio-aware scale per the configured mode.
             let src_aspect = src_width as f32 / src_height as f32;
             let dst_aspect =
                 state.swapchain_extent.width as f32 / state.swapchain_extent.height as f32;
-
             let (scale_x, scale_y) = match self.scaling_mode {
                 ScalingMode::Stretch => (1.0f32, 1.0f32),
                 ScalingMode::Letterbox => {
@@ -868,22 +822,47 @@ impl DisplayEventLoopHandler {
                     }
                 }
             };
-
             let push_constants: [f32; 4] = [scale_x, scale_y, 0.0, 0.0];
-            let push_constant_bytes = std::slice::from_raw_parts(
-                push_constants.as_ptr() as *const u8,
-                std::mem::size_of::<[f32; 4]>(),
-            );
-            device.cmd_push_constants(
-                command_buffer,
-                ps.pipeline_layout,
-                vk::ShaderStageFlags::FRAGMENT,
-                0,
-                push_constant_bytes,
-            );
+            if let Err(e) = ps.graphics_kernel.set_push_constants_value(
+                frame_index as u32,
+                &push_constants,
+            ) {
+                tracing::warn!(
+                    "Display {}: failed to stage push constants: {}",
+                    self.window_id,
+                    e
+                );
+                return;
+            }
 
-            // Draw fullscreen triangle (3 vertices from gl_VertexIndex, no vertex buffer)
-            device.cmd_draw(command_buffer, 3, 1, 0, 0);
+            // Bind pipeline + descriptor set + push constants + draw, with
+            // dynamic viewport/scissor matching the swapchain extent.
+            let draw = crate::core::rhi::DrawCall {
+                vertex_count: 3,
+                instance_count: 1,
+                first_vertex: 0,
+                first_instance: 0,
+                viewport: Some(crate::core::rhi::Viewport::full(
+                    state.swapchain_extent.width,
+                    state.swapchain_extent.height,
+                )),
+                scissor: Some(crate::core::rhi::ScissorRect::full(
+                    state.swapchain_extent.width,
+                    state.swapchain_extent.height,
+                )),
+            };
+            if let Err(e) = ps.graphics_kernel.cmd_bind_and_draw(
+                command_buffer,
+                frame_index as u32,
+                &draw,
+            ) {
+                tracing::warn!(
+                    "Display {}: graphics kernel draw failed: {}",
+                    self.window_id,
+                    e
+                );
+                return;
+            }
 
             device.cmd_end_rendering(command_buffer);
 
@@ -1310,7 +1289,7 @@ fn crc32(kind: &[u8; 4], data: &[u8]) -> u32 {
 // ---------------------------------------------------------------------------
 
 fn create_swapchain_state(
-    vulkan_device: &crate::vulkan::rhi::HostVulkanDevice,
+    vulkan_device: &Arc<crate::vulkan::rhi::HostVulkanDevice>,
     window: &Window,
     width: u32,
     height: u32,
@@ -1519,204 +1498,69 @@ fn create_swapchain_state(
         swapchain_image_views.push(view);
     }
 
-    // Create sampler for camera texture sampling in fragment shader
-    let sampler_info = vk::SamplerCreateInfo::builder()
-        .mag_filter(vk::Filter::LINEAR)
-        .min_filter(vk::Filter::LINEAR)
-        .mipmap_mode(vk::SamplerMipmapMode::NEAREST)
-        .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
-        .build();
-    let sampler = unsafe { device.create_sampler(&sampler_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create sampler: {}", e)))?;
+    // Surface-format-derived pipeline target. Convert the raw vk::Format the
+    // surface picked into a TextureFormat for the kernel descriptor; if the
+    // compositor handed us a format the kernel doesn't recognize as a color
+    // attachment, fail loudly here rather than at first draw.
+    let attachment_format = match surface_format.format {
+        vk::Format::B8G8R8A8_UNORM => crate::core::rhi::TextureFormat::Bgra8Unorm,
+        vk::Format::B8G8R8A8_SRGB => crate::core::rhi::TextureFormat::Bgra8UnormSrgb,
+        vk::Format::R8G8B8A8_UNORM => crate::core::rhi::TextureFormat::Rgba8Unorm,
+        vk::Format::R8G8B8A8_SRGB => crate::core::rhi::TextureFormat::Rgba8UnormSrgb,
+        other => {
+            return Err(StreamError::GpuError(format!(
+                "Display swapchain surface format {other:?} not mapped to TextureFormat"
+            )));
+        }
+    };
 
-    // Descriptor set layout: binding 0 = combined image sampler (fragment stage)
-    let ds_binding = vk::DescriptorSetLayoutBinding::builder()
-        .binding(0)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(1)
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-        .build();
-    let ds_bindings = [ds_binding];
-    let ds_layout_info = vk::DescriptorSetLayoutCreateInfo::builder()
-        .bindings(&ds_bindings)
-        .build();
-    let descriptor_set_layout =
-        unsafe { device.create_descriptor_set_layout(&ds_layout_info, None) }
-            .map_err(|e| {
-                StreamError::GpuError(format!(
-                    "Failed to create descriptor set layout: {}",
-                    e
-                ))
-            })?;
-
-    // Pipeline layout: push constant for scale (vec2) + offset (vec2) = 16 bytes
-    let push_constant_range = vk::PushConstantRange::builder()
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-        .offset(0)
-        .size(16)
-        .build();
-    let set_layouts = [descriptor_set_layout];
-    let pipeline_layout_info = vk::PipelineLayoutCreateInfo::builder()
-        .set_layouts(&set_layouts)
-        .push_constant_ranges(std::slice::from_ref(&push_constant_range))
-        .build();
-    let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None) }
-        .map_err(|e| {
-            StreamError::GpuError(format!("Failed to create pipeline layout: {}", e))
-        })?;
-
-    // Load compiled SPIR-V shaders
-    let vert_spv = include_bytes!("shaders/fullscreen.vert.spv");
-    let frag_spv = include_bytes!("shaders/fullscreen.frag.spv");
-
-    let vert_code: Vec<u32> = vert_spv
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-    let frag_code: Vec<u32> = frag_spv
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-
-    let vert_module_info = vk::ShaderModuleCreateInfo::builder()
-        .code(&vert_code)
-        .build();
-    let frag_module_info = vk::ShaderModuleCreateInfo::builder()
-        .code(&frag_code)
-        .build();
-
-    let vert_module = unsafe { device.create_shader_module(&vert_module_info, None) }
-        .map_err(|e| {
-            StreamError::GpuError(format!("Failed to create vertex shader module: {}", e))
-        })?;
-    let frag_module = unsafe { device.create_shader_module(&frag_module_info, None) }
-        .map_err(|e| {
-            StreamError::GpuError(format!("Failed to create fragment shader module: {}", e))
-        })?;
-
-    let shader_stages = [
-        vk::PipelineShaderStageCreateInfo::builder()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vert_module)
-            .name(b"main\0")
-            .build(),
-        vk::PipelineShaderStageCreateInfo::builder()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(frag_module)
-            .name(b"main\0")
-            .build(),
+    // Build the graphics kernel (replaces the hand-rolled vertex+fragment
+    // pipeline, descriptor set layout, descriptor pool, descriptor sets,
+    // pipeline layout, and sampler — all owned by the kernel now). The
+    // descriptor-set ring is sized to MAX_FRAMES_IN_FLIGHT so callers can
+    // index by frame_index without races against in-flight rendering.
+    use crate::core::rhi::{
+        AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState,
+        GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
+        GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage,
+        MultisampleState, PrimitiveTopology, RasterizationState, VertexInputState,
+    };
+    let display_blit_vert = include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.vert.spv"));
+    let display_blit_frag = include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.frag.spv"));
+    let stages = [
+        GraphicsStage::vertex(display_blit_vert),
+        GraphicsStage::fragment(display_blit_frag),
     ];
-
-    // No vertex input — fullscreen triangle derives UVs from gl_VertexIndex
-    let vertex_input_info = vk::PipelineVertexInputStateCreateInfo::builder().build();
-    let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::builder()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-        .build();
-
-    // Dynamic viewport/scissor — set per-frame, no pipeline recreation on resize
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic_state_info = vk::PipelineDynamicStateCreateInfo::builder()
-        .dynamic_states(&dynamic_states)
-        .build();
-
-    let viewports = [vk::Viewport::default()];
-    let scissors = [vk::Rect2D::default()];
-    let viewport_state = vk::PipelineViewportStateCreateInfo::builder()
-        .viewports(&viewports)
-        .scissors(&scissors)
-        .build();
-
-    let rasterizer = vk::PipelineRasterizationStateCreateInfo::builder()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .cull_mode(vk::CullModeFlags::NONE)
-        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-        .line_width(1.0)
-        .build();
-
-    let multisampling = vk::PipelineMultisampleStateCreateInfo::builder()
-        .rasterization_samples(vk::SampleCountFlags::_1)
-        .build();
-
-    let color_blend_attachment = vk::PipelineColorBlendAttachmentState::builder()
-        .color_write_mask(
-            vk::ColorComponentFlags::R
-                | vk::ColorComponentFlags::G
-                | vk::ColorComponentFlags::B
-                | vk::ColorComponentFlags::A,
-        )
-        .blend_enable(false)
-        .build();
-    let color_blend_attachments = [color_blend_attachment];
-    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
-        .attachments(&color_blend_attachments)
-        .build();
-
-    // Dynamic rendering: specify color attachment format via pNext
-    let color_attachment_formats = [surface_format.format];
-    let mut pipeline_rendering_info = vk::PipelineRenderingCreateInfo::builder()
-        .color_attachment_formats(&color_attachment_formats)
-        .build();
-
-    let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
-        .stages(&shader_stages)
-        .vertex_input_state(&vertex_input_info)
-        .input_assembly_state(&input_assembly)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&rasterizer)
-        .multisample_state(&multisampling)
-        .color_blend_state(&color_blend_state)
-        .dynamic_state(&dynamic_state_info)
-        .layout(pipeline_layout)
-        .push_next(&mut pipeline_rendering_info)
-        .build();
-
-    let graphics_pipeline = unsafe {
-        device.create_graphics_pipelines(
-            vk::PipelineCache::null(),
-            &[pipeline_info],
-            None,
-        )
-    }
-    .map_err(|e| {
-        StreamError::GpuError(format!("Failed to create graphics pipeline: {}", e))
-    })?
-    .0[0];
-
-    // Shader modules no longer needed after pipeline creation
-    unsafe {
-        device.destroy_shader_module(vert_module, None);
-        device.destroy_shader_module(frag_module, None);
-    }
-
-    // Descriptor pool and sets — one per in-flight frame to avoid updating
-    // a descriptor set while a previous frame's command buffer is still pending.
-    let pool_size = vk::DescriptorPoolSize::builder()
-        .type_(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .descriptor_count(MAX_FRAMES_IN_FLIGHT as u32)
-        .build();
-    let pool_sizes = [pool_size];
-    let descriptor_pool_info = vk::DescriptorPoolCreateInfo::builder()
-        .max_sets(MAX_FRAMES_IN_FLIGHT as u32)
-        .pool_sizes(&pool_sizes)
-        .build();
-    let descriptor_pool =
-        unsafe { device.create_descriptor_pool(&descriptor_pool_info, None) }
-            .map_err(|e| {
-                StreamError::GpuError(format!("Failed to create descriptor pool: {}", e))
-            })?;
-
-    let set_layouts_alloc: Vec<vk::DescriptorSetLayout> =
-        vec![descriptor_set_layout; MAX_FRAMES_IN_FLIGHT];
-    let ds_alloc_info = vk::DescriptorSetAllocateInfo::builder()
-        .descriptor_pool(descriptor_pool)
-        .set_layouts(&set_layouts_alloc)
-        .build();
-    let descriptor_sets = unsafe { device.allocate_descriptor_sets(&ds_alloc_info) }
-        .map_err(|e| {
-            StreamError::GpuError(format!("Failed to allocate descriptor sets: {}", e))
-        })?;
+    let bindings = [GraphicsBindingSpec::sampled_texture(
+        0,
+        GraphicsShaderStageFlags::FRAGMENT,
+    )];
+    let kernel_descriptor = GraphicsKernelDescriptor {
+        label: "display_blit",
+        stages: &stages,
+        bindings: &bindings,
+        push_constants: GraphicsPushConstants {
+            size: 16, // vec2 scale + vec2 offset
+            stages: GraphicsShaderStageFlags::FRAGMENT,
+        },
+        pipeline_state: GraphicsPipelineState {
+            topology: PrimitiveTopology::TriangleList,
+            vertex_input: VertexInputState::None,
+            rasterization: RasterizationState::default(),
+            multisample: MultisampleState::default(),
+            depth_stencil: DepthStencilState::Disabled,
+            color_blend: ColorBlendState::Disabled {
+                color_write_mask: ColorWriteMask::RGBA,
+            },
+            attachment_formats: AttachmentFormats::color_only(attachment_format),
+            dynamic_state: GraphicsDynamicState::ViewportScissor,
+        },
+        descriptor_sets_in_flight: MAX_FRAMES_IN_FLIGHT as u32,
+    };
+    let graphics_kernel = Arc::new(crate::vulkan::rhi::VulkanGraphicsKernel::new(
+        vulkan_device,
+        &kernel_descriptor,
+    )?);
 
     tracing::info!(
         "Swapchain created: {}x{}, format {:?}, present mode {:?}, {} images",
@@ -1743,14 +1587,7 @@ fn create_swapchain_state(
             current_frame: 0,
             swapchain_image_views,
         },
-        PersistentPipelineState {
-            graphics_pipeline,
-            pipeline_layout,
-            descriptor_set_layout,
-            descriptor_pool,
-            descriptor_sets,
-            sampler,
-        },
+        PersistentPipelineState { graphics_kernel },
     ))
 }
 
