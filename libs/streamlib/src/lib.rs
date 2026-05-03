@@ -202,6 +202,12 @@ pub mod host_rhi {
         HostMarker, HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTexture,
         HostVulkanTimelineSemaphore, VulkanComputeKernel, VulkanTextureReadback,
     };
+
+    /// EGL DRM-modifier probe — exposed so adapter conformance tests
+    /// can pick a sampler-only modifier (`external_only=TRUE`) that
+    /// would otherwise be discarded by the higher-level
+    /// `acquire_render_target_dma_buf_image` path.
+    pub use crate::vulkan::rhi::drm_modifier_probe;
 }
 
 // WebRTC streaming (cross-platform)

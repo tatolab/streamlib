@@ -11,7 +11,8 @@
 use std::sync::Arc;
 
 use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::{StreamTexture, TextureFormat};
+use streamlib::core::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
+use streamlib::host_rhi::HostVulkanTexture;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
@@ -75,6 +76,86 @@ impl HostFixture {
         height: u32,
     ) -> RegisteredSurface {
         self.register_surface_inner(surface_id, width, height, /*external_oes=*/ true)
+    }
+
+    /// Allocate a host VkImage with an explicit DRM modifier (typically a
+    /// sampler-only `external_only=TRUE` modifier discovered via
+    /// [`streamlib::host_rhi::drm_modifier_probe`]) and register it via
+    /// [`OpenGlSurfaceAdapter::register_external_oes_host_surface`].
+    ///
+    /// Unlike [`Self::register_external_oes_surface`] (which goes through
+    /// `acquire_render_target_dma_buf_image` and gets a tiled,
+    /// render-target-capable modifier), this variant lets a test exercise
+    /// the path real-world camera DMA-BUFs hit on NVIDIA — where the EGL
+    /// driver flags the only available modifier as `external_only=TRUE`.
+    /// Usage flags are [`TextureUsages::TEXTURE_BINDING`] +
+    /// [`TextureUsages::COPY_DST`] + [`TextureUsages::COPY_SRC`] (no
+    /// `RENDER_ATTACHMENT`) — matches the sampler-only contract of
+    /// `GL_TEXTURE_EXTERNAL_OES`.
+    pub fn register_external_oes_surface_with_modifier(
+        &self,
+        surface_id: SurfaceId,
+        width: u32,
+        height: u32,
+        modifier: u64,
+    ) -> Result<RegisteredSurface, String> {
+        let vulkan_device = self.gpu.device().vulkan_device();
+        let desc = TextureDescriptor::new(width, height, TextureFormat::Bgra8Unorm).with_usage(
+            TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_DST
+                | TextureUsages::COPY_SRC,
+        );
+        let host_texture = HostVulkanTexture::new_render_target_dma_buf(
+            vulkan_device,
+            &desc,
+            &[modifier],
+        )
+        .map_err(|e| format!("HostVulkanTexture::new_render_target_dma_buf failed: {e}"))?;
+
+        let dma_buf_fd = host_texture
+            .export_dma_buf_fd()
+            .map_err(|e| format!("export_dma_buf_fd failed: {e}"))?;
+        let plane_layout = host_texture
+            .dma_buf_plane_layout()
+            .map_err(|e| format!("dma_buf_plane_layout failed: {e}"))?;
+        let chosen_modifier = host_texture.chosen_drm_format_modifier();
+        assert_eq!(
+            chosen_modifier, modifier,
+            "driver picked modifier 0x{chosen_modifier:016x}, but the candidate \
+             list contained only 0x{modifier:016x} — VUID violation in the RHI"
+        );
+
+        let texture = StreamTexture::from_vulkan(host_texture);
+
+        let registration = HostSurfaceRegistration {
+            dma_buf_fd,
+            width,
+            height,
+            drm_fourcc: DRM_FORMAT_ARGB8888,
+            drm_format_modifier: modifier,
+            plane_offset: plane_layout[0].0,
+            plane_stride: plane_layout[0].1,
+        };
+
+        self.adapter
+            .register_external_oes_host_surface(surface_id, registration)
+            .map_err(|e| format!("register_external_oes_host_surface failed: {e:?}"))?;
+
+        let descriptor = StreamlibSurface::new(
+            surface_id,
+            width,
+            height,
+            SurfaceFormat::Bgra8,
+            SurfaceUsage::SAMPLED,
+            SurfaceTransportHandle::empty(),
+            SurfaceSyncState::default(),
+        );
+        Ok(RegisteredSurface {
+            descriptor,
+            texture,
+            width,
+            height,
+        })
     }
 
     fn register_surface_inner(
