@@ -220,6 +220,17 @@ When you find yourself wanting to add a field that doesn't fit cleanly,
    consumer's barrier left it in (read it back from the registration
    if the producer needs to reason about it).
 
+5. **Dual-register when the surface flows to both subprocess and
+   in-process hot-path consumers.** Adapter `install_setup_hook`
+   wirings that publish a surface to `surface_store` (cross-process)
+   AND have a same-process consumer reading it every frame must also
+   call `register_texture_with_layout` — Path 2 explicitly does not
+   cache its synthesized registration, so a Path-1 miss on the hot
+   path costs a fresh DMA-BUF import + QFOT acquire submit per frame.
+   See [`adapter-runtime-integration.md` →
+   Dual-registration](adapter-runtime-integration.md#dual-registration-for-in-process-consumers)
+   for the recipe and the in-tree reference producer.
+
 ## Consumer rules
 
 1. **Resolve the registration, not just the texture.**
