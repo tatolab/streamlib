@@ -38,6 +38,11 @@ pub struct HostVulkanDevice {
     #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
+    /// Whether the driver tolerates a failed cross-device DMA-BUF import
+    /// (raw `vkAllocateMemory` chained with `VkImportMemoryFdInfoKHR`)
+    /// without perturbing per-handle-type accounting for other export
+    /// handle types — notably OPAQUE_FD. False on NVIDIA Linux per #638.
+    supports_cross_device_dma_buf_probe: bool,
     supports_video_encode: bool,
     supports_video_decode: bool,
     video_encode_queue_family_index: Option<u32>,
@@ -302,6 +307,17 @@ impl HostVulkanDevice {
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
         let device_name =
             unsafe { CStr::from_ptr(device_props.device_name.as_ptr()) }.to_string_lossy();
+
+        // PCI vendor IDs assigned by Khronos Vulkan registry. NVIDIA's
+        // proprietary Linux driver (and currently NVK on the same
+        // hardware) report 0x10DE; failed cross-device DMA-BUF imports
+        // perturb the engine's OPAQUE_FD allocation accounting on this
+        // driver family per issue #638, so consumers must skip the probe.
+        // Mesa drivers (iris, radeonsi) tolerate the failed import; the
+        // probe runs as before. If a future NVIDIA driver release fixes
+        // this, the blocklist is a one-line update.
+        const PCI_VENDOR_NVIDIA: u32 = 0x10DE;
+        let supports_cross_device_dma_buf_probe = device_props.vendor_id != PCI_VENDOR_NVIDIA;
 
         // 5b. Query VkPhysicalDeviceIDProperties::deviceUUID via
         //     vkGetPhysicalDeviceProperties2. CUDA-Vulkan interop matches
@@ -862,11 +878,12 @@ impl HostVulkanDevice {
         };
 
         tracing::info!(
-            "Vulkan device initialized: {} (queue family {}, {} memory types, external_memory={}, vma=enabled, dma_buf_pools={})",
+            "Vulkan device initialized: {} (queue family {}, {} memory types, external_memory={}, cross_device_dma_buf_probe={}, vma=enabled, dma_buf_pools={})",
             device_name,
             queue_family_index,
             memory_properties.memory_type_count,
             supports_external_memory,
+            supports_cross_device_dma_buf_probe,
             {
                 #[cfg(target_os = "linux")]
                 { dma_buf_buffer_pool.is_some() }
@@ -887,6 +904,7 @@ impl HostVulkanDevice {
             transfer_queue,
             device_name: device_name.into_owned(),
             supports_external_memory,
+            supports_cross_device_dma_buf_probe,
             supports_video_encode,
             supports_video_decode,
             video_encode_queue_family_index,
@@ -1712,6 +1730,25 @@ impl HostVulkanDevice {
         self.supports_external_memory
     }
 
+    /// Whether the driver tolerates a failed cross-device DMA-BUF import
+    /// attempt without perturbing per-handle-type kernel accounting for
+    /// other export handle types (notably OPAQUE_FD).
+    ///
+    /// Cross-device meaning: the source DMA-BUF was allocated by a
+    /// different DRM device (e.g. UVC camera kernel driver) than this
+    /// `VkDevice`. Same-device DMA-BUF imports (e.g. swapchain images
+    /// from the compositor) are unaffected and always safe.
+    ///
+    /// Returns `false` on NVIDIA Linux today: failed cross-device DMA-BUF
+    /// imports flake the engine's OPAQUE_FD allocation budget for the
+    /// device's lifetime, even with the engine-side OPAQUE_FD sentinels
+    /// from #637 in place. Returns `true` on Mesa drivers (Intel iris,
+    /// AMD radeonsi) where the probe runs without observable side
+    /// effects.
+    pub fn supports_cross_device_dma_buf_probe(&self) -> bool {
+        self.supports_cross_device_dma_buf_probe
+    }
+
     /// Whether Vulkan Video encode extensions are available.
     #[allow(dead_code)]
     pub fn supports_video_encode(&self) -> bool {
@@ -2245,6 +2282,35 @@ mod tests {
             device.transfer_queue_family_index(),
             device.video_encode_queue_family_index(),
         );
+    }
+
+    /// Issue #638 — `supports_cross_device_dma_buf_probe()` must
+    /// return `false` on NVIDIA and `true` elsewhere. Locks the
+    /// vendor-id check; mentally-revertible (delete the
+    /// `vendor_id != 0x10DE` check in `new()` and this test fails on
+    /// NVIDIA hardware). Skips when no Vulkan device is available.
+    #[test]
+    fn supports_cross_device_dma_buf_probe_matches_vendor_blocklist() {
+        let device = match try_create_device() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let name = device.name();
+        let is_nvidia = name.contains("NVIDIA") || name.contains("nvidia");
+        let supports = device.supports_cross_device_dma_buf_probe();
+
+        if is_nvidia {
+            assert!(
+                !supports,
+                "expected supports_cross_device_dma_buf_probe()=false on NVIDIA ({name}), got true"
+            );
+        } else {
+            assert!(
+                supports,
+                "expected supports_cross_device_dma_buf_probe()=true on non-NVIDIA ({name}), got false"
+            );
+        }
     }
 
     #[test]

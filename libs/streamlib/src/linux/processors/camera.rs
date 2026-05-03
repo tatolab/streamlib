@@ -960,7 +960,25 @@ fn capture_thread_loop(
         }
     };
 
-    if vulkan_device.supports_external_memory() && !is_virtual_device {
+    // Skip the cross-device DMA-BUF probe on drivers where the failed
+    // import attempt is empirically observed to perturb the engine's
+    // OPAQUE_FD allocation accounting (issue #638). Today: NVIDIA Linux.
+    // The MMAP+memcpy fallback below is unaffected.
+    let supports_cross_device_dma_buf_probe =
+        vulkan_device.supports_cross_device_dma_buf_probe();
+    if !supports_cross_device_dma_buf_probe {
+        tracing::info!(
+            camera = camera_name,
+            device = %vulkan_device.name(),
+            "DMA-BUF probe skipped — driver blocklisted for cross-device imports (#638). \
+             Using MMAP + memcpy."
+        );
+    }
+
+    if vulkan_device.supports_external_memory()
+        && !is_virtual_device
+        && supports_cross_device_dma_buf_probe
+    {
         // Step 1: Try VIDIOC_EXPBUF on buffer 0 to check DMA-BUF export support
         let probe_succeeded: bool = unsafe {
             let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();

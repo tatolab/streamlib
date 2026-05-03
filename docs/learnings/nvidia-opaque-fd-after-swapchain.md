@@ -91,18 +91,26 @@ the per-handle-type kernel state, so it must not compete with
 consumer-class allocations. Sentinels are freed in
 `HostVulkanDevice::Drop` before the allocator is torn down.
 
-> **Residual flake.** The small-sentinel fix improved the Cam Link 4K
+> ~~**Residual flake.** The small-sentinel fix improved the Cam Link 4K
 > cold-shell pass rate to 9/10 in PR `fix/opaque-fd-export-sentinels-637`'s
-> E2E run, but did not eliminate the flake. The 1/10 failure shape is
-> identical to the original (post-swapchain `vkAllocateMemory` returns
-> `VK_ERROR_OUT_OF_DEVICE_MEMORY`). Working hypothesis: the camera
-> processor's failed cross-device DMA-BUF import probe (which only
-> runs on Cam Link 4K — vivid/v4l2loopback skip it via the
-> `is_virtual_device` gate) issues raw `vkAllocateMemory` calls with
-> `VkImportMemoryFdInfoKHR{handle_type=DMA_BUF_EXT}` post-swapchain
-> that may perturb NVIDIA's exportable-memory accounting in a way
-> the engine-side sentinel can't cover. Tracked as a separate
-> investigation (issue filed alongside #637's PR).
+> E2E run, but did not eliminate the flake.~~ — **Superseded 2026-05-03**
+> (issue #638, same PR). The hypothesis was confirmed: the camera
+> processor's failed cross-device DMA-BUF import probe perturbs NVIDIA's
+> OPAQUE_FD allocation accounting despite the engine sentinel. The
+> cheap experiment (force-skip the probe on NVIDIA, 10× cold-shell on
+> Cam Link 4K) moved 9/10 → 10/10 without touching anything else.
+> Engine-layer fix:
+> `HostVulkanDevice::supports_cross_device_dma_buf_probe()` capability
+> query returning `false` when `vendor_id == 0x10DE` (NVIDIA), and the
+> camera processor gates its V4L2 DMA-BUF probe on it. Mesa drivers
+> (Intel iris, AMD radeonsi) tolerate the failed probe and still run it.
+> The wider implication: failed `vkAllocateMemory` chained with
+> `VkImportMemoryFdInfoKHR` is NOT side-effect-free on NVIDIA, even when
+> the call returns cleanly — per-handle-type kernel accounting carries
+> forward. To the best of our current knowledge no driver release notes
+> have published this. If a future NVIDIA driver release fixes it, the
+> blocklist is a one-line update at
+> `vulkan_device.rs::HostVulkanDevice::new()`.
 
 `new()` returns `Result<Arc<Self>>` so the pre-warm step can call
 back through the public RHI constructors (which take
@@ -147,7 +155,32 @@ Deterministic on vivid (`/dev/video2`):
    `CameraToCudaCopy: registered cuda OPAQUE_FD DEVICE_LOCAL
    surface_id=...` — no setup failure.
 
-### B. Sentinels-dropped protocol (catches the #637 regression)
+### B. Probe-gate-removed protocol (catches the #638 regression)
+
+Reproduces the intermittent flake on Cam Link 4K (`/dev/video0`) once
+the engine sentinels are intact:
+
+1. Edit `camera.rs` to remove the
+   `supports_cross_device_dma_buf_probe` gate (or change the
+   `HostVulkanDevice::supports_cross_device_dma_buf_probe()` body to
+   always return `true`).
+2. `cargo build --release -p camera-python-display`.
+3. Run with `STREAMLIB_CAMERA_DEVICE=/dev/video0` (Cam Link 4K),
+   `STREAMLIB_DISPLAY_FRAME_LIMIT=180`, `timeout --kill-after=5 35`,
+   10× cold-shell.
+4. Without the gate: at least one of the 10 runs logs
+   `Setup failed: ... CameraToCudaCopy: new_opaque_fd_export_device_local:
+   ... A device memory allocation has failed.` (1/10 rate observed
+   during the original PR `fix/opaque-fd-export-sentinels-637`'s
+   E2E and the #638 retest).
+5. Restore the gate, rebuild, re-run 10×: zero failures.
+
+Vivid (`/dev/video2`) does NOT reproduce because the
+`is_virtual_device` check skips the probe regardless. Only real UVC
+hardware exercises the failed-probe path that perturbs OPAQUE_FD
+accounting.
+
+### C. Sentinels-dropped protocol (catches the #637 regression)
 
 Reproduces the intermittent flake on Cam Link 4K (`/dev/video0`)
 specifically:
@@ -185,6 +218,14 @@ decay model in this learning is stale. Update accordingly.
   type state between pre-warm and the consumer's allocation. Vivid
   and v4l2loopback never reproduced because their faster startup
   beat the decay window.
+- Bug fix #3 (probe-gate via vendor-id capability query): issue #638,
+  same PR `fix/opaque-fd-export-sentinels-637`. The 1/10 residual
+  after fix #2 was caused by the camera processor's failed
+  cross-device DMA-BUF import probe perturbing OPAQUE_FD accounting
+  on NVIDIA. Engine-layer fix:
+  `HostVulkanDevice::supports_cross_device_dma_buf_probe()`,
+  `false` when `vendor_id == 0x10DE`. The probe-gate-removed protocol
+  in section B above is the reproducer.
 - Sibling learning: @docs/learnings/nvidia-dma-buf-after-swapchain.md
 - VMA pool pattern: @docs/learnings/vma-export-pools.md
 - Empirical verification protocol above documents the reproducer
