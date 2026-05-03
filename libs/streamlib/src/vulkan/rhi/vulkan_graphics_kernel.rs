@@ -505,6 +505,12 @@ impl VulkanGraphicsKernel {
     /// Record bind + push + draw into `command_buffer` for the given
     /// `frame_index`. Caller is responsible for the surrounding render-pass
     /// scope (`vkCmdBeginRendering` / `vkCmdEndRendering`).
+    ///
+    /// Drains the slot's pending `set_*` state on entry — back-to-back
+    /// draws to the same `frame_index` must re-stage every binding +
+    /// push-constant block. Mirrors `VulkanComputeKernel::dispatch`'s
+    /// drain-then-record contract; missing bindings surface as a clear
+    /// error rather than corrupting GPU state.
     pub fn cmd_bind_and_draw(
         &self,
         command_buffer: vk::CommandBuffer,
@@ -514,8 +520,9 @@ impl VulkanGraphicsKernel {
         self.cmd_bind_and_draw_inner(command_buffer, frame_index, DrawKind::Draw(*draw))
     }
 
-    /// Indexed variant of [`Self::cmd_bind_and_draw`]. Caller must have set
-    /// an index buffer for `frame_index` via [`Self::set_index_buffer`].
+    /// Indexed variant of [`Self::cmd_bind_and_draw`] (same drain-on-draw
+    /// contract). Caller must have set an index buffer for `frame_index`
+    /// via [`Self::set_index_buffer`].
     pub fn cmd_bind_and_draw_indexed(
         &self,
         command_buffer: vk::CommandBuffer,
@@ -2032,7 +2039,7 @@ mod tests {
         AttachmentFormats, ColorBlendState, ColorWriteMask, DepthCompareOp, DepthStencilState,
         GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
         GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage,
-        MultisampleState, PolygonMode, PrimitiveTopology, RasterizationState, TextureFormat,
+        MultisampleState, PrimitiveTopology, RasterizationState, TextureFormat,
         VertexAttributeFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
         VertexInputState, derive_bindings_from_spirv_multistage,
     };
@@ -2312,6 +2319,21 @@ mod tests {
 
     #[test]
     fn constructs_kernel_with_depth_stencil_enabled() {
+        // Smoke test: pipeline creation succeeds when both
+        // `depth_stencil = Enabled` and `attachment_formats.depth =
+        // Some(...)` are set. This locks the *creation* path threading
+        // `VkPipelineDepthStencilStateCreateInfo` through to the
+        // pipeline builder — but does NOT lock depth-correctness
+        // rendering, because depth StreamTexture allocation depends on
+        // `streamlib-consumer-rhi::TextureFormat` gaining depth
+        // variants (tracked under the Graphics Kernel Buildout
+        // milestone). A driver bug that silently ignored
+        // `depth_test_enable` while accepting the pipeline create call
+        // would still pass this test; the offscreen depth-ordering
+        // test that would catch it is the deferred follow-up.
+        // Validation layers (`VK_LOADER_LAYERS_ENABLE=*validation*`)
+        // exercise the spec-VUID side of pipeline creation and cover
+        // the "did we forget to plumb depth state" failure mode.
         let device = match try_vulkan_device() { Some(d) => d, None => return };
         let bindings = [GraphicsBindingSpec::sampled_texture(
             0,
@@ -2331,9 +2353,6 @@ mod tests {
             depth: Some(crate::core::rhi::DepthFormat::D32Sfloat),
         };
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        // Lock the depth-stencil pipeline-creation path: construction must
-        // succeed and the kernel must report its declared shape correctly.
-        // Driver bugs in depth-state threading would surface here.
         let kernel = VulkanGraphicsKernel::new(&device, &descriptor)
             .expect("depth-stencil kernel must construct");
         assert_eq!(kernel.bindings().len(), 1);
