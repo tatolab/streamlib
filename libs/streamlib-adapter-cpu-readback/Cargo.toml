@@ -67,5 +67,9 @@ path = "tests/stride_offset_handling.rs"
 name = "subprocess_crash_mid_write"
 path = "tests/subprocess_crash_mid_write.rs"
 
+[[test]]
+name = "persistent_command_pool"
+path = "tests/persistent_command_pool.rs"
+
 [lints]
 workspace = true
