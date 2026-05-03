@@ -1051,6 +1051,33 @@ impl GpuContext {
         Ok(Arc::new(kernel))
     }
 
+    /// Create a graphics kernel from a multi-stage SPIR-V set + binding
+    /// declaration + pipeline state. Graphics counterpart to
+    /// [`Self::create_compute_kernel`].
+    ///
+    /// Reflects every stage's SPIR-V at creation time and validates that
+    /// the declared bindings + push constants + stage visibility match the
+    /// shaders; mismatches surface as a clear error rather than at first
+    /// draw.
+    #[cfg(target_os = "linux")]
+    pub fn create_graphics_kernel(
+        &self,
+        descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
+        tracing::debug!(
+            rhi_op = "create_graphics_kernel",
+            label = descriptor.label,
+            stages = descriptor.stages.len(),
+            bindings = descriptor.bindings.len(),
+            push_constant_size = descriptor.push_constants.size,
+            descriptor_sets_in_flight = descriptor.descriptor_sets_in_flight,
+            "GpuContext::create_graphics_kernel"
+        );
+        let vulkan_device = &self.device.inner;
+        let kernel = crate::vulkan::rhi::VulkanGraphicsKernel::new(vulkan_device, descriptor)?;
+        Ok(Arc::new(kernel))
+    }
+
     /// Create a host-side texture-readback handle bound to a fixed
     /// format/extent. The staging buffer + command resources + timeline
     /// semaphore are allocated once at construction and reused across
@@ -1757,6 +1784,16 @@ impl GpuContextFullAccess {
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.inner.create_compute_kernel(descriptor)
+    }
+
+    /// Create a graphics kernel from a multi-stage SPIR-V set, binding
+    /// declaration, and fixed-function pipeline state.
+    #[cfg(target_os = "linux")]
+    pub fn create_graphics_kernel(
+        &self,
+        descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
+        self.inner.create_graphics_kernel(descriptor)
     }
 
     /// Get the underlying Metal device (macOS only).

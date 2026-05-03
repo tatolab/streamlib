@@ -60,6 +60,11 @@ pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 mod vulkan_compute_kernel;
 pub use vulkan_compute_kernel::VulkanComputeKernel;
 
+mod vulkan_graphics_kernel;
+pub use vulkan_graphics_kernel::{
+    OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel,
+};
+
 mod vulkan_texture_readback;
 pub use vulkan_texture_readback::VulkanTextureReadback;
 
