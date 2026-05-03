@@ -480,7 +480,10 @@ make sense if the surrounding files were renamed or restructured.
 - @docs/learnings/nvidia-opaque-fd-after-swapchain.md — Same NVIDIA cap as
   DMA-BUF but for the OPAQUE_FD path used by CUDA / OpenCL interop. The
   engine pre-warms every export-capable VMA pool at
-  `HostVulkanDevice::new()`; consumers don't need to (and shouldn't) pre-warm.
+  `HostVulkanDevice::new()`; OPAQUE_FD probes are *retained as long-lived
+  sentinels* (issue #637) because the compositor doesn't keep an OPAQUE_FD
+  allocation alive in the kernel like it does for DMA-BUF, so the per-handle-
+  type kernel state can decay. Consumers don't need to (and shouldn't) pre-warm.
 - @docs/learnings/nvidia-egl-dmabuf-render-target.md — Linear DMA-BUFs on
   NVIDIA Linux are sampler-only (EGL `external_only=TRUE`); FBO color
   attachments require a tiled DRM modifier from `eglQueryDmaBufModifiersEXT`.
