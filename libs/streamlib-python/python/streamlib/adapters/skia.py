@@ -116,6 +116,10 @@ class SkiaContextProtocol(Protocol):
 
     def acquire_write(self, surface): ...
 
+    def release_for_cross_process(
+        self, surface, vulkan_ctx, post_release_layout: int
+    ) -> None: ...
+
 
 class SkiaContext:
     """Subprocess-side Skia adapter runtime.
@@ -345,6 +349,49 @@ class SkiaContext:
                 # Drop the Surface refcount so the DirectContext is
                 # not pinned across the inner release.
                 del sk_surface
+
+    def release_for_cross_process(
+        self, surface, vulkan_ctx, post_release_layout: int
+    ) -> None:
+        """Publish a producer-side cross-process release for a surface
+        this Skia context has been writing to via :meth:`acquire_write`.
+
+        Skia composes on the OpenGL adapter; Skia's GL writes don't
+        touch the underlying ``VkImage``'s Vulkan tracker, and neither
+        the Skia nor the OpenGL adapter has a Vulkan device handle of
+        its own. The engine-model answer (per
+        ``docs/architecture/adapter-authoring.md`` → Cross-process
+        producer composition) is to let the canonical Vulkan adapter
+        own the QFOT release barrier: the customer dual-registers the
+        same surface with both adapters, and the Skia/OpenGL release
+        path delegates to ``VulkanContext.release_for_cross_process``.
+
+        ``vulkan_ctx`` is the subprocess's
+        :class:`streamlib.adapters.vulkan.VulkanContext` — typically
+        obtained alongside this :class:`SkiaContext` from the same
+        runtime context inside ``setup``. It must be present (the
+        runtime must have been started with surface-share registration
+        carrying an exportable timeline OPAQUE_FD per the
+        ``register_texture(... Some(timeline.as_ref()), ...)`` host
+        pattern).
+
+        Sequencing — call this *after* the :meth:`acquire_write`
+        ``with`` block has exited so Skia's ``flushAndSubmit`` and the
+        inner OpenGL release's ``glFinish`` have drained GL writes
+        through the DMA-BUF kernel backing.
+
+        ``post_release_layout`` is a Vulkan ``VkImageLayout``
+        enumerant as an integer (use
+        :class:`streamlib.adapters.vulkan.VkImageLayout` constants).
+        ``GENERAL`` is the right choice for Skia/GL-backed surfaces
+        for the same reason it is for the OpenGL adapter — the host
+        doesn't observe the GL writes' "Vulkan layout" in any
+        meaningful sense, so GENERAL-as-source-of-truth gives the
+        consumer maximum flexibility.
+        """
+        self._opengl.release_for_cross_process(
+            surface, vulkan_ctx, post_release_layout
+        )
 
     @contextmanager
     def acquire_read(self, surface) -> Iterator[SkiaReadView]:
