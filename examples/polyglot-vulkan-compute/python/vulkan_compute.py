@@ -49,7 +49,7 @@ import struct
 from typing import Optional
 
 from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
-from streamlib.adapters.vulkan import VulkanContext
+from streamlib.adapters.vulkan import VkImageLayout, VulkanContext
 
 
 class VulkanComputeProcessor:
@@ -118,6 +118,21 @@ class VulkanComputeProcessor:
                 group_y,
                 1,
             )
+        # Producer-side cross-process release (#643). The dispatched
+        # compute leaves the image in GENERAL (the kernel writes to a
+        # storage_image binding, which Vulkan keeps in GENERAL); publish
+        # that as the post-release layout so any future host consumer
+        # going through Path 2's `acquire_from_foreign` sees a matching
+        # source layout. Pairs with the QFOT release barrier the adapter
+        # records on this subprocess's `ConsumerVulkanDevice`.
+        self._vk.release_for_cross_process(
+            self._uuid, VkImageLayout.GENERAL
+        )
+        print(
+            f"[VulkanCompute/py] published cross-process release "
+            f"layout=GENERAL for surface '{self._uuid}'",
+            flush=True,
+        )
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         print(

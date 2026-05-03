@@ -144,6 +144,15 @@ const symbols = {
     parameters: ["pointer", "buffer"] as const,
     result: "void" as const,
   },
+  // Producer-side cross-process layout publish (#633, Linux). Pairs
+  // with `sldn_vulkan_release_to_foreign`: a producer subprocess
+  // issues the QFOT release on its consumer device, then publishes
+  // the post-release `VkImageLayout` so the next host consumer's
+  // `acquire_from_foreign` sees the right source layout.
+  sldn_surface_update_image_layout: {
+    parameters: ["pointer", "buffer", "i32"] as const,
+    result: "i32" as const,
+  },
 
   // Per-plane surface-share accessors (#530). The OpenGL adapter needs
   // `plane_stride` (EGL_DMA_BUF_PLANE{N}_PITCH_EXT) and
@@ -253,6 +262,13 @@ const symbols = {
   },
   sldn_vulkan_release_read: {
     parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  // Producer-side cross-process release. Pairs with
+  // `sldn_surface_update_image_layout` — see VulkanContext
+  // `releaseForCrossProcess` (#633).
+  sldn_vulkan_release_to_foreign: {
+    parameters: ["pointer", "u64", "i32"] as const,
     result: "i32" as const,
   },
   sldn_vulkan_raw_handles: {

@@ -113,6 +113,11 @@ export interface VulkanGpuLimitedAccess {
     readonly nativeHandlePtr: Deno.PointerObject | null;
     release(): void;
   };
+  /** Publish a producer-side post-release `VkImageLayout` for `poolId`
+   * via the surface-share `update_layout` op (#633). Called by
+   * `VulkanContext.releaseForCrossProcess` after the QFOT release
+   * barrier records. */
+  updateImageLayout(poolId: string, layout: number): void;
   // deno-lint-ignore no-explicit-any
   readonly nativeLib: { readonly symbols: any };
 }
@@ -321,6 +326,63 @@ export class VulkanContext {
         symbols.sldn_vulkan_release_read(rt, surfaceId);
       },
     };
+  }
+
+  /** Issue a producer-side queue-family-ownership-transfer (QFOT)
+   * release barrier on this subprocess's `ConsumerVulkanDevice` and
+   * publish the post-release `VkImageLayout` to surface-share so the
+   * next cross-process consumer's `acquire_from_foreign` sees the
+   * right source layout (#633).
+   *
+   * Call this *after* the matching `acquireWrite`/`acquireRead`
+   * `using` block has exited and after the producer's queue
+   * submission has actually retired (e.g. the customer has signalled
+   * their own timeline or `vkQueueWaitIdle`-ed). The adapter's QFOT
+   * release barrier carries `srcAccessMask = MEMORY_WRITE_BIT` and
+   * assumes producer-side hazard coverage upstream.
+   *
+   * `postReleaseLayout` is a Vulkan `VkImageLayout` enumerant as a
+   * number (use `VkImageLayout` constants). Picking `GENERAL` is the
+   * safest default for cross-process handoffs — the consumer's
+   * `acquire_from_foreign` re-transitions to whatever layout it
+   * actually needs.
+   *
+   * On NVIDIA Linux drivers without
+   * `VK_EXT_external_memory_acquire_unmodified` (current state as of
+   * 2026-05-03), the host consumer side falls back to a bridging
+   * `UNDEFINED → target` transition; content preservation is
+   * empirical (see `docs/learnings/cross-process-vkimage-layout.md`).
+   * The producer-side path here is correct under both modes. */
+  releaseForCrossProcess(
+    surface: StreamlibSurface | string | bigint,
+    postReleaseLayout: number,
+  ): void {
+    const poolId = VulkanContext.surfacePoolId(surface);
+    const surfaceId = this.surfaceIds.get(poolId);
+    if (surfaceId === undefined) {
+      throw new Error(
+        `VulkanContext.releaseForCrossProcess: surface '${poolId}' is ` +
+          "not registered — at least one acquireWrite/acquireRead must " +
+          "have run for this surface in this subprocess before publishing " +
+          "a cross-process release.",
+      );
+    }
+    const rc: number = this.symbols.sldn_vulkan_release_to_foreign(
+      this.rt,
+      surfaceId,
+      postReleaseLayout,
+    );
+    if (rc !== 0) {
+      throw new Error(
+        `VulkanContext.releaseForCrossProcess: ` +
+          `sldn_vulkan_release_to_foreign returned ${rc} for surface ` +
+          `'${poolId}' (check subprocess log for the underlying adapter error)`,
+      );
+    }
+    // Pair the QFOT release with the surface-share `update_layout`
+    // publish so the next host-side consumer's `acquire_from_foreign`
+    // picks up the new layout instead of the cached registration one.
+    this.gpu.updateImageLayout(poolId, postReleaseLayout);
   }
 
   /** Dispatch a compute shader against the surface's host-side `VkImage`

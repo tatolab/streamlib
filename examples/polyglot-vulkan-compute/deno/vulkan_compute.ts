@@ -34,7 +34,10 @@ import type {
   RuntimeContextFullAccess,
   RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import { VulkanContext } from "../../../libs/streamlib-deno/adapters/vulkan.ts";
+import {
+  VkImageLayout,
+  VulkanContext,
+} from "../../../libs/streamlib-deno/adapters/vulkan.ts";
 
 function hexToBytes(hex: string): Uint8Array {
   const out = new Uint8Array(hex.length / 2);
@@ -106,18 +109,32 @@ export default class VulkanComputeProcessor implements ReactiveProcessor {
     const groupX = Math.ceil(this.width / local);
     const groupY = Math.ceil(this.height / local);
 
-    using guard = this.vk.acquireWrite(this.uuid);
+    {
+      using guard = this.vk.acquireWrite(this.uuid);
+      console.error(
+        `[VulkanCompute/deno] acquired vk_image=0x${guard.view.vkImage.toString(16)} ` +
+          `layout=${guard.view.vkImageLayout}`,
+      );
+      this.vk.dispatchCompute(
+        this.uuid,
+        this.spv,
+        pc,
+        groupX,
+        groupY,
+        1,
+      );
+    }
+    // Producer-side cross-process release (#643). The dispatched
+    // compute leaves the image in GENERAL (the kernel writes to a
+    // storage_image binding, which Vulkan keeps in GENERAL); publish
+    // that as the post-release layout so any future host consumer
+    // going through Path 2's `acquire_from_foreign` sees a matching
+    // source layout. Pairs with the QFOT release barrier the adapter
+    // records on this subprocess's `ConsumerVulkanDevice`.
+    this.vk.releaseForCrossProcess(this.uuid, VkImageLayout.General);
     console.error(
-      `[VulkanCompute/deno] acquired vk_image=0x${guard.view.vkImage.toString(16)} ` +
-        `layout=${guard.view.vkImageLayout}`,
-    );
-    this.vk.dispatchCompute(
-      this.uuid,
-      this.spv,
-      pc,
-      groupX,
-      groupY,
-      1,
+      `[VulkanCompute/deno] published cross-process release ` +
+        `layout=General for surface '${this.uuid}'`,
     );
   }
 
