@@ -965,8 +965,11 @@ impl<D: VulkanRhiDevice + 'static> InProcessCpuReadbackCopyTrigger<D> {
 /// and completion fence — replaces the create-and-destroy-per-submit
 /// pattern that used to churn `vkCreateCommandPool` /
 /// `vkDestroyCommandPool` once per copy. Same shape lives in
-/// `streamlib-adapter-cuda::adapter::AdapterPersistentSubmitContext`;
-/// fix BOTH if you change EITHER (issue #620 AI Agent Notes).
+/// `streamlib-adapter-cuda::adapter::AdapterPersistentSubmitContext`
+/// and `streamlib-adapter-vulkan::adapter::AdapterPersistentSubmitContext`;
+/// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
+/// Notes — `streamlib-adapter-abi` deliberately does not depend on
+/// `vulkanalia`, so duplication is the project pattern here).
 ///
 /// The fence is created signaled so the first submit doesn't block
 /// waiting on a previous-submit completion. Subsequent submits wait

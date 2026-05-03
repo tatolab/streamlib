@@ -24,7 +24,8 @@
 //!   wakes up.
 
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use streamlib_consumer_rhi::{
@@ -56,6 +57,20 @@ pub struct VulkanSurfaceAdapter<D: VulkanRhiDevice> {
     /// Per-acquire timeline wait timeout. Adjustable via
     /// [`Self::with_acquire_timeout`].
     acquire_timeout: Duration,
+    /// Persistent command pool + buffer + completion fence for the
+    /// per-acquire layout-transition path
+    /// ([`Self::transition_layout_sync`]). Lazy-init on first
+    /// transition; reused with `vkResetCommandPool` after each
+    /// submission's fence has signaled. See
+    /// [`AdapterPersistentSubmitContext`] for the full contract.
+    /// Single-threaded caller convention; multi-threaded callers
+    /// serialize through this mutex.
+    submit_ctx: Mutex<Option<AdapterPersistentSubmitContext>>,
+    /// Counts how many times the persistent submit context was
+    /// (re)created — used by tests to lock the amortisation invariant
+    /// from #620 / #640 (steady-state acquires must not grow live
+    /// pools).
+    submit_ctx_create_count: AtomicUsize,
 }
 
 impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
@@ -65,7 +80,22 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             device,
             surfaces: Registry::new(),
             acquire_timeout: DEFAULT_TIMELINE_WAIT,
+            submit_ctx: Mutex::new(None),
+            submit_ctx_create_count: AtomicUsize::new(0),
         }
+    }
+
+    /// Number of times the adapter has materialised its persistent
+    /// command pool. Stays at 0 before the first acquire, becomes 1
+    /// after the first transition, and stays at 1 across every
+    /// subsequent acquire.
+    ///
+    /// Hidden from the public docs because callers shouldn't depend
+    /// on it; tests use it to lock #620 / #640's amortisation
+    /// invariant.
+    #[doc(hidden)]
+    pub fn submit_pool_create_count(&self) -> usize {
+        self.submit_ctx_create_count.load(Ordering::Relaxed)
     }
 
     /// Override the per-acquire timeline-wait timeout. Default 5 s.
@@ -170,8 +200,13 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     /// `cmd_pipeline_barrier2`; we use queue-family-foreign transitions
     /// to support cross-process handoff.
     ///
-    /// Synchronous: blocks until the GPU has executed the barrier,
-    /// because the next consumer needs the new layout to be visible.
+    /// Synchronous: blocks on the per-submit fence until the GPU has
+    /// executed the barrier, because the next consumer needs the new
+    /// layout to be visible. Pre-#640 this used `vkQueueWaitIdle` —
+    /// queue-wide drain; #640 narrowed it to a fence on the submit
+    /// itself, which composes correctly with concurrent unrelated
+    /// activity sharing the same queue (mirrors the cpu-readback
+    /// `vkQueueWaitIdle` → fence migration in #532).
     fn transition_layout_sync(
         &self,
         image: vk::Image,
@@ -185,39 +220,30 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         let queue = self.device.queue();
         let qf = self.device.queue_family_index();
 
-        // Single-shot command pool + buffer.
-        let pool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(qf)
-            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-            .build();
-        let pool = unsafe { device.create_command_pool(&pool_info, None) }
-            .map_err(|e| AdapterError::BackendRejected {
-                reason: format!("create_command_pool: {e}"),
+        let mut guard = self
+            .submit_ctx
+            .lock()
+            .map_err(|_| AdapterError::BackendRejected {
+                reason: "transition_layout_sync: persistent submit context mutex poisoned"
+                    .into(),
             })?;
+        if guard.is_none() {
+            *guard = Some(AdapterPersistentSubmitContext::new(device, qf)?);
+            self.submit_ctx_create_count.fetch_add(1, Ordering::Relaxed);
+        }
+        let submit_ctx = guard.as_ref().expect("submit_ctx populated above");
+        let cmd = submit_ctx.cmd;
 
-        let alloc_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1)
-            .build();
-        let cmd_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
-            .map_err(|e| {
-                unsafe { device.destroy_command_pool(pool, None) };
-                AdapterError::BackendRejected {
-                    reason: format!("allocate_command_buffers: {e}"),
-                }
-            })?;
-        let cmd = cmd_buffers[0];
+        submit_ctx.reset_for_recording(device)?;
 
         let begin_info = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .build();
-        if let Err(e) = unsafe { device.begin_command_buffer(cmd, &begin_info) } {
-            unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::BackendRejected {
+        unsafe { device.begin_command_buffer(cmd, &begin_info) }.map_err(|e| {
+            AdapterError::BackendRejected {
                 reason: format!("begin_command_buffer: {e}"),
-            });
-        }
+            }
+        })?;
 
         let image_barrier = vk::ImageMemoryBarrier2::builder()
             .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
@@ -248,12 +274,11 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .build();
         unsafe { device.cmd_pipeline_barrier2(cmd, &dep_info) };
 
-        if let Err(e) = unsafe { device.end_command_buffer(cmd) } {
-            unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::BackendRejected {
+        unsafe { device.end_command_buffer(cmd) }.map_err(|e| {
+            AdapterError::BackendRejected {
                 reason: format!("end_command_buffer: {e}"),
-            });
-        }
+            }
+        })?;
 
         let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
             .command_buffer(cmd)
@@ -262,25 +287,23 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             .command_buffer_infos(&cmd_infos)
             .build();
 
-        if let Err(e) = unsafe {
-            self.device.submit_to_queue(queue, &[submit], vk::Fence::null())
-        } {
-            unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::BackendRejected {
+        unsafe { self.device.submit_to_queue(queue, &[submit], submit_ctx.fence) }.map_err(
+            |e| AdapterError::BackendRejected {
                 reason: format!("submit_to_queue: {e}"),
-            });
-        }
+            },
+        )?;
 
-        // Block until the layout transition has executed. The next
-        // consumer's view assumes the new layout is visible.
-        if let Err(e) = unsafe { device.queue_wait_idle(queue) } {
-            unsafe { device.destroy_command_pool(pool, None) };
-            return Err(AdapterError::BackendRejected {
-                reason: format!("queue_wait_idle: {e}"),
-            });
-        }
+        // Block until the GPU has executed the barrier — the next
+        // consumer's view assumes the new layout is visible. The wait
+        // is per-submit (not queue-wide like the pre-#640
+        // `vkQueueWaitIdle`), so concurrent unrelated submits on the
+        // same queue aren't drained.
+        unsafe { device.wait_for_fences(&[submit_ctx.fence], true, u64::MAX) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("wait_for_fences (transition_layout_sync): {e}"),
+            }
+        })?;
 
-        unsafe { device.destroy_command_pool(pool, None) };
         Ok(())
     }
 
@@ -576,3 +599,113 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
     }
 }
 
+/// Persistent per-adapter command pool, command buffer, and
+/// completion fence — replaces the create-and-destroy-per-acquire
+/// pattern that used to churn `vkCreateCommandPool` /
+/// `vkDestroyCommandPool` on every layout transition. Same shape
+/// lives in `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
+/// and `streamlib-adapter-cuda::adapter::AdapterPersistentSubmitContext`;
+/// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
+/// Notes — `streamlib-adapter-abi` deliberately does not depend on
+/// `vulkanalia`, so duplication is the project pattern here).
+///
+/// The fence is created signaled so the first submit doesn't block.
+/// Subsequent submits wait on it (instant when the prior submit has
+/// already drained — `transition_layout_sync` always drains
+/// synchronously at the end so the next call's wait is always
+/// instant). `vkResetCommandPool` is the cheap path per Vulkan spec
+/// — recycles every command buffer's memory in one call.
+struct AdapterPersistentSubmitContext {
+    pool: vk::CommandPool,
+    cmd: vk::CommandBuffer,
+    fence: vk::Fence,
+}
+
+impl AdapterPersistentSubmitContext {
+    fn new(device: &vulkanalia::Device, qf: u32) -> Result<Self, AdapterError> {
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(qf)
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+            .build();
+        let pool =
+            unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
+                AdapterError::BackendRejected {
+                    reason: format!("create_command_pool: {e}"),
+                }
+            })?;
+
+        let alloc_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1)
+            .build();
+        let cmd = match unsafe { device.allocate_command_buffers(&alloc_info) } {
+            Ok(v) => v[0],
+            Err(e) => {
+                unsafe { device.destroy_command_pool(pool, None) };
+                return Err(AdapterError::BackendRejected {
+                    reason: format!("allocate_command_buffers: {e}"),
+                });
+            }
+        };
+
+        let fence_info = vk::FenceCreateInfo::builder()
+            .flags(vk::FenceCreateFlags::SIGNALED)
+            .build();
+        let fence = match unsafe { device.create_fence(&fence_info, None) } {
+            Ok(f) => f,
+            Err(e) => {
+                unsafe { device.destroy_command_pool(pool, None) };
+                return Err(AdapterError::BackendRejected {
+                    reason: format!("create_fence: {e}"),
+                });
+            }
+        };
+
+        Ok(Self { pool, cmd, fence })
+    }
+
+    /// Wait for the previous submit's fence, reset it, then reset the
+    /// command pool so the single command buffer is ready to be
+    /// re-recorded. Steady-state cost is the wait, which is instant
+    /// when the prior submit has already drained.
+    fn reset_for_recording(&self, device: &vulkanalia::Device) -> Result<(), AdapterError> {
+        unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("wait_for_fences (persistent submit fence): {e}"),
+            }
+        })?;
+        unsafe { device.reset_fences(&[self.fence]) }.map_err(|e| {
+            AdapterError::BackendRejected {
+                reason: format!("reset_fences (persistent submit fence): {e}"),
+            }
+        })?;
+        unsafe { device.reset_command_pool(self.pool, vk::CommandPoolResetFlags::empty()) }
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("reset_command_pool (persistent submit pool): {e}"),
+            })?;
+        Ok(())
+    }
+
+    /// Tear down the pool + fence. Waits on the fence first to drain
+    /// any pending GPU work so destruction is safe.
+    fn destroy(self, device: &vulkanalia::Device) {
+        let _ = unsafe { device.wait_for_fences(&[self.fence], true, u64::MAX) };
+        unsafe {
+            device.destroy_fence(self.fence, None);
+            device.destroy_command_pool(self.pool, None);
+        }
+    }
+}
+
+impl<D: VulkanRhiDevice> Drop for VulkanSurfaceAdapter<D> {
+    fn drop(&mut self) {
+        let mut guard = match self.submit_ctx.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some(ctx) = guard.take() {
+            ctx.destroy(self.device.device());
+        }
+    }
+}

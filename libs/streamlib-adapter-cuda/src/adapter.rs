@@ -534,8 +534,11 @@ where
 /// pattern that used to churn `vkCreateCommandPool` /
 /// `vkDestroyCommandPool` on every host-pipeline copy. Same shape
 /// lives in
-/// `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`;
-/// fix BOTH if you change EITHER (issue #620 AI Agent Notes).
+/// `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
+/// and `streamlib-adapter-vulkan::adapter::AdapterPersistentSubmitContext`;
+/// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
+/// Notes — `streamlib-adapter-abi` deliberately does not depend on
+/// `vulkanalia`, so duplication is the project pattern here).
 ///
 /// The fence is created signaled so the first submit doesn't block.
 /// Subsequent submits wait on it (instant when the prior submit has
