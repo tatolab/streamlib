@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.4.27](https://github.com/tatolab/streamlib/compare/v0.4.26...v0.4.27) (2026-05-03)
+
+
+### Features
+
+* **adapter-cuda + linux-python:** GPU-resident camera→cuda inference path ([#619](https://github.com/tatolab/streamlib/issues/619)) ([b0bb41e](https://github.com/tatolab/streamlib/commit/b0bb41e10c69ae8efd4ede29cd850a418a8e4815))
+* **adapter-opengl:** producer-side QFOT release via dual-registration ([#644](https://github.com/tatolab/streamlib/issues/644)) ([#648](https://github.com/tatolab/streamlib/issues/648)) ([4878e86](https://github.com/tatolab/streamlib/commit/4878e864e17da4801ce65e9219497cc247b5e20d))
+* **display:** PNG sampler captures from texture surfaces via VulkanTextureReadback ([#627](https://github.com/tatolab/streamlib/issues/627)) ([c24abf8](https://github.com/tatolab/streamlib/commit/c24abf85e585246bd94259bba362492e29fabfb2))
+* **linux-python:** AvatarCharacter Linux port (cuda + opengl adapters) ([#611](https://github.com/tatolab/streamlib/issues/611)) ([cea4787](https://github.com/tatolab/streamlib/commit/cea47872be934f99a60a5a6d417eba01327256d0))
+* **linux-python:** EGL DMA-BUF GL_TEXTURE_EXTERNAL_OES camera-bg path ([#615](https://github.com/tatolab/streamlib/issues/615)) ([#622](https://github.com/tatolab/streamlib/issues/622)) ([4292fc1](https://github.com/tatolab/streamlib/commit/4292fc1a5d8aab356110af2be28835b9b9ae85c1))
+* **polyglot:** cdylib FFI for producer-side QFOT release / IPC layout publish ([#643](https://github.com/tatolab/streamlib/issues/643)) ([#647](https://github.com/tatolab/streamlib/issues/647)) ([7e70d6a](https://github.com/tatolab/streamlib/commit/7e70d6abb10462ab7378518fe2b8b4aacfa69db2))
+* **rhi,ipc:** cross-process VkImageLayout coordination ([#633](https://github.com/tatolab/streamlib/issues/633)) ([#646](https://github.com/tatolab/streamlib/issues/646)) ([eb9553d](https://github.com/tatolab/streamlib/commit/eb9553df70c08aa7d7858c47599c9135c4e8c466))
+
+
+### Bug Fixes
+
+* **display:** adapter-output layout barrier via engine-wide TextureRegistration ([#616](https://github.com/tatolab/streamlib/issues/616)) ([#632](https://github.com/tatolab/streamlib/issues/632)) ([0d746cd](https://github.com/tatolab/streamlib/commit/0d746cd3730d4c5c0f1bc21d5155c6b46474e1d6))
+* **linux-python:** AvatarCharacter Linux GLSL + EXTERNAL_OES end-to-end ([#629](https://github.com/tatolab/streamlib/issues/629)) ([d6bf98c](https://github.com/tatolab/streamlib/commit/d6bf98c393f184733fdb8a9ab4826eb7225cc592))
+* **linux-python:** AvatarCharacter Vulkan-conventional Y in pose overlay ([#621](https://github.com/tatolab/streamlib/issues/621)) ([#636](https://github.com/tatolab/streamlib/issues/636)) ([82f4ace](https://github.com/tatolab/streamlib/commit/82f4ace07cfda762b344ed8a2666c6ac8475e680))
+* **rhi,camera:** NVIDIA OPAQUE_FD reliability ([#637](https://github.com/tatolab/streamlib/issues/637) + [#638](https://github.com/tatolab/streamlib/issues/638)) ([#639](https://github.com/tatolab/streamlib/issues/639)) ([d8be611](https://github.com/tatolab/streamlib/commit/d8be6114581fbdba09e78edacf870292c5c8e813))
+* **rhi:** pre-warm export VMA pools at HostVulkanDevice construction ([#624](https://github.com/tatolab/streamlib/issues/624)) ([#625](https://github.com/tatolab/streamlib/issues/625)) ([0836e33](https://github.com/tatolab/streamlib/commit/0836e3347180e10d2b58d35d4aecde68fee93dba))
+
+
+### Performance
+
+* **adapter:** amortize per-frame command-pool churn in cpu-readback + cuda ([#641](https://github.com/tatolab/streamlib/issues/641)) ([2b08c21](https://github.com/tatolab/streamlib/commit/2b08c21cb3bc0b70bac67e2497264fe495abbc99))
+
 ## [0.4.26](https://github.com/tatolab/streamlib/compare/v0.4.25...v0.4.26) (2026-05-01)
 
 
