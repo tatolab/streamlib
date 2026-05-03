@@ -70,6 +70,31 @@ impl GlWritable for OpenGlReadView<'_> {
 /// external-OES path is read-only by construction (the underlying
 /// import is sampler-only on NVIDIA per
 /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+///
+/// # Y-axis convention — render Vulkan-conventional
+///
+/// The underlying storage is a Vulkan `VkImage`. GL writes to an FBO
+/// with origin at bottom-left; Vulkan downstream reads the same
+/// `VkImage` with origin at top-left. To avoid the consumer-side
+/// visual flip, **producers must render with Vulkan-conventional Y**:
+/// emit geometry such that the camera/source's top row lands at
+/// `gl_Position.y == -1` (GL bottom of NDC), which is byte row 0 of
+/// the underlying `VkImage` — i.e. Vulkan top.
+///
+/// Concretely, when sampling a top-down source (camera DMA-BUF, image
+/// upload) into a full-screen quad, set the texcoord-Y so that GL
+/// NDC `(−1, −1)` samples tex `(0, 0)` — **don't** flip texcoord-Y to
+/// "make it look upright in a GL window." The double flip (GL render
+/// axis + Vulkan read axis) cancels and the downstream Vulkan
+/// consumer sees the source upright. See `#621` for the bug class
+/// this prevents.
+///
+/// Equivalent fixes if you find Vulkan-conventional geometry awkward
+/// in a given producer: invert `gl_Position.y` in the vertex shader,
+/// or (GL 4.5+) call `glClipControl(GL_UPPER_LEFT, GL_ZERO_TO_ONE)`
+/// once at context init. Don't do a final Y-flip blit in the producer
+/// — that costs a render pass and recreates the same convention
+/// problem one layer down.
 pub struct OpenGlWriteView<'g> {
     pub(crate) texture: u32,
     pub(crate) _marker: PhantomData<&'g ()>,
