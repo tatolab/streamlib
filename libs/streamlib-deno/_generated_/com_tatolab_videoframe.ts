@@ -34,4 +34,13 @@ export interface Videoframe {
    * Frame width in pixels
    */
   width: number;
+
+  /**
+   * Producer's published VkImageLayout for this frame's texture (#633).
+   * Per-frame override of the per-surface current_image_layout published via
+   * surface-share register/update_layout. Encoded as the raw int32
+   * VkImageLayout enumerant. Absent when the producer relies on the
+   * per-surface default.
+   */
+  texture_layout?: number;
 }

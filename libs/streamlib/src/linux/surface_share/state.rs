@@ -12,12 +12,12 @@
 
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct SurfaceMetadata {
     pub surface_id: String,
     pub runtime_id: String,
@@ -65,6 +65,47 @@ pub struct SurfaceMetadata {
     /// path, CPU-readback, legacy `VkBuffer` pixel buffers).
     pub sync_fd: Option<RawFd>,
     pub checkout_count: u64,
+    /// Cross-process Vulkan-image-layout (i32 per `VkImageLayout`), the
+    /// **single source of truth for cross-process layout state** — same
+    /// semantics as [`streamlib_adapter_abi::SurfaceSyncState::current_image_layout`],
+    /// lifted into the surface-share daemon so any peer (host engine,
+    /// subprocess adapter, host adapter) can read or update it through
+    /// the same wire format. Producers update on QFOT release;
+    /// consumers (`GpuContext::resolve_videoframe_registration` Path 2,
+    /// host-side adapters) read for the source layout of their first
+    /// QFOT acquire barrier.
+    ///
+    /// `0` (`VK_IMAGE_LAYOUT_UNDEFINED`) is the back-compat default for
+    /// surfaces registered before the IPC schema lift (issue #633). Atomic
+    /// because producer-release and consumer-acquire can race; load with
+    /// `Acquire`, store with `Release`.
+    pub current_image_layout: AtomicI32,
+}
+
+// The atomic field makes `SurfaceMetadata` not `Clone`-by-derive. Hand-roll
+// a snapshot clone that promotes the layout to its current loaded value.
+impl Clone for SurfaceMetadata {
+    fn clone(&self) -> Self {
+        Self {
+            surface_id: self.surface_id.clone(),
+            runtime_id: self.runtime_id.clone(),
+            dma_buf_fds: self.dma_buf_fds.clone(),
+            plane_sizes: self.plane_sizes.clone(),
+            plane_offsets: self.plane_offsets.clone(),
+            plane_strides: self.plane_strides.clone(),
+            width: self.width,
+            height: self.height,
+            format: self.format.clone(),
+            resource_type: self.resource_type.clone(),
+            handle_type: self.handle_type.clone(),
+            drm_format_modifier: self.drm_format_modifier,
+            sync_fd: self.sync_fd,
+            checkout_count: self.checkout_count,
+            current_image_layout: AtomicI32::new(
+                self.current_image_layout.load(Ordering::Acquire),
+            ),
+        }
+    }
 }
 
 /// Thread-safe surface table for the runtime-internal surface-share service.
@@ -99,6 +140,12 @@ pub struct SurfacePlaneCheckout {
     /// returned as-is; callers that hand it out via SCM_RIGHTS must `dup`
     /// it first, just like the memory fds.
     pub sync_fd: Option<RawFd>,
+    /// Snapshot of the surface's [`SurfaceMetadata::current_image_layout`]
+    /// at lookup time (i32 per `VkImageLayout`). Consumers feed this into
+    /// the source layout of their first QFOT acquire barrier. `0`
+    /// (UNDEFINED) when no producer has declared a layout — the
+    /// back-compat default for surfaces registered before issue #633.
+    pub current_image_layout: i32,
 }
 
 /// Arguments to [`SurfaceShareState::register_surface`]. Grouped so the
@@ -127,6 +174,15 @@ pub struct SurfaceRegistration<'a> {
     /// ownership on success and closes it on `release_surface`. `None`
     /// for adapters that don't need explicit Vulkan sync.
     pub sync_fd: Option<RawFd>,
+    /// Initial `VkImageLayout` (i32) to seed
+    /// [`SurfaceMetadata::current_image_layout`]. Producers that publish
+    /// in a known steady-state layout (camera, OpenGL adapter wiring,
+    /// Vulkan compute outputs) pass the layout the surface lives in
+    /// immediately after the registration returns. `0` (UNDEFINED) is
+    /// the back-compat default — host consumers fall back to
+    /// `oldLayout=UNDEFINED` (content-discard permitted) when no producer
+    /// has declared a layout.
+    pub current_image_layout: i32,
 }
 
 impl SurfaceShareState {
@@ -170,16 +226,36 @@ impl SurfaceShareState {
                 drm_format_modifier: reg.drm_format_modifier,
                 sync_fd: reg.sync_fd,
                 checkout_count: 0,
+                current_image_layout: AtomicI32::new(reg.current_image_layout),
             },
         );
         Ok(())
     }
 
+    /// Update the surface's published `current_image_layout` atomically.
+    /// Producers call this through the surface-share `update_layout` op
+    /// after their QFOT release barrier records, so the next consumer's
+    /// lookup sees the post-release layout. Returns `false` if the
+    /// surface_id is unknown.
+    pub fn update_image_layout(&self, surface_id: &str, layout: i32) -> bool {
+        let surfaces = self.inner.surfaces.read();
+        match surfaces.get(surface_id) {
+            Some(metadata) => {
+                metadata
+                    .current_image_layout
+                    .store(layout, Ordering::Release);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Return a clone of the surface's plane fd vec plus its plane-layout
-    /// arrays, the underlying VkImage's DRM format modifier, and (if
-    /// registered) the timeline-semaphore OPAQUE_FD. The returned fds are
-    /// the table's own — callers that hand them out via SCM_RIGHTS must
-    /// `dup` each fd first.
+    /// arrays, the underlying VkImage's DRM format modifier, the
+    /// last-published `current_image_layout`, and (if registered) the
+    /// timeline-semaphore OPAQUE_FD. The returned fds are the table's
+    /// own — callers that hand them out via SCM_RIGHTS must `dup` each
+    /// fd first.
     pub fn get_surface_planes(
         &self,
         surface_id: &str,
@@ -195,6 +271,9 @@ impl SurfaceShareState {
                 drm_format_modifier: metadata.drm_format_modifier,
                 handle_type: metadata.handle_type.clone(),
                 sync_fd: metadata.sync_fd,
+                current_image_layout: metadata
+                    .current_image_layout
+                    .load(Ordering::Acquire),
             }
         })
     }
@@ -252,6 +331,7 @@ mod tests {
             handle_type: "dma_buf",
             drm_format_modifier: 0,
             sync_fd: None,
+            current_image_layout: 0,
         }
     }
 
@@ -322,6 +402,47 @@ mod tests {
         );
     }
 
+    /// `current_image_layout` round-trips through register → lookup, and
+    /// `update_image_layout` updates the value visible to subsequent
+    /// lookups. This is the per-surface half of issue #633's IPC schema
+    /// lift: producers seed the layout at registration and re-publish it
+    /// after their QFOT release barrier records, so cross-process
+    /// consumers can `oldLayout=current_image_layout` instead of
+    /// barriering defensively from `UNDEFINED`.
+    #[test]
+    fn current_image_layout_round_trip_and_update() {
+        let state = SurfaceShareState::new();
+        let mut initial = reg("layout-test", "rt", "texture");
+        // VK_IMAGE_LAYOUT_GENERAL = 1
+        initial.current_image_layout = 1;
+        state
+            .register_surface(initial)
+            .expect("register seeded with GENERAL");
+
+        let checkout = state
+            .get_surface_planes("layout-test")
+            .expect("lookup after register");
+        assert_eq!(
+            checkout.current_image_layout, 1,
+            "lookup must echo the producer-declared layout"
+        );
+
+        // VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5
+        assert!(state.update_image_layout("layout-test", 5));
+        let checkout = state
+            .get_surface_planes("layout-test")
+            .expect("lookup after update");
+        assert_eq!(
+            checkout.current_image_layout, 5,
+            "subsequent lookup sees the post-update layout"
+        );
+
+        // Updating a missing surface_id returns false rather than panicking
+        // — producer-side races with cleanup_runtime_surfaces shouldn't
+        // bring the daemon down.
+        assert!(!state.update_image_layout("missing", 0));
+    }
+
     /// Releasing a surface registered with multiple plane fds must close
     /// every fd — the state is the last owner of the table's fd dups and
     /// leaking any plane would leak the whole DMA-BUF. Verified via pipes:
@@ -361,6 +482,7 @@ mod tests {
                 handle_type: "dma_buf",
                 drm_format_modifier: 0,
                 sync_fd: None,
+                current_image_layout: 0,
             })
             .expect("register multi-plane");
 

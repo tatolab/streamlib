@@ -824,7 +824,18 @@ fn capture_thread_loop(
                 // legacy DMA-BUF consumers (`polyglot-dma-buf-consumer`) read
                 // pixels via CPU mapping, not Vulkan compute, so explicit
                 // cross-process timeline sync is unused.
-                if let Err(e) = store.register_texture(&texture_id, &stream_texture, None) {
+                // Same SHADER_READ_ONLY_OPTIMAL declaration the in-process
+                // `register_texture_with_layout` below uses — the camera
+                // post-compute barrier transitions the texture to
+                // SHADER_READ_ONLY before publishing the Videoframe, so
+                // by the time any cross-process consumer's lookup fires
+                // the actual contents match the declared layout (#633).
+                if let Err(e) = store.register_texture(
+                    &texture_id,
+                    &stream_texture,
+                    None,
+                    VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                ) {
                     tracing::warn!(
                         camera = camera_name,
                         ring_index = i,
@@ -1681,6 +1692,9 @@ fn capture_thread_loop(
             timestamp_ns: timestamp_ns.to_string(),
             frame_index: timeline_signal_value.to_string(),
             fps: capture_fps,
+            // Per-frame override is opt-in (#633); per-surface
+            // `current_image_layout` from surface-share is the default.
+            texture_layout: None,
         };
 
         if let Err(e) = outputs.write("video", &ipc_frame) {

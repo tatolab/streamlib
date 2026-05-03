@@ -201,6 +201,9 @@ define_class!(
                 timestamp_ns: timestamp_ns.to_string(),
                 frame_index: frame_num.to_string(),
                 fps: None,
+                // Per-frame override is opt-in (#633); per-surface
+                // `current_image_layout` from surface-share is the default.
+                texture_layout: None,
             };
 
             let outputs = &*ctx.output_writer;

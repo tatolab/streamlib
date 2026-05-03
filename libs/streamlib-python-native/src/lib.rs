@@ -1303,6 +1303,15 @@ mod gpu_surface {
         /// LINEAR on NVIDIA — see
         /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`.
         pub drm_format_modifier: u64,
+        /// Producer-declared `VkImageLayout` (i32 per Vulkan spec) read
+        /// from the surface-share lookup response (#633). The Vulkan /
+        /// CUDA / cpu-readback adapters' `register_host_surface` paths
+        /// pass this into `HostSurfaceRegistration::initial_layout` so
+        /// the adapter's per-surface `current_layout` matches the
+        /// producer's claim from the first acquire onward. `0`
+        /// (UNDEFINED) for surfaces registered without a declared layout
+        /// (back-compat).
+        pub current_image_layout: i32,
         /// Format string from the wire response (e.g. `"Bgra8Unorm"`).
         /// Used to derive a DRM_FORMAT_* fourcc for EGL import.
         pub format: String,
@@ -1647,6 +1656,22 @@ mod gpu_surface {
     ) -> u64 {
         unsafe { handle.as_ref() }
             .map(|h| h.drm_format_modifier)
+            .unwrap_or(0)
+    }
+
+    /// Producer-declared `VkImageLayout` (raw i32 per Vulkan spec) from
+    /// the surface-share lookup response (#633). `0` (UNDEFINED) on
+    /// null handle or for surfaces registered without a declared layout.
+    /// Used by adapter `register_host_surface` paths to seed
+    /// `HostSurfaceRegistration::initial_layout` so the adapter's
+    /// per-surface `current_layout` matches the producer's claim from
+    /// the first acquire onward.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_gpu_surface_initial_image_layout(
+        handle: *const SurfaceHandle,
+    ) -> i32 {
+        unsafe { handle.as_ref() }
+            .map(|h| h.current_image_layout)
             .unwrap_or(0)
     }
 
@@ -2320,6 +2345,11 @@ mod surface_client {
         bytes_per_row: u32,
         size: u64,
         drm_format_modifier: u64,
+        /// Producer-declared `VkImageLayout` mirrored from the
+        /// surface-share lookup response (#633). Cached here so cache
+        /// hits can re-emit the same value on the returned
+        /// `SurfaceHandle` without another wire roundtrip.
+        current_image_layout: i32,
         format: String,
         /// Optional OPAQUE_FD timeline-semaphore handle the host attached at
         /// register time. Stored so cache hits can hand a fresh dup to each
@@ -2556,6 +2586,7 @@ mod surface_client {
                     bytes_per_row: cached.bytes_per_row,
                     size: cached.size,
                     drm_format_modifier: cached.drm_format_modifier,
+                    current_image_layout: cached.current_image_layout,
                     format: cached.format.clone(),
                     mapped_ptr: std::ptr::null_mut(),
                     plane_mapped_ptrs: vec![std::ptr::null_mut(); n_planes],
@@ -2699,6 +2730,14 @@ mod surface_client {
             .get("drm_format_modifier")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        // Producer-declared `VkImageLayout` from the surface-share
+        // lookup response (#633). `0` (UNDEFINED) is the back-compat
+        // default for surfaces registered before the field landed.
+        let current_image_layout = response
+            .get("current_image_layout")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
+            .unwrap_or(0);
         let size: u64 = plane_sizes.iter().copied().sum();
 
         // Cache: dup every plane for the cache's own copy so the returned
@@ -2748,6 +2787,7 @@ mod surface_client {
                     bytes_per_row,
                     size,
                     drm_format_modifier,
+                    current_image_layout,
                     format: format_str.to_string(),
                     sync_fd: cache_sync_fd,
                 },
@@ -2773,6 +2813,7 @@ mod surface_client {
             bytes_per_row,
             size,
             drm_format_modifier,
+            current_image_layout,
             format: format_str.to_string(),
             mapped_ptr: std::ptr::null_mut(),
             plane_mapped_ptrs: vec![std::ptr::null_mut(); n_planes],
@@ -3701,16 +3742,23 @@ mod vulkan {
             }
         };
 
-        // The host's `acquire_render_target_dma_buf_image` leaves the
-        // image in UNDEFINED initially; subsequent acquires transition
-        // through GENERAL / SHADER_READ_ONLY_OPTIMAL. Move `texture`
-        // (not `texture.clone()` — Clone is a hollow no-image stub) into
-        // the registration so the adapter owns the imported VkImage's
-        // lifetime end-to-end.
+        // Seed the adapter's per-surface `current_layout` from the
+        // producer's declared `VkImageLayout` carried in the
+        // surface-share lookup response (#633). The host's
+        // `acquire_render_target_dma_buf_image` registers fresh images
+        // as UNDEFINED; subsequent acquires transition through
+        // GENERAL / SHADER_READ_ONLY_OPTIMAL and the producer
+        // re-declares its post-publish layout via
+        // `surface_store::register_texture(..., layout)`. Reading
+        // `gpu.current_image_layout` here keeps the consumer-side
+        // adapter's first barrier source layout aligned with the
+        // producer's claim. Move `texture` (not `texture.clone()` —
+        // Clone is a hollow no-image stub) into the registration so
+        // the adapter owns the imported VkImage's lifetime end-to-end.
         let registration = HostSurfaceRegistration::<ConsumerMarker> {
             texture: Arc::new(texture),
             timeline,
-            initial_layout: VulkanLayout::UNDEFINED,
+            initial_layout: VulkanLayout(gpu.current_image_layout),
         };
 
         if let Err(e) = rt
@@ -5303,6 +5351,13 @@ mod cuda {
         };
 
         // ── Step 7: hand the imports to the adapter's registry ──────────
+        // CUDA imports use `cudaImportExternalMemory(OPAQUE_FD)`, not
+        // VkImage layout transitions; the producer-declared layout
+        // from #633 is irrelevant to this adapter's acquire/release
+        // path. Field is kept on the struct for shape parity with
+        // `streamlib-adapter-vulkan` (see `HostSurfaceRegistration`
+        // doc comment in `streamlib-adapter-cuda::state`); always
+        // pass `UNDEFINED`.
         let registration = HostSurfaceRegistration {
             pixel_buffer: Arc::clone(&pixel_buffer),
             timeline: Arc::clone(&timeline),

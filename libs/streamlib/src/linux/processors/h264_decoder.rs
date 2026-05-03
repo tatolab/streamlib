@@ -157,6 +157,9 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
                 timestamp_ns,
                 frame_index: encoded.frame_number.clone(),
                 fps: encoded.fps,
+                // Per-frame override is opt-in (#633); per-surface
+                // `current_image_layout` from surface-share is the default.
+                texture_layout: None,
             };
 
             self.outputs.write("video_out", &video_frame)?;

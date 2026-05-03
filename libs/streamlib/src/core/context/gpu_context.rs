@@ -630,11 +630,19 @@ impl GpuContext {
     ///
     /// Same lookup path as [`Self::resolve_videoframe_texture`] but
     /// returns the registration so consumers can read `current_layout`
-    /// for barrier-source correctness. Cross-process imports (Path 2/3)
-    /// synthesize a fresh registration with `VulkanLayout::UNDEFINED`
-    /// because Vulkan import semantics leave the layout unspecified;
-    /// the consumer's barrier discards prior contents and transitions
-    /// to its target layout.
+    /// for barrier-source correctness.
+    ///
+    /// Path 2 (cross-process DMA-BUF VkImage import) reads the
+    /// producer's last-published `VkImageLayout` from the surface-share
+    /// IPC (#633). The consumer feeds this into the source layout of
+    /// its first QFOT acquire barrier. Surfaces registered without a
+    /// declared layout default to `UNDEFINED` (back-compat —
+    /// content-discard permitted on the consumer's first transition).
+    ///
+    /// Path 3 (cross-process pixel buffer fallback) leaves the host-
+    /// owned texture in `SHADER_READ_ONLY_OPTIMAL` after the upload
+    /// pipeline runs (`upload_buffer_to_image` ends in that layout —
+    /// see `vulkan_device.rs`); the registration declares it.
     pub fn resolve_videoframe_registration(
         &self,
         frame: &Videoframe,
@@ -650,12 +658,49 @@ impl GpuContext {
         // Path 2: cross-process DMA-BUF VkImage import via surface-share service.
         // Synthesized registration is not cached — Path 2 reimports per-call by
         // design, and caching would defeat that.
+        //
+        // QFOT acquire step (#633): the consumer-side VkImage was just
+        // created with `initialLayout = UNDEFINED`. The producer's
+        // post-release `VkImageLayout` is sourced from (priority order):
+        //   1. `Videoframe.texture_layout` — per-frame override for
+        //      producers that vary layout per frame.
+        //   2. The surface-share IPC's per-surface `current_image_layout`
+        //      — published at registration via `register_texture` and
+        //      refreshed via `update_image_layout` after each producer
+        //      release.
+        // When the resolved layout is non-UNDEFINED, run a one-shot
+        // QFOT acquire on the host queue. `acquire_from_foreign` uses
+        // `VK_QUEUE_FAMILY_EXTERNAL` (core Vulkan 1.1, always
+        // available) for the src family, and chains
+        // `VkExternalMemoryAcquireUnmodifiedEXT` so producer-side
+        // content survives the transfer when the optional
+        // `VK_EXT_external_memory_acquire_unmodified` extension is
+        // enabled. When that extension is missing (NVIDIA Linux
+        // today and per the current driver roadmap), the helper falls
+        // back to a bridging UNDEFINED → resolved_layout transition
+        // (content-discard permitted by spec but preserved in
+        // practice on every modern Linux Vulkan driver). Either way
+        // the consumer-side tracker ends up at the resolved layout so
+        // subsequent consumer barriers (`oldLayout = resolved →
+        // target`) are validation-clean per
+        // VUID-VkImageMemoryBarrier-oldLayout-01197.
         #[cfg(target_os = "linux")]
         {
             let surface_store = self.surface_store.lock().unwrap();
             if let Some(store) = surface_store.as_ref() {
-                if let Ok(texture) = store.lookup_texture(&frame.surface_id) {
-                    return Ok(TextureRegistration::new(texture, VulkanLayout::UNDEFINED));
+                if let Ok((texture, ipc_layout)) = store.lookup_texture(&frame.surface_id) {
+                    let resolved_layout = frame
+                        .texture_layout
+                        .map(VulkanLayout)
+                        .unwrap_or(ipc_layout);
+                    if resolved_layout != VulkanLayout::UNDEFINED {
+                        if let Some(image) = texture.inner.image() {
+                            self.device
+                                .inner
+                                .acquire_from_foreign(image, resolved_layout.as_vk())?;
+                        }
+                    }
+                    return Ok(TextureRegistration::new(texture, resolved_layout));
                 }
             }
         }
@@ -1828,6 +1873,7 @@ mod tests {
             timestamp_ns: "0".to_string(),
             frame_index: "1".to_string(),
             fps: None,
+            texture_layout: None,
         };
 
         let resolved = gpu.resolve_videoframe_texture(&frame).expect("texture cache miss");
@@ -1869,6 +1915,7 @@ mod tests {
             timestamp_ns: "0".to_string(),
             frame_index: "1".to_string(),
             fps: None,
+            texture_layout: None,
         };
 
         let registration = gpu
@@ -1913,6 +1960,60 @@ mod tests {
         println!("register_texture_with_layout + resolve_videoframe_registration: OK");
     }
 
+    /// Issue #633 — `Videoframe.texture_layout` is an optional i32
+    /// field that producers may set to override the per-surface
+    /// `current_image_layout` from surface-share IPC. Lock the
+    /// serialization shape: present when set, absent when None
+    /// (skip-serializing-if=Option::is_none keeps backward compat with
+    /// older consumers). Mentally revert the
+    /// `skip_serializing_if = "Option::is_none"` in the generated
+    /// `com_tatolab_videoframe.rs` and the `field_absent_when_none`
+    /// case starts emitting `"texture_layout":null`.
+    #[test]
+    fn videoframe_texture_layout_serialization_round_trip() {
+        let with_layout = crate::_generated_::Videoframe {
+            surface_id: "s".to_string(),
+            width: 8,
+            height: 8,
+            timestamp_ns: "0".to_string(),
+            frame_index: "1".to_string(),
+            fps: None,
+            // SHADER_READ_ONLY_OPTIMAL = 5 per Vulkan spec.
+            texture_layout: Some(5),
+        };
+        let json = serde_json::to_value(&with_layout).expect("serialize");
+        assert_eq!(
+            json.get("texture_layout").and_then(|v| v.as_i64()),
+            Some(5),
+            "set texture_layout must round-trip"
+        );
+
+        let absent = crate::_generated_::Videoframe {
+            surface_id: "s".to_string(),
+            width: 8,
+            height: 8,
+            timestamp_ns: "0".to_string(),
+            frame_index: "1".to_string(),
+            fps: None,
+            texture_layout: None,
+        };
+        let json_absent = serde_json::to_value(&absent).expect("serialize");
+        assert!(
+            json_absent.get("texture_layout").is_none(),
+            "None texture_layout must be absent from the wire (back-compat with pre-#633 consumers)"
+        );
+
+        // Round-trip through a JSON string: deserialize must recover
+        // the field both directions (set → Some, absent → None).
+        let serialized = serde_json::to_string(&with_layout).unwrap();
+        let parsed: crate::_generated_::Videoframe = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(parsed.texture_layout, Some(5));
+        let serialized_absent = serde_json::to_string(&absent).unwrap();
+        let parsed_absent: crate::_generated_::Videoframe =
+            serde_json::from_str(&serialized_absent).unwrap();
+        assert_eq!(parsed_absent.texture_layout, None);
+    }
+
     #[test]
     fn test_texture_cache_miss_and_timeline_semaphore() {
         let gpu = match GpuContext::init_for_platform() {
@@ -1931,6 +2032,7 @@ mod tests {
             timestamp_ns: "0".to_string(),
             frame_index: "1".to_string(),
             fps: None,
+            texture_layout: None,
         };
         assert!(gpu.resolve_videoframe_texture(&frame).is_err());
 

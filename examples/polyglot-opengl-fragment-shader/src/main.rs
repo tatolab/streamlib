@@ -137,8 +137,21 @@ fn main() -> Result<()> {
             // OpenGL adapter doesn't need an explicit Vulkan timeline:
             // `glFinish` on release plus DMA-BUF kernel-fence semantics
             // carry visibility for the host's pre-stop readback.
+            //
+            // GL writes leave the underlying DMA-BUF in GENERAL from
+            // Vulkan's point of view (mirrors the host's hard-coded
+            // `TextureSourceLayout::General` assumption at the
+            // post-stop readback site). Declaring it here means
+            // cross-process consumers reaching the surface via Path 2
+            // get the right source layout for their first QFOT acquire
+            // barrier (#633).
             store
-                .register_texture(SCENARIO_SURFACE_UUID, &texture, None)
+                .register_texture(
+                    SCENARIO_SURFACE_UUID,
+                    &texture,
+                    None,
+                    streamlib::core::rhi::VulkanLayout::GENERAL,
+                )
                 .map_err(|e| {
                     StreamError::Configuration(format!(
                         "register_texture: {e}"

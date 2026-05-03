@@ -147,6 +147,88 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
         self.surfaces.unregister(id).is_some()
     }
 
+    /// Producer-side QFOT release for cross-process publishing (#633).
+    ///
+    /// Issues a queue-family-ownership-transfer release barrier on the
+    /// adapter's device queue, transitioning the surface from its
+    /// current layout to `post_release_layout` and transferring
+    /// ownership to [`vk::QUEUE_FAMILY_EXTERNAL`] (core Vulkan 1.1).
+    /// Updates the adapter's internal `SurfaceState::current_layout`
+    /// to the new layout and returns it so the caller can publish via
+    /// `SurfaceStore::update_image_layout` IPC.
+    ///
+    /// When the device's
+    /// [`VulkanRhiDevice::supports_qfot_acquire_unmodified`] is
+    /// `false`, the helper still records a same-family layout
+    /// transition (so `SurfaceState::current_layout` stays consistent
+    /// with the GPU tracker), but content preservation across the
+    /// consumer's import is then driver-empirical rather than
+    /// spec-correct. This is the right shape for the cross-process
+    /// publishing seam: the cdylib's release path or the host setup
+    /// hook calls this **after** the producer's framework-level
+    /// writes have drained, **before** signalling the timeline value
+    /// the consumer waits on. The consumer's [`Path 2`] acquire (host
+    /// side) or its own `acquire_from_foreign` (subprocess side) then
+    /// pairs with this release.
+    ///
+    /// [`Path 2`]: streamlib::core::context::GpuContext::resolve_videoframe_registration
+    ///
+    /// **Concurrency invariant.** Snapshots `current_layout` under
+    /// the registry lock, releases the lock for the GPU submit, then
+    /// re-acquires it via `with_mut` to commit
+    /// `post_release_layout`. This is safe under the surface-adapter
+    /// contract's **single-producer-per-surface** rule: only one
+    /// thread issues the producer-side release for a given
+    /// `surface_id` at a time, just as only one thread holds a
+    /// `WriteGuard`. Concurrent writers on the same surface are
+    /// rejected at `acquire_write` (see
+    /// [`SurfaceAdapter::acquire_write`]). Mirrors the same lock
+    /// pattern as [`Self::transition_layout_sync`] used by
+    /// `finalize_write` / `finalize_read` — a deviation here would
+    /// surface as inconsistent
+    /// `current_layout` ↔ GPU-tracker drift, the same failure mode
+    /// the existing pattern guards against.
+    pub fn release_to_foreign(
+        &self,
+        surface_id: SurfaceId,
+        post_release_layout: VulkanLayout,
+    ) -> Result<VulkanLayout, AdapterError> {
+        // Snapshot under the registry lock; release the lock before
+        // submitting GPU work so `submit_to_queue` doesn't contend with
+        // unrelated registry operations.
+        let snapshot = self.surfaces.with(surface_id, |state| {
+            state.texture.image().map(|image| (image, state.current_layout))
+        });
+        let (image, src_layout) = match snapshot {
+            Some(Some(pair)) => pair,
+            Some(None) => {
+                return Err(AdapterError::BackendRejected {
+                    reason: format!(
+                        "release_to_foreign: surface {surface_id:?} has no VkImage"
+                    ),
+                });
+            }
+            None => {
+                return Err(AdapterError::SurfaceNotFound { surface_id });
+            }
+        };
+        if src_layout == post_release_layout && src_layout == VulkanLayout::UNDEFINED {
+            // No-op: a fresh surface that hasn't been transitioned yet
+            // and the caller's declared post-release layout is also
+            // UNDEFINED. Skip the GPU submit.
+            return Ok(post_release_layout);
+        }
+        self.device
+            .release_to_foreign(image, src_layout.as_vk(), post_release_layout.as_vk())
+            .map_err(|e| AdapterError::BackendRejected {
+                reason: format!("release_to_foreign: {e}"),
+            })?;
+        self.surfaces.with_mut(surface_id, |state| {
+            state.current_layout = post_release_layout;
+        });
+        Ok(post_release_layout)
+    }
+
     /// Snapshot the registry size — primarily for tests and
     /// observability.
     pub fn registered_count(&self) -> usize {

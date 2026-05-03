@@ -510,6 +510,24 @@ make sense if the surrounding files were renamed or restructured.
   buffers, publish drops) without `init()`. Read before writing any test
   that uses PUBSUB events (shutdown, reconfigure) outside a full
   `StreamRuntime`.
+- @docs/learnings/cross-process-vkimage-layout.md — Cross-process
+  `VkImage` layout coordination. `VkImageLayout` is independent state
+  per `VkDevice` by Vulkan spec — no shared mutable tracker. The
+  consumer's first barrier with `oldLayout = <producer's layout>`
+  trips VUID-VkImageMemoryBarrier-oldLayout-01197 against a freshly-
+  imported `VkImage`. Fix: pair producer-side QFOT release
+  (`dstQueueFamily = VK_QUEUE_FAMILY_EXTERNAL`, core Vulkan 1.1) with
+  consumer-side QFOT acquire (`srcQueueFamily = VK_QUEUE_FAMILY_EXTERNAL`
+  chaining `VkExternalMemoryAcquireUnmodifiedEXT` from the optional
+  `VK_EXT_external_memory_acquire_unmodified` extension). Falls back
+  to bridging `UNDEFINED → target` (content discard permitted by
+  spec, preserved in practice on every modern Linux Vulkan driver)
+  when the extension is missing. To the best of our current
+  knowledge as of 2026-05-03, NVIDIA Linux is not shipping
+  `acquire_unmodified` even in betas — so the bridging fallback is
+  structurally permanent on NVIDIA, with the QFOT path reserved for
+  Mesa. Read before consuming an imported `VkImage` on the host or
+  in a cdylib.
 - @docs/architecture/adapter-runtime-integration.md — Two IPC seams
   (surface-share FD lookup, escalate IPC) already exist for handing
   host-allocated adapter resources to subprocess customers. The doc
@@ -537,13 +555,18 @@ make sense if the surrounding files were renamed or restructured.
   and update on transitions. Read before adding any new per-surface
   metadata, before tracking layout state, before wondering if there's a
   better way than convention to coordinate handoff between a producer
-  and a consumer through a `surface_id`. Same-process consumers benefit
-  today; cross-process consumers wait on the IPC schema lift (#633) —
-  to the best of our current knowledge subprocess code does NOT need
-  to construct `TextureRegistration` itself (the speculation tracked
-  as #634 was closed without code change after research showed cross-
-  process layouts are independent state machines per Vulkan spec; see
-  the doc's "Why no sandbox-side mirror" section). Working rule: don't
+  and a consumer through a `surface_id`. Same-process and cross-process
+  consumers both work today: cross-process layout flows via three
+  layers (per-frame `Videoframe.texture_layout` override → per-surface
+  `current_image_layout` from surface-share IPC → default UNDEFINED),
+  resolved on Path 2 by `acquire_from_foreign` (QFOT acquire when
+  extensions allow; bridging `UNDEFINED → target` fallback otherwise —
+  see @docs/learnings/cross-process-vkimage-layout.md). To the best
+  of our current knowledge subprocess code does NOT need to construct
+  `TextureRegistration` itself (the speculation tracked as #634 was
+  closed without code change after research showed cross-process
+  layouts are independent state machines per Vulkan spec; see the
+  doc's "Why no sandbox-side mirror" section). Working rule: don't
   create a parallel engine-wide `HashMap<surface_id, ...>` alongside
   `texture_cache` — extend `TextureRegistration`. Adapter-internal
   `SurfaceState<P>` lives at a different scope and is not the failure

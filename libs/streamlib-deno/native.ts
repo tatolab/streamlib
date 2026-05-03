@@ -167,6 +167,15 @@ const symbols = {
     parameters: ["pointer"] as const,
     result: "u64" as const,
   },
+  // Producer-declared `VkImageLayout` from the surface-share lookup
+  // response (#633). Adapter `register_host_surface` paths read it
+  // from the SurfaceHandle and pass it into
+  // `HostSurfaceRegistration::initial_layout` so the consumer-side
+  // `current_layout` matches the producer's claim.
+  sldn_gpu_surface_initial_image_layout: {
+    parameters: ["pointer"] as const,
+    result: "i32" as const,
+  },
 
   // OpenGL adapter runtime (#530, Linux). Brings up
   // `streamlib-adapter-opengl::EglRuntime` + `OpenGlSurfaceAdapter`

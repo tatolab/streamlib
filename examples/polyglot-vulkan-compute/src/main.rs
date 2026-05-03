@@ -265,11 +265,17 @@ fn main() -> Result<()> {
                         .into(),
                 )
             })?;
+            // Mandelbrot kernel writes to GENERAL (per shader binding
+            // declaration) and the host-side compute pass leaves the
+            // image in GENERAL after the dispatch. Declaring it here
+            // means the subprocess's post-release layout view matches
+            // the actual image state for the first frame onward (#633).
             store
                 .register_texture(
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
+                    streamlib::core::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
                     StreamError::Configuration(format!(

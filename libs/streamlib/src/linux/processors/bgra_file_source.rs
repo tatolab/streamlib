@@ -185,6 +185,9 @@ fn source_thread_loop(
             timestamp_ns: timestamp_ns.to_string(),
             frame_index: frame_idx.to_string(),
             fps: Some(fps),
+            // Per-frame override is opt-in (#633); per-surface
+            // `current_image_layout` from surface-share is the default.
+            texture_layout: None,
         };
 
         if let Err(e) = outputs.write("video", &video_frame) {
