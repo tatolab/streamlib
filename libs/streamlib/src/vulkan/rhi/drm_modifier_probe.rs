@@ -1,16 +1,19 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! EGL probe for render-target-capable DRM format modifiers.
+//! EGL probe for DRM format modifiers (render-target-capable and
+//! sampler-only).
 //!
-//! Queries `eglQueryDmaBufModifiersEXT` on a host EGL display and filters out
-//! `external_only=TRUE` modifiers. Returned modifiers are safe to pass to a
-//! consumer-side EGL `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT` import for use as
-//! a `GL_TEXTURE_2D` color attachment.
+//! Queries `eglQueryDmaBufModifiersEXT` on a host EGL display and partitions
+//! the returned modifiers by the `external_only` flag — `external_only=FALSE`
+//! lands in the render-target list (safe to bind as `GL_TEXTURE_2D` and use
+//! as an FBO color attachment), `external_only=TRUE` lands in the
+//! sampler-only list (must be bound as `GL_TEXTURE_EXTERNAL_OES` and consumed
+//! through `samplerExternalOES`).
 //!
 //! See `docs/learnings/nvidia-egl-dmabuf-render-target.md` — linear DMA-BUFs
-//! are sampler-only on NVIDIA Linux; tiled modifiers picked from this probe
-//! are render-target-capable.
+//! are sampler-only on NVIDIA Linux; tiled modifiers from this probe are
+//! render-target-capable.
 //!
 //! `libEGL.so.1` is loaded dynamically. When EGL is unavailable (headless CI,
 //! systems without `libEGL`, or display servers that decline to initialize),
@@ -64,16 +67,23 @@ pub enum ProbeError {
     QueryFailed(u32, u32),
 }
 
-/// Render-target-capable DRM modifiers for each probed format.
+/// DRM modifiers reported by the EGL probe, partitioned by binding capability.
 ///
-/// Empty for formats EGL didn't return any `external_only=FALSE` modifier
-/// for. Callers asking for a format that isn't in the table get an empty
-/// slice — the convention is: empty list ⇒ no render-target path is
+/// `rt_modifiers` holds modifiers EGL flagged `external_only=FALSE` — safe
+/// to import as `GL_TEXTURE_2D` and use as an FBO color attachment.
+/// `sampler_only_modifiers` holds modifiers EGL flagged `external_only=TRUE`
+/// — must be imported as `GL_TEXTURE_EXTERNAL_OES` and consumed through
+/// `samplerExternalOES`. The two lists are disjoint and together cover every
+/// modifier EGL returned for the format.
+///
+/// Callers asking for a format that isn't in the table get an empty slice.
+/// The convention for the RT list is: empty ⇒ no render-target path is
 /// available for this format on this driver, fall back to linear with a
 /// `tracing::warn!`.
 #[derive(Debug, Clone, Default)]
 pub struct DrmModifierTable {
     rt_modifiers: HashMap<u32, Vec<u64>>,
+    sampler_only_modifiers: HashMap<u32, Vec<u64>>,
 }
 
 impl DrmModifierTable {
@@ -104,6 +114,24 @@ impl DrmModifierTable {
             .values()
             .filter(|v| !v.is_empty())
             .count()
+    }
+
+    /// Sampler-only modifiers for a DRM FOURCC (EGL `external_only=TRUE`),
+    /// in probe order. Imports against these must use
+    /// `GL_TEXTURE_EXTERNAL_OES`; binding as `GL_TEXTURE_2D` produces a
+    /// `GL_INVALID_OPERATION` (see
+    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+    pub fn sampler_only_modifiers(&self, fourcc: u32) -> &[u64] {
+        self.sampler_only_modifiers
+            .get(&fourcc)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Whether the probe found at least one sampler-only modifier for
+    /// `fourcc`.
+    pub fn has_sampler_only_modifier(&self, fourcc: u32) -> bool {
+        !self.sampler_only_modifiers(fourcc).is_empty()
     }
 }
 
@@ -338,23 +366,37 @@ pub fn probe_with_formats(formats: &[u32]) -> Result<DrmModifierTable, ProbeErro
             return Err(ProbeError::QueryFailed(fourcc, err));
         }
 
-        // Filter to render-target-capable: external_only must be EGL_FALSE.
-        let rt: Vec<u64> = modifiers
+        // Partition by external_only: EGL_FALSE → render-target-capable
+        // (`GL_TEXTURE_2D` + FBO color attachment), EGL_TRUE → sampler-only
+        // (`GL_TEXTURE_EXTERNAL_OES` + `samplerExternalOES`). The two lists
+        // are disjoint and together cover every modifier EGL returned.
+        let mut rt: Vec<u64> = Vec::new();
+        let mut sampler_only: Vec<u64> = Vec::new();
+        for (m, ext) in modifiers
             .iter()
             .zip(external_only.iter())
             .take(returned as usize)
-            .filter_map(|(m, ext)| if *ext == egl::EGL_FALSE { Some(*m) } else { None })
-            .collect();
+        {
+            if *ext == egl::EGL_FALSE {
+                rt.push(*m);
+            } else {
+                sampler_only.push(*m);
+            }
+        }
 
         tracing::info!(
-            "drm_modifier_probe: fourcc 0x{:08x} → {} modifier(s) total, {} render-target-capable",
+            "drm_modifier_probe: fourcc 0x{:08x} → {} modifier(s) total, {} render-target-capable, {} sampler-only",
             fourcc,
             returned,
             rt.len(),
+            sampler_only.len(),
         );
 
         if !rt.is_empty() {
             table.rt_modifiers.insert(fourcc, rt);
+        }
+        if !sampler_only.is_empty() {
+            table.sampler_only_modifiers.insert(fourcc, sampler_only);
         }
     }
 
@@ -380,6 +422,45 @@ mod tests {
         assert_eq!(table.formats_with_rt_modifier(), 0);
         assert!(!table.has_rt_modifier(fourcc::DRM_FORMAT_ABGR8888));
         assert!(table.rt_modifiers(fourcc::DRM_FORMAT_ABGR8888).is_empty());
+    }
+
+    /// Empty table also reports zero sampler-only modifiers — the
+    /// `external_only=TRUE` accessor mirrors the RT side and never panics
+    /// on an unprobed FOURCC.
+    #[test]
+    fn empty_table_reports_no_sampler_only_modifiers() {
+        let table = DrmModifierTable::empty();
+        assert!(!table.has_sampler_only_modifier(fourcc::DRM_FORMAT_ABGR8888));
+        assert!(table
+            .sampler_only_modifiers(fourcc::DRM_FORMAT_ABGR8888)
+            .is_empty());
+    }
+
+    /// Live EGL probe — when the probe runs, the RT and sampler-only lists
+    /// are disjoint per FOURCC (every modifier EGL returned lands in
+    /// exactly one bucket, never both). This is the invariant the
+    /// `register_external_oes_host_surface` linear-modifier conformance
+    /// test relies on to pick a sampler-only candidate without colliding
+    /// with the RT path.
+    #[test]
+    fn rt_and_sampler_only_lists_are_disjoint_when_probed() {
+        let table = match probe_default_display() {
+            Ok(t) => t,
+            Err(e) => {
+                println!("EGL probe skipped: {e}");
+                return;
+            }
+        };
+        for &fourcc in DEFAULT_PROBE_FORMATS {
+            let rt = table.rt_modifiers(fourcc);
+            let sampler_only = table.sampler_only_modifiers(fourcc);
+            for m in rt {
+                assert!(
+                    !sampler_only.contains(m),
+                    "modifier 0x{m:016x} appears in both RT and sampler-only lists for fourcc 0x{fourcc:08x}"
+                );
+            }
+        }
     }
 
     /// Live EGL probe — best-effort, skips when no EGL is available.
