@@ -285,4 +285,64 @@ pub trait VulkanRhiDevice: Send + Sync {
         submits: &[vk::SubmitInfo2],
         fence: vk::Fence,
     ) -> Result<()>;
+
+    /// Whether this device supports content-preserving QFOT (queue-
+    /// family-ownership-transfer) cross-process layout coordination
+    /// per #633: the optional
+    /// `VK_EXT_external_memory_acquire_unmodified` extension was
+    /// enabled at device creation. Default `false` — implementations
+    /// override based on their probe result.
+    ///
+    /// `VK_QUEUE_FAMILY_EXTERNAL` (the queue family index used for
+    /// QFOT src/dst across the carve-out) is core Vulkan 1.1 and is
+    /// always available; only the acquire-unmodified extension is
+    /// the meaningful gate.
+    ///
+    /// When `false`, [`Self::release_to_foreign`] and
+    /// [`Self::acquire_from_foreign`] still work but fall back to a
+    /// regular same-family layout transition; content preservation
+    /// across the import boundary then relies on driver-empirical
+    /// DMA-BUF kernel semantics rather than the Vulkan spec.
+    fn supports_qfot_acquire_unmodified(&self) -> bool {
+        false
+    }
+
+    /// Producer-side QFOT release barrier — declares the surface's
+    /// post-write `VkImageLayout` and transfers ownership to
+    /// [`vk::QUEUE_FAMILY_EXTERNAL`] (core Vulkan 1.1) so a foreign
+    /// device (host or peer subprocess) can subsequently acquire it.
+    /// Pair with [`Self::acquire_from_foreign`] on the consumer side.
+    ///
+    /// One-shot synchronous submit on the device's queue: blocks on a
+    /// fence until the GPU has executed the barrier. Caller is
+    /// responsible for publishing the post-release layout to the
+    /// surface-share daemon via `SurfaceStore::update_image_layout`.
+    fn release_to_foreign(
+        &self,
+        image: vk::Image,
+        src_layout: vk::ImageLayout,
+        dst_layout: vk::ImageLayout,
+    ) -> Result<()>;
+
+    /// Consumer-side QFOT acquire barrier — receives ownership from
+    /// [`vk::QUEUE_FAMILY_EXTERNAL`] (core Vulkan 1.1) and transitions
+    /// the imported `VkImage`'s tracker into `target` so subsequent
+    /// consumer barriers (`oldLayout = target → next`) are
+    /// validation-clean.
+    ///
+    /// When [`Self::supports_qfot_acquire_unmodified`] is `true`,
+    /// chains `VkExternalMemoryAcquireUnmodifiedEXT` so producer-side
+    /// content survives the transfer per spec. Otherwise falls back to
+    /// bridging `UNDEFINED → target` (content discard permitted by
+    /// spec; preserved in practice on every modern Linux Vulkan
+    /// driver). No-op when `target == UNDEFINED`.
+    ///
+    /// One-shot synchronous submit; the fence wait is the simple
+    /// correct shape because the next consumer GPU work assumes the
+    /// new layout is visible.
+    fn acquire_from_foreign(
+        &self,
+        image: vk::Image,
+        target: vk::ImageLayout,
+    ) -> Result<()>;
 }

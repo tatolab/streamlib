@@ -545,6 +545,9 @@ fn compose_one_frame(
         timestamp_ns: timestamp_ns.to_string(),
         frame_index: count.to_string(),
         fps: None,
+        // Per-frame override is opt-in (#633); per-surface
+        // `current_image_layout` from surface-share is the default.
+        texture_layout: None,
     };
     outputs.write("video_out", &output_frame)?;
 
@@ -627,6 +630,9 @@ fn compose_one_frame(
         timestamp_ns: timestamp_ns.to_string(),
         frame_index: count.to_string(),
         fps: None,
+        // Per-frame override is opt-in (#633); per-surface
+        // `current_image_layout` from surface-share is the default.
+        texture_layout: None,
     };
     outputs.write("video_out", &output_frame)?;
 

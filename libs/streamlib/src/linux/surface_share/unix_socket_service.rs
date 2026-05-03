@@ -220,6 +220,7 @@ fn handle_client_connection(
             "lookup" | "check_out" => handle_lookup(&state, &request),
             "unregister" | "release" => handle_unregister(&state, &request),
             "check_in" => handle_check_in(&state, &request, &received_fds),
+            "update_layout" => handle_update_layout(&state, &request),
             _ => (
                 serde_json::json!({"error": format!("unknown operation: {}", op)}),
                 Vec::new(),
@@ -374,6 +375,15 @@ fn handle_register(
         .get("handle_type")
         .and_then(|v| v.as_str())
         .unwrap_or("dma_buf");
+    // Producer's declared layout (i32 per `VkImageLayout`). Absent or
+    // unparseable defaults to `VK_IMAGE_LAYOUT_UNDEFINED` (0) — the
+    // back-compat behaviour for clients that haven't been updated to
+    // publish layout state through the surface-share wire format.
+    let current_image_layout = request
+        .get("current_image_layout")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32)
+        .unwrap_or(0);
 
     let mut dup_plane_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
     for fd in plane_fds {
@@ -421,6 +431,7 @@ fn handle_register(
         handle_type,
         drm_format_modifier,
         sync_fd: dup_sync_fd,
+        current_image_layout,
     }) {
         Ok(()) => {
             tracing::debug!(
@@ -518,9 +529,39 @@ fn handle_lookup(
             "plane_strides": checkout.plane_strides,
             "drm_format_modifier": checkout.drm_format_modifier,
             "has_sync_fd": has_sync_fd,
+            "current_image_layout": checkout.current_image_layout,
         }),
         dup_fds,
     )
+}
+
+/// Handle the `update_layout` op (#633): a producer that just issued a
+/// QFOT release barrier publishes the post-release `VkImageLayout` so
+/// the next consumer's lookup picks it up. Returns `{"success": bool}`.
+fn handle_update_layout(
+    state: &SurfaceShareState,
+    request: &serde_json::Value,
+) -> (serde_json::Value, Vec<RawFd>) {
+    let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return (serde_json::json!({"error": "missing surface_id"}), Vec::new()),
+    };
+
+    let layout = match request
+        .get("current_image_layout")
+        .and_then(|v| v.as_i64())
+    {
+        Some(v) => v as i32,
+        None => {
+            return (
+                serde_json::json!({"error": "missing current_image_layout"}),
+                Vec::new(),
+            )
+        }
+    };
+
+    let updated = state.update_image_layout(surface_id, layout);
+    (serde_json::json!({"success": updated}), Vec::new())
 }
 
 fn handle_unregister(
@@ -633,6 +674,10 @@ fn handle_check_in(
         // explicit Vulkan timeline sync — the wire format reserves the
         // option for the host-registers-render-target-texture path.
         sync_fd: None,
+        // check_in surfaces are pixel buffers — `VkBuffer`s have no
+        // image layout. Seed UNDEFINED; the field is unused for buffer
+        // surfaces but must be populated for the wire format.
+        current_image_layout: 0,
     }) {
         for fd in &leftover_planes {
             unsafe { libc::close(*fd) };
@@ -1208,6 +1253,7 @@ mod tests {
                     handle_type: "dma_buf",
                     drm_format_modifier: 0,
                     sync_fd: None,
+                    current_image_layout: 0,
                 })
                 .expect("register");
         }
@@ -1352,6 +1398,106 @@ mod tests {
             assert!(rc >= 0, "caller fd {} must still be valid", fd);
             unsafe { libc::close(*fd) };
         }
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// Round-trip `current_image_layout` through register → lookup, and
+    /// flip it through `update_layout` (#633). Locks the per-surface
+    /// half of the issue: producers seed the layout at registration and
+    /// re-publish it after their QFOT release barrier records, so the
+    /// next consumer's lookup sees the post-release layout instead of
+    /// the synthesized UNDEFINED.
+    #[test]
+    fn current_image_layout_round_trip_through_register_lookup_update() {
+        // VK_IMAGE_LAYOUT_GENERAL = 1, SHADER_READ_ONLY_OPTIMAL = 5.
+        let state = SurfaceShareState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        let send_fd = make_memfd_with(b"layout-test");
+        let register_req = serde_json::json!({
+            "op": "register",
+            "surface_id": "layout-rt",
+            "runtime_id": "test-runtime",
+            "width": 16,
+            "height": 16,
+            "format": "Rgba8Unorm",
+            "resource_type": "texture",
+            "current_image_layout": 1,
+        });
+        let (register_resp, _) = send_request_with_fds(&stream, &register_req, &[send_fd], 0)
+            .expect("register request");
+        unsafe { libc::close(send_fd) };
+        assert_eq!(
+            register_resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "register must succeed: {:?}",
+            register_resp
+        );
+
+        let lookup_req = serde_json::json!({
+            "op": "lookup",
+            "surface_id": "layout-rt",
+        });
+        let (lookup_resp, lookup_fds) =
+            send_request_with_fds(&stream, &lookup_req, &[], MAX_DMA_BUF_PLANES)
+                .expect("lookup request");
+        for fd in &lookup_fds {
+            unsafe { libc::close(*fd) };
+        }
+        assert_eq!(
+            lookup_resp.get("current_image_layout").and_then(|v| v.as_i64()),
+            Some(1),
+            "lookup must echo the producer-declared layout"
+        );
+
+        let update_req = serde_json::json!({
+            "op": "update_layout",
+            "surface_id": "layout-rt",
+            "current_image_layout": 5,
+        });
+        let (update_resp, _) = send_request_with_fds(&stream, &update_req, &[], 0)
+            .expect("update_layout request");
+        assert_eq!(
+            update_resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "update_layout must succeed: {:?}",
+            update_resp
+        );
+
+        let (lookup_resp, lookup_fds) =
+            send_request_with_fds(&stream, &lookup_req, &[], MAX_DMA_BUF_PLANES)
+                .expect("lookup after update");
+        for fd in &lookup_fds {
+            unsafe { libc::close(*fd) };
+        }
+        assert_eq!(
+            lookup_resp.get("current_image_layout").and_then(|v| v.as_i64()),
+            Some(5),
+            "subsequent lookup must see post-update layout"
+        );
+
+        // Updating an unknown surface_id reports failure rather than a
+        // crash — handle_update_layout must be idempotent against the
+        // race with cleanup_runtime_surfaces.
+        let bad_update = serde_json::json!({
+            "op": "update_layout",
+            "surface_id": "missing",
+            "current_image_layout": 0,
+        });
+        let (bad_resp, _) =
+            send_request_with_fds(&stream, &bad_update, &[], 0).expect("bad update");
+        assert_eq!(
+            bad_resp.get("success").and_then(|v| v.as_bool()),
+            Some(false),
+            "missing surface_id must report success=false"
+        );
 
         drop(stream);
         service.stop();

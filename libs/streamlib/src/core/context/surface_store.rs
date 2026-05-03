@@ -1089,6 +1089,7 @@ impl SurfaceStore {
         surface_id: &str,
         texture: &crate::core::rhi::StreamTexture,
         timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        current_image_layout: streamlib_consumer_rhi::VulkanLayout,
     ) -> Result<()> {
         // Export the DMA-BUF fd from the texture
         let fd = texture.inner.export_dma_buf_fd()?;
@@ -1137,6 +1138,11 @@ impl SurfaceStore {
             "plane_strides": plane_strides,
             "drm_format_modifier": drm_format_modifier,
             "has_sync_fd": sync_fd.is_some(),
+            // The producer's declared `VkImageLayout` (#633): the layout
+            // the texture lives in immediately after registration, fed to
+            // host consumers as the source layout of their first QFOT
+            // acquire barrier. Encoded as i32 per the Vulkan spec.
+            "current_image_layout": current_image_layout.as_vk().as_raw(),
         });
 
         let connection = self.inner.connection.lock();
@@ -1392,9 +1398,73 @@ impl SurfaceStore {
         RhiPixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())
     }
 
-    /// Lookup a texture from the surface-share service via Unix socket.
+    /// Publish a producer's post-release `VkImageLayout` for the given
+    /// `surface_id`. Issued through the surface-share `update_layout`
+    /// op (#633): producers call this immediately after their QFOT
+    /// release barrier records, so the next consumer's `lookup_texture`
+    /// sees the post-release layout instead of the previous one.
+    /// Returns `Ok(())` on success; `Err` on socket failure or wire
+    /// rejection (e.g., unknown surface_id).
     #[cfg(target_os = "linux")]
-    pub fn lookup_texture(&self, surface_id: &str) -> Result<crate::core::rhi::StreamTexture> {
+    pub fn update_image_layout(
+        &self,
+        surface_id: &str,
+        layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> Result<()> {
+        let request = serde_json::json!({
+            "op": "update_layout",
+            "surface_id": surface_id,
+            "current_image_layout": layout.as_vk().as_raw(),
+        });
+
+        let connection = self.inner.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            StreamError::Configuration(
+                "SurfaceStore not connected to surface-share service".into(),
+            )
+        })?;
+
+        let (response, response_fds) =
+            streamlib_surface_client::send_request_with_fds(stream, &request, &[], 0)
+                .map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "Unix socket update_layout failed: {}",
+                        e
+                    ))
+                })?;
+        for f in &response_fds {
+            unsafe { libc::close(*f) };
+        }
+
+        if let Some(error) = response.get("error").and_then(|v| v.as_str()) {
+            return Err(StreamError::Configuration(format!(
+                "update_layout: {}",
+                error
+            )));
+        }
+
+        match response.get("success").and_then(|v| v.as_bool()) {
+            Some(true) => Ok(()),
+            Some(false) => Err(StreamError::Configuration(format!(
+                "update_layout: surface_id '{}' not registered",
+                surface_id
+            ))),
+            None => Err(StreamError::Configuration(
+                "update_layout: malformed response (missing `success`)".into(),
+            )),
+        }
+    }
+
+    /// Lookup a texture from the surface-share service via Unix socket.
+    /// Returns the imported [`StreamTexture`] paired with the
+    /// producer's last-published `current_image_layout`. Cross-process
+    /// consumers feed the layout into the source layout of their first
+    /// QFOT acquire barrier (#633).
+    #[cfg(target_os = "linux")]
+    pub fn lookup_texture(
+        &self,
+        surface_id: &str,
+    ) -> Result<(crate::core::rhi::StreamTexture, streamlib_consumer_rhi::VulkanLayout)> {
         let request = serde_json::json!({
             "op": "lookup",
             "surface_id": surface_id,
@@ -1495,7 +1565,20 @@ impl SurfaceStore {
             allocation_size,
         )?;
 
-        Ok(crate::core::rhi::StreamTexture::from_vulkan(vulkan_texture))
+        // Parse the producer's last-published `VkImageLayout` from the
+        // response (#633). Absent or unparseable defaults to UNDEFINED
+        // — back-compat for surface-share daemons / clients that haven't
+        // been updated yet.
+        let current_image_layout = response
+            .get("current_image_layout")
+            .and_then(|v| v.as_i64())
+            .map(|raw| streamlib_consumer_rhi::VulkanLayout(raw as i32))
+            .unwrap_or(streamlib_consumer_rhi::VulkanLayout::UNDEFINED);
+
+        Ok((
+            crate::core::rhi::StreamTexture::from_vulkan(vulkan_texture),
+            current_image_layout,
+        ))
     }
 
     /// Send release request to surface-share service via Unix socket.
@@ -1561,12 +1644,19 @@ impl SurfaceStore {
         ))
     }
 
+    // Non-Linux stubs. `_current_image_layout` and the (timeline,
+    // layout) tuple shape mirror the Linux signatures so a future
+    // non-Linux caller hits the same API surface; they always error
+    // because the surface-share daemon and texture import paths are
+    // Linux-only today. Layout is `i32` rather than `VulkanLayout`
+    // because `VulkanLayout` is itself Linux-only.
     #[cfg(not(target_os = "linux"))]
     pub fn register_texture(
         &self,
         _surface_id: &str,
         _texture: &crate::core::rhi::StreamTexture,
         _timeline: Option<&()>,
+        _current_image_layout: i32,
     ) -> Result<()> {
         Err(StreamError::NotSupported(
             "Texture registration not supported on this platform".into(),
@@ -1577,9 +1667,20 @@ impl SurfaceStore {
     pub fn lookup_texture(
         &self,
         _surface_id: &str,
-    ) -> Result<crate::core::rhi::StreamTexture> {
+    ) -> Result<(crate::core::rhi::StreamTexture, i32)> {
         Err(StreamError::NotSupported(
             "Texture lookup not supported on this platform".into(),
+        ))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn update_image_layout(
+        &self,
+        _surface_id: &str,
+        _layout: i32,
+    ) -> Result<()> {
+        Err(StreamError::NotSupported(
+            "update_image_layout not supported on this platform".into(),
         ))
     }
 }

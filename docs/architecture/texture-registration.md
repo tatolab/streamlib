@@ -6,6 +6,10 @@
 > Cross-process section + scope clarification revised 2026-05-02
 > (issue #634) based on Vulkan spec, Khronos guidance, and
 > sandboxed-host precedent research.
+> Cross-process limitation section superseded 2026-05-03 (issue
+> #633) — per-surface IPC + per-frame Videoframe + QFOT acquire
+> machinery now ships; original "barrier defensively from UNDEFINED"
+> guidance no longer applies. See [Cross-process coordination](#cross-process-coordination-633).
 
 ## What this is
 
@@ -347,35 +351,102 @@ needs multi-consumer coordination beyond what queue serialization
 provides, escalate to RDG (#631) — that's the layer where coordination
 is the engine's job, not the consumer's.
 
-## Cross-process limitation
+## Cross-process coordination (#633)
 
-`TextureRegistration` solves the same-process handoff. **It does not
-yet propagate to cross-process / cross-language consumers.**
+> ~~`TextureRegistration` solves the same-process handoff. **It does
+> not yet propagate to cross-process / cross-language consumers.**
+> Today, when a subprocess producer registers a texture via
+> `surface-share`, the host consumer's
+> `resolve_videoframe_registration` hits Path 2 which synthesizes a
+> fresh `Arc<TextureRegistration>` with `current_layout = UNDEFINED`.
+> The host consumer barriers from UNDEFINED → its target, which is
+> correct but conservative.~~ — **Superseded 2026-05-03** (issue
+> #633). Cross-process layout coordination now flows through three
+> coordinated layers; a fresh Path 2 import barriers from the
+> producer's published layout (with
+> `VK_EXT_external_memory_acquire_unmodified` chained when available)
+> instead of conservatively from UNDEFINED. The original "barrier
+> defensively from UNDEFINED" guidance no longer applies.
 
-Today, when a subprocess producer registers a texture via
-`surface-share`, the host consumer's `resolve_videoframe_registration`
-hits Path 2 (cross-process import) which synthesizes a fresh
-`Arc<TextureRegistration>` with `current_layout = UNDEFINED`. The
-host consumer barriers from UNDEFINED → its target, which is correct
-but conservative (Vulkan spec permits content discard on
-UNDEFINED → X, though NVIDIA preserves in practice).
+`TextureRegistration` is the same-process record. Cross-process
+producers and consumers coordinate layout via three layers, in
+priority order at consumer-side resolution:
 
-The wire-format gap is mechanical, not architectural. Two extension
-shapes are possible (and probably both belong long-term):
+1. **Per-frame `Videoframe.texture_layout` (optional)** — for
+   producers that vary layout per frame. Carried on the IPC message
+   itself; serialized as the raw `int32 VkImageLayout` enumerant;
+   absent when the producer relies on the per-surface default.
+2. **Per-surface `current_image_layout`** — declared by the producer
+   at `surface_store.register_texture` time and refreshed via
+   `surface_store.update_image_layout` after each post-write release.
+   Carried in surface-share IPC `register` / `lookup` /
+   `update_layout` messages.
+3. **Default `UNDEFINED`** — back-compat for surface-share daemons /
+   producers that haven't been updated yet; the consumer's acquire
+   barrier short-circuits as a no-op when target is UNDEFINED.
 
-1. **Per-surface schema extension (`surface-share` IPC).** Add
-   `current_layout` to the `register` / `check_in` / `lookup`
-   messages. Subprocess producer declares layout at registration; host
-   consumer reads it. Handles "static layout, never changes" — matches
-   today's same-process producer pattern.
-2. **Per-frame schema extension (`Videoframe`).** Add `texture_layout`
-   (optional) to the `Videoframe` IPC message. Producers can vary
-   layout per frame. Bigger lift — `Videoframe` is a polyglot schema,
-   so all three runtimes (Rust + Python + Deno) ship together per
-   [`.claude/workflows/polyglot.md`](../../.claude/workflows/polyglot.md).
+The host consumer's `GpuContext::resolve_videoframe_registration`
+Path 2 reads (1) when present, falls back to (2), and runs
+`HostVulkanDevice::acquire_from_foreign` with the resolved layout.
+The producer-side equivalent is `HostVulkanDevice::release_to_foreign`
+(or `VulkanSurfaceAdapter::release_to_foreign` for adapter-mediated
+producers); the cdylib-side mirrors live on `ConsumerVulkanDevice`
+and the consumer-rhi `VulkanRhiDevice` trait so adapters generic over
+device flavor work unchanged.
 
-The "right" shape is probably both — registration carries a default,
-`Videoframe` overrides per-frame. Tracked as #633.
+### QFOT vs bridging fallback
+
+`acquire_from_foreign` chains `VkExternalMemoryAcquireUnmodifiedEXT`
+when `VK_EXT_external_memory_acquire_unmodified` is enabled at device
+construction (probed by `HostVulkanDevice::new` /
+`ConsumerVulkanDevice::new`); this is the spec-correct
+content-preserving QFOT acquire. The queue family index used for
+QFOT src/dst is `VK_QUEUE_FAMILY_EXTERNAL`, which is core Vulkan 1.1
+(promoted from `VK_KHR_external_memory`) and always available — only
+the optional acquire-unmodified extension is the meaningful gate.
+
+When the optional extension is missing the helper falls back to a
+bridging `UNDEFINED → target` transition. Content discard is
+permitted by spec for this transition, but DMA-BUF kernel-side memory
+contents are preserved in practice on every modern Linux Vulkan
+driver (NVIDIA confirmed empirically through streamlib's E2E
+camera→Path-2-display flow; Mesa iris/radeonsi follow the same
+convention).
+
+**The bridging fallback is structurally permanent on NVIDIA Linux,
+not interim.** Per the NVIDIA driver support list as of 2026-05-03
+(production 570.211.01 and developer betas 595.44 / 596.46),
+`VK_EXT_external_memory_acquire_unmodified` is not on the roadmap
+even though NVIDIA engineers contributed to the extension. NVIDIA
+exposes adjacent extensions (`VK_EXT_external_memory_dma_buf`,
+`VK_EXT_external_memory_host`) but not the acquire-unmodified one.
+Cross-process content preservation on NVIDIA therefore depends on
+the empirical DMA-BUF kernel-cache behavior, not the spec. Mesa is
+the eventual landing point for the QFOT-acquire path; NVIDIA
+consumers will continue to ride the bridging fallback indefinitely.
+
+### Producer-side adoption is incremental
+
+The producer-side QFOT release machinery
+(`HostVulkanDevice::release_to_foreign` and
+`VulkanSurfaceAdapter::release_to_foreign`) is in place; in-tree
+producers and cdylib FFI release paths adopt it as their
+cross-process correctness story requires (the bridging-fallback's
+empirical content preservation on NVIDIA covers the validated
+environment today). Adapter-cuda and -cpu-readback are out of scope
+by construction (CUDA imports use `cudaImportExternalMemory`
+ownership semantics; cpu-readback is buffer-only with no Vulkan
+layout). Adapter-opengl and -skia producer-side release wiring is
+deferred — the existing acquire-side QFOT fallback covers correctness
+on the validated environment, and proper producer-side release in
+those adapters requires architectural decisions about where their
+Vulkan device handle lives.
+
+> ~~The wire-format gap is mechanical, not architectural. Two
+> extension shapes are possible (and probably both belong long-term):
+> per-surface schema extension and per-frame `Videoframe` extension —
+> tracked as #633.~~ — Both extension shapes shipped with #633; the
+> "right shape is both" prediction proved correct.
 
 > ~~There's also a quieter constraint: cdylibs depend on
 > `streamlib-consumer-rhi`, NOT the full `streamlib`, so they can't

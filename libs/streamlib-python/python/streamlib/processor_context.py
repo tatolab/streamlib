@@ -242,6 +242,13 @@ def load_native_lib(lib_path):
     lib.slpn_gpu_surface_plane_fd.restype = ctypes.c_int32
     lib.slpn_gpu_surface_drm_format_modifier.argtypes = [ctypes.c_void_p]
     lib.slpn_gpu_surface_drm_format_modifier.restype = ctypes.c_uint64
+    # Producer-declared `VkImageLayout` from the surface-share lookup
+    # response (#633). Adapter `register_host_surface` paths read it
+    # from the SurfaceHandle and pass it into
+    # `HostSurfaceRegistration::initial_layout` so the consumer-side
+    # `current_layout` matches the producer's claim.
+    lib.slpn_gpu_surface_initial_image_layout.argtypes = [ctypes.c_void_p]
+    lib.slpn_gpu_surface_initial_image_layout.restype = ctypes.c_int32
 
     return lib
 

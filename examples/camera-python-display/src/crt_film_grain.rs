@@ -162,6 +162,9 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
             timestamp_ns: frame.timestamp_ns.clone(),
             frame_index: frame.frame_index.clone(),
             fps: frame.fps,
+            // Per-frame override is opt-in (#633); per-surface
+            // `current_image_layout` from surface-share is the default.
+            texture_layout: None,
         };
         self.outputs.write("video_out", &output_frame)?;
         self.frame_count.fetch_add(1, Ordering::Relaxed);

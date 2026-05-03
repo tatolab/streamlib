@@ -64,3 +64,9 @@ Avoid the two failure modes:
   Test hangs indefinitely because PUBSUB silently no-ops without `init()`
 - [@docs/learnings/nvidia-dual-vulkan-device-crash.md](nvidia-dual-vulkan-device-crash.md) —
   SIGSEGV when two Vulkan devices have concurrent GPU work on NVIDIA Linux
+- [@docs/learnings/cross-process-vkimage-layout.md](cross-process-vkimage-layout.md) —
+  `VkImageLayout` is independent state per `VkDevice` by Vulkan spec; cross-
+  process layout coordination flows via application protocol + QFOT
+  release/acquire (with `VK_EXT_external_memory_acquire_unmodified` chained
+  for content preservation), bridging `UNDEFINED → target` as the fallback
+  when extensions are missing

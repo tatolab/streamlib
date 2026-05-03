@@ -210,8 +210,18 @@ fn register_opengl_output_surface(
     // OpenGL adapter doesn't need an explicit Vulkan timeline:
     // `glFinish` on release plus DMA-BUF kernel-fence semantics carry
     // visibility for downstream consumers.
+    // GL writes leave the underlying DMA-BUF in GENERAL from Vulkan's
+    // perspective. Declaring it here means cross-process consumers
+    // reaching the surface via Path 2 issue their first QFOT acquire
+    // barrier from GENERAL — same convention as
+    // `polyglot-opengl-fragment-shader` (#633).
     surface_store
-        .register_texture(AVATAR_OUTPUT_SURFACE_UUID, &texture, None)
+        .register_texture(
+            AVATAR_OUTPUT_SURFACE_UUID,
+            &texture,
+            None,
+            streamlib::core::rhi::VulkanLayout::GENERAL,
+        )
         .map_err(|e| format!("register_texture: {e}"))?;
 
     // Mirror the texture into the GpuContext's local same-process cache

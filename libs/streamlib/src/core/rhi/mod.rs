@@ -38,11 +38,16 @@ pub use pixel_buffer_pool::{PixelBufferDescriptor, PixelBufferPoolId};
 // Note: RhiPixelBufferPool is intentionally not exported - use GpuContext::acquire_pixel_buffer()
 pub(crate) use pixel_buffer_pool::RhiPixelBufferPool;
 pub use pixel_buffer_ref::RhiPixelBufferRef;
-// PixelFormat / TextureFormat / TextureUsages are defined in the
-// `streamlib-consumer-rhi` crate so subprocess-shape dep graphs can
-// reach them without pulling streamlib. Re-exported here for in-tree
-// call sites (`crate::core::rhi::PixelFormat` keeps working).
-pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages};
+// PixelFormat / TextureFormat / TextureUsages / VulkanLayout are
+// defined in the `streamlib-consumer-rhi` crate so subprocess-shape dep
+// graphs can reach them without pulling streamlib. Re-exported here for
+// in-tree call sites (`crate::core::rhi::PixelFormat` keeps working).
+//
+// `VulkanLayout` is the typed `VkImageLayout` value used by
+// `TextureRegistration` and surface-share's cross-process layout
+// coordination (#633). In-tree consumers reach it via this re-export
+// rather than depending on `streamlib-consumer-rhi` directly.
+pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, VulkanLayout};
 pub use texture::{NativeTextureHandle, StreamTexture, TextureDescriptor};
 pub use texture_cache::{RhiTextureCache, RhiTextureView};
 pub use texture_readback::{

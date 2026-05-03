@@ -39,6 +39,27 @@ carve-out exists to make that bind possible and nothing more:
 - Tiled-image import via `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` (the modifier comes from the host descriptor).
 - Layout transitions on imported handles (single-shot at acquire/release boundary).
 - Sync wait/signal on imported timeline semaphores.
+- **Cross-process layout coordination via QFOT (#633).** Subprocess
+  Vulkan code may issue queue-family-ownership-transfer barriers with
+  `srcQueueFamily` / `dstQueueFamily = VK_QUEUE_FAMILY_EXTERNAL`
+  (core Vulkan 1.1, promoted from `VK_KHR_external_memory` — always
+  available) and chain `VkExternalMemoryAcquireUnmodifiedEXT` on the
+  consumer-side acquire (optional extension
+  `VK_EXT_external_memory_acquire_unmodified`) so producer-side
+  content survives the transfer per Vulkan spec. The acquire-side
+  extension is the only meaningful gate, optionally probed at
+  `ConsumerVulkanDevice::new` / `HostVulkanDevice::new`; when missing
+  the helpers fall back to a bridging `UNDEFINED → target` transition
+  (content discard permitted by spec, preserved in practice on every
+  modern Linux Vulkan driver). The release/acquire helpers
+  (`release_to_foreign`, `acquire_from_foreign`) live on both
+  `ConsumerVulkanDevice` and `HostVulkanDevice` and are exposed via
+  the `VulkanRhiDevice` trait so adapter code generic over device
+  flavor works unchanged. To the best of our current knowledge as of
+  2026-05-03, NVIDIA Linux does not expose
+  `VK_EXT_external_memory_acquire_unmodified` and isn't on track to
+  add it; the bridging fallback is the structurally permanent path on
+  NVIDIA, with QFOT-acquire reserved for Mesa drivers.
 
 Lives in the standalone [`streamlib-consumer-rhi`][crate] crate (post-#560).
 Cdylibs (`streamlib-python-native`, `streamlib-deno-native`) depend

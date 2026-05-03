@@ -31,6 +31,15 @@ pub struct Videoframe {
     #[serde(rename = "timestamp_ns")]
     pub timestamp_ns: String,
 
+    /// Producer's published VkImageLayout for this frame's texture (#633).
+    /// Per-frame override of the per-surface current_image_layout published
+    /// via surface-share register/update_layout. Encoded as the raw int32
+    /// VkImageLayout enumerant. Absent when the producer relies on the per-
+    /// surface default.
+    #[serde(rename = "texture_layout")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub texture_layout: Option<i32>,
+
     /// Frame width in pixels
     #[serde(rename = "width")]
     pub width: u32,

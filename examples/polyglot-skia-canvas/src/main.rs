@@ -48,7 +48,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use streamlib::core::rhi::{
-    TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
+    TextureFormat, TextureReadbackDescriptor, TextureSourceLayout, VulkanLayout,
 };
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
@@ -131,11 +131,17 @@ fn main() -> Result<()> {
                         .into(),
                 )
             })?;
+            // Skia composes on the OpenGL adapter; GL writes leave the
+            // image in GENERAL from Vulkan's perspective (per the
+            // OpenGL adapter's release-side convention). Declare
+            // GENERAL so cross-process consumers barrier from the
+            // right source layout (#633).
             store
                 .register_texture(
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
+                    VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
                     StreamError::Configuration(format!("register_texture: {e}"))

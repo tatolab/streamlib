@@ -43,6 +43,18 @@ pub struct HostVulkanDevice {
     /// without perturbing per-handle-type accounting for other export
     /// handle types — notably OPAQUE_FD. False on NVIDIA Linux per #638.
     supports_cross_device_dma_buf_probe: bool,
+    /// Whether `VK_EXT_external_memory_acquire_unmodified` was enabled
+    /// at device creation. Lets the host's acquire barrier chain
+    /// `VkExternalMemoryAcquireUnmodifiedEXT` so producer-side content
+    /// survives the QFOT acquire (#633). When unavailable, the QFOT
+    /// helpers fall back to bridging UNDEFINED → target —
+    /// structurally permanent on NVIDIA Linux (extension not on
+    /// NVIDIA's roadmap as of 2026-05-03; Mesa is the eventual
+    /// landing point). `VK_QUEUE_FAMILY_EXTERNAL` (the queue family
+    /// index used for QFOT src/dst) is core Vulkan 1.1 and is always
+    /// available; this acquire-side extension is the only meaningful
+    /// gate.
+    has_acquire_unmodified: bool,
     supports_video_encode: bool,
     supports_video_decode: bool,
     video_encode_queue_family_index: Option<u32>,
@@ -144,6 +156,18 @@ pub struct HostVulkanDevice {
     /// the post-swapchain allocation flakes intermittently.
     #[cfg(target_os = "linux")]
     opaque_fd_export_sentinels: Vec<ExportPoolSentinel>,
+}
+
+/// Single-COLOR-aspect / single-mip / single-layer subresource range —
+/// every host-side surface-adapter-managed image fits this shape today.
+fn host_default_color_subresource_range() -> vk::ImageSubresourceRange {
+    vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    }
 }
 
 /// Internal anti-decay sentinel for an export-capable VMA pool.
@@ -512,6 +536,8 @@ impl HostVulkanDevice {
 
         // On Linux, check for DMA-BUF external memory extensions
         #[cfg(target_os = "linux")]
+        let mut has_acquire_unmodified = false;
+        #[cfg(target_os = "linux")]
         let has_external_memory = {
             let external_memory_ext = c"VK_KHR_external_memory";
             let external_memory_fd_ext = c"VK_KHR_external_memory_fd";
@@ -545,6 +571,26 @@ impl HostVulkanDevice {
                 if available_device_ext_names.contains(&external_semaphore_fd_ext) {
                     device_extensions.push(external_semaphore_fd_ext.as_ptr());
                     tracing::info!("VK_KHR_external_semaphore_fd available");
+                }
+
+                // Optional extension for spec-correct cross-process
+                // layout coordination (#633).
+                // `VK_EXT_external_memory_acquire_unmodified` lets the
+                // consumer's acquire barrier chain
+                // `VkExternalMemoryAcquireUnmodifiedEXT` so producer-
+                // side content survives the QFOT acquire. When absent,
+                // `acquire_from_foreign` falls back to bridging
+                // UNDEFINED → target (content discard permitted by
+                // spec but preserved in practice on NVIDIA Linux
+                // DMA-BUF — and structurally permanent on NVIDIA per
+                // current driver roadmap). `VK_QUEUE_FAMILY_EXTERNAL`
+                // (used for QFOT src/dst) is core Vulkan 1.1 and
+                // doesn't need an optional probe.
+                let acquire_unmodified_ext = c"VK_EXT_external_memory_acquire_unmodified";
+                if available_device_ext_names.contains(&acquire_unmodified_ext) {
+                    device_extensions.push(acquire_unmodified_ext.as_ptr());
+                    has_acquire_unmodified = true;
+                    tracing::info!("VK_EXT_external_memory_acquire_unmodified available");
                 }
 
                 tracing::info!("Vulkan external memory extensions enabled");
@@ -666,6 +712,9 @@ impl HostVulkanDevice {
         let supports_external_memory = has_external_memory;
         #[cfg(not(target_os = "linux"))]
         let supports_external_memory = false;
+
+        #[cfg(not(target_os = "linux"))]
+        let has_acquire_unmodified = false;
 
         #[cfg(target_os = "linux")]
         let supports_video_encode = has_video_encode;
@@ -878,12 +927,13 @@ impl HostVulkanDevice {
         };
 
         tracing::info!(
-            "Vulkan device initialized: {} (queue family {}, {} memory types, external_memory={}, cross_device_dma_buf_probe={}, vma=enabled, dma_buf_pools={})",
+            "Vulkan device initialized: {} (queue family {}, {} memory types, external_memory={}, cross_device_dma_buf_probe={}, acquire_unmodified={}, vma=enabled, dma_buf_pools={})",
             device_name,
             queue_family_index,
             memory_properties.memory_type_count,
             supports_external_memory,
             supports_cross_device_dma_buf_probe,
+            has_acquire_unmodified,
             {
                 #[cfg(target_os = "linux")]
                 { dma_buf_buffer_pool.is_some() }
@@ -905,6 +955,7 @@ impl HostVulkanDevice {
             device_name: device_name.into_owned(),
             supports_external_memory,
             supports_cross_device_dma_buf_probe,
+            has_acquire_unmodified,
             supports_video_encode,
             supports_video_decode,
             video_encode_queue_family_index,
@@ -1903,6 +1954,29 @@ impl VulkanRhiDevice for HostVulkanDevice {
         unsafe { HostVulkanDevice::submit_to_queue(self, queue, submits, fence) }
             .map_err(|e| streamlib_consumer_rhi::ConsumerRhiError::Gpu(e.to_string()))
     }
+
+    fn supports_qfot_acquire_unmodified(&self) -> bool {
+        HostVulkanDevice::supports_qfot_acquire_unmodified(self)
+    }
+
+    fn release_to_foreign(
+        &self,
+        image: vk::Image,
+        src_layout: vk::ImageLayout,
+        dst_layout: vk::ImageLayout,
+    ) -> streamlib_consumer_rhi::Result<()> {
+        HostVulkanDevice::release_to_foreign(self, image, src_layout, dst_layout)
+            .map_err(|e| streamlib_consumer_rhi::ConsumerRhiError::Gpu(e.to_string()))
+    }
+
+    fn acquire_from_foreign(
+        &self,
+        image: vk::Image,
+        target: vk::ImageLayout,
+    ) -> streamlib_consumer_rhi::Result<()> {
+        HostVulkanDevice::acquire_from_foreign(self, image, target)
+            .map_err(|e| streamlib_consumer_rhi::ConsumerRhiError::Gpu(e.to_string()))
+    }
 }
 
 impl HostVulkanDevice {
@@ -2031,6 +2105,207 @@ impl HostVulkanDevice {
         unsafe { self.submit_to_queue(queue, &[submit], fence) }?;
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .map_err(|e| StreamError::GpuError(format!("wait: {e}")))?;
+
+        unsafe { device.destroy_fence(fence, None) };
+        unsafe { device.destroy_command_pool(pool, None) };
+
+        Ok(())
+    }
+
+    /// Whether this device supports content-preserving QFOT for
+    /// cross-process layout coordination per #633: the optional
+    /// `VK_EXT_external_memory_acquire_unmodified` extension was
+    /// enabled at construction.
+    ///
+    /// `VK_QUEUE_FAMILY_EXTERNAL` (the queue family index used for
+    /// QFOT src/dst) is core Vulkan 1.1 and is always available; only
+    /// the acquire-unmodified extension is the meaningful gate.
+    /// Structurally permanent `false` on NVIDIA Linux per current
+    /// driver roadmap (extension not on NVIDIA's published support
+    /// list as of 2026-05-03); Mesa is the eventual landing point.
+    pub fn supports_qfot_acquire_unmodified(&self) -> bool {
+        self.has_acquire_unmodified
+    }
+
+    /// Producer-side QFOT release barrier — declares the surface's
+    /// post-write `VkImageLayout` and transfers ownership to
+    /// [`vk::QUEUE_FAMILY_EXTERNAL`] (core Vulkan 1.1) so a foreign
+    /// device (host or peer subprocess) can subsequently acquire it.
+    /// Pair with [`Self::acquire_from_foreign`] on the consumer side.
+    ///
+    /// One-shot synchronous submit on the host graphics queue.
+    /// Caller is responsible for publishing the post-release layout
+    /// to the surface-share daemon via
+    /// `SurfaceStore::update_image_layout`.
+    ///
+    /// When [`Self::supports_qfot_acquire_unmodified`] is `false`,
+    /// falls back to a same-family layout transition; content
+    /// preservation across the consumer's import is then driver-
+    /// empirical on DMA-BUF.
+    pub fn release_to_foreign(
+        &self,
+        image: vk::Image,
+        src_layout: vk::ImageLayout,
+        dst_layout: vk::ImageLayout,
+    ) -> Result<()> {
+        // `VK_QUEUE_FAMILY_EXTERNAL` is core Vulkan 1.1 (promoted from
+        // VK_KHR_external_memory) — always available. The Khronos
+        // proposal for `VK_EXT_external_memory_acquire_unmodified`
+        // permits either EXTERNAL or FOREIGN_EXT as the src/dst; for
+        // cross-process Vulkan-to-Vulkan handoff EXTERNAL is the
+        // idiomatic choice (FOREIGN_EXT is for non-Vulkan foreign
+        // owners, and the OpenGL adapter doesn't issue Vulkan
+        // barriers from GL writes anyway).
+        let barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
+            .dst_stage_mask(vk::PipelineStageFlags2::NONE)
+            .dst_access_mask(vk::AccessFlags2::empty())
+            .old_layout(src_layout)
+            .new_layout(dst_layout)
+            .src_queue_family_index(self.queue_family_index)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+            .image(image)
+            .subresource_range(host_default_color_subresource_range())
+            .build();
+        self.submit_one_shot_image_barriers(&[barrier])
+    }
+
+    /// Consumer-side QFOT acquire barrier — receives ownership from
+    /// [`vk::QUEUE_FAMILY_EXTERNAL`] (core Vulkan 1.1) and transitions
+    /// the imported `VkImage`'s tracker into `target` so subsequent
+    /// host-side consumer barriers (`oldLayout = target → next`) are
+    /// validation-clean per VUID-VkImageMemoryBarrier-oldLayout-01197.
+    ///
+    /// When [`Self::supports_qfot_acquire_unmodified`] is `true`,
+    /// chains `VkExternalMemoryAcquireUnmodifiedEXT { acquireUnmodifiedMemory =
+    /// VK_TRUE }` so the producer's content survives the transfer per
+    /// Vulkan spec. When `false`, falls back to bridging
+    /// `UNDEFINED → target` — content discard permitted by spec, but
+    /// in practice DMA-BUF kernel-side memory contents are preserved
+    /// on every modern Linux Vulkan driver (NVIDIA confirmed; Mesa
+    /// iris/radeonsi follow the same convention).
+    ///
+    /// No-op when `target == UNDEFINED` (nothing to transition into).
+    /// Path 2 of
+    /// [`crate::core::context::GpuContext::resolve_videoframe_registration`]
+    /// calls this to align the consumer-side VkImage tracker with the
+    /// surface-share IPC's `current_image_layout` (#633).
+    pub fn acquire_from_foreign(
+        &self,
+        image: vk::Image,
+        target: vk::ImageLayout,
+    ) -> Result<()> {
+        if target == vk::ImageLayout::UNDEFINED {
+            return Ok(());
+        }
+        // QFOT path requires only `VK_EXT_external_memory_acquire_unmodified`;
+        // `VK_QUEUE_FAMILY_EXTERNAL` is core Vulkan 1.1 and always
+        // available. When the optional extension is absent (NVIDIA
+        // Linux today and for the foreseeable future), fall back to
+        // bridging UNDEFINED → target as a same-family transition.
+        let use_qfot = self.has_acquire_unmodified;
+        let (src_qf, src_layout) = if use_qfot {
+            (vk::QUEUE_FAMILY_EXTERNAL, target)
+        } else {
+            (self.queue_family_index, vk::ImageLayout::UNDEFINED)
+        };
+        // The chained `VkExternalMemoryAcquireUnmodifiedEXT` lives on
+        // the stack here — must outlive the call to
+        // `submit_one_shot_image_barriers` because the built barrier
+        // holds a raw pointer to it via pNext.
+        let mut acquire_unmodified = vk::ExternalMemoryAcquireUnmodifiedEXT::builder()
+            .acquire_unmodified_memory(true)
+            .build();
+        let mut barrier_builder = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::empty())
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(
+                vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+            )
+            .old_layout(src_layout)
+            .new_layout(target)
+            .src_queue_family_index(src_qf)
+            .dst_queue_family_index(self.queue_family_index)
+            .image(image)
+            .subresource_range(host_default_color_subresource_range());
+        if use_qfot {
+            barrier_builder = barrier_builder.push_next(&mut acquire_unmodified);
+        }
+        let barrier = barrier_builder.build();
+        self.submit_one_shot_image_barriers(&[barrier])
+    }
+
+    /// Internal: one-shot pipeline barrier on the host graphics queue.
+    /// Caller passes already-built `vk::ImageMemoryBarrier2` values
+    /// (including any chained pNext structs they keep alive on their
+    /// own stack); this helper handles command-pool/buffer/fence
+    /// creation, submit, wait, and teardown.
+    fn submit_one_shot_image_barriers(
+        &self,
+        barriers: &[vk::ImageMemoryBarrier2],
+    ) -> Result<()> {
+        use crate::core::StreamError;
+
+        let device = self.device();
+        let queue = self.queue;
+        let qf = self.queue_family_index;
+
+        let pool = unsafe {
+            device.create_command_pool(
+                &vk::CommandPoolCreateInfo::builder()
+                    .queue_family_index(qf)
+                    .flags(vk::CommandPoolCreateFlags::TRANSIENT),
+                None,
+            )
+        }
+        .map_err(|e| StreamError::GpuError(format!("qfot cmd pool: {e}")))?;
+
+        let cb = unsafe {
+            device.allocate_command_buffers(
+                &vk::CommandBufferAllocateInfo::builder()
+                    .command_pool(pool)
+                    .level(vk::CommandBufferLevel::PRIMARY)
+                    .command_buffer_count(1),
+            )
+        }
+        .map_err(|e| {
+            unsafe { device.destroy_command_pool(pool, None) };
+            StreamError::GpuError(format!("qfot cmd buf: {e}"))
+        })?[0];
+
+        let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
+            .map_err(|e| {
+                unsafe { device.destroy_command_pool(pool, None) };
+                StreamError::GpuError(format!("qfot fence: {e}"))
+            })?;
+
+        unsafe {
+            device.begin_command_buffer(
+                cb,
+                &vk::CommandBufferBeginInfo::builder()
+                    .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT),
+            )
+        }
+        .map_err(|e| StreamError::GpuError(format!("begin qfot cb: {e}")))?;
+
+        let dep = vk::DependencyInfo::builder().image_memory_barriers(barriers);
+        unsafe { device.cmd_pipeline_barrier2(cb, &dep) };
+
+        unsafe { device.end_command_buffer(cb) }
+            .map_err(|e| StreamError::GpuError(format!("end qfot cb: {e}")))?;
+
+        let cb_submit = vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(cb)
+            .build();
+        let cb_submits = [cb_submit];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cb_submits)
+            .build();
+        unsafe { self.submit_to_queue(queue, &[submit], fence) }?;
+        unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
+            .map_err(|e| StreamError::GpuError(format!("qfot wait: {e}")))?;
 
         unsafe { device.destroy_fence(fence, None) };
         unsafe { device.destroy_command_pool(pool, None) };
@@ -2311,6 +2586,49 @@ mod tests {
                 "expected supports_cross_device_dma_buf_probe()=true on non-NVIDIA ({name}), got false"
             );
         }
+    }
+
+    /// Issue #633 — `supports_qfot_acquire_unmodified` must equal the
+    /// `has_acquire_unmodified` extension probe from `new()`.
+    /// Trait-method route must agree with the inherent method.
+    #[test]
+    fn supports_qfot_acquire_unmodified_consistent_across_inherent_and_trait() {
+        let device = match try_create_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let inherent = HostVulkanDevice::supports_qfot_acquire_unmodified(&device);
+        let via_trait =
+            <HostVulkanDevice as streamlib_consumer_rhi::VulkanRhiDevice>::supports_qfot_acquire_unmodified(&device);
+        assert_eq!(inherent, via_trait, "trait and inherent reports must agree");
+        assert_eq!(
+            inherent, device.has_acquire_unmodified,
+            "supports_qfot_acquire_unmodified must equal has_acquire_unmodified \
+             (VK_QUEUE_FAMILY_EXTERNAL is core 1.1 and always available)"
+        );
+    }
+
+    /// Issue #633 — QFOT acquire is a no-op when target is UNDEFINED.
+    /// **Honest scope**: this asserts only that the call returns
+    /// `Ok`, not that no GPU work was issued. Reverting the early
+    /// return makes the helper attempt a barrier with
+    /// `image = vk::Image::null()`; validation layers reject that
+    /// (`VUID-VkImageMemoryBarrier2-image-parameter`), but raw
+    /// drivers may tolerate it silently. Real GPU-correctness for
+    /// QFOT comes from E2E scenarios run with
+    /// `VK_LOADER_LAYERS_ENABLE=*validation*`.
+    #[test]
+    fn host_acquire_from_foreign_undefined_target_is_noop() {
+        let device = match try_create_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let result =
+            device.acquire_from_foreign(vk::Image::null(), vk::ImageLayout::UNDEFINED);
+        assert!(
+            result.is_ok(),
+            "acquire_from_foreign with target=UNDEFINED must short-circuit Ok"
+        );
     }
 
     #[test]

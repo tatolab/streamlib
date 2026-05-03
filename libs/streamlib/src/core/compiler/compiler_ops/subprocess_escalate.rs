@@ -525,7 +525,19 @@ fn assign_texture_handle_id(
             // No timeline semaphore — escalate-IPC consumers (CPU-readback
             // bridge) handle sync via the per-acquire response, not via a
             // shared host timeline.
-            store.register_texture(&handle_id, texture.texture(), None)?;
+            //
+            // UNDEFINED at registration: pooled textures sit in the
+            // texture pool unowned until the first acquire. The host
+            // adapter or escalate-IPC bridge transitions to its
+            // workload-specific layout on first use; subsequent
+            // releases publish the post-release layout via
+            // `update_image_layout`.
+            store.register_texture(
+                &handle_id,
+                texture.texture(),
+                None,
+                streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
+            )?;
         }
     }
     Ok(handle_id)
@@ -544,7 +556,17 @@ fn assign_image_handle_id(
 ) -> crate::core::error::Result<String> {
     let handle_id = Uuid::new_v4().to_string();
     if let Some(store) = full.surface_store() {
-        store.register_texture(&handle_id, texture, None)?;
+        // Render-target images are freshly allocated and unwritten at
+        // registration time — declare UNDEFINED and let the first
+        // producer publish their post-release layout via
+        // `update_image_layout` once they've issued their QFOT
+        // release barrier (#633).
+        store.register_texture(
+            &handle_id,
+            texture,
+            None,
+            streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
+        )?;
     }
     Ok(handle_id)
 }
