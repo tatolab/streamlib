@@ -368,10 +368,18 @@ The shape of what the hook does varies by seam:
   the host's `StreamTexture` (via
   `gpu.acquire_render_target_dma_buf_image` for render-target-capable
   DMA-BUF), registers it in surface-share with a known UUID via
-  `gpu.surface_store().register_texture(uuid, &texture)`, and stashes
-  any per-runtime sync state the adapter needs (timeline semaphores,
-  DRM modifier records). No bridge — every subprocess acquire is a
-  one-shot `check_out`.
+  `gpu.surface_store().register_texture(uuid, &texture, timeline,
+  current_image_layout)` (4-arg signature post-#633: `timeline` is
+  an `Option<&HostVulkanTimelineSemaphore>` for cross-process sync,
+  `current_image_layout` is the producer's post-write `VulkanLayout`
+  consumed by Path 2 QFOT acquire), and stashes any per-runtime
+  sync state the adapter needs (timeline semaphores, DRM modifier
+  records). When the same surface flows downstream to an
+  **in-process** Rust consumer on the hot path, the hook also calls
+  `gpu.register_texture_with_layout(uuid, texture.clone(), layout)`
+  — see [Dual-registration for in-process
+  consumers](#dual-registration-for-in-process-consumers) below. No
+  bridge — every subprocess acquire is a one-shot `check_out`.
 - **Escalate-IPC seam** (cpu-readback). The hook constructs the
   `CpuReadbackSurfaceAdapter`, allocates + registers the host
   surface(s) it serves, and registers a `CpuReadbackBridge`
@@ -406,6 +414,104 @@ need per-acquire host work should also expose a `set_*_bridge` setter
 on `GpuContext` mirroring `set_cpu_readback_bridge`. Application
 authors call `install_setup_hook` exactly once per adapter they want
 to expose to subprocesses.
+
+### Dual-registration for in-process consumers
+
+> Added 2026-05-03 (#614). Originally framed as a silent-failure
+> bug from the #484 debugging session. Path 2 (`gpu_context.rs:689-705`)
+> resolves surface_store-only registrations now (#633), so the
+> failure mode no longer reproduces — but the dual-registration
+> rule survives with a different rationale: **performance**.
+
+`gpu.surface_store().register_texture(...)` publishes the surface
+to the cross-process surface-share daemon. It does NOT populate
+`GpuContext`'s in-process `texture_cache`. Same-process consumers
+calling `gpu.resolve_videoframe_registration(&frame)` therefore
+miss Path 1 (`texture_cache` HashMap lookup) and fall through to
+Path 2 (`surface_store.lookup_texture` + DMA-BUF FD import + QFOT
+acquire submit per call). Path 2 explicitly does NOT cache its
+synthesized `TextureRegistration` (`gpu_context.rs:658-660`:
+*"Synthesized registration is not cached — Path 2 reimports
+per-call by design"*) — so an in-process consumer reading the
+same surface every frame would pay a fresh import + QFOT acquire
+on every render.
+
+For hot-path in-process consumers (e.g. `LinuxDisplayProcessor`,
+the `BlendingCompositor`, video encoders), populate Path 1 by
+**dual-registering** in the setup hook:
+
+```rust
+// 1. Cross-process publish (subprocess customers):
+gpu.surface_store()
+    .ok_or(...)?
+    .register_texture(
+        SCENARIO_SURFACE_UUID,
+        &texture,
+        Some(timeline.as_ref()),
+        VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+    )?;
+
+// 2. In-process Path 1 fast path (same-process consumers):
+gpu.register_texture_with_layout(
+    &SCENARIO_SURFACE_UUID,
+    texture.clone(),
+    VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+);
+```
+
+Both calls take the same `current_layout`. The producer is
+responsible for keeping the two declarations consistent — one is
+read by Path 2 (cross-process, via `surface_store.lookup_texture`),
+the other by Path 1 (in-process, via the registry held in
+`GpuContext`). Lying in either is the
+[`TextureRegistration` anti-pattern #2 — descriptor-side claims
+that don't match registration](texture-registration.md#anti-patterns).
+
+The reference in-tree producer is `LinuxCameraProcessor` —
+`libs/streamlib/src/linux/processors/camera.rs` calls both
+`store.register_texture(...)` (around line 833) and
+`gpu_context.register_texture_with_layout(...)` (around line 862)
+for every ring texture it allocates, with the same
+`VulkanLayout::SHADER_READ_ONLY_OPTIMAL` declaration on both
+sides.
+
+#### When the second call is unnecessary
+
+When the surface is consumed **only** by subprocess customers (or
+by a post-stop one-shot like `gpu.create_texture_readback`), the
+in-process call is redundant — Path 1 is never consulted. The
+canonical example is
+[`examples/polyglot-opengl-fragment-shader/src/main.rs`](../../examples/polyglot-opengl-fragment-shader/src/main.rs):
+the host registers via `surface_store.register_texture` only and
+relies on `gpu.create_texture_readback` for its post-stop pixel
+capture. Don't dual-register surfaces with no in-process hot-path
+consumer — every entry in `texture_cache` lives until the
+producer explicitly unregisters, and over-populating it muddies
+the cache's purpose (per-surface lifecycle state for in-process
+fast-path resolution; see
+[`texture-registration.md`](texture-registration.md#what-goes-in--what-stays-out)).
+
+#### Why not auto-couple the two registrations
+
+Considered and rejected: making `surface_store.register_texture`
+populate `texture_cache` automatically. Two reasons it doesn't fit:
+
+- The two registries have different scopes by design.
+  `texture_cache` is for in-process consumers reaching textures
+  via Path 1; `surface_store` is for cross-process consumers
+  reaching them via the surface-share daemon. Auto-coupling them
+  re-introduces the stale-content risk when adapters re-register
+  the same UUID — `texture_cache` would silently rebind to a
+  different texture, while `Path 2` resolves through a separate
+  IPC roundtrip that already encodes per-call freshness.
+- The doc-only path is the conservative fix. The dual-registration
+  call is one line per setup hook; the engine-level coupling is a
+  layered API change with non-local consequences.
+
+If a future adapter genuinely needs both registrations to stay in
+lock-step (e.g. a producer that re-registers on every layout
+transition), revisit — but the current shape is two explicit
+calls.
 
 ### Trade-off — explicit registration vs. Cargo-feature ambient availability
 

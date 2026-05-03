@@ -203,6 +203,18 @@ Document the canonical `install_setup_hook` snippet for your
 adapter in the crate's top-level `lib.rs` doc-comment so
 application authors can copy-paste.
 
+When the adapter's surface is expected to flow downstream to an
+**in-process** Rust consumer on the hot path (display, blending
+compositor, encoder), the snippet must dual-register the surface
+— `gpu.surface_store().register_texture(...)` for cross-process
+publishing AND `gpu.register_texture_with_layout(...)` for the
+in-process Path 1 fast path. See
+[Dual-registration for in-process consumers](adapter-runtime-integration.md#dual-registration-for-in-process-consumers)
+in the runtime-integration doc for the rule, the reference
+in-tree producer (`LinuxCameraProcessor`), and the cases where
+the second call is unnecessary (subprocess-only consumers,
+post-stop readback).
+
 ### 7. Cross-links
 
 Add the new adapter to:
