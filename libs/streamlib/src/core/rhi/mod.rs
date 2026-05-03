@@ -13,6 +13,7 @@ mod external_handle;
 mod format_converter;
 mod format_converter_cache;
 mod gl_interop;
+mod graphics_kernel;
 mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;
@@ -29,6 +30,16 @@ pub use compute_kernel::{
     ComputeKernelDescriptor,
 };
 pub use device::GpuDevice;
+pub use graphics_kernel::{
+    derive_bindings_from_spirv_multistage, AttachmentFormats, BlendFactor, BlendOp,
+    ColorBlendAttachment, ColorBlendState, ColorWriteMask, CullMode, DepthCompareOp, DepthFormat,
+    DepthStencilState, DrawCall, DrawIndexedCall, FrontFace, GraphicsBindingKind,
+    GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
+    GraphicsPushConstants, GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage,
+    IndexType, MultisampleState, PolygonMode, PrimitiveTopology, RasterizationState, ScissorRect,
+    VertexAttributeFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
+    VertexInputState, Viewport,
+};
 pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
 pub use format_converter::RhiFormatConverter;
 pub use format_converter_cache::RhiFormatConverterCache;
