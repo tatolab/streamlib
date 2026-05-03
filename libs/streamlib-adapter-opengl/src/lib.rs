@@ -13,6 +13,14 @@
 //! never reaches them because the host allocator already picked a
 //! tiled, render-target-capable modifier.
 //!
+//! **Y-axis convention** — the imported `GL_TEXTURE_2D` is backed by a
+//! `VkImage` that downstream Vulkan consumers (display, encoders) read
+//! with origin at top-left, while GL writes to an FBO with origin at
+//! bottom-left. Producers MUST render Vulkan-conventional or the
+//! consumer sees an upside-down image (#621). See [`OpenGlWriteView`]
+//! for the full convention and the `pose_overlay_renderer.py` example
+//! for an in-tree reference.
+//!
 //! See `docs/architecture/surface-adapter.md` for the architecture brief
 //! and `docs/architecture/adapter-authoring.md` for the 3rd-party
 //! authoring guide.

@@ -226,14 +226,20 @@ class PoseOverlayRenderer:
             vertex_shader=_BACKGROUND_VS, fragment_shader=_BACKGROUND_FS,
         )
         # Full-screen quad — pos.xy + texcoord.xy interleaved.
-        # NDC corners + flipped Y in tex coords (camera bytes upload
-        # top-down, OpenGL textures are bottom-up, so we sample with
-        # flipped Y to keep the camera the right way up).
+        # The output FBO wraps an imported GL_TEXTURE_2D backed by a
+        # Vulkan VkImage (the OpenGL adapter's contract). GL writes
+        # with origin bottom-left; Vulkan downstream reads with origin
+        # top-left — so we render with Vulkan-conventional Y: GL bottom
+        # (NDC y=-1) gets the camera's top row (tex y=0). The double
+        # flip (GL render axis + Vulkan read axis) cancels and the
+        # display sees the camera upright. See OpenGlContext docs for
+        # the convention. Don't be tempted to "fix" by inverting the
+        # texcoord Y — that re-introduces #621.
         bg_verts = np.array([
-            -1.0, -1.0, 0.0, 1.0,
-             1.0, -1.0, 1.0, 1.0,
-            -1.0,  1.0, 0.0, 0.0,
-             1.0,  1.0, 1.0, 0.0,
+            -1.0, -1.0, 0.0, 0.0,
+             1.0, -1.0, 1.0, 0.0,
+            -1.0,  1.0, 0.0, 1.0,
+             1.0,  1.0, 1.0, 1.0,
         ], dtype=np.float32)
         self._bg_vbo = ctx.buffer(bg_verts.tobytes())
         self._bg_vao = ctx.vertex_array(
@@ -311,12 +317,17 @@ class PoseOverlayRenderer:
                 # Collapse to origin so the edge takes zero pixels.
                 continue
 
-            # Pixel → NDC (-1..1). Y is flipped because YOLO image-space
-            # has Y growing downwards while NDC Y grows upwards.
+            # Pixel → NDC (-1..1). Y is NOT negated: YOLO image-space
+            # y grows downwards (y=0 at top of camera) and we want
+            # camera-top to render at GL NDC y=-1 (bottom) so that the
+            # VkImage backing this FBO sees row 0 at the top — Vulkan-
+            # conventional. See bg_verts above for the full rationale
+            # and OpenGlContext docs for the convention. Inverting Y
+            # here re-introduces #621.
             ax = (xi / max(self.W, 1)) * 2.0 - 1.0
-            ay = -((yi / max(self.H, 1)) * 2.0 - 1.0)
+            ay = (yi / max(self.H, 1)) * 2.0 - 1.0
             bx = (xj / max(self.W, 1)) * 2.0 - 1.0
-            by = -((yj / max(self.H, 1)) * 2.0 - 1.0)
+            by = (yj / max(self.H, 1)) * 2.0 - 1.0
 
             dx = bx - ax
             dy = by - ay
@@ -370,7 +381,7 @@ class PoseOverlayRenderer:
                 continue
 
             cx = (xp / max(self.W, 1)) * 2.0 - 1.0
-            cy = -((yp / max(self.H, 1)) * 2.0 - 1.0)
+            cy = (yp / max(self.H, 1)) * 2.0 - 1.0
 
             for vi in range(6):
                 cx_corner, cy_corner = corners[vi]

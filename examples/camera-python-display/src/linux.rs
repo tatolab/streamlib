@@ -95,8 +95,13 @@ pub fn main() -> Result<()> {
     // BGRA-shaped ring textures; mismatched sizes are rejected by the
     // copy processor at the first frame.
     println!("📷 Adding camera processor...");
+    // Match the env-var convention used in `examples/camera-display` so
+    // the same flag (`STREAMLIB_CAMERA_DEVICE=/dev/videoN`) targets vivid
+    // / v4l2loopback fixtures during E2E. Default `None` lets the camera
+    // processor pick by capability.
+    let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
-        device_id: None,
+        device_id,
         ..Default::default()
     }))?;
     println!("✓ Camera added: {camera}\n");
