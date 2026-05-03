@@ -587,6 +587,17 @@ class VulkanContext:
         carries ``srcAccessMask = MEMORY_WRITE_BIT`` and assumes
         producer-side hazard coverage upstream.
 
+        Also serves the **dual-registration** path used by non-Vulkan
+        adapters that need cross-process release wiring (OpenGL via
+        :meth:`streamlib.adapters.opengl.OpenGLContext.release_for_cross_process`,
+        and Skia GL by extension). In that mode the surface may not
+        have been touched by an explicit ``acquire_*`` on this Vulkan
+        context — the release barrier still issues correctly because
+        the surface-share registration carries the producer's
+        post-write layout as the Vulkan adapter's initial layout, so
+        the QFOT source layout matches what the OpenGL writes left
+        the DMA-BUF in.
+
         ``post_release_layout`` is a Vulkan ``VkImageLayout`` enumerant
         as an integer (use :class:`VkImageLayout` constants). Picking
         ``GENERAL`` is the safest default for cross-process handoffs
@@ -602,15 +613,10 @@ class VulkanContext:
         producer-side path here is correct under both modes.
         """
         pool_id = self._surface_pool_id(surface)
-        surface_id = self._surface_ids.get(pool_id)
-        if surface_id is None:
-            raise RuntimeError(
-                f"VulkanContext.release_for_cross_process: surface "
-                f"'{pool_id}' is not registered — at least one "
-                "acquire_write/acquire_read must have run for this "
-                "surface in this subprocess before publishing a "
-                "cross-process release."
-            )
+        # Lazily resolve+register so dual-registration callers
+        # (OpenGL, Skia GL) don't have to issue a no-op acquire first.
+        # Idempotent — repeat calls return the cached id.
+        surface_id = self._resolve_and_register(pool_id)
         rc = self._lib.slpn_vulkan_release_to_foreign(
             self._rt,
             ctypes.c_uint64(surface_id),

@@ -38,6 +38,7 @@ from typing import Optional
 
 from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
 from streamlib.adapters.opengl import OpenGLContext
+from streamlib.adapters.vulkan import VkImageLayout, VulkanContext
 
 
 # =============================================================================
@@ -284,6 +285,13 @@ class OpenGlFragmentShaderProcessor:
         self._width = int(cfg["width"])
         self._height = int(cfg["height"])
         self._opengl = OpenGLContext.from_runtime(ctx)
+        # Dual-register the surface with the Vulkan adapter too so the
+        # producer-side QFOT release barrier (#644) can publish layout
+        # to host consumers via OpenGLContext.release_for_cross_process.
+        # OpenGL itself does GL writes; the Vulkan adapter owns the
+        # cross-process release barrier — engine-model composition per
+        # docs/architecture/adapter-authoring.md.
+        self._vulkan = VulkanContext.from_runtime(ctx)
         self._gl: Optional[dict] = None
         self._rendered = False
         self._error: Optional[str] = None
@@ -385,6 +393,23 @@ class OpenGlFragmentShaderProcessor:
         # acquire_write's __exit__ runs adapter `end_write_access`
         # which does a final glFinish so the host's DMA-BUF readback
         # sees a fully-flushed image.
+
+        # Producer-side cross-process release (#644). The OpenGL
+        # adapter has no Vulkan device of its own and never issues a
+        # release barrier on the imported VkImage — delegate to the
+        # Vulkan adapter (dual-registration). GENERAL is the right
+        # choice for OpenGL-backed surfaces (the host's pre-stop
+        # readback also reads with TextureSourceLayout::General).
+        # Pairs with any future host consumer's `acquire_from_foreign`
+        # via the bridging fallback on NVIDIA / QFOT-acquire on Mesa.
+        self._opengl.release_for_cross_process(
+            self._uuid, self._vulkan, VkImageLayout.GENERAL
+        )
+        print(
+            f"[OpenGlFragmentShader/py] published cross-process release "
+            f"layout=GENERAL for surface '{self._uuid}'",
+            flush=True,
+        )
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         print(

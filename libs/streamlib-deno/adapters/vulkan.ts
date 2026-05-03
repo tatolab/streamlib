@@ -341,6 +341,15 @@ export class VulkanContext {
    * release barrier carries `srcAccessMask = MEMORY_WRITE_BIT` and
    * assumes producer-side hazard coverage upstream.
    *
+   * Also serves the **dual-registration** path used by non-Vulkan
+   * adapters that need cross-process release wiring (OpenGL via
+   * `OpenGLContext.releaseForCrossProcess`, and Skia GL by
+   * extension). In that mode the surface may not have been touched
+   * by an explicit `acquire*` on this Vulkan context — the release
+   * barrier still issues correctly because the surface-share
+   * registration carries the producer's post-write layout as the
+   * Vulkan adapter's initial layout.
+   *
    * `postReleaseLayout` is a Vulkan `VkImageLayout` enumerant as a
    * number (use `VkImageLayout` constants). Picking `GENERAL` is the
    * safest default for cross-process handoffs — the consumer's
@@ -358,15 +367,11 @@ export class VulkanContext {
     postReleaseLayout: number,
   ): void {
     const poolId = VulkanContext.surfacePoolId(surface);
-    const surfaceId = this.surfaceIds.get(poolId);
-    if (surfaceId === undefined) {
-      throw new Error(
-        `VulkanContext.releaseForCrossProcess: surface '${poolId}' is ` +
-          "not registered — at least one acquireWrite/acquireRead must " +
-          "have run for this surface in this subprocess before publishing " +
-          "a cross-process release.",
-      );
-    }
+    // Lazily resolve+register so dual-registration callers
+    // (OpenGL via OpenGLContext.releaseForCrossProcess, Skia GL by
+    // extension) don't have to issue a no-op acquire first.
+    // Idempotent — repeat calls return the cached id.
+    const surfaceId = this.resolveAndRegister(poolId);
     const rc: number = this.symbols.sldn_vulkan_release_to_foreign(
       this.rt,
       surfaceId,
