@@ -42,6 +42,7 @@ from typing import Optional
 
 from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
 from streamlib.adapters.skia import SkiaContext
+from streamlib.adapters.vulkan import VkImageLayout, VulkanContext
 from streamlib.surface_adapter import StreamlibSurface, SurfaceFormat, SurfaceUsage
 
 
@@ -53,6 +54,14 @@ class SkiaCanvasProcessor:
         self._height = int(cfg["height"])
         self._fps = int(cfg.get("fps", 60))
         self._skia_ctx = SkiaContext.from_runtime(ctx)
+        # Dual-register the surface with the Vulkan adapter too so the
+        # producer-side QFOT release barrier (#645) can publish layout
+        # to host consumers via SkiaContext.release_for_cross_process.
+        # Skia composes on the OpenGL adapter, which has no Vulkan
+        # device of its own; the Vulkan adapter owns the cross-process
+        # release barrier — engine-model composition per
+        # docs/architecture/adapter-authoring.md.
+        self._vulkan = VulkanContext.from_runtime(ctx)
         self._frame_count = 0
         self._error: Optional[str] = None
         self._surface = StreamlibSurface(
@@ -91,6 +100,17 @@ class SkiaCanvasProcessor:
             sk_surface = guard.surface
             canvas = sk_surface.getCanvas()
             _draw_animated_frame(canvas, t, self._width, self._height)
+        # Producer-side cross-process release (#645). Skia composes on
+        # the OpenGL adapter which has no Vulkan device of its own —
+        # delegate to the Vulkan adapter (dual-registration). GENERAL
+        # mirrors the OpenGL adapter's release-side convention; the
+        # host's pre-stop readback also reads with
+        # TextureSourceLayout::General. Pairs with any future host
+        # consumer's `acquire_from_foreign` via the bridging fallback
+        # on NVIDIA / QFOT-acquire on Mesa.
+        self._skia_ctx.release_for_cross_process(
+            self._surface, self._vulkan, VkImageLayout.GENERAL
+        )
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         print(
