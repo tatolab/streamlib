@@ -2163,6 +2163,24 @@ mod surface_client {
         surface_handle_ptr
     }
 
+    /// macOS XPC has no `update_layout` op — the macOS surface-share
+    /// path does not coordinate cross-process Vulkan layouts (#633 is
+    /// Linux-only by construction; macOS uses IOSurface + XPC).
+    /// Returns `-1` so callers see the failure clearly rather than
+    /// silently no-op'ing.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_surface_update_image_layout(
+        _handle: *mut c_void,
+        _pool_id: *const c_char,
+        _layout: i32,
+    ) -> i32 {
+        tracing::error!(
+            "sldn_surface_update_image_layout: not supported on macOS \
+             (cross-process VkImageLayout coordination is Linux-only; #633)"
+        );
+        -1
+    }
+
     unsafe fn c_str_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
         if ptr.is_null() {
             return None;
@@ -2714,6 +2732,92 @@ mod surface_client {
         }
     }
 
+    /// Publish a producer-side post-release `VkImageLayout` for the
+    /// given `pool_id` over the surface-share `update_layout` op (#633).
+    /// Pairs with [`sldn_vulkan_release_to_foreign`]: a producer
+    /// subprocess issues the QFOT release barrier on its consumer
+    /// `VkDevice` and then publishes the resulting layout so the next
+    /// host-side consumer's `acquire_from_foreign` sees it.
+    ///
+    /// Returns `0` on success, `-1` on socket failure or wire
+    /// rejection (e.g. unknown surface_id).
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_surface_update_image_layout(
+        handle: *mut SurfaceShareHandle,
+        pool_id: *const c_char,
+        layout: i32,
+    ) -> i32 {
+        let handle = match unsafe { handle.as_ref() } {
+            Some(h) => h,
+            None => {
+                tracing::error!("sldn_surface_update_image_layout: null handle");
+                return -1;
+            }
+        };
+        let pool_id_str = match c_str_to_string(pool_id) {
+            Some(s) if !s.is_empty() => s,
+            _ => {
+                tracing::error!(
+                    "sldn_surface_update_image_layout: null or empty pool_id"
+                );
+                return -1;
+            }
+        };
+        let guard = match handle.lazy_connect() {
+            Ok(g) => g,
+            Err(e) => {
+                tracing::error!(
+                    "sldn_surface_update_image_layout: connect to '{}' failed: {}",
+                    handle.socket_path, e
+                );
+                return -1;
+            }
+        };
+        let stream = guard.as_ref().expect("connection just populated");
+        let request = serde_json::json!({
+            "op": "update_layout",
+            "surface_id": pool_id_str,
+            "current_image_layout": layout,
+        });
+        let (response, response_fds) =
+            match wire::send_request_with_fds(stream, &request, &[], 0) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(
+                        "sldn_surface_update_image_layout: update_layout for '{}' failed: {}",
+                        pool_id_str, e
+                    );
+                    return -1;
+                }
+            };
+        for fd in &response_fds {
+            unsafe { libc::close(*fd) };
+        }
+        if let Some(err) = response.get("error").and_then(|v| v.as_str()) {
+            tracing::error!(
+                "sldn_surface_update_image_layout: '{}': {}",
+                pool_id_str, err
+            );
+            return -1;
+        }
+        match response.get("success").and_then(|v| v.as_bool()) {
+            Some(true) => 0,
+            Some(false) => {
+                tracing::error!(
+                    "sldn_surface_update_image_layout: surface_id '{}' not registered",
+                    pool_id_str
+                );
+                -1
+            }
+            None => {
+                tracing::error!(
+                    "sldn_surface_update_image_layout: malformed response (missing `success`) for '{}'",
+                    pool_id_str
+                );
+                -1
+            }
+        }
+    }
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -2735,6 +2839,16 @@ mod surface_client {
         _pool_id: *const c_char,
     ) -> *mut c_void {
         std::ptr::null_mut()
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_surface_update_image_layout(
+        _handle: *mut c_void,
+        _pool_id: *const c_char,
+        _layout: i32,
+    ) -> i32 {
+        tracing::error!("Surface-share operations not supported on this platform");
+        -1
     }
 
     #[unsafe(no_mangle)]
@@ -3515,6 +3629,70 @@ mod vulkan {
         surface_id: u64,
     ) -> i32 {
         release_inner(rt, surface_id, AcquireKind::Read)
+    }
+
+    /// Issue a producer-side queue-family-ownership-transfer release
+    /// barrier to `VK_QUEUE_FAMILY_EXTERNAL` against the surface's
+    /// imported `VkImage`, transitioning to `post_release_layout` (#633).
+    /// Pairs with the host-side consumer's `acquire_from_foreign`
+    /// (Path 2 of `GpuContext::resolve_videoframe_registration`).
+    ///
+    /// Caller responsibilities:
+    /// 1. The surface must already be registered (via
+    ///    `sldn_vulkan_register_surface`) and NOT currently held in a
+    ///    read or write acquire — call this **after** the matching
+    ///    `sldn_vulkan_release_write`/`_read` returns. The adapter's
+    ///    single-producer-per-surface contract is what makes the
+    ///    snapshot-then-submit pattern in
+    ///    `VulkanSurfaceAdapter::release_to_foreign` safe.
+    /// 2. The producer must have completed all writes / reads against
+    ///    the image (i.e. their own queue submission has signalled or
+    ///    `vkQueueWaitIdle` has returned) before calling this; the
+    ///    adapter's QFOT release barrier carries an
+    ///    `srcAccessMask = MEMORY_WRITE_BIT` and assumes hazard
+    ///    coverage upstream.
+    /// 3. After this returns successfully, the producer should
+    ///    publish `post_release_layout` to surface-share via
+    ///    [`sldn_surface_update_image_layout`] so the next consumer's
+    ///    `acquire_from_foreign` sees the right source layout.
+    ///
+    /// `post_release_layout` is the `VkImageLayout` enumerant value
+    /// (an `i32`, e.g. `VK_IMAGE_LAYOUT_GENERAL = 1`,
+    /// `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5`).
+    ///
+    /// Returns `0` on success, `-1` on failure (null runtime,
+    /// unregistered surface, or GPU submit error). On a missing
+    /// `VK_EXT_external_memory_acquire_unmodified` extension at
+    /// device construction the adapter records a same-family layout
+    /// transition instead of a true QFOT — the result is still
+    /// validation-clean against the consumer's bridging fallback;
+    /// see `docs/learnings/cross-process-vkimage-layout.md`.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_release_to_foreign(
+        rt: *mut VulkanRuntimeHandle,
+        surface_id: u64,
+        post_release_layout: i32,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!("sldn_vulkan_release_to_foreign: null runtime");
+                return -1;
+            }
+        };
+        match rt
+            .adapter
+            .release_to_foreign(surface_id, VulkanLayout(post_release_layout))
+        {
+            Ok(_) => 0,
+            Err(e) => {
+                tracing::error!(
+                    "sldn_vulkan_release_to_foreign({}): {:?}",
+                    surface_id, e
+                );
+                -1
+            }
+        }
     }
 
     #[unsafe(no_mangle)]
@@ -5498,6 +5676,15 @@ mod vulkan {
     pub unsafe extern "C" fn sldn_vulkan_release_read(
         _rt: *mut c_void,
         _surface_id: u64,
+    ) -> i32 {
+        -1
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn sldn_vulkan_release_to_foreign(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _post_release_layout: i32,
     ) -> i32 {
         -1
     }

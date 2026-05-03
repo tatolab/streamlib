@@ -422,6 +422,28 @@ class NativeGpuContextLimitedAccess implements GpuContextLimitedAccess {
     }
     return new NativeGpuSurface(this.lib, handlePtr, iosurfaceId);
   }
+
+  updateImageLayout(poolId: string, layout: number): void {
+    if (this.surfaceHandlePtr === null) {
+      throw new Error(
+        "updateImageLayout requires a surface-share connection (Linux-only; " +
+          "macOS uses IOSurface + XPC and has no VkImageLayout coordination op)",
+      );
+    }
+    const poolIdBuf = cString(poolId);
+    const rc: number = this.lib.symbols.sldn_surface_update_image_layout(
+      this.surfaceHandlePtr,
+      poolIdBuf,
+      layout,
+    );
+    if (rc !== 0) {
+      throw new Error(
+        `updateImageLayout failed for poolId='${poolId}' (rc=${rc}). ` +
+          "Check the subprocess log; the daemon may have rejected an " +
+          "unknown surface_id, or the socket may be broken.",
+      );
+    }
+  }
 }
 
 /**

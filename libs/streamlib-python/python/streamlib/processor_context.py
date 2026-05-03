@@ -202,6 +202,15 @@ def load_native_lib(lib_path):
     lib.slpn_surface_acquire_surface.restype = ctypes.c_void_p
     lib.slpn_surface_unregister_surface.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
     lib.slpn_surface_unregister_surface.restype = None
+    # Producer-side cross-process layout publish (#633, Linux). Pairs
+    # with `slpn_vulkan_release_to_foreign`: a producer subprocess
+    # issues the QFOT release on its consumer device, then publishes
+    # the post-release `VkImageLayout` so the next host consumer's
+    # `acquire_from_foreign` sees the right source layout.
+    lib.slpn_surface_update_image_layout.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int32,
+    ]
+    lib.slpn_surface_update_image_layout.restype = ctypes.c_int32
 
     # OpenGL adapter runtime (#530, Linux). Uses the host adapter crate's
     # EglRuntime + OpenGlSurfaceAdapter for EGL bring-up + DMA-BUF→GL
@@ -482,6 +491,36 @@ class NativeGpuContextLimitedAccess:
         if not handle_ptr:
             raise RuntimeError(f"IOSurface not found: {surface_id}")
         return NativeGpuSurfaceHandle(self._lib, handle_ptr)
+
+    def update_image_layout(self, surface_id: str, layout: int) -> None:
+        """Publish a producer-side post-release ``VkImageLayout`` for
+        ``surface_id`` over the surface-share ``update_layout`` op (#633).
+        Pairs with the cross-process QFOT release a producer subprocess
+        issues via :meth:`streamlib.adapters.vulkan.VulkanContext.release_for_cross_process`
+        — without this publish, the next host consumer's ``acquire_from_foreign``
+        falls back to the cached registration layout.
+
+        Linux-only: macOS surface-share doesn't ship a layout-coordination
+        op (cross-process VkImageLayout coordination is Linux-by-construction).
+        """
+        if not self._handle_ptr:
+            raise RuntimeError(
+                "update_image_layout requires a surface-share connection "
+                "(Linux-only; macOS uses IOSurface + XPC and has no "
+                "VkImageLayout coordination op)"
+            )
+        rc = self._lib.slpn_surface_update_image_layout(
+            self._handle_ptr,
+            surface_id.encode("utf-8"),
+            int(layout),
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"update_image_layout failed for surface_id='{surface_id}' "
+                f"(rc={rc}). Check the subprocess log; the daemon may have "
+                "rejected an unknown surface_id, or the socket may be "
+                "broken."
+            )
 
 
 class NativeGpuContextFullAccess(NativeGpuContextLimitedAccess):

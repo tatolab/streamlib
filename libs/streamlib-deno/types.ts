@@ -92,6 +92,16 @@ export interface GpuContextLimitedAccess {
   resolveSurface(poolId: string): GpuSurface;
 
   /**
+   * Publish a producer-side post-release `VkImageLayout` for `poolId`
+   * over the surface-share `update_layout` op (#633). Pairs with the
+   * cross-process QFOT release a producer subprocess issues via
+   * `VulkanContext.releaseForCrossProcess` — without this publish, the
+   * next host consumer's `acquire_from_foreign` falls back to the
+   * cached registration layout. Linux-only.
+   */
+  updateImageLayout(poolId: string, layout: number): void;
+
+  /**
    * The cdylib handle this view's surfaces resolve against. Used by
    * in-tree adapter SDKs to call additional `sldn_*` FFI ops without
    * re-loading the cdylib.

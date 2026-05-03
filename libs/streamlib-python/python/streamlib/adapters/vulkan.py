@@ -361,6 +361,13 @@ class VulkanContext:
             fn.restype = ctypes.c_int32
             fn.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
 
+        lib.slpn_vulkan_release_to_foreign.restype = ctypes.c_int32
+        lib.slpn_vulkan_release_to_foreign.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+            ctypes.c_int32,
+        ]
+
         lib.slpn_vulkan_raw_handles.restype = ctypes.c_int32
         lib.slpn_vulkan_raw_handles.argtypes = [
             ctypes.c_void_p,
@@ -562,6 +569,64 @@ class VulkanContext:
             group_count_y=int(group_count_y),
             group_count_z=int(group_count_z),
         )
+
+    def release_for_cross_process(
+        self, surface, post_release_layout: int
+    ) -> None:
+        """Issue a producer-side queue-family-ownership-transfer (QFOT)
+        release barrier on this subprocess's ``ConsumerVulkanDevice`` and
+        publish the post-release ``VkImageLayout`` to surface-share so
+        the next cross-process consumer's ``acquire_from_foreign`` sees
+        the right source layout.
+
+        Call this *after* the matching :meth:`acquire_write` /
+        :meth:`acquire_read` ``with`` block has exited and after the
+        producer's queue submission has actually retired (e.g. the
+        customer has signalled their own timeline or
+        ``vkQueueWaitIdle``-ed). The adapter's QFOT release barrier
+        carries ``srcAccessMask = MEMORY_WRITE_BIT`` and assumes
+        producer-side hazard coverage upstream.
+
+        ``post_release_layout`` is a Vulkan ``VkImageLayout`` enumerant
+        as an integer (use :class:`VkImageLayout` constants). Picking
+        ``GENERAL`` is the safest default for cross-process handoffs
+        — the consumer's ``acquire_from_foreign`` re-transitions to
+        whatever layout it actually needs.
+
+        On NVIDIA Linux drivers without
+        ``VK_EXT_external_memory_acquire_unmodified`` (current state
+        as of 2026-05-03), the host consumer side falls back to a
+        bridging ``UNDEFINED → target`` transition; content
+        preservation is empirical (see
+        ``docs/learnings/cross-process-vkimage-layout.md``). The
+        producer-side path here is correct under both modes.
+        """
+        pool_id = self._surface_pool_id(surface)
+        surface_id = self._surface_ids.get(pool_id)
+        if surface_id is None:
+            raise RuntimeError(
+                f"VulkanContext.release_for_cross_process: surface "
+                f"'{pool_id}' is not registered — at least one "
+                "acquire_write/acquire_read must have run for this "
+                "surface in this subprocess before publishing a "
+                "cross-process release."
+            )
+        rc = self._lib.slpn_vulkan_release_to_foreign(
+            self._rt,
+            ctypes.c_uint64(surface_id),
+            ctypes.c_int32(int(post_release_layout)),
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"VulkanContext.release_for_cross_process: "
+                f"slpn_vulkan_release_to_foreign returned {rc} for "
+                f"surface '{pool_id}' (check subprocess log for the "
+                "underlying adapter error)"
+            )
+        # Pair the QFOT release with the surface-share `update_layout`
+        # publish so the next host-side consumer's `acquire_from_foreign`
+        # picks up the new layout instead of the cached registration one.
+        self._gpu.update_image_layout(pool_id, int(post_release_layout))
 
     def raw_handles(self) -> RawVulkanHandles:
         """Return the cdylib runtime's raw Vulkan handles — same shape
