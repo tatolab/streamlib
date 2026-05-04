@@ -238,10 +238,17 @@ impl BlendingCompositorProcessor::Processor {
         let compositor = Arc::new(VulkanBlendingCompositor::new(&vulkan_device)?);
 
         // Pre-allocate the output texture ring — render-target-capable
-        // tiled DMA-BUF VkImages, registered in
-        // `GpuContext::texture_cache` so downstream consumers
-        // (`LinuxDisplayProcessor`, future encoders) resolve them via
-        // the standard Path 1 lookup.
+        // tiled DMA-BUF VkImages, registered in BOTH
+        // `GpuContext::texture_cache` (Path 1 — in-process consumers
+        // like `LinuxDisplayProcessor` and future encoders) AND
+        // `surface_store` (Path 2 — cross-process consumers like the
+        // `cyberpunk_glitch` Python subprocess from #486 reaching the
+        // ring via `OpenGLContext.acquire_read`). The dual-registration
+        // mirrors the `register_render_target_surface` helper in
+        // `linux.rs`; both registrations describe the same texture and
+        // declare matching layouts (anti-pattern #2 in
+        // `texture-registration.md` — never let descriptor-side claims
+        // diverge from registration).
         //
         // UUIDs encode both the processor ("blending_compositor") and
         // the slot index so a future debugger reading the registry
@@ -279,6 +286,41 @@ impl BlendingCompositorProcessor::Processor {
                 texture.clone(),
                 VulkanLayout::UNDEFINED,
             );
+            // Cross-process registration. The cdylib OpenGL adapter
+            // (Path 2 consumer) imports the DMA-BUF as an EGLImage and
+            // exposes it as a `GL_TEXTURE_2D` — no consumer-side
+            // VkImage, so the Vulkan layout state machine doesn't
+            // cross the boundary. Content visibility is carried by the
+            // DMA-BUF kernel-fence + the compositor's post-render
+            // pipeline barrier; the declared layout is informational
+            // for any future cross-process Vulkan consumer (which
+            // would chain `VkExternalMemoryAcquireUnmodifiedEXT` on a
+            // QFOT acquire from this layout, or fall back to bridging
+            // — see `docs/learnings/cross-process-vkimage-layout.md`).
+            // Glitch reads after the first render lands, so declaring
+            // SHADER_READ_ONLY_OPTIMAL (the steady-state post-render
+            // layout) is honest.
+            let surface_store = gpu_full.surface_store().ok_or_else(|| {
+                StreamError::Configuration(
+                    "BlendingCompositor: GpuContext has no surface_store \
+                     — cross-process output (Glitch consumer, #486) \
+                     unavailable"
+                        .to_string(),
+                )
+            })?;
+            surface_store
+                .register_texture(
+                    &surface_id,
+                    &texture,
+                    None,
+                    VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                )
+                .map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "BlendingCompositor: surface_store.register_texture \
+                         slot {slot_idx}: {e}"
+                    ))
+                })?;
             output_ring.push(OutputSlot {
                 surface_id,
                 texture,
