@@ -13,6 +13,7 @@ use crate::vulkan::rhi::HostVulkanTexture;
 use streamlib_consumer_rhi::VulkanLayout;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use v4l::buffer::Type;
 use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
@@ -350,8 +351,29 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.is_capturing.store(false, Ordering::Release);
 
+        // Bounded wait — same shape as `LinuxDisplayProcessor::stop`. The
+        // capture thread can be inside `device.wait_semaphores(u64::MAX)`
+        // (camera ring fence) or a V4L2 dequeue when stop arrives; both
+        // exit promptly under normal conditions but a stalled GPU /
+        // driver state can stretch them out indefinitely. Detaching
+        // after a 2 s grace window keeps the runtime's shutdown chain
+        // moving so downstream processors (display, etc.) can also tear
+        // down — without this, a stuck camera thread freezes the
+        // window with the last rendered frame on screen. The detached
+        // thread is reaped when the parent process exits.
         if let Some(handle) = self.capture_thread_handle.take() {
-            let _ = handle.join();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !handle.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            } else {
+                tracing::warn!(
+                    "Camera {}: capture thread did not exit within 2s, detaching",
+                    self.camera_name
+                );
+            }
         }
 
         tracing::info!(
