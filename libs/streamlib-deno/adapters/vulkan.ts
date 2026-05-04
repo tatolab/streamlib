@@ -27,7 +27,10 @@
  *    customers driving Vulkan directly.
  */
 
-import { getChannel as getEscalateChannel } from "../escalate.ts";
+import {
+  EscalateRequestRunGraphicsDrawDrawKind,
+  getChannel as getEscalateChannel,
+} from "../escalate.ts";
 import {
   STREAMLIB_ADAPTER_ABI_VERSION,
   type StreamlibSurface,
@@ -167,6 +170,15 @@ export class VulkanContext {
    * IPC payload is sent again).
    */
   private readonly computeKernelIds = new WeakMap<Uint8Array, string>();
+  /** Identity-keyed graphics kernel-id cache. Composite keys (vertex
+   * SPIR-V + fragment SPIR-V) require a 2-level WeakMap: the outer
+   * keyed on the vertex Uint8Array, the inner keyed on the fragment
+   * Uint8Array. Same auto-clearing semantics as the compute cache.
+   */
+  private readonly graphicsKernelIds = new WeakMap<
+    Uint8Array,
+    WeakMap<Uint8Array, string>
+  >();
   private readonly resolvedHandles = new Map<
     string,
     ReturnType<VulkanGpuLimitedAccess["resolveSurface"]>
@@ -446,6 +458,111 @@ export class VulkanContext {
       groupCountY,
       groupCountZ,
     );
+  }
+
+  /** Dispatch a graphics draw against the surface's host-side
+   * `VkImage` via escalate IPC. The surface MUST currently be held
+   * in WRITE mode (call inside an `acquireWrite` `using` block).
+   *
+   * On the first call with a given `(vertexSpv, fragmentSpv)` pair
+   * this registers the kernel through escalate IPC; subsequent
+   * calls with the same `Uint8Array` references hit the local
+   * kernel-id cache and skip registration.
+   *
+   * `bindings` is the per-draw binding-value list (slot →
+   * `surface_uuid`); `bindingDecls` is the register-time binding
+   * declaration validated against SPIR-V reflection on the host.
+   * Both default to empty arrays for fullscreen-triangle / first-
+   * render shapes that use neither textures nor uniform buffers.
+   *
+   * Graphics dispatch is synchronous host-side: when this resolves,
+   * the host's writes to the color target are visible to subsequent
+   * submissions.
+   */
+  async dispatchGraphics(args: {
+    colorTarget: StreamlibSurface | string | bigint;
+    vertexSpv: Uint8Array;
+    fragmentSpv: Uint8Array;
+    pipelineState: import("../escalate.ts").EscalateRequestRegisterGraphicsKernelPipelineState;
+    bindings?: readonly import("../escalate.ts").EscalateRequestRunGraphicsDrawBinding[];
+    bindingDecls?: readonly import("../escalate.ts").EscalateRequestRegisterGraphicsKernelBinding[];
+    vertexBuffers?: readonly import("../escalate.ts").EscalateRequestRunGraphicsDrawVertexBuffer[];
+    pushConstants?: Uint8Array;
+    pushConstantStages?: number;
+    descriptorSetsInFlight?: number;
+    frameIndex?: number;
+    indexBuffer?: import("../escalate.ts").EscalateRequestRunGraphicsDrawIndexBuffer;
+    depthTargetUuid?: string;
+    viewport?: import("../escalate.ts").EscalateRequestRunGraphicsDrawViewport;
+    scissor?: import("../escalate.ts").EscalateRequestRunGraphicsDrawScissor;
+    draw?: import("../escalate.ts").EscalateRequestRunGraphicsDrawDraw;
+    label?: string;
+    extentWidth: number;
+    extentHeight: number;
+  }): Promise<void> {
+    const poolId = VulkanContext.surfacePoolId(args.colorTarget);
+    const cached = this.surfaceIds.get(poolId);
+    if (cached === undefined) {
+      throw new Error(
+        `VulkanContext.dispatchGraphics: surface '${poolId}' is not registered ` +
+          "— call acquireWrite inside a `using` block first.",
+      );
+    }
+    const ch = getEscalateChannel();
+    const pushConstants = args.pushConstants ?? new Uint8Array();
+
+    // Identity-keyed two-level WeakMap lookup keeps the hot path O(1)
+    // per dispatch — no hashing, no copying.
+    let inner = this.graphicsKernelIds.get(args.vertexSpv);
+    let kernelId = inner?.get(args.fragmentSpv);
+    if (kernelId === undefined) {
+      const response = await ch.registerGraphicsKernel({
+        label: args.label ?? "polyglot-graphics",
+        vertexSpv: args.vertexSpv,
+        fragmentSpv: args.fragmentSpv,
+        bindings: args.bindingDecls ?? [],
+        pushConstantSize: pushConstants.byteLength,
+        pushConstantStages: args.pushConstantStages ?? 0,
+        descriptorSetsInFlight: args.descriptorSetsInFlight ?? 2,
+        pipelineState: args.pipelineState,
+      });
+      kernelId = response.handle_id;
+      if (inner === undefined) {
+        inner = new WeakMap<Uint8Array, string>();
+        this.graphicsKernelIds.set(args.vertexSpv, inner);
+      }
+      inner.set(args.fragmentSpv, kernelId);
+    }
+
+    // Default to a 3-vertex non-indexed draw for first-render shapes.
+    const draw: import("../escalate.ts").EscalateRequestRunGraphicsDrawDraw =
+      args.draw ?? {
+        kind: EscalateRequestRunGraphicsDrawDrawKind.Draw,
+        vertex_count: 3,
+        instance_count: 1,
+        first_vertex: 0,
+        first_instance: 0,
+        index_count: 0,
+        first_index: 0,
+        vertex_offset: 0,
+      };
+
+    void cached;
+    await ch.runGraphicsDraw({
+      kernelId,
+      frameIndex: args.frameIndex ?? 0,
+      bindings: args.bindings ?? [],
+      vertexBuffers: args.vertexBuffers ?? [],
+      colorTargetUuids: [poolId],
+      extentWidth: Math.trunc(args.extentWidth),
+      extentHeight: Math.trunc(args.extentHeight),
+      pushConstants,
+      draw,
+      indexBuffer: args.indexBuffer,
+      depthTargetUuid: args.depthTargetUuid,
+      viewport: args.viewport,
+      scissor: args.scissor,
+    });
   }
 
   /** Return the cdylib runtime's raw Vulkan handles — same shape as

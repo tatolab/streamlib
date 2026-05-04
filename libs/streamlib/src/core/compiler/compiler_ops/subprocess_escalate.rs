@@ -23,10 +23,29 @@ use uuid::Uuid;
 use crate::_generated_::com_streamlib_escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestRegisterComputeKernel, EscalateRequestReleaseHandle,
-    EscalateRequestRunComputeKernel, EscalateRequestRunCpuReadbackCopy,
-    EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestTryRunCpuReadbackCopy,
-    EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestRegisterComputeKernel, EscalateRequestRegisterGraphicsKernel,
+    EscalateRequestRegisterGraphicsKernelBindingKind,
+    EscalateRequestRegisterGraphicsKernelPipelineState,
+    EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
+    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
+    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
+    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
+    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
+    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
+    EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
+    EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp,
+    EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState,
+    EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode,
+    EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace,
+    EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode,
+    EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
+    EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
+    EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate,
+    EscalateRequestReleaseHandle, EscalateRequestRunComputeKernel,
+    EscalateRequestRunCpuReadbackCopy, EscalateRequestRunCpuReadbackCopyDirection,
+    EscalateRequestRunGraphicsDraw, EscalateRequestRunGraphicsDrawBindingKind,
+    EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunGraphicsDrawIndexBufferIndexType,
+    EscalateRequestTryRunCpuReadbackCopy, EscalateRequestTryRunCpuReadbackCopyDirection,
 };
 use crate::_generated_::com_streamlib_escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
@@ -35,7 +54,16 @@ use crate::_generated_::{EscalateRequest, EscalateResponse};
 use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
-use crate::core::context::{ComputeKernelBridge, CpuReadbackBridge, CpuReadbackCopyDirection};
+use crate::core::context::{
+    BlendFactorWire, BlendOpWire, ComputeKernelBridge, CpuReadbackBridge,
+    CpuReadbackCopyDirection, CullModeWire, DepthCompareOpWire, DepthFormatWire,
+    DynamicStateWire, FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire,
+    GraphicsBindingValue, GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge,
+    GraphicsKernelRegisterDecl, GraphicsKernelRunDraw, GraphicsPipelineStateWire,
+    GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
+    ScissorRectWire, VertexAttributeFormatWire, VertexInputAttributeDecl,
+    VertexInputBindingDecl, VertexInputRateWire, ViewportWire,
+};
 use crate::core::logging::{push_polyglot_record, LogLevel, LogRecord, Source};
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat, TextureUsages};
 
@@ -61,6 +89,8 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::TryRunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::RegisterComputeKernel(p) => Some(&p.request_id),
         EscalateRequest::RunComputeKernel(p) => Some(&p.request_id),
+        EscalateRequest::RegisterGraphicsKernel(p) => Some(&p.request_id),
+        EscalateRequest::RunGraphicsDraw(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
@@ -396,6 +426,34 @@ pub(crate) fn handle_escalate_op(
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "run_compute_kernel is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RegisterGraphicsKernel(req) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_register_graphics_kernel(sandbox, rid, req))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = req;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "register_graphics_kernel is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RunGraphicsDraw(req) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_run_graphics_draw(sandbox, rid, req))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = req;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "run_graphics_draw is only available on Linux".to_string(),
                 }))
             }
         }
@@ -875,6 +933,581 @@ fn handle_run_compute_kernel(
             message: format!("run_compute_kernel bridge call failed: {msg}"),
         }),
     }
+}
+
+/// Map a wire-format `register_graphics_kernel` request through the
+/// registered [`GraphicsKernelBridge`].
+///
+/// Decodes the per-stage SPIR-V hex blobs, translates the wire-format
+/// pipeline-state enums into the bridge's typed [`GraphicsPipelineStateWire`],
+/// and asks the bridge to register the kernel. The bridge returns a
+/// stable `kernel_id` (recommended: SHA-256 over a canonical
+/// representation of all register-time inputs); identical re-registration
+/// hits the bridge's cache and returns the same id.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. `vertex_spv_hex` / `fragment_spv_hex` doesn't decode as hex bytes.
+/// 2. No bridge is registered.
+/// 3. Bridge `register` returned an error — typically reflection
+///    failure, push-constant size mismatch, pipeline-state validation
+///    failure, or pipeline build failure.
+#[cfg(target_os = "linux")]
+fn handle_register_graphics_kernel(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    req: EscalateRequestRegisterGraphicsKernel,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let vertex_spv = match decode_hex(&req.vertex_spv_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("register_graphics_kernel: vertex_spv_hex decode: {e}"),
+            });
+        }
+    };
+    let fragment_spv = match decode_hex(&req.fragment_spv_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("register_graphics_kernel: fragment_spv_hex decode: {e}"),
+            });
+        }
+    };
+
+    let bridge: Arc<dyn GraphicsKernelBridge> = match sandbox.escalate(|full| {
+        full.graphics_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "register_graphics_kernel: no GraphicsKernelBridge registered on GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    let bindings: Vec<GraphicsBindingDecl> = req
+        .bindings
+        .into_iter()
+        .map(|b| GraphicsBindingDecl {
+            binding: b.binding,
+            kind: graphics_register_binding_kind_from_wire(b.kind),
+            stages: b.stages,
+        })
+        .collect();
+
+    let pipeline_state = match graphics_pipeline_state_from_wire(req.pipeline_state) {
+        Ok(p) => p,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("register_graphics_kernel: pipeline_state: {e}"),
+            });
+        }
+    };
+
+    let decl = GraphicsKernelRegisterDecl {
+        label: req.label,
+        vertex_spv,
+        fragment_spv,
+        vertex_entry_point: req.vertex_entry_point,
+        fragment_entry_point: req.fragment_entry_point,
+        bindings,
+        push_constant_size: req.push_constant_size,
+        push_constant_stages: req.push_constant_stages,
+        descriptor_sets_in_flight: req.descriptor_sets_in_flight,
+        pipeline_state,
+    };
+
+    match bridge.register(&decl) {
+        Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: kernel_id,
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("register_graphics_kernel bridge call failed: {msg}"),
+        }),
+    }
+}
+
+/// Map a wire-format `run_graphics_draw` request through the registered
+/// [`GraphicsKernelBridge`].
+///
+/// Graphics dispatch on the host is synchronous (the bridge calls
+/// [`crate::vulkan::rhi::VulkanGraphicsKernel::offscreen_render`] which
+/// submits + waits on its own command buffer + fence), so by the time
+/// this function returns `Ok`, the GPU work has retired and the host's
+/// writes to the color attachments are visible.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. `push_constants_hex` doesn't decode as hex bytes.
+/// 2. Vertex/index buffer offset doesn't parse as decimal u64.
+/// 3. No bridge is registered.
+/// 4. Bridge `run_draw` returned an error — typically unrecognized
+///    `kernel_id`, surface lookup failure, or Vulkan submit failure.
+#[cfg(target_os = "linux")]
+fn handle_run_graphics_draw(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    req: EscalateRequestRunGraphicsDraw,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let push_constants = match decode_hex(&req.push_constants_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("run_graphics_draw: push_constants_hex decode: {e}"),
+            });
+        }
+    };
+
+    let bindings: Vec<GraphicsBindingValue> = req
+        .bindings
+        .into_iter()
+        .map(|b| GraphicsBindingValue {
+            binding: b.binding,
+            kind: graphics_run_binding_kind_from_wire(b.kind),
+            surface_uuid: b.surface_uuid,
+        })
+        .collect();
+
+    let mut vertex_buffers: Vec<GraphicsVertexBufferBinding> =
+        Vec::with_capacity(req.vertex_buffers.len());
+    for vb in req.vertex_buffers.into_iter() {
+        let offset = match vb.offset.parse::<u64>() {
+            Ok(v) => v,
+            Err(e) => {
+                return EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!(
+                        "run_graphics_draw: vertex_buffer.offset '{}' is not a decimal u64: {e}",
+                        vb.offset
+                    ),
+                });
+            }
+        };
+        vertex_buffers.push(GraphicsVertexBufferBinding {
+            binding: vb.binding,
+            surface_uuid: vb.surface_uuid,
+            offset,
+        });
+    }
+
+    let index_buffer = if let Some(ib) = req.index_buffer {
+        let offset = match ib.offset.parse::<u64>() {
+            Ok(v) => v,
+            Err(e) => {
+                return EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!(
+                        "run_graphics_draw: index_buffer.offset '{}' is not a decimal u64: {e}",
+                        ib.offset
+                    ),
+                });
+            }
+        };
+        Some(GraphicsIndexBufferBinding {
+            surface_uuid: ib.surface_uuid,
+            offset,
+            index_type: match ib.index_type {
+                EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint16 => IndexTypeWire::Uint16,
+                EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint32 => IndexTypeWire::Uint32,
+            },
+        })
+    } else {
+        None
+    };
+
+    let viewport = req.viewport.map(|v| ViewportWire {
+        x: v.x,
+        y: v.y,
+        width: v.width,
+        height: v.height,
+        min_depth: v.min_depth,
+        max_depth: v.max_depth,
+    });
+    let scissor = req.scissor.map(|s| ScissorRectWire {
+        x: s.x,
+        y: s.y,
+        width: s.width,
+        height: s.height,
+    });
+
+    let draw = match req.draw.kind {
+        EscalateRequestRunGraphicsDrawDrawKind::Draw => GraphicsDrawSpec::Draw {
+            vertex_count: req.draw.vertex_count,
+            instance_count: req.draw.instance_count,
+            first_vertex: req.draw.first_vertex,
+            first_instance: req.draw.first_instance,
+        },
+        EscalateRequestRunGraphicsDrawDrawKind::DrawIndexed => GraphicsDrawSpec::DrawIndexed {
+            index_count: req.draw.index_count,
+            instance_count: req.draw.instance_count,
+            first_index: req.draw.first_index,
+            vertex_offset: req.draw.vertex_offset,
+            first_instance: req.draw.first_instance,
+        },
+    };
+
+    let kernel_id = req.kernel_id;
+    let domain = GraphicsKernelRunDraw {
+        kernel_id: kernel_id.clone(),
+        frame_index: req.frame_index,
+        bindings,
+        vertex_buffers,
+        index_buffer,
+        color_target_uuids: req.color_target_uuids,
+        depth_target_uuid: req.depth_target_uuid,
+        extent: (req.extent_width, req.extent_height),
+        push_constants,
+        viewport,
+        scissor,
+        draw,
+    };
+
+    let bridge: Arc<dyn GraphicsKernelBridge> = match sandbox.escalate(|full| {
+        full.graphics_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "run_graphics_draw: no GraphicsKernelBridge registered on GpuContext".to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    match bridge.run_draw(&domain) {
+        Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: kernel_id,
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("run_graphics_draw bridge call failed: {msg}"),
+        }),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn graphics_register_binding_kind_from_wire(
+    kind: EscalateRequestRegisterGraphicsKernelBindingKind,
+) -> GraphicsBindingKindWire {
+    match kind {
+        EscalateRequestRegisterGraphicsKernelBindingKind::SampledTexture => {
+            GraphicsBindingKindWire::SampledTexture
+        }
+        EscalateRequestRegisterGraphicsKernelBindingKind::StorageBuffer => {
+            GraphicsBindingKindWire::StorageBuffer
+        }
+        EscalateRequestRegisterGraphicsKernelBindingKind::UniformBuffer => {
+            GraphicsBindingKindWire::UniformBuffer
+        }
+        EscalateRequestRegisterGraphicsKernelBindingKind::StorageImage => {
+            GraphicsBindingKindWire::StorageImage
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn graphics_run_binding_kind_from_wire(
+    kind: EscalateRequestRunGraphicsDrawBindingKind,
+) -> GraphicsBindingKindWire {
+    match kind {
+        EscalateRequestRunGraphicsDrawBindingKind::SampledTexture => {
+            GraphicsBindingKindWire::SampledTexture
+        }
+        EscalateRequestRunGraphicsDrawBindingKind::StorageBuffer => {
+            GraphicsBindingKindWire::StorageBuffer
+        }
+        EscalateRequestRunGraphicsDrawBindingKind::UniformBuffer => {
+            GraphicsBindingKindWire::UniformBuffer
+        }
+        EscalateRequestRunGraphicsDrawBindingKind::StorageImage => {
+            GraphicsBindingKindWire::StorageImage
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn graphics_pipeline_state_from_wire(
+    p: EscalateRequestRegisterGraphicsKernelPipelineState,
+) -> std::result::Result<GraphicsPipelineStateWire, String> {
+    let topology = match p.topology {
+        EscalateRequestRegisterGraphicsKernelPipelineStateTopology::PointList => {
+            PrimitiveTopologyWire::PointList
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateTopology::LineList => {
+            PrimitiveTopologyWire::LineList
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateTopology::LineStrip => {
+            PrimitiveTopologyWire::LineStrip
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleList => {
+            PrimitiveTopologyWire::TriangleList
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleStrip => {
+            PrimitiveTopologyWire::TriangleStrip
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleFan => {
+            PrimitiveTopologyWire::TriangleFan
+        }
+    };
+    let vertex_input_bindings = p
+        .vertex_input_bindings
+        .into_iter()
+        .map(|b| VertexInputBindingDecl {
+            binding: b.binding,
+            stride: b.stride,
+            input_rate: match b.input_rate {
+                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Vertex => {
+                    VertexInputRateWire::Vertex
+                }
+                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Instance => {
+                    VertexInputRateWire::Instance
+                }
+            },
+        })
+        .collect::<Vec<_>>();
+    let vertex_input_attributes = p
+        .vertex_input_attributes
+        .into_iter()
+        .map(|a| {
+            Ok::<_, String>(VertexInputAttributeDecl {
+                location: a.location,
+                binding: a.binding,
+                format: vertex_attribute_format_from_wire(a.format),
+                offset: a.offset,
+            })
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let rasterization_polygon_mode = match p.rasterization_polygon_mode {
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Fill => {
+            PolygonModeWire::Fill
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Line => {
+            PolygonModeWire::Line
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Point => {
+            PolygonModeWire::Point
+        }
+    };
+    let rasterization_cull_mode = match p.rasterization_cull_mode {
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::None => {
+            CullModeWire::None
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Front => {
+            CullModeWire::Front
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Back => {
+            CullModeWire::Back
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::FrontAndBack => {
+            CullModeWire::FrontAndBack
+        }
+    };
+    let rasterization_front_face = match p.rasterization_front_face {
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::CounterClockwise => {
+            FrontFaceWire::CounterClockwise
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::Clockwise => {
+            FrontFaceWire::Clockwise
+        }
+    };
+    let depth_compare_op = depth_compare_op_from_wire(p.depth_compare_op);
+    let color_blend_src_color_factor = blend_factor_from_wire_src_color(p.color_blend_src_color_factor);
+    let color_blend_dst_color_factor = blend_factor_from_wire_dst_color(p.color_blend_dst_color_factor);
+    let color_blend_color_op = blend_op_from_wire_color(p.color_blend_color_op);
+    let color_blend_src_alpha_factor = blend_factor_from_wire_src_alpha(p.color_blend_src_alpha_factor);
+    let color_blend_dst_alpha_factor = blend_factor_from_wire_dst_alpha(p.color_blend_dst_alpha_factor);
+    let color_blend_alpha_op = blend_op_from_wire_alpha(p.color_blend_alpha_op);
+    let attachment_depth_format = p.attachment_depth_format.map(|d| match d {
+        EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D16Unorm => {
+            DepthFormatWire::D16Unorm
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat => {
+            DepthFormatWire::D32Sfloat
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D24UnormS8Uint => {
+            DepthFormatWire::D24UnormS8Uint
+        }
+    });
+    let dynamic_state = match p.dynamic_state {
+        EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::None => {
+            DynamicStateWire::None
+        }
+        EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::ViewportScissor => {
+            DynamicStateWire::ViewportScissor
+        }
+    };
+
+    Ok(GraphicsPipelineStateWire {
+        topology,
+        vertex_input_bindings,
+        vertex_input_attributes,
+        rasterization_polygon_mode,
+        rasterization_cull_mode,
+        rasterization_front_face,
+        rasterization_line_width: p.rasterization_line_width,
+        multisample_samples: p.multisample_samples,
+        depth_stencil_enabled: p.depth_stencil_enabled,
+        depth_compare_op,
+        depth_write: p.depth_write,
+        color_blend_enabled: p.color_blend_enabled,
+        color_write_mask: p.color_write_mask,
+        color_blend_src_color_factor,
+        color_blend_dst_color_factor,
+        color_blend_color_op,
+        color_blend_src_alpha_factor,
+        color_blend_dst_alpha_factor,
+        color_blend_alpha_op,
+        attachment_color_formats: p.attachment_color_formats,
+        attachment_depth_format,
+        dynamic_state,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn vertex_attribute_format_from_wire(
+    fmt: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
+) -> VertexAttributeFormatWire {
+    use EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat as W;
+    match fmt {
+        W::R32Float => VertexAttributeFormatWire::R32Float,
+        W::Rg32Float => VertexAttributeFormatWire::Rg32Float,
+        W::Rgb32Float => VertexAttributeFormatWire::Rgb32Float,
+        W::Rgba32Float => VertexAttributeFormatWire::Rgba32Float,
+        W::R32Uint => VertexAttributeFormatWire::R32Uint,
+        W::Rg32Uint => VertexAttributeFormatWire::Rg32Uint,
+        W::Rgb32Uint => VertexAttributeFormatWire::Rgb32Uint,
+        W::Rgba32Uint => VertexAttributeFormatWire::Rgba32Uint,
+        W::R32Sint => VertexAttributeFormatWire::R32Sint,
+        W::Rg32Sint => VertexAttributeFormatWire::Rg32Sint,
+        W::Rgb32Sint => VertexAttributeFormatWire::Rgb32Sint,
+        W::Rgba32Sint => VertexAttributeFormatWire::Rgba32Sint,
+        W::Rgba8Unorm => VertexAttributeFormatWire::Rgba8Unorm,
+        W::Rgba8Snorm => VertexAttributeFormatWire::Rgba8Snorm,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn depth_compare_op_from_wire(
+    op: EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp,
+) -> DepthCompareOpWire {
+    use EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp as W;
+    match op {
+        W::Never => DepthCompareOpWire::Never,
+        W::Less => DepthCompareOpWire::Less,
+        W::Equal => DepthCompareOpWire::Equal,
+        W::LessOrEqual => DepthCompareOpWire::LessOrEqual,
+        W::Greater => DepthCompareOpWire::Greater,
+        W::NotEqual => DepthCompareOpWire::NotEqual,
+        W::GreaterOrEqual => DepthCompareOpWire::GreaterOrEqual,
+        W::Always => DepthCompareOpWire::Always,
+    }
+}
+
+#[cfg(target_os = "linux")]
+macro_rules! blend_factor_match {
+    ($enum:ident, $val:expr) => {{
+        use $enum as W;
+        match $val {
+            W::Zero => BlendFactorWire::Zero,
+            W::One => BlendFactorWire::One,
+            W::SrcColor => BlendFactorWire::SrcColor,
+            W::OneMinusSrcColor => BlendFactorWire::OneMinusSrcColor,
+            W::DstColor => BlendFactorWire::DstColor,
+            W::OneMinusDstColor => BlendFactorWire::OneMinusDstColor,
+            W::SrcAlpha => BlendFactorWire::SrcAlpha,
+            W::OneMinusSrcAlpha => BlendFactorWire::OneMinusSrcAlpha,
+            W::DstAlpha => BlendFactorWire::DstAlpha,
+            W::OneMinusDstAlpha => BlendFactorWire::OneMinusDstAlpha,
+            W::ConstantColor => BlendFactorWire::ConstantColor,
+            W::OneMinusConstantColor => BlendFactorWire::OneMinusConstantColor,
+            W::ConstantAlpha => BlendFactorWire::ConstantAlpha,
+            W::OneMinusConstantAlpha => BlendFactorWire::OneMinusConstantAlpha,
+            W::SrcAlphaSaturate => BlendFactorWire::SrcAlphaSaturate,
+        }
+    }};
+}
+
+#[cfg(target_os = "linux")]
+macro_rules! blend_op_match {
+    ($enum:ident, $val:expr) => {{
+        use $enum as W;
+        match $val {
+            W::Add => BlendOpWire::Add,
+            W::Subtract => BlendOpWire::Subtract,
+            W::ReverseSubtract => BlendOpWire::ReverseSubtract,
+            W::Min => BlendOpWire::Min,
+            W::Max => BlendOpWire::Max,
+        }
+    }};
+}
+
+#[cfg(target_os = "linux")]
+fn blend_factor_from_wire_src_color(
+    f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
+) -> BlendFactorWire {
+    blend_factor_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor, f)
+}
+#[cfg(target_os = "linux")]
+fn blend_factor_from_wire_dst_color(
+    f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
+) -> BlendFactorWire {
+    blend_factor_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor, f)
+}
+#[cfg(target_os = "linux")]
+fn blend_factor_from_wire_src_alpha(
+    f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
+) -> BlendFactorWire {
+    blend_factor_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor, f)
+}
+#[cfg(target_os = "linux")]
+fn blend_factor_from_wire_dst_alpha(
+    f: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
+) -> BlendFactorWire {
+    blend_factor_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor, f)
+}
+#[cfg(target_os = "linux")]
+fn blend_op_from_wire_color(
+    o: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
+) -> BlendOpWire {
+    blend_op_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp, o)
+}
+#[cfg(target_os = "linux")]
+fn blend_op_from_wire_alpha(
+    o: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
+) -> BlendOpWire {
+    blend_op_match!(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp, o)
 }
 
 /// Decode lowercase hex into bytes, returning a clean error message on
@@ -2054,6 +2687,628 @@ mod tests {
             assert_eq!(r.surface_uuid, "surface-xyz");
             assert_eq!(r.push_len, 8, "push_constants_hex decoded to 8 bytes");
             assert_eq!(r.groups, (4, 5, 6));
+        }
+    }
+
+    /// Host-Rust unit tests for the `register_graphics_kernel` /
+    /// `run_graphics_draw` escalate handlers. Mirrors the
+    /// `compute_kernel_dispatch` shape — the synthetic
+    /// `RecordingGraphicsBridge` keeps tests independent of a working
+    /// VkDevice, so handler-shape regressions surface even on
+    /// machines without a GPU.
+    #[cfg(target_os = "linux")]
+    mod graphics_kernel_dispatch {
+        use super::super::*;
+        use super::EscalateHandleRegistry;
+        use std::sync::{Arc, Mutex};
+
+        use crate::_generated_::com_streamlib_escalate_request::{
+            EscalateRequestRunGraphicsDrawBinding, EscalateRequestRunGraphicsDrawDraw,
+            EscalateRequestRunGraphicsDrawIndexBuffer, EscalateRequestRunGraphicsDrawScissor,
+            EscalateRequestRunGraphicsDrawVertexBuffer, EscalateRequestRunGraphicsDrawViewport,
+        };
+        use crate::core::context::{
+            GpuContext, GpuContextLimitedAccess, GraphicsKernelBridge,
+            GraphicsKernelRegisterDecl, GraphicsKernelRunDraw,
+        };
+
+        /// Synthetic bridge — registers any caller-provided vertex+fragment
+        /// SPIR-V (no SPV reflection or pipeline build), keys the kernel id by
+        /// SHA-256 over the canonicalized inputs so identical descriptors
+        /// hit the cache, and records each `run_draw` for later assertion.
+        struct RecordingGraphicsBridge {
+            registered: Mutex<std::collections::HashMap<String, GraphicsKernelRegisterDecl>>,
+            runs: Mutex<Vec<GraphicsKernelRunDraw>>,
+        }
+
+        impl RecordingGraphicsBridge {
+            fn new() -> Arc<Self> {
+                Arc::new(Self {
+                    registered: Mutex::new(std::collections::HashMap::new()),
+                    runs: Mutex::new(Vec::new()),
+                })
+            }
+
+            fn registered_count(&self) -> usize {
+                self.registered.lock().unwrap().len()
+            }
+
+            fn runs(&self) -> Vec<GraphicsKernelRunDraw> {
+                self.runs.lock().unwrap().clone()
+            }
+
+            fn key(decl: &GraphicsKernelRegisterDecl) -> String {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(b"v=");
+                h.update(&decl.vertex_spv);
+                h.update(b"|f=");
+                h.update(&decl.fragment_spv);
+                h.update(b"|ve=");
+                h.update(decl.vertex_entry_point.as_bytes());
+                h.update(b"|fe=");
+                h.update(decl.fragment_entry_point.as_bytes());
+                h.update(b"|pcs=");
+                h.update(&decl.push_constant_size.to_le_bytes());
+                h.update(b"|pcst=");
+                h.update(&decl.push_constant_stages.to_le_bytes());
+                h.update(b"|dsi=");
+                h.update(&decl.descriptor_sets_in_flight.to_le_bytes());
+                h.update(b"|nb=");
+                h.update(&(decl.bindings.len() as u32).to_le_bytes());
+                format!("{:x}", h.finalize())
+            }
+        }
+
+        impl GraphicsKernelBridge for RecordingGraphicsBridge {
+            fn register(
+                &self,
+                decl: &GraphicsKernelRegisterDecl,
+            ) -> std::result::Result<String, String> {
+                let id = Self::key(decl);
+                self.registered
+                    .lock()
+                    .unwrap()
+                    .entry(id.clone())
+                    .or_insert_with(|| decl.clone());
+                Ok(id)
+            }
+
+            fn run_draw(
+                &self,
+                draw: &GraphicsKernelRunDraw,
+            ) -> std::result::Result<(), String> {
+                if !self.registered.lock().unwrap().contains_key(&draw.kernel_id) {
+                    return Err(format!(
+                        "kernel_id '{}' not registered with this bridge",
+                        draw.kernel_id
+                    ));
+                }
+                self.runs.lock().unwrap().push(draw.clone());
+                Ok(())
+            }
+        }
+
+        fn make_sandbox_with_bridge(
+            bridge: Option<Arc<dyn GraphicsKernelBridge>>,
+        ) -> Option<GpuContextLimitedAccess> {
+            let gpu = match GpuContext::init_for_platform_sync() {
+                Ok(g) => g,
+                Err(_) => return None,
+            };
+            if let Some(b) = bridge {
+                gpu.set_graphics_kernel_bridge(b);
+            }
+            Some(GpuContextLimitedAccess::new(gpu))
+        }
+
+        /// Build a baseline `register_graphics_kernel` request — vertex
+        /// + fragment SPIR-V hex, default-shaped TriangleList pipeline
+        /// state with no blending and no depth. Tests that need a
+        /// specific shape mutate fields after calling.
+        fn make_register_req(
+            request_id: &str,
+            vertex_hex: &str,
+            fragment_hex: &str,
+        ) -> EscalateRequestRegisterGraphicsKernel {
+            EscalateRequestRegisterGraphicsKernel {
+                request_id: request_id.to_string(),
+                label: "test-graphics".to_string(),
+                vertex_spv_hex: vertex_hex.to_string(),
+                fragment_spv_hex: fragment_hex.to_string(),
+                vertex_entry_point: "main".to_string(),
+                fragment_entry_point: "main".to_string(),
+                bindings: Vec::new(),
+                push_constant_size: 0,
+                push_constant_stages: 0,
+                descriptor_sets_in_flight: 2,
+                pipeline_state: EscalateRequestRegisterGraphicsKernelPipelineState {
+                    topology: EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleList,
+                    vertex_input_bindings: Vec::new(),
+                    vertex_input_attributes: Vec::new(),
+                    rasterization_polygon_mode:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Fill,
+                    rasterization_cull_mode:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::None,
+                    rasterization_front_face:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::CounterClockwise,
+                    rasterization_line_width: 1.0,
+                    multisample_samples: 1,
+                    depth_stencil_enabled: false,
+                    depth_compare_op:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Always,
+                    depth_write: false,
+                    color_blend_enabled: false,
+                    color_write_mask: 0b1111,
+                    color_blend_src_color_factor:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::One,
+                    color_blend_dst_color_factor:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::Zero,
+                    color_blend_color_op:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Add,
+                    color_blend_src_alpha_factor:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::One,
+                    color_blend_dst_alpha_factor:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::Zero,
+                    color_blend_alpha_op:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Add,
+                    attachment_color_formats: vec!["rgba8_unorm".to_string()],
+                    dynamic_state:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::ViewportScissor,
+                    attachment_depth_format: None,
+                },
+            }
+        }
+
+        /// Baseline `run_graphics_draw` request — vertex-fabricating
+        /// (no vertex buffers, no index buffer), single color target,
+        /// 320x240 extent, simple Draw of 3 vertices.
+        fn make_run_req(
+            request_id: &str,
+            kernel_id: &str,
+            surface_uuid: &str,
+        ) -> EscalateRequestRunGraphicsDraw {
+            EscalateRequestRunGraphicsDraw {
+                request_id: request_id.to_string(),
+                kernel_id: kernel_id.to_string(),
+                frame_index: 0,
+                bindings: Vec::new(),
+                vertex_buffers: Vec::new(),
+                color_target_uuids: vec![surface_uuid.to_string()],
+                extent_width: 320,
+                extent_height: 240,
+                push_constants_hex: String::new(),
+                draw: EscalateRequestRunGraphicsDrawDraw {
+                    kind: EscalateRequestRunGraphicsDrawDrawKind::Draw,
+                    vertex_count: 3,
+                    index_count: 0,
+                    instance_count: 1,
+                    first_vertex: 0,
+                    first_instance: 0,
+                    first_index: 0,
+                    vertex_offset: 0,
+                },
+                index_buffer: None,
+                depth_target_uuid: None,
+                viewport: None,
+                scissor: None,
+            }
+        }
+
+        #[test]
+        fn register_without_bridge_returns_err() {
+            let sandbox = match make_sandbox_with_bridge(None) {
+                Some(s) => s,
+                None => {
+                    println!("register_without_bridge_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                "req-reg-1", "deadbeef", "cafebabe",
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-reg-1");
+                    assert!(
+                        err.message.contains("GraphicsKernelBridge"),
+                        "expected bridge-not-registered error, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err when no bridge registered, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn run_without_bridge_returns_err() {
+            let sandbox = match make_sandbox_with_bridge(None) {
+                Some(s) => s,
+                None => {
+                    println!("run_without_bridge_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RunGraphicsDraw(make_run_req(
+                "req-run-1", "kernel-x", "surface-y",
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-run-1");
+                    assert!(
+                        err.message.contains("GraphicsKernelBridge"),
+                        "expected bridge-not-registered error, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err when no bridge registered, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn register_with_invalid_vertex_hex_returns_err() {
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!("register_with_invalid_vertex_hex_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                "req-bad-v", "xyz123", "cafebabe",
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-v");
+                    assert!(
+                        err.message.contains("vertex_spv_hex"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err for malformed vertex hex, got {other:?}"),
+            }
+            assert_eq!(
+                bridge.registered_count(),
+                0,
+                "bridge.register must not have been called on the parse-error path"
+            );
+        }
+
+        #[test]
+        fn register_with_invalid_fragment_hex_returns_err() {
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!("register_with_invalid_fragment_hex_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                "req-bad-f", "deadbeef", "qq",
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-f");
+                    assert!(
+                        err.message.contains("fragment_spv_hex"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err for malformed fragment hex, got {other:?}"),
+            }
+            assert_eq!(bridge.registered_count(), 0);
+        }
+
+        #[test]
+        fn run_with_invalid_push_constants_hex_returns_err() {
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_with_invalid_push_constants_hex_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_run_req("req-bad-push", "kernel-x", "surface-y");
+            req.push_constants_hex = "xyz".to_string();
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RunGraphicsDraw(req),
+            )
+            .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-push");
+                    assert!(
+                        err.message.contains("push_constants_hex"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err for malformed push hex, got {other:?}"),
+            }
+            assert!(bridge.runs().is_empty());
+        }
+
+        #[test]
+        fn run_with_malformed_vertex_buffer_offset_returns_err() {
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_with_malformed_vertex_buffer_offset_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_run_req("req-bad-vb", "kernel-x", "surface-y");
+            req.vertex_buffers = vec![EscalateRequestRunGraphicsDrawVertexBuffer {
+                binding: 0,
+                surface_uuid: "vb-uuid".to_string(),
+                offset: "not-a-number".to_string(),
+            }];
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RunGraphicsDraw(req),
+            )
+            .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-vb");
+                    assert!(
+                        err.message.contains("vertex_buffer.offset"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err for malformed vb.offset, got {other:?}"),
+            }
+            assert!(bridge.runs().is_empty());
+        }
+
+        #[test]
+        fn register_returns_stable_kernel_id_for_identical_descriptor() {
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_returns_stable_kernel_id_for_identical_descriptor: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let make_req = |rid: &str| {
+                EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                    rid,
+                    "deadbeefcafebabe",
+                    "00112233445566778899aabbccddeeff",
+                ))
+            };
+            let id1 = match handle_escalate_op(&sandbox, &registry, make_req("a")).unwrap() {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("first register expected Ok, got {other:?}"),
+            };
+            let id2 = match handle_escalate_op(&sandbox, &registry, make_req("b")).unwrap() {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("second register expected Ok, got {other:?}"),
+            };
+            assert_eq!(id1, id2, "identical descriptor must produce the same kernel_id");
+        }
+
+        #[test]
+        fn register_returns_distinct_kernel_ids_for_different_spirv() {
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_returns_distinct_kernel_ids_for_different_spirv: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req_a = EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                "a", "deadbeef", "cafebabe",
+            ));
+            let req_b = EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                "b", "11223344", "cafebabe",
+            ));
+            let id_a = match handle_escalate_op(&sandbox, &registry, req_a).unwrap() {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok, got {other:?}"),
+            };
+            let id_b = match handle_escalate_op(&sandbox, &registry, req_b).unwrap() {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok, got {other:?}"),
+            };
+            assert_ne!(id_a, id_b, "different vertex SPIR-V must produce different kernel_ids");
+        }
+
+        #[test]
+        fn run_with_unregistered_kernel_id_returns_err() {
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_with_unregistered_kernel_id_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RunGraphicsDraw(make_run_req(
+                "req-bad-id",
+                "never-registered",
+                "surface-y",
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-id");
+                    assert!(
+                        err.message.contains("not registered")
+                            || err.message.contains("never-registered"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err for unregistered kernel_id, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn run_forwards_payload_to_bridge_and_echoes_kernel_id() {
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_forwards_payload_to_bridge_and_echoes_kernel_id: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            // Register first so the bridge has the kernel_id cached.
+            let reg = EscalateRequest::RegisterGraphicsKernel(make_register_req(
+                "reg",
+                "abcdef0123456789",
+                "fedcba9876543210",
+            ));
+            let kernel_id = match handle_escalate_op(&sandbox, &registry, reg).unwrap() {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("register expected Ok, got {other:?}"),
+            };
+
+            // Indexed draw with a vertex buffer + push constants — exercises
+            // every translation arm in the wire→domain mapper.
+            let mut run = make_run_req("run", &kernel_id, "color-target-uuid");
+            run.frame_index = 1;
+            run.bindings = vec![EscalateRequestRunGraphicsDrawBinding {
+                binding: 0,
+                kind: EscalateRequestRunGraphicsDrawBindingKind::SampledTexture,
+                surface_uuid: "tex-uuid".to_string(),
+            }];
+            run.vertex_buffers = vec![EscalateRequestRunGraphicsDrawVertexBuffer {
+                binding: 0,
+                surface_uuid: "vb-uuid".to_string(),
+                offset: "128".to_string(),
+            }];
+            run.index_buffer = Some(EscalateRequestRunGraphicsDrawIndexBuffer {
+                surface_uuid: "ib-uuid".to_string(),
+                offset: "64".to_string(),
+                index_type: EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint32,
+            });
+            run.push_constants_hex = "00112233aabbccdd".to_string();
+            run.draw = EscalateRequestRunGraphicsDrawDraw {
+                kind: EscalateRequestRunGraphicsDrawDrawKind::DrawIndexed,
+                vertex_count: 0,
+                index_count: 6,
+                instance_count: 2,
+                first_vertex: 0,
+                first_instance: 1,
+                first_index: 3,
+                vertex_offset: -4,
+            };
+            run.viewport = Some(EscalateRequestRunGraphicsDrawViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 240.0,
+                min_depth: 0.0,
+                max_depth: 1.0,
+            });
+            run.scissor = Some(EscalateRequestRunGraphicsDrawScissor {
+                x: 0,
+                y: 0,
+                width: 320,
+                height: 240,
+            });
+
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RunGraphicsDraw(run),
+            )
+            .unwrap();
+            match response {
+                EscalateResponse::Ok(ok) => {
+                    assert_eq!(ok.request_id, "run");
+                    assert_eq!(
+                        ok.handle_id, kernel_id,
+                        "run response handle_id must echo the kernel_id"
+                    );
+                    assert!(
+                        ok.timeline_value.is_none(),
+                        "run_graphics_draw responses carry no timeline"
+                    );
+                }
+                other => panic!("run expected Ok, got {other:?}"),
+            }
+            let runs = bridge.runs();
+            assert_eq!(runs.len(), 1, "bridge.run_draw must have been called once");
+            let r = &runs[0];
+            assert_eq!(r.kernel_id, kernel_id);
+            assert_eq!(r.frame_index, 1);
+            assert_eq!(r.color_target_uuids, vec!["color-target-uuid".to_string()]);
+            assert_eq!(r.extent, (320, 240));
+            assert_eq!(r.bindings.len(), 1);
+            assert_eq!(r.bindings[0].surface_uuid, "tex-uuid");
+            assert_eq!(r.vertex_buffers.len(), 1);
+            assert_eq!(r.vertex_buffers[0].surface_uuid, "vb-uuid");
+            assert_eq!(r.vertex_buffers[0].offset, 128);
+            let ib = r.index_buffer.as_ref().expect("index_buffer present");
+            assert_eq!(ib.surface_uuid, "ib-uuid");
+            assert_eq!(ib.offset, 64);
+            assert_eq!(ib.index_type, IndexTypeWire::Uint32);
+            assert_eq!(r.push_constants.len(), 8);
+            assert!(r.viewport.is_some());
+            assert!(r.scissor.is_some());
+            match r.draw {
+                GraphicsDrawSpec::DrawIndexed {
+                    index_count,
+                    instance_count,
+                    first_index,
+                    vertex_offset,
+                    first_instance,
+                } => {
+                    assert_eq!(index_count, 6);
+                    assert_eq!(instance_count, 2);
+                    assert_eq!(first_index, 3);
+                    assert_eq!(vertex_offset, -4);
+                    assert_eq!(first_instance, 1);
+                }
+                other => panic!("expected DrawIndexed, got {other:?}"),
+            }
         }
     }
 

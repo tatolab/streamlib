@@ -47,6 +47,7 @@ members = [
     "examples/polyglot-continuous-processor", # Example: Polyglot continuous processor — Python/Deno process() driven by monotonic-clock timerfd (#542)
     "examples/polyglot-opengl-fragment-shader", # Example: Polyglot OpenGL adapter — Python Mandelbrot / Deno plasma fragment shader rendered into a host DMA-BUF (#530)
     "examples/polyglot-vulkan-compute",   # Example: Polyglot Vulkan adapter — Python/Deno Mandelbrot compute kernel dispatched against a host DMA-BUF VkImage (#531)
+    "examples/polyglot-vulkan-graphics",  # Example: Polyglot Vulkan adapter — Python/Deno triangle vertex/fragment graphics kernel rendered into a host DMA-BUF VkImage (#656)
     "examples/polyglot-skia-canvas",      # Example: Polyglot Skia adapter — Python skia-python draws into a host DMA-BUF VkImage via composing on the Vulkan adapter (#513)
     "examples/polyglot-cuda-inference",   # Example: Polyglot CUDA adapter — Python YOLO inference / Deno DLPack capsule validation against a host OPAQUE_FD VkBuffer (#591)
     "examples/camera-rust-plugin",       # Example: Camera → Rust dylib plugin → Display pipeline

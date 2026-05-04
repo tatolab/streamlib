@@ -28,9 +28,11 @@ class EscalateRequest:
             "acquire_texture": EscalateRequestAcquireTexture,
             "log": EscalateRequestLog,
             "register_compute_kernel": EscalateRequestRegisterComputeKernel,
+            "register_graphics_kernel": EscalateRequestRegisterGraphicsKernel,
             "release_handle": EscalateRequestReleaseHandle,
             "run_compute_kernel": EscalateRequestRunComputeKernel,
             "run_cpu_readback_copy": EscalateRequestRunCPUReadbackCopy,
+            "run_graphics_draw": EscalateRequestRunGraphicsDraw,
             "try_run_cpu_readback_copy": EscalateRequestTryRunCPUReadbackCopy,
         }
 
@@ -358,6 +360,598 @@ class EscalateRequestRegisterComputeKernel(EscalateRequest):
         data["spv_hex"] = _to_json_data(self.spv_hex)
         return data
 
+class EscalateRequestRegisterGraphicsKernelBindingKind(Enum):
+    """
+    Resource kind for this binding slot.
+    """
+
+    SAMPLED_TEXTURE = "sampled_texture"
+    STORAGE_BUFFER = "storage_buffer"
+    STORAGE_IMAGE = "storage_image"
+    UNIFORM_BUFFER = "uniform_buffer"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelBindingKind':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRegisterGraphicsKernelBinding:
+    binding: 'int'
+    kind: 'EscalateRequestRegisterGraphicsKernelBindingKind'
+    """
+    Resource kind for this binding slot.
+    """
+
+    stages: 'int'
+    """
+    Bitmask of stages the binding is visible to. `1 = VERTEX`, `2 = FRAGMENT`,
+    `3 = VERTEX_FRAGMENT`.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelBinding':
+        return cls(
+            _from_json_data(int, data.get("binding")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelBindingKind, data.get("kind")),
+            _from_json_data(int, data.get("stages")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["binding"] = _to_json_data(self.binding)
+        data["kind"] = _to_json_data(self.kind)
+        data["stages"] = _to_json_data(self.stages)
+        return data
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp(Enum):
+    ADD = "add"
+    MAX = "max"
+    MIN = "min"
+    REVERSE_SUBTRACT = "reverse_subtract"
+    SUBTRACT = "subtract"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp(Enum):
+    ADD = "add"
+    MAX = "max"
+    MIN = "min"
+    REVERSE_SUBTRACT = "reverse_subtract"
+    SUBTRACT = "subtract"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor(Enum):
+    CONSTANT_ALPHA = "constant_alpha"
+    CONSTANT_COLOR = "constant_color"
+    DST_ALPHA = "dst_alpha"
+    DST_COLOR = "dst_color"
+    ONE = "one"
+    ONE_MINUS_CONSTANT_ALPHA = "one_minus_constant_alpha"
+    ONE_MINUS_CONSTANT_COLOR = "one_minus_constant_color"
+    ONE_MINUS_DST_ALPHA = "one_minus_dst_alpha"
+    ONE_MINUS_DST_COLOR = "one_minus_dst_color"
+    ONE_MINUS_SRC_ALPHA = "one_minus_src_alpha"
+    ONE_MINUS_SRC_COLOR = "one_minus_src_color"
+    SRC_ALPHA = "src_alpha"
+    SRC_ALPHA_SATURATE = "src_alpha_saturate"
+    SRC_COLOR = "src_color"
+    ZERO = "zero"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor(Enum):
+    CONSTANT_ALPHA = "constant_alpha"
+    CONSTANT_COLOR = "constant_color"
+    DST_ALPHA = "dst_alpha"
+    DST_COLOR = "dst_color"
+    ONE = "one"
+    ONE_MINUS_CONSTANT_ALPHA = "one_minus_constant_alpha"
+    ONE_MINUS_CONSTANT_COLOR = "one_minus_constant_color"
+    ONE_MINUS_DST_ALPHA = "one_minus_dst_alpha"
+    ONE_MINUS_DST_COLOR = "one_minus_dst_color"
+    ONE_MINUS_SRC_ALPHA = "one_minus_src_alpha"
+    ONE_MINUS_SRC_COLOR = "one_minus_src_color"
+    SRC_ALPHA = "src_alpha"
+    SRC_ALPHA_SATURATE = "src_alpha_saturate"
+    SRC_COLOR = "src_color"
+    ZERO = "zero"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor(Enum):
+    CONSTANT_ALPHA = "constant_alpha"
+    CONSTANT_COLOR = "constant_color"
+    DST_ALPHA = "dst_alpha"
+    DST_COLOR = "dst_color"
+    ONE = "one"
+    ONE_MINUS_CONSTANT_ALPHA = "one_minus_constant_alpha"
+    ONE_MINUS_CONSTANT_COLOR = "one_minus_constant_color"
+    ONE_MINUS_DST_ALPHA = "one_minus_dst_alpha"
+    ONE_MINUS_DST_COLOR = "one_minus_dst_color"
+    ONE_MINUS_SRC_ALPHA = "one_minus_src_alpha"
+    ONE_MINUS_SRC_COLOR = "one_minus_src_color"
+    SRC_ALPHA = "src_alpha"
+    SRC_ALPHA_SATURATE = "src_alpha_saturate"
+    SRC_COLOR = "src_color"
+    ZERO = "zero"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor(Enum):
+    """
+    Blend factor. Ignored when `color_blend_enabled` is false; carry a valid
+    value (e.g. `one`) regardless.
+    """
+
+    CONSTANT_ALPHA = "constant_alpha"
+    CONSTANT_COLOR = "constant_color"
+    DST_ALPHA = "dst_alpha"
+    DST_COLOR = "dst_color"
+    ONE = "one"
+    ONE_MINUS_CONSTANT_ALPHA = "one_minus_constant_alpha"
+    ONE_MINUS_CONSTANT_COLOR = "one_minus_constant_color"
+    ONE_MINUS_DST_ALPHA = "one_minus_dst_alpha"
+    ONE_MINUS_DST_COLOR = "one_minus_dst_color"
+    ONE_MINUS_SRC_ALPHA = "one_minus_src_alpha"
+    ONE_MINUS_SRC_COLOR = "one_minus_src_color"
+    SRC_ALPHA = "src_alpha"
+    SRC_ALPHA_SATURATE = "src_alpha_saturate"
+    SRC_COLOR = "src_color"
+    ZERO = "zero"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp(Enum):
+    """
+    Depth compare op. Ignored when `depth_stencil_enabled` is false; the
+    wire field must still carry a valid value (use `always` as the default
+    placeholder when disabled).
+    """
+
+    ALWAYS = "always"
+    EQUAL = "equal"
+    GREATER = "greater"
+    GREATER_OR_EQUAL = "greater_or_equal"
+    LESS = "less"
+    LESS_OR_EQUAL = "less_or_equal"
+    NEVER = "never"
+    NOT_EQUAL = "not_equal"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState(Enum):
+    """
+    Which pipeline state is set dynamically per draw vs baked into the pipeline
+    at creation. `none` bakes a default 1×1 viewport (offscreen fixed-size
+    only); `viewport_scissor` lets the same pipeline serve varying extents.
+    """
+
+    NONE = "none"
+    VIEWPORT_SCISSOR = "viewport_scissor"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode(Enum):
+    BACK = "back"
+    FRONT = "front"
+    FRONT_AND_BACK = "front_and_back"
+    NONE = "none"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace(Enum):
+    CLOCKWISE = "clockwise"
+    COUNTER_CLOCKWISE = "counter_clockwise"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode(Enum):
+    FILL = "fill"
+    LINE = "line"
+    POINT = "point"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateTopology(Enum):
+    LINE_LIST = "line_list"
+    LINE_STRIP = "line_strip"
+    POINT_LIST = "point_list"
+    TRIANGLE_FAN = "triangle_fan"
+    TRIANGLE_LIST = "triangle_list"
+    TRIANGLE_STRIP = "triangle_strip"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateTopology':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat(Enum):
+    R32_FLOAT = "r32_float"
+    R32_SINT = "r32_sint"
+    R32_UINT = "r32_uint"
+    RG32_FLOAT = "rg32_float"
+    RG32_SINT = "rg32_sint"
+    RG32_UINT = "rg32_uint"
+    RGB32_FLOAT = "rgb32_float"
+    RGB32_SINT = "rgb32_sint"
+    RGB32_UINT = "rgb32_uint"
+    RGBA32_FLOAT = "rgba32_float"
+    RGBA32_SINT = "rgba32_sint"
+    RGBA32_UINT = "rgba32_uint"
+    RGBA8_SNORM = "rgba8_snorm"
+    RGBA8_UNORM = "rgba8_unorm"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute:
+    binding: 'int'
+    format: 'EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat'
+    location: 'int'
+    offset: 'int'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute':
+        return cls(
+            _from_json_data(int, data.get("binding")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat, data.get("format")),
+            _from_json_data(int, data.get("location")),
+            _from_json_data(int, data.get("offset")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["binding"] = _to_json_data(self.binding)
+        data["format"] = _to_json_data(self.format)
+        data["location"] = _to_json_data(self.location)
+        data["offset"] = _to_json_data(self.offset)
+        return data
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate(Enum):
+    INSTANCE = "instance"
+    VERTEX = "vertex"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding:
+    binding: 'int'
+    input_rate: 'EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate'
+    stride: 'int'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding':
+        return cls(
+            _from_json_data(int, data.get("binding")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate, data.get("input_rate")),
+            _from_json_data(int, data.get("stride")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["binding"] = _to_json_data(self.binding)
+        data["input_rate"] = _to_json_data(self.input_rate)
+        data["stride"] = _to_json_data(self.stride)
+        return data
+
+class EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat(Enum):
+    """
+    Depth attachment format. Absent disables depth attachments — the
+    depth_stencil flags must be consistent (`depth_stencil_enabled = false` when
+    this is absent).
+    """
+
+    D16_UNORM = "d16_unorm"
+    D24_UNORM_S8_UINT = "d24_unorm_s8_uint"
+    D32_SFLOAT = "d32_sfloat"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRegisterGraphicsKernelPipelineState:
+    """
+    Fixed-function pipeline state plus attachment formats for the graphics
+    pipeline. Mirrors the host `GraphicsPipelineState` shape; unsupported
+    combinations (multi-attachment color blend, MSAA samples > 1, etc.) are
+    rejected with an `err` response.
+    """
+
+    attachment_color_formats: 'List[str]'
+    """
+    Color attachment texture formats (lowercase snake-case names matching
+    `acquire_texture.format`). v1 supports a single color attachment; arrays of
+    length other than 1 are rejected.
+    """
+
+    color_blend_alpha_op: 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp'
+    color_blend_color_op: 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp'
+    color_blend_dst_alpha_factor: 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor'
+    color_blend_dst_color_factor: 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor'
+    color_blend_enabled: 'bool'
+    color_blend_src_alpha_factor: 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor'
+    color_blend_src_color_factor: 'EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor'
+    """
+    Blend factor. Ignored when `color_blend_enabled` is false; carry a valid
+    value (e.g. `one`) regardless.
+    """
+
+    color_write_mask: 'int'
+    """
+    Color write mask bits — `1=R`, `2=G`, `4=B`, `8=A`. `15` (`0b1111`) writes
+    RGBA. Used both when blending is disabled and as the blend attachment's
+    `color_write_mask` when enabled.
+    """
+
+    depth_compare_op: 'EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp'
+    """
+    Depth compare op. Ignored when `depth_stencil_enabled` is false; the
+    wire field must still carry a valid value (use `always` as the default
+    placeholder when disabled).
+    """
+
+    depth_stencil_enabled: 'bool'
+    depth_write: 'bool'
+    dynamic_state: 'EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState'
+    """
+    Which pipeline state is set dynamically per draw vs baked into the pipeline
+    at creation. `none` bakes a default 1×1 viewport (offscreen fixed-size
+    only); `viewport_scissor` lets the same pipeline serve varying extents.
+    """
+
+    multisample_samples: 'int'
+    """
+    MSAA sample count. Only `1` is supported in v1; any other value returns an
+    `err` response.
+    """
+
+    rasterization_cull_mode: 'EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode'
+    rasterization_front_face: 'EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace'
+    rasterization_line_width: 'float'
+    rasterization_polygon_mode: 'EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode'
+    topology: 'EscalateRequestRegisterGraphicsKernelPipelineStateTopology'
+    vertex_input_attributes: 'List[EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute]'
+    """
+    Vertex attributes pulled from the bindings. Must be empty when
+    `vertex_input_bindings` is empty.
+    """
+
+    vertex_input_bindings: 'List[EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding]'
+    """
+    Vertex buffer binding slots — stride and step rate per binding. Empty
+    array selects the `VertexInputState::None` (gl_VertexIndex-driven) shape;
+    non-empty selects `VertexInputState::Buffers` with the given bindings
+    + attributes.
+    """
+
+    attachment_depth_format: 'Optional[EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat]'
+    """
+    Depth attachment format. Absent disables depth attachments — the
+    depth_stencil flags must be consistent (`depth_stencil_enabled = false` when
+    this is absent).
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernelPipelineState':
+        return cls(
+            _from_json_data(List[str], data.get("attachment_color_formats")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp, data.get("color_blend_alpha_op")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp, data.get("color_blend_color_op")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor, data.get("color_blend_dst_alpha_factor")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor, data.get("color_blend_dst_color_factor")),
+            _from_json_data(bool, data.get("color_blend_enabled")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor, data.get("color_blend_src_alpha_factor")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor, data.get("color_blend_src_color_factor")),
+            _from_json_data(int, data.get("color_write_mask")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp, data.get("depth_compare_op")),
+            _from_json_data(bool, data.get("depth_stencil_enabled")),
+            _from_json_data(bool, data.get("depth_write")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState, data.get("dynamic_state")),
+            _from_json_data(int, data.get("multisample_samples")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode, data.get("rasterization_cull_mode")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace, data.get("rasterization_front_face")),
+            _from_json_data(float, data.get("rasterization_line_width")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode, data.get("rasterization_polygon_mode")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineStateTopology, data.get("topology")),
+            _from_json_data(List[EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute], data.get("vertex_input_attributes")),
+            _from_json_data(List[EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding], data.get("vertex_input_bindings")),
+            _from_json_data(Optional[EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat], data.get("attachment_depth_format")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["attachment_color_formats"] = _to_json_data(self.attachment_color_formats)
+        data["color_blend_alpha_op"] = _to_json_data(self.color_blend_alpha_op)
+        data["color_blend_color_op"] = _to_json_data(self.color_blend_color_op)
+        data["color_blend_dst_alpha_factor"] = _to_json_data(self.color_blend_dst_alpha_factor)
+        data["color_blend_dst_color_factor"] = _to_json_data(self.color_blend_dst_color_factor)
+        data["color_blend_enabled"] = _to_json_data(self.color_blend_enabled)
+        data["color_blend_src_alpha_factor"] = _to_json_data(self.color_blend_src_alpha_factor)
+        data["color_blend_src_color_factor"] = _to_json_data(self.color_blend_src_color_factor)
+        data["color_write_mask"] = _to_json_data(self.color_write_mask)
+        data["depth_compare_op"] = _to_json_data(self.depth_compare_op)
+        data["depth_stencil_enabled"] = _to_json_data(self.depth_stencil_enabled)
+        data["depth_write"] = _to_json_data(self.depth_write)
+        data["dynamic_state"] = _to_json_data(self.dynamic_state)
+        data["multisample_samples"] = _to_json_data(self.multisample_samples)
+        data["rasterization_cull_mode"] = _to_json_data(self.rasterization_cull_mode)
+        data["rasterization_front_face"] = _to_json_data(self.rasterization_front_face)
+        data["rasterization_line_width"] = _to_json_data(self.rasterization_line_width)
+        data["rasterization_polygon_mode"] = _to_json_data(self.rasterization_polygon_mode)
+        data["topology"] = _to_json_data(self.topology)
+        data["vertex_input_attributes"] = _to_json_data(self.vertex_input_attributes)
+        data["vertex_input_bindings"] = _to_json_data(self.vertex_input_bindings)
+        if self.attachment_depth_format is not None:
+             data["attachment_depth_format"] = _to_json_data(self.attachment_depth_format)
+        return data
+
+@dataclass
+class EscalateRequestRegisterGraphicsKernel(EscalateRequest):
+    bindings: 'List[EscalateRequestRegisterGraphicsKernelBinding]'
+    """
+    Descriptor-set-0 bindings the host pipeline declares. Validated against
+    `rspirv-reflect` of the supplied SPIR-V at register time — mismatches return
+    an `err` response. Empty array means no bindings.
+    """
+
+    descriptor_sets_in_flight: 'int'
+    """
+    Depth of the descriptor-set ring. Render-loop callers pass `frame_index ∈
+    [0, descriptor_sets_in_flight)` per draw. Must be ≥ 1.
+    """
+
+    fragment_entry_point: 'str'
+    """
+    Entry-point name for the fragment stage. Empty string is normalized to
+    `"main"` host-side.
+    """
+
+    fragment_spv_hex: 'str'
+    """
+    Compiled SPIR-V bytecode for the fragment stage, encoded as lowercase hex.
+    Today exactly one fragment stage is required (matching the host kernel's
+    v1 contract).
+    """
+
+    label: 'str'
+    """
+    Human-readable label used in error messages and tracing on the host. Echoed
+    in `kernel_id` derivation only via its bytes — purely diagnostic.
+    """
+
+    pipeline_state: 'EscalateRequestRegisterGraphicsKernelPipelineState'
+    """
+    Fixed-function pipeline state plus attachment formats for the graphics
+    pipeline. Mirrors the host `GraphicsPipelineState` shape; unsupported
+    combinations (multi-attachment color blend, MSAA samples > 1, etc.) are
+    rejected with an `err` response.
+    """
+
+    push_constant_size: 'int'
+    """
+    Push-constant range size in bytes, validated against the merged shader
+    reflection. Set 0 if the shaders use no push constants.
+    """
+
+    push_constant_stages: 'int'
+    """
+    Bitmask of stages the push-constant range is visible to. `1 = VERTEX`, `2 =
+    FRAGMENT`. Ignored when `push_constant_size == 0`.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    vertex_entry_point: 'str'
+    """
+    Entry-point name for the vertex stage. Empty string is normalized to
+    `"main"` host-side.
+    """
+
+    vertex_spv_hex: 'str'
+    """
+    Compiled SPIR-V bytecode for the vertex stage, encoded as lowercase hex (no
+    `0x` prefix, no whitespace). Today exactly one vertex stage is required (the
+    host kernel rejects zero or multiple vertex stages). Geometry / tessellation
+    / mesh / task stages are not yet supported.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterGraphicsKernel':
+        return cls(
+            "register_graphics_kernel",
+            _from_json_data(List[EscalateRequestRegisterGraphicsKernelBinding], data.get("bindings")),
+            _from_json_data(int, data.get("descriptor_sets_in_flight")),
+            _from_json_data(str, data.get("fragment_entry_point")),
+            _from_json_data(str, data.get("fragment_spv_hex")),
+            _from_json_data(str, data.get("label")),
+            _from_json_data(EscalateRequestRegisterGraphicsKernelPipelineState, data.get("pipeline_state")),
+            _from_json_data(int, data.get("push_constant_size")),
+            _from_json_data(int, data.get("push_constant_stages")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(str, data.get("vertex_entry_point")),
+            _from_json_data(str, data.get("vertex_spv_hex")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "register_graphics_kernel" }
+        data["bindings"] = _to_json_data(self.bindings)
+        data["descriptor_sets_in_flight"] = _to_json_data(self.descriptor_sets_in_flight)
+        data["fragment_entry_point"] = _to_json_data(self.fragment_entry_point)
+        data["fragment_spv_hex"] = _to_json_data(self.fragment_spv_hex)
+        data["label"] = _to_json_data(self.label)
+        data["pipeline_state"] = _to_json_data(self.pipeline_state)
+        data["push_constant_size"] = _to_json_data(self.push_constant_size)
+        data["push_constant_stages"] = _to_json_data(self.push_constant_stages)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["vertex_entry_point"] = _to_json_data(self.vertex_entry_point)
+        data["vertex_spv_hex"] = _to_json_data(self.vertex_spv_hex)
+        return data
+
 @dataclass
 class EscalateRequestReleaseHandle(EscalateRequest):
     handle_id: 'str'
@@ -522,6 +1116,352 @@ class EscalateRequestRunCPUReadbackCopy(EscalateRequest):
         data["direction"] = _to_json_data(self.direction)
         data["request_id"] = _to_json_data(self.request_id)
         data["surface_id"] = _to_json_data(self.surface_id)
+        return data
+
+class EscalateRequestRunGraphicsDrawBindingKind(Enum):
+    SAMPLED_TEXTURE = "sampled_texture"
+    STORAGE_BUFFER = "storage_buffer"
+    STORAGE_IMAGE = "storage_image"
+    UNIFORM_BUFFER = "uniform_buffer"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawBindingKind':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRunGraphicsDrawBinding:
+    binding: 'int'
+    kind: 'EscalateRequestRunGraphicsDrawBindingKind'
+    surface_uuid: 'str'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawBinding':
+        return cls(
+            _from_json_data(int, data.get("binding")),
+            _from_json_data(EscalateRequestRunGraphicsDrawBindingKind, data.get("kind")),
+            _from_json_data(str, data.get("surface_uuid")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["binding"] = _to_json_data(self.binding)
+        data["kind"] = _to_json_data(self.kind)
+        data["surface_uuid"] = _to_json_data(self.surface_uuid)
+        return data
+
+class EscalateRequestRunGraphicsDrawDrawKind(Enum):
+    DRAW = "draw"
+    DRAW_INDEXED = "draw_indexed"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawDrawKind':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRunGraphicsDrawDraw:
+    """
+    Draw call. `kind = "draw"` selects non-indexed (`vertex_count`-driven),
+    `kind = "draw_indexed"` requires `index_buffer` to be set and uses
+    `index_count` / `first_index` / `vertex_offset`. Fields not used by the
+    selected kind are ignored host-side; subprocesses should still send valid
+    placeholder values (zero is fine) to keep the wire shape regular.
+    """
+
+    first_index: 'int'
+    first_instance: 'int'
+    first_vertex: 'int'
+    index_count: 'int'
+    instance_count: 'int'
+    kind: 'EscalateRequestRunGraphicsDrawDrawKind'
+    vertex_count: 'int'
+    vertex_offset: 'int'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawDraw':
+        return cls(
+            _from_json_data(int, data.get("first_index")),
+            _from_json_data(int, data.get("first_instance")),
+            _from_json_data(int, data.get("first_vertex")),
+            _from_json_data(int, data.get("index_count")),
+            _from_json_data(int, data.get("instance_count")),
+            _from_json_data(EscalateRequestRunGraphicsDrawDrawKind, data.get("kind")),
+            _from_json_data(int, data.get("vertex_count")),
+            _from_json_data(int, data.get("vertex_offset")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["first_index"] = _to_json_data(self.first_index)
+        data["first_instance"] = _to_json_data(self.first_instance)
+        data["first_vertex"] = _to_json_data(self.first_vertex)
+        data["index_count"] = _to_json_data(self.index_count)
+        data["instance_count"] = _to_json_data(self.instance_count)
+        data["kind"] = _to_json_data(self.kind)
+        data["vertex_count"] = _to_json_data(self.vertex_count)
+        data["vertex_offset"] = _to_json_data(self.vertex_offset)
+        return data
+
+@dataclass
+class EscalateRequestRunGraphicsDrawVertexBuffer:
+    binding: 'int'
+    offset: 'str'
+    surface_uuid: 'str'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawVertexBuffer':
+        return cls(
+            _from_json_data(int, data.get("binding")),
+            _from_json_data(str, data.get("offset")),
+            _from_json_data(str, data.get("surface_uuid")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["binding"] = _to_json_data(self.binding)
+        data["offset"] = _to_json_data(self.offset)
+        data["surface_uuid"] = _to_json_data(self.surface_uuid)
+        return data
+
+class EscalateRequestRunGraphicsDrawIndexBufferIndexType(Enum):
+    UINT16 = "uint16"
+    UINT32 = "uint32"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawIndexBufferIndexType':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRunGraphicsDrawIndexBuffer:
+    """
+    Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
+    `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
+    into it.
+    """
+
+    index_type: 'EscalateRequestRunGraphicsDrawIndexBufferIndexType'
+    offset: 'str'
+    surface_uuid: 'str'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawIndexBuffer':
+        return cls(
+            _from_json_data(EscalateRequestRunGraphicsDrawIndexBufferIndexType, data.get("index_type")),
+            _from_json_data(str, data.get("offset")),
+            _from_json_data(str, data.get("surface_uuid")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["index_type"] = _to_json_data(self.index_type)
+        data["offset"] = _to_json_data(self.offset)
+        data["surface_uuid"] = _to_json_data(self.surface_uuid)
+        return data
+
+@dataclass
+class EscalateRequestRunGraphicsDrawScissor:
+    """
+    Dynamic scissor rect for this draw. Required when the kernel declared
+    `dynamic_state = "viewport_scissor"`; ignored otherwise.
+    """
+
+    height: 'int'
+    width: 'int'
+    x: 'int'
+    y: 'int'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawScissor':
+        return cls(
+            _from_json_data(int, data.get("height")),
+            _from_json_data(int, data.get("width")),
+            _from_json_data(int, data.get("x")),
+            _from_json_data(int, data.get("y")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["height"] = _to_json_data(self.height)
+        data["width"] = _to_json_data(self.width)
+        data["x"] = _to_json_data(self.x)
+        data["y"] = _to_json_data(self.y)
+        return data
+
+@dataclass
+class EscalateRequestRunGraphicsDrawViewport:
+    """
+    Dynamic viewport for this draw. Required when the kernel's pipeline state
+    declared `dynamic_state = "viewport_scissor"`; ignored otherwise.
+    """
+
+    height: 'float'
+    max_depth: 'float'
+    min_depth: 'float'
+    width: 'float'
+    x: 'float'
+    y: 'float'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDrawViewport':
+        return cls(
+            _from_json_data(float, data.get("height")),
+            _from_json_data(float, data.get("max_depth")),
+            _from_json_data(float, data.get("min_depth")),
+            _from_json_data(float, data.get("width")),
+            _from_json_data(float, data.get("x")),
+            _from_json_data(float, data.get("y")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["height"] = _to_json_data(self.height)
+        data["max_depth"] = _to_json_data(self.max_depth)
+        data["min_depth"] = _to_json_data(self.min_depth)
+        data["width"] = _to_json_data(self.width)
+        data["x"] = _to_json_data(self.x)
+        data["y"] = _to_json_data(self.y)
+        return data
+
+@dataclass
+class EscalateRequestRunGraphicsDraw(EscalateRequest):
+    bindings: 'List[EscalateRequestRunGraphicsDrawBinding]'
+    """
+    Per-draw bindings — each slot's `surface_uuid` must resolve through the host
+    bridge's UUID → resource map. `kind` must match the binding's declared kind
+    from register time.
+    """
+
+    color_target_uuids: 'List[str]'
+    """
+    UUIDs of color attachment textures. v1 requires exactly one entry — multi-
+    attachment is a future extension. Each UUID must resolve to a host-side
+    `StreamTexture` registered as a render target.
+    """
+
+    draw: 'EscalateRequestRunGraphicsDrawDraw'
+    """
+    Draw call. `kind = "draw"` selects non-indexed (`vertex_count`-driven),
+    `kind = "draw_indexed"` requires `index_buffer` to be set and uses
+    `index_count` / `first_index` / `vertex_offset`. Fields not used by the
+    selected kind are ignored host-side; subprocesses should still send valid
+    placeholder values (zero is fine) to keep the wire shape regular.
+    """
+
+    extent_height: 'int'
+    """
+    Render-area height in pixels.
+    """
+
+    extent_width: 'int'
+    """
+    Render-area width in pixels.
+    """
+
+    frame_index: 'int'
+    """
+    Slot in the kernel's descriptor-set ring. Must satisfy `frame_index <
+    descriptor_sets_in_flight` declared at register time. Render-loop callers
+    cycle this through `MAX_FRAMES_IN_FLIGHT` so concurrent frames don't
+    scribble each other's bindings.
+    """
+
+    kernel_id: 'str'
+    """
+    Handle returned by a prior `register_graphics_kernel` response. The host
+    looks up the cached `Arc<VulkanGraphicsKernel>` and dispatches against it.
+    Dispatching with an unrecognized kernel_id returns an `err` response.
+    """
+
+    push_constants_hex: 'str'
+    """
+    Push-constant payload for this draw, lowercase hex. Must decode to exactly
+    the kernel's declared `push_constant_size` (or empty if zero).
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    vertex_buffers: 'List[EscalateRequestRunGraphicsDrawVertexBuffer]'
+    """
+    Per-draw vertex buffer bindings. Each entry's `surface_uuid` must resolve
+    to a host-side `RhiPixelBuffer`. `offset` is the byte offset into the buffer
+    where vertex data starts (decimal-encoded u64 — JTD has no native u64).
+    Empty for vertex-fabricating shaders (`gl_VertexIndex` patterns).
+    """
+
+    depth_target_uuid: 'Optional[str]'
+    """
+    UUID of a depth attachment texture. Reserved for future use — v1 rejects
+    depth attachments with an `err` response.
+    """
+
+    index_buffer: 'Optional[EscalateRequestRunGraphicsDrawIndexBuffer]'
+    """
+    Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
+    `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
+    into it.
+    """
+
+    scissor: 'Optional[EscalateRequestRunGraphicsDrawScissor]'
+    """
+    Dynamic scissor rect for this draw. Required when the kernel declared
+    `dynamic_state = "viewport_scissor"`; ignored otherwise.
+    """
+
+    viewport: 'Optional[EscalateRequestRunGraphicsDrawViewport]'
+    """
+    Dynamic viewport for this draw. Required when the kernel's pipeline state
+    declared `dynamic_state = "viewport_scissor"`; ignored otherwise.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunGraphicsDraw':
+        return cls(
+            "run_graphics_draw",
+            _from_json_data(List[EscalateRequestRunGraphicsDrawBinding], data.get("bindings")),
+            _from_json_data(List[str], data.get("color_target_uuids")),
+            _from_json_data(EscalateRequestRunGraphicsDrawDraw, data.get("draw")),
+            _from_json_data(int, data.get("extent_height")),
+            _from_json_data(int, data.get("extent_width")),
+            _from_json_data(int, data.get("frame_index")),
+            _from_json_data(str, data.get("kernel_id")),
+            _from_json_data(str, data.get("push_constants_hex")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(List[EscalateRequestRunGraphicsDrawVertexBuffer], data.get("vertex_buffers")),
+            _from_json_data(Optional[str], data.get("depth_target_uuid")),
+            _from_json_data(Optional[EscalateRequestRunGraphicsDrawIndexBuffer], data.get("index_buffer")),
+            _from_json_data(Optional[EscalateRequestRunGraphicsDrawScissor], data.get("scissor")),
+            _from_json_data(Optional[EscalateRequestRunGraphicsDrawViewport], data.get("viewport")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "run_graphics_draw" }
+        data["bindings"] = _to_json_data(self.bindings)
+        data["color_target_uuids"] = _to_json_data(self.color_target_uuids)
+        data["draw"] = _to_json_data(self.draw)
+        data["extent_height"] = _to_json_data(self.extent_height)
+        data["extent_width"] = _to_json_data(self.extent_width)
+        data["frame_index"] = _to_json_data(self.frame_index)
+        data["kernel_id"] = _to_json_data(self.kernel_id)
+        data["push_constants_hex"] = _to_json_data(self.push_constants_hex)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["vertex_buffers"] = _to_json_data(self.vertex_buffers)
+        if self.depth_target_uuid is not None:
+             data["depth_target_uuid"] = _to_json_data(self.depth_target_uuid)
+        if self.index_buffer is not None:
+             data["index_buffer"] = _to_json_data(self.index_buffer)
+        if self.scissor is not None:
+             data["scissor"] = _to_json_data(self.scissor)
+        if self.viewport is not None:
+             data["viewport"] = _to_json_data(self.viewport)
         return data
 
 class EscalateRequestTryRunCPUReadbackCopyDirection(Enum):

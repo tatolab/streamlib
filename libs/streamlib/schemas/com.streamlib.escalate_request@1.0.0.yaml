@@ -236,6 +236,451 @@ mapping:
         metadata:
           description: "vkCmdDispatch groupCountZ."
         type: uint32
+  register_graphics_kernel:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      label:
+        metadata:
+          description: >
+            Human-readable label used in error messages and tracing
+            on the host. Echoed in `kernel_id` derivation only via
+            its bytes — purely diagnostic.
+        type: string
+      vertex_spv_hex:
+        metadata:
+          description: >
+            Compiled SPIR-V bytecode for the vertex stage, encoded
+            as lowercase hex (no `0x` prefix, no whitespace). Today
+            exactly one vertex stage is required (the host kernel
+            rejects zero or multiple vertex stages). Geometry /
+            tessellation / mesh / task stages are not yet supported.
+        type: string
+      fragment_spv_hex:
+        metadata:
+          description: >
+            Compiled SPIR-V bytecode for the fragment stage, encoded
+            as lowercase hex. Today exactly one fragment stage is
+            required (matching the host kernel's v1 contract).
+        type: string
+      vertex_entry_point:
+        metadata:
+          description: >
+            Entry-point name for the vertex stage. Empty string is
+            normalized to `"main"` host-side.
+        type: string
+      fragment_entry_point:
+        metadata:
+          description: >
+            Entry-point name for the fragment stage. Empty string is
+            normalized to `"main"` host-side.
+        type: string
+      bindings:
+        metadata:
+          description: >
+            Descriptor-set-0 bindings the host pipeline declares.
+            Validated against `rspirv-reflect` of the supplied
+            SPIR-V at register time — mismatches return an `err`
+            response. Empty array means no bindings.
+        elements:
+          properties:
+            binding:
+              type: uint32
+            kind:
+              metadata:
+                description: >
+                  Resource kind for this binding slot.
+              enum:
+                - sampled_texture
+                - storage_buffer
+                - uniform_buffer
+                - storage_image
+            stages:
+              metadata:
+                description: >
+                  Bitmask of stages the binding is visible to.
+                  `1 = VERTEX`, `2 = FRAGMENT`, `3 = VERTEX_FRAGMENT`.
+              type: uint32
+      push_constant_size:
+        metadata:
+          description: >
+            Push-constant range size in bytes, validated against
+            the merged shader reflection. Set 0 if the shaders use
+            no push constants.
+        type: uint32
+      push_constant_stages:
+        metadata:
+          description: >
+            Bitmask of stages the push-constant range is visible to.
+            `1 = VERTEX`, `2 = FRAGMENT`. Ignored when
+            `push_constant_size == 0`.
+        type: uint32
+      descriptor_sets_in_flight:
+        metadata:
+          description: >
+            Depth of the descriptor-set ring. Render-loop callers
+            pass `frame_index ∈ [0, descriptor_sets_in_flight)` per
+            draw. Must be ≥ 1.
+        type: uint32
+      pipeline_state:
+        metadata:
+          description: >
+            Fixed-function pipeline state plus attachment formats
+            for the graphics pipeline. Mirrors the host
+            `GraphicsPipelineState` shape; unsupported combinations
+            (multi-attachment color blend, MSAA samples > 1, etc.)
+            are rejected with an `err` response.
+        properties:
+          topology:
+            enum:
+              - point_list
+              - line_list
+              - line_strip
+              - triangle_list
+              - triangle_strip
+              - triangle_fan
+          vertex_input_bindings:
+            metadata:
+              description: >
+                Vertex buffer binding slots — stride and step rate
+                per binding. Empty array selects the
+                `VertexInputState::None` (gl_VertexIndex-driven)
+                shape; non-empty selects `VertexInputState::Buffers`
+                with the given bindings + attributes.
+            elements:
+              properties:
+                binding:
+                  type: uint32
+                stride:
+                  type: uint32
+                input_rate:
+                  enum:
+                    - vertex
+                    - instance
+          vertex_input_attributes:
+            metadata:
+              description: >
+                Vertex attributes pulled from the bindings. Must be
+                empty when `vertex_input_bindings` is empty.
+            elements:
+              properties:
+                location:
+                  type: uint32
+                binding:
+                  type: uint32
+                format:
+                  enum:
+                    - r32_float
+                    - rg32_float
+                    - rgb32_float
+                    - rgba32_float
+                    - r32_uint
+                    - rg32_uint
+                    - rgb32_uint
+                    - rgba32_uint
+                    - r32_sint
+                    - rg32_sint
+                    - rgb32_sint
+                    - rgba32_sint
+                    - rgba8_unorm
+                    - rgba8_snorm
+                offset:
+                  type: uint32
+          rasterization_polygon_mode:
+            enum:
+              - fill
+              - line
+              - point
+          rasterization_cull_mode:
+            enum:
+              - none
+              - front
+              - back
+              - front_and_back
+          rasterization_front_face:
+            enum:
+              - counter_clockwise
+              - clockwise
+          rasterization_line_width:
+            type: float32
+          multisample_samples:
+            metadata:
+              description: >
+                MSAA sample count. Only `1` is supported in v1; any
+                other value returns an `err` response.
+            type: uint32
+          depth_stencil_enabled:
+            type: boolean
+          depth_compare_op:
+            metadata:
+              description: >
+                Depth compare op. Ignored when
+                `depth_stencil_enabled` is false; the wire field
+                must still carry a valid value (use `always` as the
+                default placeholder when disabled).
+            enum:
+              - never
+              - less
+              - equal
+              - less_or_equal
+              - greater
+              - not_equal
+              - greater_or_equal
+              - always
+          depth_write:
+            type: boolean
+          color_blend_enabled:
+            type: boolean
+          color_write_mask:
+            metadata:
+              description: >
+                Color write mask bits — `1=R`, `2=G`, `4=B`, `8=A`.
+                `15` (`0b1111`) writes RGBA. Used both when blending
+                is disabled and as the blend attachment's
+                `color_write_mask` when enabled.
+            type: uint32
+          color_blend_src_color_factor:
+            metadata:
+              description: >
+                Blend factor. Ignored when `color_blend_enabled` is
+                false; carry a valid value (e.g. `one`) regardless.
+              ref: "blend_factor_enum"
+            enum: &blend_factor
+              - zero
+              - one
+              - src_color
+              - one_minus_src_color
+              - dst_color
+              - one_minus_dst_color
+              - src_alpha
+              - one_minus_src_alpha
+              - dst_alpha
+              - one_minus_dst_alpha
+              - constant_color
+              - one_minus_constant_color
+              - constant_alpha
+              - one_minus_constant_alpha
+              - src_alpha_saturate
+          color_blend_dst_color_factor:
+            enum: *blend_factor
+          color_blend_color_op:
+            enum: &blend_op
+              - add
+              - subtract
+              - reverse_subtract
+              - min
+              - max
+          color_blend_src_alpha_factor:
+            enum: *blend_factor
+          color_blend_dst_alpha_factor:
+            enum: *blend_factor
+          color_blend_alpha_op:
+            enum: *blend_op
+          attachment_color_formats:
+            metadata:
+              description: >
+                Color attachment texture formats (lowercase
+                snake-case names matching `acquire_texture.format`).
+                v1 supports a single color attachment; arrays of
+                length other than 1 are rejected.
+            elements:
+              type: string
+          dynamic_state:
+            metadata:
+              description: >
+                Which pipeline state is set dynamically per draw vs
+                baked into the pipeline at creation. `none` bakes a
+                default 1×1 viewport (offscreen fixed-size only);
+                `viewport_scissor` lets the same pipeline serve
+                varying extents.
+            enum:
+              - none
+              - viewport_scissor
+        optionalProperties:
+          attachment_depth_format:
+            metadata:
+              description: >
+                Depth attachment format. Absent disables depth
+                attachments — the depth_stencil flags must be
+                consistent (`depth_stencil_enabled = false` when
+                this is absent).
+              ref: "depth_format_enum"
+            enum:
+              - d16_unorm
+              - d32_sfloat
+              - d24_unorm_s8_uint
+  run_graphics_draw:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      kernel_id:
+        metadata:
+          description: >
+            Handle returned by a prior `register_graphics_kernel`
+            response. The host looks up the cached
+            `Arc<VulkanGraphicsKernel>` and dispatches against it.
+            Dispatching with an unrecognized kernel_id returns an
+            `err` response.
+        type: string
+      frame_index:
+        metadata:
+          description: >
+            Slot in the kernel's descriptor-set ring. Must satisfy
+            `frame_index < descriptor_sets_in_flight` declared at
+            register time. Render-loop callers cycle this through
+            `MAX_FRAMES_IN_FLIGHT` so concurrent frames don't
+            scribble each other's bindings.
+        type: uint32
+      bindings:
+        metadata:
+          description: >
+            Per-draw bindings — each slot's `surface_uuid` must
+            resolve through the host bridge's UUID → resource map.
+            `kind` must match the binding's declared kind from
+            register time.
+        elements:
+          properties:
+            binding:
+              type: uint32
+            kind:
+              enum:
+                - sampled_texture
+                - storage_buffer
+                - uniform_buffer
+                - storage_image
+            surface_uuid:
+              type: string
+      vertex_buffers:
+        metadata:
+          description: >
+            Per-draw vertex buffer bindings. Each entry's
+            `surface_uuid` must resolve to a host-side
+            `RhiPixelBuffer`. `offset` is the byte offset into the
+            buffer where vertex data starts (decimal-encoded u64 —
+            JTD has no native u64). Empty for vertex-fabricating
+            shaders (`gl_VertexIndex` patterns).
+        elements:
+          properties:
+            binding:
+              type: uint32
+            surface_uuid:
+              type: string
+            offset:
+              type: string
+      color_target_uuids:
+        metadata:
+          description: >
+            UUIDs of color attachment textures. v1 requires exactly
+            one entry — multi-attachment is a future extension. Each
+            UUID must resolve to a host-side `StreamTexture`
+            registered as a render target.
+        elements:
+          type: string
+      extent_width:
+        metadata:
+          description: "Render-area width in pixels."
+        type: uint32
+      extent_height:
+        metadata:
+          description: "Render-area height in pixels."
+        type: uint32
+      push_constants_hex:
+        metadata:
+          description: >
+            Push-constant payload for this draw, lowercase hex. Must
+            decode to exactly the kernel's declared
+            `push_constant_size` (or empty if zero).
+        type: string
+      draw:
+        metadata:
+          description: >
+            Draw call. `kind = "draw"` selects non-indexed
+            (`vertex_count`-driven), `kind = "draw_indexed"` requires
+            `index_buffer` to be set and uses `index_count` /
+            `first_index` / `vertex_offset`. Fields not used by the
+            selected kind are ignored host-side; subprocesses
+            should still send valid placeholder values (zero is
+            fine) to keep the wire shape regular.
+        properties:
+          kind:
+            enum:
+              - draw
+              - draw_indexed
+          vertex_count:
+            type: uint32
+          index_count:
+            type: uint32
+          instance_count:
+            type: uint32
+          first_vertex:
+            type: uint32
+          first_instance:
+            type: uint32
+          first_index:
+            type: uint32
+          vertex_offset:
+            type: int32
+    optionalProperties:
+      index_buffer:
+        metadata:
+          description: >
+            Required when `draw.kind == "draw_indexed"`, must be
+            absent otherwise. `surface_uuid` resolves to an
+            `RhiPixelBuffer`; `offset` is the byte offset into it.
+        properties:
+          surface_uuid:
+            type: string
+          offset:
+            type: string
+          index_type:
+            enum:
+              - uint16
+              - uint32
+      depth_target_uuid:
+        metadata:
+          description: >
+            UUID of a depth attachment texture. Reserved for future
+            use — v1 rejects depth attachments with an `err`
+            response.
+        type: string
+      viewport:
+        metadata:
+          description: >
+            Dynamic viewport for this draw. Required when the
+            kernel's pipeline state declared
+            `dynamic_state = "viewport_scissor"`; ignored otherwise.
+        properties:
+          x:
+            type: float32
+          y:
+            type: float32
+          width:
+            type: float32
+          height:
+            type: float32
+          min_depth:
+            type: float32
+          max_depth:
+            type: float32
+      scissor:
+        metadata:
+          description: >
+            Dynamic scissor rect for this draw. Required when the
+            kernel declared `dynamic_state = "viewport_scissor"`;
+            ignored otherwise.
+        properties:
+          x:
+            type: int32
+          y:
+            type: int32
+          width:
+            type: uint32
+          height:
+            type: uint32
   release_handle:
     properties:
       request_id:

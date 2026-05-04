@@ -1,0 +1,15 @@
+package:
+  name: polyglot-vulkan-graphics
+  version: "0.1.0"
+  description: "Polyglot Vulkan adapter scenario (#656) — Python triangle vertex/fragment graphics kernel rendered into a host DMA-BUF VkImage"
+
+processors:
+  - name: com.tatolab.vulkan_graphics
+    version: "1.0.0"
+    description: "Acquires a host-pre-registered render-target DMA-BUF surface as a VkImage, draws a triangle via the host's VulkanGraphicsKernel, releases"
+    runtime: python
+    execution: reactive
+    entrypoint: "vulkan_graphics:VulkanGraphicsProcessor"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0

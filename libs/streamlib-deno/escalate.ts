@@ -23,13 +23,24 @@ import type {
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
   EscalateRequestRegisterComputeKernel,
+  EscalateRequestRegisterGraphicsKernel,
+  EscalateRequestRegisterGraphicsKernelBinding,
+  EscalateRequestRegisterGraphicsKernelPipelineState,
   EscalateRequestReleaseHandle,
   EscalateRequestRunComputeKernel,
   EscalateRequestRunCpuReadbackCopy,
+  EscalateRequestRunGraphicsDraw,
+  EscalateRequestRunGraphicsDrawBinding,
+  EscalateRequestRunGraphicsDrawDraw,
+  EscalateRequestRunGraphicsDrawIndexBuffer,
+  EscalateRequestRunGraphicsDrawScissor,
+  EscalateRequestRunGraphicsDrawVertexBuffer,
+  EscalateRequestRunGraphicsDrawViewport,
   EscalateRequestTryRunCpuReadbackCopy,
 } from "./_generated_/com_streamlib_escalate_request.ts";
 import {
   EscalateRequestRunCpuReadbackCopyDirection,
+  EscalateRequestRunGraphicsDrawDrawKind,
   EscalateRequestTryRunCpuReadbackCopyDirection,
 } from "./_generated_/com_streamlib_escalate_request.ts";
 import type {
@@ -46,9 +57,19 @@ export type {
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
   EscalateRequestRegisterComputeKernel,
+  EscalateRequestRegisterGraphicsKernel,
+  EscalateRequestRegisterGraphicsKernelBinding,
+  EscalateRequestRegisterGraphicsKernelPipelineState,
   EscalateRequestReleaseHandle,
   EscalateRequestRunComputeKernel,
   EscalateRequestRunCpuReadbackCopy,
+  EscalateRequestRunGraphicsDraw,
+  EscalateRequestRunGraphicsDrawBinding,
+  EscalateRequestRunGraphicsDrawDraw,
+  EscalateRequestRunGraphicsDrawIndexBuffer,
+  EscalateRequestRunGraphicsDrawScissor,
+  EscalateRequestRunGraphicsDrawVertexBuffer,
+  EscalateRequestRunGraphicsDrawViewport,
   EscalateRequestTryRunCpuReadbackCopy,
   EscalateResponse,
   EscalateResponseContended,
@@ -57,6 +78,7 @@ export type {
 };
 export {
   EscalateRequestRunCpuReadbackCopyDirection,
+  EscalateRequestRunGraphicsDrawDrawKind,
   EscalateRequestTryRunCpuReadbackCopyDirection,
 };
 
@@ -88,9 +110,11 @@ export type EscalateOpPayload =
   | Omit<EscalateRequestAcquirePixelBuffer, "request_id">
   | Omit<EscalateRequestAcquireTexture, "request_id">
   | Omit<EscalateRequestRegisterComputeKernel, "request_id">
+  | Omit<EscalateRequestRegisterGraphicsKernel, "request_id">
   | Omit<EscalateRequestReleaseHandle, "request_id">
   | Omit<EscalateRequestRunComputeKernel, "request_id">
   | Omit<EscalateRequestRunCpuReadbackCopy, "request_id">
+  | Omit<EscalateRequestRunGraphicsDraw, "request_id">
   | Omit<EscalateRequestTryRunCpuReadbackCopy, "request_id">;
 
 /**
@@ -276,6 +300,99 @@ export class EscalateChannel {
       group_count_y: Math.trunc(groupCountY),
       group_count_z: Math.trunc(groupCountZ),
     }) as EscalateOkResponse;
+  }
+
+  /**
+   * Register a graphics kernel on the host. Resolves to the
+   * `ok`-payload whose `handle_id` is the bridge-assigned kernel_id
+   * (typically a stable hash over a canonical representation of all
+   * register-time inputs — re-registering an identical descriptor hits
+   * the host-side cache and returns the same id).
+   *
+   * `vertexSpv` and `fragmentSpv` are raw SPIR-V bytes. The host
+   * derives the binding shape from `rspirv-reflect`, validates the
+   * declared `bindings` match the merged shader declaration, and
+   * persists driver-compiled pipeline state to the same on-disk
+   * pipeline cache compute uses.
+   */
+  async registerGraphicsKernel(args: {
+    label: string;
+    vertexSpv: Uint8Array;
+    fragmentSpv: Uint8Array;
+    bindings: readonly EscalateRequestRegisterGraphicsKernelBinding[];
+    pushConstantSize: number;
+    pushConstantStages: number;
+    descriptorSetsInFlight: number;
+    pipelineState: EscalateRequestRegisterGraphicsKernelPipelineState;
+    vertexEntryPoint?: string;
+    fragmentEntryPoint?: string;
+  }): Promise<EscalateOkResponse> {
+    return await this.request({
+      op: "register_graphics_kernel",
+      label: args.label,
+      vertex_spv_hex: bytesToHex(args.vertexSpv),
+      fragment_spv_hex: bytesToHex(args.fragmentSpv),
+      vertex_entry_point: args.vertexEntryPoint ?? "main",
+      fragment_entry_point: args.fragmentEntryPoint ?? "main",
+      bindings: [...args.bindings],
+      push_constant_size: Math.trunc(args.pushConstantSize),
+      push_constant_stages: Math.trunc(args.pushConstantStages),
+      descriptor_sets_in_flight: Math.trunc(args.descriptorSetsInFlight),
+      pipeline_state: args.pipelineState,
+    }) as EscalateOkResponse;
+  }
+
+  /**
+   * Issue one draw against a previously-registered graphics kernel.
+   *
+   * Graphics dispatch is synchronous host-side: this resolves once
+   * the host's own command buffer + fence have retired and the host's
+   * writes to the color attachments are visible to subsequent
+   * submissions. `frameIndex` indexes the kernel's descriptor-set
+   * ring (`0 ≤ frameIndex < descriptorSetsInFlight`).
+   */
+  async runGraphicsDraw(args: {
+    kernelId: string;
+    frameIndex: number;
+    bindings: readonly EscalateRequestRunGraphicsDrawBinding[];
+    vertexBuffers: readonly EscalateRequestRunGraphicsDrawVertexBuffer[];
+    colorTargetUuids: readonly string[];
+    extentWidth: number;
+    extentHeight: number;
+    pushConstants: Uint8Array;
+    draw: EscalateRequestRunGraphicsDrawDraw;
+    indexBuffer?: EscalateRequestRunGraphicsDrawIndexBuffer;
+    depthTargetUuid?: string;
+    viewport?: EscalateRequestRunGraphicsDrawViewport;
+    scissor?: EscalateRequestRunGraphicsDrawScissor;
+  }): Promise<EscalateOkResponse> {
+    const payload = {
+      op: "run_graphics_draw" as const,
+      kernel_id: args.kernelId,
+      frame_index: Math.trunc(args.frameIndex),
+      bindings: [...args.bindings],
+      vertex_buffers: [...args.vertexBuffers],
+      color_target_uuids: [...args.colorTargetUuids],
+      extent_width: Math.trunc(args.extentWidth),
+      extent_height: Math.trunc(args.extentHeight),
+      push_constants_hex: bytesToHex(args.pushConstants),
+      draw: args.draw,
+    } as Record<string, unknown>;
+    if (args.indexBuffer !== undefined) {
+      payload.index_buffer = args.indexBuffer;
+    }
+    if (args.depthTargetUuid !== undefined) {
+      payload.depth_target_uuid = args.depthTargetUuid;
+    }
+    if (args.viewport !== undefined) {
+      payload.viewport = args.viewport;
+    }
+    if (args.scissor !== undefined) {
+      payload.scissor = args.scissor;
+    }
+    return await this.request(
+      payload as unknown as EscalateOpPayload,
+    ) as EscalateOkResponse;
   }
 
   async releaseHandle(handleId: string): Promise<EscalateOkResponse> {

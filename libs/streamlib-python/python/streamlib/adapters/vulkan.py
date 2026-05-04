@@ -36,7 +36,7 @@ import ctypes
 import itertools
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from typing import Iterator, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Iterator, Optional, Protocol, Sequence, runtime_checkable
 
 from streamlib.surface_adapter import (
     STREAMLIB_ADAPTER_ABI_VERSION,
@@ -312,6 +312,14 @@ class VulkanContext:
         # re-register through escalate IPC (host-side cache hit, but the
         # IPC payload is sent again).
         self._compute_kernel_ids: dict[int, tuple[bytes, str]] = {}
+        # Graphics-kernel cache: `(id(vertex_spv), id(fragment_spv))` →
+        # `(vertex_strong_ref, fragment_strong_ref, kernel_id)`. Same
+        # identity-keyed pattern as `_compute_kernel_ids` — strong refs
+        # pin both byte buffers so Python can't recycle either id while
+        # the cached kernel_id is still in flight.
+        self._graphics_kernel_ids: dict[
+            tuple[int, int], tuple[bytes, bytes, str]
+        ] = {}
 
     def _wire_signatures(self) -> None:
         """Set ctypes signatures on every `slpn_vulkan_*` entry point.
@@ -568,6 +576,118 @@ class VulkanContext:
             group_count_x=int(group_count_x),
             group_count_y=int(group_count_y),
             group_count_z=int(group_count_z),
+        )
+
+    def dispatch_graphics(
+        self,
+        *,
+        color_target,
+        extent_width: int,
+        extent_height: int,
+        vertex_spv: bytes,
+        fragment_spv: bytes,
+        pipeline_state: Dict[str, Any],
+        bindings: Sequence[Dict[str, Any]] = (),
+        binding_decls: Sequence[Dict[str, Any]] = (),
+        vertex_buffers: Sequence[Dict[str, Any]] = (),
+        push_constants: bytes = b"",
+        push_constant_stages: int = 0,
+        descriptor_sets_in_flight: int = 2,
+        frame_index: int = 0,
+        index_buffer: Optional[Dict[str, Any]] = None,
+        depth_target_uuid: Optional[str] = None,
+        viewport: Optional[Dict[str, Any]] = None,
+        scissor: Optional[Dict[str, Any]] = None,
+        draw: Optional[Dict[str, Any]] = None,
+        label: str = "polyglot-graphics",
+    ) -> None:
+        """Dispatch a graphics draw against ``color_target``'s host-side
+        ``VkImage`` via escalate IPC.
+
+        ``color_target`` is the surface acquired via :meth:`acquire_write`
+        (a ``StreamlibSurface``). The surface's ``pool_id`` (the host
+        surface-share UUID) is sent to the host bridge for resolution.
+
+        The first call with a given ``(vertex_spv, fragment_spv)`` pair
+        registers the kernel through escalate IPC; subsequent calls with
+        the same byte objects hit the local kernel-id cache and skip
+        registration. ``binding_decls`` is the register-time binding
+        declaration list (validated against SPIR-V reflection on the
+        host); ``bindings`` is the per-draw binding-value list. They
+        share the same ``{"binding", "kind"[, "stages"|"surface_uuid"]}``
+        shape but with different field sets — the customer authors both
+        because the host can't infer per-draw values from declarations
+        alone.
+
+        ``draw`` defaults to a 3-vertex non-indexed draw (the canonical
+        fullscreen-triangle / first-render shape). Pass an explicit
+        ``{"kind": "draw" | "draw_indexed", ...}`` for anything else.
+
+        Graphics dispatch is synchronous host-side: when this returns,
+        the host's writes to the color target are visible to subsequent
+        submissions.
+        """
+        from streamlib.escalate import channel as _escalate_channel
+
+        pool_id = self._surface_pool_id(color_target)
+        cached = self._surface_ids.get(pool_id)
+        if cached is None:
+            raise RuntimeError(
+                f"VulkanContext.dispatch_graphics: surface '{pool_id}' is not "
+                "registered — call acquire_write inside a `with` block first."
+            )
+        ch = _escalate_channel()
+        cache_key = (id(vertex_spv), id(fragment_spv))
+        cached_entry = self._graphics_kernel_ids.get(cache_key)
+        if (
+            cached_entry is not None
+            and cached_entry[0] is vertex_spv
+            and cached_entry[1] is fragment_spv
+        ):
+            kernel_id = cached_entry[2]
+        else:
+            response = ch.register_graphics_kernel(
+                label=label,
+                vertex_spv=vertex_spv,
+                fragment_spv=fragment_spv,
+                bindings=binding_decls,
+                push_constant_size=len(push_constants),
+                push_constant_stages=int(push_constant_stages),
+                descriptor_sets_in_flight=int(descriptor_sets_in_flight),
+                pipeline_state=pipeline_state,
+            )
+            kernel_id = response["handle_id"]
+            self._graphics_kernel_ids[cache_key] = (vertex_spv, fragment_spv, kernel_id)
+
+        if draw is None:
+            draw = {
+                "kind": "draw",
+                "vertex_count": 3,
+                "instance_count": 1,
+                "first_vertex": 0,
+                "first_instance": 0,
+                "index_count": 0,
+                "first_index": 0,
+                "vertex_offset": 0,
+            }
+
+        # Use `pool_id` (surface-share UUID) for the color target — same
+        # convention as compute. Host bridge resolves UUID → host-side
+        # `StreamTexture`.
+        ch.run_graphics_draw(
+            kernel_id=kernel_id,
+            frame_index=int(frame_index),
+            bindings=bindings,
+            vertex_buffers=vertex_buffers,
+            color_target_uuids=[pool_id],
+            extent_width=int(extent_width),
+            extent_height=int(extent_height),
+            push_constants=push_constants,
+            draw=draw,
+            index_buffer=index_buffer,
+            depth_target_uuid=depth_target_uuid,
+            viewport=viewport,
+            scissor=scissor,
         )
 
     def release_for_cross_process(
