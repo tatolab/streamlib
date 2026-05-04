@@ -8,11 +8,13 @@ do not hand-roll a descriptor set, descriptor pool, command buffer, fence,
 or pipeline layout for a kernel.**
 
 For graphics-pipeline (vertex + fragment) work, see the sibling
-[graphics-kernel.md](graphics-kernel.md). The two kernels share the
-SPIR-V-reflection-validated, descriptor-managed, pipeline-cached shape;
-the only asymmetry is that compute owns its own command buffer + fence
-(serial dispatch) while graphics records into a caller-owned command
-buffer with a descriptor-set ring sized to frames-in-flight.
+[graphics-kernel.md](graphics-kernel.md). For ray-tracing-pipeline work
+(`VkRayTracingPipelineKHR`), see [ray-tracing-kernel.md](ray-tracing-kernel.md).
+All three kernels share the SPIR-V-reflection-validated, descriptor-managed,
+pipeline-cached shape; the asymmetry is that compute and ray-tracing own
+their own command buffer + fence (serial dispatch) while graphics records
+into a caller-owned command buffer with a descriptor-set ring sized to
+frames-in-flight.
 
 This is engine-model territory: the RHI is the single gateway to the GPU,
 and the kernel abstraction is the single gateway for compute dispatch.

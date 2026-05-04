@@ -614,6 +614,118 @@ impl HostVulkanTexture {
         let _ = self.cached_image_view.set(view);
         Ok(*self.cached_image_view.get().unwrap())
     }
+
+    /// One-shot UNDEFINED → GENERAL barrier on a freshly-allocated
+    /// `vk::Image`. Used by [`crate::core::context::GpuContext::transition_storage_image_to_general`]
+    /// to give example / processor code a way to bring a storage-image
+    /// texture into the layout compute / RT kernels expect — without
+    /// pulling vulkanalia into the consumer.
+    ///
+    /// Synchronous: submits to the graphics queue and waits on a fence
+    /// before returning. The image must not have content the caller
+    /// cares about; UNDEFINED-source transitions allow the driver to
+    /// discard contents.
+    #[cfg(target_os = "linux")]
+    pub fn transition_to_general(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        image: vk::Image,
+    ) -> Result<()> {
+        let device = vulkan_device.device();
+        let pool_info = vk::CommandPoolCreateInfo::builder()
+            .queue_family_index(vulkan_device.queue_family_index())
+            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
+            .build();
+        let pool = unsafe { device.create_command_pool(&pool_info, None) }
+            .map_err(|e| StreamError::GpuError(format!("transition_to_general: create_command_pool: {e}")))?;
+        let cb_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1)
+            .build();
+        let cmd = match unsafe { device.allocate_command_buffers(&cb_info) } {
+            Ok(c) => c[0],
+            Err(e) => {
+                unsafe { device.destroy_command_pool(pool, None) };
+                return Err(StreamError::GpuError(format!(
+                    "transition_to_general: allocate_command_buffers: {e}"
+                )));
+            }
+        };
+        let begin = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .build();
+        unsafe { device.begin_command_buffer(cmd, &begin) }.map_err(|e| {
+            StreamError::GpuError(format!("transition_to_general: begin_command_buffer: {e}"))
+        })?;
+        let barrier = vk::ImageMemoryBarrier2::builder()
+            .src_stage_mask(vk::PipelineStageFlags2::NONE)
+            .src_access_mask(vk::AccessFlags2::empty())
+            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .dst_access_mask(
+                vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
+            )
+            .old_layout(vk::ImageLayout::UNDEFINED)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+            .image(image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            })
+            .build();
+        let barriers = [barrier];
+        let dep = vk::DependencyInfo::builder()
+            .image_memory_barriers(&barriers)
+            .build();
+        unsafe { device.cmd_pipeline_barrier2(cmd, &dep) };
+        unsafe { device.end_command_buffer(cmd) }.map_err(|e| {
+            StreamError::GpuError(format!("transition_to_general: end_command_buffer: {e}"))
+        })?;
+
+        let cmd_info = vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(cmd)
+            .build();
+        let cmd_infos = [cmd_info];
+        let submit = vk::SubmitInfo2::builder()
+            .command_buffer_infos(&cmd_infos)
+            .build();
+        let fence_info = vk::FenceCreateInfo::default();
+        let fence = unsafe { device.create_fence(&fence_info, None) }.map_err(|e| {
+            StreamError::GpuError(format!("transition_to_general: create_fence: {e}"))
+        })?;
+        let submits = [submit];
+        let submit_result = unsafe {
+            HostVulkanDevice::submit_to_queue(
+                vulkan_device,
+                vulkan_device.queue(),
+                &submits,
+                fence,
+            )
+        };
+        if let Err(e) = submit_result {
+            unsafe {
+                device.destroy_fence(fence, None);
+                device.destroy_command_pool(pool, None);
+            }
+            return Err(e);
+        }
+        let wait_result = unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
+            .map(|_| ())
+            .map_err(|e| {
+                StreamError::GpuError(format!(
+                    "transition_to_general: wait_for_fences: {e}"
+                ))
+            });
+        unsafe {
+            device.destroy_fence(fence, None);
+            device.destroy_command_pool(pool, None);
+        }
+        wait_result
+    }
 }
 
 #[cfg(target_os = "linux")]

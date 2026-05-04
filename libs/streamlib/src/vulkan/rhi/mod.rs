@@ -23,7 +23,7 @@ mod vulkan_texture;
 pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
-pub use vulkan_device::HostVulkanDevice;
+pub use vulkan_device::{HostVulkanDevice, RayTracingPipelineProperties};
 #[allow(unused_imports)]
 pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 #[cfg(target_os = "linux")]
@@ -64,6 +64,18 @@ mod vulkan_graphics_kernel;
 pub use vulkan_graphics_kernel::{
     OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel,
 };
+
+#[cfg(target_os = "linux")]
+mod vulkan_acceleration_structure;
+#[cfg(target_os = "linux")]
+pub use vulkan_acceleration_structure::{
+    AccelerationStructureKind, TlasInstanceDesc, VulkanAccelerationStructure, IDENTITY_TRANSFORM,
+};
+
+#[cfg(target_os = "linux")]
+mod vulkan_ray_tracing_kernel;
+#[cfg(target_os = "linux")]
+pub use vulkan_ray_tracing_kernel::VulkanRayTracingKernel;
 
 mod vulkan_texture_readback;
 pub use vulkan_texture_readback::VulkanTextureReadback;

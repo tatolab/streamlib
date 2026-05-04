@@ -4,10 +4,10 @@
 #![allow(clippy::disallowed_macros)] // build.rs uses println!/eprintln! for `cargo:` directives
 
 //! Build script: links Metal on Apple platforms; on Linux compiles the
-//! Vulkan compute, vertex, and fragment shaders this crate ships
-//! (`vulkan/rhi/shaders/*.{comp,vert,frag}`) to SPIR-V via `glslc` and
-//! stages the artifacts in `OUT_DIR` for `include_bytes!` to consume at
-//! compile time.
+//! Vulkan compute, vertex, fragment, and ray-tracing shaders this crate
+//! ships (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to
+//! SPIR-V via `glslc` and stages the artifacts in `OUT_DIR` for
+//! `include_bytes!` to consume at compile time.
 
 fn main() {
     // Link Metal framework on macOS for MP4 writer
@@ -92,5 +92,61 @@ fn compile_shaders() {
             status.success(),
             "glslc failed to compile test_blend.comp with INPUT_COUNT={n}"
         );
+    }
+
+    // Ray-tracing shaders. Need Vulkan 1.2 + SPIR-V 1.4 minimum for the
+    // `SPV_KHR_ray_tracing` opcodes; `glslc`'s default target is
+    // Vulkan 1.0 / SPIR-V 1.0 which silently drops `GL_EXT_ray_tracing`.
+    let rt_shaders: &[(&str, &str, &str)] = &[
+        (
+            "src/vulkan/rhi/shaders/raytracing_test.rgen",
+            "raytracing_test.rgen.spv",
+            "rgen",
+        ),
+        (
+            "src/vulkan/rhi/shaders/raytracing_test.rmiss",
+            "raytracing_test.rmiss.spv",
+            "rmiss",
+        ),
+        (
+            "src/vulkan/rhi/shaders/raytracing_test.rchit",
+            "raytracing_test.rchit.spv",
+            "rchit",
+        ),
+        (
+            "src/vulkan/rhi/shaders/raytracing_showcase.rgen",
+            "raytracing_showcase.rgen.spv",
+            "rgen",
+        ),
+        (
+            "src/vulkan/rhi/shaders/raytracing_showcase.rmiss",
+            "raytracing_showcase.rmiss.spv",
+            "rmiss",
+        ),
+        (
+            "src/vulkan/rhi/shaders/raytracing_showcase.rchit",
+            "raytracing_showcase.rchit.spv",
+            "rchit",
+        ),
+    ];
+
+    for (src, dst, stage) in rt_shaders {
+        let src_path = Path::new(src);
+        let dst_path: PathBuf = Path::new(&out_dir).join(dst);
+
+        println!("cargo:rerun-if-changed={}", src);
+
+        let status = Command::new("glslc")
+            .arg(format!("-fshader-stage={stage}"))
+            .arg("--target-env=vulkan1.2")
+            .arg("--target-spv=spv1.4")
+            .arg("-O")
+            .arg(src_path)
+            .arg("-o")
+            .arg(&dst_path)
+            .status()
+            .expect("Failed to run glslc. Install the Vulkan SDK or ensure glslc is in PATH.");
+
+        assert!(status.success(), "glslc failed to compile {}", src);
     }
 }

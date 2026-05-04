@@ -17,6 +17,7 @@ mod graphics_kernel;
 mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;
+mod ray_tracing_kernel;
 mod texture;
 mod texture_cache;
 mod texture_readback;
@@ -41,6 +42,11 @@ pub use graphics_kernel::{
     VertexInputState, Viewport,
 };
 pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
+pub use ray_tracing_kernel::{
+    validate_shader_groups, RayTracingBindingKind, RayTracingBindingSpec,
+    RayTracingKernelDescriptor, RayTracingPushConstants, RayTracingShaderGroup,
+    RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
+};
 pub use format_converter::RhiFormatConverter;
 pub use format_converter_cache::RhiFormatConverterCache;
 pub use gl_interop::{gl_constants, GlContext, GlTextureBinding};

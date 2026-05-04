@@ -73,7 +73,29 @@ What this means concretely when designing or extending a core system (RHI, IPC, 
 
 What stays the same as the system-prompt defaults:
 
-- Don't fabricate consumers. "What if someone wants X" is hypothetical until X is filed, documented, or in-tree.
+- Don't fabricate consumers *outside a filed issue*. "What if
+  someone wants X" is the kind of speculation that drifts into
+  parallel abstractions solving no filed problem. **A filed issue
+  in any open milestone is itself sufficient sanction**: the
+  ticket is the consumer attestation, and an engine-tier primitive
+  that anchors the use-case class the milestone exists to ship is
+  exactly what we want to land. Don't refuse to start sanctioned
+  work because no separate "concrete consumer" ticket exists, and
+  don't gate pickup on filing one — that turns the rule into a
+  development blocker, which it was never meant to be. The target
+  is a model going off-issue and inventing scope, not a sanctioned
+  engine build-out anchored by a real ticket.
+
+  > ~~Original wording: "Don't fabricate consumers. 'What if
+  > someone wants X' is hypothetical until X is filed, documented,
+  > or in-tree."~~ — Superseded 2026-05-03 during #610. The
+  > original framing was being applied as a gate on sanctioned
+  > engine work, blocking pickup until a separate "consumer"
+  > ticket existed alongside the engine ticket. That inverted the
+  > intent — the rule was meant to catch scope-creep outside an
+  > issue, not to second-guess a milestone's deliverables. Issue
+  > bodies that copied the same gate ("don't start until consumer
+  > filed") were updated in place at the same time.
 - Don't add validation for impossibilities. Type-system invariants don't need runtime checks.
 - Don't keep half-finished implementations or `todo!()` in library code.
 - Don't introduce abstractions that solve no problem the engine is responsible for ("just in case") — but DO introduce abstractions that solve the *class* of problem a core system addresses, when the class is documented.
@@ -352,6 +374,16 @@ declaring their bindings as data and calling `GpuContext::create_compute_kernel`
 SPIR-V reflection (via `rspirv-reflect`) validates the declared layout
 against the shader at construction. See @docs/architecture/compute-kernel.md
 for the full recipe.
+
+Same shape applies to graphics-pipeline work
+(@docs/architecture/graphics-kernel.md) and ray-tracing work
+(@docs/architecture/ray-tracing-kernel.md). Each pipeline kind
+ships its own kernel type with the same SPIR-V-reflected /
+descriptor-managed / pipeline-cached invariants — RT additionally
+owns a shader-binding-table layout and depends on
+`VulkanAccelerationStructure` for BLAS/TLAS construction. Pick the
+kernel that matches the pipeline kind; never hand-roll a parallel
+shape.
 
 #### TextureRegistration — single canonical per-surface state
 

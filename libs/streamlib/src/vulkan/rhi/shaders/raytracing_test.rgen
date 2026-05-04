@@ -1,0 +1,31 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D outputImage;
+
+layout(location = 0) rayPayloadEXT vec3 hitColor;
+
+void main() {
+    vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+    vec2 uv = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
+    vec2 ndc = uv * 2.0 - 1.0;
+
+    vec3 origin = vec3(ndc.x, -ndc.y, 1.0);
+    vec3 direction = vec3(0.0, 0.0, -1.0);
+
+    hitColor = vec3(0.0);
+    traceRayEXT(
+        topLevelAS,
+        gl_RayFlagsOpaqueEXT,
+        0xff,
+        0, 0, 0,
+        origin, 0.001, direction, 100.0,
+        0
+    );
+
+    imageStore(outputImage, ivec2(gl_LaunchIDEXT.xy), vec4(hitColor, 1.0));
+}

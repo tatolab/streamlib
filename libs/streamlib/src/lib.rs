@@ -199,9 +199,11 @@ pub mod linux_surface_share {
 #[cfg(target_os = "linux")]
 pub mod host_rhi {
     pub use crate::vulkan::rhi::{
-        HostMarker, HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTexture,
-        HostVulkanTimelineSemaphore, OffscreenColorTarget, OffscreenDraw,
-        VulkanComputeKernel, VulkanGraphicsKernel, VulkanTextureReadback,
+        AccelerationStructureKind, HostMarker, HostVulkanDevice, HostVulkanPixelBuffer,
+        HostVulkanTexture, HostVulkanTimelineSemaphore, OffscreenColorTarget, OffscreenDraw,
+        RayTracingPipelineProperties, TlasInstanceDesc, VulkanAccelerationStructure,
+        VulkanComputeKernel, VulkanGraphicsKernel, VulkanRayTracingKernel,
+        VulkanTextureReadback, IDENTITY_TRANSFORM,
     };
 
     /// EGL DRM-modifier probe — exposed so adapter conformance tests
