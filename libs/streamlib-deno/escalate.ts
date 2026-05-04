@@ -22,10 +22,17 @@ import type {
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
+  EscalateRequestRegisterAccelerationStructureBlas,
+  EscalateRequestRegisterAccelerationStructureTlas,
+  EscalateRequestRegisterAccelerationStructureTlasInstance,
   EscalateRequestRegisterComputeKernel,
   EscalateRequestRegisterGraphicsKernel,
   EscalateRequestRegisterGraphicsKernelBinding,
   EscalateRequestRegisterGraphicsKernelPipelineState,
+  EscalateRequestRegisterRayTracingKernel,
+  EscalateRequestRegisterRayTracingKernelBinding,
+  EscalateRequestRegisterRayTracingKernelGroup,
+  EscalateRequestRegisterRayTracingKernelStage,
   EscalateRequestReleaseHandle,
   EscalateRequestRunComputeKernel,
   EscalateRequestRunCpuReadbackCopy,
@@ -36,6 +43,8 @@ import type {
   EscalateRequestRunGraphicsDrawScissor,
   EscalateRequestRunGraphicsDrawVertexBuffer,
   EscalateRequestRunGraphicsDrawViewport,
+  EscalateRequestRunRayTracingKernel,
+  EscalateRequestRunRayTracingKernelBinding,
   EscalateRequestTryRunCpuReadbackCopy,
 } from "./_generated_/com_streamlib_escalate_request.ts";
 import {
@@ -56,10 +65,17 @@ export type {
   EscalateRequestAcquirePixelBuffer,
   EscalateRequestAcquireTexture,
   EscalateRequestLog,
+  EscalateRequestRegisterAccelerationStructureBlas,
+  EscalateRequestRegisterAccelerationStructureTlas,
+  EscalateRequestRegisterAccelerationStructureTlasInstance,
   EscalateRequestRegisterComputeKernel,
   EscalateRequestRegisterGraphicsKernel,
   EscalateRequestRegisterGraphicsKernelBinding,
   EscalateRequestRegisterGraphicsKernelPipelineState,
+  EscalateRequestRegisterRayTracingKernel,
+  EscalateRequestRegisterRayTracingKernelBinding,
+  EscalateRequestRegisterRayTracingKernelGroup,
+  EscalateRequestRegisterRayTracingKernelStage,
   EscalateRequestReleaseHandle,
   EscalateRequestRunComputeKernel,
   EscalateRequestRunCpuReadbackCopy,
@@ -70,6 +86,8 @@ export type {
   EscalateRequestRunGraphicsDrawScissor,
   EscalateRequestRunGraphicsDrawVertexBuffer,
   EscalateRequestRunGraphicsDrawViewport,
+  EscalateRequestRunRayTracingKernel,
+  EscalateRequestRunRayTracingKernelBinding,
   EscalateRequestTryRunCpuReadbackCopy,
   EscalateResponse,
   EscalateResponseContended,
@@ -109,12 +127,16 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 export type EscalateOpPayload =
   | Omit<EscalateRequestAcquirePixelBuffer, "request_id">
   | Omit<EscalateRequestAcquireTexture, "request_id">
+  | Omit<EscalateRequestRegisterAccelerationStructureBlas, "request_id">
+  | Omit<EscalateRequestRegisterAccelerationStructureTlas, "request_id">
   | Omit<EscalateRequestRegisterComputeKernel, "request_id">
   | Omit<EscalateRequestRegisterGraphicsKernel, "request_id">
+  | Omit<EscalateRequestRegisterRayTracingKernel, "request_id">
   | Omit<EscalateRequestReleaseHandle, "request_id">
   | Omit<EscalateRequestRunComputeKernel, "request_id">
   | Omit<EscalateRequestRunCpuReadbackCopy, "request_id">
   | Omit<EscalateRequestRunGraphicsDraw, "request_id">
+  | Omit<EscalateRequestRunRayTracingKernel, "request_id">
   | Omit<EscalateRequestTryRunCpuReadbackCopy, "request_id">;
 
 /**
@@ -393,6 +415,122 @@ export class EscalateChannel {
     return await this.request(
       payload as unknown as EscalateOpPayload,
     ) as EscalateOkResponse;
+  }
+
+  /**
+   * Build a triangle-geometry BLAS on the host. Resolves to the
+   * `ok`-payload whose `handle_id` is the bridge-assigned `as_id`.
+   *
+   * `vertices` is the raw little-endian f32 vertex blob (interleaved
+   * `[x, y, z, ...]` — R32G32B32_SFLOAT, stride 12 bytes; total length
+   * must be a multiple of 12). `indices` is the raw little-endian u32
+   * index blob (three indices per triangle; total length must be a
+   * multiple of 12).
+   */
+  async registerAccelerationStructureBlas(args: {
+    label: string;
+    vertices: Uint8Array;
+    indices: Uint8Array;
+  }): Promise<EscalateOkResponse> {
+    return await this.request({
+      op: "register_acceleration_structure_blas",
+      label: args.label,
+      vertices_hex: bytesToHex(args.vertices),
+      indices_hex: bytesToHex(args.indices),
+    }) as EscalateOkResponse;
+  }
+
+  /**
+   * Build a TLAS on the host from a list of instances referencing
+   * previously-built BLASes. Resolves to the `ok`-payload whose
+   * `handle_id` is the bridge-assigned `as_id`. Each entry's
+   * `transform` is exactly 12 floats (row-major 3×4); `mask` is a
+   * uint32 carrying the 8-bit visibility mask (host rejects values
+   * > 0xff).
+   */
+  async registerAccelerationStructureTlas(args: {
+    label: string;
+    instances:
+      readonly EscalateRequestRegisterAccelerationStructureTlasInstance[];
+  }): Promise<EscalateOkResponse> {
+    return await this.request({
+      op: "register_acceleration_structure_tlas",
+      label: args.label,
+      instances: [...args.instances],
+    }) as EscalateOkResponse;
+  }
+
+  /**
+   * Register a ray-tracing kernel on the host. Resolves to the
+   * `ok`-payload whose `handle_id` is the bridge-assigned `kernel_id`
+   * (typically a stable hash over a canonical representation of all
+   * register-time inputs — re-registering an identical descriptor hits
+   * the host-side cache and returns the same id).
+   *
+   * `stages` is a list of `{stage, spv_hex, entry_point}` shapes;
+   * `groups` is the SBT layout (general / triangles_hit /
+   * procedural_hit) referencing stage indices into `stages` (use
+   * `0xFFFFFFFF` as the absent-stage sentinel — JTD has no
+   * `Option<uint32>`); `bindings` is descriptor-set-0 with stages
+   * bitmask `1=RAYGEN | 2=MISS | 4=CLOSEST_HIT | 8=ANY_HIT |
+   * 16=INTERSECTION | 32=CALLABLE`.
+   */
+  async registerRayTracingKernel(args: {
+    label: string;
+    /** Per-stage SPIR-V `Uint8Array` plus stage classification. The
+     * channel hex-encodes each stage's bytes inline so callers don't
+     * have to. `entry_point` defaults to `"main"`. */
+    stages: readonly {
+      stage: EscalateRequestRegisterRayTracingKernelStage["stage"];
+      spv: Uint8Array;
+      entry_point?: string;
+    }[];
+    groups: readonly EscalateRequestRegisterRayTracingKernelGroup[];
+    bindings: readonly EscalateRequestRegisterRayTracingKernelBinding[];
+    pushConstantSize: number;
+    pushConstantStages: number;
+    maxRecursionDepth: number;
+  }): Promise<EscalateOkResponse> {
+    return await this.request({
+      op: "register_ray_tracing_kernel",
+      label: args.label,
+      stages: args.stages.map((s) => ({
+        stage: s.stage,
+        spv_hex: bytesToHex(s.spv),
+        entry_point: s.entry_point ?? "main",
+      })) as unknown as EscalateRequestRegisterRayTracingKernelStage[],
+      groups: [...args.groups],
+      bindings: [...args.bindings],
+      push_constant_size: Math.trunc(args.pushConstantSize),
+      push_constant_stages: Math.trunc(args.pushConstantStages),
+      max_recursion_depth: Math.trunc(args.maxRecursionDepth),
+    }) as EscalateOkResponse;
+  }
+
+  /**
+   * Issue one `vkCmdTraceRaysKHR` against a previously-registered RT
+   * kernel. RT dispatch is synchronous host-side: this resolves once
+   * the host's own command buffer + fence have retired and the
+   * host's writes to the bound storage image are visible to
+   * subsequent submissions.
+   */
+  async runRayTracingKernel(args: {
+    kernelId: string;
+    bindings: readonly EscalateRequestRunRayTracingKernelBinding[];
+    pushConstants: Uint8Array;
+    width: number;
+    height: number;
+    depth: number;
+  }): Promise<EscalateOkResponse> {
+    return await this.request({
+      op: "run_ray_tracing_kernel",
+      kernel_id: args.kernelId,
+      bindings: [...args.bindings],
+      push_constants_hex: bytesToHex(args.pushConstants),
+      width: Math.trunc(args.width),
+      height: Math.trunc(args.height),
+      depth: Math.trunc(args.depth),
+    }) as EscalateOkResponse;
   }
 
   async releaseHandle(handleId: string): Promise<EscalateOkResponse> {

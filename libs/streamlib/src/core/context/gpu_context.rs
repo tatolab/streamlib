@@ -56,6 +56,8 @@ use super::compute_kernel_bridge::ComputeKernelBridge;
 #[cfg(target_os = "linux")]
 use super::graphics_kernel_bridge::GraphicsKernelBridge;
 #[cfg(target_os = "linux")]
+use super::ray_tracing_kernel_bridge::RayTracingKernelBridge;
+#[cfg(target_os = "linux")]
 use super::cpu_readback_bridge::CpuReadbackBridge;
 use super::surface_store::SurfaceStore;
 use super::texture_pool::{
@@ -427,6 +429,17 @@ pub struct GpuContext {
     /// escalate handler responds with an `Err` in that case).
     #[cfg(target_os = "linux")]
     graphics_kernel_bridge: Arc<Mutex<Option<Arc<dyn GraphicsKernelBridge>>>>,
+    /// Host-side bridge for the ray-tracing-kernel escalate ops
+    /// (`register_acceleration_structure_blas`,
+    /// `register_acceleration_structure_tlas`, `register_ray_tracing_kernel`,
+    /// `run_ray_tracing_kernel`). Wired by application code that exposes the
+    /// host's [`crate::vulkan::rhi::VulkanRayTracingKernel`] +
+    /// [`crate::vulkan::rhi::VulkanAccelerationStructure`] to subprocess
+    /// customers; left unset on hosts that don't expose RT dispatch (the
+    /// escalate handler responds with an `Err` in that case, as does any
+    /// device that lacks the `VK_KHR_ray_tracing_pipeline` extension chain).
+    #[cfg(target_os = "linux")]
+    ray_tracing_kernel_bridge: Arc<Mutex<Option<Arc<dyn RayTracingKernelBridge>>>>,
 }
 
 impl GpuContext {
@@ -451,6 +464,8 @@ impl GpuContext {
             compute_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
+            #[cfg(target_os = "linux")]
+            ray_tracing_kernel_bridge: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -475,6 +490,8 @@ impl GpuContext {
             compute_kernel_bridge: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             graphics_kernel_bridge: Arc::new(Mutex::new(None)),
+            #[cfg(target_os = "linux")]
+            ray_tracing_kernel_bridge: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -1409,6 +1426,28 @@ impl GpuContext {
         self.graphics_kernel_bridge.lock().unwrap().clone()
     }
 
+    // =========================================================================
+    // RayTracingKernelBridge — host-side dispatch for the RT-kernel escalate ops
+    // =========================================================================
+
+    /// Register a [`RayTracingKernelBridge`] implementation. The escalate
+    /// handler dispatches `register_acceleration_structure_blas`,
+    /// `register_acceleration_structure_tlas`, `register_ray_tracing_kernel`,
+    /// and `run_ray_tracing_kernel` requests through this bridge; until it
+    /// is set, those requests fail with an "unsupported" error response.
+    /// Linux-only: RT escalate uses the Linux-side `VulkanRayTracingKernel`
+    /// + `VulkanAccelerationStructure`.
+    #[cfg(target_os = "linux")]
+    pub fn set_ray_tracing_kernel_bridge(&self, bridge: Arc<dyn RayTracingKernelBridge>) {
+        *self.ray_tracing_kernel_bridge.lock().unwrap() = Some(bridge);
+    }
+
+    /// Get the registered [`RayTracingKernelBridge`], if any.
+    #[cfg(target_os = "linux")]
+    pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
+        self.ray_tracing_kernel_bridge.lock().unwrap().clone()
+    }
+
     /// Check in a pixel buffer to the surface-share service, returning a surface ID.
     ///
     /// The surface ID can be shared with other processes (e.g., Python subprocesses)
@@ -2064,6 +2103,13 @@ impl GpuContextFullAccess {
     #[cfg(target_os = "linux")]
     pub fn graphics_kernel_bridge(&self) -> Option<Arc<dyn GraphicsKernelBridge>> {
         self.inner.graphics_kernel_bridge()
+    }
+
+    /// Get the registered ray-tracing-kernel bridge, if any. Reachable only
+    /// inside `escalate(|full| ...)` since it requires `FullAccess`.
+    #[cfg(target_os = "linux")]
+    pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
+        self.inner.ray_tracing_kernel_bridge()
     }
 }
 

@@ -9,6 +9,8 @@ mod cpu_readback_bridge;
 mod gpu_context;
 #[cfg(target_os = "linux")]
 mod graphics_kernel_bridge;
+#[cfg(target_os = "linux")]
+mod ray_tracing_kernel_bridge;
 mod runtime_context;
 mod surface_store;
 pub mod texture_pool;
@@ -32,6 +34,14 @@ pub use graphics_kernel_bridge::{
     GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
     ScissorRectWire, VertexAttributeFormatWire, VertexInputAttributeDecl,
     VertexInputBindingDecl, VertexInputRateWire, ViewportWire,
+};
+#[cfg(target_os = "linux")]
+pub use ray_tracing_kernel_bridge::{
+    BlasRegisterDecl, RayTracingBindingDecl, RayTracingBindingKindWire,
+    RayTracingBindingValue, RayTracingKernelBridge, RayTracingKernelRegisterDecl,
+    RayTracingKernelRunDispatch, RayTracingShaderGroupWire, RayTracingShaderStageWire,
+    RayTracingStageDecl, TlasInstanceDeclWire, TlasRegisterDecl,
+    RAY_TRACING_STAGE_INDEX_NONE,
 };
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 pub use runtime_context::{

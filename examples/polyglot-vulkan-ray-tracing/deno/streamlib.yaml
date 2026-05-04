@@ -1,0 +1,15 @@
+package:
+  name: polyglot-vulkan-ray-tracing-deno
+  version: "0.1.0"
+  description: "Polyglot Vulkan adapter scenario (#667) — Deno ray-traced triangle via host VulkanRayTracingKernel + AS escalate IPC"
+
+processors:
+  - name: com.tatolab.vulkan_ray_tracing_deno
+    version: "1.0.0"
+    description: "Builds a single-triangle BLAS + identity TLAS via escalate IPC, registers an RT kernel, and dispatches one trace into a host-pre-registered storage image"
+    runtime: deno
+    execution: reactive
+    entrypoint: "vulkan_ray_tracing.ts:default"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0
