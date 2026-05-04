@@ -12,35 +12,33 @@ dependencies = [
     "moderngl>=5.8.0",
     "pillow>=10.0.0",
     "msgpack>=1.0",
+    # Skia GPU canvas — `streamlib.adapters.skia.SkiaContext` (#485)
+    # composes on `streamlib.adapters.opengl` and brings up Skia via
+    # `skia.GrDirectContext.MakeGL(MakeEGL())`. Used by LowerThird and
+    # Watermark.
+    "skia-python>=87.0",
 
-    # macOS path: MediaPipe + GLB skinning + Skia overlays.
-    'mediapipe>=0.10.18; sys_platform == "darwin"',
-    'PyOpenGL>=3.1.0; sys_platform == "darwin"',
-    'pygltflib>=1.16.0; sys_platform == "darwin"',
-    'pyrr>=0.10.3; sys_platform == "darwin"',
-    'skia-python>=87.0; sys_platform == "darwin"',
-
-    # Linux path (#484): YOLOv8 pose detection on CUDA via streamlib-adapter-cuda
-    # DLPack zero-copy. ultralytics pulls torch + torchvision + opencv-python
+    # YOLOv8 pose detection on CUDA via streamlib-adapter-cuda DLPack
+    # zero-copy. ultralytics pulls torch + torchvision + opencv-python
     # transitively. The torch wheel must be the CUDA-capable build matching
     # the local NVIDIA driver — we route through PyTorch's cu128 index below
     # (PyPI's default torch ships cu130 which mismatches a CUDA 12.8 driver).
-    'ultralytics>=8.3; sys_platform == "linux"',
-    'torch>=2.4; sys_platform == "linux"',
-    'torchvision>=0.19; sys_platform == "linux"',
-    'opencv-python-headless>=4.8; sys_platform == "linux"',
+    "ultralytics>=8.3",
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "opencv-python-headless>=4.8",
 ]
 
-# Route torch/torchvision through PyTorch's cu128 wheel index on Linux so
-# uv resolves a CUDA-12.8-built wheel instead of the PyPI default cu130.
+# Route torch/torchvision through PyTorch's cu128 wheel index so uv
+# resolves a CUDA-12.8-built wheel instead of the PyPI default cu130.
 # `explicit = true` keeps the index out of the resolver for any package
 # not in `tool.uv.sources`.
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu128" },
 ]
 torchvision = [
-    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu128" },
 ]
 
 [[tool.uv.index]]

@@ -167,7 +167,8 @@ pub use linux::{
 #[cfg(target_os = "linux")]
 pub use vulkan::rhi::{
     blending_compositor_flags, BlendingCompositorInputs, BlendingCompositorPushConstants,
-    CrtFilmGrainInputs, CrtFilmGrainPushConstants, VulkanBlendingCompositor, VulkanCrtFilmGrain,
+    BlendingLayer, BlendingOutput, CrtFilmGrainInputs, CrtFilmGrainPushConstants,
+    VulkanBlendingCompositor, VulkanCrtFilmGrain,
 };
 
 /// Per-runtime surface-share service primitives. Exposed for adapter

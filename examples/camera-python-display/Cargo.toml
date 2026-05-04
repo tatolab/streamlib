@@ -19,18 +19,10 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Vision framework for person segmentation (macOS only)
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = { workspace = true }
-objc2-vision = { workspace = true }
-objc2-foundation = { workspace = true }
-objc2-core-video = { workspace = true }
-objc2-io-surface = { workspace = true }
-objc2-metal = { workspace = true }
-metal = "0.31"
-mach2 = "0.4"
-
-# Surface adapters for the Linux subprocess GPU path (#484, #485, #486)
+# Surface adapters for the Linux subprocess GPU path (#484, #485, #486).
+# macOS support was removed in #485 — the pre-RHI CGL+IOSurface path
+# could not consume the tiled DMA-BUF VkImages every modern producer
+# emits. See `src/main.rs` for context.
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
 streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }

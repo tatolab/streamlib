@@ -1,24 +1,29 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// Multi-layer alpha-over compositor (Porter-Duff "over" with premultiplied
-// alpha). Mirrors the macOS Metal fragment shader at
-// examples/camera-python-display/src/shaders/blending_compositor.metal —
-// 4-layer composite (video → lower_third → watermark → PiP) with the same
-// Cyberpunk N54 News PiP chrome and bilinear sampling for the PiP content.
+// 4-layer Porter-Duff "over" compositor with animated PiP frame chrome.
 //
-// All buffers are packed BGRA8 in little-endian uint32: byte0=B, byte1=G,
-// byte2=R, byte3=A. Same packing as nv12_to_bgra.comp.
+// Inputs are sampled textures bound at descriptor-set 0 — the hardware
+// sampler handles tiled-format access and (for the PiP layer) bilinear
+// filtering, replacing the manual byte unpack + nearest-neighbor
+// `sample_layer_pixel` / hand-rolled bilinear `sample_pip_bilinear`
+// helpers from the pre-RHI compute shader. Output goes to the bound
+// color attachment via `out vec4 outColor`.
+//
+// Layer-size contract: video, lower_third, and watermark must match the
+// output's dimensions exactly (sampled at the same screen UV); the PiP
+// layer may be any size and is bilinearly downsampled into the PiP
+// rect.
 
 #version 450
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(location = 0) in vec2 inUV;
+layout(location = 0) out vec4 outColor;
 
-layout(set = 0, binding = 0) readonly buffer VideoIn      { uint data[]; } video_in;
-layout(set = 0, binding = 1) readonly buffer LowerThirdIn { uint data[]; } lower_third_in;
-layout(set = 0, binding = 2) readonly buffer WatermarkIn  { uint data[]; } watermark_in;
-layout(set = 0, binding = 3) readonly buffer PipIn        { uint data[]; } pip_in;
-layout(set = 0, binding = 4) writeonly buffer Output      { uint data[]; } output_buf;
+layout(set = 0, binding = 0) uniform sampler2D videoTex;
+layout(set = 0, binding = 1) uniform sampler2D lowerThirdTex;
+layout(set = 0, binding = 2) uniform sampler2D watermarkTex;
+layout(set = 0, binding = 3) uniform sampler2D pipTex;
 
 layout(push_constant) uniform PushConstants {
     uint width;
@@ -30,9 +35,9 @@ layout(push_constant) uniform PushConstants {
     float pip_slide_progress;
 } pc;
 
-// Cyberpunk palette (matches Metal kernel verbatim).
-const vec4 CYBER_CYAN   = vec4(0.0,   0.94,  1.0,   1.0);   // #00f0ff
-const vec4 CYBER_YELLOW = vec4(0.988, 0.933, 0.039, 1.0);   // #fcee0a
+// Cyberpunk palette — matches the macOS Metal kernel's chrome.
+const vec4 CYBER_CYAN   = vec4(0.0,   0.94,  1.0,   1.0);
+const vec4 CYBER_YELLOW = vec4(0.988, 0.933, 0.039, 1.0);
 const vec4 CYBER_WHITE  = vec4(1.0,   1.0,   1.0,   1.0);
 const vec4 CYBER_DARK   = vec4(0.06,  0.06,  0.08,  0.95);
 
@@ -43,63 +48,12 @@ const float PIP_MARGIN       = 0.02;
 const float PIP_BORDER       = 0.004;
 const float TITLE_BAR_HEIGHT = 0.045;
 
-vec4 unpack_bgra(uint p) {
-    float b = float((p >>  0u) & 0xFFu) / 255.0;
-    float g = float((p >>  8u) & 0xFFu) / 255.0;
-    float r = float((p >> 16u) & 0xFFu) / 255.0;
-    float a = float((p >> 24u) & 0xFFu) / 255.0;
-    return vec4(r, g, b, a);
-}
-
-uint pack_bgra(vec4 c) {
-    uint b = uint(clamp(c.b, 0.0, 1.0) * 255.0 + 0.5);
-    uint g = uint(clamp(c.g, 0.0, 1.0) * 255.0 + 0.5);
-    uint r = uint(clamp(c.r, 0.0, 1.0) * 255.0 + 0.5);
-    uint a = uint(clamp(c.a, 0.0, 1.0) * 255.0 + 0.5);
-    return b | (g << 8u) | (r << 16u) | (a << 24u);
-}
-
-// Sample a screen-sized layer at integer pixel `pos`. Layers are aligned
-// 1:1 with the output (the upstream Skia/Python/etc. processors produce
-// canvases at the camera resolution — same shape as the Metal version).
-vec4 sample_layer_pixel(uint binding_idx, uvec2 pos) {
-    uint idx = pos.y * pc.width + pos.x;
-    if (binding_idx == 0u) return unpack_bgra(video_in.data[idx]);
-    if (binding_idx == 1u) return unpack_bgra(lower_third_in.data[idx]);
-    return unpack_bgra(watermark_in.data[idx]);
-}
-
-vec4 read_pip_texel(ivec2 p) {
-    p = clamp(p, ivec2(0), ivec2(int(pc.pip_width) - 1, int(pc.pip_height) - 1));
-    uint idx = uint(p.y) * pc.pip_width + uint(p.x);
-    return unpack_bgra(pip_in.data[idx]);
-}
-
-// Bilinear sample of the PiP source at UV (0..1, 0..1). Matches Metal's
-// linear sampler with clamp-to-edge addressing; without bilinear the
-// downsample to ~28% of screen width looks pixelated.
-vec4 sample_pip_bilinear(vec2 uv) {
-    vec2 size = vec2(float(pc.pip_width), float(pc.pip_height));
-    vec2 sample_pos = uv * size - vec2(0.5);
-    ivec2 base = ivec2(floor(sample_pos));
-    vec2 frac_pos = fract(sample_pos);
-
-    vec4 c00 = read_pip_texel(base + ivec2(0, 0));
-    vec4 c10 = read_pip_texel(base + ivec2(1, 0));
-    vec4 c01 = read_pip_texel(base + ivec2(0, 1));
-    vec4 c11 = read_pip_texel(base + ivec2(1, 1));
-
-    vec4 top    = mix(c00, c10, frac_pos.x);
-    vec4 bottom = mix(c01, c11, frac_pos.x);
-    return mix(top, bottom, frac_pos.y);
-}
-
 bool in_rect(vec2 uv, vec2 lo, vec2 hi) {
     return uv.x >= lo.x && uv.x <= hi.x && uv.y >= lo.y && uv.y <= hi.y;
 }
 
 // Cyberpunk N54 News PiP frame (border + title bar + content + corner techmarks).
-// Slides in from the right; `slideProgress` 0 → fully off-screen, 1 → docked.
+// Slides in from the right; `slide_progress` 0 → fully off-screen, 1 → docked.
 vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
     float slide_offset = (1.0 - slide_progress) * (PIP_WIDTH + PIP_MARGIN + 0.1);
 
@@ -120,7 +74,6 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
         return base;
     }
 
-    // Outer cyan border.
     bool outer_inner = in_rect(uv,
         vec2(frame_left + PIP_BORDER, frame_top + PIP_BORDER),
         vec2(frame_right - PIP_BORDER, frame_bottom - PIP_BORDER));
@@ -128,7 +81,6 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
         return CYBER_CYAN;
     }
 
-    // Inner white border (half thickness).
     float inner_border = PIP_BORDER * 0.5;
     bool inner_inner = in_rect(uv,
         vec2(frame_left + PIP_BORDER + inner_border, frame_top + PIP_BORDER + inner_border),
@@ -137,7 +89,6 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
         return CYBER_WHITE;
     }
 
-    // Title bar (yellow with subtle scanline darkening).
     if (in_rect(uv, vec2(pip_left, title_top), vec2(pip_right, title_bottom))) {
         vec4 title = CYBER_YELLOW;
         title.a = 0.95;
@@ -148,7 +99,6 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
         return title;
     }
 
-    // Content area: PiP texture with corner techmarks.
     if (in_rect(uv, vec2(pip_left, pip_top), vec2(pip_right, pip_bottom))) {
         vec4 result = CYBER_DARK;
 
@@ -157,7 +107,9 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
             (uv.y - pip_top)  / (pip_bottom - pip_top)
         );
 
-        vec4 pip_color = sample_pip_bilinear(pip_uv);
+        // Hardware-bilinear sample of the PiP source — replaces the
+        // hand-rolled bilinear from the pre-RHI compute shader.
+        vec4 pip_color = texture(pipTex, pip_uv);
         result.rgb = pip_color.rgb + result.rgb * (1.0 - pip_color.a);
         result.a   = pip_color.a   + result.a   * (1.0 - pip_color.a);
 
@@ -187,35 +139,31 @@ vec4 draw_pip_frame(vec2 uv, float slide_progress, vec4 base) {
 }
 
 void main() {
-    uvec2 pos = gl_GlobalInvocationID.xy;
-    if (pos.x >= pc.width || pos.y >= pc.height) return;
-
     bool has_video        = (pc.flags & 1u) != 0u;
     bool has_lower_third  = (pc.flags & 2u) != 0u;
     bool has_watermark    = (pc.flags & 4u) != 0u;
     bool has_pip          = (pc.flags & 8u) != 0u;
 
-    // Base layer: video, or the dark-blue placeholder the Metal version uses
-    // before any camera frame has arrived.
+    // Base layer: video, or the dark-blue fallback before any camera
+    // frame has arrived (matches the macOS Metal kernel's pre-frame
+    // placeholder so the swapchain shows something on cold start).
     vec4 result = has_video
-        ? sample_layer_pixel(0u, pos)
+        ? texture(videoTex, inUV)
         : vec4(0.05, 0.05, 0.12, 1.0);
 
     if (has_lower_third) {
-        vec4 src = sample_layer_pixel(1u, pos);
+        vec4 src = texture(lowerThirdTex, inUV);
         result.rgb = src.rgb + result.rgb * (1.0 - src.a);
         result.a   = src.a   + result.a   * (1.0 - src.a);
     }
     if (has_watermark) {
-        vec4 src = sample_layer_pixel(2u, pos);
+        vec4 src = texture(watermarkTex, inUV);
         result.rgb = src.rgb + result.rgb * (1.0 - src.a);
         result.a   = src.a   + result.a   * (1.0 - src.a);
     }
     if (has_pip && pc.pip_slide_progress > 0.0) {
-        vec2 uv = vec2(float(pos.x) + 0.5, float(pos.y) + 0.5)
-                / vec2(float(pc.width), float(pc.height));
-        result = draw_pip_frame(uv, pc.pip_slide_progress, result);
+        result = draw_pip_frame(inUV, pc.pip_slide_progress, result);
     }
 
-    output_buf.data[pos.y * pc.width + pos.x] = pack_bgra(result);
+    outColor = result;
 }

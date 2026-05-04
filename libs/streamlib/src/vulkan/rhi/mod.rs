@@ -86,7 +86,8 @@ pub use vulkan_format_converter::VulkanFormatConverter;
 mod vulkan_blending_compositor;
 pub use vulkan_blending_compositor::{
     flag_bits as blending_compositor_flags, BlendingCompositorInputs,
-    BlendingCompositorPushConstants, VulkanBlendingCompositor,
+    BlendingCompositorPushConstants, BlendingLayer, BlendingOutput,
+    VulkanBlendingCompositor,
 };
 
 mod vulkan_crt_film_grain;
