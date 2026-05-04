@@ -320,6 +320,16 @@ class VulkanContext:
         self._graphics_kernel_ids: dict[
             tuple[int, int], tuple[bytes, bytes, str]
         ] = {}
+        # Ray-tracing-kernel cache: same identity-keyed pattern, but
+        # keyed by a tuple of every stage's SPIR-V `id(...)`. The
+        # `frozenset` of ids ignores stage order (re-ordering doesn't
+        # matter to the host's reflection-driven cache) but still
+        # collides on identical input. Strong refs pin every stage's
+        # bytes so Python can't recycle their ids while the cached
+        # kernel_id is in flight.
+        self._ray_tracing_kernel_ids: dict[
+            frozenset[int], tuple[tuple[bytes, ...], str]
+        ] = {}
 
     def _wire_signatures(self) -> None:
         """Set ctypes signatures on every `slpn_vulkan_*` entry point.
@@ -688,6 +698,180 @@ class VulkanContext:
             depth_target_uuid=depth_target_uuid,
             viewport=viewport,
             scissor=scissor,
+        )
+
+    def build_blas(
+        self,
+        *,
+        vertices: bytes,
+        indices: bytes,
+        label: str = "polyglot-blas",
+    ) -> str:
+        """Build a triangle-geometry BLAS on the host via escalate IPC.
+        Returns the bridge-assigned ``as_id``.
+
+        ``vertices`` is the raw little-endian f32 vertex blob
+        (interleaved ``[x, y, z, ...]``); ``indices`` is the raw
+        little-endian u32 index blob (three indices per triangle).
+        """
+        from streamlib.escalate import channel as _escalate_channel
+
+        ch = _escalate_channel()
+        response = ch.register_acceleration_structure_blas(
+            label=label,
+            vertices=vertices,
+            indices=indices,
+        )
+        return response["handle_id"]
+
+    def build_tlas(
+        self,
+        *,
+        instances: Sequence[Dict[str, Any]],
+        label: str = "polyglot-tlas",
+    ) -> str:
+        """Build a TLAS on the host from a list of instances referencing
+        previously-built BLASes. Returns the bridge-assigned ``as_id``.
+
+        Each entry in ``instances`` is a dict with ``blas_id``,
+        ``transform`` (12 floats — row-major 3×4), ``custom_index``,
+        ``mask``, ``sbt_record_offset``, ``flags``. See
+        :meth:`streamlib.escalate.EscalateChannel.register_acceleration_structure_tlas`
+        for the full shape.
+        """
+        from streamlib.escalate import channel as _escalate_channel
+
+        ch = _escalate_channel()
+        response = ch.register_acceleration_structure_tlas(
+            label=label,
+            instances=instances,
+        )
+        return response["handle_id"]
+
+    def dispatch_ray_tracing(
+        self,
+        *,
+        storage_image,
+        tlas_id: str,
+        width: int,
+        height: int,
+        stages: Sequence[Dict[str, Any]],
+        groups: Sequence[Dict[str, Any]],
+        binding_decls: Sequence[Dict[str, Any]],
+        bindings: Sequence[Dict[str, Any]] = (),
+        push_constants: bytes = b"",
+        push_constant_stages: int = 1,  # default: RAYGEN
+        max_recursion_depth: int = 1,
+        depth: int = 1,
+        label: str = "polyglot-ray-tracing",
+    ) -> None:
+        """Dispatch a ray-tracing trace against ``storage_image``'s
+        host-side ``VkImage`` via escalate IPC.
+
+        ``storage_image`` is the surface acquired via :meth:`acquire_write`
+        (a ``StreamlibSurface``). The surface's ``pool_id`` (the host
+        surface-share UUID) is used as the ``target_id`` for any
+        ``storage_image`` binding entry whose ``target_id`` field is set
+        to ``"<self>"`` — convenience to keep callers from having to
+        thread the UUID through twice.
+
+        The first call with a given list of SPIR-V byte buffers
+        (identity-compared) registers the kernel through escalate IPC;
+        subsequent calls with the same buffers hit the local kernel-id
+        cache and skip registration.
+
+        ``stages`` is a list of ``{"spv": bytes, "stage": str,
+        "entry_point": str}``. ``groups`` and ``binding_decls`` mirror the
+        host RHI descriptor shape — see
+        :meth:`streamlib.escalate.EscalateChannel.register_ray_tracing_kernel`
+        for the full per-field reference.
+
+        ``bindings`` is the per-trace binding-value list; entries with
+        ``target_id == "<self>"`` resolve to ``storage_image``'s
+        ``pool_id``, entries with ``target_id == "<tlas>"`` resolve to
+        ``tlas_id``, anything else is passed through verbatim.
+
+        RT dispatch is synchronous host-side: when this returns, the
+        host's writes to the storage image are visible to subsequent
+        submissions.
+        """
+        from streamlib.escalate import channel as _escalate_channel
+
+        pool_id = self._surface_pool_id(storage_image)
+        # NOTE: unlike `dispatch_compute` / `dispatch_graphics`, RT
+        # dispatch does not require `acquire_write` to have populated
+        # `_surface_ids`. The host bridge resolves UUIDs from its own
+        # surface map; the storage image may be a host-local
+        # `HostVulkanTexture` that was never exported through
+        # surface-share (the polyglot-vulkan-ray-tracing example uses
+        # exactly this shape — `STORAGE_BINDING` only, no DMA-BUF).
+        # Pre-acquiring stays useful when the surface IS exported
+        # (sync semantics) but isn't a hard precondition.
+        ch = _escalate_channel()
+
+        # Caller-facing stages carry `{spv: bytes, stage: str,
+        # entry_point: str}`. Identity-keyed kernel cache: when the
+        # caller stashes the same `bytes` objects on the processor at
+        # `setup()` and reuses them across dispatches, the frozenset of
+        # ids hits the cache. Fresh `bytes` instances are a cache miss
+        # and re-register through escalate IPC.
+        #
+        # The cache key is `frozenset(id(s["spv"]) for s in stages)` —
+        # the *original* objects' ids. We MUST pin those original
+        # objects (NOT copies) so Python can't recycle their ids
+        # while the cached kernel_id is in flight. `tuple(s["spv"]
+        # for s in stages)` keeps strong references to the originals;
+        # wrapping in `bytes(...)` would create copies whose ids are
+        # unrelated to the cache key, defeating the pin.
+        spv_objs: tuple[bytes, ...] = tuple(s["spv"] for s in stages)
+        cache_key: frozenset[int] = frozenset(id(s["spv"]) for s in stages)
+        normalized_stages: list[Dict[str, Any]] = [
+            {
+                "stage": str(s["stage"]),
+                "spv_hex": bytes(s["spv"]).hex(),
+                "entry_point": str(s.get("entry_point", "main")),
+            }
+            for s in stages
+        ]
+
+        kernel_id: Optional[str] = None
+        cached_entry = self._ray_tracing_kernel_ids.get(cache_key)
+        if cached_entry is not None and len(cached_entry[0]) == len(stages):
+            kernel_id = cached_entry[1]
+        if kernel_id is None:
+            response = ch.register_ray_tracing_kernel(
+                label=label,
+                stages=normalized_stages,
+                groups=groups,
+                bindings=binding_decls,
+                push_constant_size=len(push_constants),
+                push_constant_stages=int(push_constant_stages),
+                max_recursion_depth=int(max_recursion_depth),
+            )
+            kernel_id = response["handle_id"]
+            self._ray_tracing_kernel_ids[cache_key] = (spv_objs, kernel_id)
+
+        # Resolve `<self>` and `<tlas>` placeholders to concrete UUIDs.
+        resolved_bindings: list[Dict[str, Any]] = []
+        for b in bindings:
+            target = str(b["target_id"])
+            if target == "<self>":
+                target = pool_id
+            elif target == "<tlas>":
+                target = tlas_id
+            resolved_bindings.append({
+                "binding": int(b["binding"]),
+                "kind": str(b["kind"]),
+                "target_id": target,
+            })
+
+        ch.run_ray_tracing_kernel(
+            kernel_id=kernel_id,
+            bindings=resolved_bindings,
+            push_constants=push_constants,
+            width=int(width),
+            height=int(height),
+            depth=int(depth),
         )
 
     def release_for_cross_process(

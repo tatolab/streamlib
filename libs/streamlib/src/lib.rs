@@ -206,6 +206,13 @@ pub mod host_rhi {
         VulkanTextureReadback, IDENTITY_TRANSFORM,
     };
 
+    /// `vk::GeometryInstanceFlagsKHR` re-export — needed by callers
+    /// (e.g. polyglot-vulkan-ray-tracing's bridge) that construct
+    /// [`TlasInstanceDesc`] values from u32 wire bitmasks. Lives here
+    /// so example / adapter code doesn't need a direct vulkanalia
+    /// dep (the Vulkan RHI boundary doesn't permit one).
+    pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
+
     /// EGL DRM-modifier probe — exposed so adapter conformance tests
     /// can pick a sampler-only modifier (`external_only=TRUE`) that
     /// would otherwise be discarded by the higher-level

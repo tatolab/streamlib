@@ -23,6 +23,8 @@ use uuid::Uuid;
 use crate::_generated_::com_streamlib_escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
+    EscalateRequestRegisterAccelerationStructureBlas,
+    EscalateRequestRegisterAccelerationStructureTlas,
     EscalateRequestRegisterComputeKernel, EscalateRequestRegisterGraphicsKernel,
     EscalateRequestRegisterGraphicsKernelBindingKind,
     EscalateRequestRegisterGraphicsKernelPipelineState,
@@ -41,11 +43,15 @@ use crate::_generated_::com_streamlib_escalate_request::{
     EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
     EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
     EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate,
-    EscalateRequestReleaseHandle, EscalateRequestRunComputeKernel,
-    EscalateRequestRunCpuReadbackCopy, EscalateRequestRunCpuReadbackCopyDirection,
-    EscalateRequestRunGraphicsDraw, EscalateRequestRunGraphicsDrawBindingKind,
-    EscalateRequestRunGraphicsDrawDrawKind, EscalateRequestRunGraphicsDrawIndexBufferIndexType,
-    EscalateRequestTryRunCpuReadbackCopy, EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestRegisterRayTracingKernel, EscalateRequestRegisterRayTracingKernelBindingKind,
+    EscalateRequestRegisterRayTracingKernelGroupKind,
+    EscalateRequestRegisterRayTracingKernelStageStage, EscalateRequestReleaseHandle,
+    EscalateRequestRunComputeKernel, EscalateRequestRunCpuReadbackCopy,
+    EscalateRequestRunCpuReadbackCopyDirection, EscalateRequestRunGraphicsDraw,
+    EscalateRequestRunGraphicsDrawBindingKind, EscalateRequestRunGraphicsDrawDrawKind,
+    EscalateRequestRunGraphicsDrawIndexBufferIndexType, EscalateRequestRunRayTracingKernel,
+    EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopy,
+    EscalateRequestTryRunCpuReadbackCopyDirection,
 };
 use crate::_generated_::com_streamlib_escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
@@ -55,14 +61,18 @@ use crate::core::context::{PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use crate::core::context::{
-    BlendFactorWire, BlendOpWire, ComputeKernelBridge, CpuReadbackBridge,
+    BlasRegisterDecl, BlendFactorWire, BlendOpWire, ComputeKernelBridge, CpuReadbackBridge,
     CpuReadbackCopyDirection, CullModeWire, DepthCompareOpWire, DepthFormatWire,
     DynamicStateWire, FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire,
     GraphicsBindingValue, GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge,
     GraphicsKernelRegisterDecl, GraphicsKernelRunDraw, GraphicsPipelineStateWire,
     GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
-    ScissorRectWire, VertexAttributeFormatWire, VertexInputAttributeDecl,
-    VertexInputBindingDecl, VertexInputRateWire, ViewportWire,
+    RayTracingBindingDecl, RayTracingBindingKindWire, RayTracingBindingValue,
+    RayTracingKernelBridge, RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch,
+    RayTracingShaderGroupWire, RayTracingShaderStageWire, RayTracingStageDecl,
+    ScissorRectWire, TlasInstanceDeclWire, TlasRegisterDecl, VertexAttributeFormatWire,
+    VertexInputAttributeDecl, VertexInputBindingDecl, VertexInputRateWire, ViewportWire,
+    RAY_TRACING_STAGE_INDEX_NONE,
 };
 use crate::core::logging::{push_polyglot_record, LogLevel, LogRecord, Source};
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat, TextureUsages};
@@ -91,6 +101,10 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::RunComputeKernel(p) => Some(&p.request_id),
         EscalateRequest::RegisterGraphicsKernel(p) => Some(&p.request_id),
         EscalateRequest::RunGraphicsDraw(p) => Some(&p.request_id),
+        EscalateRequest::RegisterAccelerationStructureBlas(p) => Some(&p.request_id),
+        EscalateRequest::RegisterAccelerationStructureTlas(p) => Some(&p.request_id),
+        EscalateRequest::RegisterRayTracingKernel(p) => Some(&p.request_id),
+        EscalateRequest::RunRayTracingKernel(p) => Some(&p.request_id),
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
@@ -454,6 +468,67 @@ pub(crate) fn handle_escalate_op(
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "run_graphics_draw is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RegisterAccelerationStructureBlas(req) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_register_acceleration_structure_blas(sandbox, rid, req))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = req;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message:
+                        "register_acceleration_structure_blas is only available on Linux"
+                            .to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RegisterAccelerationStructureTlas(req) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_register_acceleration_structure_tlas(sandbox, rid, req))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = req;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message:
+                        "register_acceleration_structure_tlas is only available on Linux"
+                            .to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RegisterRayTracingKernel(req) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_register_ray_tracing_kernel(sandbox, rid, req))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = req;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "register_ray_tracing_kernel is only available on Linux"
+                        .to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RunRayTracingKernel(req) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_run_ray_tracing_kernel(sandbox, rid, req))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = req;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "run_ray_tracing_kernel is only available on Linux".to_string(),
                 }))
             }
         }
@@ -1214,6 +1289,517 @@ fn handle_run_graphics_draw(
             request_id: rid,
             message: format!("run_graphics_draw bridge call failed: {msg}"),
         }),
+    }
+}
+
+/// Map a wire-format `register_acceleration_structure_blas` request
+/// through the registered [`RayTracingKernelBridge`].
+///
+/// Decodes the hex-encoded vertex (`f32` triples) and index (`u32`
+/// triples) blobs, validates triangle-shape consistency, and asks the
+/// bridge to build a triangle BLAS. Returns the bridge-assigned
+/// `as_id` on success.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. `vertices_hex` / `indices_hex` doesn't decode as hex bytes.
+/// 2. Vertex blob length is not a multiple of 12 (one f32 = 4 bytes;
+///    one vertex = 3 floats = 12 bytes).
+/// 3. Index blob length is not a multiple of 12 (one u32 = 4 bytes;
+///    one triangle = 3 indices = 12 bytes).
+/// 4. No bridge is registered.
+/// 5. Bridge `register_blas` returned an error — typically empty
+///    geometry, missing RT extensions, or AS-build submit failure.
+#[cfg(target_os = "linux")]
+fn handle_register_acceleration_structure_blas(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    req: EscalateRequestRegisterAccelerationStructureBlas,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let vertex_bytes = match decode_hex(&req.vertices_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!(
+                    "register_acceleration_structure_blas: vertices_hex decode: {e}"
+                ),
+            });
+        }
+    };
+    if vertex_bytes.len() % 12 != 0 {
+        return EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!(
+                "register_acceleration_structure_blas: vertex blob length {} is not a \
+                 multiple of 12 bytes (one vertex = 3 × f32)",
+                vertex_bytes.len()
+            ),
+        });
+    }
+    let vertices: Vec<f32> = vertex_bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+
+    let index_bytes = match decode_hex(&req.indices_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!(
+                    "register_acceleration_structure_blas: indices_hex decode: {e}"
+                ),
+            });
+        }
+    };
+    if index_bytes.len() % 12 != 0 {
+        return EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!(
+                "register_acceleration_structure_blas: index blob length {} is not a \
+                 multiple of 12 bytes (one triangle = 3 × u32)",
+                index_bytes.len()
+            ),
+        });
+    }
+    let indices: Vec<u32> = index_bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+
+    let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
+        full.ray_tracing_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "register_acceleration_structure_blas: no RayTracingKernelBridge \
+                 registered on GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    let decl = BlasRegisterDecl {
+        label: req.label,
+        vertices,
+        indices,
+    };
+    match bridge.register_blas(&decl) {
+        Ok(as_id) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: as_id,
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!(
+                "register_acceleration_structure_blas bridge call failed: {msg}"
+            ),
+        }),
+    }
+}
+
+/// Map a wire-format `register_acceleration_structure_tlas` request
+/// through the registered [`RayTracingKernelBridge`].
+///
+/// Validates each instance's transform layout (exactly 12 floats —
+/// row-major 3×4) and 8-bit mask, then asks the bridge to build a
+/// TLAS. The bridge resolves each `blas_id` against its own map.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. Instance `transform` length isn't 12 floats.
+/// 2. Instance `mask` exceeds 0xff (JTD has no native u8).
+/// 3. No bridge is registered.
+/// 4. Bridge `register_tlas` returned an error — typically empty
+///    instance list, unknown blas_id, kind mismatch (a TLAS appearing
+///    as a BLAS reference), or AS-build submit failure.
+#[cfg(target_os = "linux")]
+fn handle_register_acceleration_structure_tlas(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    req: EscalateRequestRegisterAccelerationStructureTlas,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    if req.instances.is_empty() {
+        return EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message:
+                "register_acceleration_structure_tlas: instances must not be empty (TLAS \
+                 requires at least one instance per Vulkan spec)"
+                    .to_string(),
+        });
+    }
+    let mut instances: Vec<TlasInstanceDeclWire> = Vec::with_capacity(req.instances.len());
+    for (idx, inst) in req.instances.into_iter().enumerate() {
+        if inst.transform.len() != 12 {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!(
+                    "register_acceleration_structure_tlas: instance {idx} transform has \
+                     {} floats, expected exactly 12 (row-major 3×4)",
+                    inst.transform.len()
+                ),
+            });
+        }
+        if inst.mask > 0xff {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!(
+                    "register_acceleration_structure_tlas: instance {idx} mask {} > 0xff \
+                     (mask is 8-bit; wire form is uint32)",
+                    inst.mask
+                ),
+            });
+        }
+        let t = &inst.transform;
+        let transform = [
+            [t[0], t[1], t[2], t[3]],
+            [t[4], t[5], t[6], t[7]],
+            [t[8], t[9], t[10], t[11]],
+        ];
+        instances.push(TlasInstanceDeclWire {
+            blas_id: inst.blas_id,
+            transform,
+            custom_index: inst.custom_index,
+            mask: inst.mask as u8,
+            sbt_record_offset: inst.sbt_record_offset,
+            flags: inst.flags,
+        });
+    }
+
+    let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
+        full.ray_tracing_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "register_acceleration_structure_tlas: no RayTracingKernelBridge \
+                 registered on GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    let decl = TlasRegisterDecl {
+        label: req.label,
+        instances,
+    };
+    match bridge.register_tlas(&decl) {
+        Ok(as_id) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: as_id,
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!(
+                "register_acceleration_structure_tlas bridge call failed: {msg}"
+            ),
+        }),
+    }
+}
+
+/// Map a wire-format `register_ray_tracing_kernel` request through
+/// the registered [`RayTracingKernelBridge`].
+///
+/// Decodes per-stage SPIR-V hex blobs, translates the wire-format
+/// stage / group / binding kinds into the bridge's typed mirrors, and
+/// asks the bridge to register the kernel. The bridge returns a
+/// stable `kernel_id` (typically SHA-256 over a canonical
+/// representation of all register-time inputs); identical
+/// re-registration hits the bridge's cache and returns the same id.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. Any stage's `spv_hex` doesn't decode as hex bytes.
+/// 2. No bridge is registered.
+/// 3. Bridge `register_kernel` returned an error — typically
+///    reflection failure, push-constant size mismatch, group/stage
+///    inconsistency, or pipeline build failure.
+#[cfg(target_os = "linux")]
+fn handle_register_ray_tracing_kernel(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    req: EscalateRequestRegisterRayTracingKernel,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let mut stages: Vec<RayTracingStageDecl> = Vec::with_capacity(req.stages.len());
+    for (idx, st) in req.stages.into_iter().enumerate() {
+        let spv = match decode_hex(&st.spv_hex) {
+            Ok(b) => b,
+            Err(e) => {
+                return EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!(
+                        "register_ray_tracing_kernel: stages[{idx}].spv_hex decode: {e}"
+                    ),
+                });
+            }
+        };
+        stages.push(RayTracingStageDecl {
+            stage: ray_tracing_stage_from_wire(st.stage),
+            spv,
+            entry_point: st.entry_point,
+        });
+    }
+
+    let mut groups: Vec<RayTracingShaderGroupWire> = Vec::with_capacity(req.groups.len());
+    for (idx, g) in req.groups.into_iter().enumerate() {
+        let group = match g.kind {
+            EscalateRequestRegisterRayTracingKernelGroupKind::General => {
+                RayTracingShaderGroupWire::General {
+                    general_stage: g.general_stage,
+                }
+            }
+            EscalateRequestRegisterRayTracingKernelGroupKind::TrianglesHit => {
+                RayTracingShaderGroupWire::TrianglesHit {
+                    closest_hit_stage: optional_stage(g.closest_hit_stage),
+                    any_hit_stage: optional_stage(g.any_hit_stage),
+                }
+            }
+            EscalateRequestRegisterRayTracingKernelGroupKind::ProceduralHit => {
+                if g.intersection_stage == RAY_TRACING_STAGE_INDEX_NONE {
+                    return EscalateResponse::Err(EscalateResponseErr {
+                        request_id: rid,
+                        message: format!(
+                            "register_ray_tracing_kernel: groups[{idx}] procedural_hit \
+                             must set intersection_stage (got {RAY_TRACING_STAGE_INDEX_NONE} \
+                             which is the absent-sentinel)"
+                        ),
+                    });
+                }
+                RayTracingShaderGroupWire::ProceduralHit {
+                    intersection_stage: g.intersection_stage,
+                    closest_hit_stage: optional_stage(g.closest_hit_stage),
+                    any_hit_stage: optional_stage(g.any_hit_stage),
+                }
+            }
+        };
+        groups.push(group);
+    }
+
+    let bindings: Vec<RayTracingBindingDecl> = req
+        .bindings
+        .into_iter()
+        .map(|b| RayTracingBindingDecl {
+            binding: b.binding,
+            kind: ray_tracing_register_binding_kind_from_wire(b.kind),
+            stages: b.stages,
+        })
+        .collect();
+
+    let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
+        full.ray_tracing_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "register_ray_tracing_kernel: no RayTracingKernelBridge registered on \
+                 GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    let decl = RayTracingKernelRegisterDecl {
+        label: req.label,
+        stages,
+        groups,
+        bindings,
+        push_constant_size: req.push_constant_size,
+        push_constant_stages: req.push_constant_stages,
+        max_recursion_depth: req.max_recursion_depth,
+    };
+
+    match bridge.register_kernel(&decl) {
+        Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: kernel_id,
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("register_ray_tracing_kernel bridge call failed: {msg}"),
+        }),
+    }
+}
+
+/// Map a wire-format `run_ray_tracing_kernel` request through the
+/// registered [`RayTracingKernelBridge`].
+///
+/// RT dispatch on the host is synchronous (the bridge calls
+/// [`crate::vulkan::rhi::VulkanRayTracingKernel::trace_rays`] which
+/// submits + waits on its own command buffer + fence), so by the time
+/// this function returns `Ok`, the GPU work has retired and the
+/// host's writes to the storage image are visible.
+///
+/// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
+/// by the original request_id):
+/// 1. `push_constants_hex` doesn't decode as hex bytes.
+/// 2. No bridge is registered.
+/// 3. Bridge `run_kernel` returned an error — typically unrecognized
+///    `kernel_id`, target lookup failure (binding `target_id` doesn't
+///    resolve in the bridge's surface / AS map), or Vulkan submit
+///    failure.
+#[cfg(target_os = "linux")]
+fn handle_run_ray_tracing_kernel(
+    sandbox: &GpuContextLimitedAccess,
+    rid: String,
+    req: EscalateRequestRunRayTracingKernel,
+) -> EscalateResponse {
+    use std::sync::Arc;
+
+    let push_constants = match decode_hex(&req.push_constants_hex) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!("run_ray_tracing_kernel: push_constants_hex decode: {e}"),
+            });
+        }
+    };
+
+    let bindings: Vec<RayTracingBindingValue> = req
+        .bindings
+        .into_iter()
+        .map(|b| RayTracingBindingValue {
+            binding: b.binding,
+            kind: ray_tracing_run_binding_kind_from_wire(b.kind),
+            target_id: b.target_id,
+        })
+        .collect();
+
+    let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
+        full.ray_tracing_kernel_bridge().ok_or_else(|| {
+            crate::core::error::StreamError::Configuration(
+                "run_ray_tracing_kernel: no RayTracingKernelBridge registered on \
+                 GpuContext"
+                    .to_string(),
+            )
+        })
+    }) {
+        Ok(b) => b,
+        Err(e) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: e.to_string(),
+            });
+        }
+    };
+
+    let kernel_id = req.kernel_id;
+    let dispatch = RayTracingKernelRunDispatch {
+        kernel_id: kernel_id.clone(),
+        bindings,
+        push_constants,
+        width: req.width,
+        height: req.height,
+        depth: req.depth,
+    };
+
+    match bridge.run_kernel(&dispatch) {
+        Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id: rid,
+            handle_id: kernel_id,
+            width: None,
+            height: None,
+            format: None,
+            usage: None,
+            timeline_value: None,
+        }),
+        Err(msg) => EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message: format!("run_ray_tracing_kernel bridge call failed: {msg}"),
+        }),
+    }
+}
+
+/// Convert a sentinel-encoded wire stage index back into an
+/// `Option<u32>`. The wire form uses `0xFFFFFFFF` to mean "absent"
+/// because JTD has no `Option<uint32>`.
+#[cfg(target_os = "linux")]
+fn optional_stage(idx: u32) -> Option<u32> {
+    if idx == RAY_TRACING_STAGE_INDEX_NONE {
+        None
+    } else {
+        Some(idx)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ray_tracing_stage_from_wire(
+    stage: EscalateRequestRegisterRayTracingKernelStageStage,
+) -> RayTracingShaderStageWire {
+    use EscalateRequestRegisterRayTracingKernelStageStage as W;
+    match stage {
+        W::RayGen => RayTracingShaderStageWire::RayGen,
+        W::Miss => RayTracingShaderStageWire::Miss,
+        W::ClosestHit => RayTracingShaderStageWire::ClosestHit,
+        W::AnyHit => RayTracingShaderStageWire::AnyHit,
+        W::Intersection => RayTracingShaderStageWire::Intersection,
+        W::Callable => RayTracingShaderStageWire::Callable,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ray_tracing_register_binding_kind_from_wire(
+    kind: EscalateRequestRegisterRayTracingKernelBindingKind,
+) -> RayTracingBindingKindWire {
+    use EscalateRequestRegisterRayTracingKernelBindingKind as W;
+    match kind {
+        W::StorageBuffer => RayTracingBindingKindWire::StorageBuffer,
+        W::UniformBuffer => RayTracingBindingKindWire::UniformBuffer,
+        W::SampledTexture => RayTracingBindingKindWire::SampledTexture,
+        W::StorageImage => RayTracingBindingKindWire::StorageImage,
+        W::AccelerationStructure => RayTracingBindingKindWire::AccelerationStructure,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ray_tracing_run_binding_kind_from_wire(
+    kind: EscalateRequestRunRayTracingKernelBindingKind,
+) -> RayTracingBindingKindWire {
+    use EscalateRequestRunRayTracingKernelBindingKind as W;
+    match kind {
+        W::StorageBuffer => RayTracingBindingKindWire::StorageBuffer,
+        W::UniformBuffer => RayTracingBindingKindWire::UniformBuffer,
+        W::SampledTexture => RayTracingBindingKindWire::SampledTexture,
+        W::StorageImage => RayTracingBindingKindWire::StorageImage,
+        W::AccelerationStructure => RayTracingBindingKindWire::AccelerationStructure,
     }
 }
 
@@ -3493,6 +4079,1041 @@ mod tests {
                 }
                 other => panic!("expected DrawIndexed, got {other:?}"),
             }
+        }
+    }
+
+    /// Tests for the ray-tracing-kernel + acceleration-structure
+    /// escalate ops (issue #667).
+    ///
+    /// Mirrors the `graphics_kernel_dispatch` mod above: a synthetic
+    /// `RecordingRayTracingBridge` keeps the tests independent of a
+    /// working `VkDevice` (and an RT-capable GPU), so handler-shape
+    /// regressions surface even on machines without a GPU.
+    #[cfg(target_os = "linux")]
+    mod ray_tracing_kernel_dispatch {
+        use super::super::*;
+        use super::EscalateHandleRegistry;
+        use std::sync::{Arc, Mutex};
+
+        use crate::_generated_::com_streamlib_escalate_request::{
+            EscalateRequestRegisterAccelerationStructureTlasInstance,
+            EscalateRequestRegisterRayTracingKernelBinding,
+            EscalateRequestRegisterRayTracingKernelGroup,
+            EscalateRequestRegisterRayTracingKernelStage,
+            EscalateRequestRunRayTracingKernelBinding,
+        };
+        use crate::core::context::{
+            BlasRegisterDecl, GpuContext, GpuContextLimitedAccess, RayTracingKernelBridge,
+            RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, TlasRegisterDecl,
+            RAY_TRACING_STAGE_INDEX_NONE,
+        };
+
+        /// Synthetic bridge — accepts any caller-provided BLAS/TLAS/kernel
+        /// (no SPIR-V reflection or AS build), keys handles by SHA-256
+        /// over the canonicalized inputs so identical descriptors hit
+        /// the cache, and records every `run_kernel` for later assertion.
+        struct RecordingRayTracingBridge {
+            blases: Mutex<std::collections::HashMap<String, BlasRegisterDecl>>,
+            tlases: Mutex<std::collections::HashMap<String, TlasRegisterDecl>>,
+            kernels: Mutex<std::collections::HashMap<String, RayTracingKernelRegisterDecl>>,
+            runs: Mutex<Vec<RayTracingKernelRunDispatch>>,
+        }
+
+        impl RecordingRayTracingBridge {
+            fn new() -> Arc<Self> {
+                Arc::new(Self {
+                    blases: Mutex::new(std::collections::HashMap::new()),
+                    tlases: Mutex::new(std::collections::HashMap::new()),
+                    kernels: Mutex::new(std::collections::HashMap::new()),
+                    runs: Mutex::new(Vec::new()),
+                })
+            }
+
+            fn blas_count(&self) -> usize {
+                self.blases.lock().unwrap().len()
+            }
+
+            fn tlas_count(&self) -> usize {
+                self.tlases.lock().unwrap().len()
+            }
+
+            fn kernel_count(&self) -> usize {
+                self.kernels.lock().unwrap().len()
+            }
+
+            fn last_kernel(&self) -> Option<RayTracingKernelRegisterDecl> {
+                self.kernels.lock().unwrap().values().next().cloned()
+            }
+
+            fn last_tlas(&self) -> Option<TlasRegisterDecl> {
+                self.tlases.lock().unwrap().values().next().cloned()
+            }
+
+            fn runs(&self) -> Vec<RayTracingKernelRunDispatch> {
+                self.runs.lock().unwrap().clone()
+            }
+
+            fn blas_key(decl: &BlasRegisterDecl) -> String {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(b"blas|v=");
+                for f in &decl.vertices {
+                    h.update(&f.to_le_bytes());
+                }
+                h.update(b"|i=");
+                for i in &decl.indices {
+                    h.update(&i.to_le_bytes());
+                }
+                format!("{:x}", h.finalize())
+            }
+
+            fn tlas_key(decl: &TlasRegisterDecl) -> String {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(b"tlas|n=");
+                h.update(&(decl.instances.len() as u32).to_le_bytes());
+                for inst in &decl.instances {
+                    h.update(b"|b=");
+                    h.update(inst.blas_id.as_bytes());
+                    h.update(b"|c=");
+                    h.update(&inst.custom_index.to_le_bytes());
+                    h.update(b"|m=");
+                    h.update(&[inst.mask]);
+                }
+                format!("{:x}", h.finalize())
+            }
+
+            fn kernel_key(decl: &RayTracingKernelRegisterDecl) -> String {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(b"k|s=");
+                h.update(&(decl.stages.len() as u32).to_le_bytes());
+                for s in &decl.stages {
+                    h.update(&s.spv);
+                    h.update(b"|");
+                }
+                h.update(b"|g=");
+                h.update(&(decl.groups.len() as u32).to_le_bytes());
+                h.update(b"|nb=");
+                h.update(&(decl.bindings.len() as u32).to_le_bytes());
+                h.update(b"|pcs=");
+                h.update(&decl.push_constant_size.to_le_bytes());
+                h.update(b"|mrd=");
+                h.update(&decl.max_recursion_depth.to_le_bytes());
+                format!("{:x}", h.finalize())
+            }
+        }
+
+        impl RayTracingKernelBridge for RecordingRayTracingBridge {
+            fn register_blas(
+                &self,
+                decl: &BlasRegisterDecl,
+            ) -> std::result::Result<String, String> {
+                if decl.vertices.is_empty() || decl.indices.is_empty() {
+                    return Err("BLAS requires non-empty vertices + indices".into());
+                }
+                let id = Self::blas_key(decl);
+                self.blases
+                    .lock()
+                    .unwrap()
+                    .entry(id.clone())
+                    .or_insert_with(|| decl.clone());
+                Ok(id)
+            }
+
+            fn register_tlas(
+                &self,
+                decl: &TlasRegisterDecl,
+            ) -> std::result::Result<String, String> {
+                if decl.instances.is_empty() {
+                    return Err("TLAS must have at least one instance".into());
+                }
+                let blases = self.blases.lock().unwrap();
+                for (i, inst) in decl.instances.iter().enumerate() {
+                    if !blases.contains_key(&inst.blas_id) {
+                        return Err(format!(
+                            "TLAS instance {i} references unknown blas_id '{}'",
+                            inst.blas_id
+                        ));
+                    }
+                }
+                drop(blases);
+                let id = Self::tlas_key(decl);
+                self.tlases
+                    .lock()
+                    .unwrap()
+                    .entry(id.clone())
+                    .or_insert_with(|| decl.clone());
+                Ok(id)
+            }
+
+            fn register_kernel(
+                &self,
+                decl: &RayTracingKernelRegisterDecl,
+            ) -> std::result::Result<String, String> {
+                if decl.stages.is_empty() {
+                    return Err("kernel requires at least one shader stage".into());
+                }
+                if decl.groups.is_empty() {
+                    return Err("kernel requires at least one shader group".into());
+                }
+                let id = Self::kernel_key(decl);
+                self.kernels
+                    .lock()
+                    .unwrap()
+                    .entry(id.clone())
+                    .or_insert_with(|| decl.clone());
+                Ok(id)
+            }
+
+            fn run_kernel(
+                &self,
+                dispatch: &RayTracingKernelRunDispatch,
+            ) -> std::result::Result<(), String> {
+                if !self
+                    .kernels
+                    .lock()
+                    .unwrap()
+                    .contains_key(&dispatch.kernel_id)
+                {
+                    return Err(format!(
+                        "kernel_id '{}' not registered with this bridge",
+                        dispatch.kernel_id
+                    ));
+                }
+                self.runs.lock().unwrap().push(dispatch.clone());
+                Ok(())
+            }
+        }
+
+        fn make_sandbox_with_bridge(
+            bridge: Option<Arc<dyn RayTracingKernelBridge>>,
+        ) -> Option<GpuContextLimitedAccess> {
+            let gpu = match GpuContext::init_for_platform_sync() {
+                Ok(g) => g,
+                Err(_) => return None,
+            };
+            if let Some(b) = bridge {
+                gpu.set_ray_tracing_kernel_bridge(b);
+            }
+            Some(GpuContextLimitedAccess::new(gpu))
+        }
+
+        // ----- BLAS register tests --------------------------------------
+
+        fn make_blas_req(
+            request_id: &str,
+            vertices_hex: &str,
+            indices_hex: &str,
+        ) -> EscalateRequestRegisterAccelerationStructureBlas {
+            EscalateRequestRegisterAccelerationStructureBlas {
+                request_id: request_id.to_string(),
+                label: "test-blas".to_string(),
+                vertices_hex: vertices_hex.to_string(),
+                indices_hex: indices_hex.to_string(),
+            }
+        }
+
+        /// Encode `[f32]` as the lowercase hex blob the wire expects.
+        fn vertex_hex(vs: &[f32]) -> String {
+            let mut bytes = Vec::with_capacity(vs.len() * 4);
+            for v in vs {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+            bytes_to_hex(&bytes)
+        }
+
+        /// Encode `[u32]` as the lowercase hex blob the wire expects.
+        fn index_hex(is: &[u32]) -> String {
+            let mut bytes = Vec::with_capacity(is.len() * 4);
+            for i in is {
+                bytes.extend_from_slice(&i.to_le_bytes());
+            }
+            bytes_to_hex(&bytes)
+        }
+
+        fn bytes_to_hex(b: &[u8]) -> String {
+            let mut s = String::with_capacity(b.len() * 2);
+            for &x in b {
+                s.push_str(&format!("{:02x}", x));
+            }
+            s
+        }
+
+        const TRIANGLE_VERTS: &[f32] = &[
+            0.0, 0.5, 0.0, // top
+            -0.5, -0.5, 0.0, // bottom-left
+            0.5, -0.5, 0.0, // bottom-right
+        ];
+        const TRIANGLE_INDICES: &[u32] = &[0, 1, 2];
+
+        #[test]
+        fn register_blas_without_bridge_returns_err() {
+            let sandbox = match make_sandbox_with_bridge(None) {
+                Some(s) => s,
+                None => {
+                    println!("register_blas_without_bridge_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                "req-blas-1",
+                &vertex_hex(TRIANGLE_VERTS),
+                &index_hex(TRIANGLE_INDICES),
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-blas-1");
+                    assert!(
+                        err.message.contains("RayTracingKernelBridge"),
+                        "expected bridge-not-registered error, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err when no bridge registered, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn register_blas_with_invalid_vertex_hex_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_blas_with_invalid_vertex_hex_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                "req-bad-v",
+                "xyz123",
+                &index_hex(TRIANGLE_INDICES),
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-v");
+                    assert!(err.message.contains("vertices_hex"), "got: {}", err.message);
+                }
+                other => panic!("expected Err for bad vertices_hex, got {other:?}"),
+            }
+            assert_eq!(bridge.blas_count(), 0);
+        }
+
+        #[test]
+        fn register_blas_with_misaligned_vertex_blob_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_blas_with_misaligned_vertex_blob_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            // 11 bytes (not a multiple of 12 — should be rejected before the
+            // bridge is even called).
+            let req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                "req-misaligned-v",
+                &"00".repeat(11),
+                &index_hex(TRIANGLE_INDICES),
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-misaligned-v");
+                    assert!(
+                        err.message.contains("multiple of 12"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err for misaligned vertex blob, got {other:?}"
+                ),
+            }
+            assert_eq!(bridge.blas_count(), 0);
+        }
+
+        #[test]
+        fn register_blas_with_misaligned_index_blob_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_blas_with_misaligned_index_blob_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            // 8 bytes (not a multiple of 12 — should be rejected).
+            let req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                "req-misaligned-i",
+                &vertex_hex(TRIANGLE_VERTS),
+                &"00".repeat(8),
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-misaligned-i");
+                    assert!(
+                        err.message.contains("multiple of 12"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err for misaligned index blob, got {other:?}"
+                ),
+            }
+            assert_eq!(bridge.blas_count(), 0);
+        }
+
+        #[test]
+        fn register_blas_succeeds_and_caches() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!("register_blas_succeeds_and_caches: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req1 = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                "req-blas-a",
+                &vertex_hex(TRIANGLE_VERTS),
+                &index_hex(TRIANGLE_INDICES),
+            ));
+            let resp1 = handle_escalate_op(&sandbox, &registry, req1)
+                .expect("must produce a response");
+            let id1 = match resp1 {
+                EscalateResponse::Ok(ok) => {
+                    assert_eq!(ok.request_id, "req-blas-a");
+                    ok.handle_id
+                }
+                other => panic!("expected Ok, got {other:?}"),
+            };
+            // Re-register identical descriptor — bridge cache hit, same id.
+            let req2 = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                "req-blas-b",
+                &vertex_hex(TRIANGLE_VERTS),
+                &index_hex(TRIANGLE_INDICES),
+            ));
+            let resp2 = handle_escalate_op(&sandbox, &registry, req2)
+                .expect("must produce a response");
+            let id2 = match resp2 {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok on re-register, got {other:?}"),
+            };
+            assert_eq!(id1, id2, "identical BLAS descriptors must collide on as_id");
+            assert_eq!(bridge.blas_count(), 1, "cache must coalesce identical BLAS");
+        }
+
+        // ----- TLAS register tests --------------------------------------
+
+        fn make_tlas_req(
+            request_id: &str,
+            blas_id: &str,
+        ) -> EscalateRequestRegisterAccelerationStructureTlas {
+            EscalateRequestRegisterAccelerationStructureTlas {
+                request_id: request_id.to_string(),
+                label: "test-tlas".to_string(),
+                instances: vec![
+                    EscalateRequestRegisterAccelerationStructureTlasInstance {
+                        blas_id: blas_id.to_string(),
+                        transform: vec![
+                            1.0, 0.0, 0.0, 0.0, // row 0
+                            0.0, 1.0, 0.0, 0.0, // row 1
+                            0.0, 0.0, 1.0, 0.0, // row 2
+                        ],
+                        custom_index: 7,
+                        mask: 0xff,
+                        sbt_record_offset: 0,
+                        flags: 0,
+                    },
+                ],
+            }
+        }
+
+        #[test]
+        fn register_tlas_with_wrong_transform_length_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_tlas_with_wrong_transform_length_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_tlas_req("req-bad-tx", "blas-x");
+            req.instances[0].transform = vec![1.0; 11]; // wrong length
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterAccelerationStructureTlas(req),
+            )
+            .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-tx");
+                    assert!(err.message.contains("transform"), "got: {}", err.message);
+                }
+                other => panic!(
+                    "expected Err for wrong-length transform, got {other:?}"
+                ),
+            }
+            assert_eq!(bridge.tlas_count(), 0);
+        }
+
+        #[test]
+        fn register_tlas_with_oversized_mask_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_tlas_with_oversized_mask_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_tlas_req("req-bad-mask", "blas-x");
+            req.instances[0].mask = 0xfff; // > 0xff, should be rejected
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterAccelerationStructureTlas(req),
+            )
+            .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-mask");
+                    assert!(err.message.contains("mask"), "got: {}", err.message);
+                }
+                other => panic!("expected Err for oversized mask, got {other:?}"),
+            }
+            assert_eq!(bridge.tlas_count(), 0);
+        }
+
+        #[test]
+        fn register_tlas_succeeds_after_blas() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_tlas_succeeds_after_blas: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            // 1. Register a BLAS first to obtain a real as_id.
+            let blas_req = EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
+                "req-blas",
+                &vertex_hex(TRIANGLE_VERTS),
+                &index_hex(TRIANGLE_INDICES),
+            ));
+            let blas_resp = handle_escalate_op(&sandbox, &registry, blas_req)
+                .expect("must produce a response");
+            let blas_id = match blas_resp {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok for BLAS register, got {other:?}"),
+            };
+            // 2. Now register a TLAS pointing at it.
+            let tlas_req = EscalateRequest::RegisterAccelerationStructureTlas(
+                make_tlas_req("req-tlas", &blas_id),
+            );
+            let tlas_resp = handle_escalate_op(&sandbox, &registry, tlas_req)
+                .expect("must produce a response");
+            let tlas_id = match tlas_resp {
+                EscalateResponse::Ok(ok) => {
+                    assert_eq!(ok.request_id, "req-tlas");
+                    ok.handle_id
+                }
+                other => panic!("expected Ok for TLAS register, got {other:?}"),
+            };
+            assert!(!tlas_id.is_empty(), "TLAS id must be non-empty");
+            // Verify the bridge actually saw the right shape.
+            let tlas_decl = bridge
+                .last_tlas()
+                .expect("bridge must have stored the TLAS decl");
+            assert_eq!(tlas_decl.instances.len(), 1);
+            assert_eq!(tlas_decl.instances[0].blas_id, blas_id);
+            assert_eq!(tlas_decl.instances[0].custom_index, 7);
+            assert_eq!(tlas_decl.instances[0].mask, 0xff);
+            assert_eq!(
+                tlas_decl.instances[0].transform,
+                [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                ]
+            );
+        }
+
+        #[test]
+        fn register_tlas_with_unknown_blas_id_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_tlas_with_unknown_blas_id_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
+                "req-tlas-bad",
+                "definitely-not-a-real-blas-id",
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-tlas-bad");
+                    assert!(
+                        err.message.contains("unknown blas_id"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err for unknown blas_id, got {other:?}"
+                ),
+            }
+            assert_eq!(bridge.tlas_count(), 0);
+        }
+
+        // ----- Kernel register + run tests ------------------------------
+
+        fn make_kernel_req(
+            request_id: &str,
+        ) -> EscalateRequestRegisterRayTracingKernel {
+            EscalateRequestRegisterRayTracingKernel {
+                request_id: request_id.to_string(),
+                label: "test-rt-kernel".to_string(),
+                stages: vec![
+                    EscalateRequestRegisterRayTracingKernelStage {
+                        stage: EscalateRequestRegisterRayTracingKernelStageStage::RayGen,
+                        spv_hex: "deadbeef".to_string(),
+                        entry_point: "main".to_string(),
+                    },
+                    EscalateRequestRegisterRayTracingKernelStage {
+                        stage: EscalateRequestRegisterRayTracingKernelStageStage::Miss,
+                        spv_hex: "cafebabe".to_string(),
+                        entry_point: "main".to_string(),
+                    },
+                    EscalateRequestRegisterRayTracingKernelStage {
+                        stage: EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit,
+                        spv_hex: "facefeed".to_string(),
+                        entry_point: "main".to_string(),
+                    },
+                ],
+                groups: vec![
+                    EscalateRequestRegisterRayTracingKernelGroup {
+                        kind: EscalateRequestRegisterRayTracingKernelGroupKind::General,
+                        general_stage: 0,
+                        closest_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                        any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                        intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                    },
+                    EscalateRequestRegisterRayTracingKernelGroup {
+                        kind: EscalateRequestRegisterRayTracingKernelGroupKind::General,
+                        general_stage: 1,
+                        closest_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                        any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                        intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                    },
+                    EscalateRequestRegisterRayTracingKernelGroup {
+                        kind: EscalateRequestRegisterRayTracingKernelGroupKind::TrianglesHit,
+                        general_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                        closest_hit_stage: 2,
+                        any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                        intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                    },
+                ],
+                bindings: vec![
+                    EscalateRequestRegisterRayTracingKernelBinding {
+                        binding: 0,
+                        kind: EscalateRequestRegisterRayTracingKernelBindingKind::AccelerationStructure,
+                        stages: 1, // RAYGEN
+                    },
+                    EscalateRequestRegisterRayTracingKernelBinding {
+                        binding: 1,
+                        kind: EscalateRequestRegisterRayTracingKernelBindingKind::StorageImage,
+                        stages: 1, // RAYGEN
+                    },
+                ],
+                push_constant_size: 16,
+                push_constant_stages: 1, // RAYGEN
+                max_recursion_depth: 1,
+            }
+        }
+
+        fn make_run_req(
+            request_id: &str,
+            kernel_id: &str,
+        ) -> EscalateRequestRunRayTracingKernel {
+            EscalateRequestRunRayTracingKernel {
+                request_id: request_id.to_string(),
+                kernel_id: kernel_id.to_string(),
+                bindings: vec![
+                    EscalateRequestRunRayTracingKernelBinding {
+                        binding: 0,
+                        kind: EscalateRequestRunRayTracingKernelBindingKind::AccelerationStructure,
+                        target_id: "test-tlas-uuid".to_string(),
+                    },
+                    EscalateRequestRunRayTracingKernelBinding {
+                        binding: 1,
+                        kind: EscalateRequestRunRayTracingKernelBindingKind::StorageImage,
+                        target_id: "test-storage-uuid".to_string(),
+                    },
+                ],
+                push_constants_hex: "00".repeat(16),
+                width: 1280,
+                height: 720,
+                depth: 1,
+            }
+        }
+
+        #[test]
+        fn register_kernel_without_bridge_returns_err() {
+            let sandbox = match make_sandbox_with_bridge(None) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_kernel_without_bridge_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-1"));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-k-1");
+                    assert!(
+                        err.message.contains("RayTracingKernelBridge"),
+                        "expected bridge-not-registered error, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err when no bridge registered, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn register_kernel_with_invalid_stage_hex_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_kernel_with_invalid_stage_hex_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_kernel_req("req-bad-stage");
+            req.stages[1].spv_hex = "qq".to_string();
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterRayTracingKernel(req),
+            )
+            .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-stage");
+                    assert!(
+                        err.message.contains("stages[1].spv_hex"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err for bad stage SPIR-V hex, got {other:?}"
+                ),
+            }
+            assert_eq!(bridge.kernel_count(), 0);
+        }
+
+        #[test]
+        fn register_kernel_with_procedural_missing_intersection_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "register_kernel_with_procedural_missing_intersection_returns_err: \
+                         no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_kernel_req("req-bad-proc");
+            // Replace the third group with a procedural_hit that lacks
+            // an intersection stage (sentinel-encoded "absent").
+            req.groups[2] = EscalateRequestRegisterRayTracingKernelGroup {
+                kind: EscalateRequestRegisterRayTracingKernelGroupKind::ProceduralHit,
+                general_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                closest_hit_stage: 2,
+                any_hit_stage: RAY_TRACING_STAGE_INDEX_NONE,
+                intersection_stage: RAY_TRACING_STAGE_INDEX_NONE,
+            };
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterRayTracingKernel(req),
+            )
+            .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-proc");
+                    assert!(
+                        err.message.contains("procedural_hit"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err for procedural_hit missing intersection_stage, got {other:?}"
+                ),
+            }
+            assert_eq!(bridge.kernel_count(), 0);
+        }
+
+        #[test]
+        fn register_kernel_succeeds_and_caches() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!("register_kernel_succeeds_and_caches: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req1 =
+                EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-a"));
+            let resp1 = handle_escalate_op(&sandbox, &registry, req1)
+                .expect("must produce a response");
+            let id1 = match resp1 {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok, got {other:?}"),
+            };
+            let req2 =
+                EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k-b"));
+            let resp2 = handle_escalate_op(&sandbox, &registry, req2)
+                .expect("must produce a response");
+            let id2 = match resp2 {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok, got {other:?}"),
+            };
+            assert_eq!(id1, id2, "identical kernel descriptors must collide on id");
+            assert_eq!(bridge.kernel_count(), 1);
+
+            // Verify the bridge stored what we sent — sanity check on the
+            // wire→domain conversion.
+            let stored = bridge.last_kernel().expect("must have a stored decl");
+            assert_eq!(stored.stages.len(), 3);
+            assert_eq!(stored.groups.len(), 3);
+            assert_eq!(stored.bindings.len(), 2);
+            assert_eq!(stored.push_constant_size, 16);
+            assert_eq!(stored.max_recursion_depth, 1);
+        }
+
+        #[test]
+        fn run_kernel_without_bridge_returns_err() {
+            let sandbox = match make_sandbox_with_bridge(None) {
+                Some(s) => s,
+                None => {
+                    println!("run_kernel_without_bridge_returns_err: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RunRayTracingKernel(make_run_req(
+                "req-run-1",
+                "kernel-x",
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-run-1");
+                    assert!(
+                        err.message.contains("RayTracingKernelBridge"),
+                        "expected bridge-not-registered error, got: {}",
+                        err.message
+                    );
+                }
+                other => panic!("expected Err when no bridge registered, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn run_kernel_with_invalid_push_constants_hex_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_kernel_with_invalid_push_constants_hex_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let mut req = make_run_req("req-bad-push", "kernel-x");
+            req.push_constants_hex = "qq".to_string();
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RunRayTracingKernel(req),
+            )
+            .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-bad-push");
+                    assert!(
+                        err.message.contains("push_constants_hex"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err for malformed push hex, got {other:?}"
+                ),
+            }
+            assert!(bridge.runs().is_empty());
+        }
+
+        #[test]
+        fn run_kernel_with_unknown_kernel_id_returns_err() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "run_kernel_with_unknown_kernel_id_returns_err: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            let req = EscalateRequest::RunRayTracingKernel(make_run_req(
+                "req-run-x",
+                "definitely-not-a-real-kernel-id",
+            ));
+            let response = handle_escalate_op(&sandbox, &registry, req)
+                .expect("must produce a response");
+            match response {
+                EscalateResponse::Err(err) => {
+                    assert_eq!(err.request_id, "req-run-x");
+                    assert!(
+                        err.message.contains("not registered"),
+                        "got: {}",
+                        err.message
+                    );
+                }
+                other => panic!(
+                    "expected Err for unknown kernel_id, got {other:?}"
+                ),
+            }
+            assert!(bridge.runs().is_empty());
+        }
+
+        #[test]
+        fn run_kernel_succeeds_after_register() {
+            let bridge = RecordingRayTracingBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!("run_kernel_succeeds_after_register: no GPU — skipping");
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+            // 1. Register the kernel.
+            let kernel_req =
+                EscalateRequest::RegisterRayTracingKernel(make_kernel_req("req-k"));
+            let kernel_resp = handle_escalate_op(&sandbox, &registry, kernel_req)
+                .expect("must produce a response");
+            let kernel_id = match kernel_resp {
+                EscalateResponse::Ok(ok) => ok.handle_id,
+                other => panic!("expected Ok for kernel register, got {other:?}"),
+            };
+            // 2. Now dispatch it.
+            let run_req = EscalateRequest::RunRayTracingKernel(make_run_req(
+                "req-run-k",
+                &kernel_id,
+            ));
+            let run_resp = handle_escalate_op(&sandbox, &registry, run_req)
+                .expect("must produce a response");
+            match run_resp {
+                EscalateResponse::Ok(ok) => {
+                    assert_eq!(ok.request_id, "req-run-k");
+                    assert_eq!(
+                        ok.handle_id, kernel_id,
+                        "Ok response must echo kernel_id back"
+                    );
+                }
+                other => panic!("expected Ok for run, got {other:?}"),
+            }
+            // Verify the bridge actually saw the dispatch with the right
+            // shape.
+            let runs = bridge.runs();
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].kernel_id, kernel_id);
+            assert_eq!(runs[0].width, 1280);
+            assert_eq!(runs[0].height, 720);
+            assert_eq!(runs[0].depth, 1);
+            assert_eq!(runs[0].bindings.len(), 2);
+            assert_eq!(runs[0].push_constants.len(), 16);
+            // Lock the per-binding wire→domain conversion: a handler
+            // bug that swapped, dropped, or overwrote `target_id`
+            // during conversion would slip past the length check
+            // alone. The test request used "test-tlas-uuid" for
+            // binding 0 (acceleration_structure) and
+            // "test-storage-uuid" for binding 1 (storage_image).
+            assert_eq!(runs[0].bindings[0].binding, 0);
+            assert_eq!(runs[0].bindings[0].target_id, "test-tlas-uuid");
+            assert_eq!(
+                runs[0].bindings[0].kind,
+                RayTracingBindingKindWire::AccelerationStructure
+            );
+            assert_eq!(runs[0].bindings[1].binding, 1);
+            assert_eq!(runs[0].bindings[1].target_id, "test-storage-uuid");
+            assert_eq!(
+                runs[0].bindings[1].kind,
+                RayTracingBindingKindWire::StorageImage
+            );
         }
     }
 

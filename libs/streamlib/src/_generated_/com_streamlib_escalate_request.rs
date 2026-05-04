@@ -24,11 +24,20 @@ pub enum EscalateRequest {
     #[serde(rename = "log")]
     Log(EscalateRequestLog),
 
+    #[serde(rename = "register_acceleration_structure_blas")]
+    RegisterAccelerationStructureBlas(EscalateRequestRegisterAccelerationStructureBlas),
+
+    #[serde(rename = "register_acceleration_structure_tlas")]
+    RegisterAccelerationStructureTlas(EscalateRequestRegisterAccelerationStructureTlas),
+
     #[serde(rename = "register_compute_kernel")]
     RegisterComputeKernel(EscalateRequestRegisterComputeKernel),
 
     #[serde(rename = "register_graphics_kernel")]
     RegisterGraphicsKernel(EscalateRequestRegisterGraphicsKernel),
+
+    #[serde(rename = "register_ray_tracing_kernel")]
+    RegisterRayTracingKernel(EscalateRequestRegisterRayTracingKernel),
 
     #[serde(rename = "release_handle")]
     ReleaseHandle(EscalateRequestReleaseHandle),
@@ -41,6 +50,9 @@ pub enum EscalateRequest {
 
     #[serde(rename = "run_graphics_draw")]
     RunGraphicsDraw(EscalateRequestRunGraphicsDraw),
+
+    #[serde(rename = "run_ray_tracing_kernel")]
+    RunRayTracingKernel(EscalateRequestRunRayTracingKernel),
 
     #[serde(rename = "try_run_cpu_readback_copy")]
     TryRunCpuReadbackCopy(EscalateRequestTryRunCpuReadbackCopy),
@@ -214,6 +226,94 @@ pub struct EscalateRequestLog {
     /// sort key.
     #[serde(rename = "source_ts")]
     pub source_ts: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRegisterAccelerationStructureBlas {
+    /// Index blob, lowercase hex-encoded little-endian u32s.
+    /// Must be a multiple of 3 — three indices per triangle.
+    /// The host decodes these into a `&[u32]` and forwards to
+    /// `VulkanAccelerationStructure::build_triangles_blas`.
+    #[serde(rename = "indices_hex")]
+    pub indices_hex: String,
+
+    /// Human-readable label used in error messages and tracing on the host.
+    /// Echoed in the returned `as_id` derivation only via its bytes — purely
+    /// diagnostic.
+    #[serde(rename = "label")]
+    pub label: String,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// Vertex blob, lowercase hex-encoded little-endian f32s
+    /// (`R32G32B32_SFLOAT`, stride 12 bytes — interleaved `[x,y,z,x,y,z,...]`).
+    /// Length in bytes after hex decoding must be a multiple of 12; total f32
+    /// count must equal `3 × vertex_count`.
+    #[serde(rename = "vertices_hex")]
+    pub vertices_hex: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRegisterAccelerationStructureTlasInstance {
+    /// Handle returned by a prior `register_acceleration_structure_blas`
+    /// response. Must reference a BLAS, not a TLAS — the host validates kind
+    /// and rejects mismatches.
+    #[serde(rename = "blas_id")]
+    pub blas_id: String,
+
+    /// 24-bit user data exposed to hit shaders as `gl_InstanceCustomIndexEXT`.
+    /// The high 8 bits must be zero.
+    #[serde(rename = "custom_index")]
+    pub custom_index: u32,
+
+    /// `VkGeometryInstanceFlagsKHR` bitmask. The host passes this through to
+    /// `VkAccelerationStructureInstanceKHR` unchanged. `0` selects the spec
+    /// default; conventional combinations: `1 = TRIANGLE_FACING_CULL_DISABLE`,
+    /// `4 = FORCE_OPAQUE`.
+    #[serde(rename = "flags")]
+    pub flags: u32,
+
+    /// 8-bit visibility mask. Rays specify a `cullMask`; the instance is hit
+    /// only when `(mask & cullMask) != 0`. JTD has no native u8 — the wire form
+    /// is uint32 and the host rejects values > 0xff.
+    #[serde(rename = "mask")]
+    pub mask: u32,
+
+    /// Offset added to the SBT hit-group index. Usually 0 for single-hit-group
+    /// RT pipelines.
+    #[serde(rename = "sbt_record_offset")]
+    pub sbt_record_offset: u32,
+
+    /// Row-major 3×4 affine transform applied to the BLAS geometry in world
+    /// space. Exactly 12 floats — three rows of four — laid out `[m00, m01,
+    /// m02, m03, m10, ..., m23]`. Matches `VkTransformMatrixKHR` directly.
+    #[serde(rename = "transform")]
+    pub transform: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRegisterAccelerationStructureTlas {
+    /// One TLAS instance per entry. The host resolves `blas_id`
+    /// to a previously-registered BLAS via the bridge's `as_id
+    /// → Arc<VulkanAccelerationStructure>` map and forwards to
+    /// `VulkanAccelerationStructure::build_tlas`. Empty array is rejected (TLAS
+    /// must have at least one instance).
+    #[serde(rename = "instances")]
+    pub instances: Vec<EscalateRequestRegisterAccelerationStructureTlasInstance>,
+
+    /// Human-readable label used in error messages and tracing on the host.
+    /// Diagnostic only.
+    #[serde(rename = "label")]
+    pub label: String,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -884,6 +984,188 @@ pub struct EscalateRequestRegisterGraphicsKernel {
     pub vertex_spv_hex: String,
 }
 
+/// Resource kind for this binding slot.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum EscalateRequestRegisterRayTracingKernelBindingKind {
+    #[serde(rename = "acceleration_structure")]
+    #[default]
+    AccelerationStructure,
+
+    #[serde(rename = "sampled_texture")]
+    SampledTexture,
+
+    #[serde(rename = "storage_buffer")]
+    StorageBuffer,
+
+    #[serde(rename = "storage_image")]
+    StorageImage,
+
+    #[serde(rename = "uniform_buffer")]
+    UniformBuffer,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRegisterRayTracingKernelBinding {
+    #[serde(rename = "binding")]
+    pub binding: u32,
+
+    /// Resource kind for this binding slot.
+    #[serde(rename = "kind")]
+    pub kind: EscalateRequestRegisterRayTracingKernelBindingKind,
+
+    /// Bitmask of RT stages the binding is visible to. Bits: `1=RAYGEN`,
+    /// `2=MISS`, `4=CLOSEST_HIT`, `8=ANY_HIT`, `16=INTERSECTION`,
+    /// `32=CALLABLE`.
+    #[serde(rename = "stages")]
+    pub stages: u32,
+}
+
+/// - `general`: contributes one ray-gen, miss, or
+///   callable stage via `general_stage`.
+/// - `triangles_hit`: triangle hit group; sets at least
+///   one of `closest_hit_stage` / `any_hit_stage` (use
+///   `0xFFFFFFFF` as the absent sentinel — JTD has no
+///   `Option<uint32>`).
+/// - `procedural_hit`: procedural hit group with custom
+///   intersection shader plus optional closest-hit /
+///   any-hit (same sentinel for absent).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum EscalateRequestRegisterRayTracingKernelGroupKind {
+    #[serde(rename = "general")]
+    #[default]
+    General,
+
+    #[serde(rename = "procedural_hit")]
+    ProceduralHit,
+
+    #[serde(rename = "triangles_hit")]
+    TrianglesHit,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRegisterRayTracingKernelGroup {
+    /// Stage index for `triangles_hit` / `procedural_hit`. `0xFFFFFFFF` for
+    /// absent. Ignored for `general`.
+    #[serde(rename = "any_hit_stage")]
+    pub any_hit_stage: u32,
+
+    /// Stage index for `triangles_hit` / `procedural_hit`. Use `0xFFFFFFFF` to
+    /// indicate absent. Ignored for `general`.
+    #[serde(rename = "closest_hit_stage")]
+    pub closest_hit_stage: u32,
+
+    /// Stage index for `general`. `0xFFFFFFFF` for the other group kinds
+    /// (ignored host-side).
+    #[serde(rename = "general_stage")]
+    pub general_stage: u32,
+
+    /// Stage index for `procedural_hit`. `0xFFFFFFFF` for the other group
+    /// kinds. Required for `procedural_hit`.
+    #[serde(rename = "intersection_stage")]
+    pub intersection_stage: u32,
+
+    /// - `general`: contributes one ray-gen, miss, or
+    ///   callable stage via `general_stage`.
+    /// - `triangles_hit`: triangle hit group; sets at least
+    ///   one of `closest_hit_stage` / `any_hit_stage` (use
+    ///   `0xFFFFFFFF` as the absent sentinel — JTD has no
+    ///   `Option<uint32>`).
+    /// - `procedural_hit`: procedural hit group with custom
+    ///   intersection shader plus optional closest-hit /
+    ///   any-hit (same sentinel for absent).
+    #[serde(rename = "kind")]
+    pub kind: EscalateRequestRegisterRayTracingKernelGroupKind,
+}
+
+/// Which RT stage this SPIR-V blob fills.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum EscalateRequestRegisterRayTracingKernelStageStage {
+    #[serde(rename = "any_hit")]
+    #[default]
+    AnyHit,
+
+    #[serde(rename = "callable")]
+    Callable,
+
+    #[serde(rename = "closest_hit")]
+    ClosestHit,
+
+    #[serde(rename = "intersection")]
+    Intersection,
+
+    #[serde(rename = "miss")]
+    Miss,
+
+    #[serde(rename = "ray_gen")]
+    RayGen,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRegisterRayTracingKernelStage {
+    /// Entry-point name. Empty string is normalized to `"main"` host-side.
+    #[serde(rename = "entry_point")]
+    pub entry_point: String,
+
+    /// Compiled SPIR-V bytecode for the stage, lowercase hex (no `0x` prefix,
+    /// no whitespace).
+    #[serde(rename = "spv_hex")]
+    pub spv_hex: String,
+
+    /// Which RT stage this SPIR-V blob fills.
+    #[serde(rename = "stage")]
+    pub stage: EscalateRequestRegisterRayTracingKernelStageStage,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRegisterRayTracingKernel {
+    /// Descriptor-set-0 bindings. Validated against `rspirv-reflect` of every
+    /// supplied stage at register time — mismatches return an `err` response.
+    #[serde(rename = "bindings")]
+    pub bindings: Vec<EscalateRequestRegisterRayTracingKernelBinding>,
+
+    /// Shader-group layout. The order here is the order entries appear in the
+    /// SBT regions (raygen / miss / hit / callable). Each variant references
+    /// stage indices into `stages`.
+    #[serde(rename = "groups")]
+    pub groups: Vec<EscalateRequestRegisterRayTracingKernelGroup>,
+
+    /// Human-readable label used in error messages and tracing. Diagnostic
+    /// only.
+    #[serde(rename = "label")]
+    pub label: String,
+
+    /// Maximum ray recursion depth. Must be ≤ device's `maxRayRecursionDepth`.
+    /// Most scenes (primary rays only) use 1; secondary-ray techniques bump
+    /// this to 2 or more.
+    #[serde(rename = "max_recursion_depth")]
+    pub max_recursion_depth: u32,
+
+    /// Push-constant range size in bytes. 0 if the kernel uses no push
+    /// constants. Validated against the merged shader reflection.
+    #[serde(rename = "push_constant_size")]
+    pub push_constant_size: u32,
+
+    /// Bitmask of RT stages the push-constant range is visible to. Same bit
+    /// layout as `bindings.stages`. Ignored when `push_constant_size == 0`.
+    #[serde(rename = "push_constant_stages")]
+    pub push_constant_stages: u32,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// Shader stages composing the pipeline. Indices into this array
+    /// are referenced by `groups`. At minimum a RayGen stage plus enough
+    /// hit / miss stages to populate every group entry — the host's
+    /// `validate_shader_groups` validates the consistency.
+    #[serde(rename = "stages")]
+    pub stages: Vec<EscalateRequestRegisterRayTracingKernelStage>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EscalateRequestReleaseHandle {
@@ -1226,6 +1508,82 @@ pub struct EscalateRequestRunGraphicsDraw {
     #[serde(rename = "viewport")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewport: Option<EscalateRequestRunGraphicsDrawViewport>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub enum EscalateRequestRunRayTracingKernelBindingKind {
+    #[serde(rename = "acceleration_structure")]
+    #[default]
+    AccelerationStructure,
+
+    #[serde(rename = "sampled_texture")]
+    SampledTexture,
+
+    #[serde(rename = "storage_buffer")]
+    StorageBuffer,
+
+    #[serde(rename = "storage_image")]
+    StorageImage,
+
+    #[serde(rename = "uniform_buffer")]
+    UniformBuffer,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRunRayTracingKernelBinding {
+    #[serde(rename = "binding")]
+    pub binding: u32,
+
+    #[serde(rename = "kind")]
+    pub kind: EscalateRequestRunRayTracingKernelBindingKind,
+
+    #[serde(rename = "target_id")]
+    pub target_id: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EscalateRequestRunRayTracingKernel {
+    /// Per-trace bindings. `kind` must match the binding's declared kind from
+    /// register time. The host bridge resolves `target_id` based on `kind`: -
+    /// `acceleration_structure`: `target_id` is an `as_id`
+    ///   from a prior `register_acceleration_structure_tlas`.
+    /// - all other kinds: `target_id` is the surface-share UUID
+    ///   of a host-side `RhiPixelBuffer` / `StreamTexture`
+    ///   (same convention compute and graphics use).
+    #[serde(rename = "bindings")]
+    pub bindings: Vec<EscalateRequestRunRayTracingKernelBinding>,
+
+    /// vkCmdTraceRaysKHR depth (usually 1 for 2D output).
+    #[serde(rename = "depth")]
+    pub depth: u32,
+
+    /// vkCmdTraceRaysKHR height.
+    #[serde(rename = "height")]
+    pub height: u32,
+
+    /// Handle returned by a prior `register_ray_tracing_kernel` response. The
+    /// host looks up the cached `Arc<VulkanRayTracingKernel>` and dispatches
+    /// against it. Dispatching with an unrecognized kernel_id returns an `err`
+    /// response.
+    #[serde(rename = "kernel_id")]
+    pub kernel_id: String,
+
+    /// Push-constant payload for this dispatch, lowercase hex. Length
+    /// in bytes (after hex decoding) must equal the kernel's declared
+    /// `push_constant_size`. Empty string when the kernel has no push
+    /// constants.
+    #[serde(rename = "push_constants_hex")]
+    pub push_constants_hex: String,
+
+    /// Correlates request with response. UUID string.
+    #[serde(rename = "request_id")]
+    pub request_id: String,
+
+    /// vkCmdTraceRaysKHR width.
+    #[serde(rename = "width")]
+    pub width: u32,
 }
 
 /// Same shape as `run_cpu_readback_copy.direction`.

@@ -8,7 +8,7 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestRegisterComputeKernel | EscalateRequestRegisterGraphicsKernel | EscalateRequestReleaseHandle | EscalateRequestRunComputeKernel | EscalateRequestRunCpuReadbackCopy | EscalateRequestRunGraphicsDraw | EscalateRequestTryRunCpuReadbackCopy;
+export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestRegisterAccelerationStructureBlas | EscalateRequestRegisterAccelerationStructureTlas | EscalateRequestRegisterComputeKernel | EscalateRequestRegisterGraphicsKernel | EscalateRequestRegisterRayTracingKernel | EscalateRequestReleaseHandle | EscalateRequestRunComputeKernel | EscalateRequestRunCpuReadbackCopy | EscalateRequestRunGraphicsDraw | EscalateRequestRunRayTracingKernel | EscalateRequestTryRunCpuReadbackCopy;
 
 export interface EscalateRequestAcquireImage {
   op: "acquire_image";
@@ -189,6 +189,102 @@ export interface EscalateRequestLog {
    * key.
    */
   source_ts: string;
+}
+
+export interface EscalateRequestRegisterAccelerationStructureBlas {
+  op: "register_acceleration_structure_blas";
+
+  /**
+   * Index blob, lowercase hex-encoded little-endian u32s. Must be a multiple of
+   * 3 — three indices per triangle. The host decodes these into a `&[u32]` and
+   * forwards to `VulkanAccelerationStructure::build_triangles_blas`.
+   */
+  indices_hex: string;
+
+  /**
+   * Human-readable label used in error messages and tracing on the host. Echoed
+   * in the returned `as_id` derivation only via its bytes — purely diagnostic.
+   */
+  label: string;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Vertex blob, lowercase hex-encoded little-endian f32s (`R32G32B32_SFLOAT`,
+   * stride 12 bytes — interleaved `[x,y,z,x,y,z,...]`). Length in bytes after
+   * hex decoding must be a multiple of 12; total f32 count must equal `3
+   * × vertex_count`.
+   */
+  vertices_hex: string;
+}
+
+export interface EscalateRequestRegisterAccelerationStructureTlasInstance {
+  /**
+   * Handle returned by a prior `register_acceleration_structure_blas` response.
+   * Must reference a BLAS, not a TLAS — the host validates kind and rejects
+   * mismatches.
+   */
+  blas_id: string;
+
+  /**
+   * 24-bit user data exposed to hit shaders as `gl_InstanceCustomIndexEXT`. The
+   * high 8 bits must be zero.
+   */
+  custom_index: number;
+
+  /**
+   * `VkGeometryInstanceFlagsKHR` bitmask. The host passes this through to
+   * `VkAccelerationStructureInstanceKHR` unchanged. `0` selects the spec
+   * default; conventional combinations: `1 = TRIANGLE_FACING_CULL_DISABLE`, `4
+   * = FORCE_OPAQUE`.
+   */
+  flags: number;
+
+  /**
+   * 8-bit visibility mask. Rays specify a `cullMask`; the instance is hit only
+   * when `(mask & cullMask) != 0`. JTD has no native u8 — the wire form is
+   * uint32 and the host rejects values > 0xff.
+   */
+  mask: number;
+
+  /**
+   * Offset added to the SBT hit-group index. Usually 0 for single-hit-group
+   * RT pipelines.
+   */
+  sbt_record_offset: number;
+
+  /**
+   * Row-major 3×4 affine transform applied to the BLAS geometry in world space.
+   * Exactly 12 floats — three rows of four — laid out `[m00, m01, m02, m03,
+   * m10, ..., m23]`. Matches `VkTransformMatrixKHR` directly.
+   */
+  transform: number[];
+}
+
+export interface EscalateRequestRegisterAccelerationStructureTlas {
+  op: "register_acceleration_structure_tlas";
+
+  /**
+   * One TLAS instance per entry. The host resolves `blas_id` to a previously-
+   * registered BLAS via the bridge's `as_id → Arc<VulkanAccelerationStructure>`
+   * map and forwards to `VulkanAccelerationStructure::build_tlas`. Empty array
+   * is rejected (TLAS must have at least one instance).
+   */
+  instances: EscalateRequestRegisterAccelerationStructureTlasInstance[];
+
+  /**
+   * Human-readable label used in error messages and tracing on the host.
+   * Diagnostic only.
+   */
+  label: string;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
 }
 
 export interface EscalateRequestRegisterComputeKernel {
@@ -595,6 +691,172 @@ export interface EscalateRequestRegisterGraphicsKernel {
   vertex_spv_hex: string;
 }
 
+/**
+ * Resource kind for this binding slot.
+ */
+export enum EscalateRequestRegisterRayTracingKernelBindingKind {
+  AccelerationStructure = "acceleration_structure",
+  SampledTexture = "sampled_texture",
+  StorageBuffer = "storage_buffer",
+  StorageImage = "storage_image",
+  UniformBuffer = "uniform_buffer",
+}
+
+export interface EscalateRequestRegisterRayTracingKernelBinding {
+  binding: number;
+
+  /**
+   * Resource kind for this binding slot.
+   */
+  kind: EscalateRequestRegisterRayTracingKernelBindingKind;
+
+  /**
+   * Bitmask of RT stages the binding is visible to. Bits: `1=RAYGEN`, `2=MISS`,
+   * `4=CLOSEST_HIT`, `8=ANY_HIT`, `16=INTERSECTION`, `32=CALLABLE`.
+   */
+  stages: number;
+}
+
+/**
+ * - `general`: contributes one ray-gen, miss, or
+ *   callable stage via `general_stage`.
+ * - `triangles_hit`: triangle hit group; sets at least
+ *   one of `closest_hit_stage` / `any_hit_stage` (use
+ *   `0xFFFFFFFF` as the absent sentinel — JTD has no
+ *   `Option<uint32>`).
+ * - `procedural_hit`: procedural hit group with custom
+ *   intersection shader plus optional closest-hit /
+ *   any-hit (same sentinel for absent).
+ */
+export enum EscalateRequestRegisterRayTracingKernelGroupKind {
+  General = "general",
+  ProceduralHit = "procedural_hit",
+  TrianglesHit = "triangles_hit",
+}
+
+export interface EscalateRequestRegisterRayTracingKernelGroup {
+  /**
+   * Stage index for `triangles_hit` / `procedural_hit`. `0xFFFFFFFF` for
+   * absent. Ignored for `general`.
+   */
+  any_hit_stage: number;
+
+  /**
+   * Stage index for `triangles_hit` / `procedural_hit`. Use `0xFFFFFFFF` to
+   * indicate absent. Ignored for `general`.
+   */
+  closest_hit_stage: number;
+
+  /**
+   * Stage index for `general`. `0xFFFFFFFF` for the other group kinds (ignored
+   * host-side).
+   */
+  general_stage: number;
+
+  /**
+   * Stage index for `procedural_hit`. `0xFFFFFFFF` for the other group kinds.
+   * Required for `procedural_hit`.
+   */
+  intersection_stage: number;
+
+  /**
+   * - `general`: contributes one ray-gen, miss, or
+   *   callable stage via `general_stage`.
+   * - `triangles_hit`: triangle hit group; sets at least
+   *   one of `closest_hit_stage` / `any_hit_stage` (use
+   *   `0xFFFFFFFF` as the absent sentinel — JTD has no
+   *   `Option<uint32>`).
+   * - `procedural_hit`: procedural hit group with custom
+   *   intersection shader plus optional closest-hit /
+   *   any-hit (same sentinel for absent).
+   */
+  kind: EscalateRequestRegisterRayTracingKernelGroupKind;
+}
+
+/**
+ * Which RT stage this SPIR-V blob fills.
+ */
+export enum EscalateRequestRegisterRayTracingKernelStageStage {
+  AnyHit = "any_hit",
+  Callable = "callable",
+  ClosestHit = "closest_hit",
+  Intersection = "intersection",
+  Miss = "miss",
+  RayGen = "ray_gen",
+}
+
+export interface EscalateRequestRegisterRayTracingKernelStage {
+  /**
+   * Entry-point name. Empty string is normalized to `"main"` host-side.
+   */
+  entry_point: string;
+
+  /**
+   * Compiled SPIR-V bytecode for the stage, lowercase hex (no `0x` prefix,
+   * no whitespace).
+   */
+  spv_hex: string;
+
+  /**
+   * Which RT stage this SPIR-V blob fills.
+   */
+  stage: EscalateRequestRegisterRayTracingKernelStageStage;
+}
+
+export interface EscalateRequestRegisterRayTracingKernel {
+  op: "register_ray_tracing_kernel";
+
+  /**
+   * Descriptor-set-0 bindings. Validated against `rspirv-reflect` of every
+   * supplied stage at register time — mismatches return an `err` response.
+   */
+  bindings: EscalateRequestRegisterRayTracingKernelBinding[];
+
+  /**
+   * Shader-group layout. The order here is the order entries appear in the SBT
+   * regions (raygen / miss / hit / callable). Each variant references stage
+   * indices into `stages`.
+   */
+  groups: EscalateRequestRegisterRayTracingKernelGroup[];
+
+  /**
+   * Human-readable label used in error messages and tracing. Diagnostic only.
+   */
+  label: string;
+
+  /**
+   * Maximum ray recursion depth. Must be ≤ device's `maxRayRecursionDepth`.
+   * Most scenes (primary rays only) use 1; secondary-ray techniques bump this
+   * to 2 or more.
+   */
+  max_recursion_depth: number;
+
+  /**
+   * Push-constant range size in bytes. 0 if the kernel uses no push constants.
+   * Validated against the merged shader reflection.
+   */
+  push_constant_size: number;
+
+  /**
+   * Bitmask of RT stages the push-constant range is visible to. Same bit layout
+   * as `bindings.stages`. Ignored when `push_constant_size == 0`.
+   */
+  push_constant_stages: number;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Shader stages composing the pipeline. Indices into this array are
+   * referenced by `groups`. At minimum a RayGen stage plus enough hit / miss
+   * stages to populate every group entry — the host's `validate_shader_groups`
+   * validates the consistency.
+   */
+  stages: EscalateRequestRegisterRayTracingKernelStage[];
+}
+
 export interface EscalateRequestReleaseHandle {
   op: "release_handle";
 
@@ -880,6 +1142,69 @@ export interface EscalateRequestRunGraphicsDraw {
    * declared `dynamic_state = "viewport_scissor"`; ignored otherwise.
    */
   viewport?: EscalateRequestRunGraphicsDrawViewport;
+}
+
+export enum EscalateRequestRunRayTracingKernelBindingKind {
+  AccelerationStructure = "acceleration_structure",
+  SampledTexture = "sampled_texture",
+  StorageBuffer = "storage_buffer",
+  StorageImage = "storage_image",
+  UniformBuffer = "uniform_buffer",
+}
+
+export interface EscalateRequestRunRayTracingKernelBinding {
+  binding: number;
+  kind: EscalateRequestRunRayTracingKernelBindingKind;
+  target_id: string;
+}
+
+export interface EscalateRequestRunRayTracingKernel {
+  op: "run_ray_tracing_kernel";
+
+  /**
+   * Per-trace bindings. `kind` must match the binding's declared kind from
+   * register time. The host bridge resolves `target_id` based on `kind`: -
+   * `acceleration_structure`: `target_id` is an `as_id`
+   *   from a prior `register_acceleration_structure_tlas`.
+   * - all other kinds: `target_id` is the surface-share UUID
+   *   of a host-side `RhiPixelBuffer` / `StreamTexture`
+   *   (same convention compute and graphics use).
+   */
+  bindings: EscalateRequestRunRayTracingKernelBinding[];
+
+  /**
+   * vkCmdTraceRaysKHR depth (usually 1 for 2D output).
+   */
+  depth: number;
+
+  /**
+   * vkCmdTraceRaysKHR height.
+   */
+  height: number;
+
+  /**
+   * Handle returned by a prior `register_ray_tracing_kernel` response. The host
+   * looks up the cached `Arc<VulkanRayTracingKernel>` and dispatches against
+   * it. Dispatching with an unrecognized kernel_id returns an `err` response.
+   */
+  kernel_id: string;
+
+  /**
+   * Push-constant payload for this dispatch, lowercase hex. Length in bytes
+   * (after hex decoding) must equal the kernel's declared `push_constant_size`.
+   * Empty string when the kernel has no push constants.
+   */
+  push_constants_hex: string;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * vkCmdTraceRaysKHR width.
+   */
+  width: number;
 }
 
 /**

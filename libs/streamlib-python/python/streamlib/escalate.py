@@ -366,6 +366,153 @@ class EscalateChannel:
             payload["scissor"] = dict(scissor)
         return self.request(payload)
 
+    def register_acceleration_structure_blas(
+        self,
+        *,
+        label: str,
+        vertices: bytes,
+        indices: bytes,
+    ) -> Dict[str, Any]:
+        """Build a triangle-geometry bottom-level acceleration structure on
+        the host. Returns the ``ok``-payload whose ``handle_id`` is the
+        bridge-assigned ``as_id``.
+
+        ``vertices`` is the raw little-endian f32 vertex blob (interleaved
+        ``[x, y, z, ...]`` — R32G32B32_SFLOAT, stride 12 bytes; total length
+        must be a multiple of 12). ``indices`` is the raw little-endian u32
+        index blob (three indices per triangle; total length must be a
+        multiple of 12).
+
+        On failure raises :class:`EscalateError`.
+        """
+        return self.request(
+            {
+                "op": "register_acceleration_structure_blas",
+                "label": str(label),
+                "vertices_hex": vertices.hex(),
+                "indices_hex": indices.hex(),
+            }
+        )
+
+    def register_acceleration_structure_tlas(
+        self,
+        *,
+        label: str,
+        instances: Sequence[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Build a top-level acceleration structure from a list of
+        instances referencing previously-registered BLASes. Returns the
+        ``ok``-payload whose ``handle_id`` is the bridge-assigned
+        ``as_id``.
+
+        Each entry in ``instances`` is a dict with keys ``blas_id``
+        (string from a prior :meth:`register_acceleration_structure_blas`),
+        ``transform`` (12-element list of floats — row-major 3×4),
+        ``custom_index`` (24-bit u32), ``mask`` (8-bit u32), ``sbt_record_offset``
+        (u32), and ``flags`` (``VkGeometryInstanceFlagsKHR`` bitmask).
+
+        On failure raises :class:`EscalateError`.
+        """
+        return self.request(
+            {
+                "op": "register_acceleration_structure_tlas",
+                "label": str(label),
+                "instances": [dict(inst) for inst in instances],
+            }
+        )
+
+    def register_ray_tracing_kernel(
+        self,
+        *,
+        label: str,
+        stages: Sequence[Dict[str, Any]],
+        groups: Sequence[Dict[str, Any]],
+        bindings: Sequence[Dict[str, Any]],
+        push_constant_size: int,
+        push_constant_stages: int,
+        max_recursion_depth: int,
+    ) -> Dict[str, Any]:
+        """Register a ray-tracing kernel on the host. Returns the
+        ``ok``-payload whose ``handle_id`` is the bridge-assigned
+        ``kernel_id`` (typically a stable hash over a canonical
+        representation of all register-time inputs — re-registering an
+        identical descriptor hits the host-side cache and returns the
+        same id).
+
+        ``stages`` is a list of ``{"stage": str, "spv_hex": str,
+        "entry_point": str}`` where ``stage`` is one of ``ray_gen | miss
+        | closest_hit | any_hit | intersection | callable`` and
+        ``spv_hex`` is the lowercase hex-encoded SPIR-V bytecode for
+        that stage. Empty ``entry_point`` is normalized to ``"main"``
+        host-side.
+
+        ``groups`` is a list of ``{"kind": str, "general_stage": int,
+        "closest_hit_stage": int, "any_hit_stage": int,
+        "intersection_stage": int}`` where ``kind`` is one of ``general
+        | triangles_hit | procedural_hit`` and stage indices reference
+        positions in ``stages``. Use ``0xFFFFFFFF`` as the sentinel for
+        absent optional stages (the wire format has no
+        ``Option<uint32>``).
+
+        ``bindings`` is a list of ``{"binding": int, "kind": str,
+        "stages": int}`` where ``kind`` is one of ``storage_buffer |
+        uniform_buffer | sampled_texture | storage_image |
+        acceleration_structure`` and ``stages`` is a bitmask
+        (``1=RAYGEN``, ``2=MISS``, ``4=CLOSEST_HIT``, ``8=ANY_HIT``,
+        ``16=INTERSECTION``, ``32=CALLABLE``).
+
+        On failure raises :class:`EscalateError`.
+        """
+        return self.request(
+            {
+                "op": "register_ray_tracing_kernel",
+                "label": str(label),
+                "stages": [dict(s) for s in stages],
+                "groups": [dict(g) for g in groups],
+                "bindings": [dict(b) for b in bindings],
+                "push_constant_size": int(push_constant_size),
+                "push_constant_stages": int(push_constant_stages),
+                "max_recursion_depth": int(max_recursion_depth),
+            }
+        )
+
+    def run_ray_tracing_kernel(
+        self,
+        *,
+        kernel_id: str,
+        bindings: Sequence[Dict[str, Any]],
+        push_constants: bytes,
+        width: int,
+        height: int,
+        depth: int = 1,
+    ) -> Dict[str, Any]:
+        """Issue one ``vkCmdTraceRaysKHR`` against a previously-registered
+        ray-tracing kernel. RT dispatch is synchronous host-side: when this
+        returns, the host's writes to the bound storage image are visible to
+        any subsequent submission against the same VkDevice.
+
+        ``bindings`` is a list of ``{"binding": int, "kind": str,
+        "target_id": str}``. For ``kind ==
+        "acceleration_structure"``, ``target_id`` is an ``as_id`` from
+        a prior :meth:`register_acceleration_structure_tlas`; for all
+        other kinds, ``target_id`` is the surface-share UUID of the
+        host-side ``RhiPixelBuffer`` / ``StreamTexture`` (same
+        convention compute and graphics use).
+
+        On failure raises :class:`EscalateError`.
+        """
+        return self.request(
+            {
+                "op": "run_ray_tracing_kernel",
+                "kernel_id": str(kernel_id),
+                "bindings": [dict(b) for b in bindings],
+                "push_constants_hex": push_constants.hex(),
+                "width": int(width),
+                "height": int(height),
+                "depth": int(depth),
+            }
+        )
+
     def release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Tell the host to drop its strong reference to ``handle_id``."""
         return self.request(

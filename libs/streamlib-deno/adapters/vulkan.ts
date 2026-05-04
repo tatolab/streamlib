@@ -179,6 +179,18 @@ export class VulkanContext {
     Uint8Array,
     WeakMap<Uint8Array, string>
   >();
+  /** Identity-keyed ray-tracing kernel-id cache. Stages share
+   * `Uint8Array` instances on repeat dispatches; we hash a stable
+   * derived key from those identities so kernel registration is
+   * O(1) per dispatch on the hot path. WeakMap-of-WeakMaps doesn't
+   * fit well here (variable stage count, the stages frozenset would
+   * need a stable representative); we use a plain Map keyed by a
+   * derived string and rely on the fact that ray-tracing dispatches
+   * are not as hot as compute. Customers who want zero-cost cache
+   * hits should also stash a kernel_id on their processor and skip
+   * `dispatchRayTracing` entirely on subsequent calls.
+   */
+  private readonly rayTracingKernelIds = new Map<string, string>();
   private readonly resolvedHandles = new Map<
     string,
     ReturnType<VulkanGpuLimitedAccess["resolveSurface"]>
@@ -564,6 +576,153 @@ export class VulkanContext {
       scissor: args.scissor,
     });
   }
+
+  /**
+   * Build a triangle-geometry BLAS on the host via escalate IPC.
+   * Resolves to the bridge-assigned `as_id`. `vertices` is the raw
+   * little-endian f32 vertex blob (interleaved `[x, y, z, ...]`);
+   * `indices` is the raw little-endian u32 index blob.
+   */
+  async buildBlas(args: {
+    vertices: Uint8Array;
+    indices: Uint8Array;
+    label?: string;
+  }): Promise<string> {
+    const ch = getEscalateChannel();
+    const response = await ch.registerAccelerationStructureBlas({
+      label: args.label ?? "polyglot-blas",
+      vertices: args.vertices,
+      indices: args.indices,
+    });
+    return response.handle_id;
+  }
+
+  /**
+   * Build a TLAS on the host from a list of instances referencing
+   * previously-built BLASes. Resolves to the bridge-assigned `as_id`.
+   * Each instance's `transform` is exactly 12 floats (row-major 3×4);
+   * `mask` is uint32 carrying the 8-bit visibility mask.
+   */
+  async buildTlas(args: {
+    instances:
+      readonly import("../escalate.ts").EscalateRequestRegisterAccelerationStructureTlasInstance[];
+    label?: string;
+  }): Promise<string> {
+    const ch = getEscalateChannel();
+    const response = await ch.registerAccelerationStructureTlas({
+      label: args.label ?? "polyglot-tlas",
+      instances: args.instances,
+    });
+    return response.handle_id;
+  }
+
+  /**
+   * Dispatch a ray-tracing trace against `storageImage`'s host-side
+   * `VkImage` via escalate IPC. RT dispatch is synchronous host-side
+   * — when this resolves, the host's writes to the storage image are
+   * visible to subsequent submissions.
+   *
+   * `storageImage` is the surface acquired via `acquireWrite`. The
+   * surface's `pool_id` (the host surface-share UUID) is used as the
+   * `target_id` for any binding entry whose `target_id` field is
+   * `"<self>"`; entries with `target_id == "<tlas>"` resolve to
+   * `tlasId`; anything else is passed through verbatim.
+   *
+   * The first call with a given list of SPIR-V `Uint8Array` objects
+   * (identity-compared) registers the kernel through escalate IPC;
+   * subsequent calls with the same buffers hit the local kernel-id
+   * cache and skip registration.
+   */
+  async dispatchRayTracing(args: {
+    storageImage: StreamlibSurface | string | bigint;
+    tlasId: string;
+    width: number;
+    height: number;
+    stages:
+      readonly { stage: string; spv: Uint8Array; entry_point?: string }[];
+    groups:
+      readonly import("../escalate.ts").EscalateRequestRegisterRayTracingKernelGroup[];
+    bindingDecls:
+      readonly import("../escalate.ts").EscalateRequestRegisterRayTracingKernelBinding[];
+    bindings?:
+      readonly import("../escalate.ts").EscalateRequestRunRayTracingKernelBinding[];
+    pushConstants?: Uint8Array;
+    pushConstantStages?: number;
+    maxRecursionDepth?: number;
+    depth?: number;
+    label?: string;
+  }): Promise<void> {
+    const poolId = VulkanContext.surfacePoolId(args.storageImage);
+    // NOTE: unlike `dispatchCompute` / `dispatchGraphics`, RT dispatch
+    // does not require `acquireWrite` to have populated `surfaceIds`.
+    // The host bridge resolves UUIDs from its own surface map; the
+    // storage image may be a host-local `HostVulkanTexture` that was
+    // never exported through surface-share (the
+    // polyglot-vulkan-ray-tracing example uses exactly this shape —
+    // `STORAGE_BINDING` only, no DMA-BUF). Pre-acquiring stays useful
+    // when the surface IS exported (sync semantics) but isn't a hard
+    // precondition.
+    const ch = getEscalateChannel();
+    const pushConstants = args.pushConstants ?? new Uint8Array();
+
+    // Identity-keyed cache key: the stages' SPIR-V byte buffers are
+    // shared across dispatches when the customer stashes them on the
+    // processor. WeakMap<Uint8Array, ...> nesting doesn't generalise
+    // across variable-length stage lists, so we derive a stable key
+    // from a registry of buffer identities.
+    const cacheKey = args.stages
+      .map((s) => `${s.stage}:${this.spvIdentityKey(s.spv)}:${s.entry_point ?? "main"}`)
+      .join("|");
+    let kernelId = this.rayTracingKernelIds.get(cacheKey);
+    if (kernelId === undefined) {
+      const response = await ch.registerRayTracingKernel({
+        label: args.label ?? "polyglot-ray-tracing",
+        stages: args.stages.map((s) => ({
+          stage: s.stage as
+            import("../escalate.ts").EscalateRequestRegisterRayTracingKernelStage["stage"],
+          spv: s.spv,
+          entry_point: s.entry_point,
+        })),
+        groups: args.groups,
+        bindings: args.bindingDecls,
+        pushConstantSize: pushConstants.byteLength,
+        pushConstantStages: args.pushConstantStages ?? 1, // RAYGEN
+        maxRecursionDepth: args.maxRecursionDepth ?? 1,
+      });
+      kernelId = response.handle_id;
+      this.rayTracingKernelIds.set(cacheKey, kernelId);
+    }
+
+    const resolvedBindings = (args.bindings ?? []).map((b) => {
+      let target = b.target_id;
+      if (target === "<self>") target = poolId;
+      else if (target === "<tlas>") target = args.tlasId;
+      return { binding: b.binding, kind: b.kind, target_id: target };
+    }) as unknown as readonly import("../escalate.ts").EscalateRequestRunRayTracingKernelBinding[];
+
+    await ch.runRayTracingKernel({
+      kernelId,
+      bindings: resolvedBindings,
+      pushConstants,
+      width: Math.trunc(args.width),
+      height: Math.trunc(args.height),
+      depth: Math.trunc(args.depth ?? 1),
+    });
+  }
+
+  /** Stable per-Uint8Array identity key. WeakMap → counter so the key
+   * is unique per buffer instance and shared across dispatches that
+   * pass the same `Uint8Array`. */
+  private spvIdentityKey(spv: Uint8Array): string {
+    let id = this.spvIdentityKeys.get(spv);
+    if (id === undefined) {
+      id = `spv${this.spvIdentityCounter++}`;
+      this.spvIdentityKeys.set(spv, id);
+    }
+    return id;
+  }
+  private readonly spvIdentityKeys = new WeakMap<Uint8Array, string>();
+  private spvIdentityCounter = 0;
 
   /** Return the cdylib runtime's raw Vulkan handles — same shape as
    * `streamlib_adapter_vulkan::raw_handles()`. Use these to drive your

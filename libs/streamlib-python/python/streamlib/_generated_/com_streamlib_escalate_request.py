@@ -27,12 +27,16 @@ class EscalateRequest:
             "acquire_pixel_buffer": EscalateRequestAcquirePixelBuffer,
             "acquire_texture": EscalateRequestAcquireTexture,
             "log": EscalateRequestLog,
+            "register_acceleration_structure_blas": EscalateRequestRegisterAccelerationStructureBlas,
+            "register_acceleration_structure_tlas": EscalateRequestRegisterAccelerationStructureTlas,
             "register_compute_kernel": EscalateRequestRegisterComputeKernel,
             "register_graphics_kernel": EscalateRequestRegisterGraphicsKernel,
+            "register_ray_tracing_kernel": EscalateRequestRegisterRayTracingKernel,
             "release_handle": EscalateRequestReleaseHandle,
             "run_compute_kernel": EscalateRequestRunComputeKernel,
             "run_cpu_readback_copy": EscalateRequestRunCPUReadbackCopy,
             "run_graphics_draw": EscalateRequestRunGraphicsDraw,
+            "run_ray_tracing_kernel": EscalateRequestRunRayTracingKernel,
             "try_run_cpu_readback_copy": EscalateRequestTryRunCPUReadbackCopy,
         }
 
@@ -312,6 +316,156 @@ class EscalateRequestLog(EscalateRequest):
         data["source"] = _to_json_data(self.source)
         data["source_seq"] = _to_json_data(self.source_seq)
         data["source_ts"] = _to_json_data(self.source_ts)
+        return data
+
+@dataclass
+class EscalateRequestRegisterAccelerationStructureBlas(EscalateRequest):
+    indices_hex: 'str'
+    """
+    Index blob, lowercase hex-encoded little-endian u32s. Must be a multiple of
+    3 — three indices per triangle. The host decodes these into a `&[u32]` and
+    forwards to `VulkanAccelerationStructure::build_triangles_blas`.
+    """
+
+    label: 'str'
+    """
+    Human-readable label used in error messages and tracing on the host. Echoed
+    in the returned `as_id` derivation only via its bytes — purely diagnostic.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    vertices_hex: 'str'
+    """
+    Vertex blob, lowercase hex-encoded little-endian f32s (`R32G32B32_SFLOAT`,
+    stride 12 bytes — interleaved `[x,y,z,x,y,z,...]`). Length in bytes after
+    hex decoding must be a multiple of 12; total f32 count must equal `3 ×
+    vertex_count`.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterAccelerationStructureBlas':
+        return cls(
+            "register_acceleration_structure_blas",
+            _from_json_data(str, data.get("indices_hex")),
+            _from_json_data(str, data.get("label")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(str, data.get("vertices_hex")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "register_acceleration_structure_blas" }
+        data["indices_hex"] = _to_json_data(self.indices_hex)
+        data["label"] = _to_json_data(self.label)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["vertices_hex"] = _to_json_data(self.vertices_hex)
+        return data
+
+@dataclass
+class EscalateRequestRegisterAccelerationStructureTlasInstance:
+    blas_id: 'str'
+    """
+    Handle returned by a prior `register_acceleration_structure_blas` response.
+    Must reference a BLAS, not a TLAS — the host validates kind and rejects
+    mismatches.
+    """
+
+    custom_index: 'int'
+    """
+    24-bit user data exposed to hit shaders as `gl_InstanceCustomIndexEXT`. The
+    high 8 bits must be zero.
+    """
+
+    flags: 'int'
+    """
+    `VkGeometryInstanceFlagsKHR` bitmask. The host passes this through to
+    `VkAccelerationStructureInstanceKHR` unchanged. `0` selects the spec
+    default; conventional combinations: `1 = TRIANGLE_FACING_CULL_DISABLE`, `4
+    = FORCE_OPAQUE`.
+    """
+
+    mask: 'int'
+    """
+    8-bit visibility mask. Rays specify a `cullMask`; the instance is hit only
+    when `(mask & cullMask) != 0`. JTD has no native u8 — the wire form is
+    uint32 and the host rejects values > 0xff.
+    """
+
+    sbt_record_offset: 'int'
+    """
+    Offset added to the SBT hit-group index. Usually 0 for single-hit-group
+    RT pipelines.
+    """
+
+    transform: 'List[float]'
+    """
+    Row-major 3×4 affine transform applied to the BLAS geometry in world space.
+    Exactly 12 floats — three rows of four — laid out `[m00, m01, m02, m03, m10,
+    ..., m23]`. Matches `VkTransformMatrixKHR` directly.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterAccelerationStructureTlasInstance':
+        return cls(
+            _from_json_data(str, data.get("blas_id")),
+            _from_json_data(int, data.get("custom_index")),
+            _from_json_data(int, data.get("flags")),
+            _from_json_data(int, data.get("mask")),
+            _from_json_data(int, data.get("sbt_record_offset")),
+            _from_json_data(List[float], data.get("transform")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["blas_id"] = _to_json_data(self.blas_id)
+        data["custom_index"] = _to_json_data(self.custom_index)
+        data["flags"] = _to_json_data(self.flags)
+        data["mask"] = _to_json_data(self.mask)
+        data["sbt_record_offset"] = _to_json_data(self.sbt_record_offset)
+        data["transform"] = _to_json_data(self.transform)
+        return data
+
+@dataclass
+class EscalateRequestRegisterAccelerationStructureTlas(EscalateRequest):
+    instances: 'List[EscalateRequestRegisterAccelerationStructureTlasInstance]'
+    """
+    One TLAS instance per entry. The host resolves `blas_id` to a previously-
+    registered BLAS via the bridge's `as_id → Arc<VulkanAccelerationStructure>`
+    map and forwards to `VulkanAccelerationStructure::build_tlas`. Empty array
+    is rejected (TLAS must have at least one instance).
+    """
+
+    label: 'str'
+    """
+    Human-readable label used in error messages and tracing on the host.
+    Diagnostic only.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterAccelerationStructureTlas':
+        return cls(
+            "register_acceleration_structure_tlas",
+            _from_json_data(List[EscalateRequestRegisterAccelerationStructureTlasInstance], data.get("instances")),
+            _from_json_data(str, data.get("label")),
+            _from_json_data(str, data.get("request_id")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "register_acceleration_structure_tlas" }
+        data["instances"] = _to_json_data(self.instances)
+        data["label"] = _to_json_data(self.label)
+        data["request_id"] = _to_json_data(self.request_id)
         return data
 
 @dataclass
@@ -952,6 +1106,266 @@ class EscalateRequestRegisterGraphicsKernel(EscalateRequest):
         data["vertex_spv_hex"] = _to_json_data(self.vertex_spv_hex)
         return data
 
+class EscalateRequestRegisterRayTracingKernelBindingKind(Enum):
+    """
+    Resource kind for this binding slot.
+    """
+
+    ACCELERATION_STRUCTURE = "acceleration_structure"
+    SAMPLED_TEXTURE = "sampled_texture"
+    STORAGE_BUFFER = "storage_buffer"
+    STORAGE_IMAGE = "storage_image"
+    UNIFORM_BUFFER = "uniform_buffer"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterRayTracingKernelBindingKind':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRegisterRayTracingKernelBinding:
+    binding: 'int'
+    kind: 'EscalateRequestRegisterRayTracingKernelBindingKind'
+    """
+    Resource kind for this binding slot.
+    """
+
+    stages: 'int'
+    """
+    Bitmask of RT stages the binding is visible to. Bits: `1=RAYGEN`, `2=MISS`,
+    `4=CLOSEST_HIT`, `8=ANY_HIT`, `16=INTERSECTION`, `32=CALLABLE`.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterRayTracingKernelBinding':
+        return cls(
+            _from_json_data(int, data.get("binding")),
+            _from_json_data(EscalateRequestRegisterRayTracingKernelBindingKind, data.get("kind")),
+            _from_json_data(int, data.get("stages")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["binding"] = _to_json_data(self.binding)
+        data["kind"] = _to_json_data(self.kind)
+        data["stages"] = _to_json_data(self.stages)
+        return data
+
+class EscalateRequestRegisterRayTracingKernelGroupKind(Enum):
+    """
+    - `general`: contributes one ray-gen, miss, or
+      callable stage via `general_stage`.
+    - `triangles_hit`: triangle hit group; sets at least
+      one of `closest_hit_stage` / `any_hit_stage` (use
+      `0xFFFFFFFF` as the absent sentinel — JTD has no
+      `Option<uint32>`).
+    - `procedural_hit`: procedural hit group with custom
+      intersection shader plus optional closest-hit /
+      any-hit (same sentinel for absent).
+    """
+
+    GENERAL = "general"
+    PROCEDURAL_HIT = "procedural_hit"
+    TRIANGLES_HIT = "triangles_hit"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterRayTracingKernelGroupKind':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRegisterRayTracingKernelGroup:
+    any_hit_stage: 'int'
+    """
+    Stage index for `triangles_hit` / `procedural_hit`. `0xFFFFFFFF` for absent.
+    Ignored for `general`.
+    """
+
+    closest_hit_stage: 'int'
+    """
+    Stage index for `triangles_hit` / `procedural_hit`. Use `0xFFFFFFFF` to
+    indicate absent. Ignored for `general`.
+    """
+
+    general_stage: 'int'
+    """
+    Stage index for `general`. `0xFFFFFFFF` for the other group kinds (ignored
+    host-side).
+    """
+
+    intersection_stage: 'int'
+    """
+    Stage index for `procedural_hit`. `0xFFFFFFFF` for the other group kinds.
+    Required for `procedural_hit`.
+    """
+
+    kind: 'EscalateRequestRegisterRayTracingKernelGroupKind'
+    """
+    - `general`: contributes one ray-gen, miss, or
+      callable stage via `general_stage`.
+    - `triangles_hit`: triangle hit group; sets at least
+      one of `closest_hit_stage` / `any_hit_stage` (use
+      `0xFFFFFFFF` as the absent sentinel — JTD has no
+      `Option<uint32>`).
+    - `procedural_hit`: procedural hit group with custom
+      intersection shader plus optional closest-hit /
+      any-hit (same sentinel for absent).
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterRayTracingKernelGroup':
+        return cls(
+            _from_json_data(int, data.get("any_hit_stage")),
+            _from_json_data(int, data.get("closest_hit_stage")),
+            _from_json_data(int, data.get("general_stage")),
+            _from_json_data(int, data.get("intersection_stage")),
+            _from_json_data(EscalateRequestRegisterRayTracingKernelGroupKind, data.get("kind")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["any_hit_stage"] = _to_json_data(self.any_hit_stage)
+        data["closest_hit_stage"] = _to_json_data(self.closest_hit_stage)
+        data["general_stage"] = _to_json_data(self.general_stage)
+        data["intersection_stage"] = _to_json_data(self.intersection_stage)
+        data["kind"] = _to_json_data(self.kind)
+        return data
+
+class EscalateRequestRegisterRayTracingKernelStageStage(Enum):
+    """
+    Which RT stage this SPIR-V blob fills.
+    """
+
+    ANY_HIT = "any_hit"
+    CALLABLE = "callable"
+    CLOSEST_HIT = "closest_hit"
+    INTERSECTION = "intersection"
+    MISS = "miss"
+    RAY_GEN = "ray_gen"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterRayTracingKernelStageStage':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRegisterRayTracingKernelStage:
+    entry_point: 'str'
+    """
+    Entry-point name. Empty string is normalized to `"main"` host-side.
+    """
+
+    spv_hex: 'str'
+    """
+    Compiled SPIR-V bytecode for the stage, lowercase hex (no `0x` prefix, no
+    whitespace).
+    """
+
+    stage: 'EscalateRequestRegisterRayTracingKernelStageStage'
+    """
+    Which RT stage this SPIR-V blob fills.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterRayTracingKernelStage':
+        return cls(
+            _from_json_data(str, data.get("entry_point")),
+            _from_json_data(str, data.get("spv_hex")),
+            _from_json_data(EscalateRequestRegisterRayTracingKernelStageStage, data.get("stage")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["entry_point"] = _to_json_data(self.entry_point)
+        data["spv_hex"] = _to_json_data(self.spv_hex)
+        data["stage"] = _to_json_data(self.stage)
+        return data
+
+@dataclass
+class EscalateRequestRegisterRayTracingKernel(EscalateRequest):
+    bindings: 'List[EscalateRequestRegisterRayTracingKernelBinding]'
+    """
+    Descriptor-set-0 bindings. Validated against `rspirv-reflect` of every
+    supplied stage at register time — mismatches return an `err` response.
+    """
+
+    groups: 'List[EscalateRequestRegisterRayTracingKernelGroup]'
+    """
+    Shader-group layout. The order here is the order entries appear in the SBT
+    regions (raygen / miss / hit / callable). Each variant references stage
+    indices into `stages`.
+    """
+
+    label: 'str'
+    """
+    Human-readable label used in error messages and tracing. Diagnostic only.
+    """
+
+    max_recursion_depth: 'int'
+    """
+    Maximum ray recursion depth. Must be ≤ device's `maxRayRecursionDepth`. Most
+    scenes (primary rays only) use 1; secondary-ray techniques bump this to 2
+    or more.
+    """
+
+    push_constant_size: 'int'
+    """
+    Push-constant range size in bytes. 0 if the kernel uses no push constants.
+    Validated against the merged shader reflection.
+    """
+
+    push_constant_stages: 'int'
+    """
+    Bitmask of RT stages the push-constant range is visible to. Same bit layout
+    as `bindings.stages`. Ignored when `push_constant_size == 0`.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    stages: 'List[EscalateRequestRegisterRayTracingKernelStage]'
+    """
+    Shader stages composing the pipeline. Indices into this array are referenced
+    by `groups`. At minimum a RayGen stage plus enough hit / miss stages to
+    populate every group entry — the host's `validate_shader_groups` validates
+    the consistency.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRegisterRayTracingKernel':
+        return cls(
+            "register_ray_tracing_kernel",
+            _from_json_data(List[EscalateRequestRegisterRayTracingKernelBinding], data.get("bindings")),
+            _from_json_data(List[EscalateRequestRegisterRayTracingKernelGroup], data.get("groups")),
+            _from_json_data(str, data.get("label")),
+            _from_json_data(int, data.get("max_recursion_depth")),
+            _from_json_data(int, data.get("push_constant_size")),
+            _from_json_data(int, data.get("push_constant_stages")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(List[EscalateRequestRegisterRayTracingKernelStage], data.get("stages")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "register_ray_tracing_kernel" }
+        data["bindings"] = _to_json_data(self.bindings)
+        data["groups"] = _to_json_data(self.groups)
+        data["label"] = _to_json_data(self.label)
+        data["max_recursion_depth"] = _to_json_data(self.max_recursion_depth)
+        data["push_constant_size"] = _to_json_data(self.push_constant_size)
+        data["push_constant_stages"] = _to_json_data(self.push_constant_stages)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["stages"] = _to_json_data(self.stages)
+        return data
+
 @dataclass
 class EscalateRequestReleaseHandle(EscalateRequest):
     handle_id: 'str'
@@ -1462,6 +1876,112 @@ class EscalateRequestRunGraphicsDraw(EscalateRequest):
              data["scissor"] = _to_json_data(self.scissor)
         if self.viewport is not None:
              data["viewport"] = _to_json_data(self.viewport)
+        return data
+
+class EscalateRequestRunRayTracingKernelBindingKind(Enum):
+    ACCELERATION_STRUCTURE = "acceleration_structure"
+    SAMPLED_TEXTURE = "sampled_texture"
+    STORAGE_BUFFER = "storage_buffer"
+    STORAGE_IMAGE = "storage_image"
+    UNIFORM_BUFFER = "uniform_buffer"
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunRayTracingKernelBindingKind':
+        return cls(data)
+
+    def to_json_data(self) -> Any:
+        return self.value
+
+@dataclass
+class EscalateRequestRunRayTracingKernelBinding:
+    binding: 'int'
+    kind: 'EscalateRequestRunRayTracingKernelBindingKind'
+    target_id: 'str'
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunRayTracingKernelBinding':
+        return cls(
+            _from_json_data(int, data.get("binding")),
+            _from_json_data(EscalateRequestRunRayTracingKernelBindingKind, data.get("kind")),
+            _from_json_data(str, data.get("target_id")),
+        )
+
+    def to_json_data(self) -> Any:
+        data: Dict[str, Any] = {}
+        data["binding"] = _to_json_data(self.binding)
+        data["kind"] = _to_json_data(self.kind)
+        data["target_id"] = _to_json_data(self.target_id)
+        return data
+
+@dataclass
+class EscalateRequestRunRayTracingKernel(EscalateRequest):
+    bindings: 'List[EscalateRequestRunRayTracingKernelBinding]'
+    """
+    Per-trace bindings. `kind` must match the binding's declared kind from
+    register time. The host bridge resolves `target_id` based on `kind`: -
+    `acceleration_structure`: `target_id` is an `as_id`
+      from a prior `register_acceleration_structure_tlas`.
+    - all other kinds: `target_id` is the surface-share UUID
+      of a host-side `RhiPixelBuffer` / `StreamTexture`
+      (same convention compute and graphics use).
+    """
+
+    depth: 'int'
+    """
+    vkCmdTraceRaysKHR depth (usually 1 for 2D output).
+    """
+
+    height: 'int'
+    """
+    vkCmdTraceRaysKHR height.
+    """
+
+    kernel_id: 'str'
+    """
+    Handle returned by a prior `register_ray_tracing_kernel` response. The host
+    looks up the cached `Arc<VulkanRayTracingKernel>` and dispatches against it.
+    Dispatching with an unrecognized kernel_id returns an `err` response.
+    """
+
+    push_constants_hex: 'str'
+    """
+    Push-constant payload for this dispatch, lowercase hex. Length in bytes
+    (after hex decoding) must equal the kernel's declared `push_constant_size`.
+    Empty string when the kernel has no push constants.
+    """
+
+    request_id: 'str'
+    """
+    Correlates request with response. UUID string.
+    """
+
+    width: 'int'
+    """
+    vkCmdTraceRaysKHR width.
+    """
+
+
+    @classmethod
+    def from_json_data(cls, data: Any) -> 'EscalateRequestRunRayTracingKernel':
+        return cls(
+            "run_ray_tracing_kernel",
+            _from_json_data(List[EscalateRequestRunRayTracingKernelBinding], data.get("bindings")),
+            _from_json_data(int, data.get("depth")),
+            _from_json_data(int, data.get("height")),
+            _from_json_data(str, data.get("kernel_id")),
+            _from_json_data(str, data.get("push_constants_hex")),
+            _from_json_data(str, data.get("request_id")),
+            _from_json_data(int, data.get("width")),
+        )
+
+    def to_json_data(self) -> Any:
+        data = { "op": "run_ray_tracing_kernel" }
+        data["bindings"] = _to_json_data(self.bindings)
+        data["depth"] = _to_json_data(self.depth)
+        data["height"] = _to_json_data(self.height)
+        data["kernel_id"] = _to_json_data(self.kernel_id)
+        data["push_constants_hex"] = _to_json_data(self.push_constants_hex)
+        data["request_id"] = _to_json_data(self.request_id)
+        data["width"] = _to_json_data(self.width)
         return data
 
 class EscalateRequestTryRunCPUReadbackCopyDirection(Enum):

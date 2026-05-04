@@ -681,6 +681,309 @@ mapping:
             type: uint32
           height:
             type: uint32
+  register_acceleration_structure_blas:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      label:
+        metadata:
+          description: >
+            Human-readable label used in error messages and tracing on
+            the host. Echoed in the returned `as_id` derivation only via
+            its bytes — purely diagnostic.
+        type: string
+      vertices_hex:
+        metadata:
+          description: >
+            Vertex blob, lowercase hex-encoded little-endian f32s
+            (`R32G32B32_SFLOAT`, stride 12 bytes — interleaved
+            `[x,y,z,x,y,z,...]`). Length in bytes after hex decoding
+            must be a multiple of 12; total f32 count must equal
+            `3 × vertex_count`.
+        type: string
+      indices_hex:
+        metadata:
+          description: >
+            Index blob, lowercase hex-encoded little-endian u32s. Must
+            be a multiple of 3 — three indices per triangle. The host
+            decodes these into a `&[u32]` and forwards to
+            `VulkanAccelerationStructure::build_triangles_blas`.
+        type: string
+  register_acceleration_structure_tlas:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      label:
+        metadata:
+          description: >
+            Human-readable label used in error messages and tracing on
+            the host. Diagnostic only.
+        type: string
+      instances:
+        metadata:
+          description: >
+            One TLAS instance per entry. The host resolves `blas_id` to
+            a previously-registered BLAS via the bridge's
+            `as_id → Arc<VulkanAccelerationStructure>` map and forwards
+            to `VulkanAccelerationStructure::build_tlas`. Empty array
+            is rejected (TLAS must have at least one instance).
+        elements:
+          properties:
+            blas_id:
+              metadata:
+                description: >
+                  Handle returned by a prior
+                  `register_acceleration_structure_blas` response.
+                  Must reference a BLAS, not a TLAS — the host
+                  validates kind and rejects mismatches.
+              type: string
+            transform:
+              metadata:
+                description: >
+                  Row-major 3×4 affine transform applied to the BLAS
+                  geometry in world space. Exactly 12 floats — three
+                  rows of four — laid out
+                  `[m00, m01, m02, m03, m10, ..., m23]`. Matches
+                  `VkTransformMatrixKHR` directly.
+              elements:
+                type: float32
+            custom_index:
+              metadata:
+                description: >
+                  24-bit user data exposed to hit shaders as
+                  `gl_InstanceCustomIndexEXT`. The high 8 bits must be
+                  zero.
+              type: uint32
+            mask:
+              metadata:
+                description: >
+                  8-bit visibility mask. Rays specify a `cullMask`; the
+                  instance is hit only when `(mask & cullMask) != 0`.
+                  JTD has no native u8 — the wire form is uint32 and
+                  the host rejects values > 0xff.
+              type: uint32
+            sbt_record_offset:
+              metadata:
+                description: >
+                  Offset added to the SBT hit-group index. Usually 0
+                  for single-hit-group RT pipelines.
+              type: uint32
+            flags:
+              metadata:
+                description: >
+                  `VkGeometryInstanceFlagsKHR` bitmask. The host
+                  passes this through to `VkAccelerationStructureInstanceKHR`
+                  unchanged. `0` selects the spec default; conventional
+                  combinations: `1 = TRIANGLE_FACING_CULL_DISABLE`,
+                  `4 = FORCE_OPAQUE`.
+              type: uint32
+  register_ray_tracing_kernel:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      label:
+        metadata:
+          description: >
+            Human-readable label used in error messages and tracing.
+            Diagnostic only.
+        type: string
+      stages:
+        metadata:
+          description: >
+            Shader stages composing the pipeline. Indices into this
+            array are referenced by `groups`. At minimum a RayGen
+            stage plus enough hit / miss stages to populate every
+            group entry — the host's
+            `validate_shader_groups` validates the consistency.
+        elements:
+          properties:
+            stage:
+              metadata:
+                description: >
+                  Which RT stage this SPIR-V blob fills.
+              enum:
+                - ray_gen
+                - miss
+                - closest_hit
+                - any_hit
+                - intersection
+                - callable
+            spv_hex:
+              metadata:
+                description: >
+                  Compiled SPIR-V bytecode for the stage, lowercase
+                  hex (no `0x` prefix, no whitespace).
+              type: string
+            entry_point:
+              metadata:
+                description: >
+                  Entry-point name. Empty string is normalized to
+                  `"main"` host-side.
+              type: string
+      groups:
+        metadata:
+          description: >
+            Shader-group layout. The order here is the order entries
+            appear in the SBT regions (raygen / miss / hit / callable).
+            Each variant references stage indices into `stages`.
+        elements:
+          properties:
+            kind:
+              metadata:
+                description: >
+                  - `general`: contributes one ray-gen, miss, or
+                    callable stage via `general_stage`.
+                  - `triangles_hit`: triangle hit group; sets at least
+                    one of `closest_hit_stage` / `any_hit_stage` (use
+                    `0xFFFFFFFF` as the absent sentinel — JTD has no
+                    `Option<uint32>`).
+                  - `procedural_hit`: procedural hit group with custom
+                    intersection shader plus optional closest-hit /
+                    any-hit (same sentinel for absent).
+              enum:
+                - general
+                - triangles_hit
+                - procedural_hit
+            general_stage:
+              metadata:
+                description: >
+                  Stage index for `general`. `0xFFFFFFFF` for the
+                  other group kinds (ignored host-side).
+              type: uint32
+            closest_hit_stage:
+              metadata:
+                description: >
+                  Stage index for `triangles_hit` /
+                  `procedural_hit`. Use `0xFFFFFFFF` to indicate
+                  absent. Ignored for `general`.
+              type: uint32
+            any_hit_stage:
+              metadata:
+                description: >
+                  Stage index for `triangles_hit` /
+                  `procedural_hit`. `0xFFFFFFFF` for absent.
+                  Ignored for `general`.
+              type: uint32
+            intersection_stage:
+              metadata:
+                description: >
+                  Stage index for `procedural_hit`. `0xFFFFFFFF` for
+                  the other group kinds. Required for
+                  `procedural_hit`.
+              type: uint32
+      bindings:
+        metadata:
+          description: >
+            Descriptor-set-0 bindings. Validated against
+            `rspirv-reflect` of every supplied stage at register
+            time — mismatches return an `err` response.
+        elements:
+          properties:
+            binding:
+              type: uint32
+            kind:
+              metadata:
+                description: >
+                  Resource kind for this binding slot.
+              enum:
+                - storage_buffer
+                - uniform_buffer
+                - sampled_texture
+                - storage_image
+                - acceleration_structure
+            stages:
+              metadata:
+                description: >
+                  Bitmask of RT stages the binding is visible to.
+                  Bits: `1=RAYGEN`, `2=MISS`, `4=CLOSEST_HIT`,
+                  `8=ANY_HIT`, `16=INTERSECTION`, `32=CALLABLE`.
+              type: uint32
+      push_constant_size:
+        metadata:
+          description: >
+            Push-constant range size in bytes. 0 if the kernel uses
+            no push constants. Validated against the merged shader
+            reflection.
+        type: uint32
+      push_constant_stages:
+        metadata:
+          description: >
+            Bitmask of RT stages the push-constant range is visible
+            to. Same bit layout as `bindings.stages`. Ignored when
+            `push_constant_size == 0`.
+        type: uint32
+      max_recursion_depth:
+        metadata:
+          description: >
+            Maximum ray recursion depth. Must be ≤ device's
+            `maxRayRecursionDepth`. Most scenes (primary rays only)
+            use 1; secondary-ray techniques bump this to 2 or more.
+        type: uint32
+  run_ray_tracing_kernel:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      kernel_id:
+        metadata:
+          description: >
+            Handle returned by a prior `register_ray_tracing_kernel`
+            response. The host looks up the cached
+            `Arc<VulkanRayTracingKernel>` and dispatches against it.
+            Dispatching with an unrecognized kernel_id returns an
+            `err` response.
+        type: string
+      bindings:
+        metadata:
+          description: >
+            Per-trace bindings. `kind` must match the binding's
+            declared kind from register time. The host bridge
+            resolves `target_id` based on `kind`:
+            - `acceleration_structure`: `target_id` is an `as_id`
+              from a prior `register_acceleration_structure_tlas`.
+            - all other kinds: `target_id` is the surface-share UUID
+              of a host-side `RhiPixelBuffer` / `StreamTexture`
+              (same convention compute and graphics use).
+        elements:
+          properties:
+            binding:
+              type: uint32
+            kind:
+              enum:
+                - storage_buffer
+                - uniform_buffer
+                - sampled_texture
+                - storage_image
+                - acceleration_structure
+            target_id:
+              type: string
+      push_constants_hex:
+        metadata:
+          description: >
+            Push-constant payload for this dispatch, lowercase hex.
+            Length in bytes (after hex decoding) must equal the
+            kernel's declared `push_constant_size`. Empty string
+            when the kernel has no push constants.
+        type: string
+      width:
+        metadata:
+          description: "vkCmdTraceRaysKHR width."
+        type: uint32
+      height:
+        metadata:
+          description: "vkCmdTraceRaysKHR height."
+        type: uint32
+      depth:
+        metadata:
+          description: "vkCmdTraceRaysKHR depth (usually 1 for 2D output)."
+        type: uint32
   release_handle:
     properties:
       request_id:
