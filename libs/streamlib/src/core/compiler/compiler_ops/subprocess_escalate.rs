@@ -2703,6 +2703,9 @@ mod tests {
         use std::sync::{Arc, Mutex};
 
         use crate::_generated_::com_streamlib_escalate_request::{
+            EscalateRequestRegisterGraphicsKernelBinding,
+            EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute,
+            EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding,
             EscalateRequestRunGraphicsDrawBinding, EscalateRequestRunGraphicsDrawDraw,
             EscalateRequestRunGraphicsDrawIndexBuffer, EscalateRequestRunGraphicsDrawScissor,
             EscalateRequestRunGraphicsDrawVertexBuffer, EscalateRequestRunGraphicsDrawViewport,
@@ -2731,6 +2734,12 @@ mod tests {
 
             fn registered_count(&self) -> usize {
                 self.registered.lock().unwrap().len()
+            }
+
+            fn last_registered(&self) -> Option<GraphicsKernelRegisterDecl> {
+                // The tests register at most one descriptor each so
+                // returning a snapshot of the first entry is enough.
+                self.registered.lock().unwrap().values().next().cloned()
             }
 
             fn runs(&self) -> Vec<GraphicsKernelRunDraw> {
@@ -3148,6 +3157,181 @@ mod tests {
                 other => panic!("expected Ok, got {other:?}"),
             };
             assert_ne!(id_a, id_b, "different vertex SPIR-V must produce different kernel_ids");
+        }
+
+        /// Lock in the wire→domain pipeline-state translation. Mentally
+        /// reverting any single arm of `graphics_pipeline_state_from_wire`
+        /// (e.g. swapping `BlendOpWire::Add ↔ Subtract`) must fail this
+        /// test — the synthetic `RecordingGraphicsBridge` accepts the
+        /// translated `GraphicsPipelineStateWire` value but doesn't itself
+        /// validate any arm, so without this test the ~200 lines of enum
+        /// mapping in the handler would have no regression coverage.
+        #[test]
+        fn pipeline_state_translates_every_enum_arm() {
+            use crate::core::context::{
+                BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire,
+                DepthFormatWire, DynamicStateWire, FrontFaceWire, GraphicsBindingKindWire,
+                PolygonModeWire, PrimitiveTopologyWire, VertexAttributeFormatWire,
+                VertexInputRateWire,
+            };
+
+            let bridge = RecordingGraphicsBridge::new();
+            let sandbox = match make_sandbox_with_bridge(Some(bridge.clone())) {
+                Some(s) => s,
+                None => {
+                    println!(
+                        "pipeline_state_translates_every_enum_arm: no GPU — skipping"
+                    );
+                    return;
+                }
+            };
+            let registry = EscalateHandleRegistry::new();
+
+            // Build a request that uses non-default values for every
+            // pipeline-state arm we want to lock down. Each value is
+            // chosen to be DIFFERENT from the matching default so a
+            // wrong arm in the translation would land in the wrong
+            // wire-mirror variant and the assertion would fail.
+            let mut req = make_register_req(
+                "req-translate", "deadbeef", "cafebabe",
+            );
+            req.bindings = vec![EscalateRequestRegisterGraphicsKernelBinding {
+                binding: 7,
+                kind: EscalateRequestRegisterGraphicsKernelBindingKind::UniformBuffer,
+                stages: 3, // VERTEX | FRAGMENT
+            }];
+            req.pipeline_state.topology =
+                EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleStrip;
+            req.pipeline_state.vertex_input_bindings = vec![
+                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding {
+                    binding: 2,
+                    stride: 28,
+                    input_rate:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Instance,
+                },
+            ];
+            req.pipeline_state.vertex_input_attributes = vec![
+                EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute {
+                    location: 5,
+                    binding: 2,
+                    format:
+                        EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rgb32Float,
+                    offset: 12,
+                },
+            ];
+            req.pipeline_state.rasterization_polygon_mode =
+                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Line;
+            req.pipeline_state.rasterization_cull_mode =
+                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Back;
+            req.pipeline_state.rasterization_front_face =
+                EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::Clockwise;
+            req.pipeline_state.rasterization_line_width = 2.5;
+            req.pipeline_state.depth_stencil_enabled = true;
+            req.pipeline_state.depth_compare_op =
+                EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::LessOrEqual;
+            req.pipeline_state.depth_write = true;
+            req.pipeline_state.color_blend_enabled = true;
+            req.pipeline_state.color_write_mask = 0b0101; // R | B only
+            req.pipeline_state.color_blend_src_color_factor =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::SrcAlpha;
+            req.pipeline_state.color_blend_dst_color_factor =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusSrcAlpha;
+            req.pipeline_state.color_blend_color_op =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Subtract;
+            req.pipeline_state.color_blend_src_alpha_factor =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::ConstantAlpha;
+            req.pipeline_state.color_blend_dst_alpha_factor =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusConstantAlpha;
+            req.pipeline_state.color_blend_alpha_op =
+                EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Max;
+            req.pipeline_state.attachment_color_formats =
+                vec!["bgra8_unorm_srgb".to_string()];
+            req.pipeline_state.attachment_depth_format = Some(
+                EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat,
+            );
+            req.pipeline_state.dynamic_state =
+                EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::None;
+            req.push_constant_size = 16;
+            req.push_constant_stages = 3;
+            req.descriptor_sets_in_flight = 4;
+
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                EscalateRequest::RegisterGraphicsKernel(req),
+            )
+            .expect("must produce a response");
+            match response {
+                EscalateResponse::Ok(ok) => assert_eq!(ok.request_id, "req-translate"),
+                other => panic!("expected Ok, got {other:?}"),
+            }
+
+            let registered = bridge
+                .last_registered()
+                .expect("bridge should have stored the descriptor");
+
+            // Top-level fields.
+            assert_eq!(registered.label, "test-graphics");
+            assert_eq!(registered.vertex_spv, vec![0xde, 0xad, 0xbe, 0xef]);
+            assert_eq!(registered.fragment_spv, vec![0xca, 0xfe, 0xba, 0xbe]);
+            assert_eq!(registered.push_constant_size, 16);
+            assert_eq!(registered.push_constant_stages, 3);
+            assert_eq!(registered.descriptor_sets_in_flight, 4);
+
+            // Bindings translation.
+            assert_eq!(registered.bindings.len(), 1);
+            assert_eq!(registered.bindings[0].binding, 7);
+            assert_eq!(
+                registered.bindings[0].kind,
+                GraphicsBindingKindWire::UniformBuffer
+            );
+            assert_eq!(registered.bindings[0].stages, 3);
+
+            let p = &registered.pipeline_state;
+            assert_eq!(p.topology, PrimitiveTopologyWire::TriangleStrip);
+            assert_eq!(p.vertex_input_bindings.len(), 1);
+            assert_eq!(p.vertex_input_bindings[0].binding, 2);
+            assert_eq!(p.vertex_input_bindings[0].stride, 28);
+            assert_eq!(
+                p.vertex_input_bindings[0].input_rate,
+                VertexInputRateWire::Instance
+            );
+            assert_eq!(p.vertex_input_attributes.len(), 1);
+            assert_eq!(p.vertex_input_attributes[0].location, 5);
+            assert_eq!(p.vertex_input_attributes[0].binding, 2);
+            assert_eq!(
+                p.vertex_input_attributes[0].format,
+                VertexAttributeFormatWire::Rgb32Float
+            );
+            assert_eq!(p.vertex_input_attributes[0].offset, 12);
+            assert_eq!(p.rasterization_polygon_mode, PolygonModeWire::Line);
+            assert_eq!(p.rasterization_cull_mode, CullModeWire::Back);
+            assert_eq!(p.rasterization_front_face, FrontFaceWire::Clockwise);
+            assert_eq!(p.rasterization_line_width, 2.5);
+            assert_eq!(p.multisample_samples, 1);
+            assert!(p.depth_stencil_enabled);
+            assert_eq!(p.depth_compare_op, DepthCompareOpWire::LessOrEqual);
+            assert!(p.depth_write);
+            assert!(p.color_blend_enabled);
+            assert_eq!(p.color_write_mask, 0b0101);
+            assert_eq!(p.color_blend_src_color_factor, BlendFactorWire::SrcAlpha);
+            assert_eq!(
+                p.color_blend_dst_color_factor,
+                BlendFactorWire::OneMinusSrcAlpha
+            );
+            assert_eq!(p.color_blend_color_op, BlendOpWire::Subtract);
+            assert_eq!(
+                p.color_blend_src_alpha_factor,
+                BlendFactorWire::ConstantAlpha
+            );
+            assert_eq!(
+                p.color_blend_dst_alpha_factor,
+                BlendFactorWire::OneMinusConstantAlpha
+            );
+            assert_eq!(p.color_blend_alpha_op, BlendOpWire::Max);
+            assert_eq!(p.attachment_color_formats, vec!["bgra8_unorm_srgb"]);
+            assert_eq!(p.attachment_depth_format, Some(DepthFormatWire::D32Sfloat));
+            assert_eq!(p.dynamic_state, DynamicStateWire::None);
         }
 
         #[test]

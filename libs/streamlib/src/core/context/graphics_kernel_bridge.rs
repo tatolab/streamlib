@@ -333,11 +333,18 @@ pub trait GraphicsKernelBridge: Send + Sync {
     /// returns the same id without re-reflecting or rebuilding the
     /// pipeline.
     ///
-    /// The bridge is responsible for hashing `decl` into a
-    /// content-addressed kernel id; SHA-256 over a canonical byte
-    /// representation is the recommended pattern (mirrors the
-    /// compute-kernel approach but extended to cover stage SPIR-V +
-    /// pipeline state).
+    /// The `kernel_id` shape is **implementation-defined** — the
+    /// escalate handler treats it as an opaque string and the
+    /// subprocess uses it only as a `run_draw` reference, so
+    /// implementations are free to canonicalize whichever subset of
+    /// `decl` makes sense for their cache shape. The recommended
+    /// pattern is SHA-256 hex over a canonical byte representation
+    /// of the inputs that *materially* determine the host-side
+    /// `VulkanGraphicsKernel` (mirroring compute's SHA-256(spv)
+    /// approach but extended to stage SPIR-V + pipeline state).
+    /// Identical descriptors must collide on `kernel_id` for the
+    /// register-cache to work; differing descriptors should not
+    /// collide, but the bridge — not the trait — owns that contract.
     fn register(
         &self,
         decl: &GraphicsKernelRegisterDecl,
