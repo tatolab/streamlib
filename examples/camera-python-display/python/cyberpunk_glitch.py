@@ -7,10 +7,23 @@ Linux subprocess processor on the canonical surface-adapter pattern
 (post-#485): reads its ``video_in`` surface (the BlendingCompositor's
 output, a tiled DMA-BUF ``VkImage``) via
 :meth:`streamlib.adapters.opengl.OpenGLContext.acquire_read`, runs a
-GLSL fragment shader that produces chromatic aberration / scanlines /
-slice displacement / film-grain glitches, and writes into the host's
-pre-registered ``video_out`` surface via
+GLSL fragment shader that applies (1) the intermittent glitch flash
+ported from the macOS ``cyberpunk_glitch.py`` shader (chromatic
+aberration / sparse slice displacement / cyan noise lines / dramatic-
+mode horizontal slice + multi-octave grain) and (2) a continuous
+cyberpunk grade + vignette + light CRT scanline that ports the
+full-frame look from the dropped macOS ``cyberpunk_processor.py``,
+and writes into the host's pre-registered ``video_out`` surface via
 :meth:`OpenGLContext.acquire_write`.
+
+The macOS pipeline composed two separate processors —
+``cyberpunk_processor.py`` (continuous grade) and
+``cyberpunk_glitch.py`` (intermittent flashes) — to produce the
+cyberpunk camera look. The Linux pipeline collapses both passes into
+this single fragment shader so ``BlendingCompositor → Glitch →
+Display`` is the only post-process hop. Heavier scanlines and
+continuous film grain are intentionally deferred to the CrtFilmGrain
+processor in #487.
 
 ModernGL adopts the adapter's EGL context (``standalone=False``) for
 shader compilation, FBO construction, and the fullscreen draw; the
@@ -86,10 +99,25 @@ void main() {
 }
 """
 
-# Fragment shader translated from the macOS sampler2DRect path. Pixel-
-# space offsets become normalized-UV offsets via the precomputed
-# `1.0 / resolution`. Same chromatic-aberration / scanlines / slice /
-# film-grain modes; same intermittent dramatic gate.
+# Fragment shader. Two stacked passes:
+#
+# 1. **Intermittent glitch** (when `u_intensity > 0.01`) — translated
+#    from the dropped macOS `cyberpunk_glitch.py` `sampler2DRect` path.
+#    Pixel-space offsets become normalized-UV offsets via the
+#    precomputed `1.0 / resolution`. Same chromatic-aberration / sparse
+#    slice / cyan noise lines / dramatic-mode slice + multi-octave grain.
+# 2. **Continuous cyberpunk grade** (always applied) — folds in the
+#    full-frame color matrix from the dropped macOS `cyberpunk_processor.py`
+#    plus the vignette + light CRT scanline from
+#    `pose_overlay_renderer.py` so the camera background carries the
+#    same cyberpunk aesthetic the AvatarCharacter PiP already does. The
+#    macOS pipeline composed `cyberpunk_processor.py` (continuous grade)
+#    + `cyberpunk_glitch.py` (intermittent flashes) as two separate
+#    processors; the Linux pipeline collapses both passes into this
+#    single fragment shader so the BlendingCompositor → Glitch → Display
+#    edge is the only post-process hop. Heavier scanlines + continuous
+#    film grain are intentionally deferred to the CrtFilmGrain processor
+#    in #487 — keep them light enough here that #487 has room to layer.
 _GLITCH_FRAGMENT_SHADER = """
 #version 330 core
 in vec2 v_uv;
@@ -119,14 +147,11 @@ void main() {
     vec2 uv = v_uv;
     vec2 inv_res = 1.0 / u_resolution;
 
-    if (u_intensity < 0.01) {
-        frag_color = texture(u_input, uv);
-        return;
-    }
-
+    // ---- Pass 1: glitch effect (intermittent) ----------------------
     vec3 color;
-
-    if (u_is_dramatic > 0.5) {
+    if (u_intensity < 0.01) {
+        color = texture(u_input, uv).rgb;
+    } else if (u_is_dramatic > 0.5) {
         // Horizontal slice displacement + multi-octave film grain.
         float slice_height_px = mix(15.0, 30.0, hash11(u_seed * 0.5));
         float slice_index = floor(uv.y * u_resolution.y / slice_height_px);
@@ -149,7 +174,9 @@ void main() {
         color += grain * 0.12 * u_intensity;
         color = clamp(color, 0.0, 1.0);
     } else {
-        // Subtle: chromatic aberration + scanlines + sparse slice + cyan lines.
+        // Subtle: chromatic aberration + sparse slice + cyan lines.
+        // Scanlines moved out of this branch and into the continuous
+        // grade pass below.
         float aberration_px = 8.0 * u_intensity;
         vec2 r_offset = vec2(
             aberration_px * (hash11(u_seed * 1.1) - 0.5) * 2.0 * inv_res.x, 0.0
@@ -161,11 +188,6 @@ void main() {
         float g = texture(u_input, uv).g;
         float b = texture(u_input, uv + b_offset).b;
         color = vec3(r, g, b);
-
-        // Scanlines indexed in pixel space so spacing stays constant at any res.
-        float scanline = sin(uv.y * u_resolution.y * 3.14159 * 2.0) * 0.5 + 0.5;
-        scanline = pow(scanline, 0.5);
-        color *= 0.85 + 0.15 * scanline;
 
         float slice_noise = hash11(floor(uv.y * 60.0) + u_seed);
         if (slice_noise > 0.75 && u_intensity > 0.3) {
@@ -183,7 +205,38 @@ void main() {
         }
     }
 
-    frag_color = vec4(color, 1.0);
+    // ---- Pass 2: continuous cyberpunk grade ------------------------
+    // 2a. Color matrix — ports the macOS `cyberpunk_processor.py`
+    //     subtle game-style grade (slight boost to reds/blues, green
+    //     flat to preserve skin tones, R↔B cross-channel for the
+    //     teal/magenta cyberpunk feel).
+    vec3 graded;
+    graded.r = color.r * 1.08 + color.g * 0.02 + color.b * 0.03;
+    graded.g = color.g;
+    graded.b = color.r * 0.03 + color.g * 0.02 + color.b * 1.06;
+
+    // 2b. Heavier "game" grade on top — mirrors
+    //     `pose_overlay_renderer.py`'s background pass so the camera
+    //     background and the AvatarCharacter PiP share the same
+    //     aesthetic. Lifts mids towards cyan, pushes shadows slightly
+    //     violet.
+    graded = mix(graded, graded * vec3(0.78, 1.05, 1.18), 0.55);
+    graded = mix(graded, graded + vec3(0.04, 0.0, 0.06), 0.35);
+
+    // 2c. Light CRT scanline — same formula as
+    //     `pose_overlay_renderer.py`. Heavier scanlines and continuous
+    //     film grain land in the CrtFilmGrain processor (#487).
+    float scan = 0.94 + 0.06 * sin(uv.y * 800.0);
+    graded *= scan;
+
+    // 2d. Vignette — radial darkening towards corners, same shape as
+    //     `pose_overlay_renderer.py`. Clamped to [0.5, 1.0] so corners
+    //     don't go fully black.
+    vec2 uv_centered = uv * 2.0 - 1.0;
+    float vignette = 1.0 - dot(uv_centered, uv_centered) * 0.35;
+    graded *= clamp(vignette, 0.5, 1.0);
+
+    frag_color = vec4(graded, 1.0);
 }
 """
 
@@ -432,7 +485,7 @@ class CyberpunkGlitch:
                 f"Cyberpunk Glitch: First frame processed "
                 f"({self._W}x{self._H})"
             )
-        elif self.frame_count % 300 == 0:
+        elif self.frame_count % 60 == 0:
             logger.info(
                 f"Cyberpunk Glitch: {self.frame_count} frames "
                 f"(active={glitch_active})"
