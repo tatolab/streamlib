@@ -160,14 +160,16 @@ impl streamlib::core::ManualProcessor for BlendingCompositorProcessor::Processor
         let outputs = Arc::clone(&self.outputs);
         let running = Arc::clone(&self.running);
         let frame_count = Arc::clone(&self.frame_count);
-        let gpu_context = self
-            .gpu_context
-            .clone()
-            .ok_or_else(|| StreamError::Configuration("setup() not run".into()))?;
-        let backend = self
-            .backend
-            .take()
-            .ok_or_else(|| StreamError::Configuration("setup() not run".into()))?;
+        let gpu_context = self.gpu_context.clone().ok_or_else(|| {
+            StreamError::Configuration(
+                "BlendingCompositor::start: gpu_context unset (setup() not run)".into(),
+            )
+        })?;
+        let backend = self.backend.take().ok_or_else(|| {
+            StreamError::Configuration(
+                "BlendingCompositor::start: backend unset (setup() not run)".into(),
+            )
+        })?;
         let config = self.config.clone();
 
         running.store(true, Ordering::Release);
@@ -255,8 +257,11 @@ impl BlendingCompositorProcessor::Processor {
             // `surface_id` stable across runs (helpful for log
             // correlation) and the slot index visible in the last
             // octet so a tail of warnings names the slot in flight.
+            // Hex-only by construction so any future consumer that
+            // parses surface_id as a real UUID still resolves it
+            // (`b1e0d` ≈ "blend").
             let surface_id =
-                format!("00000000-0000-0000-0000-0000blendc{slot_idx:03}");
+                format!("00000000-0000-0000-0000-00000b1e0d{slot_idx:02x}");
             // Compositor's post-render barrier leaves the texture in
             // SHADER_READ_ONLY_OPTIMAL — declare that as the registered
             // current layout so downstream consumers issue zero-cost
@@ -532,5 +537,180 @@ fn slot_videoframe(surface_id: &str, width: u32, height: u32) -> Videoframe {
         frame_index: "0".into(),
         fps: None,
         texture_layout: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    /// Issue exit-criterion: idle invocation count is bounded by display
+    /// refresh + small slack (60 → ≤ 65/s on a 60 Hz display).
+    #[test]
+    fn manual_loop_runs_at_target_fps() {
+        let target_fps: f64 = 60.0;
+        let running = Arc::new(AtomicBool::new(true));
+        let counter = Arc::new(AtomicU64::new(0));
+
+        let counter_clone = Arc::clone(&counter);
+        let running_clone = Arc::clone(&running);
+        let handle = std::thread::spawn(move || {
+            manual_render_loop(target_fps, running_clone, || {
+                counter_clone.fetch_add(1, Ordering::Relaxed);
+            });
+        });
+
+        std::thread::sleep(Duration::from_millis(2000));
+        running.store(false, Ordering::Release);
+        handle.join().expect("loop thread join");
+
+        let observed = counter.load(Ordering::Relaxed) as f64;
+        let nominal = target_fps * 2.0; // 2 seconds at 60 fps = 120
+        let lower = nominal - TARGET_FPS_OVERSHOOT_SLACK * 2.0; // tolerate ±5/s
+        let upper = nominal + TARGET_FPS_OVERSHOOT_SLACK * 2.0;
+        assert!(
+            observed >= lower && observed <= upper,
+            "expected {nominal} ±{} ticks, got {observed}",
+            TARGET_FPS_OVERSHOOT_SLACK * 2.0
+        );
+    }
+
+    /// Issue exit-criterion: stop signal exits the render loop within 250 ms.
+    /// Mirrors the `Arc<AtomicBool>` + explicit-stop pattern used by
+    /// `LinuxDisplayProcessor` and the camera processor.
+    #[test]
+    fn shutdown_exits_loop() {
+        let running = Arc::new(AtomicBool::new(true));
+        let started = Arc::new(AtomicBool::new(false));
+
+        let running_clone = Arc::clone(&running);
+        let started_clone = Arc::clone(&started);
+        let handle = std::thread::spawn(move || {
+            manual_render_loop(60.0, running_clone, || {
+                started_clone.store(true, Ordering::Release);
+                std::thread::sleep(Duration::from_millis(8));
+            });
+        });
+
+        // Wait for the loop to start before signalling stop, so we
+        // measure shutdown latency rather than thread-spawn overhead.
+        let spawn_deadline = Instant::now() + Duration::from_millis(500);
+        while !started.load(Ordering::Acquire) && Instant::now() < spawn_deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(started.load(Ordering::Acquire), "loop never started");
+
+        let stop_at = Instant::now();
+        running.store(false, Ordering::Release);
+        handle.join().expect("loop thread join");
+        let elapsed = stop_at.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "loop took {elapsed:?} to exit after stop signal (cap is 250 ms)"
+        );
+    }
+
+    /// Locks down the contract the render loop's drain-latest behavior
+    /// inherits from the iceoryx2 `SkipToLatest` read mode (the schema
+    /// default for video input ports). `inputs.read()` calls into
+    /// `PortMailbox::pop_latest`; if a future refactor changed this
+    /// primitive to FIFO behavior, the loop would silently drift to
+    /// consuming stale frames.
+    #[test]
+    fn iceoryx2_pop_latest_skips_stale_frames() {
+        use streamlib::iceoryx2::PortMailbox;
+
+        let mailbox = PortMailbox::new(8);
+        for i in 0u8..5 {
+            mailbox.push(vec![i]);
+        }
+        let latest = mailbox
+            .pop_latest()
+            .expect("at least one frame should have been pushed");
+        assert_eq!(latest, vec![4], "pop_latest must return the most recent push");
+        assert!(
+            mailbox.is_empty(),
+            "older frames must be drained (skip-stale semantics)"
+        );
+    }
+
+    /// Verifies the render loop's call shape: each tick pulls **one**
+    /// payload from the input source and ignores any that arrived
+    /// between ticks. Uses an in-memory queue mock in place of
+    /// `InputMailboxes::read()` so the test exercises the loop's
+    /// per-tick consume model rather than the iceoryx2 primitive.
+    #[test]
+    fn render_loop_consumes_one_payload_per_tick() {
+        use std::sync::Mutex;
+
+        let target_fps: f64 = 60.0;
+        let running = Arc::new(AtomicBool::new(true));
+        let queue: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(vec![10, 11, 12, 13, 14]));
+        let consumed: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let queue_for_loop = Arc::clone(&queue);
+        let consumed_clone = Arc::clone(&consumed);
+        let running_clone = Arc::clone(&running);
+
+        let handle = std::thread::spawn(move || {
+            manual_render_loop(target_fps, running_clone, || {
+                let mut q = queue_for_loop.lock().unwrap();
+                if let Some(latest) = q.pop() {
+                    q.clear();
+                    drop(q);
+                    consumed_clone.lock().unwrap().push(latest);
+                }
+            });
+        });
+
+        // First tick should consume only the latest of the seeded five.
+        std::thread::sleep(Duration::from_millis(40));
+        // Push one more between iterations; the next tick should pick
+        // it up directly with no buffering of the prior consumed frame.
+        queue.lock().unwrap().push(99);
+        std::thread::sleep(Duration::from_millis(40));
+
+        running.store(false, Ordering::Release);
+        handle.join().expect("loop join");
+
+        let observed = consumed.lock().unwrap().clone();
+        assert!(
+            observed.contains(&14),
+            "loop must consume the latest pre-seeded frame, got {observed:?}"
+        );
+        assert!(
+            observed.contains(&99),
+            "loop must pick up the post-seed frame, got {observed:?}"
+        );
+        assert!(
+            !observed.contains(&10) && !observed.contains(&11) && !observed.contains(&12),
+            "stale frames must NOT be consumed, got {observed:?}"
+        );
+    }
+
+    /// Easing curve sanity-check — locks the PiP slide timing so a
+    /// future refactor of `LoopState::pip_slide_progress` doesn't
+    /// silently change the user-visible slide-in feel.
+    #[test]
+    fn pip_slide_progress_is_ease_out_cubic() {
+        let mut state = LoopState::new(BlendingCompositorConfig {
+            pip_slide_duration: 1.0,
+            ..Default::default()
+        });
+        // No animation → 0.
+        assert_eq!(state.pip_slide_progress(), 0.0);
+
+        state.pip_animation_start = Some(Instant::now() - Duration::from_millis(250));
+        let q1 = state.pip_slide_progress();
+        // ease-out-cubic at t=0.25: 1 - (0.75)^3 ≈ 0.578
+        assert!(
+            (q1 - 0.578).abs() < 0.05,
+            "expected ~0.578 at t=0.25, got {q1}"
+        );
+
+        state.pip_animation_start = Some(Instant::now() - Duration::from_millis(2000));
+        let done = state.pip_slide_progress();
+        assert!((done - 1.0).abs() < 1e-3, "expected 1.0 past duration, got {done}");
     }
 }

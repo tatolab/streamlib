@@ -45,6 +45,11 @@ fn main() {
 mod blending_compositor;
 #[cfg(target_os = "linux")]
 mod camera_to_cuda_copy;
+// CRT/Film-Grain processor module is declared (so its
+// `#[streamlib::processor]` registration runs at module-init and the
+// type is loadable) but not yet wired into the Linux pipeline —
+// `linux.rs` adds the BlendingCompositor → CRT → Glitch → Display
+// chain in #487 alongside the Glitch port.
 #[cfg(target_os = "linux")]
 mod crt_film_grain;
 #[cfg(target_os = "linux")]
