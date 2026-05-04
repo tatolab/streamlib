@@ -1,9 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Linux path for camera-python-display (#484 AvatarCharacter).
+//! Linux path for camera-python-display (#484 AvatarCharacter, #485
+//! Skia-on-Vulkan overlays).
 //!
-//! Wires two surface adapters around AvatarCharacter:
+//! Wires three surface adapters across the four Linux Python ports
+//! that exist today:
 //!
 //! - `streamlib-adapter-cuda` — the camera frame is copied GPU-side into
 //!   a DEVICE_LOCAL OPAQUE_FD `VkBuffer` by [`CameraToCudaCopyProcessor`]
@@ -13,15 +15,27 @@
 //!   round-trip on the inference path. Per #612.
 //! - `streamlib-adapter-opengl` — pre-registers a render-target-capable
 //!   tiled DMA-BUF `VkImage` so AvatarCharacter can `acquire_write` it
-//!   and ModernGL renders the skinned mesh into it. The display
-//!   processor consumes the same DMA-BUF surface UUID downstream.
+//!   and ModernGL renders the skinned mesh into it.
+//! - `streamlib-adapter-skia` (#485) — pre-registers two more
+//!   render-target-capable tiled DMA-BUF `VkImage`s for the Python Skia
+//!   overlays (`CyberpunkLowerThird` and `CyberpunkWatermark`). Skia
+//!   composes on the OpenGL adapter via
+//!   `skia.GrDirectContext.MakeGL(MakeEGL())`; the host pre-allocation
+//!   side is identical to the OpenGL adapter's — same
+//!   `acquire_render_target_dma_buf_image` + surface-share
+//!   registration flow.
 //!
-//! Pipeline shape (#485 / #486 will extend the right side):
+//! Pipeline shape (post-#485, pre-#486/#487):
 //!
 //! ```text
-//!   Camera ──→ CameraToCudaCopy ──→ AvatarCharacter ──→ Display
-//!                                  (cuda read + opengl write)
+//!   Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐
+//!                                 │                       ▼
+//!                                 │   LowerThird ────→ Blending ──→ Display
+//!                                 │                       ▲
+//!                                 │   Watermark ──────────┘
 //! ```
+//!
+//! Glitch (#486) and CRT/FilmGrain integration land in #487.
 //!
 //! See `docs/architecture/adapter-runtime-integration.md` for the
 //! single-pattern principle these adapters ride and
@@ -39,6 +53,7 @@ use streamlib::{
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
 
+use crate::blending_compositor::BlendingCompositorProcessor;
 use crate::camera_to_cuda_copy::{CameraToCudaCopyProcessor, CUDA_CAMERA_SURFACE_ID};
 
 /// Re-exported alias so the Python avatar's JSON config and other
@@ -48,13 +63,25 @@ const AVATAR_CAMERA_CUDA_SURFACE_ID: SurfaceId = CUDA_CAMERA_SURFACE_ID;
 
 /// Surface UUID for the avatar mesh-render output (tiled DMA-BUF
 /// `VkImage`). The Python processor renders into it via
-/// `OpenGLContext.acquire_write`; the display processor reads it
-/// downstream via the standard surface-share lookup.
+/// `OpenGLContext.acquire_write`; the BlendingCompositor consumes it
+/// as the `pip_in` input.
 const AVATAR_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000484";
+
+/// Surface UUID for the cyberpunk lower-third overlay output (tiled
+/// DMA-BUF `VkImage`). The Python processor renders into it via
+/// `SkiaContext.acquire_write` (Skia-on-GL); the BlendingCompositor
+/// consumes it as the `lower_third_in` input. UUID encodes the issue
+/// number for traceability.
+const LOWER_THIRD_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000485";
+
+/// Surface UUID for the spray-paint watermark overlay output. Same
+/// shape as the lower-third — tiled DMA-BUF VkImage written via
+/// SkiaContext, consumed by BlendingCompositor as `watermark_in`.
+const WATERMARK_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000486";
 
 /// Pin everything to 1920x1080 for the first iteration. The Linux
 /// camera processor's default capture resolution and the host's
-/// pre-allocated cuda + opengl surfaces all use this size.
+/// pre-allocated cuda + opengl + skia surfaces all use this size.
 const SURFACE_WIDTH: u32 = 1920;
 const SURFACE_HEIGHT: u32 = 1080;
 const BYTES_PER_PIXEL: u32 = 4;
@@ -72,19 +99,55 @@ pub fn main() -> Result<()> {
     runtime.load_project(&project_path)?;
     println!("✓ Loaded processor package from streamlib.yaml\n");
 
-    // OpenGL DMA-BUF mesh-render output surface stays as a setup hook
-    // (one-shot pre-allocation; no per-frame host work). The cuda
-    // surface used to ride a setup hook too — that's now owned by the
-    // CameraToCudaCopyProcessor below, which also issues the per-frame
-    // GPU-side copy.
+    // OpenGL + Skia DMA-BUF render-target output surfaces stay as setup
+    // hooks (one-shot pre-allocation; no per-frame host work). Each
+    // surface is allocated render-target-capable (tiled DRM modifier)
+    // and dual-registered (surface-share for cross-process consumers,
+    // GpuContext::texture_cache for in-process Path 1 fast path — the
+    // BlendingCompositor reads all three via Path 1).
+    //
+    // The cuda surface used to ride a setup hook too — that's now
+    // owned by the CameraToCudaCopyProcessor below, which also issues
+    // the per-frame GPU-side copy.
     runtime.install_setup_hook(move |gpu| {
-        register_opengl_output_surface(gpu).map_err(|e| {
+        register_render_target_surface(
+            gpu,
+            AVATAR_OUTPUT_SURFACE_UUID,
+            "avatar mesh-render output",
+        )
+        .map_err(|e| {
             StreamError::Configuration(format!(
-                "register_opengl_output_surface: {e}"
+                "register avatar surface: {e}"
             ))
         })?;
         println!(
-            "✓ OpenGL DMA-BUF output surface registered: uuid={AVATAR_OUTPUT_SURFACE_UUID}"
+            "✓ Avatar OpenGL DMA-BUF output surface registered: uuid={AVATAR_OUTPUT_SURFACE_UUID}"
+        );
+        register_render_target_surface(
+            gpu,
+            LOWER_THIRD_OUTPUT_SURFACE_UUID,
+            "lower-third Skia output (#485)",
+        )
+        .map_err(|e| {
+            StreamError::Configuration(format!(
+                "register lower-third surface: {e}"
+            ))
+        })?;
+        println!(
+            "✓ Lower-third Skia DMA-BUF output surface registered: uuid={LOWER_THIRD_OUTPUT_SURFACE_UUID}"
+        );
+        register_render_target_surface(
+            gpu,
+            WATERMARK_OUTPUT_SURFACE_UUID,
+            "watermark Skia output (#485)",
+        )
+        .map_err(|e| {
+            StreamError::Configuration(format!(
+                "register watermark surface: {e}"
+            ))
+        })?;
+        println!(
+            "✓ Watermark Skia DMA-BUF output surface registered: uuid={WATERMARK_OUTPUT_SURFACE_UUID}"
         );
         Ok(())
     });
@@ -137,22 +200,58 @@ pub fn main() -> Result<()> {
     ))?;
     println!("✓ Avatar character processor added: {avatar}\n");
 
+    // Cyberpunk LowerThird (Python subprocess, Skia-on-GL). Continuous
+    // RGBA generator drawing into a pre-registered DMA-BUF VkImage via
+    // SkiaContext.acquire_write.
+    println!("🐍 Adding Python cyberpunk lower third (subprocess, Skia-on-GL)...");
+    let lower_third = runtime.add_processor(ProcessorSpec::new(
+        "com.tatolab.cyberpunk_lower_third",
+        serde_json::json!({
+            "output_surface_uuid": LOWER_THIRD_OUTPUT_SURFACE_UUID,
+            "width": SURFACE_WIDTH,
+            "height": SURFACE_HEIGHT,
+        }),
+    ))?;
+    println!("✓ Lower third processor added: {lower_third}\n");
+
+    // Cyberpunk Watermark (Python subprocess, Skia-on-GL). Same shape
+    // as lower-third — distinct UUID, same allocation pattern.
+    println!("🐍 Adding Python cyberpunk watermark (subprocess, Skia-on-GL)...");
+    let watermark = runtime.add_processor(ProcessorSpec::new(
+        "com.tatolab.cyberpunk_watermark",
+        serde_json::json!({
+            "output_surface_uuid": WATERMARK_OUTPUT_SURFACE_UUID,
+            "width": SURFACE_WIDTH,
+            "height": SURFACE_HEIGHT,
+        }),
+    ))?;
+    println!("✓ Watermark processor added: {watermark}\n");
+
+    // BlendingCompositor (Rust ManualProcessor backed by
+    // VulkanBlendingCompositor on Linux). Composites four input layers
+    // (video, lower_third, watermark, pip) into one output frame paced
+    // against the display refresh rate. CRT/FilmGrain + Glitch land in
+    // #486/#487; this PR wires Blending → Display directly.
+    println!("🎨 Adding blending compositor (parallel layer blending)...");
+    let blending = runtime.add_processor(BlendingCompositorProcessor::node(Default::default()))?;
+    println!("✓ Blending compositor added: {blending}\n");
+
     // Display processor (Vulkan swapchain).
     println!("🖥️  Adding display processor...");
     let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
         width: SURFACE_WIDTH,
         height: SURFACE_HEIGHT,
-        title: Some("AvatarCharacter Linux (#484)".to_string()),
+        title: Some("Cyberpunk Pipeline Linux (#484 + #485)".to_string()),
         scaling_mode: Default::default(),
         vsync: Some(true),
         ..Default::default()
     }))?;
     println!("✓ Display added: {display}\n");
 
-    // Wire camera → camera_to_cuda → avatar → display. The full
-    // Breaking-News-PiP pipeline (compositor + CRT + glitch + lower
-    // third + watermark) is gated on #485/#486 landing the remaining
-    // Linux Python ports.
+    // Wire camera → camera_to_cuda → avatar (PiP) and the camera
+    // background + lower_third + watermark + avatar all into the
+    // BlendingCompositor → Display. CRT/FilmGrain + Glitch land
+    // alongside this in #486/#487.
     println!("🔗 Connecting pipeline...");
     runtime.connect(
         OutputLinkPortRef::new(&camera, "video"),
@@ -163,17 +262,40 @@ pub fn main() -> Result<()> {
         OutputLinkPortRef::new(&camera_to_cuda, "video_out"),
         InputLinkPortRef::new(&avatar, "video_in"),
     )?;
-    println!("   ✓ CameraToCudaCopy → AvatarCharacter");
+    println!("   ✓ CameraToCudaCopy → AvatarCharacter (cuda inference + camera bg)");
+    runtime.connect(
+        OutputLinkPortRef::new(&camera_to_cuda, "video_out"),
+        InputLinkPortRef::new(&blending, "video_in"),
+    )?;
+    println!("   ✓ CameraToCudaCopy → BlendingCompositor.video_in (camera always visible)");
     runtime.connect(
         OutputLinkPortRef::new(&avatar, "video_out"),
+        InputLinkPortRef::new(&blending, "pip_in"),
+    )?;
+    println!("   ✓ AvatarCharacter → BlendingCompositor.pip_in (Breaking-News-PiP)");
+    runtime.connect(
+        OutputLinkPortRef::new(&lower_third, "video_out"),
+        InputLinkPortRef::new(&blending, "lower_third_in"),
+    )?;
+    println!("   ✓ LowerThird → BlendingCompositor.lower_third_in");
+    runtime.connect(
+        OutputLinkPortRef::new(&watermark, "video_out"),
+        InputLinkPortRef::new(&blending, "watermark_in"),
+    )?;
+    println!("   ✓ Watermark → BlendingCompositor.watermark_in");
+    runtime.connect(
+        OutputLinkPortRef::new(&blending, "video_out"),
         InputLinkPortRef::new(&display, "video"),
     )?;
-    println!("   ✓ AvatarCharacter → Display\n");
+    println!("   ✓ BlendingCompositor → Display\n");
 
     println!("▶️  Starting pipeline...");
-    println!("   Architecture (Linux, #484 + #612):");
-    println!("     Camera ──→ CameraToCudaCopy ──→ AvatarCharacter ──→ Display");
-    println!("                (cuda DEVICE_LOCAL OPAQUE_FD)   (opengl DMA-BUF)");
+    println!("   Architecture (Linux, #484 + #485 + #612):");
+    println!("     Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐");
+    println!("                                   ├──────────────────────┴── BlendingCompositor ──→ Display");
+    println!("                                   │   LowerThird ───────────/");
+    println!("                                   │   Watermark ───────────/");
+    println!("                (cuda OPAQUE_FD + opengl DMA-BUF + skia-on-GL DMA-BUFs)");
     println!();
     println!("   Press Ctrl+C to stop\n");
 
@@ -184,13 +306,16 @@ pub fn main() -> Result<()> {
     Ok(())
 }
 
-/// Allocate a render-target-capable tiled DMA-BUF `VkImage` for the
-/// avatar mesh-render output and register it with the surface-share
-/// service under [`AVATAR_OUTPUT_SURFACE_UUID`]. The opengl adapter
-/// imports it subprocess-side as an `EGLImage` + `GL_TEXTURE_2D`; the
-/// display processor reads it via the same UUID downstream.
-fn register_opengl_output_surface(
+/// Allocate a render-target-capable tiled DMA-BUF `VkImage` for one
+/// of the Python adapter outputs (avatar OpenGL, lower-third Skia,
+/// watermark Skia) and dual-register it under `uuid`. The Skia adapter
+/// composes on the OpenGL adapter, so the host pre-allocation side is
+/// identical for both — same `acquire_render_target_dma_buf_image` +
+/// surface-share registration with no explicit timeline.
+fn register_render_target_surface(
     gpu: &GpuContext,
+    uuid: &str,
+    label: &str,
 ) -> std::result::Result<(), String> {
     // `acquire_render_target_dma_buf_image` picks a tiled DRM modifier
     // — required on NVIDIA where linear DMA-BUFs are sampler-only when
@@ -202,33 +327,33 @@ fn register_opengl_output_surface(
             SURFACE_HEIGHT,
             TextureFormat::Bgra8Unorm,
         )
-        .map_err(|e| format!("acquire_render_target_dma_buf_image: {e}"))?;
+        .map_err(|e| format!("{label}: acquire_render_target_dma_buf_image: {e}"))?;
 
     let surface_store = gpu
         .surface_store()
-        .ok_or_else(|| "GpuContext has no surface_store".to_string())?;
-    // OpenGL adapter doesn't need an explicit Vulkan timeline:
+        .ok_or_else(|| format!("{label}: GpuContext has no surface_store"))?;
+    // OpenGL/Skia adapters don't need an explicit Vulkan timeline:
     // `glFinish` on release plus DMA-BUF kernel-fence semantics carry
-    // visibility for downstream consumers.
-    // GL writes leave the underlying DMA-BUF in GENERAL from Vulkan's
-    // perspective. Declaring it here means cross-process consumers
-    // reaching the surface via Path 2 issue their first QFOT acquire
-    // barrier from GENERAL — same convention as
-    // `polyglot-opengl-fragment-shader` (#633).
+    // visibility for downstream consumers. GL writes leave the
+    // underlying DMA-BUF in GENERAL from Vulkan's perspective.
+    // Declaring it here means cross-process consumers reaching the
+    // surface via Path 2 issue their first QFOT acquire barrier from
+    // GENERAL — same convention as `polyglot-opengl-fragment-shader`
+    // (#633).
     surface_store
         .register_texture(
-            AVATAR_OUTPUT_SURFACE_UUID,
+            uuid,
             &texture,
             None,
             streamlib::core::rhi::VulkanLayout::GENERAL,
         )
-        .map_err(|e| format!("register_texture: {e}"))?;
+        .map_err(|e| format!("{label}: surface_store.register_texture: {e}"))?;
 
     // Mirror the texture into the GpuContext's local same-process cache
-    // so downstream processors (in this case the display) hit Path 1 in
+    // so downstream processors (BlendingCompositor here) hit Path 1 in
     // `GpuContext::resolve_videoframe_registration` instead of the cross-
     // process daemon lookup. This matches what `LinuxCameraProcessor`
-    // does for its own ring textures (see `linux/processors/camera.rs:857`)
+    // does for its own ring textures (see `linux/processors/camera.rs`)
     // — without it, same-process consumers can't find the texture by
     // UUID even though surface-share has it.
     //
@@ -238,16 +363,16 @@ fn register_opengl_output_surface(
     // on release; DMA-BUF kernel-fence semantics carry data visibility,
     // but Vulkan's layout tracker stays at the image's `initialLayout`
     // which is `UNDEFINED` from `acquire_render_target_dma_buf_image`).
-    // Display's first-frame barrier transitions UNDEFINED →
+    // The consumer's first-frame barrier transitions UNDEFINED →
     // SHADER_READ_ONLY_OPTIMAL — content is technically allowed to be
     // discarded by the spec on this transition but NVIDIA preserves
     // it (verified empirically on RTX 3090). After that first barrier,
-    // display's `update_layout` advances the registration to
+    // the consumer's `update_layout` advances the registration to
     // SHADER_READ_ONLY_OPTIMAL; subsequent GL writes don't change the
     // Vulkan tracker, so steady-state barriers are SHADER_READ_ONLY
     // → SHADER_READ_ONLY no-ops.
     gpu.register_texture_with_layout(
-        AVATAR_OUTPUT_SURFACE_UUID,
+        uuid,
         texture,
         VulkanLayout::UNDEFINED,
     );
