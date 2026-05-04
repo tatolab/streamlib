@@ -1826,7 +1826,8 @@ mod tests {
             .vulkan_inner()
             .image()
             .expect("image handle");
-        transition_to_general(&device, image);
+        HostVulkanTexture::transition_to_general(&device, image)
+            .expect("transition output to GENERAL");
 
         let kernel = make_test_kernel(&device, "rt-trace-test").expect("kernel creation");
         kernel
@@ -1886,64 +1887,4 @@ mod tests {
         );
     }
 
-    fn transition_to_general(device: &Arc<HostVulkanDevice>, image: vk::Image) {
-        let raw = device.device();
-        let pool_info = vk::CommandPoolCreateInfo::builder()
-            .queue_family_index(device.queue_family_index())
-            .flags(vk::CommandPoolCreateFlags::TRANSIENT)
-            .build();
-        let pool = unsafe { raw.create_command_pool(&pool_info, None) }.expect("pool");
-        let cb_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(pool)
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1)
-            .build();
-        let cmd = unsafe { raw.allocate_command_buffers(&cb_info) }
-            .expect("allocate cmd")[0];
-        let begin = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .build();
-        unsafe { raw.begin_command_buffer(cmd, &begin) }.expect("begin");
-        let barrier = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(vk::PipelineStageFlags2::NONE)
-            .src_access_mask(vk::AccessFlags2::empty())
-            .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-            .dst_access_mask(
-                vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
-            )
-            .old_layout(vk::ImageLayout::UNDEFINED)
-            .new_layout(vk::ImageLayout::GENERAL)
-            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
-            .image(image)
-            .subresource_range(vk::ImageSubresourceRange {
-                aspect_mask: vk::ImageAspectFlags::COLOR,
-                base_mip_level: 0,
-                level_count: 1,
-                base_array_layer: 0,
-                layer_count: 1,
-            })
-            .build();
-        let barriers = [barrier];
-        let dep = vk::DependencyInfo::builder()
-            .image_memory_barriers(&barriers)
-            .build();
-        unsafe { raw.cmd_pipeline_barrier2(cmd, &dep) };
-        unsafe { raw.end_command_buffer(cmd) }.expect("end");
-        let cmd_info = vk::CommandBufferSubmitInfo::builder().command_buffer(cmd).build();
-        let cmd_infos = [cmd_info];
-        let submit = vk::SubmitInfo2::builder()
-            .command_buffer_infos(&cmd_infos)
-            .build();
-        let fence = unsafe { raw.create_fence(&vk::FenceCreateInfo::default(), None) }.expect("fence");
-        unsafe {
-            HostVulkanDevice::submit_to_queue(device, device.queue(), &[submit], fence)
-        }
-        .expect("submit");
-        unsafe { raw.wait_for_fences(&[fence], true, u64::MAX) }.expect("wait");
-        unsafe {
-            raw.destroy_fence(fence, None);
-            raw.destroy_command_pool(pool, None);
-        }
-    }
 }

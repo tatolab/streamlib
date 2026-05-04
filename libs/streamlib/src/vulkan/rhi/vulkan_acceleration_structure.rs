@@ -431,120 +431,123 @@ impl VulkanAccelerationStructure {
         build_geometry_info.geometry_count = geometries.len() as u32;
         build_geometry_info.geometries = geometries.as_ptr();
 
-        // 3. Scratch buffer (the build needs this; freed once the build completes).
-        let scratch = AsBuffer::new(
-            vulkan_device,
-            size_info.build_scratch_size,
-            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            &format!("{label}/scratch"),
-        )?;
-        build_geometry_info.scratch_data = vk::DeviceOrHostAddressKHR {
-            device_address: scratch.device_address,
-        };
+        // The remaining steps (scratch alloc + record + submit + wait)
+        // each need to destroy `handle` if they fail — otherwise the
+        // VkAccelerationStructureKHR leaks. Wrap them in an inner
+        // closure that returns Result and apply the destroy on Err
+        // exactly once at the call site, instead of duplicating the
+        // cleanup at every `?` site.
+        let build_result: Result<()> = (|| {
+            // 3. Scratch buffer (the build needs this; freed once the build completes).
+            let scratch = AsBuffer::new(
+                vulkan_device,
+                size_info.build_scratch_size,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                &format!("{label}/scratch"),
+            )?;
+            build_geometry_info.scratch_data = vk::DeviceOrHostAddressKHR {
+                device_address: scratch.device_address,
+            };
 
-        // 4. Record + submit the build.
-        let queue = vulkan_device.queue();
-        let queue_family = vulkan_device.queue_family_index();
-        let command_pool = create_one_shot_pool(device, queue_family, label)?;
+            // 4. Record + submit the build.
+            let queue = vulkan_device.queue();
+            let queue_family = vulkan_device.queue_family_index();
+            let command_pool = create_one_shot_pool(device, queue_family, label)?;
 
-        let cmd = match allocate_one_shot_cmd(device, command_pool) {
-            Ok(c) => c,
-            Err(e) => {
+            let cmd = match allocate_one_shot_cmd(device, command_pool) {
+                Ok(c) => c,
+                Err(e) => {
+                    unsafe { device.destroy_command_pool(command_pool, None) };
+                    drop(scratch);
+                    return Err(e);
+                }
+            };
+
+            let begin_info = vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+                .build();
+            if let Err(e) = unsafe { device.begin_command_buffer(cmd, &begin_info) } {
                 unsafe { device.destroy_command_pool(command_pool, None) };
-                unsafe { device.destroy_acceleration_structure_khr(handle, None) };
-                drop(storage);
                 drop(scratch);
-                drop(transient_inputs);
-                return Err(e);
+                return Err(StreamError::GpuError(format!(
+                    "Acceleration structure '{label}': begin_command_buffer failed: {e}"
+                )));
             }
-        };
 
-        let begin_info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .build();
-        unsafe { device.begin_command_buffer(cmd, &begin_info) }.map_err(|e| {
-            StreamError::GpuError(format!(
-                "Acceleration structure '{label}': begin_command_buffer failed: {e}"
-            ))
-        })?;
+            // vulkanalia's `cmd_build_acceleration_structures_khr` wrapper has
+            // a Rust→C ABI mismatch: it accepts `&[&[T]]` (slice of fat-pointer
+            // slots, 16 bytes each on 64-bit) where the C signature is
+            // `*const *const T` (array of thin pointers, 8 bytes each), and
+            // casts the Rust slice pointer directly without rebuilding the
+            // thin-pointer array. Workaround: build the thin-pointer array by
+            // hand and call the function pointer directly.
+            let range_infos = [range_info];
+            let range_ptrs: [*const vk::AccelerationStructureBuildRangeInfoKHR; 1] =
+                [range_infos.as_ptr()];
+            let infos = [build_geometry_info];
+            unsafe {
+                (device.commands().cmd_build_acceleration_structures_khr)(
+                    cmd,
+                    infos.len() as u32,
+                    infos.as_ptr(),
+                    range_ptrs.as_ptr(),
+                );
+            }
 
-        // vulkanalia's `cmd_build_acceleration_structures_khr` wrapper has
-        // a Rust→C ABI mismatch: it accepts `&[&[T]]` (slice of fat-pointer
-        // slots, 16 bytes each on 64-bit) where the C signature is
-        // `*const *const T` (array of thin pointers, 8 bytes each), and
-        // casts the Rust slice pointer directly without rebuilding the
-        // thin-pointer array. The driver then reads the 16-byte fat
-        // pointers as 8-byte thin pointers, picks up the slice's *length*
-        // as the next "pointer," and silently builds an empty BVH —
-        // every ray then misses. Workaround: build the thin-pointer
-        // array by hand and call the function pointer directly.
-        let range_infos = [range_info];
-        let range_ptrs: [*const vk::AccelerationStructureBuildRangeInfoKHR; 1] =
-            [range_infos.as_ptr()];
-        let infos = [build_geometry_info];
-        unsafe {
-            (device.commands().cmd_build_acceleration_structures_khr)(
-                cmd,
-                infos.len() as u32,
-                infos.as_ptr(),
-                range_ptrs.as_ptr(),
-            );
-        }
+            if let Err(e) = unsafe { device.end_command_buffer(cmd) } {
+                unsafe { device.destroy_command_pool(command_pool, None) };
+                drop(scratch);
+                return Err(StreamError::GpuError(format!(
+                    "Acceleration structure '{label}': end_command_buffer failed: {e}"
+                )));
+            }
 
-        unsafe { device.end_command_buffer(cmd) }.map_err(|e| {
-            StreamError::GpuError(format!(
-                "Acceleration structure '{label}': end_command_buffer failed: {e}"
-            ))
-        })?;
+            let fence_info = vk::FenceCreateInfo::builder().build();
+            let fence = match unsafe { device.create_fence(&fence_info, None) } {
+                Ok(f) => f,
+                Err(e) => {
+                    unsafe { device.destroy_command_pool(command_pool, None) };
+                    drop(scratch);
+                    return Err(StreamError::GpuError(format!(
+                        "Acceleration structure '{label}': fence creation failed: {e}"
+                    )));
+                }
+            };
 
-        let fence_info = vk::FenceCreateInfo::builder().build();
-        let fence = unsafe { device.create_fence(&fence_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
-                "Acceleration structure '{label}': fence creation failed: {e}"
-            ))
-        })?;
+            let cmd_info = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(cmd)
+                .build();
+            let cmd_infos = [cmd_info];
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&cmd_infos)
+                .build();
 
-        let cmd_info = vk::CommandBufferSubmitInfo::builder()
-            .command_buffer(cmd)
-            .build();
-        let cmd_infos = [cmd_info];
-        let submit = vk::SubmitInfo2::builder()
-            .command_buffer_infos(&cmd_infos)
-            .build();
+            let submit_then_wait: Result<()> = unsafe {
+                HostVulkanDevice::submit_to_queue(vulkan_device, queue, &[submit], fence)
+            }
+            .and_then(|_| {
+                unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
+                    .map(|_| ())
+                    .map_err(|e| {
+                        StreamError::GpuError(format!(
+                            "Acceleration structure '{label}': wait_for_fences failed: {e}"
+                        ))
+                    })
+            });
 
-        if let Err(e) = unsafe {
-            HostVulkanDevice::submit_to_queue(vulkan_device, queue, &[submit], fence)
-        } {
             unsafe {
                 device.destroy_fence(fence, None);
                 device.destroy_command_pool(command_pool, None);
-                device.destroy_acceleration_structure_khr(handle, None);
             }
-            drop(storage);
             drop(scratch);
+            submit_then_wait
+        })();
+
+        if let Err(e) = build_result {
+            unsafe { device.destroy_acceleration_structure_khr(handle, None) };
+            drop(storage);
             drop(transient_inputs);
             return Err(e);
-        }
-
-        if let Err(e) =
-            unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }.map(|_| ())
-        {
-            unsafe {
-                device.destroy_fence(fence, None);
-                device.destroy_command_pool(command_pool, None);
-                device.destroy_acceleration_structure_khr(handle, None);
-            }
-            drop(storage);
-            drop(scratch);
-            drop(transient_inputs);
-            return Err(StreamError::GpuError(format!(
-                "Acceleration structure '{label}': wait_for_fences failed: {e}"
-            )));
-        }
-
-        unsafe {
-            device.destroy_fence(fence, None);
-            device.destroy_command_pool(command_pool, None);
         }
 
         // 5. Query the AS device address (used as `accelerationStructureReference`
@@ -556,8 +559,8 @@ impl VulkanAccelerationStructure {
             device.get_acceleration_structure_device_address_khr(&address_info)
         };
 
-        // Drop the scratch + any transient inputs now — the AS is built.
-        drop(scratch);
+        // Drop transient inputs now — the AS is built; scratch was freed
+        // inside the build closure above.
         drop(transient_inputs);
 
         let (storage_buffer, storage_allocation, _storage_address) = storage.into_parts();
