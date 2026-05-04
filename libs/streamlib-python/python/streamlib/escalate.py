@@ -243,6 +243,129 @@ class EscalateChannel:
             }
         )
 
+    def register_graphics_kernel(
+        self,
+        *,
+        label: str,
+        vertex_spv: bytes,
+        fragment_spv: bytes,
+        bindings: Sequence[Dict[str, Any]],
+        push_constant_size: int,
+        push_constant_stages: int,
+        descriptor_sets_in_flight: int,
+        pipeline_state: Dict[str, Any],
+        vertex_entry_point: str = "main",
+        fragment_entry_point: str = "main",
+    ) -> Dict[str, Any]:
+        """Register a graphics kernel on the host.
+
+        Returns the ``ok``-payload whose ``handle_id`` is the
+        bridge-assigned kernel_id (typically SHA-256 over a canonical
+        representation of all register-time inputs — re-registering an
+        identical descriptor hits the host-side cache and returns the
+        same id).
+
+        ``vertex_spv`` and ``fragment_spv`` are raw SPIR-V bytes. The
+        host derives the binding shape from `rspirv-reflect`,
+        validates the declared ``bindings`` match the merged shader
+        declaration, and persists driver-compiled pipeline state to
+        the same on-disk pipeline cache compute uses.
+
+        ``bindings`` is a list of ``{"binding": int, "kind": str,
+        "stages": int}`` dicts where ``kind`` is one of
+        ``sampled_texture | storage_buffer | uniform_buffer |
+        storage_image`` and ``stages`` is a bitmask
+        (``1=VERTEX``, ``2=FRAGMENT``).
+
+        ``pipeline_state`` mirrors the host
+        ``GraphicsPipelineState`` shape — see the schema YAML for the
+        complete field list.
+
+        On failure raises :class:`EscalateError`.
+        """
+        return self.request(
+            {
+                "op": "register_graphics_kernel",
+                "label": str(label),
+                "vertex_spv_hex": vertex_spv.hex(),
+                "fragment_spv_hex": fragment_spv.hex(),
+                "vertex_entry_point": vertex_entry_point,
+                "fragment_entry_point": fragment_entry_point,
+                "bindings": list(bindings),
+                "push_constant_size": int(push_constant_size),
+                "push_constant_stages": int(push_constant_stages),
+                "descriptor_sets_in_flight": int(descriptor_sets_in_flight),
+                "pipeline_state": dict(pipeline_state),
+            }
+        )
+
+    def run_graphics_draw(
+        self,
+        *,
+        kernel_id: str,
+        frame_index: int,
+        bindings: Sequence[Dict[str, Any]],
+        vertex_buffers: Sequence[Dict[str, Any]],
+        color_target_uuids: Sequence[str],
+        extent_width: int,
+        extent_height: int,
+        push_constants: bytes,
+        draw: Dict[str, Any],
+        index_buffer: Optional[Dict[str, Any]] = None,
+        depth_target_uuid: Optional[str] = None,
+        viewport: Optional[Dict[str, Any]] = None,
+        scissor: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Issue one draw against a previously-registered graphics kernel.
+
+        Resolves binding ``surface_uuid``s through the host bridge's
+        UUID → resource map, records bind + push + draw, submits the
+        kernel's command buffer, and waits on its fence — graphics
+        dispatch is synchronous host-side, so when this returns, the
+        host's writes to the color attachments are visible.
+
+        ``frame_index`` indexes the kernel's descriptor-set ring
+        (``0 ≤ frame_index < descriptor_sets_in_flight``).
+        ``bindings`` carries per-slot ``surface_uuid`` references for
+        sampled textures + storage/uniform buffers + storage images.
+        ``vertex_buffers`` is a list of ``{"binding": int,
+        "surface_uuid": str, "offset": str}`` (offset is decimal-
+        encoded u64).
+
+        ``draw`` is one of:
+
+        - ``{"kind": "draw", "vertex_count": int, "instance_count": int,
+          "first_vertex": int, "first_instance": int, "index_count": 0,
+          "first_index": 0, "vertex_offset": 0}``
+        - ``{"kind": "draw_indexed", "vertex_count": 0,
+          "instance_count": int, "first_vertex": 0,
+          "first_instance": int, "index_count": int, "first_index":
+          int, "vertex_offset": int}``
+
+        On failure raises :class:`EscalateError`.
+        """
+        payload: Dict[str, Any] = {
+            "op": "run_graphics_draw",
+            "kernel_id": str(kernel_id),
+            "frame_index": int(frame_index),
+            "bindings": list(bindings),
+            "vertex_buffers": list(vertex_buffers),
+            "color_target_uuids": list(color_target_uuids),
+            "extent_width": int(extent_width),
+            "extent_height": int(extent_height),
+            "push_constants_hex": push_constants.hex(),
+            "draw": dict(draw),
+        }
+        if index_buffer is not None:
+            payload["index_buffer"] = dict(index_buffer)
+        if depth_target_uuid is not None:
+            payload["depth_target_uuid"] = str(depth_target_uuid)
+        if viewport is not None:
+            payload["viewport"] = dict(viewport)
+        if scissor is not None:
+            payload["scissor"] = dict(scissor)
+        return self.request(payload)
+
     def release_handle(self, handle_id: str) -> Dict[str, Any]:
         """Tell the host to drop its strong reference to ``handle_id``."""
         return self.request(

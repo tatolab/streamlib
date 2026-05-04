@@ -8,7 +8,7 @@
 /**
  * Polyglot subprocess escalate-on-behalf request (subprocess → host)
  */
-export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestRegisterComputeKernel | EscalateRequestReleaseHandle | EscalateRequestRunComputeKernel | EscalateRequestRunCpuReadbackCopy | EscalateRequestTryRunCpuReadbackCopy;
+export type EscalateRequest = EscalateRequestAcquireImage | EscalateRequestAcquirePixelBuffer | EscalateRequestAcquireTexture | EscalateRequestLog | EscalateRequestRegisterComputeKernel | EscalateRequestRegisterGraphicsKernel | EscalateRequestReleaseHandle | EscalateRequestRunComputeKernel | EscalateRequestRunCpuReadbackCopy | EscalateRequestRunGraphicsDraw | EscalateRequestTryRunCpuReadbackCopy;
 
 export interface EscalateRequestAcquireImage {
   op: "acquire_image";
@@ -222,6 +222,379 @@ export interface EscalateRequestRegisterComputeKernel {
   spv_hex: string;
 }
 
+/**
+ * Resource kind for this binding slot.
+ */
+export enum EscalateRequestRegisterGraphicsKernelBindingKind {
+  SampledTexture = "sampled_texture",
+  StorageBuffer = "storage_buffer",
+  StorageImage = "storage_image",
+  UniformBuffer = "uniform_buffer",
+}
+
+export interface EscalateRequestRegisterGraphicsKernelBinding {
+  binding: number;
+
+  /**
+   * Resource kind for this binding slot.
+   */
+  kind: EscalateRequestRegisterGraphicsKernelBindingKind;
+
+  /**
+   * Bitmask of stages the binding is visible to. `1 = VERTEX`, `2 = FRAGMENT`,
+   * `3 = VERTEX_FRAGMENT`.
+   */
+  stages: number;
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp {
+  Add = "add",
+  Max = "max",
+  Min = "min",
+  ReverseSubtract = "reverse_subtract",
+  Subtract = "subtract",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp {
+  Add = "add",
+  Max = "max",
+  Min = "min",
+  ReverseSubtract = "reverse_subtract",
+  Subtract = "subtract",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor {
+  ConstantAlpha = "constant_alpha",
+  ConstantColor = "constant_color",
+  DstAlpha = "dst_alpha",
+  DstColor = "dst_color",
+  One = "one",
+  OneMinusConstantAlpha = "one_minus_constant_alpha",
+  OneMinusConstantColor = "one_minus_constant_color",
+  OneMinusDstAlpha = "one_minus_dst_alpha",
+  OneMinusDstColor = "one_minus_dst_color",
+  OneMinusSrcAlpha = "one_minus_src_alpha",
+  OneMinusSrcColor = "one_minus_src_color",
+  SrcAlpha = "src_alpha",
+  SrcAlphaSaturate = "src_alpha_saturate",
+  SrcColor = "src_color",
+  Zero = "zero",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor {
+  ConstantAlpha = "constant_alpha",
+  ConstantColor = "constant_color",
+  DstAlpha = "dst_alpha",
+  DstColor = "dst_color",
+  One = "one",
+  OneMinusConstantAlpha = "one_minus_constant_alpha",
+  OneMinusConstantColor = "one_minus_constant_color",
+  OneMinusDstAlpha = "one_minus_dst_alpha",
+  OneMinusDstColor = "one_minus_dst_color",
+  OneMinusSrcAlpha = "one_minus_src_alpha",
+  OneMinusSrcColor = "one_minus_src_color",
+  SrcAlpha = "src_alpha",
+  SrcAlphaSaturate = "src_alpha_saturate",
+  SrcColor = "src_color",
+  Zero = "zero",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor {
+  ConstantAlpha = "constant_alpha",
+  ConstantColor = "constant_color",
+  DstAlpha = "dst_alpha",
+  DstColor = "dst_color",
+  One = "one",
+  OneMinusConstantAlpha = "one_minus_constant_alpha",
+  OneMinusConstantColor = "one_minus_constant_color",
+  OneMinusDstAlpha = "one_minus_dst_alpha",
+  OneMinusDstColor = "one_minus_dst_color",
+  OneMinusSrcAlpha = "one_minus_src_alpha",
+  OneMinusSrcColor = "one_minus_src_color",
+  SrcAlpha = "src_alpha",
+  SrcAlphaSaturate = "src_alpha_saturate",
+  SrcColor = "src_color",
+  Zero = "zero",
+}
+
+/**
+ * Blend factor. Ignored when `color_blend_enabled` is false; carry a valid
+ * value (e.g. `one`) regardless.
+ */
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor {
+  ConstantAlpha = "constant_alpha",
+  ConstantColor = "constant_color",
+  DstAlpha = "dst_alpha",
+  DstColor = "dst_color",
+  One = "one",
+  OneMinusConstantAlpha = "one_minus_constant_alpha",
+  OneMinusConstantColor = "one_minus_constant_color",
+  OneMinusDstAlpha = "one_minus_dst_alpha",
+  OneMinusDstColor = "one_minus_dst_color",
+  OneMinusSrcAlpha = "one_minus_src_alpha",
+  OneMinusSrcColor = "one_minus_src_color",
+  SrcAlpha = "src_alpha",
+  SrcAlphaSaturate = "src_alpha_saturate",
+  SrcColor = "src_color",
+  Zero = "zero",
+}
+
+/**
+ * Depth compare op. Ignored when `depth_stencil_enabled` is false; the wire
+ * field must still carry a valid value (use `always` as the default placeholder
+ * when disabled).
+ */
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp {
+  Always = "always",
+  Equal = "equal",
+  Greater = "greater",
+  GreaterOrEqual = "greater_or_equal",
+  Less = "less",
+  LessOrEqual = "less_or_equal",
+  Never = "never",
+  NotEqual = "not_equal",
+}
+
+/**
+ * Which pipeline state is set dynamically per draw vs baked into the pipeline
+ * at creation. `none` bakes a default 1×1 viewport (offscreen fixed-size only);
+ * `viewport_scissor` lets the same pipeline serve varying extents.
+ */
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState {
+  None = "none",
+  ViewportScissor = "viewport_scissor",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode {
+  Back = "back",
+  Front = "front",
+  FrontAndBack = "front_and_back",
+  None = "none",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace {
+  Clockwise = "clockwise",
+  CounterClockwise = "counter_clockwise",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode {
+  Fill = "fill",
+  Line = "line",
+  Point = "point",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateTopology {
+  LineList = "line_list",
+  LineStrip = "line_strip",
+  PointList = "point_list",
+  TriangleFan = "triangle_fan",
+  TriangleList = "triangle_list",
+  TriangleStrip = "triangle_strip",
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat {
+  R32Float = "r32_float",
+  R32Sint = "r32_sint",
+  R32Uint = "r32_uint",
+  Rg32Float = "rg32_float",
+  Rg32Sint = "rg32_sint",
+  Rg32Uint = "rg32_uint",
+  Rgb32Float = "rgb32_float",
+  Rgb32Sint = "rgb32_sint",
+  Rgb32Uint = "rgb32_uint",
+  Rgba32Float = "rgba32_float",
+  Rgba32Sint = "rgba32_sint",
+  Rgba32Uint = "rgba32_uint",
+  Rgba8Snorm = "rgba8_snorm",
+  Rgba8Unorm = "rgba8_unorm",
+}
+
+export interface EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute {
+  binding: number;
+  format: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat;
+  location: number;
+  offset: number;
+}
+
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate {
+  Instance = "instance",
+  Vertex = "vertex",
+}
+
+export interface EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding {
+  binding: number;
+  input_rate: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate;
+  stride: number;
+}
+
+/**
+ * Depth attachment format. Absent disables depth attachments — the
+ * depth_stencil flags must be consistent (`depth_stencil_enabled = false` when
+ * this is absent).
+ */
+export enum EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat {
+  D16Unorm = "d16_unorm",
+  D24UnormS8Uint = "d24_unorm_s8_uint",
+  D32Sfloat = "d32_sfloat",
+}
+
+/**
+ * Fixed-function pipeline state plus attachment formats for the graphics
+ * pipeline. Mirrors the host `GraphicsPipelineState` shape; unsupported
+ * combinations (multi-attachment color blend, MSAA samples > 1, etc.) are
+ * rejected with an `err` response.
+ */
+export interface EscalateRequestRegisterGraphicsKernelPipelineState {
+  /**
+   * Color attachment texture formats (lowercase snake-case names matching
+   * `acquire_texture.format`). v1 supports a single color attachment; arrays of
+   * length other than 1 are rejected.
+   */
+  attachment_color_formats: string[];
+  color_blend_alpha_op: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp;
+  color_blend_color_op: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp;
+  color_blend_dst_alpha_factor: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor;
+  color_blend_dst_color_factor: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor;
+  color_blend_enabled: boolean;
+  color_blend_src_alpha_factor: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor;
+
+  /**
+   * Blend factor. Ignored when `color_blend_enabled` is false; carry a valid
+   * value (e.g. `one`) regardless.
+   */
+  color_blend_src_color_factor: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor;
+
+  /**
+   * Color write mask bits — `1=R`, `2=G`, `4=B`, `8=A`. `15` (`0b1111`) writes
+   * RGBA. Used both when blending is disabled and as the blend attachment's
+   * `color_write_mask` when enabled.
+   */
+  color_write_mask: number;
+
+  /**
+   * Depth compare op. Ignored when `depth_stencil_enabled` is false; the
+   * wire field must still carry a valid value (use `always` as the default
+   * placeholder when disabled).
+   */
+  depth_compare_op: EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp;
+  depth_stencil_enabled: boolean;
+  depth_write: boolean;
+
+  /**
+   * Which pipeline state is set dynamically per draw vs baked into the pipeline
+   * at creation. `none` bakes a default 1×1 viewport (offscreen fixed-size
+   * only); `viewport_scissor` lets the same pipeline serve varying extents.
+   */
+  dynamic_state: EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState;
+
+  /**
+   * MSAA sample count. Only `1` is supported in v1; any other value returns an
+   * `err` response.
+   */
+  multisample_samples: number;
+  rasterization_cull_mode: EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode;
+  rasterization_front_face: EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace;
+  rasterization_line_width: number;
+  rasterization_polygon_mode: EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode;
+  topology: EscalateRequestRegisterGraphicsKernelPipelineStateTopology;
+
+  /**
+   * Vertex attributes pulled from the bindings. Must be empty when
+   * `vertex_input_bindings` is empty.
+   */
+  vertex_input_attributes: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute[];
+
+  /**
+   * Vertex buffer binding slots — stride and step rate per binding. Empty
+   * array selects the `VertexInputState::None` (gl_VertexIndex-driven) shape;
+   * non-empty selects `VertexInputState::Buffers` with the given bindings
+   * + attributes.
+   */
+  vertex_input_bindings: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding[];
+
+  /**
+   * Depth attachment format. Absent disables depth attachments — the
+   * depth_stencil flags must be consistent (`depth_stencil_enabled = false`
+   * when this is absent).
+   */
+  attachment_depth_format?: EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat;
+}
+
+export interface EscalateRequestRegisterGraphicsKernel {
+  op: "register_graphics_kernel";
+
+  /**
+   * Descriptor-set-0 bindings the host pipeline declares. Validated against
+   * `rspirv-reflect` of the supplied SPIR-V at register time — mismatches
+   * return an `err` response. Empty array means no bindings.
+   */
+  bindings: EscalateRequestRegisterGraphicsKernelBinding[];
+
+  /**
+   * Depth of the descriptor-set ring. Render-loop callers pass `frame_index ∈
+   * [0, descriptor_sets_in_flight)` per draw. Must be ≥ 1.
+   */
+  descriptor_sets_in_flight: number;
+
+  /**
+   * Entry-point name for the fragment stage. Empty string is normalized to
+   * `"main"` host-side.
+   */
+  fragment_entry_point: string;
+
+  /**
+   * Compiled SPIR-V bytecode for the fragment stage, encoded as lowercase hex.
+   * Today exactly one fragment stage is required (matching the host kernel's
+   * v1 contract).
+   */
+  fragment_spv_hex: string;
+
+  /**
+   * Human-readable label used in error messages and tracing on the host. Echoed
+   * in `kernel_id` derivation only via its bytes — purely diagnostic.
+   */
+  label: string;
+
+  /**
+   * Fixed-function pipeline state plus attachment formats for the graphics
+   * pipeline. Mirrors the host `GraphicsPipelineState` shape; unsupported
+   * combinations (multi-attachment color blend, MSAA samples > 1, etc.) are
+   * rejected with an `err` response.
+   */
+  pipeline_state: EscalateRequestRegisterGraphicsKernelPipelineState;
+
+  /**
+   * Push-constant range size in bytes, validated against the merged shader
+   * reflection. Set 0 if the shaders use no push constants.
+   */
+  push_constant_size: number;
+
+  /**
+   * Bitmask of stages the push-constant range is visible to. `1 = VERTEX`, `2 =
+   * FRAGMENT`. Ignored when `push_constant_size == 0`.
+   */
+  push_constant_stages: number;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Entry-point name for the vertex stage. Empty string is normalized to
+   * `"main"` host-side.
+   */
+  vertex_entry_point: string;
+
+  /**
+   * Compiled SPIR-V bytecode for the vertex stage, encoded as lowercase hex
+   * (no `0x` prefix, no whitespace). Today exactly one vertex stage is required
+   * (the host kernel rejects zero or multiple vertex stages). Geometry /
+   * tessellation / mesh / task stages are not yet supported.
+   */
+  vertex_spv_hex: string;
+}
+
 export interface EscalateRequestReleaseHandle {
   op: "release_handle";
 
@@ -329,6 +702,184 @@ export interface EscalateRequestRunCpuReadbackCopy {
    * back into u64 by the host before dispatch.
    */
   surface_id: string;
+}
+
+export enum EscalateRequestRunGraphicsDrawBindingKind {
+  SampledTexture = "sampled_texture",
+  StorageBuffer = "storage_buffer",
+  StorageImage = "storage_image",
+  UniformBuffer = "uniform_buffer",
+}
+
+export interface EscalateRequestRunGraphicsDrawBinding {
+  binding: number;
+  kind: EscalateRequestRunGraphicsDrawBindingKind;
+  surface_uuid: string;
+}
+
+export enum EscalateRequestRunGraphicsDrawDrawKind {
+  Draw = "draw",
+  DrawIndexed = "draw_indexed",
+}
+
+/**
+ * Draw call. `kind = "draw"` selects non-indexed (`vertex_count`-driven), `kind
+ * = "draw_indexed"` requires `index_buffer` to be set and uses `index_count`
+ * / `first_index` / `vertex_offset`. Fields not used by the selected kind are
+ * ignored host-side; subprocesses should still send valid placeholder values
+ * (zero is fine) to keep the wire shape regular.
+ */
+export interface EscalateRequestRunGraphicsDrawDraw {
+  first_index: number;
+  first_instance: number;
+  first_vertex: number;
+  index_count: number;
+  instance_count: number;
+  kind: EscalateRequestRunGraphicsDrawDrawKind;
+  vertex_count: number;
+  vertex_offset: number;
+}
+
+export interface EscalateRequestRunGraphicsDrawVertexBuffer {
+  binding: number;
+  offset: string;
+  surface_uuid: string;
+}
+
+export enum EscalateRequestRunGraphicsDrawIndexBufferIndexType {
+  Uint16 = "uint16",
+  Uint32 = "uint32",
+}
+
+/**
+ * Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
+ * `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
+ * into it.
+ */
+export interface EscalateRequestRunGraphicsDrawIndexBuffer {
+  index_type: EscalateRequestRunGraphicsDrawIndexBufferIndexType;
+  offset: string;
+  surface_uuid: string;
+}
+
+/**
+ * Dynamic scissor rect for this draw. Required when the kernel declared
+ * `dynamic_state = "viewport_scissor"`; ignored otherwise.
+ */
+export interface EscalateRequestRunGraphicsDrawScissor {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
+}
+
+/**
+ * Dynamic viewport for this draw. Required when the kernel's pipeline state
+ * declared `dynamic_state = "viewport_scissor"`; ignored otherwise.
+ */
+export interface EscalateRequestRunGraphicsDrawViewport {
+  height: number;
+  max_depth: number;
+  min_depth: number;
+  width: number;
+  x: number;
+  y: number;
+}
+
+export interface EscalateRequestRunGraphicsDraw {
+  op: "run_graphics_draw";
+
+  /**
+   * Per-draw bindings — each slot's `surface_uuid` must resolve through the
+   * host bridge's UUID → resource map. `kind` must match the binding's declared
+   * kind from register time.
+   */
+  bindings: EscalateRequestRunGraphicsDrawBinding[];
+
+  /**
+   * UUIDs of color attachment textures. v1 requires exactly one entry — multi-
+   * attachment is a future extension. Each UUID must resolve to a host-side
+   * `StreamTexture` registered as a render target.
+   */
+  color_target_uuids: string[];
+
+  /**
+   * Draw call. `kind = "draw"` selects non-indexed (`vertex_count`-driven),
+   * `kind = "draw_indexed"` requires `index_buffer` to be set and uses
+   * `index_count` / `first_index` / `vertex_offset`. Fields not used by the
+   * selected kind are ignored host-side; subprocesses should still send valid
+   * placeholder values (zero is fine) to keep the wire shape regular.
+   */
+  draw: EscalateRequestRunGraphicsDrawDraw;
+
+  /**
+   * Render-area height in pixels.
+   */
+  extent_height: number;
+
+  /**
+   * Render-area width in pixels.
+   */
+  extent_width: number;
+
+  /**
+   * Slot in the kernel's descriptor-set ring. Must satisfy `frame_index <
+   * descriptor_sets_in_flight` declared at register time. Render-loop callers
+   * cycle this through `MAX_FRAMES_IN_FLIGHT` so concurrent frames don't
+   * scribble each other's bindings.
+   */
+  frame_index: number;
+
+  /**
+   * Handle returned by a prior `register_graphics_kernel` response. The host
+   * looks up the cached `Arc<VulkanGraphicsKernel>` and dispatches against it.
+   * Dispatching with an unrecognized kernel_id returns an `err` response.
+   */
+  kernel_id: string;
+
+  /**
+   * Push-constant payload for this draw, lowercase hex. Must decode to exactly
+   * the kernel's declared `push_constant_size` (or empty if zero).
+   */
+  push_constants_hex: string;
+
+  /**
+   * Correlates request with response. UUID string.
+   */
+  request_id: string;
+
+  /**
+   * Per-draw vertex buffer bindings. Each entry's `surface_uuid` must resolve
+   * to a host-side `RhiPixelBuffer`. `offset` is the byte offset into the
+   * buffer where vertex data starts (decimal-encoded u64 — JTD has no native
+   * u64). Empty for vertex-fabricating shaders (`gl_VertexIndex` patterns).
+   */
+  vertex_buffers: EscalateRequestRunGraphicsDrawVertexBuffer[];
+
+  /**
+   * UUID of a depth attachment texture. Reserved for future use — v1 rejects
+   * depth attachments with an `err` response.
+   */
+  depth_target_uuid?: string;
+
+  /**
+   * Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
+   * `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
+   * into it.
+   */
+  index_buffer?: EscalateRequestRunGraphicsDrawIndexBuffer;
+
+  /**
+   * Dynamic scissor rect for this draw. Required when the kernel declared
+   * `dynamic_state = "viewport_scissor"`; ignored otherwise.
+   */
+  scissor?: EscalateRequestRunGraphicsDrawScissor;
+
+  /**
+   * Dynamic viewport for this draw. Required when the kernel's pipeline state
+   * declared `dynamic_state = "viewport_scissor"`; ignored otherwise.
+   */
+  viewport?: EscalateRequestRunGraphicsDrawViewport;
 }
 
 /**

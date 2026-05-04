@@ -1,0 +1,15 @@
+package:
+  name: polyglot-vulkan-graphics-deno
+  version: "0.1.0"
+  description: "Polyglot Vulkan adapter scenario (#656) — Deno triangle vertex/fragment graphics kernel rendered into a host DMA-BUF VkImage"
+
+processors:
+  - name: com.tatolab.vulkan_graphics_deno
+    version: "1.0.0"
+    description: "Acquires a host-pre-registered render-target DMA-BUF surface as a VkImage, draws a triangle via the host's VulkanGraphicsKernel, releases"
+    runtime: deno
+    execution: reactive
+    entrypoint: "vulkan_graphics.ts:default"
+    inputs:
+      - name: video_in
+        schema: com.tatolab.videoframe@1.0.0

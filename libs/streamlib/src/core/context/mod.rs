@@ -7,6 +7,8 @@ mod compute_kernel_bridge;
 #[cfg(target_os = "linux")]
 mod cpu_readback_bridge;
 mod gpu_context;
+#[cfg(target_os = "linux")]
+mod graphics_kernel_bridge;
 mod runtime_context;
 mod surface_store;
 pub mod texture_pool;
@@ -21,6 +23,16 @@ pub use audio_clock::{
 pub use compute_kernel_bridge::ComputeKernelBridge;
 #[cfg(target_os = "linux")]
 pub use cpu_readback_bridge::{CpuReadbackBridge, CpuReadbackCopyDirection};
+#[cfg(target_os = "linux")]
+pub use graphics_kernel_bridge::{
+    BlendFactorWire, BlendOpWire, CullModeWire, DepthCompareOpWire, DepthFormatWire,
+    DynamicStateWire, FrontFaceWire, GraphicsBindingDecl, GraphicsBindingKindWire,
+    GraphicsBindingValue, GraphicsDrawSpec, GraphicsIndexBufferBinding, GraphicsKernelBridge,
+    GraphicsKernelRegisterDecl, GraphicsKernelRunDraw, GraphicsPipelineStateWire,
+    GraphicsVertexBufferBinding, IndexTypeWire, PolygonModeWire, PrimitiveTopologyWire,
+    ScissorRectWire, VertexAttributeFormatWire, VertexInputAttributeDecl,
+    VertexInputBindingDecl, VertexInputRateWire, ViewportWire,
+};
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 pub use runtime_context::{
     RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
