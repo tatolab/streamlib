@@ -301,6 +301,22 @@ impl BlendingCompositorProcessor::Processor {
 // ---- Render-loop scaffolding ------------------------------------------------
 
 /// Per-iteration state owned by the spawned render thread.
+///
+/// The four `last_*` fields cache each input port's most recently
+/// resolved layer so a tick where iceoryx2 has no fresh `has_data` for
+/// that port still composites against the producer's last-known
+/// surface — visual continuity instead of a one-frame layer drop. The
+/// camera (~30 fps), the two Skia generators (60 fps), and the
+/// compositor itself (60 fps) all run on independent clocks; without
+/// the cache, any tick with imperfect alignment briefly drops a
+/// layer and the user sees a flicker.
+///
+/// The texture pointed at by a cached registration is still live —
+/// producers write into the same `surface_id` (or rotate through a
+/// ring keyed by `frame_index`), so a cached resolve names whatever
+/// the producer most recently wrote. Layout drift is harmless: the
+/// compositor's pre-render barrier transitions from
+/// `current_layout` regardless of how stale the value is.
 struct LoopState {
     config: BlendingCompositorConfig,
     pip_ready: bool,
@@ -309,6 +325,10 @@ struct LoopState {
     cached_video_dimensions: Option<(u32, u32)>,
     /// Round-robin index into [`GpuBackend::output_ring`].
     next_output_slot: usize,
+    last_video: Option<ResolvedLayer>,
+    last_lower_third: Option<ResolvedLayer>,
+    last_watermark: Option<ResolvedLayer>,
+    last_pip: Option<ResolvedLayer>,
 }
 
 impl LoopState {
@@ -320,6 +340,10 @@ impl LoopState {
             first_video_time: None,
             cached_video_dimensions: None,
             next_output_slot: 0,
+            last_video: None,
+            last_lower_third: None,
+            last_watermark: None,
+            last_pip: None,
         }
     }
 
@@ -395,17 +419,15 @@ fn compose_one_frame(
 ) -> Result<()> {
     // Resolve each upstream layer's texture + current layout via the
     // engine's `resolve_videoframe_registration` (Path 1 same-process
-    // texture cache). Each Resolved entry is cloned out of the
-    // registration's `Arc` so the layout is captured at this instant
-    // — the compositor's input barrier reads from `current_layout`
-    // and barriers to SHADER_READ_ONLY_OPTIMAL inside its render
-    // submit.
-    let video = read_layer(gpu_ctx, inputs, "video_in")?;
-    let lower_third = read_layer(gpu_ctx, inputs, "lower_third_in")?;
-    let watermark = read_layer(gpu_ctx, inputs, "watermark_in")?;
-    let pip = read_layer(gpu_ctx, inputs, "pip_in")?;
+    // texture cache). When a port has no new frame this tick (the
+    // producer's clock didn't align with ours), reuse the prior
+    // tick's resolved layer — see [`LoopState`] for the rationale.
+    refresh_layer(gpu_ctx, inputs, "video_in", &mut state.last_video)?;
+    refresh_layer(gpu_ctx, inputs, "lower_third_in", &mut state.last_lower_third)?;
+    refresh_layer(gpu_ctx, inputs, "watermark_in", &mut state.last_watermark)?;
+    refresh_layer(gpu_ctx, inputs, "pip_in", &mut state.last_pip)?;
 
-    if let Some(ref v) = video {
+    if let Some(v) = state.last_video.as_ref() {
         state.cached_video_dimensions = Some((v.texture.width(), v.texture.height()));
         if state.first_video_time.is_none() {
             state.first_video_time = Some(Instant::now());
@@ -414,6 +436,7 @@ fn compose_one_frame(
 
     state.maybe_promote_pip(Instant::now());
     let pip_slide_progress = state.pip_slide_progress();
+    let pip_ready = state.pip_ready;
 
     let (width, height) = state
         .cached_video_dimensions
@@ -439,14 +462,21 @@ fn compose_one_frame(
         ))?;
     let output_current_layout = output_registration.current_layout();
 
+    // Borrow each cached layer immutably for the dispatch — `state`
+    // is no longer mutated past this point.
+    let video = state.last_video.as_ref();
+    let lower_third = state.last_lower_third.as_ref();
+    let watermark = state.last_watermark.as_ref();
+    let pip = state.last_pip.as_ref();
+
     // Dispatch — the compositor records input barriers + render +
     // output barrier in one CB, submits, and waits before returning.
     backend.compositor.dispatch(BlendingCompositorInputs {
-        video: video.as_ref().map(|l| l.as_layer()),
-        lower_third: lower_third.as_ref().map(|l| l.as_layer()),
-        watermark: watermark.as_ref().map(|l| l.as_layer()),
-        pip: if state.pip_ready {
-            pip.as_ref().map(|l| l.as_layer())
+        video: video.map(|l| l.as_layer()),
+        lower_third: lower_third.map(|l| l.as_layer()),
+        watermark: watermark.map(|l| l.as_layer()),
+        pip: if pip_ready {
+            pip.map(|l| l.as_layer())
         } else {
             None
         },
@@ -462,7 +492,7 @@ fn compose_one_frame(
     // a current layout matching reality (per
     // `docs/architecture/texture-registration.md` consumer rules).
     output_registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
-    for layer in [&video, &lower_third, &watermark, &pip].into_iter().flatten() {
+    for layer in [video, lower_third, watermark, pip].into_iter().flatten() {
         layer
             .registration
             .update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
@@ -508,21 +538,27 @@ impl ResolvedLayer {
     }
 }
 
-fn read_layer(
+/// Resolve `port`'s freshest videoframe (if any) and refresh the
+/// caller's `last` cache. Leaves the cache untouched when no new
+/// frame has arrived since the prior tick — the cache then carries
+/// over the prior layer for the next dispatch.
+fn refresh_layer(
     gpu_ctx: &GpuContextLimitedAccess,
     inputs: &InputMailboxes,
     port: &str,
-) -> Result<Option<ResolvedLayer>> {
+    last: &mut Option<ResolvedLayer>,
+) -> Result<()> {
     if !inputs.has_data(port) {
-        return Ok(None);
+        return Ok(());
     }
     let frame: Videoframe = inputs.read(port)?;
     let registration = gpu_ctx.resolve_videoframe_registration(&frame)?;
     let texture = registration.texture().clone();
-    Ok(Some(ResolvedLayer {
+    *last = Some(ResolvedLayer {
         registration,
         texture,
-    }))
+    });
+    Ok(())
 }
 
 /// Synthesize a Videoframe pointing at one of our output ring slots —
