@@ -1435,6 +1435,15 @@ fn handle_register_acceleration_structure_tlas(
 ) -> EscalateResponse {
     use std::sync::Arc;
 
+    if req.instances.is_empty() {
+        return EscalateResponse::Err(EscalateResponseErr {
+            request_id: rid,
+            message:
+                "register_acceleration_structure_tlas: instances must not be empty (TLAS \
+                 requires at least one instance per Vulkan spec)"
+                    .to_string(),
+        });
+    }
     let mut instances: Vec<TlasInstanceDeclWire> = Vec::with_capacity(req.instances.len());
     for (idx, inst) in req.instances.into_iter().enumerate() {
         if inst.transform.len() != 12 {
@@ -5087,6 +5096,24 @@ mod tests {
             assert_eq!(runs[0].depth, 1);
             assert_eq!(runs[0].bindings.len(), 2);
             assert_eq!(runs[0].push_constants.len(), 16);
+            // Lock the per-binding wire→domain conversion: a handler
+            // bug that swapped, dropped, or overwrote `target_id`
+            // during conversion would slip past the length check
+            // alone. The test request used "test-tlas-uuid" for
+            // binding 0 (acceleration_structure) and
+            // "test-storage-uuid" for binding 1 (storage_image).
+            assert_eq!(runs[0].bindings[0].binding, 0);
+            assert_eq!(runs[0].bindings[0].target_id, "test-tlas-uuid");
+            assert_eq!(
+                runs[0].bindings[0].kind,
+                RayTracingBindingKindWire::AccelerationStructure
+            );
+            assert_eq!(runs[0].bindings[1].binding, 1);
+            assert_eq!(runs[0].bindings[1].target_id, "test-storage-uuid");
+            assert_eq!(
+                runs[0].bindings[1].kind,
+                RayTracingBindingKindWire::StorageImage
+            );
         }
     }
 

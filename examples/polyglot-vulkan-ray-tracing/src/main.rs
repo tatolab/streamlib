@@ -205,17 +205,6 @@ fn stage_byte(s: RayTracingShaderStageWire) -> u8 {
     }
 }
 
-fn map_stage(s: RayTracingShaderStageWire) -> RayTracingShaderStageFlags {
-    match s {
-        RayTracingShaderStageWire::RayGen => RayTracingShaderStageFlags::RAYGEN,
-        RayTracingShaderStageWire::Miss => RayTracingShaderStageFlags::MISS,
-        RayTracingShaderStageWire::ClosestHit => RayTracingShaderStageFlags::CLOSEST_HIT,
-        RayTracingShaderStageWire::AnyHit => RayTracingShaderStageFlags::ANY_HIT,
-        RayTracingShaderStageWire::Intersection => RayTracingShaderStageFlags::INTERSECTION,
-        RayTracingShaderStageWire::Callable => RayTracingShaderStageFlags::CALLABLE,
-    }
-}
-
 fn stage_to_descriptor(s: RayTracingShaderStageWire) -> impl Fn(&[u8]) -> RayTracingStage<'_> {
     use streamlib::core::rhi::RayTracingShaderStage;
     move |spv| RayTracingStage {
@@ -400,10 +389,6 @@ impl RayTracingKernelBridge for SceneKernelBridge {
             };
             let kernel = VulkanRayTracingKernel::new(&self.device, &descriptor)
                 .map_err(|e| format!("VulkanRayTracingKernel::new: {e}"))?;
-            // Suppress the unused-binding warning — `map_stage` is
-            // declared so a future bridge that tracks declared vs
-            // actual stages can re-use it. Drop a dummy reference.
-            let _ = map_stage;
             kernels.insert(kernel_id.clone(), Arc::new(kernel));
         }
         Ok(kernel_id)

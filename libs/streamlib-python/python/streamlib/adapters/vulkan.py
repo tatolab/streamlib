@@ -815,7 +815,15 @@ class VulkanContext:
         # `setup()` and reuses them across dispatches, the frozenset of
         # ids hits the cache. Fresh `bytes` instances are a cache miss
         # and re-register through escalate IPC.
-        spv_objs: tuple[bytes, ...] = tuple(bytes(s["spv"]) for s in stages)
+        #
+        # The cache key is `frozenset(id(s["spv"]) for s in stages)` —
+        # the *original* objects' ids. We MUST pin those original
+        # objects (NOT copies) so Python can't recycle their ids
+        # while the cached kernel_id is in flight. `tuple(s["spv"]
+        # for s in stages)` keeps strong references to the originals;
+        # wrapping in `bytes(...)` would create copies whose ids are
+        # unrelated to the cache key, defeating the pin.
+        spv_objs: tuple[bytes, ...] = tuple(s["spv"] for s in stages)
         cache_key: frozenset[int] = frozenset(id(s["spv"]) for s in stages)
         normalized_stages: list[Dict[str, Any]] = [
             {
