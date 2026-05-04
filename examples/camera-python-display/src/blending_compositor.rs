@@ -16,11 +16,15 @@
 //!
 //! Layer order (bottom → top): video → lower_third → watermark → PiP.
 //!
-//! Linux-only. The pre-RHI macOS Metal path was removed when the
-//! compositor was rewritten on `VulkanBlendingCompositor` /
-//! `VulkanGraphicsKernel` (#485) — supporting it would have required
-//! parallel adapter machinery that does not exist outside the engine
-//! today.
+//! Linux-only. The pre-RHI macOS Metal path was removed in #485 when
+//! the compositor was rewritten on the graphics-kernel + texture-cache
+//! RHI; supporting it would have required parallel adapter machinery
+//! that does not exist outside the engine today.
+//!
+//! The kernel wrapper itself ([`SandboxedBlendingCompositor`]) lives
+//! in `blending_compositor_kernel.rs` — see that file's module-level
+//! doc for why it lives in the example and not the engine, and for
+//! the link to RDG (#631) which absorbs it when ready.
 
 #![cfg(target_os = "linux")]
 
@@ -36,9 +40,13 @@ use streamlib::core::{
     GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError,
 };
 use streamlib::iceoryx2::{InputMailboxes, OutputWriter};
-use streamlib::{
-    BlendingCompositorInputs, BlendingLayer, BlendingOutput, Videoframe,
-    VulkanBlendingCompositor,
+use streamlib::Videoframe;
+
+// Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
+// the transitional rationale (this kernel previously lived in the
+// engine pre-#487, migrates into RDG (#631) when that lands).
+use crate::blending_compositor_kernel::{
+    BlendingCompositorInputs, BlendingLayer, BlendingOutput, SandboxedBlendingCompositor,
 };
 
 /// Iteration cap applied when [`BlendingCompositorConfig::target_fps`]
@@ -108,7 +116,7 @@ struct OutputSlot {
 /// the render thread (LimitedAccess is sufficient for resolving
 /// registrations).
 struct GpuBackend {
-    compositor: Arc<VulkanBlendingCompositor>,
+    compositor: Arc<SandboxedBlendingCompositor>,
     output_ring: Vec<OutputSlot>,
 }
 
@@ -235,7 +243,7 @@ impl BlendingCompositorProcessor::Processor {
 
         let gpu_full = ctx.gpu_full_access();
         let vulkan_device = gpu_full.device().vulkan_device().clone();
-        let compositor = Arc::new(VulkanBlendingCompositor::new(&vulkan_device)?);
+        let compositor = Arc::new(SandboxedBlendingCompositor::new(&vulkan_device)?);
 
         // Pre-allocate the output texture ring — render-target-capable
         // tiled DMA-BUF VkImages, registered in BOTH

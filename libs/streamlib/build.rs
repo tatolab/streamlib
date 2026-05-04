@@ -31,21 +31,6 @@ fn compile_shaders() {
     let shaders: &[(&str, &str, &str)] = &[
         ("src/vulkan/rhi/shaders/nv12_to_bgra.comp", "nv12_to_bgra.spv", "compute"),
         (
-            "src/vulkan/rhi/shaders/blending_compositor.vert",
-            "blending_compositor.vert.spv",
-            "vertex",
-        ),
-        (
-            "src/vulkan/rhi/shaders/blending_compositor.frag",
-            "blending_compositor.frag.spv",
-            "fragment",
-        ),
-        (
-            "src/vulkan/rhi/shaders/crt_film_grain.comp",
-            "crt_film_grain.spv",
-            "compute",
-        ),
-        (
             "src/vulkan/rhi/shaders/display_blit.vert",
             "display_blit.vert.spv",
             "vertex",

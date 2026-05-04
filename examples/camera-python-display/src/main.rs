@@ -43,15 +43,21 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod blending_compositor;
+// Sandboxed kernel wrapper for [`blending_compositor`] — was in
+// `libs/streamlib/src/vulkan/rhi/` pre-#487; relocated as
+// transitional content. See module-level doc for the migration path
+// to RDG (#631).
+#[cfg(target_os = "linux")]
+mod blending_compositor_kernel;
 #[cfg(target_os = "linux")]
 mod camera_to_cuda_copy;
-// CRT/Film-Grain processor module is declared (so its
-// `#[streamlib::processor]` registration runs at module-init and the
-// type is loadable) but not yet wired into the Linux pipeline —
-// `linux.rs` adds the BlendingCompositor → CRT → Glitch → Display
-// chain in #487 alongside the Glitch port.
+// CRT/Film-Grain post-effect: processor + sandboxed kernel wrapper.
+// Wired into the Linux pipeline as
+// `BlendingCompositor → CrtFilmGrain → Glitch → Display` (#487).
 #[cfg(target_os = "linux")]
 mod crt_film_grain;
+#[cfg(target_os = "linux")]
+mod crt_film_grain_kernel;
 #[cfg(target_os = "linux")]
 mod linux;
 

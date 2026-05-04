@@ -25,24 +25,33 @@
 //!   `acquire_render_target_dma_buf_image` + surface-share
 //!   registration flow.
 //!
-//! Pipeline shape (post-#486, pre-#487):
+//! Pipeline shape (post-#487):
 //!
 //! ```text
 //!   Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐
 //!                                 │                       ▼
-//!                                 │   LowerThird ────→ Blending ──→ Glitch ──→ Display
+//!                                 │   LowerThird ────→ Blending ──→ CrtFilmGrain ──→ Glitch ──→ Display
 //!                                 │                       ▲
 //!                                 │   Watermark ──────────┘
 //! ```
 //!
 //! `Glitch` is a Python subprocess processor (`cyberpunk_glitch:CyberpunkGlitch`)
-//! that reads BlendingCompositor's output (a Vulkan-allocated tiled
-//! DMA-BUF VkImage; cross-process accessible because the compositor
-//! dual-registers each ring slot in `surface_store`) and applies a GLSL
+//! that reads CrtFilmGrain's output (a Vulkan-allocated tiled DMA-BUF
+//! VkImage; cross-process accessible because the CRT processor dual-
+//! registers each ring slot in `surface_store`) and applies a GLSL
 //! fragment shader (chromatic aberration / scanlines / slice
 //! displacement / film grain). It writes into the host-pre-registered
 //! `GLITCH_OUTPUT_SURFACE_UUID` and emits the UUID downstream to
-//! Display. CRT/FilmGrain integration lands in #487.
+//! Display.
+//!
+//! `CrtFilmGrain` is an in-process Rust processor that owns a
+//! sandboxed graphics-kernel wrapper (`SandboxedCrtFilmGrain` in
+//! `crt_film_grain_kernel.rs`). Pre-#487 the kernel + its compute
+//! shader lived in `libs/streamlib/src/vulkan/rhi/`; that placement
+//! encoded a single demo's app content (Blade Runner CRT vibe) into
+//! the engine. They migrated out into the example as transitional
+//! sandboxed code (gated by an explicit `xtask check-boundaries`
+//! allowlist exception) and migrate into RDG passes when #631 ships.
 //!
 //! See `docs/architecture/adapter-runtime-integration.md` for the
 //! single-pattern principle these adapters ride and
@@ -62,6 +71,7 @@ use streamlib_consumer_rhi::VulkanLayout;
 
 use crate::blending_compositor::BlendingCompositorProcessor;
 use crate::camera_to_cuda_copy::{CameraToCudaCopyProcessor, CUDA_CAMERA_SURFACE_ID};
+use crate::crt_film_grain::CrtFilmGrainProcessor;
 
 /// Re-exported alias so the Python avatar's JSON config and other
 /// pipeline wiring keep using the historical name; the processor's
@@ -255,25 +265,39 @@ pub fn main() -> Result<()> {
     ))?;
     println!("✓ Watermark processor added: {watermark}\n");
 
-    // BlendingCompositor (Rust ManualProcessor backed by
-    // VulkanBlendingCompositor on Linux). Composites four input layers
-    // (video, lower_third, watermark, pip) into one output frame paced
-    // against the display refresh rate. Each output ring slot is
-    // dual-registered (`texture_cache` for in-process Display reads,
-    // `surface_store` for cross-process Glitch reads via the OpenGL
-    // adapter); see `blending_compositor.rs::setup_inner`.
+    // BlendingCompositor (Rust ManualProcessor backed by a sandboxed
+    // graphics kernel — see `blending_compositor_kernel.rs` for the
+    // transitional rationale). Composites four input layers (video,
+    // lower_third, watermark, pip) into one output frame paced against
+    // the display refresh rate. Each output ring slot is
+    // dual-registered (`texture_cache` for in-process consumers
+    // — CrtFilmGrain reads here — `surface_store` for cross-process
+    // consumers — would be reachable via the OpenGL adapter); see
+    // `blending_compositor.rs::setup_inner`.
     println!("🎨 Adding blending compositor (parallel layer blending)...");
     let blending = runtime.add_processor(BlendingCompositorProcessor::node(Default::default()))?;
     println!("✓ Blending compositor added: {blending}\n");
 
+    // CrtFilmGrain (Rust ReactiveProcessor, Linux only post-#485).
+    // Pre-#487 this kernel + its shader lived in `libs/streamlib/`;
+    // they relocated to the example as transitional sandboxed content
+    // (`crt_film_grain_kernel.rs`) and the .comp shader was ported to
+    // .vert + .frag for the texture-throughout pipeline. The
+    // processor allocates and dual-registers its own 2-slot output
+    // ring in `setup_inner`, so it doesn't need a setup-hook entry
+    // here.
+    println!("📺 Adding CRT/film-grain post-effect...");
+    let crt = runtime.add_processor(CrtFilmGrainProcessor::node(Default::default()))?;
+    println!("✓ CRT/film-grain added: {crt}\n");
+
     // Cyberpunk Glitch (Python subprocess, OpenGL adapter, GLSL
-    // fragment shader). Reads BlendingCompositor's output cross-
-    // process via `OpenGLContext.acquire_read`, applies chromatic
-    // aberration / scanlines / slice displacement / film-grain
-    // glitches, writes into the host-pre-registered
-    // GLITCH_OUTPUT_SURFACE_UUID. The intermittent dramatic-mode
-    // trigger lives Python-side (single timer, 0–8 s after a 2 s
-    // cooldown — see `cyberpunk_glitch.py::GlitchState`).
+    // fragment shader). Reads CrtFilmGrain's output cross-process via
+    // `OpenGLContext.acquire_read`, applies chromatic aberration /
+    // scanlines / slice displacement / film-grain glitches, writes
+    // into the host-pre-registered GLITCH_OUTPUT_SURFACE_UUID. The
+    // intermittent dramatic-mode trigger lives Python-side (single
+    // timer, 0–8 s after a 2 s cooldown — see
+    // `cyberpunk_glitch.py::GlitchState`).
     println!("🐍 Adding Python cyberpunk glitch (subprocess, OpenGL fragment shader)...");
     let glitch = runtime.add_processor(ProcessorSpec::new(
         "com.tatolab.cyberpunk_glitch",
@@ -334,9 +358,14 @@ pub fn main() -> Result<()> {
     println!("   ✓ Watermark → BlendingCompositor.watermark_in");
     runtime.connect(
         OutputLinkPortRef::new(&blending, "video_out"),
+        InputLinkPortRef::new(&crt, "video_in"),
+    )?;
+    println!("   ✓ BlendingCompositor → CrtFilmGrain (Rust graphics kernel)");
+    runtime.connect(
+        OutputLinkPortRef::new(&crt, "video_out"),
         InputLinkPortRef::new(&glitch, "video_in"),
     )?;
-    println!("   ✓ BlendingCompositor → Glitch (Python OpenGL fragment shader)");
+    println!("   ✓ CrtFilmGrain → Glitch (Python OpenGL fragment shader)");
     runtime.connect(
         OutputLinkPortRef::new(&glitch, "video_out"),
         InputLinkPortRef::new(&display, "video"),
@@ -344,9 +373,9 @@ pub fn main() -> Result<()> {
     println!("   ✓ Glitch → Display\n");
 
     println!("▶️  Starting pipeline...");
-    println!("   Architecture (Linux, #484 + #485 + #486 + #612):");
+    println!("   Architecture (Linux, #484 + #485 + #486 + #487 + #612):");
     println!("     Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐");
-    println!("                                   ├──────────────────────┴── BlendingCompositor ──→ Glitch ──→ Display");
+    println!("                                   ├──────────────────────┴── BlendingCompositor ──→ CrtFilmGrain ──→ Glitch ──→ Display");
     println!("                                   │   LowerThird ───────────/");
     println!("                                   │   Watermark ───────────/");
     println!("                (cuda OPAQUE_FD + opengl DMA-BUF + skia-on-GL DMA-BUFs)");
