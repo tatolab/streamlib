@@ -1092,6 +1092,129 @@ impl GpuContext {
         Ok(Arc::new(kernel))
     }
 
+    /// Create a ray-tracing kernel from shader stages, shader-group
+    /// layout, binding declaration, and push-constant range. Mirror of
+    /// [`Self::create_compute_kernel`] / [`Self::create_graphics_kernel`]
+    /// for `VkRayTracingPipelineKHR`-backed work.
+    ///
+    /// Validates every stage's SPIR-V against the declared bindings +
+    /// push-constants at creation time, builds the pipeline, fetches
+    /// shader-group handles, lays out the shader-binding table, and
+    /// returns a kernel ready for `set_*` + `trace_rays` dispatch.
+    /// Returns a clean error when the device lacks RT support.
+    #[cfg(target_os = "linux")]
+    pub fn create_ray_tracing_kernel(
+        &self,
+        descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
+        tracing::debug!(
+            rhi_op = "create_ray_tracing_kernel",
+            label = descriptor.label,
+            stages = descriptor.stages.len(),
+            groups = descriptor.groups.len(),
+            bindings = descriptor.bindings.len(),
+            push_constant_size = descriptor.push_constants.size,
+            max_recursion_depth = descriptor.max_recursion_depth,
+            "GpuContext::create_ray_tracing_kernel"
+        );
+        let vulkan_device = &self.device.inner;
+        let kernel = crate::vulkan::rhi::VulkanRayTracingKernel::new(vulkan_device, descriptor)?;
+        Ok(Arc::new(kernel))
+    }
+
+    /// Build a triangle-geometry bottom-level acceleration structure
+    /// from CPU-side vertex + index data. Backs [`Self::create_ray_tracing_kernel`]
+    /// — every TLAS instance references one of these BLAS handles.
+    /// Returns a clean error when the device lacks RT support.
+    #[cfg(target_os = "linux")]
+    pub fn build_triangles_blas(
+        &self,
+        label: &str,
+        vertices: &[f32],
+        indices: &[u32],
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+        tracing::debug!(
+            rhi_op = "build_triangles_blas",
+            label,
+            vertex_count = vertices.len() / 3,
+            triangle_count = indices.len() / 3,
+            "GpuContext::build_triangles_blas"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::VulkanAccelerationStructure::build_triangles_blas(
+            vulkan_device,
+            label,
+            vertices,
+            indices,
+        )
+    }
+
+    /// Build a top-level acceleration structure from a list of TLAS
+    /// instances. Each instance references a BLAS the TLAS keeps alive
+    /// for its lifetime. Returns a clean error when the device lacks
+    /// RT support.
+    #[cfg(target_os = "linux")]
+    pub fn build_tlas(
+        &self,
+        label: &str,
+        instances: &[crate::vulkan::rhi::TlasInstanceDesc],
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+        tracing::debug!(
+            rhi_op = "build_tlas",
+            label,
+            instance_count = instances.len(),
+            "GpuContext::build_tlas"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::VulkanAccelerationStructure::build_tlas(
+            vulkan_device,
+            label,
+            instances,
+        )
+    }
+
+    /// Whether the underlying GPU exposes the
+    /// `VK_KHR_ray_tracing_pipeline` extension chain. RT-dependent
+    /// consumers should check this before calling
+    /// [`Self::create_ray_tracing_kernel`] /
+    /// [`Self::build_triangles_blas`] / [`Self::build_tlas`].
+    #[cfg(target_os = "linux")]
+    pub fn supports_ray_tracing_pipeline(&self) -> bool {
+        self.device.inner.supports_ray_tracing_pipeline()
+    }
+
+    /// Transition `texture` into `VK_IMAGE_LAYOUT_GENERAL` via a
+    /// one-shot command buffer + fence. Used as the prelude to binding
+    /// a freshly-created storage image to a compute / RT kernel that
+    /// will write into it via `imageStore`. The transition uses
+    /// `UNDEFINED` as the source layout, so this is correct for
+    /// just-allocated textures only — once the texture has content
+    /// you'd otherwise lose, callers must use a barrier with the
+    /// actual prior layout.
+    ///
+    /// Lives here (not on `HostVulkanTexture`) so example / processor
+    /// code that needs a one-shot layout transition stays inside the
+    /// RHI boundary instead of pulling vulkanalia directly. Mirrors
+    /// the existing `acquire_*` shape on `GpuContext`.
+    #[cfg(target_os = "linux")]
+    pub fn transition_storage_image_to_general(
+        &self,
+        texture: &crate::core::rhi::StreamTexture,
+    ) -> Result<()> {
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::HostVulkanTexture::transition_to_general(
+            vulkan_device,
+            texture
+                .vulkan_inner()
+                .image()
+                .ok_or_else(|| {
+                    crate::core::StreamError::GpuError(
+                        "transition_storage_image_to_general: texture missing VkImage".to_string(),
+                    )
+                })?,
+        )
+    }
+
     /// Create a host-side texture-readback handle bound to a fixed
     /// format/extent. The staging buffer + command resources + timeline
     /// semaphore are allocated once at construction and reused across
@@ -1828,6 +1951,45 @@ impl GpuContextFullAccess {
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanGraphicsKernel>> {
         self.inner.create_graphics_kernel(descriptor)
+    }
+
+    /// Create a ray-tracing kernel from shader stages, shader-group
+    /// layout, binding declaration, and push-constant range.
+    #[cfg(target_os = "linux")]
+    pub fn create_ray_tracing_kernel(
+        &self,
+        descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanRayTracingKernel>> {
+        self.inner.create_ray_tracing_kernel(descriptor)
+    }
+
+    /// Build a triangle-geometry bottom-level acceleration structure
+    /// from CPU-side vertex + index data.
+    #[cfg(target_os = "linux")]
+    pub fn build_triangles_blas(
+        &self,
+        label: &str,
+        vertices: &[f32],
+        indices: &[u32],
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+        self.inner.build_triangles_blas(label, vertices, indices)
+    }
+
+    /// Build a top-level acceleration structure from BLAS instances.
+    #[cfg(target_os = "linux")]
+    pub fn build_tlas(
+        &self,
+        label: &str,
+        instances: &[crate::vulkan::rhi::TlasInstanceDesc],
+    ) -> Result<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
+        self.inner.build_tlas(label, instances)
+    }
+
+    /// Whether the underlying GPU exposes the
+    /// `VK_KHR_ray_tracing_pipeline` extension chain.
+    #[cfg(target_os = "linux")]
+    pub fn supports_ray_tracing_pipeline(&self) -> bool {
+        self.inner.supports_ray_tracing_pipeline()
     }
 
     /// Get the underlying Metal device (macOS only).

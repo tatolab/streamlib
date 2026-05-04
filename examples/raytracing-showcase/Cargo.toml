@@ -1,0 +1,8 @@
+[package]
+name = "raytracing-showcase"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib" }
+anyhow = "1.0.100"

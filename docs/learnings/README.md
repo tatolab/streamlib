@@ -70,3 +70,8 @@ Avoid the two failure modes:
   release/acquire (with `VK_EXT_external_memory_acquire_unmodified` chained
   for content preservation), bridging `UNDEFINED → target` as the fallback
   when extensions are missing
+- [@docs/learnings/vulkanalia-acceleration-structure-instance-layout.md](vulkanalia-acceleration-structure-instance-layout.md) —
+  `vulkanalia-sys` 0.35.0's `VkAccelerationStructureInstanceKHR` field order
+  disagrees with the Vulkan C spec; using the struct directly puts the BLAS
+  device address at the wrong offset and every TLAS instance points at
+  garbage. Workaround: serialize the 64-byte instance manually in spec order

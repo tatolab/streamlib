@@ -55,6 +55,20 @@ pub struct HostVulkanDevice {
     /// available; this acquire-side extension is the only meaningful
     /// gate.
     has_acquire_unmodified: bool,
+    /// Whether the `VK_KHR_ray_tracing_pipeline` extension chain
+    /// (acceleration_structure + ray_tracing_pipeline +
+    /// deferred_host_operations + pipeline_library) was enabled at
+    /// device creation, plus the core 1.2 `bufferDeviceAddress`
+    /// feature it depends on. Gates [`VulkanRayTracingKernel`]
+    /// construction; absent on devices without RT support and on
+    /// non-Linux platforms.
+    has_ray_tracing_pipeline: bool,
+    /// `VkPhysicalDeviceRayTracingPipelinePropertiesKHR` snapshot
+    /// queried at construction when [`Self::has_ray_tracing_pipeline`]
+    /// is true. Carries the SBT alignment + handle-size constants the
+    /// kernel needs at every dispatch — caching on the device avoids
+    /// a re-query per kernel.
+    ray_tracing_properties: Option<RayTracingPipelineProperties>,
     supports_video_encode: bool,
     supports_video_decode: bool,
     video_encode_queue_family_index: Option<u32>,
@@ -168,6 +182,30 @@ fn host_default_color_subresource_range() -> vk::ImageSubresourceRange {
         base_array_layer: 0,
         layer_count: 1,
     }
+}
+
+/// Snapshot of `VkPhysicalDeviceRayTracingPipelinePropertiesKHR` at
+/// device construction. Only the fields the kernel actually uses are
+/// kept — the upstream struct carries dispatch-time limits the engine
+/// doesn't surface today (e.g. `maxRayHitAttributeSize`).
+#[derive(Debug, Clone, Copy)]
+pub struct RayTracingPipelineProperties {
+    /// Size in bytes of an opaque shader group handle. Each SBT entry
+    /// starts with one of these handles followed by optional shader
+    /// record data.
+    pub shader_group_handle_size: u32,
+    /// Required alignment of every SBT region's stride. Per Khronos
+    /// spec, `stride` passed to `vkCmdTraceRaysKHR` must be a multiple
+    /// of this value.
+    pub shader_group_handle_alignment: u32,
+    /// Required alignment of the start address of each SBT region.
+    /// The buffer device address passed in
+    /// `VkStridedDeviceAddressRegionKHR::deviceAddress` must be a
+    /// multiple of this value.
+    pub shader_group_base_alignment: u32,
+    /// Maximum recursion depth a ray-tracing pipeline can declare.
+    /// Pipelines requesting a higher value fail at creation.
+    pub max_ray_recursion_depth: u32,
 }
 
 /// Internal anti-decay sentinel for an export-capable VMA pool.
@@ -301,9 +339,38 @@ impl HostVulkanDevice {
             instance_create_flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
         }
 
+        // Optional Khronos validation layer — opt-in so it doesn't bloat
+        // the production deviceless path. Enabled via the
+        // `STREAMLIB_VULKAN_VALIDATION=1` env var; a sibling alternative
+        // to `VK_LOADER_LAYERS_ENABLE` for cases where the loader-side
+        // hook is shadowed (notably some Bazel / Docker / cargo-test
+        // configurations).
+        let validation_layer_name = std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap();
+        let mut enabled_layer_names: Vec<*const c_char> = Vec::new();
+        let want_validation = std::env::var("STREAMLIB_VULKAN_VALIDATION")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        if want_validation {
+            let layers = unsafe { entry.enumerate_instance_layer_properties() }
+                .unwrap_or_default();
+            let layer_present = layers.iter().any(|l| {
+                let name = unsafe { CStr::from_ptr(l.layer_name.as_ptr()) };
+                name == validation_layer_name.as_c_str()
+            });
+            if layer_present {
+                enabled_layer_names.push(validation_layer_name.as_ptr());
+                tracing::info!("VK_LAYER_KHRONOS_validation enabled (STREAMLIB_VULKAN_VALIDATION)");
+            } else {
+                tracing::warn!(
+                    "STREAMLIB_VULKAN_VALIDATION=1 set but VK_LAYER_KHRONOS_validation not installed"
+                );
+            }
+        }
+
         let instance_info = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_extension_names(&instance_extensions)
+            .enabled_layer_names(&enabled_layer_names)
             .flags(instance_create_flags)
             .build();
 
@@ -601,6 +668,49 @@ impl HostVulkanDevice {
             has_external_memory
         };
 
+        // Ray-tracing pipeline extension chain — gates
+        // `VulkanRayTracingKernel` and `VulkanAccelerationStructure`.
+        // All four extensions must be present together; partial
+        // support is not a thing the engine exposes. The feature
+        // structs are pushed into the device-create chain only when
+        // every extension is available so devices without RT do not
+        // fail at create time on a missing-feature error.
+        #[cfg(target_os = "linux")]
+        let has_ray_tracing_pipeline = {
+            let accel_struct_ext = c"VK_KHR_acceleration_structure";
+            let rt_pipeline_ext = c"VK_KHR_ray_tracing_pipeline";
+            let deferred_host_ext = c"VK_KHR_deferred_host_operations";
+            let pipeline_library_ext = c"VK_KHR_pipeline_library";
+            let all_present = available_device_ext_names.contains(&accel_struct_ext)
+                && available_device_ext_names.contains(&rt_pipeline_ext)
+                && available_device_ext_names.contains(&deferred_host_ext)
+                && available_device_ext_names.contains(&pipeline_library_ext);
+            if all_present {
+                device_extensions.push(accel_struct_ext.as_ptr());
+                device_extensions.push(rt_pipeline_ext.as_ptr());
+                device_extensions.push(deferred_host_ext.as_ptr());
+                device_extensions.push(pipeline_library_ext.as_ptr());
+                tracing::info!(
+                    "Vulkan ray-tracing extensions enabled \
+                     (acceleration_structure + ray_tracing_pipeline + \
+                      deferred_host_operations + pipeline_library)"
+                );
+            } else {
+                tracing::info!(
+                    "Vulkan ray-tracing extensions not available \
+                     (accel_struct={}, rt_pipeline={}, deferred_host={}, \
+                      pipeline_library={})",
+                    available_device_ext_names.contains(&accel_struct_ext),
+                    available_device_ext_names.contains(&rt_pipeline_ext),
+                    available_device_ext_names.contains(&deferred_host_ext),
+                    available_device_ext_names.contains(&pipeline_library_ext),
+                );
+            }
+            all_present
+        };
+        #[cfg(not(target_os = "linux"))]
+        let has_ray_tracing_pipeline = false;
+
         // On Linux, enable VK_KHR_swapchain for windowed display rendering
         #[cfg(target_os = "linux")]
         {
@@ -716,6 +826,36 @@ impl HostVulkanDevice {
         #[cfg(not(target_os = "linux"))]
         let has_acquire_unmodified = false;
 
+        // Snapshot the RT pipeline properties (SBT alignment + handle
+        // size + max recursion depth) before device creation. The query
+        // is on the physical device; chained `VkPhysicalDeviceRayTracingPipelinePropertiesKHR`
+        // is well-defined once the implementation advertises the extension.
+        #[cfg(target_os = "linux")]
+        let ray_tracing_properties = if has_ray_tracing_pipeline {
+            let mut rt_props = vk::PhysicalDeviceRayTracingPipelinePropertiesKHR::builder().build();
+            let mut props2 = vk::PhysicalDeviceProperties2::builder()
+                .push_next(&mut rt_props)
+                .build();
+            unsafe { instance.get_physical_device_properties2(physical_device, &mut props2) };
+            tracing::info!(
+                "Ray-tracing pipeline properties: handle_size={}, handle_alignment={}, base_alignment={}, max_recursion_depth={}",
+                rt_props.shader_group_handle_size,
+                rt_props.shader_group_handle_alignment,
+                rt_props.shader_group_base_alignment,
+                rt_props.max_ray_recursion_depth,
+            );
+            Some(RayTracingPipelineProperties {
+                shader_group_handle_size: rt_props.shader_group_handle_size,
+                shader_group_handle_alignment: rt_props.shader_group_handle_alignment,
+                shader_group_base_alignment: rt_props.shader_group_base_alignment,
+                max_ray_recursion_depth: rt_props.max_ray_recursion_depth,
+            })
+        } else {
+            None
+        };
+        #[cfg(not(target_os = "linux"))]
+        let ray_tracing_properties: Option<RayTracingPipelineProperties> = None;
+
         #[cfg(target_os = "linux")]
         let supports_video_encode = has_video_encode;
         #[cfg(not(target_os = "linux"))]
@@ -752,6 +892,32 @@ impl HostVulkanDevice {
             .sampler_ycbcr_conversion(true)
             .build();
 
+        // Ray-tracing requires `bufferDeviceAddress` (core 1.2). Use the
+        // standalone `VkPhysicalDeviceBufferDeviceAddressFeatures`
+        // extension struct rather than `VkPhysicalDeviceVulkan12Features`
+        // — Vulkan spec rejects mixing the 1.2 aggregate with the
+        // standalone `*Features` structs it subsumes (timeline-semaphore
+        // / synchronization2 are already pushed via their standalone
+        // structs above; using the 1.2 aggregate here would trip
+        // VUID-VkDeviceCreateInfo-pNext-02830).
+        #[cfg(target_os = "linux")]
+        let mut buffer_device_address_features =
+            vk::PhysicalDeviceBufferDeviceAddressFeatures::builder()
+                .buffer_device_address(true)
+                .build();
+
+        #[cfg(target_os = "linux")]
+        let mut acceleration_structure_features =
+            vk::PhysicalDeviceAccelerationStructureFeaturesKHR::builder()
+                .acceleration_structure(true)
+                .build();
+
+        #[cfg(target_os = "linux")]
+        let mut ray_tracing_pipeline_features =
+            vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::builder()
+                .ray_tracing_pipeline(true)
+                .build();
+
         #[cfg(target_os = "linux")]
         let device_create_info = {
             let mut builder = vk::DeviceCreateInfo::builder()
@@ -763,6 +929,12 @@ impl HostVulkanDevice {
                 .push_next(&mut vulkan_1_1_features);
             if supports_video_encode || supports_video_decode {
                 builder = builder.push_next(&mut video_maintenance1_features);
+            }
+            if has_ray_tracing_pipeline {
+                builder = builder
+                    .push_next(&mut buffer_device_address_features)
+                    .push_next(&mut acceleration_structure_features)
+                    .push_next(&mut ray_tracing_pipeline_features);
             }
             builder.build()
         };
@@ -821,6 +993,18 @@ impl HostVulkanDevice {
         //     correct fix.
         let mut alloc_options = vma::AllocatorOptions::new(&instance, &device, physical_device);
         alloc_options.version = vulkanalia::Version::new(1, 4, 0);
+        // BUFFER_DEVICE_ADDRESS — required so buffers created with
+        // `VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT` (acceleration-
+        // structure storage / scratch / vertex / index, the SBT) get
+        // `VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT` on their device-memory
+        // allocations. Only enabled when the RT extension chain is on,
+        // since the underlying `bufferDeviceAddress` feature is gated
+        // there. Non-RT devices keep the default flags so the
+        // allocator's behavior is unchanged on hardware without RT.
+        #[cfg(target_os = "linux")]
+        if has_ray_tracing_pipeline {
+            alloc_options.flags = vma::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+        }
 
         let allocator = Arc::new(
             unsafe { vma::Allocator::new(&alloc_options) }
@@ -927,13 +1111,14 @@ impl HostVulkanDevice {
         };
 
         tracing::info!(
-            "Vulkan device initialized: {} (queue family {}, {} memory types, external_memory={}, cross_device_dma_buf_probe={}, acquire_unmodified={}, vma=enabled, dma_buf_pools={})",
+            "Vulkan device initialized: {} (queue family {}, {} memory types, external_memory={}, cross_device_dma_buf_probe={}, acquire_unmodified={}, ray_tracing={}, vma=enabled, dma_buf_pools={})",
             device_name,
             queue_family_index,
             memory_properties.memory_type_count,
             supports_external_memory,
             supports_cross_device_dma_buf_probe,
             has_acquire_unmodified,
+            has_ray_tracing_pipeline,
             {
                 #[cfg(target_os = "linux")]
                 { dma_buf_buffer_pool.is_some() }
@@ -956,6 +1141,8 @@ impl HostVulkanDevice {
             supports_external_memory,
             supports_cross_device_dma_buf_probe,
             has_acquire_unmodified,
+            has_ray_tracing_pipeline,
+            ray_tracing_properties,
             supports_video_encode,
             supports_video_decode,
             video_encode_queue_family_index,
@@ -2125,6 +2312,24 @@ impl HostVulkanDevice {
     /// list as of 2026-05-03); Mesa is the eventual landing point.
     pub fn supports_qfot_acquire_unmodified(&self) -> bool {
         self.has_acquire_unmodified
+    }
+
+    /// Whether the `VK_KHR_ray_tracing_pipeline` extension chain
+    /// (acceleration_structure + ray_tracing_pipeline +
+    /// deferred_host_operations + pipeline_library) was enabled at
+    /// device creation. Gates [`VulkanRayTracingKernel`] and
+    /// [`VulkanAccelerationStructure`] construction.
+    pub fn supports_ray_tracing_pipeline(&self) -> bool {
+        self.has_ray_tracing_pipeline
+    }
+
+    /// `VkPhysicalDeviceRayTracingPipelinePropertiesKHR` snapshot
+    /// queried at device construction. `Some(_)` whenever
+    /// [`Self::supports_ray_tracing_pipeline`] is true.
+    pub fn ray_tracing_pipeline_properties(
+        &self,
+    ) -> Option<RayTracingPipelineProperties> {
+        self.ray_tracing_properties
     }
 
     /// Producer-side QFOT release barrier — declares the surface's
