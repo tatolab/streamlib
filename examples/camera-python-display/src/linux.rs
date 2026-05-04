@@ -25,17 +25,24 @@
 //!   `acquire_render_target_dma_buf_image` + surface-share
 //!   registration flow.
 //!
-//! Pipeline shape (post-#485, pre-#486/#487):
+//! Pipeline shape (post-#486, pre-#487):
 //!
 //! ```text
 //!   Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐
 //!                                 │                       ▼
-//!                                 │   LowerThird ────→ Blending ──→ Display
+//!                                 │   LowerThird ────→ Blending ──→ Glitch ──→ Display
 //!                                 │                       ▲
 //!                                 │   Watermark ──────────┘
 //! ```
 //!
-//! Glitch (#486) and CRT/FilmGrain integration land in #487.
+//! `Glitch` is a Python subprocess processor (`cyberpunk_glitch:CyberpunkGlitch`)
+//! that reads BlendingCompositor's output (a Vulkan-allocated tiled
+//! DMA-BUF VkImage; cross-process accessible because the compositor
+//! dual-registers each ring slot in `surface_store`) and applies a GLSL
+//! fragment shader (chromatic aberration / scanlines / slice
+//! displacement / film grain). It writes into the host-pre-registered
+//! `GLITCH_OUTPUT_SURFACE_UUID` and emits the UUID downstream to
+//! Display. CRT/FilmGrain integration lands in #487.
 //!
 //! See `docs/architecture/adapter-runtime-integration.md` for the
 //! single-pattern principle these adapters ride and
@@ -78,6 +85,14 @@ const LOWER_THIRD_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000
 /// shape as the lower-third — tiled DMA-BUF VkImage written via
 /// SkiaContext, consumed by BlendingCompositor as `watermark_in`.
 const WATERMARK_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000486";
+
+/// Surface UUID for the cyberpunk glitch GLSL post-process output
+/// (#486). Tiled DMA-BUF VkImage written by the Python `Glitch`
+/// subprocess via `OpenGLContext.acquire_write` (ModernGL fragment
+/// shader); consumed in-process by `Display` via Path 1. UUID's last
+/// octet (`487`) is sequenced after the watermark slot, leaving 486
+/// stable for back-traceability.
+const GLITCH_OUTPUT_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000000487";
 
 /// Pin everything to 1920x1080 for the first iteration. The Linux
 /// camera processor's default capture resolution and the host's
@@ -148,6 +163,19 @@ pub fn main() -> Result<()> {
         })?;
         println!(
             "✓ Watermark Skia DMA-BUF output surface registered: uuid={WATERMARK_OUTPUT_SURFACE_UUID}"
+        );
+        register_render_target_surface(
+            gpu,
+            GLITCH_OUTPUT_SURFACE_UUID,
+            "glitch OpenGL output (#486)",
+        )
+        .map_err(|e| {
+            StreamError::Configuration(format!(
+                "register glitch surface: {e}"
+            ))
+        })?;
+        println!(
+            "✓ Glitch OpenGL DMA-BUF output surface registered: uuid={GLITCH_OUTPUT_SURFACE_UUID}"
         );
         Ok(())
     });
@@ -230,11 +258,32 @@ pub fn main() -> Result<()> {
     // BlendingCompositor (Rust ManualProcessor backed by
     // VulkanBlendingCompositor on Linux). Composites four input layers
     // (video, lower_third, watermark, pip) into one output frame paced
-    // against the display refresh rate. CRT/FilmGrain + Glitch land in
-    // #486/#487; this PR wires Blending → Display directly.
+    // against the display refresh rate. Each output ring slot is
+    // dual-registered (`texture_cache` for in-process Display reads,
+    // `surface_store` for cross-process Glitch reads via the OpenGL
+    // adapter); see `blending_compositor.rs::setup_inner`.
     println!("🎨 Adding blending compositor (parallel layer blending)...");
     let blending = runtime.add_processor(BlendingCompositorProcessor::node(Default::default()))?;
     println!("✓ Blending compositor added: {blending}\n");
+
+    // Cyberpunk Glitch (Python subprocess, OpenGL adapter, GLSL
+    // fragment shader). Reads BlendingCompositor's output cross-
+    // process via `OpenGLContext.acquire_read`, applies chromatic
+    // aberration / scanlines / slice displacement / film-grain
+    // glitches, writes into the host-pre-registered
+    // GLITCH_OUTPUT_SURFACE_UUID. The intermittent dramatic-mode
+    // trigger lives Python-side (single timer, 0–8 s after a 2 s
+    // cooldown — see `cyberpunk_glitch.py::GlitchState`).
+    println!("🐍 Adding Python cyberpunk glitch (subprocess, OpenGL fragment shader)...");
+    let glitch = runtime.add_processor(ProcessorSpec::new(
+        "com.tatolab.cyberpunk_glitch",
+        serde_json::json!({
+            "output_surface_uuid": GLITCH_OUTPUT_SURFACE_UUID,
+            "width": SURFACE_WIDTH,
+            "height": SURFACE_HEIGHT,
+        }),
+    ))?;
+    println!("✓ Glitch processor added: {glitch}\n");
 
     // Display processor (Vulkan swapchain).
     println!("🖥️  Adding display processor...");
@@ -285,14 +334,19 @@ pub fn main() -> Result<()> {
     println!("   ✓ Watermark → BlendingCompositor.watermark_in");
     runtime.connect(
         OutputLinkPortRef::new(&blending, "video_out"),
+        InputLinkPortRef::new(&glitch, "video_in"),
+    )?;
+    println!("   ✓ BlendingCompositor → Glitch (Python OpenGL fragment shader)");
+    runtime.connect(
+        OutputLinkPortRef::new(&glitch, "video_out"),
         InputLinkPortRef::new(&display, "video"),
     )?;
-    println!("   ✓ BlendingCompositor → Display\n");
+    println!("   ✓ Glitch → Display\n");
 
     println!("▶️  Starting pipeline...");
-    println!("   Architecture (Linux, #484 + #485 + #612):");
+    println!("   Architecture (Linux, #484 + #485 + #486 + #612):");
     println!("     Camera ──→ CameraToCudaCopy ──┬──→ AvatarCharacter ──┐");
-    println!("                                   ├──────────────────────┴── BlendingCompositor ──→ Display");
+    println!("                                   ├──────────────────────┴── BlendingCompositor ──→ Glitch ──→ Display");
     println!("                                   │   LowerThird ───────────/");
     println!("                                   │   Watermark ───────────/");
     println!("                (cuda OPAQUE_FD + opengl DMA-BUF + skia-on-GL DMA-BUFs)");

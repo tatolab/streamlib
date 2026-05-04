@@ -1,69 +1,135 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Cyberpunk glitch post-processing effect using pure OpenGL shaders.
+"""Cyberpunk glitch post-processing — Linux GLSL fragment shader (#486).
 
-Isolated subprocess processor using standalone CGL context.
-Full-screen glitch effect inspired by Cyberpunk 2077's "Relic Malfunction" visuals.
-Uses GLSL fragment shaders directly on GL textures for GPU-accelerated distortion.
+Linux subprocess processor on the canonical surface-adapter pattern
+(post-#485): reads its ``video_in`` surface (the BlendingCompositor's
+output, a tiled DMA-BUF ``VkImage``) via
+:meth:`streamlib.adapters.opengl.OpenGLContext.acquire_read`, runs a
+GLSL fragment shader that applies (1) the intermittent glitch flash
+ported from the macOS ``cyberpunk_glitch.py`` shader (chromatic
+aberration / sparse slice displacement / cyan noise lines / dramatic-
+mode horizontal slice + multi-octave grain) and (2) a continuous
+cyberpunk grade + vignette + light CRT scanline that ports the
+full-frame look from the dropped macOS ``cyberpunk_processor.py``,
+and writes into the host's pre-registered ``video_out`` surface via
+:meth:`OpenGLContext.acquire_write`.
 
-Features:
-- RGB chromatic aberration (samples input at offset UVs per channel)
-- CRT curvature distortion
-- Scanlines
-- Horizontal slice displacement
-- Intermittent triggering (not constant)
-- Zero-copy GPU texture via IOSurface + CGL binding
+The macOS pipeline composed two separate processors —
+``cyberpunk_processor.py`` (continuous grade) and
+``cyberpunk_glitch.py`` (intermittent flashes) — to produce the
+cyberpunk camera look. The Linux pipeline collapses both passes into
+this single fragment shader so ``BlendingCompositor → Glitch →
+Display`` is the only post-process hop. Heavier scanlines and
+continuous film grain are intentionally deferred to the CrtFilmGrain
+processor in #487.
+
+ModernGL adopts the adapter's EGL context (``standalone=False``) for
+shader compilation, FBO construction, and the fullscreen draw; the
+input texture is bound on unit 0 by raw GL via ``ctypes`` —
+``moderngl.Context.external_texture`` would work but would churn a
+fresh Python wrapper per frame as the upstream ring slot rotates.
+This matches ``pose_overlay_renderer.py``'s pattern, just on
+``GL_TEXTURE_2D`` instead of ``GL_TEXTURE_EXTERNAL_OES`` (the
+BlendingCompositor's output is allocated render-target-capable with a
+tiled DRM modifier — see
+``docs/learnings/nvidia-egl-dmabuf-render-target.md``).
+
+The intermittent dramatic-mode triggering stays Python-side via
+:class:`GlitchState`. The shader receives ``intensity`` and
+``isDramatic`` uniforms each frame; ``intensity < 0.01`` short-
+circuits to a passthrough sample of the input.
+
+macOS support was removed in #485; the pre-RHI CGL+IOSurface path
+predated the surface-adapter pattern.
+
+Config keys (set by ``examples/camera-python-display/src/linux.rs``):
+    output_surface_uuid (str) — pre-registered render-target DMA-BUF VkImage.
+    width, height (int) — surface dimensions.
 """
 
+import ctypes
 import logging
-import math
 import random
+import time
 
+import moderngl
 import numpy as np
-from OpenGL.GL import *
 
 from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
+from streamlib.adapters.opengl import GL_TEXTURE_2D, OpenGLContext
 
 logger = logging.getLogger(__name__)
 
 
+# Raw GL entry points for binding the upstream input texture on unit 0.
+# ModernGL's `Texture.use` works only for textures it owns; rebinding an
+# externally-supplied `GL_TEXTURE_2D` id requires raw GL. Both functions
+# are core GL entry points always exported by libGL — resolving via
+# ctypes avoids dragging PyOpenGL in as a Linux dep, and matches
+# `pose_overlay_renderer.py`'s pattern (the OS GL loader is what
+# ModernGL uses internally).
+_GL_LIB = ctypes.CDLL("libGL.so.1")
+_GL_LIB.glActiveTexture.argtypes = [ctypes.c_uint]
+_GL_LIB.glActiveTexture.restype = None
+_GL_LIB.glBindTexture.argtypes = [ctypes.c_uint, ctypes.c_uint]
+_GL_LIB.glBindTexture.restype = None
+_GL_TEXTURE0 = 0x84C0
+
+
 # =============================================================================
-# GLSL Shaders
+# Shaders
 # =============================================================================
 
-# Vertex shader - simple fullscreen quad
-VERTEX_SHADER = """
-#version 150 core
-
-in vec2 position;
-out vec2 texCoord;
-
-uniform vec2 resolution;
-
+# Fullscreen-quad vertex shader. NDC y aligns with uv.y so a write at
+# NDC y=-1 lands in row 0 of the FBO (GL bottom = Vulkan top under the
+# DMA-BUF aliasing) sampling uv.y=0 of the input. Both producer and
+# consumer use the same convention so the GL→Vulkan double flip cancels
+# and downstream sees the image upright. See the bg_verts comment in
+# `pose_overlay_renderer.py` for the full rationale; do NOT invert
+# texcoord Y to "fix" orientation — that re-introduces #621.
+_VERTEX_SHADER = """
+#version 330 core
+in vec2 in_position;
+out vec2 v_uv;
 void main() {
-    gl_Position = vec4(position, 0.0, 1.0);
-    // Convert from clip space (-1 to 1) to texture space (0 to resolution)
-    texCoord = (position * 0.5 + 0.5) * resolution;
+    gl_Position = vec4(in_position, 0.0, 1.0);
+    v_uv = in_position * 0.5 + 0.5;
 }
 """
 
-# Fragment shader for glitch effect
-# Note: Uses sampler2DRect for IOSurface textures (pixel coordinates, not normalized)
-GLITCH_FRAGMENT_SHADER = """
-#version 150 core
+# Fragment shader. Two stacked passes:
+#
+# 1. **Intermittent glitch** (when `u_intensity > 0.01`) — translated
+#    from the dropped macOS `cyberpunk_glitch.py` `sampler2DRect` path.
+#    Pixel-space offsets become normalized-UV offsets via the
+#    precomputed `1.0 / resolution`. Same chromatic-aberration / sparse
+#    slice / cyan noise lines / dramatic-mode slice + multi-octave grain.
+# 2. **Continuous cyberpunk grade** (always applied) — folds in the
+#    full-frame color matrix from the dropped macOS `cyberpunk_processor.py`
+#    plus the vignette + light CRT scanline from
+#    `pose_overlay_renderer.py` so the camera background carries the
+#    same cyberpunk aesthetic the AvatarCharacter PiP already does. The
+#    macOS pipeline composed `cyberpunk_processor.py` (continuous grade)
+#    + `cyberpunk_glitch.py` (intermittent flashes) as two separate
+#    processors; the Linux pipeline collapses both passes into this
+#    single fragment shader so the BlendingCompositor → Glitch → Display
+#    edge is the only post-process hop. Heavier scanlines + continuous
+#    film grain are intentionally deferred to the CrtFilmGrain processor
+#    in #487 — keep them light enough here that #487 has room to layer.
+_GLITCH_FRAGMENT_SHADER = """
+#version 330 core
+in vec2 v_uv;
+out vec4 frag_color;
 
-in vec2 texCoord;
-out vec4 fragColor;
+uniform sampler2D u_input;
+uniform vec2 u_resolution;
+uniform float u_time;
+uniform float u_intensity;
+uniform float u_seed;
+uniform float u_is_dramatic;
 
-uniform sampler2DRect inputTexture;
-uniform vec2 resolution;
-uniform float time;
-uniform float intensity;
-uniform float seed;
-uniform float isDramatic;  // 1.0 for dramatic mode, 0.0 for normal
-
-// Hash function for pseudo-random values
 float hash11(float p) {
     p = fract(p * 0.1031);
     p *= p + 33.33;
@@ -71,7 +137,6 @@ float hash11(float p) {
     return fract(p);
 }
 
-// 2D hash for block noise
 float hash21(vec2 p) {
     p = fract(p * vec2(234.34, 435.345));
     p += dot(p, p + 34.23);
@@ -79,105 +144,99 @@ float hash21(vec2 p) {
 }
 
 void main() {
-    vec2 uv = texCoord / resolution;  // Normalized 0-1
-    vec2 sampleCoord = texCoord;
+    vec2 uv = v_uv;
+    vec2 inv_res = 1.0 / u_resolution;
 
-    // No effect when intensity is 0
-    if (intensity < 0.01) {
-        fragColor = texture(inputTexture, texCoord);
-        return;
-    }
-
+    // ---- Pass 1: glitch effect (intermittent) ----------------------
     vec3 color;
+    if (u_intensity < 0.01) {
+        color = texture(u_input, uv).rgb;
+    } else if (u_is_dramatic > 0.5) {
+        // Horizontal slice displacement + multi-octave film grain.
+        float slice_height_px = mix(15.0, 30.0, hash11(u_seed * 0.5));
+        float slice_index = floor(uv.y * u_resolution.y / slice_height_px);
+        float slice_random = hash11(slice_index + u_seed);
+        float max_offset_px = 200.0 * u_intensity;
+        float x_offset_px = (slice_random - 0.5) * 2.0 * max_offset_px;
+        vec2 displaced_uv = uv + vec2(x_offset_px * inv_res.x, 0.0);
+        color = texture(u_input, displaced_uv).rgb;
 
-    // =========================================================================
-    // DRAMATIC MODE - Horizontal slice displacement + film grain
-    // =========================================================================
-    if (isDramatic > 0.5) {
-        // Divide screen into rows of ~15-30px height
-        // Use seed to vary slice height between frames
-        float sliceHeight = mix(15.0, 30.0, hash11(seed * 0.5));
-        float sliceIndex = floor(texCoord.y / sliceHeight);
-
-        // Random horizontal offset for this slice (0-200 pixels, left or right)
-        float sliceRandom = hash11(sliceIndex + seed);
-        float maxOffset = 200.0 * intensity;
-        float xOffset = (sliceRandom - 0.5) * 2.0 * maxOffset;
-
-        // Sample with horizontal displacement
-        vec2 displacedCoord = sampleCoord + vec2(xOffset, 0.0);
-        color = texture(inputTexture, displacedCoord).rgb;
-
-        // === FILM GRAIN (Perlin-like noise) ===
-        // Multi-octave noise for organic film grain look
         float grain = 0.0;
-        float grainScale = 1.0;
-        float grainAmp = 0.5;
+        float scale = 1.0;
+        float amp = 0.5;
         for (int i = 0; i < 3; i++) {
-            vec2 grainUV = uv * resolution * grainScale * 0.01 + seed;
-            grain += (hash21(grainUV) - 0.5) * grainAmp;
-            grainScale *= 2.0;
-            grainAmp *= 0.5;
+            vec2 grain_uv = uv * u_resolution * scale * 0.01 + u_seed;
+            grain += (hash21(grain_uv) - 0.5) * amp;
+            scale *= 2.0;
+            amp *= 0.5;
         }
-
-        // Add temporal variation to grain
-        grain += (hash21(uv * 800.0 + time * 10.0) - 0.5) * 0.15;
-
-        // Apply grain (subtle, film-like)
-        color += grain * 0.12 * intensity;
+        grain += (hash21(uv * 800.0 + u_time * 10.0) - 0.5) * 0.15;
+        color += grain * 0.12 * u_intensity;
         color = clamp(color, 0.0, 1.0);
-    }
-    // =========================================================================
-    // NORMAL MODE - Subtle glitch
-    // =========================================================================
-    else {
-        // === RGB Chromatic Aberration ===
-        float aberration = 8.0 * intensity;
-        vec2 rOffset = vec2(aberration * (hash11(seed * 1.1) - 0.5) * 2.0, 0.0);
-        vec2 bOffset = vec2(aberration * (hash11(seed * 2.2) - 0.5) * 2.0, 0.0);
-
-        float r = texture(inputTexture, sampleCoord + rOffset).r;
-        float g = texture(inputTexture, sampleCoord).g;
-        float b = texture(inputTexture, sampleCoord + bOffset).b;
-
+    } else {
+        // Subtle: chromatic aberration + sparse slice + cyan lines.
+        // Scanlines moved out of this branch and into the continuous
+        // grade pass below.
+        float aberration_px = 8.0 * u_intensity;
+        vec2 r_offset = vec2(
+            aberration_px * (hash11(u_seed * 1.1) - 0.5) * 2.0 * inv_res.x, 0.0
+        );
+        vec2 b_offset = vec2(
+            aberration_px * (hash11(u_seed * 2.2) - 0.5) * 2.0 * inv_res.x, 0.0
+        );
+        float r = texture(u_input, uv + r_offset).r;
+        float g = texture(u_input, uv).g;
+        float b = texture(u_input, uv + b_offset).b;
         color = vec3(r, g, b);
 
-        // === Scanlines ===
-        float scanline = sin(texCoord.y * 3.14159 * 2.0) * 0.5 + 0.5;
-        scanline = pow(scanline, 0.5);
-        color *= 0.85 + 0.15 * scanline;
-
-        // === Horizontal slice displacement (sparse) ===
-        float sliceNoise = hash11(floor(uv.y * 60.0) + seed);
-        if (sliceNoise > 0.75 && intensity > 0.3) {
-            float sliceStrength = (sliceNoise - 0.75) / 0.25;
-            float sliceOffset = (hash11(seed + floor(uv.y * 60.0) * 0.1) - 0.5) * 60.0 * intensity * sliceStrength;
-            vec2 sliceCoord = sampleCoord + vec2(sliceOffset, 0.0);
-            color = texture(inputTexture, sliceCoord).rgb;
+        float slice_noise = hash11(floor(uv.y * 60.0) + u_seed);
+        if (slice_noise > 0.75 && u_intensity > 0.3) {
+            float slice_strength = (slice_noise - 0.75) / 0.25;
+            float slice_offset_px =
+                (hash11(u_seed + floor(uv.y * 60.0) * 0.1) - 0.5)
+                * 60.0 * u_intensity * slice_strength;
+            vec2 slice_uv = uv + vec2(slice_offset_px * inv_res.x, 0.0);
+            color = texture(u_input, slice_uv).rgb;
         }
 
-        // === Random noise lines ===
-        float lineNoise = hash11(time * 50.0 + floor(uv.y * resolution.y));
-        if (lineNoise > 0.97) {
-            color += vec3(0.0, 0.3 * intensity, 0.3 * intensity);
+        float line_noise = hash11(u_time * 50.0 + floor(uv.y * u_resolution.y));
+        if (line_noise > 0.97) {
+            color += vec3(0.0, 0.3 * u_intensity, 0.3 * u_intensity);
         }
     }
 
-    fragColor = vec4(color, 1.0);
-}
-"""
+    // ---- Pass 2: continuous cyberpunk grade ------------------------
+    // 2a. Color matrix — ports the macOS `cyberpunk_processor.py`
+    //     subtle game-style grade (slight boost to reds/blues, green
+    //     flat to preserve skin tones, R↔B cross-channel for the
+    //     teal/magenta cyberpunk feel).
+    vec3 graded;
+    graded.r = color.r * 1.08 + color.g * 0.02 + color.b * 0.03;
+    graded.g = color.g;
+    graded.b = color.r * 0.03 + color.g * 0.02 + color.b * 1.06;
 
-# True passthrough - no effects when not glitching
-PASSTHROUGH_FRAGMENT_SHADER = """
-#version 150 core
+    // 2b. Heavier "game" grade on top — mirrors
+    //     `pose_overlay_renderer.py`'s background pass so the camera
+    //     background and the AvatarCharacter PiP share the same
+    //     aesthetic. Lifts mids towards cyan, pushes shadows slightly
+    //     violet.
+    graded = mix(graded, graded * vec3(0.78, 1.05, 1.18), 0.55);
+    graded = mix(graded, graded + vec3(0.04, 0.0, 0.06), 0.35);
 
-in vec2 texCoord;
-out vec4 fragColor;
+    // 2c. Light CRT scanline — same formula as
+    //     `pose_overlay_renderer.py`. Heavier scanlines and continuous
+    //     film grain land in the CrtFilmGrain processor (#487).
+    float scan = 0.94 + 0.06 * sin(uv.y * 800.0);
+    graded *= scan;
 
-uniform sampler2DRect inputTexture;
+    // 2d. Vignette — radial darkening towards corners, same shape as
+    //     `pose_overlay_renderer.py`. Clamped to [0.5, 1.0] so corners
+    //     don't go fully black.
+    vec2 uv_centered = uv * 2.0 - 1.0;
+    float vignette = 1.0 - dot(uv_centered, uv_centered) * 0.35;
+    graded *= clamp(vignette, 0.5, 1.0);
 
-void main() {
-    fragColor = texture(inputTexture, texCoord);
+    frag_color = vec4(graded, 1.0);
 }
 """
 
@@ -187,13 +246,13 @@ void main() {
 # =============================================================================
 
 class GlitchState:
-    """Tracks glitch effect state and timing.
+    """Single timer firing every 0–8 s after a 2 s cooldown.
 
-    Single timer triggers every 0-8 seconds (after 2s cooldown).
-    Randomly chooses between minor or major glitch each time.
+    On each fire: 50/50 between a dramatic glitch (0.3–0.8 s, intensity
+    0.8–1.0) and a minor glitch (0.1–0.3 s, intensity 0.3–0.6).
     """
 
-    COOLDOWN = 2.0  # 2 second delay after glitch ends before scheduling next
+    COOLDOWN = 2.0  # seconds
 
     def __init__(self):
         self.active = False
@@ -204,315 +263,248 @@ class GlitchState:
         self.seed = 0.0
         self.in_cooldown = False
         self.cooldown_end_time = 0.0
-
-        # Single timer for next glitch (0-8 seconds)
         self.next_glitch = random.uniform(0.0, 8.0)
 
     def update(self, elapsed: float) -> bool:
-        """Update glitch state, returns True if glitch should be active."""
-
-        # If currently glitching, check if it should end
+        """Step the state machine. Returns True iff a glitch is active."""
         if self.active:
             if elapsed - self.start_time > self.duration:
                 self.active = False
                 self.is_dramatic = False
                 self.intensity = 0.0
-                # Start cooldown period
                 self.in_cooldown = True
                 self.cooldown_end_time = elapsed + self.COOLDOWN
             return self.active
 
-        # If in cooldown, check if it's over and schedule next glitch
         if self.in_cooldown:
             if elapsed >= self.cooldown_end_time:
                 self.in_cooldown = False
-                # Schedule next glitch (random 0-8 seconds from now)
                 self.next_glitch = elapsed + random.uniform(0.0, 8.0)
             return False
 
-        # Check if it's time for a glitch
         if elapsed >= self.next_glitch:
             self.active = True
             self.start_time = elapsed
             self.seed = elapsed
-
-            # Randomly choose major or minor
             if random.random() < 0.5:
-                # Major (dramatic) glitch
                 self.is_dramatic = True
                 self.duration = random.uniform(0.3, 0.8)
                 self.intensity = random.uniform(0.8, 1.0)
             else:
-                # Minor (normal) glitch
                 self.is_dramatic = False
                 self.duration = random.uniform(0.1, 0.3)
                 self.intensity = random.uniform(0.3, 0.6)
-
             return True
 
         return False
 
 
 # =============================================================================
-# Cyberpunk Glitch Processor (Isolated Subprocess)
+# Cyberpunk Glitch Processor (Linux)
 # =============================================================================
 
 class CyberpunkGlitch:
-    """Full-screen glitch effect using pure OpenGL shaders.
+    """GLSL fragment-shader glitch post-processor (Linux, #486).
 
-    Isolated subprocess processor with own CGL context.
-    Runs GLSL fragment shaders directly on GL textures backed by IOSurfaces.
+    Reads ``video_in`` via :meth:`OpenGLContext.acquire_read`
+    (`GL_TEXTURE_2D`), applies the glitch shader, writes into the host-
+    pre-registered output surface via :meth:`OpenGLContext.acquire_write`,
+    and emits a frame referencing that UUID downstream.
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        """Initialize standalone CGL context and compile shaders."""
-        from streamlib.cgl_context import create_cgl_context, make_current
+        cfg = ctx.config
+        self._uuid = str(cfg["output_surface_uuid"])
+        self._W = int(cfg["width"])
+        self._H = int(cfg["height"])
 
         self.frame_count = 0
+        self._start_time = time.monotonic()
         self.glitch_state = GlitchState()
 
-        # Create standalone CGL context (own GPU context, not host's)
-        self.cgl_ctx = create_cgl_context()
-        make_current(self.cgl_ctx)
+        # No application-level frame limiter — `video_in` is a
+        # SkipToLatest mailbox, so the upstream's pace governs ours.
+        # `BlendingCompositor` is paced at the display's 60 Hz today;
+        # if a future upstream produces faster, we'd want to consume
+        # at that rate and let the display do its own SkipToLatest
+        # rather than gating here. AvatarCharacter (the precedent
+        # consumer of an `acquire_read` upstream) follows the same
+        # convention.
 
-        # Compile shaders
-        self._compile_shaders()
+        self._opengl = OpenGLContext.from_runtime(ctx)
 
-        # Create fullscreen quad VAO
-        self._create_quad_vao()
+        # ModernGL state — initialized lazily on first acquire_write.
+        # The adapter's EGL context is current on this thread inside an
+        # `acquire_*` scope; `moderngl.create_context(standalone=False)`
+        # adopts that context.
+        self._mgl_ctx = None
+        self._program = None
+        self._vbo = None
+        self._vao = None
+        self._mgl_external_color = None
+        self._mgl_output_fbo = None
+        self._cached_output_gl_id = None
 
-        # Create FBO for rendering to output texture
-        self.fbo = glGenFramebuffers(1)
+        logger.info(
+            f"Cyberpunk Glitch initialized "
+            f"({self._W}x{self._H}, uuid={self._uuid})"
+        )
 
-        # Create reusable GL textures for input and output IOSurface binding
-        self.input_tex_id = glGenTextures(1)
-        self.output_tex_id = glGenTextures(1)
+    def _ensure_render_state(self, output_gl_texture_id: int) -> None:
+        """Lazy-init ModernGL ctx + shader program + VAO + output FBO.
 
-        # Track current dimensions for lazy output buffer allocation
-        self._current_width = 0
-        self._current_height = 0
-        self._fbo_validated = False
+        Must be called from inside an :meth:`OpenGLContext.acquire_write`
+        scope. Idempotent on repeat calls; rebuilds the FBO if the
+        adapter ever returns a different output GL id (defensive — in
+        practice the adapter's id is stable per-UUID across acquires).
+        """
+        if self._mgl_ctx is None:
+            self._mgl_ctx = moderngl.create_context(standalone=False)
+            logger.info(
+                f"Cyberpunk Glitch: ModernGL context created "
+                f"(GL {self._mgl_ctx.version_code})"
+            )
+            self._program = self._mgl_ctx.program(
+                vertex_shader=_VERTEX_SHADER,
+                fragment_shader=_GLITCH_FRAGMENT_SHADER,
+            )
+            verts = np.array([
+                -1.0, -1.0,
+                 1.0, -1.0,
+                -1.0,  1.0,
+                 1.0,  1.0,
+            ], dtype=np.float32)
+            self._vbo = self._mgl_ctx.buffer(verts.tobytes())
+            self._vao = self._mgl_ctx.vertex_array(
+                self._program,
+                [(self._vbo, "2f", "in_position")],
+            )
 
-        logger.info("Cyberpunk Glitch: Standalone CGL context + shaders initialized")
-
-    def _compile_shaders(self):
-        """Compile and link GLSL shader programs."""
-        def compile_shader(source: str, shader_type) -> int:
-            shader = glCreateShader(shader_type)
-            glShaderSource(shader, source)
-            glCompileShader(shader)
-            if not glGetShaderiv(shader, GL_COMPILE_STATUS):
-                error = glGetShaderInfoLog(shader).decode('utf-8')
-                glDeleteShader(shader)
-                raise RuntimeError(f"Shader compilation failed: {error}")
-            return shader
-
-        def link_program(vertex_shader, fragment_shader) -> int:
-            program = glCreateProgram()
-            glAttachShader(program, vertex_shader)
-            glAttachShader(program, fragment_shader)
-            glLinkProgram(program)
-            if not glGetProgramiv(program, GL_LINK_STATUS):
-                error = glGetProgramInfoLog(program).decode('utf-8')
-                glDeleteProgram(program)
-                raise RuntimeError(f"Program linking failed: {error}")
-            return program
-
-        vertex_shader = compile_shader(VERTEX_SHADER, GL_VERTEX_SHADER)
-        glitch_frag = compile_shader(GLITCH_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-        passthrough_frag = compile_shader(PASSTHROUGH_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-
-        self.glitch_program = link_program(vertex_shader, glitch_frag)
-        self.passthrough_program = link_program(vertex_shader, passthrough_frag)
-
-        # Clean up shader objects (they're linked into programs now)
-        glDeleteShader(vertex_shader)
-        glDeleteShader(glitch_frag)
-        glDeleteShader(passthrough_frag)
-
-        # Get uniform locations for glitch shader
-        glUseProgram(self.glitch_program)
-        self.glitch_uniforms = {
-            'inputTexture': glGetUniformLocation(self.glitch_program, 'inputTexture'),
-            'resolution': glGetUniformLocation(self.glitch_program, 'resolution'),
-            'time': glGetUniformLocation(self.glitch_program, 'time'),
-            'intensity': glGetUniformLocation(self.glitch_program, 'intensity'),
-            'seed': glGetUniformLocation(self.glitch_program, 'seed'),
-            'isDramatic': glGetUniformLocation(self.glitch_program, 'isDramatic'),
-        }
-
-        # Get uniform locations for passthrough shader
-        glUseProgram(self.passthrough_program)
-        self.passthrough_uniforms = {
-            'inputTexture': glGetUniformLocation(self.passthrough_program, 'inputTexture'),
-            'resolution': glGetUniformLocation(self.passthrough_program, 'resolution'),
-        }
-
-        glUseProgram(0)
-
-    def _create_quad_vao(self):
-        """Create fullscreen quad VAO."""
-        self.vao = glGenVertexArrays(1)
-        self.vbo = glGenBuffers(1)
-
-        glBindVertexArray(self.vao)
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-
-        # Fullscreen quad vertices (clip space coordinates)
-        vertices = np.array([
-            -1.0, -1.0,
-             1.0, -1.0,
-            -1.0,  1.0,
-             1.0,  1.0,
-        ], dtype=np.float32)
-
-        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
-
-        # Position attribute
-        position_loc = glGetAttribLocation(self.glitch_program, 'position')
-        glEnableVertexAttribArray(position_loc)
-        glVertexAttribPointer(position_loc, 2, GL_FLOAT, GL_FALSE, 0, None)
-
-        glBindVertexArray(0)
+        if (self._mgl_output_fbo is None
+                or self._cached_output_gl_id != output_gl_texture_id):
+            if self._mgl_output_fbo is not None:
+                try:
+                    self._mgl_output_fbo.release()
+                except Exception:
+                    pass
+                try:
+                    if self._mgl_external_color is not None:
+                        self._mgl_external_color.release()
+                except Exception:
+                    pass
+                self._mgl_output_fbo = None
+                self._mgl_external_color = None
+            # `external_texture(glo, size, components, samples, dtype)` —
+            # ModernGL 5.x requires all five positional args. The OpenGL
+            # adapter allocates the imported texture as 8-bit RGBA,
+            # single-sample. The wrapper does NOT own the underlying GL
+            # name — releasing it only frees ModernGL bookkeeping.
+            self._mgl_external_color = self._mgl_ctx.external_texture(
+                output_gl_texture_id, (self._W, self._H), 4, 0, "f1",
+            )
+            self._mgl_output_fbo = self._mgl_ctx.framebuffer(
+                color_attachments=[self._mgl_external_color],
+            )
+            self._cached_output_gl_id = output_gl_texture_id
+            logger.info(
+                f"Cyberpunk Glitch: external FBO bound "
+                f"(gl_texture_id={output_gl_texture_id})"
+            )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        """Apply glitch effect using OpenGL shaders."""
         frame = ctx.inputs.read("video_in")
         if frame is None:
             return
 
-        from streamlib.cgl_context import make_current, bind_iosurface_to_texture, flush, GL_TEXTURE_RECTANGLE
-        import time as time_mod
+        upstream_id = frame.get("surface_id")
+        if upstream_id is None:
+            return
 
-        # Frame limiter: cap at 60fps to match display vsync.
-        # With 3 pool surfaces at 250+fps, surfaces recycle every ~12ms
-        # which is faster than the 16.7ms display refresh.
-        now = time_mod.monotonic()
-        if hasattr(self, '_last_output_time'):
-            if now - self._last_output_time < 1.0 / 60.0:
-                return
-
-        w = frame["width"]
-        h = frame["height"]
-
-        # Use monotonic time for elapsed calculation
-        if not hasattr(self, '_start_time'):
-            self._start_time = now
-        elapsed = now - self._start_time
-
-        # Update glitch state
+        elapsed = time.monotonic() - self._start_time
         glitch_active = self.glitch_state.update(elapsed)
 
-        make_current(self.cgl_ctx)
+        # Acquire ordering: write outer, read inner — matches
+        # `avatar_character._process_linux`. The OpenGL adapter
+        # serializes `acquire_*` calls behind a single make-current
+        # mutex on the EGL context, so nesting is safe.
+        try:
+            with self._opengl.acquire_write(self._uuid) as out_view:
+                self._ensure_render_state(out_view.gl_texture_id)
+                with self._opengl.acquire_read(upstream_id) as in_view:
+                    self._mgl_output_fbo.use()
+                    self._mgl_output_fbo.viewport = (0, 0, self._W, self._H)
+                    # No clear — the fragment shader covers every pixel
+                    # of the fullscreen quad and ignores the prior FBO
+                    # contents.
 
-        # Resolve input surface → IOSurface handle → bind as GL texture
-        input_handle = ctx.gpu_limited_access.resolve_surface(frame["surface_id"])
-        bind_iosurface_to_texture(
-            self.cgl_ctx, self.input_tex_id,
-            input_handle.iosurface_ref, w, h
-        )
+                    # Bind upstream `GL_TEXTURE_2D` on unit 0 by raw GL.
+                    _GL_LIB.glActiveTexture(_GL_TEXTURE0)
+                    _GL_LIB.glBindTexture(GL_TEXTURE_2D, in_view.gl_texture_id)
 
-        # TODO(#325/#369): surface allocation is a privileged op — once the
-        # polyglot escalate IPC grows an acquire_texture op, replace this
-        # AttributeError-at-runtime access pattern with a proper
-        # `ctx.escalate_acquire_pixel_buffer(...)` call. Mirrors the Deno
-        # halftone example's pending-escalate pattern.
-        out_surface_id, output_handle = ctx.gpu_full_access.acquire_surface(  # type: ignore[attr-defined]
-            width=w, height=h, format="bgra",
-        )
-        bind_iosurface_to_texture(
-            self.cgl_ctx, self.output_tex_id,
-            output_handle.iosurface_ref, w, h
-        )
+                    self._program["u_input"].value = 0
+                    self._program["u_resolution"].value = (
+                        float(self._W), float(self._H),
+                    )
+                    self._program["u_time"].value = float(elapsed)
+                    self._program["u_intensity"].value = (
+                        float(self.glitch_state.intensity)
+                        if glitch_active else 0.0
+                    )
+                    self._program["u_seed"].value = (
+                        float(self.glitch_state.seed)
+                        if glitch_active else 0.0
+                    )
+                    self._program["u_is_dramatic"].value = (
+                        1.0 if (glitch_active and self.glitch_state.is_dramatic)
+                        else 0.0
+                    )
 
-        # Validate FBO on dimension change
-        if self._current_width != w or self._current_height != h:
-            self._current_width = w
-            self._current_height = h
-            self._fbo_validated = False
+                    self._mgl_ctx.disable(moderngl.DEPTH_TEST)
+                    self._mgl_ctx.disable(moderngl.CULL_FACE)
+                    self._vao.render(moderngl.TRIANGLE_STRIP)
 
-        # Bind FBO with output texture as color attachment
-        glBindFramebuffer(GL_FRAMEBUFFER, self.fbo)
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE, self.output_tex_id, 0)
+                    _GL_LIB.glBindTexture(GL_TEXTURE_2D, 0)
+        except Exception as e:
+            if self.frame_count <= 5 or self.frame_count % 60 == 0:
+                logger.warning(
+                    f"Cyberpunk Glitch: opengl acquire / render failed "
+                    f"(frame={self.frame_count} upstream_id={upstream_id}): {e}"
+                )
+            return
 
-        # Check FBO status only on first use or after resize
-        if not self._fbo_validated:
-            status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
-            if status != GL_FRAMEBUFFER_COMPLETE:
-                logger.warning(f"Framebuffer incomplete: {status}")
-                input_handle.release()
-                output_handle.release()
-                ctx.outputs.write("video_out", frame)
-                return
-            self._fbo_validated = True
-
-        # Set viewport
-        glViewport(0, 0, w, h)
-
-        # Always use glitch program — intensity=0 triggers early-return passthrough
-        # in the shader (line 84). This avoids potential GL attribute location
-        # mismatch between the glitch and passthrough programs (VAO was bound
-        # to the glitch program's 'position' attribute location).
-        glUseProgram(self.glitch_program)
-        glUniform1i(self.glitch_uniforms['inputTexture'], 0)
-        glUniform2f(self.glitch_uniforms['resolution'], float(w), float(h))
-        if glitch_active:
-            glUniform1f(self.glitch_uniforms['time'], elapsed)
-            glUniform1f(self.glitch_uniforms['intensity'], self.glitch_state.intensity)
-            glUniform1f(self.glitch_uniforms['seed'], self.glitch_state.seed)
-            glUniform1f(self.glitch_uniforms['isDramatic'], 1.0 if self.glitch_state.is_dramatic else 0.0)
-        else:
-            glUniform1f(self.glitch_uniforms['intensity'], 0.0)
-
-        # Bind input texture
-        glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_RECTANGLE, self.input_tex_id)
-
-        # Draw fullscreen quad
-        glBindVertexArray(self.vao)
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
-        glBindVertexArray(0)
-
-        # Cleanup
-        glBindTexture(GL_TEXTURE_RECTANGLE, 0)
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        glUseProgram(0)
-
-        # Flush GL commands
-        flush()
-
-        # Release IOSurface references
-        input_handle.release()
-        output_handle.release()
-
-        # Output frame with new surface_id
-        out_frame = dict(frame)  # copy input frame
-        out_frame["surface_id"] = out_surface_id
+        out_frame = dict(frame)
+        out_frame["surface_id"] = self._uuid
+        out_frame["width"] = self._W
+        out_frame["height"] = self._H
         ctx.outputs.write("video_out", out_frame)
-        self._last_output_time = time_mod.monotonic()
 
         self.frame_count += 1
-        if self.frame_count % 120 == 0:
-            logger.debug(f"Glitch processor: {self.frame_count} frames (active={glitch_active})")
+
+        if self.frame_count == 1:
+            logger.info(
+                f"Cyberpunk Glitch: First frame processed "
+                f"({self._W}x{self._H})"
+            )
+        elif self.frame_count % 60 == 0:
+            logger.info(
+                f"Cyberpunk Glitch: {self.frame_count} frames "
+                f"(active={glitch_active})"
+            )
 
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
-        """Cleanup OpenGL resources."""
-        from streamlib.cgl_context import make_current, destroy_cgl_context
-
-        if hasattr(self, 'cgl_ctx'):
-            make_current(self.cgl_ctx)
-
-            if hasattr(self, 'vao'):
-                glDeleteVertexArrays(1, [self.vao])
-            if hasattr(self, 'vbo'):
-                glDeleteBuffers(1, [self.vbo])
-            if hasattr(self, 'fbo'):
-                glDeleteFramebuffers(1, [self.fbo])
-            if hasattr(self, 'glitch_program'):
-                glDeleteProgram(self.glitch_program)
-            if hasattr(self, 'passthrough_program'):
-                glDeleteProgram(self.passthrough_program)
-
-            destroy_cgl_context(self.cgl_ctx)
-
-        logger.info(f"Cyberpunk Glitch processor shutdown ({self.frame_count} frames)")
+        # Best-effort release; the EGL context may already be torn down
+        # by the time teardown runs.
+        for obj_name in (
+            "_mgl_output_fbo", "_mgl_external_color",
+            "_vao", "_vbo", "_program",
+        ):
+            obj = getattr(self, obj_name, None)
+            if obj is not None:
+                try:
+                    obj.release()
+                except Exception:
+                    pass
+            setattr(self, obj_name, None)
+        logger.info(
+            f"Cyberpunk Glitch: Shutdown ({self.frame_count} frames)"
+        )
