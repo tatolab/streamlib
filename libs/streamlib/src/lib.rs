@@ -162,15 +162,6 @@ pub use linux::{
     LinuxDisplayProcessor as DisplayProcessor,
 };
 
-// Vulkan compositor re-exports for in-tree examples that drive the kernel
-// directly. Linux-only because the Vulkan module itself is Linux-gated.
-#[cfg(target_os = "linux")]
-pub use vulkan::rhi::{
-    blending_compositor_flags, BlendingCompositorInputs, BlendingCompositorPushConstants,
-    BlendingLayer, BlendingOutput, CrtFilmGrainInputs, CrtFilmGrainPushConstants,
-    VulkanBlendingCompositor, VulkanCrtFilmGrain,
-};
-
 /// Per-runtime surface-share service primitives. Exposed for adapter
 /// integration tests and 3rd-party tooling that needs to drive the
 /// service in isolation; production callers go through [`StreamRuntime`].

@@ -83,18 +83,6 @@ pub use vulkan_texture_readback::VulkanTextureReadback;
 mod vulkan_format_converter;
 pub use vulkan_format_converter::VulkanFormatConverter;
 
-mod vulkan_blending_compositor;
-pub use vulkan_blending_compositor::{
-    flag_bits as blending_compositor_flags, BlendingCompositorInputs,
-    BlendingCompositorPushConstants, BlendingLayer, BlendingOutput,
-    VulkanBlendingCompositor,
-};
-
-mod vulkan_crt_film_grain;
-pub use vulkan_crt_film_grain::{
-    CrtFilmGrainInputs, CrtFilmGrainPushConstants, VulkanCrtFilmGrain,
-};
-
 #[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;
 

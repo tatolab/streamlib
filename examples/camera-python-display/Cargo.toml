@@ -23,11 +23,27 @@ serde_json = { workspace = true }
 # macOS support was removed in #485 — the pre-RHI CGL+IOSurface path
 # could not consume the tiled DMA-BUF VkImages every modern producer
 # emits. See `src/main.rs` for context.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# `png` for the kernel-wrapper visual-smoke test (writes a synthetic
+# CRT post-effect output to PNG for human review). Test-only.
+png = "0.17"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
 streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }
 # `CameraToCudaCopyProcessor` (#612) passes the resolved camera
 # texture through `VulkanTextureLike` and uses the `VulkanLayout`
-# newtype, so the example stays out of `vulkanalia` per the engine
-# boundary rule.
+# newtype, so the surface-adapter side stays out of `vulkanalia`
+# per the engine boundary rule.
 streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi" }
+# Direct vulkanalia dep — TRANSITIONAL exception (#487). The
+# example owns its `BlendingCompositor` + `CrtFilmGrain` graphics-
+# kernel wrappers as sandboxed scenario content; the wrappers
+# hand-roll synchronous fence-blocked dispatch with internal
+# layout-barrier management, a pattern the engine deliberately
+# doesn't expose because it's wrong-shape for production hot-paths.
+# Removed when RDG (#631) ships and absorbs the wrappers into
+# render-graph passes. The `xtask check-boundaries` allowlist
+# (`xtask/src/check_boundaries.rs::VULKANALIA_*_ALLOWLIST`)
+# carries the matching exception entries.
+vulkanalia = { workspace = true }

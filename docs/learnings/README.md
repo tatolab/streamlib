@@ -70,6 +70,11 @@ Avoid the two failure modes:
   release/acquire (with `VK_EXT_external_memory_acquire_unmodified` chained
   for content preservation), bridging `UNDEFINED → target` as the fallback
   when extensions are missing
+- [@docs/learnings/sandboxing-demo-content-pending-engine-feature.md](sandboxing-demo-content-pending-engine-feature.md) —
+  Recipe for relocating app-specific hot-path content out of the engine
+  into an example crate when the right engine primitive is a future
+  feature: gated boundary-check exception + heavy module-level docs +
+  follow-up ticket blocked by the destination
 - [@docs/learnings/vulkanalia-acceleration-structure-instance-layout.md](vulkanalia-acceleration-structure-instance-layout.md) —
   `vulkanalia-sys` 0.35.0's `VkAccelerationStructureInstanceKHR` field order
   disagrees with the Vulkan C spec; using the struct directly puts the BLAS
