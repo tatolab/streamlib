@@ -23,6 +23,11 @@ serde_json = { workspace = true }
 # macOS support was removed in #485 — the pre-RHI CGL+IOSurface path
 # could not consume the tiled DMA-BUF VkImages every modern producer
 # emits. See `src/main.rs` for context.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# `png` for the kernel-wrapper visual-smoke test (writes a synthetic
+# CRT post-effect output to PNG for human review). Test-only.
+png = "0.17"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
 streamlib-adapter-cuda = { path = "../../libs/streamlib-adapter-cuda" }

@@ -563,3 +563,292 @@ fn output_barrier_to_color_attachment(
         .subresource_range(color_subresource_range())
         .build()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use streamlib::core::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
+    use streamlib::host_rhi::VulkanTextureReadback;
+
+    fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
+        match HostVulkanDevice::new() {
+            Ok(d) => Some(d),
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                None
+            }
+        }
+    }
+
+    /// Allocate a render-target-capable texture for compositor input or
+    /// output use. Local (non-DMA-BUF) — these are unit-test fixtures
+    /// and never cross a process boundary.
+    fn make_render_texture(
+        device: &Arc<HostVulkanDevice>,
+        width: u32,
+        height: u32,
+    ) -> StreamTexture {
+        let desc = TextureDescriptor::new(width, height, TextureFormat::Bgra8Unorm).with_usage(
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_DST
+                | TextureUsages::COPY_SRC,
+        );
+        let host_tex = device.create_texture_local(&desc).expect("texture");
+        StreamTexture::from_vulkan(host_tex)
+    }
+
+    /// Fill a texture with a single BGRA color via host-visible staging
+    /// buffer + cmd_copy_buffer_to_image. Leaves the image in
+    /// SHADER_READ_ONLY_OPTIMAL.
+    fn fill_texture_solid(
+        device: &Arc<HostVulkanDevice>,
+        texture: &StreamTexture,
+        b: u8,
+        g: u8,
+        r: u8,
+        a: u8,
+    ) {
+        let w = texture.width();
+        let h = texture.height();
+        let staging = HostVulkanPixelBuffer::new(device, w, h, 4, PixelFormat::Bgra32)
+            .expect("staging");
+        let pixel = (b as u32) | ((g as u32) << 8) | ((r as u32) << 16) | ((a as u32) << 24);
+        unsafe {
+            let ptr = staging.mapped_ptr() as *mut u32;
+            for i in 0..(w * h) as usize {
+                *ptr.add(i) = pixel;
+            }
+        }
+        let image = texture.vulkan_inner().image().expect("image");
+        unsafe {
+            device
+                .upload_buffer_to_image(staging.buffer(), image, w, h)
+                .expect("upload");
+        }
+    }
+
+    /// Read one pixel from a texture via the RHI's readback primitive.
+    fn read_pixel(
+        device: &Arc<HostVulkanDevice>,
+        texture: &StreamTexture,
+        x: u32,
+        y: u32,
+    ) -> (u8, u8, u8, u8) {
+        let w = texture.width();
+        let h = texture.height();
+        let readback = VulkanTextureReadback::new(
+            device,
+            &TextureReadbackDescriptor {
+                label: "blending-test-readback",
+                format: TextureFormat::Bgra8Unorm,
+                width: w,
+                height: h,
+            },
+        )
+        .expect("readback");
+        let ticket = readback
+            .submit(texture, TextureSourceLayout::ShaderReadOnly)
+            .expect("readback submit");
+        let mut sample: (u8, u8, u8, u8) = (0, 0, 0, 0);
+        readback
+            .wait_and_read_with(ticket, u64::MAX, |bgra| -> std::io::Result<()> {
+                let idx = ((y * w + x) * 4) as usize;
+                sample = (bgra[idx], bgra[idx + 1], bgra[idx + 2], bgra[idx + 3]);
+                Ok(())
+            })
+            .expect("readback wait")
+            .expect("readback read closure");
+        sample
+    }
+
+    #[test]
+    fn new_compiles_kernel() {
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let result = SandboxedBlendingCompositor::new(&device);
+        assert!(
+            result.is_ok(),
+            "compositor creation must succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn output_matches_video_when_only_video_bound() {
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let compositor = SandboxedBlendingCompositor::new(&device).expect("compositor");
+
+        let video = make_render_texture(&device, 64, 32);
+        let output = make_render_texture(&device, 64, 32);
+        // BGRA = (10, 200, 50, 255) → opaque green-ish.
+        fill_texture_solid(&device, &video, 10, 200, 50, 255);
+
+        compositor
+            .dispatch(BlendingCompositorInputs {
+                video: Some(BlendingLayer {
+                    texture: &video,
+                    current_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                }),
+                lower_third: None,
+                watermark: None,
+                pip: None,
+                output: BlendingOutput {
+                    texture: &output,
+                    current_layout: VulkanLayout::UNDEFINED,
+                },
+                pip_slide_progress: 0.0,
+            })
+            .expect("dispatch");
+
+        // ±1 tolerance per channel for unorm round-trip.
+        let (b, g, r, a) = read_pixel(&device, &output, 16, 16);
+        assert!((b as i32 - 10).abs() <= 1, "B={b}");
+        assert!((g as i32 - 200).abs() <= 1, "G={g}");
+        assert!((r as i32 - 50).abs() <= 1, "R={r}");
+        assert!((a as i32 - 255).abs() <= 1, "A={a}");
+    }
+
+    #[test]
+    fn no_video_falls_back_to_dark_blue() {
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let compositor = SandboxedBlendingCompositor::new(&device).expect("compositor");
+        let output = make_render_texture(&device, 32, 32);
+
+        compositor
+            .dispatch(BlendingCompositorInputs {
+                video: None,
+                lower_third: None,
+                watermark: None,
+                pip: None,
+                output: BlendingOutput {
+                    texture: &output,
+                    current_layout: VulkanLayout::UNDEFINED,
+                },
+                pip_slide_progress: 0.0,
+            })
+            .expect("dispatch");
+
+        // Fragment shader's no-video fallback is vec4(0.05, 0.05, 0.12, 1.0)
+        // → BGRA roughly (31, 13, 13, 255).
+        let (b, g, r, a) = read_pixel(&device, &output, 8, 8);
+        let expected_b = (0.12_f32 * 255.0).round() as i32; // 31
+        let expected_g = (0.05_f32 * 255.0).round() as i32; // 13
+        let expected_r = (0.05_f32 * 255.0).round() as i32; // 13
+        assert!((b as i32 - expected_b).abs() <= 1, "B={b}");
+        assert!((g as i32 - expected_g).abs() <= 1, "G={g}");
+        assert!((r as i32 - expected_r).abs() <= 1, "R={r}");
+        assert_eq!(a, 255, "alpha must be opaque on fallback");
+    }
+
+    #[test]
+    fn rejects_layer_size_mismatch() {
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let compositor = SandboxedBlendingCompositor::new(&device).expect("compositor");
+
+        let video = make_render_texture(&device, 32, 32);
+        let output = make_render_texture(&device, 64, 32);
+        fill_texture_solid(&device, &video, 0, 0, 0, 255);
+
+        let err = compositor
+            .dispatch(BlendingCompositorInputs {
+                video: Some(BlendingLayer {
+                    texture: &video,
+                    current_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                }),
+                lower_third: None,
+                watermark: None,
+                pip: None,
+                output: BlendingOutput {
+                    texture: &output,
+                    current_layout: VulkanLayout::UNDEFINED,
+                },
+                pip_slide_progress: 0.0,
+            })
+            .expect_err("size mismatch must error");
+        assert!(matches!(err, StreamError::GpuError(_)));
+    }
+
+    /// Multi-layer composite smoke — exercises the full alpha-over
+    /// path with all 4 inputs bound. Asserts every layer composite path
+    /// executes without error and the PiP frame chrome lands in the
+    /// upper-right when `pip_slide_progress = 1.0`.
+    #[test]
+    fn multi_layer_composite_writes_each_layer() {
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let compositor = SandboxedBlendingCompositor::new(&device).expect("compositor");
+
+        let w: u32 = 320;
+        let h: u32 = 240;
+        let pip_w: u32 = 96;
+        let pip_h: u32 = 64;
+
+        let video = make_render_texture(&device, w, h);
+        let lower_third = make_render_texture(&device, w, h);
+        let watermark = make_render_texture(&device, w, h);
+        let pip = make_render_texture(&device, pip_w, pip_h);
+        let output = make_render_texture(&device, w, h);
+
+        fill_texture_solid(&device, &video, 128, 128, 128, 255);
+        fill_texture_solid(&device, &watermark, 0, 0, 0, 0);
+        fill_texture_solid(&device, &lower_third, 0, 0, 0, 0);
+        fill_texture_solid(&device, &pip, 255, 255, 0, 255);
+
+        compositor
+            .dispatch(BlendingCompositorInputs {
+                video: Some(BlendingLayer {
+                    texture: &video,
+                    current_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                }),
+                lower_third: Some(BlendingLayer {
+                    texture: &lower_third,
+                    current_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                }),
+                watermark: Some(BlendingLayer {
+                    texture: &watermark,
+                    current_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                }),
+                pip: Some(BlendingLayer {
+                    texture: &pip,
+                    current_layout: VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                }),
+                output: BlendingOutput {
+                    texture: &output,
+                    current_layout: VulkanLayout::UNDEFINED,
+                },
+                pip_slide_progress: 1.0,
+            })
+            .expect("dispatch with 4 layers must succeed");
+
+        let (b, g, r, a) = read_pixel(&device, &output, w / 2, h / 2);
+        assert!((b as i32 - 128).abs() <= 2, "B={b}");
+        assert!((g as i32 - 128).abs() <= 2, "G={g}");
+        assert!((r as i32 - 128).abs() <= 2, "R={r}");
+        assert_eq!(a, 255, "A={a}");
+
+        // Pixel inside the PiP content rect (PiP docks right edge at
+        // pip_slide_progress=1.0). Hardware-bilinear sample of opaque
+        // cyan; tolerance accounts for chroma drift at the rect edge.
+        let pip_sample_x = ((1.0 - 0.02 - 0.28 * 0.5) * (w as f32)) as u32;
+        let pip_sample_y = ((0.02 + 0.35 * 0.5) * (h as f32)) as u32;
+        let (b2, g2, r2, _a2) = read_pixel(&device, &output, pip_sample_x, pip_sample_y);
+        assert!(
+            b2 > 200 && g2 > 200 && r2 < 30,
+            "PiP content sample expected cyan-dominant, got BGRA=({b2}, {g2}, {r2}, _)"
+        );
+    }
+}

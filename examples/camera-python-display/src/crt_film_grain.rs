@@ -65,6 +65,12 @@ struct LinuxBackend {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CrtFilmGrainConfig {
+    /// Output ring slot width in pixels. Must match the upstream
+    /// (`BlendingCompositor`) output width.
+    pub width: u32,
+    /// Output ring slot height in pixels. Must match the upstream
+    /// output height.
+    pub height: u32,
     /// CRT barrel distortion amount (0.0 = flat, 1.0 = heavy curve).
     pub crt_curve: f32,
     /// Scanline darkness intensity (0.0 = none, 1.0 = heavy).
@@ -85,6 +91,8 @@ impl Default for CrtFilmGrainConfig {
     fn default() -> Self {
         // 80s Blade Runner look
         Self {
+            width: 1920,
+            height: 1080,
             crt_curve: 0.7,
             scanline_intensity: 0.6,
             chromatic_aberration: 0.004,
@@ -242,10 +250,14 @@ impl CrtFilmGrainProcessor::Processor {
                     .into(),
             )
         })?;
-        // Match the example pipeline's 1920x1080 — the upstream
-        // BlendingCompositor produces 1920x1080 output.
-        let width = 1920u32;
-        let height = 1080u32;
+        // Output ring slot dimensions come from the processor's
+        // config — same shape `BlendingCompositor` uses. Default is
+        // 1920x1080 to match the example pipeline; if the upstream
+        // compositor's resolution drifts, both configs must change in
+        // lock-step (the kernel's dispatch-time size guard catches a
+        // mismatch loudly).
+        let width = self.config.width;
+        let height = self.config.height;
         for slot_idx in 0..OUTPUT_RING_DEPTH {
             let texture = gpu_full.acquire_render_target_dma_buf_image(
                 width,
