@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// WHEP endpoint configuration
@@ -19,6 +20,7 @@ pub struct Whep {
 
     /// Optional bearer token for authentication
     #[serde(rename = "auth_token")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
 }
 

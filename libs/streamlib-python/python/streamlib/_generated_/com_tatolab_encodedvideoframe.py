@@ -37,6 +37,11 @@ class Encodedvideoframe:
     Monotonic timestamp in nanoseconds (int64 as string)
     """
 
+    fps: 'Optional[int]'
+    """
+    Source frame rate in frames per second (pass-through from capture device)
+    """
+
 
     @classmethod
     def from_json_data(cls, data: Any) -> 'Encodedvideoframe':
@@ -45,6 +50,7 @@ class Encodedvideoframe:
             _from_json_data(str, data.get("frame_number")),
             _from_json_data(bool, data.get("is_keyframe")),
             _from_json_data(str, data.get("timestamp_ns")),
+            _from_json_data(Optional[int], data.get("fps")),
         )
 
     def to_json_data(self) -> Any:
@@ -53,6 +59,8 @@ class Encodedvideoframe:
         data["frame_number"] = _to_json_data(self.frame_number)
         data["is_keyframe"] = _to_json_data(self.is_keyframe)
         data["timestamp_ns"] = _to_json_data(self.timestamp_ns)
+        if self.fps is not None:
+             data["fps"] = _to_json_data(self.fps)
         return data
 
 def _from_json_data(cls: Any, data: Any) -> Any:

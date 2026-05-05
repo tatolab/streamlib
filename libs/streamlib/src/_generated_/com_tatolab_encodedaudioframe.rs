@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Encoded audio frame with Opus/AAC bitstream data

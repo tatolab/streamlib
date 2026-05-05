@@ -3,31 +3,74 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::error::{ResolverError, ResolverResult};
 use crate::ident::{Org, Package};
 use crate::semver::{SemVer, SemVerRange};
 
-/// Package-flavor `streamlib.yaml` — declares a publishable package.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageManifest {
-    pub package: PackageMetadata,
+/// `streamlib.yaml` — single source of truth for a package or project.
+///
+/// **Package flavor** has a `package:` block declaring `org`/`name`/`version`
+/// and is publishable. **Project flavor** has no `package:` block; it's a
+/// consumer like an application or example.
+///
+/// The resolver reads `package`, `dependencies`, and `schemas`. Other top-level
+/// fields like `processors:` and `env:` are runtime concerns owned by the
+/// streamlib runtime; they are tolerated here without being interpreted, so
+/// one `streamlib.yaml` carries both schema-identity and runtime
+/// configuration without splitting into two files.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Manifest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<PackageMetadata>,
 
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<String, DependencySpec>,
+
+    /// Explicit list of schema YAML files this package owns, relative to the
+    /// manifest's directory. When `None`, the resolver auto-discovers
+    /// `schemas/*.yaml` in the manifest dir.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schemas: Option<Vec<PathBuf>>,
 }
 
-/// Project-flavor `streamlib.yaml` — declares a consumer project.
-///
-/// No `package:` block; only declares `dependencies`. Use this for
-/// applications and examples that depend on packages but aren't themselves
-/// publishable.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectManifest {
-    #[serde(default)]
-    pub dependencies: BTreeMap<String, DependencySpec>,
+impl Manifest {
+    /// Conventional file name.
+    pub const FILE_NAME: &'static str = "streamlib.yaml";
+
+    /// Read a manifest from a directory containing `streamlib.yaml`.
+    pub fn load(dir: &Path) -> ResolverResult<Self> {
+        Self::load_file(&dir.join(Self::FILE_NAME))
+    }
+
+    /// Read a manifest from a specific file path.
+    pub fn load_file(path: &Path) -> ResolverResult<Self> {
+        let content = std::fs::read_to_string(path).map_err(|e| ResolverError::ManifestRead {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        serde_yaml::from_str(&content).map_err(|e| ResolverError::ManifestParse {
+            path: path.to_path_buf(),
+            source: e,
+        })
+    }
+
+    /// True when this manifest declares its own `package:` block (publishable).
+    pub fn is_package_flavor(&self) -> bool {
+        self.package.is_some()
+    }
+
+    /// Canonical `"@org/name"` key for this manifest, when it's a package
+    /// flavor. The key form is what the lockfile uses to identify packages
+    /// — the structured-everywhere rule applies to schema *identifiers*; the
+    /// lockfile key is a deliberate joined form so YAML map keys stay
+    /// readable.
+    pub fn package_id(&self) -> Option<String> {
+        self.package
+            .as_ref()
+            .map(|p| format!("@{}/{}", p.org.as_str(), p.name.as_str()))
+    }
 }
 
 /// Package metadata. `version` lives here and ONLY here — per the
@@ -47,6 +90,10 @@ pub struct PackageMetadata {
 /// - String form `^1.2.3` → registry dependency with a semver range
 /// - `{ path: ../foo }` → path dependency
 /// - `{ git: ..., rev: ... }` → git dependency
+///
+/// `.slpkg` archives are an additional path-flavored source: a `path` value
+/// that ends in `.slpkg` is treated as a zip archive that the resolver
+/// extracts before reading.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum DependencySpec {
@@ -84,9 +131,7 @@ impl<'de> Deserialize<'de> for DependencySpec {
         #[derive(Deserialize)]
         #[serde(untagged)]
         enum Repr {
-            // Bare string: `dep-name: ^1.2.3`.
             Range(SemVerRange),
-            // Structured map: `dep-name: { ... }`.
             Map(StructuredRepr),
         }
 
@@ -113,7 +158,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn package_manifest_round_trip() {
+    fn package_flavor_round_trip() {
         let yaml = "
 package:
   org: tatolab
@@ -122,15 +167,18 @@ package:
   description: Canonical wire vocabulary
 dependencies: {}
 ";
-        let m: PackageManifest = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(m.package.org.as_str(), "tatolab");
-        assert_eq!(m.package.name.as_str(), "core");
-        assert_eq!(m.package.version, SemVer::new(1, 0, 0));
+        let m: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(m.is_package_flavor());
+        let pkg = m.package.as_ref().unwrap();
+        assert_eq!(pkg.org.as_str(), "tatolab");
+        assert_eq!(pkg.name.as_str(), "core");
+        assert_eq!(pkg.version, SemVer::new(1, 0, 0));
+        assert_eq!(m.package_id().as_deref(), Some("@tatolab/core"));
         assert!(m.dependencies.is_empty());
     }
 
     #[test]
-    fn project_manifest_with_three_dep_flavors() {
+    fn project_flavor_with_three_dep_sources() {
         let yaml = r#"
 dependencies:
   "@tatolab/core": "^1.0.0"
@@ -140,7 +188,9 @@ dependencies:
     git: https://github.com/tatolab/moq
     rev: abc123def456
 "#;
-        let m: ProjectManifest = serde_yaml::from_str(yaml).unwrap();
+        let m: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(!m.is_package_flavor());
+        assert_eq!(m.package_id(), None);
         assert_eq!(m.dependencies.len(), 3);
 
         match m.dependencies.get("@tatolab/core").unwrap() {
@@ -163,41 +213,47 @@ dependencies:
     }
 
     #[test]
-    fn package_manifest_rejects_invalid_org() {
+    fn manifest_tolerates_runtime_extras() {
+        // streamlib.yaml carries runtime fields like `processors:` and `env:`
+        // that the resolver ignores. The manifest must NOT reject them with
+        // `deny_unknown_fields` — that's the whole point of one file.
+        let yaml = r#"
+package:
+  org: tatolab
+  name: core
+  version: 1.0.0
+processors:
+  - name: com.tatolab.foo
+    version: 1.0.0
+env:
+  STREAMLIB_BACKEND: vulkan
+"#;
+        let m: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(m.is_package_flavor());
+        assert_eq!(m.package_id().as_deref(), Some("@tatolab/core"));
+    }
+
+    #[test]
+    fn manifest_rejects_invalid_org() {
         let yaml = "
 package:
   org: Tatolab
   name: core
   version: 1.0.0
 ";
-        let res: Result<PackageManifest, _> = serde_yaml::from_str(yaml);
+        let res: Result<Manifest, _> = serde_yaml::from_str(yaml);
         assert!(res.is_err());
     }
 
     #[test]
-    fn package_manifest_rejects_invalid_version() {
+    fn manifest_rejects_invalid_version() {
         let yaml = "
 package:
   org: tatolab
   name: core
   version: not-a-version
 ";
-        let res: Result<PackageManifest, _> = serde_yaml::from_str(yaml);
-        assert!(res.is_err());
-    }
-
-    #[test]
-    fn manifest_rejects_unknown_field() {
-        // The `deny_unknown_fields` invariant — typos at the manifest top
-        // level should fail loudly, not silently turn into no-ops.
-        let yaml = "
-package:
-  org: tatolab
-  name: core
-  version: 1.0.0
-unknown_top_level_field: oops
-";
-        let res: Result<PackageManifest, _> = serde_yaml::from_str(yaml);
+        let res: Result<Manifest, _> = serde_yaml::from_str(yaml);
         assert!(res.is_err());
     }
 
@@ -208,7 +264,26 @@ dependencies:
   "@tatolab/moq":
     git: https://github.com/tatolab/moq
 "#;
-        let res: Result<ProjectManifest, _> = serde_yaml::from_str(yaml);
+        let res: Result<Manifest, _> = serde_yaml::from_str(yaml);
         assert!(res.is_err(), "git dep without rev must fail");
+    }
+
+    #[test]
+    fn manifest_load_from_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n",
+        )
+        .unwrap();
+        let m = Manifest::load(tmp.path()).unwrap();
+        assert_eq!(m.package_id().as_deref(), Some("@tatolab/core"));
+    }
+
+    #[test]
+    fn manifest_load_missing_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let res = Manifest::load(tmp.path());
+        assert!(matches!(res, Err(ResolverError::ManifestRead { .. })));
     }
 }

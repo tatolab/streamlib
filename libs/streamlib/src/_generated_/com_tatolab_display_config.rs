@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// How video content is scaled within the window. Default: Letterbox
@@ -33,17 +34,21 @@ pub struct DisplayConfig {
 
     /// Number of drawable buffers (2=double, 3=triple). Default: 2
     #[serde(rename = "drawable_count")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub drawable_count: Option<u32>,
 
     /// How video content is scaled within the window. Default: Letterbox
     #[serde(rename = "scaling_mode")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scaling_mode: Option<ScalingMode>,
 
     /// Window title. Default: 'streamlib Display'
     #[serde(rename = "title")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
     /// Enable vsync (synchronize to display refresh rate). Default: true
     #[serde(rename = "vsync")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub vsync: Option<bool>,
 }

@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Video frame for IPC - references GPU surface by ID
@@ -12,11 +13,6 @@ pub struct Videoframe {
     /// Sequential frame counter (uint64 as string - parse to native uint64)
     #[serde(rename = "frame_index")]
     pub frame_index: String,
-
-    /// Source frame rate in frames per second (set by capture device)
-    #[serde(rename = "fps")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fps: Option<u32>,
 
     /// Frame height in pixels
     #[serde(rename = "height")]
@@ -31,6 +27,15 @@ pub struct Videoframe {
     #[serde(rename = "timestamp_ns")]
     pub timestamp_ns: String,
 
+    /// Frame width in pixels
+    #[serde(rename = "width")]
+    pub width: u32,
+
+    /// Source frame rate in frames per second (set by capture device)
+    #[serde(rename = "fps")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
+
     /// Producer's published VkImageLayout for this frame's texture (#633).
     /// Per-frame override of the per-surface current_image_layout published
     /// via surface-share register/update_layout. Encoded as the raw int32
@@ -39,8 +44,4 @@ pub struct Videoframe {
     #[serde(rename = "texture_layout")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub texture_layout: Option<i32>,
-
-    /// Frame width in pixels
-    #[serde(rename = "width")]
-    pub width: u32,
 }

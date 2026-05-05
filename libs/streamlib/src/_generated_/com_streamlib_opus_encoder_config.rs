@@ -3,13 +3,15 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
-/// Configuration for Opus audio encoding.
+/// Configuration for Opus audio encoding
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OpusEncoderConfig {
-    /// Target bitrate in bits per second (default: 128000).
+    /// Target bitrate in bits per second (default: 128000)
     #[serde(rename = "bitrate_bps")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bitrate_bps: Option<u32>,
 }

@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Configuration for rechunking audio buffers to fixed size

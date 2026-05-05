@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the runtime API server
@@ -19,9 +20,12 @@ pub struct ApiServerConfig {
 
     /// Log file path for surface-share registration
     #[serde(rename = "log_path")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
 
-    /// Runtime name for surface-share registration (auto-generated if not provided)
+    /// Runtime name for surface-share registration (auto-generated if not
+    /// provided)
     #[serde(rename = "name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }

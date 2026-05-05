@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Configuration for CLAP audio plugin processing
@@ -19,9 +20,11 @@ pub struct EffectConfig {
 
     /// Index of the plugin to load (if multiple in file)
     #[serde(rename = "plugin_index")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_index: Option<u32>,
 
     /// Name of the plugin to load (if multiple in file)
     #[serde(rename = "plugin_name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,
 }

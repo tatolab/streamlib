@@ -139,9 +139,11 @@ enum Commands {
         #[arg(long)]
         output: PathBuf,
 
-        /// Read schema list from a project file (Cargo.toml or pyproject.toml)
+        /// `streamlib.yaml`-driven mode: directory containing the manifest.
+        /// The resolver walks declared dependencies and codegen ingests the
+        /// resulting set, writing `streamlib.lock` next to the manifest.
         #[arg(long, group = "input")]
-        project_file: Option<PathBuf>,
+        project_dir: Option<PathBuf>,
 
         /// Process a single schema file
         #[arg(long, group = "input")]
@@ -272,10 +274,10 @@ async fn async_main(cli: Cli) -> Result<()> {
         Some(Commands::Generate {
             runtime,
             output,
-            project_file,
+            project_dir,
             schema_file,
             schema_dir,
-        }) => commands::generate::run(runtime, output, project_file, schema_file, schema_dir)?,
+        }) => commands::generate::run(runtime, output, project_dir, schema_file, schema_dir)?,
         None => {
             Cli::parse_from(["streamlib", "--help"]);
         }

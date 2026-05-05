@@ -65,6 +65,7 @@ examples/camera-python-display/assets/*
 # Claude Code project files (except versioned items)
 # Claude Code — ephemeral only
 .claude/worktrees/
+.claude/scheduled_tasks.lock
 *.log
 .rustup/
 

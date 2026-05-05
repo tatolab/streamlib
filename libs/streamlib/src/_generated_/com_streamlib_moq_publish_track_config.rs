@@ -3,13 +3,15 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
-/// Configuration for publishing a single track to a MoQ relay.
+/// Configuration for publishing a single track to a MoQ relay
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MoqPublishTrackConfig {
-    /// Track name (auto-generated from processor ID if not set).
+    /// Track name (auto-generated from processor ID if not set)
     #[serde(rename = "track_name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub track_name: Option<String>,
 }
