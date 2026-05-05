@@ -762,6 +762,7 @@ fn try_create_device() -> Option<Arc<HostVulkanDevice>> {
 
 /// BASELINE: without swapchain, even the broken VMA config works.
 /// Proves the bug requires a swapchain to manifest.
+#[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
 #[test]
 fn test_baseline_no_swapchain_broken_config_works() {
     let device = match try_create_device() {
@@ -812,6 +813,7 @@ fn test_baseline_no_swapchain_broken_config_works() {
 ///   1. BUG REPRO: broken VMA config + swapchain → at least one alloc must fail
 ///   2. FIX (clean VMA): internal allocs via plain VMA → all succeed
 ///   3. FIX (VMA pools): export allocs via custom pools → all succeed
+#[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
 #[test]
 fn test_swapchain_allocation_scenarios() {
     let device = match try_create_device() {

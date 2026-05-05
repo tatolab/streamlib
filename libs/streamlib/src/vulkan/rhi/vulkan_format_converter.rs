@@ -166,6 +166,7 @@ mod tests {
         out
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn nv12_full_range_to_bgra_matches_cpu_reference() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -238,6 +239,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn convert_rejects_size_mismatch() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -249,6 +251,7 @@ mod tests {
         assert!(matches!(err, StreamError::GpuError(_)));
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn convert_rejects_unsupported_formats() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -260,6 +263,7 @@ mod tests {
         assert!(matches!(err, StreamError::NotSupported(_)));
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_new_creates_compute_pipeline_successfully() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -386,6 +390,7 @@ mod tests {
         rgba
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn nv12_to_bgra_matches_committed_png_fixture() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -435,7 +440,7 @@ mod tests {
     /// The fixture path is relative to `libs/streamlib/`. After running, commit
     /// the regenerated `tests/fixtures/nv12_to_bgra/*` files.
     #[test]
-    #[ignore = "regenerate fixture — run explicitly with --ignored"]
+    #[ignore = "regenerate fixture — run explicitly with --ignored. (Always ignored — fixture regen is an explicit operation, not a hardware-tier test.)"]
     fn regenerate_nv12_to_bgra_fixture() {
         let device = try_vulkan_device().expect("Vulkan device required to regenerate fixture");
         let nv12_input = build_fixture_nv12_input();

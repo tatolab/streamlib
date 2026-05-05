@@ -1677,12 +1677,14 @@ mod tests {
         )
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn kernel_constructs_against_real_device() {
         let Some(device) = try_ray_tracing_device() else { return };
         let _kernel = make_test_kernel(&device, "rt-construct").expect("kernel creation");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn kernel_rejects_missing_binding_in_descriptor() {
         let Some(device) = try_ray_tracing_device() else { return };
@@ -1722,6 +1724,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn kernel_rejects_kind_mismatch() {
         let Some(device) = try_ray_tracing_device() else { return };
@@ -1766,6 +1769,7 @@ mod tests {
     /// against a 64×64 storage image. Reads the result back and checks
     /// that the centre pixel is hit (barycentric color, mostly red) and
     /// the corner pixels are miss (dark blue from rmiss).
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn trace_rays_produces_hit_and_miss_pixels() {
         let Some(device) = try_ray_tracing_device() else { return };

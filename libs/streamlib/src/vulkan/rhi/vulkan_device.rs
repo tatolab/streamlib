@@ -2738,6 +2738,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_device_creation() {
         let device = match try_create_device() {
@@ -2749,6 +2750,7 @@ mod tests {
         println!("Vulkan device created: {}", device.name());
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_queue_family_discovery() {
         let device = match try_create_device() {
@@ -2769,6 +2771,7 @@ mod tests {
     /// vendor-id check; mentally-revertible (delete the
     /// `vendor_id != 0x10DE` check in `new()` and this test fails on
     /// NVIDIA hardware). Skips when no Vulkan device is available.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn supports_cross_device_dma_buf_probe_matches_vendor_blocklist() {
         let device = match try_create_device() {
@@ -2796,6 +2799,7 @@ mod tests {
     /// Issue #633 — `supports_qfot_acquire_unmodified` must equal the
     /// `has_acquire_unmodified` extension probe from `new()`.
     /// Trait-method route must agree with the inherent method.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn supports_qfot_acquire_unmodified_consistent_across_inherent_and_trait() {
         let device = match try_create_device() {
@@ -2822,6 +2826,7 @@ mod tests {
     /// drivers may tolerate it silently. Real GPU-correctness for
     /// QFOT comes from E2E scenarios run with
     /// `VK_LOADER_LAYERS_ENABLE=*validation*`.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn host_acquire_from_foreign_undefined_target_is_noop() {
         let device = match try_create_device() {
@@ -2836,6 +2841,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_vma_allocator_created() {
         let device = match try_create_device() {
@@ -2860,6 +2866,7 @@ mod tests {
     /// structure level so CI catches it without needing the manual
     /// Cam Link 4K reproducer.
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn opaque_fd_export_sentinels_retained_for_each_supported_pool() {
         let device = match try_create_device() {
@@ -2935,6 +2942,7 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_dma_buf_import_round_trip() {
         use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
@@ -3005,6 +3013,7 @@ mod tests {
         unsafe { device.allocator().destroy_buffer(buffer, allocation) };
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_physical_device_supports_vulkan_1_4() {
         let device = match try_create_device() {

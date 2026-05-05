@@ -23,6 +23,13 @@ moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url", "dep:ru
 # Strip `debug!` (and `trace!`) from release builds. Opt-in per deployment
 # image. `warn!` / `error!` / `info!` are never stripped. See docs/logging.md.
 strip_debug_logging = ["tracing/release_max_level_info"]
+# Tier 2 — hardware-integration tests (`#[cfg_attr(not(feature =
+# "hardware-tests"), ignore)]` on tests that construct a real
+# `HostVulkanDevice`). Default `cargo test` is the tier-1 unit gate
+# (parallel-safe, mocked). To run hardware tests:
+#   cargo test --features streamlib/hardware-tests --workspace -- --test-threads=1
+# See `docs/testing-hardware.md`.
+hardware-tests = []
 
 [dependencies]
 # Processor schema types (shared with macros for code generation)

@@ -418,6 +418,7 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_semaphore_creation() {
         let device = match HostVulkanDevice::new() {
@@ -434,6 +435,7 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn timeline_semaphore_host_signal_advances_counter() {
         let device = match HostVulkanDevice::new() {
@@ -457,6 +459,7 @@ mod tests {
     /// Cross-process import is exercised by the surface-adapter
     /// integration tests in `streamlib-adapter-vulkan`.
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn timeline_semaphore_exports_valid_opaque_fd() {
         let device = match HostVulkanDevice::new() {
@@ -478,6 +481,7 @@ mod tests {
         unsafe { libc::close(fd) };
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_fence_creation() {
         let device = match HostVulkanDevice::new() {

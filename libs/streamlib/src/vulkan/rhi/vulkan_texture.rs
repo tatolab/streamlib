@@ -1238,6 +1238,7 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_pool_texture_creation_1920x1080_bgra8() {
         let device = match HostVulkanDevice::new() {
@@ -1264,6 +1265,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_texture_drop_frees_memory() {
         let device = match HostVulkanDevice::new() {
@@ -1281,6 +1283,7 @@ mod tests {
         println!("Texture drop completed without panic");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_multiple_textures_coexist() {
         let device = match HostVulkanDevice::new() {
@@ -1313,6 +1316,7 @@ mod tests {
         println!("All dropped successfully");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_dma_buf_export() {
         let device = match HostVulkanDevice::new() {
@@ -1358,6 +1362,7 @@ mod tests {
     /// buffers, textures for IPC) use raw vkAllocateMemory with VkExportMemoryAllocateInfo.
     /// Internal allocations (display camera textures) use raw vkAllocateMemory with
     /// dedicated allocation + multi-type fallback (no export flags).
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_camera_display_allocation_pattern() {
         let device = match HostVulkanDevice::new() {
@@ -1494,6 +1499,7 @@ mod tests {
         println!("All resources cleaned up successfully");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_various_formats() {
         let device = match HostVulkanDevice::new() {
@@ -1517,6 +1523,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_device_local_texture_creation() {
         let device = match HostVulkanDevice::new() {
@@ -1540,6 +1547,7 @@ mod tests {
         println!("Device-local texture created: {}x{}", texture.width(), texture.height());
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_lazy_image_view() {
         let device = match HostVulkanDevice::new() {
@@ -1572,6 +1580,7 @@ mod tests {
     /// 6. Assert plane[0].row_pitch >= 1920 * 4 (BGRA stride is at least
     ///    pixel-tight, possibly aligned up by tiling).
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_render_target_dma_buf_round_trip() {
         use crate::vulkan::rhi::drm_modifier_probe::fourcc;
@@ -1641,6 +1650,7 @@ mod tests {
     /// loudly rather than silently fall back to LINEAR (which is sampler-
     /// only on NVIDIA — see docs/learnings/nvidia-egl-dmabuf-render-target.md).
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_render_target_dma_buf_empty_modifiers_rejected() {
         let device = match HostVulkanDevice::new() {
@@ -1664,6 +1674,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_ring_texture_lifecycle() {
         let device = match HostVulkanDevice::new() {

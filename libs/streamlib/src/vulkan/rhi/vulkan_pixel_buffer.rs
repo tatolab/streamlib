@@ -771,6 +771,7 @@ unsafe impl Sync for HostVulkanPixelBuffer {}
 mod tests {
     use super::*;
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_pool_buffer_creation_1920x1080_bgra32() {
         let device = match HostVulkanDevice::new() {
@@ -800,6 +801,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_buffer_write_and_readback() {
         let device = match HostVulkanDevice::new() {
@@ -838,6 +840,7 @@ mod tests {
         println!("Write/readback verified for {} bytes", size);
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_dma_buf_export() {
         let device = match HostVulkanDevice::new() {
@@ -864,6 +867,7 @@ mod tests {
     /// export is rejected (calling `export_opaque_fd_memory` on a DMA-BUF
     /// buffer produces an error).
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn opaque_fd_export_round_trip_and_cross_flavor_rejection() {
         let device = match HostVulkanDevice::new() {
@@ -917,6 +921,7 @@ mod tests {
     /// `opaque_fd_export_round_trip_and_cross_flavor_rejection` covering
     /// the GPU-resident path.
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn opaque_fd_device_local_export_round_trip() {
         let device = match HostVulkanDevice::new() {
@@ -958,6 +963,7 @@ mod tests {
     /// `export_external_handle` dispatches to the correct
     /// `RhiExternalHandle` variant for each allocation flavor.
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn export_external_handle_dispatches_on_allocation_flavor() {
         use crate::core::rhi::RhiExternalHandle;
@@ -1013,6 +1019,7 @@ mod tests {
     /// is comfortably below every observed real-device UUID and well
     /// above any plausible constant-write bug.
     #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn physical_device_uuid_is_populated() {
         let device = match HostVulkanDevice::new() {
@@ -1047,6 +1054,7 @@ mod tests {
         println!("physical_device_uuid: {uuid:02x?}");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_multiple_buffers_coexist() {
         let device = match HostVulkanDevice::new() {
@@ -1081,6 +1089,7 @@ mod tests {
         println!("All dropped successfully");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_drop_frees_without_panic() {
         let device = match HostVulkanDevice::new() {
@@ -1098,6 +1107,7 @@ mod tests {
         println!("Buffer drop completed without panic");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_dma_buf_import_round_trip() {
         let device = match HostVulkanDevice::new() {
@@ -1162,6 +1172,7 @@ mod tests {
     /// `HostVulkanPixelBuffer`, confirm `plane_count()` reports 2, and each
     /// plane's bytes survive intact. Mirrors the symmetry the polyglot
     /// Python and Deno shims provide via `*_gpu_surface_plane_{count,size,mmap,base_address}`.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_dma_buf_import_multi_plane_round_trip() {
         let device = match HostVulkanDevice::new() {
@@ -1253,6 +1264,7 @@ mod tests {
     /// more planes than the surface-share `MAX_DMA_BUF_PLANES` cap (4 today).
     /// Covers the Rust half of the consistency the wire helpers already
     /// enforce on sends/receives.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_dma_buf_import_rejects_oversize_plane_vec() {
         let device = match HostVulkanDevice::new() {

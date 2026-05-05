@@ -202,6 +202,7 @@ mod tests {
         })
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_blit_copy_between_equal_size_buffers() {
         let device = match HostVulkanDevice::new() {
@@ -240,6 +241,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_blit_copy_rejects_mismatched_buffer_sizes() {
         let device = match HostVulkanDevice::new() {
