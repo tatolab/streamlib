@@ -399,10 +399,21 @@ The two allowed construction pathways:
   field in the source document; `serde` reads the structured shape
   directly into `SchemaIdent { org, package, r#type, version }`.
 
-A `tests/no_parse_api.rs` integration test in `streamlib-idents` is
-the compile-time witness that no `parse` method has been smuggled
-back in. If you find yourself wanting one — even for a "tiny"
-helper, even "just for tests" — stop. The drift starts that way.
+The compile-time witness is a set of `compile_fail` doctests on each
+public identifier type (`SchemaIdent`, `Org`, `Package`, `TypeName`)
+in `streamlib-idents` — the doctests assert the forbidden snippets
+MUST fail to compile. If a `parse` method (or `FromStr` impl) is
+ever added, the doctests would compile cleanly, the `compile_fail`
+assertion flips, and `cargo test --doc -p streamlib-idents` surfaces
+the regression. Each type locks both `Type::parse(...)` and
+`"…".parse::<Type>()` so adding either entry point trips the gate.
+The `tests/no_parse_api.rs` integration test is the positive
+counterpart: it locks the *allowed* construction pathways
+(validating `Type::new` constructors, typed YAML/JSON deserialization,
+and explicitly that the joined Display form does NOT round-trip
+back through deserialization). If you find yourself wanting a
+parse method — even for a "tiny" helper, even "just for tests" —
+stop. The drift starts that way.
 
 ### 2. Cross-package import-then-shorthand
 
@@ -663,8 +674,16 @@ the cross-language need.
   anchor for in-flight design.
 - **Tests**:
   - `libs/streamlib-idents/src/{ident,semver,manifest,lockfile}.rs::tests`
-  - `libs/streamlib-idents/tests/no_parse_api.rs` — public-API
-    surface guard.
+    — unit tests covering grammar conformance, semver-range matching,
+    typed deserialization, lockfile round-trip + diff stability.
+  - `libs/streamlib-idents/src/ident.rs` — `compile_fail` doctests on
+    each identifier type that lock the no-`parse`-API invariant
+    (proven real: temporarily add `pub fn parse(_: &str) -> Self` to
+    `SchemaIdent` and `cargo test --doc` reports
+    "Test compiled successfully, but it's marked `compile_fail`").
+  - `libs/streamlib-idents/tests/no_parse_api.rs` — positive
+    counterpart: locks the *allowed* construction pathways and
+    asserts joined-string deserialization fails.
   - `xtask/src/check_schema_versions.rs::tests` — fixture tests +
     workspace smoke test.
 - **Future research / follow-ups**:

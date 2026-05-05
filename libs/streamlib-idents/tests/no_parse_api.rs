@@ -8,83 +8,68 @@
 // There is **no** `parse` constructor on these types; adding one would
 // re-introduce the parser-disagreement drift mode the design eliminates.
 //
-// This file is a compile-time witness: if any of the snippets below ever
-// start compiling, a `parse` (or equivalent) entry point has been added
-// to the public surface and the structured-everywhere invariant has
-// been violated. See `docs/architecture/schema-identity-and-packaging.md`,
-// the "Anti-patterns" section.
+// ## Where the actual gate lives
+//
+// The compile-time witness for "no `parse` API" lives in `compile_fail`
+// doctests on each type definition (`SchemaIdent`, `Org`, `Package`,
+// `TypeName`) — see their rustdoc. Those doctests assert the
+// forbidden snippets MUST fail to compile; if a `parse` (or `FromStr`)
+// API is ever added, the doctests would compile cleanly, the `compile_fail`
+// assertion would flip, and `cargo test --doc -p streamlib-idents` would
+// surface the regression.
+//
+// This integration test is the *positive* counterpart: it locks the
+// allowed construction pathways (`Type::new` validating constructors and
+// typed YAML deserialization) so that whatever change adds a new public
+// constructor has to pass through here too. If a `parse` API were
+// accidentally added in the same change that removed one of the allowed
+// constructors, the doctest would catch the addition and this test would
+// catch the removal — together they bracket the public surface.
 
-use streamlib_idents::{Org, Package, SchemaIdent, TypeName};
+use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 
-/// Each of these must be a compile error. We test that by referencing the
-/// methods through a `cfg(any())` block — the code is type-checked but
-/// dead-eliminated. If a `parse` method were added, this file would error
-/// at type-check time, failing the build.
-#[allow(dead_code)]
-fn _structurally_no_parse_api() {
-    // Negative API surface — these calls must not type-check. Rather than
-    // running them, we reference them inside a `cfg(any())` so the
-    // compiler still sees them but never tries to lower them. If a `parse`
-    // method is added that returns `Result<Self, _>`, the call would
-    // compile and the whole file would build — failing the gate.
-    //
-    // We use a runtime check (`should_not_compile!`) that's only ever
-    // referenced inside `if false { … }` so the asserter sees the methods
-    // but doesn't actually run anything.
-
-    if false {
-        // SchemaIdent
-        let _: () = should_not_compile_schema_ident();
-        // Segments
-        let _: () = should_not_compile_org();
-        let _: () = should_not_compile_package();
-        let _: () = should_not_compile_type();
-    }
-}
-
-/// These functions are never called. Their *existence* is the assertion:
-/// each line below must fail to compile if the API includes a `parse`
-/// method. They are referenced only inside `if false { … }` above so the
-/// compiler type-checks the file but never tries to actually link the
-/// non-existent methods at runtime.
-fn should_not_compile_schema_ident() {
-    // Uncommenting the line below MUST fail to compile. If it ever starts
-    // compiling, the structured-everywhere rule has been violated.
-    //
-    // let _ = SchemaIdent::parse("@tatolab/core/VideoFrame@1.0.0");
-}
-
-fn should_not_compile_org() {
-    // let _ = Org::parse("tatolab");
-}
-
-fn should_not_compile_package() {
-    // let _ = Package::parse("core");
-}
-
-fn should_not_compile_type() {
-    // let _ = TypeName::parse("VideoFrame");
-}
-
-/// Reflective check: list every public method name on the public types and
-/// assert none of them is `parse` or `from_str`. We do this by exercising
-/// the *valid* construction paths to make sure the public surface stays
-/// stable, then asserting the no-parse API in plain prose.
 #[test]
-fn public_surface_uses_only_structured_construction() {
-    // The only public constructors:
+fn allowed_construction_paths_remain_intact() {
+    // Path 1 — codegen-style: validating segment constructors + struct
+    // literal. This is what the rust-side macro emits.
     let org = Org::new("tatolab").unwrap();
     let package = Package::new("core").unwrap();
     let type_name = TypeName::new("VideoFrame").unwrap();
-    let version = streamlib_idents::SemVer::new(1, 0, 0);
-    let _id = SchemaIdent::new(org, package, type_name, version);
+    let version = SemVer::new(1, 0, 0);
+    let id = SchemaIdent::new(org, package, type_name, version);
+    assert_eq!(id.to_string(), "@tatolab/core/VideoFrame@1.0.0");
 
-    // Typed deserialization is the other allowed pathway:
+    // Path 2 — typed YAML deserialization: each segment is its own field.
+    // The wire shape is structured fields, not a joined string.
     let yaml = "
 org: tatolab
 package: core
 type: VideoFrame
 version: 1.0.0
 ";
-    let _id: SchemaIdent = serde_yaml::from_str(yaml).unwrap();
+    let id: SchemaIdent = serde_yaml::from_str(yaml).unwrap();
+    assert_eq!(id.org.as_str(), "tatolab");
+    assert_eq!(id.package.as_str(), "core");
+    assert_eq!(id.r#type.as_str(), "VideoFrame");
+    assert_eq!(id.version, SemVer::new(1, 0, 0));
+
+    // Path 3 — typed JSON deserialization: same structured shape over JSON.
+    let json = r#"{"org":"tatolab","package":"core","type":"VideoFrame","version":"1.0.0"}"#;
+    let id: SchemaIdent = serde_json::from_str(json).unwrap();
+    assert_eq!(id.to_string(), "@tatolab/core/VideoFrame@1.0.0");
+}
+
+#[test]
+fn joined_string_is_not_a_valid_yaml_shape() {
+    // The Display form `@org/package/Type@version` is render-only — feeding
+    // it back as a YAML string for a SchemaIdent must NOT round-trip. If
+    // someone added a custom Deserialize impl that accepts the joined form,
+    // this test would start passing-with-the-wrong-id and the assertion
+    // below would fire.
+    let yaml = "\"@tatolab/core/VideoFrame@1.0.0\"";
+    let res: Result<SchemaIdent, _> = serde_yaml::from_str(yaml);
+    assert!(
+        res.is_err(),
+        "joined-string deserialization MUST fail — structured-everywhere rule"
+    );
 }

@@ -8,6 +8,19 @@ use crate::error::{IdentError, IdentResult};
 use crate::semver::SemVer;
 
 /// Org segment of an identifier (the `@org` part).
+///
+/// Constructed via [`Org::new`] (validating) or typed deserialization. No
+/// `parse` API — gated below with a `compile_fail` doctest.
+///
+/// ```compile_fail
+/// use streamlib_idents::Org;
+/// let _ = Org::parse("tatolab");
+/// ```
+///
+/// ```compile_fail
+/// use streamlib_idents::Org;
+/// let _: Org = "tatolab".parse().unwrap();
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Org(String);
 
@@ -43,6 +56,19 @@ impl<'de> Deserialize<'de> for Org {
 }
 
 /// Package segment.
+///
+/// Constructed via [`Package::new`] (validating) or typed deserialization.
+/// No `parse` API — gated below with a `compile_fail` doctest.
+///
+/// ```compile_fail
+/// use streamlib_idents::Package;
+/// let _ = Package::parse("core");
+/// ```
+///
+/// ```compile_fail
+/// use streamlib_idents::Package;
+/// let _: Package = "core".parse().unwrap();
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Package(String);
 
@@ -78,6 +104,19 @@ impl<'de> Deserialize<'de> for Package {
 }
 
 /// Type segment (PascalCase).
+///
+/// Constructed via [`TypeName::new`] (validating) or typed deserialization.
+/// No `parse` API — gated below with a `compile_fail` doctest.
+///
+/// ```compile_fail
+/// use streamlib_idents::TypeName;
+/// let _ = TypeName::parse("VideoFrame");
+/// ```
+///
+/// ```compile_fail
+/// use streamlib_idents::TypeName;
+/// let _: TypeName = "VideoFrame".parse().unwrap();
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeName(String);
 
@@ -118,6 +157,25 @@ impl<'de> Deserialize<'de> for TypeName {
 /// deserialization (each field as its own YAML key). There is no `parse`
 /// constructor on this type or any of its segments, by deliberate design —
 /// see `docs/architecture/schema-identity-and-packaging.md`.
+///
+/// # No `parse` API — compile-fail doctest gate
+///
+/// Calling `SchemaIdent::parse` must not compile. If a `parse` method is
+/// ever added, the doctest below would compile, the `compile_fail`
+/// assertion would flip, and `cargo test --doc` would surface the
+/// regression. Same gate as [`Org`], [`Package`], [`TypeName`].
+///
+/// ```compile_fail
+/// use streamlib_idents::SchemaIdent;
+/// let _ = SchemaIdent::parse("@tatolab/core/VideoFrame@1.0.0");
+/// ```
+///
+/// `FromStr` would also let `"…".parse::<SchemaIdent>()` work — locked too:
+///
+/// ```compile_fail
+/// use streamlib_idents::SchemaIdent;
+/// let _: SchemaIdent = "@tatolab/core/VideoFrame@1.0.0".parse().unwrap();
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SchemaIdent {
     pub org: Org,
