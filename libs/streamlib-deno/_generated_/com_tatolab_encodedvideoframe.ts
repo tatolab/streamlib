@@ -28,4 +28,9 @@ export interface Encodedvideoframe {
    * Monotonic timestamp in nanoseconds (int64 as string)
    */
   timestamp_ns: string;
+
+  /**
+   * Source frame rate in frames per second (pass-through from capture device)
+   */
+  fps?: number;
 }

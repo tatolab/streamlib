@@ -1,78 +1,28 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+//! Embedded JTD schema definitions, looked up by metadata name.
+//!
+//! The lookup table is generated at build time by `build.rs` from the
+//! `schemas:` list in `streamlib.yaml` (replacing the hand-curated 21-arm
+//! match that historically drifted against the on-disk schema set —
+//! see #402).
+
+include!(concat!(env!("OUT_DIR"), "/embedded_schemas_table.rs"));
+
 /// Get the embedded JTD YAML definition for a built-in schema.
 pub fn get_embedded_schema_definition(name: &str) -> Option<&'static str> {
-    match name {
-        // Data schemas
-        "com.tatolab.videoframe" => Some(include_str!("../../schemas/com.tatolab.videoframe.yaml")),
-        "com.tatolab.audioframe" => Some(include_str!("../../schemas/com.tatolab.audioframe.yaml")),
-        "com.tatolab.encodedvideoframe" => Some(include_str!(
-            "../../schemas/com.tatolab.encodedvideoframe.yaml"
-        )),
-        // Config schemas
-        "com.tatolab.camera.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.camera.config@1.0.0.yaml"
-        )),
-        "com.tatolab.display.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.display.config@1.0.0.yaml"
-        )),
-        "com.tatolab.audio_capture.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.audio_capture.config@1.0.0.yaml"
-        )),
-        "com.tatolab.audio_output.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.audio_output.config@1.0.0.yaml"
-        )),
-        "com.tatolab.audio_mixer.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.audio_mixer.config@1.0.0.yaml"
-        )),
-        "com.tatolab.audio_resampler.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.audio_resampler.config@1.0.0.yaml"
-        )),
-        "com.tatolab.audio_channel_converter.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.audio_channel_converter.config@1.0.0.yaml"
-        )),
-        "com.tatolab.buffer_rechunker.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.buffer_rechunker.config@1.0.0.yaml"
-        )),
-        "com.tatolab.chord_generator.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.chord_generator.config@1.0.0.yaml"
-        )),
-        "com.tatolab.mp4_writer.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.mp4_writer.config@1.0.0.yaml"
-        )),
-        "com.tatolab.screen_capture.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.screen_capture.config@1.0.0.yaml"
-        )),
-        "com.tatolab.simple_passthrough.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml"
-        )),
-        "com.streamlib.api_server.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.streamlib.api_server.config@1.0.0.yaml"
-        )),
-        "com.streamlib.clap.effect.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.streamlib.clap.effect.config@1.0.0.yaml"
-        )),
-        "com.streamlib.webrtc_whip.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml"
-        )),
-        "com.streamlib.webrtc_whep.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml"
-        )),
-        "com.streamlib.opus_encoder.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.streamlib.opus_encoder.config@1.0.0.yaml"
-        )),
-        "com.streamlib.opus_decoder.config@1.0.0" => Some(include_str!(
-            "../../schemas/com.streamlib.opus_decoder.config@1.0.0.yaml"
-        )),
-        _ => None,
-    }
+    EMBEDDED_SCHEMAS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, body)| *body)
 }
 
 /// Extract `max_payload_bytes` from a schema's metadata section.
 ///
-/// Strips any version suffix (e.g. `com.tatolab.audioframe@1.0.0` → `com.tatolab.audioframe`)
-/// before lookup. Returns [`MAX_PAYLOAD_SIZE`] if the schema is unknown or has no declaration.
+/// Strips any version suffix (e.g. `com.tatolab.audioframe@1.0.0` →
+/// `com.tatolab.audioframe`) before lookup. Returns the iceoryx2 default if
+/// the schema is unknown or has no declaration.
 pub fn max_payload_bytes_for_schema(schema_name: &str) -> usize {
     use crate::iceoryx2::MAX_PAYLOAD_SIZE;
     let base_name = schema_name.split('@').next().unwrap_or(schema_name);
@@ -90,31 +40,72 @@ pub fn max_payload_bytes_for_schema(schema_name: &str) -> usize {
     MAX_PAYLOAD_SIZE as usize
 }
 
-/// List all embedded schema names.
+/// List all embedded schema names. Returns a fresh `Vec` keyed by
+/// `metadata.name` for every schema declared in `streamlib.yaml`. Sorted
+/// alphabetically so consumers (API server) get diff-stable output.
 pub fn list_embedded_schema_names() -> Vec<&'static str> {
-    vec![
-        // Data schemas
-        "com.tatolab.audioframe",
-        "com.tatolab.encodedvideoframe",
-        "com.tatolab.videoframe",
-        // Config schemas
-        "com.streamlib.api_server.config@1.0.0",
-        "com.streamlib.clap.effect.config@1.0.0",
-        "com.streamlib.webrtc_whep.config@1.0.0",
-        "com.streamlib.webrtc_whip.config@1.0.0",
-        "com.tatolab.audio_capture.config@1.0.0",
-        "com.tatolab.audio_channel_converter.config@1.0.0",
-        "com.tatolab.audio_mixer.config@1.0.0",
-        "com.tatolab.audio_output.config@1.0.0",
-        "com.tatolab.audio_resampler.config@1.0.0",
-        "com.tatolab.buffer_rechunker.config@1.0.0",
-        "com.tatolab.camera.config@1.0.0",
-        "com.tatolab.chord_generator.config@1.0.0",
-        "com.tatolab.display.config@1.0.0",
-        "com.tatolab.mp4_writer.config@1.0.0",
-        "com.tatolab.screen_capture.config@1.0.0",
-        "com.tatolab.simple_passthrough.config@1.0.0",
-        "com.streamlib.opus_encoder.config@1.0.0",
-        "com.streamlib.opus_decoder.config@1.0.0",
-    ]
+    EMBEDDED_SCHEMAS.iter().map(|(name, _)| *name).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_table_is_populated() {
+        // Build script must populate at least the wire vocabulary plus a
+        // representative config schema. Specific count is intentionally
+        // not asserted (volatile across schema additions, per
+        // `feedback_no_brittle_numbers_in_docs`).
+        assert!(
+            !EMBEDDED_SCHEMAS.is_empty(),
+            "build.rs must populate the embedded schema table from streamlib.yaml"
+        );
+    }
+
+    #[test]
+    fn lookup_finds_known_schema() {
+        let yaml = get_embedded_schema_definition("com.tatolab.videoframe");
+        assert!(
+            yaml.is_some(),
+            "videoframe wire vocabulary must be embedded"
+        );
+        assert!(
+            yaml.unwrap().contains("metadata"),
+            "embedded schema body should contain its metadata block"
+        );
+    }
+
+    #[test]
+    fn lookup_returns_none_for_unknown_schema() {
+        assert!(get_embedded_schema_definition("does.not.exist").is_none());
+    }
+
+    #[test]
+    fn list_is_sorted() {
+        let names = list_embedded_schema_names();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted, "build.rs sorts entries — diff stability");
+    }
+
+    #[test]
+    fn no_duplicate_names() {
+        let names = list_embedded_schema_names();
+        let unique: std::collections::HashSet<&&str> = names.iter().collect();
+        assert_eq!(
+            names.len(),
+            unique.len(),
+            "duplicate metadata.name across schemas — fix the streamlib.yaml `schemas:` list"
+        );
+    }
+
+    #[test]
+    fn max_payload_bytes_returns_default_for_unknown() {
+        use crate::iceoryx2::MAX_PAYLOAD_SIZE;
+        assert_eq!(
+            max_payload_bytes_for_schema("does.not.exist"),
+            MAX_PAYLOAD_SIZE as usize
+        );
+    }
 }

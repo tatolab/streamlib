@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// What to capture: Display, Window, or Application
@@ -29,33 +30,41 @@ pub struct ScreenCaptureConfig {
 
     /// Bundle identifier for Application mode (e.g., 'com.apple.Safari')
     #[serde(rename = "app_bundle_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub app_bundle_id: Option<String>,
 
     /// Display index for Application mode (default: 0)
     #[serde(rename = "app_display_index")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub app_display_index: Option<u32>,
 
     /// Display index for Display mode (default: 0 for main display)
     #[serde(rename = "display_index")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display_index: Option<u32>,
 
     /// Exclude current application from capture (default: true)
     #[serde(rename = "exclude_current_app")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exclude_current_app: Option<bool>,
 
     /// Target frame rate in fps (default: 30.0)
     #[serde(rename = "frame_rate")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub frame_rate: Option<f64>,
 
     /// Whether to capture cursor (default: false)
     #[serde(rename = "show_cursor")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub show_cursor: Option<bool>,
 
     /// Window ID for Window mode
     #[serde(rename = "window_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub window_id: Option<u32>,
 
     /// Window title substring for Window mode
     #[serde(rename = "window_title")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub window_title: Option<String>,
 }

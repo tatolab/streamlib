@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Channel conversion mode
@@ -29,5 +30,6 @@ pub struct AudioChannelConverterConfig {
 
     /// Number of output channels (default: 2)
     #[serde(rename = "output_channels")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_channels: Option<u8>,
 }

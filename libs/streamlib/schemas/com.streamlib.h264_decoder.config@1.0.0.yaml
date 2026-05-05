@@ -7,3 +7,10 @@ metadata:
   name: com.streamlib.h264_decoder.config
   version: 1.0.0
   description: "Configuration for H.264 video decoding."
+
+# Empty struct body — JTD requires *some* shape declaration; without it, the
+# schema is interpreted as "any value" and codegen emits a `pub type X =
+# Option<Value>` alias instead of an empty struct. The decoder takes no
+# user-tunable knobs today, so the empty `optionalProperties` block is the
+# faithful representation.
+optionalProperties: {}

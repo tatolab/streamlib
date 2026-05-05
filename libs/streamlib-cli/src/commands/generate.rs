@@ -3,9 +3,10 @@
 
 //! `streamlib generate` — codegen subcommand.
 //!
-//! Drives the JTD-codegen pipeline (extracted in #400) so non-Rust developers
-//! can regenerate bindings without installing rustup. Mirrors
-//! `cargo xtask generate-schemas` exactly — same input modes, same output.
+//! Drives the JTD-codegen pipeline (extracted in #400, resolver-driven
+//! since #402) so non-Rust developers can regenerate bindings without
+//! installing rustup. Mirrors `cargo xtask generate-schemas` exactly —
+//! same input modes, same output.
 
 use std::path::PathBuf;
 
@@ -16,23 +17,24 @@ use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 pub fn run(
     runtime: RuntimeTarget,
     output: PathBuf,
-    project_file: Option<PathBuf>,
+    project_dir: Option<PathBuf>,
     schema_file: Option<PathBuf>,
     schema_dir: Option<PathBuf>,
 ) -> Result<()> {
     generate(GenerateOptions {
         runtime,
         output,
-        project_file,
+        project_dir,
         schema_file,
         schema_dir,
         workspace_root: workspace_root()?,
+        write_lockfile: true,
     })
 }
 
 /// Resolve the workspace root the same way `cargo xtask` does — by asking
 /// cargo. Mirrors `xtask::workspace_root` so the two entry points behave
-/// identically when resolving project-file-relative schema paths.
+/// identically when resolving project-relative paths.
 fn workspace_root() -> Result<PathBuf> {
     let output = std::process::Command::new("cargo")
         .args(["locate-project", "--workspace", "--message-format=plain"])

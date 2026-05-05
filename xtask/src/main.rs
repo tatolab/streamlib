@@ -4,7 +4,7 @@
 //! Build tasks for StreamLib development.
 //!
 //! Usage:
-//!   cargo xtask generate-schemas --runtime rust --project-file libs/streamlib/Cargo.toml --output libs/streamlib/src/_generated_
+//!   cargo xtask generate-schemas --runtime rust --project-dir libs/streamlib --output libs/streamlib/src/_generated_
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 
 pub mod check_boundaries;
+pub mod check_no_streamlib_metadata;
 pub mod check_schema_versions;
 pub mod lint_logging;
 
@@ -39,9 +40,11 @@ enum Commands {
         #[arg(long)]
         output: PathBuf,
 
-        /// Read schema list from a project file (Cargo.toml or pyproject.toml)
+        /// `streamlib.yaml`-driven mode: directory containing the manifest.
+        /// The resolver walks declared dependencies and codegen ingests the
+        /// resulting set.
         #[arg(long, group = "input")]
-        project_file: Option<PathBuf>,
+        project_dir: Option<PathBuf>,
 
         /// Process a single schema file
         #[arg(long, group = "input")]
@@ -67,6 +70,13 @@ enum Commands {
     /// (versioning lives in `streamlib.yaml`, not in individual schemas).
     /// See `docs/architecture/schema-identity-and-packaging.md`.
     CheckSchemaVersions,
+
+    /// CI gate for #402's atomic cutover off language-native metadata.
+    /// Fails on `[package.metadata.streamlib]`, `[tool.streamlib]`, or a
+    /// top-level `streamlib` key in `deno.json` / `deno.jsonc`. The single
+    /// source of truth is `streamlib.yaml`; see
+    /// `docs/architecture/schema-identity-and-packaging.md` (anti-pattern 4).
+    CheckNoStreamlibMetadata,
 }
 
 fn main() -> Result<()> {
@@ -85,20 +95,24 @@ fn main() -> Result<()> {
         Commands::GenerateSchemas {
             runtime,
             output,
-            project_file,
+            project_dir,
             schema_file,
             schema_dir,
         } => generate(GenerateOptions {
             runtime,
             output,
-            project_file,
+            project_dir,
             schema_file,
             schema_dir,
             workspace_root: workspace_root()?,
+            write_lockfile: true,
         })?,
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,
+        Commands::CheckNoStreamlibMetadata => {
+            check_no_streamlib_metadata::run(&workspace_root()?)?
+        }
     }
 
     Ok(())

@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Configuration for audio output (macOS)
@@ -11,5 +12,6 @@ use serde::{Deserialize, Serialize};
 pub struct AudioOutputConfig {
     /// Audio output device ID. If None, uses default device
     #[serde(rename = "device_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
 }

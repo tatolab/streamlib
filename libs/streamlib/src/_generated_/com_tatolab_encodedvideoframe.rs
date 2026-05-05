@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Encoded video frame with H.264/H.265 NAL unit data
@@ -12,11 +13,6 @@ pub struct Encodedvideoframe {
     /// Encoded NAL units (H.264/H.265 bitstream data)
     #[serde(rename = "data")]
     pub data: Vec<u8>,
-
-    /// Source frame rate in frames per second (pass-through from capture device)
-    #[serde(rename = "fps")]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fps: Option<u32>,
 
     /// Sequential frame number (uint64 as string)
     #[serde(rename = "frame_number")]
@@ -29,4 +25,10 @@ pub struct Encodedvideoframe {
     /// Monotonic timestamp in nanoseconds (int64 as string)
     #[serde(rename = "timestamp_ns")]
     pub timestamp_ns: String,
+
+    /// Source frame rate in frames per second (pass-through from capture
+    /// device)
+    #[serde(rename = "fps")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<u32>,
 }

@@ -3,14 +3,23 @@
 
 //! JTD-codegen pipeline: schema YAML files → typed Rust/Python/TypeScript bindings.
 //!
-//! All three languages share the same shape:
-//! 1. Resolve schema YAML files (from a project file, single file, or directory)
-//! 2. Convert each YAML schema → JSON
-//! 3. Invoke `jtd-codegen` with the language-specific output flag
-//! 4. Post-process output (copyright headers, naming fixups, derives, etc.)
-//! 5. Emit a barrel module file (`mod.rs` / `__init__.py` / `index.ts`)
+//! Three-pass shape (Decision 7 of milestone-10's
+//! `docs/architecture/schema-identity-and-packaging.md`):
 //!
-//! Public entry point: [`generate`].
+//! 1. **Resolve** — read `streamlib.yaml` + `streamlib.lock`, walk the
+//!    dependency graph, produce `(SchemaIdent, JtdSchema)` pairs.
+//! 2. **Substitute → generate → substitute back** — replace cross-package
+//!    refs with deterministic sentinels, run `jtd-codegen`, restore native
+//!    cross-package imports. Implementation: [`sentinel`].
+//! 3. **Order** — stable-sort properties by name so the output is
+//!    diff-stable. Implementation: [`ordering`].
+//!
+//! Public entry points:
+//!
+//! - [`generate`] — driver for the CLI / xtask, accepting `--project-dir`,
+//!   `--schema-file`, or `--schema-dir`.
+//! - [`generate_from_resolved`] — direct entry for code that's already run
+//!   the resolver (build scripts, integration tests).
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
@@ -18,6 +27,13 @@ use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use streamlib_idents::{ResolvedPackages, ResolverOptions};
+
+pub mod ordering;
+pub mod sentinel;
+
+pub use sentinel::SentinelTable;
 
 /// Target runtime language for schema code generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -33,14 +49,33 @@ pub struct GenerateOptions {
     pub runtime: RuntimeTarget,
     /// Output directory for generated bindings.
     pub output: PathBuf,
-    /// Read schema list from a project file (`Cargo.toml` or `pyproject.toml`).
-    pub project_file: Option<PathBuf>,
-    /// Process a single schema file.
+    /// `streamlib.yaml`-driven mode: directory containing the project
+    /// manifest. The resolver walks declared dependencies and the codegen
+    /// pipeline ingests the resulting `(SchemaIdent, JtdSchema)` set.
+    pub project_dir: Option<PathBuf>,
+    /// Single-schema mode (kept for ad-hoc use).
     pub schema_file: Option<PathBuf>,
-    /// Process all `.yaml` files in a directory.
+    /// Directory-of-yaml mode (kept for ad-hoc use).
     pub schema_dir: Option<PathBuf>,
-    /// Workspace root used to resolve project-file-relative schema paths.
+    /// Workspace root used to resolve project-relative paths in CLI args.
     pub workspace_root: PathBuf,
+    /// When `project_dir` mode is used and dependencies were declared,
+    /// write `streamlib.lock` next to `streamlib.yaml`. Defaults to `true`.
+    pub write_lockfile: bool,
+}
+
+impl Default for GenerateOptions {
+    fn default() -> Self {
+        Self {
+            runtime: RuntimeTarget::Rust,
+            output: PathBuf::new(),
+            project_dir: None,
+            schema_file: None,
+            schema_dir: None,
+            workspace_root: PathBuf::new(),
+            write_lockfile: true,
+        }
+    }
 }
 
 /// Run the JTD-codegen pipeline.
@@ -48,67 +83,93 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
     let GenerateOptions {
         runtime,
         output,
-        project_file,
+        project_dir,
         schema_file,
         schema_dir,
-        workspace_root,
+        workspace_root: _,
+        write_lockfile,
     } = opts;
 
-    let schema_files =
-        resolve_schema_files(&workspace_root, project_file, schema_file, schema_dir)?;
+    if let Some(project_dir) = project_dir {
+        let resolved = streamlib_idents::resolve_with(&project_dir, &ResolverOptions::default())
+            .context("Failed to resolve streamlib.yaml dependency graph")?;
 
+        if write_lockfile && !resolved.packages.is_empty() {
+            let lockfile = resolved.to_lockfile();
+            let lock_path = project_dir.join(streamlib_idents::LOCKFILE_NAME);
+            streamlib_idents::write_lockfile(&lock_path, &lockfile)
+                .context("Failed to write streamlib.lock")?;
+            tracing::info!("Wrote {} ({} packages)", lock_path.display(), resolved.packages.len());
+        }
+
+        return generate_from_resolved(&resolved, runtime, &output);
+    }
+
+    if let Some(schema_path) = schema_file {
+        if !schema_path.exists() {
+            anyhow::bail!("Schema file not found: {}", schema_path.display());
+        }
+        return run_codegen(&[schema_path], runtime, &output);
+    }
+
+    if let Some(dir) = schema_dir {
+        let mut files: Vec<PathBuf> = Vec::new();
+        for entry in fs::read_dir(&dir)
+            .with_context(|| format!("Failed to read directory {}", dir.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str());
+            if matches!(ext, Some("yaml") | Some("yml")) {
+                files.push(path);
+            }
+        }
+        files.sort();
+        return run_codegen(&files, runtime, &output);
+    }
+
+    anyhow::bail!("No input specified. Use --project-dir, --schema-file, or --schema-dir");
+}
+
+/// Direct entry: run codegen against an already-resolved package set.
+///
+/// The output layout is flat for now (one file per schema in `output`),
+/// matching the in-tree `_generated_/` shape pre-#402. When carve-out
+/// packages land, this layout will likely become per-package
+/// (`output/<org>__<package>/<file>`); the function keeps a stable name so
+/// callers don't churn.
+pub fn generate_from_resolved(
+    resolved: &ResolvedPackages,
+    runtime: RuntimeTarget,
+    output: &Path,
+) -> Result<()> {
+    let mut all_schema_files: Vec<PathBuf> = Vec::new();
+    for pkg in resolved.iter_all() {
+        all_schema_files.extend(pkg.schema_files.iter().cloned());
+    }
+    all_schema_files.sort();
+    all_schema_files.dedup();
+
+    if all_schema_files.is_empty() {
+        tracing::info!("No schemas to generate");
+        return Ok(());
+    }
+
+    run_codegen(&all_schema_files, runtime, output)
+}
+
+fn run_codegen(schema_files: &[PathBuf], runtime: RuntimeTarget, output: &Path) -> Result<()> {
     if schema_files.is_empty() {
         tracing::info!("No schemas found");
         return Ok(());
     }
-
     tracing::info!("Found {} schemas", schema_files.len());
 
     match runtime {
-        RuntimeTarget::Rust => run_jtd_codegen_rust(&schema_files, &output),
-        RuntimeTarget::Python => run_jtd_codegen_python(&schema_files, &output),
-        RuntimeTarget::Typescript => run_jtd_codegen_typescript(&schema_files, &output),
+        RuntimeTarget::Rust => run_jtd_codegen_rust(schema_files, output),
+        RuntimeTarget::Python => run_jtd_codegen_python(schema_files, output),
+        RuntimeTarget::Typescript => run_jtd_codegen_typescript(schema_files, output),
     }
-}
-
-/// Cargo.toml structure for reading metadata.
-#[derive(Deserialize)]
-struct CargoToml {
-    package: Package,
-}
-
-#[derive(Deserialize)]
-struct Package {
-    metadata: Option<Metadata>,
-}
-
-#[derive(Deserialize)]
-struct Metadata {
-    streamlib: Option<StreamlibMetadata>,
-}
-
-#[derive(Deserialize)]
-struct StreamlibMetadata {
-    /// Data type and config schemas (JTD format)
-    schemas: Vec<String>,
-}
-
-/// pyproject.toml structure for reading [tool.streamlib] metadata.
-#[derive(Deserialize)]
-struct PyProjectToml {
-    tool: Option<PyProjectTool>,
-}
-
-#[derive(Deserialize)]
-struct PyProjectTool {
-    streamlib: Option<PyProjectStreamlib>,
-}
-
-#[derive(Deserialize)]
-struct PyProjectStreamlib {
-    /// Data type schemas (YAML format)
-    #[serde(default)]
-    schemas: Vec<String>,
 }
 
 /// Minimal JTD schema structure for extracting metadata.
@@ -120,84 +181,6 @@ struct JtdSchema {
 #[derive(Debug, Deserialize)]
 struct JtdMetadata {
     name: String,
-}
-
-/// Resolve schema YAML files from one of three input modes.
-fn resolve_schema_files(
-    workspace_root: &Path,
-    project_file: Option<PathBuf>,
-    schema_file: Option<PathBuf>,
-    schema_dir: Option<PathBuf>,
-) -> Result<Vec<PathBuf>> {
-    if let Some(project_path) = project_file {
-        // Read schema list from project file (Cargo.toml or pyproject.toml)
-        let (base_dir, schema_list) = read_schema_paths(workspace_root, project_path)?;
-        Ok(schema_list.iter().map(|p| base_dir.join(p)).collect())
-    } else if let Some(file_path) = schema_file {
-        // Single schema file
-        if !file_path.exists() {
-            anyhow::bail!("Schema file not found: {}", file_path.display());
-        }
-        Ok(vec![file_path])
-    } else if let Some(dir_path) = schema_dir {
-        // Directory of schema files
-        let mut files: Vec<PathBuf> = Vec::new();
-        for entry in fs::read_dir(&dir_path)
-            .with_context(|| format!("Failed to read directory {}", dir_path.display()))?
-        {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-                files.push(path);
-            }
-        }
-        files.sort();
-        Ok(files)
-    } else {
-        anyhow::bail!("No input specified. Use --project-file, --schema-file, or --schema-dir");
-    }
-}
-
-/// Read schema paths from a project file (Cargo.toml or pyproject.toml).
-fn read_schema_paths(
-    workspace_root: &Path,
-    source_path: PathBuf,
-) -> Result<(PathBuf, Vec<String>)> {
-    let source_filename = source_path
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or("");
-
-    let base_dir = source_path
-        .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| workspace_root.to_path_buf());
-
-    tracing::info!("Reading schemas from: {}", source_path.display());
-
-    let content = fs::read_to_string(&source_path)
-        .with_context(|| format!("Failed to read {}", source_path.display()))?;
-
-    let schemas = if source_filename == "pyproject.toml" {
-        let pyproject: PyProjectToml =
-            toml::from_str(&content).context("Failed to parse pyproject.toml")?;
-        pyproject
-            .tool
-            .and_then(|t| t.streamlib)
-            .map(|s| s.schemas)
-            .unwrap_or_default()
-    } else {
-        let cargo_toml: CargoToml =
-            toml::from_str(&content).context("Failed to parse Cargo.toml")?;
-        cargo_toml
-            .package
-            .metadata
-            .and_then(|m| m.streamlib)
-            .map(|s| s.schemas)
-            .unwrap_or_default()
-    };
-
-    Ok((base_dir, schemas))
 }
 
 // =============================================================================
@@ -222,8 +205,13 @@ fn verify_jtd_codegen() -> Result<()> {
     Ok(())
 }
 
-/// Convert a schema YAML file to JSON and extract metadata.
-fn prepare_schema(yaml_path: &Path, temp_dir: &Path) -> Result<(String, String, PathBuf)> {
+/// Convert a schema YAML file to JSON, run the sentinel pre-pass + property
+/// ordering, and write the result to `temp_dir`. Returns the (module_name,
+/// struct_name, json_path, sentinel_table) tuple.
+fn prepare_schema(
+    yaml_path: &Path,
+    temp_dir: &Path,
+) -> Result<(String, String, PathBuf, SentinelTable)> {
     let yaml_content = fs::read_to_string(yaml_path)
         .with_context(|| format!("Failed to read {}", yaml_path.display()))?;
 
@@ -233,9 +221,14 @@ fn prepare_schema(yaml_path: &Path, temp_dir: &Path) -> Result<(String, String, 
     let module_name = schema_name_to_module_name(&schema.metadata.name);
     let struct_name = schema_name_to_struct_name(&schema.metadata.name);
 
-    // Convert YAML to JSON
-    let json_value: serde_json::Value = serde_yaml::from_str(&yaml_content)
+    // YAML → JSON value (mutable so we can run pre-passes on it).
+    let mut json_value: serde_json::Value = serde_yaml::from_str(&yaml_content)
         .with_context(|| format!("Failed to parse YAML {}", yaml_path.display()))?;
+
+    let mut sentinel_table = SentinelTable::default();
+    sentinel::substitute(&mut json_value, &mut sentinel_table)
+        .with_context(|| format!("Sentinel substitution failed for {}", yaml_path.display()))?;
+    ordering::sort_object_keys_recursively(&mut json_value);
 
     let json_filename = format!("{}.json", struct_name);
     let json_path = temp_dir.join(&json_filename);
@@ -244,7 +237,7 @@ fn prepare_schema(yaml_path: &Path, temp_dir: &Path) -> Result<(String, String, 
     fs::write(&json_path, &json_content)
         .with_context(|| format!("Failed to write {}", json_path.display()))?;
 
-    Ok((module_name, struct_name, json_path))
+    Ok((module_name, struct_name, json_path, sentinel_table))
 }
 
 // =============================================================================
@@ -262,13 +255,12 @@ fn run_jtd_codegen_rust(schema_files: &[PathBuf], output_dir: &Path) -> Result<(
     for yaml_path in schema_files {
         tracing::info!("  Processing: {}", yaml_path.display());
 
-        let (module_name, struct_name, json_path) = prepare_schema(yaml_path, temp_dir.path())?;
+        let (module_name, struct_name, json_path, sentinel_table) =
+            prepare_schema(yaml_path, temp_dir.path())?;
 
-        // Create temp output dir for this schema
         let temp_rust_out = temp_dir.path().join(format!("rust_{}", module_name));
         fs::create_dir_all(&temp_rust_out)?;
 
-        // Run jtd-codegen
         let output = Command::new("jtd-codegen")
             .arg("--rust-out")
             .arg(&temp_rust_out)
@@ -284,22 +276,21 @@ fn run_jtd_codegen_rust(schema_files: &[PathBuf], output_dir: &Path) -> Result<(
             anyhow::bail!("jtd-codegen failed for {}: {}", yaml_path.display(), stderr);
         }
 
-        // Read generated code and post-process
         let generated_mod = temp_rust_out.join("mod.rs");
         let generated_code = fs::read_to_string(&generated_mod).with_context(|| {
             format!("Failed to read generated code for {}", yaml_path.display())
         })?;
 
         let processed_code = post_process_rust(&generated_code, &struct_name)?;
+        let restored_code = sentinel::restore_rust(&processed_code, &sentinel_table);
 
         let output_path = output_dir.join(format!("{}.rs", module_name));
-        fs::write(&output_path, processed_code)
+        fs::write(&output_path, restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
         modules.push((module_name, struct_name));
     }
 
-    // Generate mod.rs
     let mod_rs = generate_rust_mod_rs(&modules);
     let mod_path = output_dir.join("mod.rs");
     fs::write(&mod_path, mod_rs).context("Failed to write mod.rs")?;
@@ -331,13 +322,12 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
     for yaml_path in schema_files {
         tracing::info!("  Processing: {}", yaml_path.display());
 
-        let (module_name, class_name, json_path) = prepare_schema(yaml_path, temp_dir.path())?;
+        let (module_name, class_name, json_path, sentinel_table) =
+            prepare_schema(yaml_path, temp_dir.path())?;
 
-        // Create temp output dir
         let temp_python_out = temp_dir.path().join(format!("python_{}", module_name));
         fs::create_dir_all(&temp_python_out)?;
 
-        // Run jtd-codegen --python-out
         let output = Command::new("jtd-codegen")
             .arg("--python-out")
             .arg(&temp_python_out)
@@ -353,7 +343,6 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
             anyhow::bail!("jtd-codegen failed for {}: {}", yaml_path.display(), stderr);
         }
 
-        // Read generated Python file
         let generated_init = temp_python_out.join("__init__.py");
         let python_code = fs::read_to_string(&generated_init).with_context(|| {
             format!(
@@ -362,18 +351,17 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
             )
         })?;
 
-        // Post-process: add copyright header and enforce expected class name
         let processed_code = post_process_python(&python_code, &class_name);
+        let restored_code = sentinel::restore_python(&processed_code, &sentinel_table);
 
         let output_path = output_dir.join(format!("{}.py", module_name));
-        fs::write(&output_path, &processed_code)
+        fs::write(&output_path, &restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
         tracing::info!("    -> {}.py (class {})", module_name, class_name);
         modules.push((module_name, class_name));
     }
 
-    // Generate __init__.py
     let init_py = generate_python_init_py(&modules);
     let init_path = output_dir.join("__init__.py");
     fs::write(&init_path, &init_py).context("Failed to write __init__.py")?;
@@ -405,13 +393,12 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
     for yaml_path in schema_files {
         tracing::info!("  Processing: {}", yaml_path.display());
 
-        let (module_name, class_name, json_path) = prepare_schema(yaml_path, temp_dir.path())?;
+        let (module_name, class_name, json_path, sentinel_table) =
+            prepare_schema(yaml_path, temp_dir.path())?;
 
-        // Create temp output dir
         let temp_ts_out = temp_dir.path().join(format!("ts_{}", module_name));
         fs::create_dir_all(&temp_ts_out)?;
 
-        // Run jtd-codegen --typescript-out
         let output = Command::new("jtd-codegen")
             .arg("--typescript-out")
             .arg(&temp_ts_out)
@@ -427,7 +414,6 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
             anyhow::bail!("jtd-codegen failed for {}: {}", yaml_path.display(), stderr);
         }
 
-        // Read generated TypeScript file
         let generated_index = temp_ts_out.join("index.ts");
         let ts_code = fs::read_to_string(&generated_index).with_context(|| {
             format!(
@@ -436,18 +422,17 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
             )
         })?;
 
-        // Post-process: add copyright header
         let processed_code = post_process_typescript(&ts_code);
+        let restored_code = sentinel::restore_typescript(&processed_code, &sentinel_table);
 
         let output_path = output_dir.join(format!("{}.ts", module_name));
-        fs::write(&output_path, &processed_code)
+        fs::write(&output_path, &restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
         tracing::info!("    -> {}.ts (interface {})", module_name, class_name);
         modules.push((module_name, class_name));
     }
 
-    // Generate index.ts
     let index_ts = generate_typescript_index_ts(&modules);
     let index_path = output_dir.join("index.ts");
     fs::write(&index_path, &index_ts).context("Failed to write index.ts")?;
@@ -481,8 +466,6 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
 fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
     let lines: Vec<&str> = code.lines().collect();
 
-    // Collect all `pub struct` / `pub enum` names. jtd-codegen puts sub-types
-    // first and the root last, but we don't rely on that here.
     let struct_names: Vec<String> = lines
         .iter()
         .filter_map(|line| extract_decl_name(line, "pub struct "))
@@ -492,17 +475,9 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
         .filter_map(|line| extract_decl_name(line, "pub enum "))
         .collect();
 
-    // Detect discriminator (tagged) enum: `#[serde(tag = "…")]` immediately
-    // preceding a `pub enum Name`. The enum is the root of the schema, not
-    // any of the per-variant structs.
     let discriminator_enum_name = find_discriminator_enum_name(&lines);
     let is_discriminator = discriminator_enum_name.is_some();
 
-    // Root-rename pass: for plain struct schemas, jtd-codegen's last `pub
-    // struct` is the root and may be named something other than
-    // `expected_struct_name` (e.g. `Whep` vs `WebrtcWhepConfig`). Rewrite the
-    // text so the root name matches. Skip for discriminator schemas — their
-    // root is the enum, which already carries `expected_struct_name`.
     let rewritten;
     let code: &str = if !is_discriminator {
         let root_struct_name = struct_names.last();
@@ -524,11 +499,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
         code
     };
 
-    // Precompute name renames (full → short) so lines referencing a renamed
-    // type (e.g. enum variant references, field types) can be rewritten in a
-    // single pass. For discriminator schemas we leave variant payload struct
-    // names as-is (avoids `Ok`/`Err` collisions with std::result and keeps
-    // Rust output in step with Python/TS which also keep full names).
     let post_lines: Vec<&str> = code.lines().collect();
     let mut name_renames: Vec<(String, String)> = Vec::new();
     let discriminator_enum_ref = discriminator_enum_name.as_deref();
@@ -549,8 +519,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             }
         }
     }
-    // Sort renames by descending length of the full name so longer prefixes
-    // match first (prevents `Foo` rewriting the start of `FooBar`).
     name_renames.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
 
     let mut result = String::from(
@@ -567,7 +535,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
     let mut pending_attr_lines: Vec<String> = Vec::new();
 
     for (idx, line) in post_lines.iter().enumerate() {
-        // Skip the jtd-codegen version comment and chrono import.
         if line.starts_with("// Code generated by jtd-codegen") {
             continue;
         }
@@ -575,9 +542,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             continue;
         }
 
-        // Defer derive emission until we see the upcoming declaration — the
-        // derive bundle depends on declaration kind (struct / plain enum /
-        // discriminator enum).
         if line.contains("#[derive(Serialize, Deserialize)]")
             || line.contains("#[derive(Debug, Serialize, Deserialize)]")
         {
@@ -587,8 +551,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             continue;
         }
 
-        // Buffer attribute lines that sit between a deferred `#[derive(...)]`
-        // and the upcoming `pub struct`/`pub enum` (e.g. `#[serde(tag = "…")]`).
         if pending_decl_kind.is_some()
             && !line.starts_with("pub struct ")
             && !line.starts_with("pub enum ")
@@ -598,10 +560,15 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             continue;
         }
 
-        // Emit a struct declaration.
         if pending_decl_kind == Some(DeclKind::Struct) && line.starts_with("pub struct ") {
             let full_name = extract_decl_name(line, "pub struct ").unwrap_or_default();
             let short_name = rename_lookup(&name_renames, &full_name).unwrap_or(&full_name);
+
+            // Empty-struct-on-one-line case: jtd-codegen emits `pub struct X {}`
+            // when JTD declares `optionalProperties: {}` (decoder configs that
+            // take no knobs today). Treat it as a complete decl so the trailing
+            // `}` doesn't get dropped.
+            let is_empty_inline = line.trim_end().ends_with("{}");
 
             result.push_str(
                 "#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]\n",
@@ -611,15 +578,19 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
                 result.push('\n');
             }
             result.push_str("#[serde(deny_unknown_fields)]\n");
-            result.push_str(&format!("pub struct {} {{\n", short_name));
-            in_struct = true;
+            if is_empty_inline {
+                result.push_str(&format!("pub struct {} {{}}\n", short_name));
+                in_struct = false;
+            } else {
+                result.push_str(&format!("pub struct {} {{\n", short_name));
+                in_struct = true;
+            }
             in_enum = false;
             in_discriminator_enum = false;
             pending_decl_kind = None;
             continue;
         }
 
-        // Emit an enum declaration.
         if matches!(
             pending_decl_kind,
             Some(DeclKind::RegularEnum) | Some(DeclKind::DiscriminatorEnum)
@@ -630,7 +601,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             let is_disc_variant = pending_decl_kind == Some(DeclKind::DiscriminatorEnum);
 
             if is_disc_variant {
-                // Wire enum: explicit construction only, no Default.
                 result.push_str(
                     "#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]\n",
                 );
@@ -652,9 +622,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             continue;
         }
 
-        // Plain enums only: insert `#[default]` on the first real variant to
-        // satisfy the Default derive. Discriminator enums don't derive
-        // Default.
         if in_enum && !in_discriminator_enum && !marked_first_variant {
             let trimmed = line.trim();
             if !trimmed.is_empty()
@@ -667,7 +634,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             }
         }
 
-        // End of enum/struct.
         if line.trim() == "}" {
             if in_enum {
                 in_enum = false;
@@ -678,7 +644,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             }
         }
 
-        // Struct field: camelCase → snake_case, remove Box<>.
         if in_struct
             && line.starts_with("    pub ")
             && line.contains(": ")
@@ -703,10 +668,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
                 }
             }
 
-            // Strip the `Box<...>` that jtd-codegen wraps optional recursive
-            // field types in, but only touch `>>` that we actually opened —
-            // otherwise unrelated nested generics like
-            // `HashMap<String, Option<Value>>` lose their closing bracket.
             let boxed_count = processed_line.matches("Option<Box<").count();
             if boxed_count > 0 {
                 processed_line = processed_line.replace("Option<Box<", "Option<");
@@ -724,9 +685,6 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             continue;
         }
 
-        // Non-field lines (doc comments, enum variants, closing braces) —
-        // apply name renames so variant payload types reference the stripped
-        // type names.
         let mut processed_line = line.to_string();
         for (full_name, short_name) in &name_renames {
             processed_line = processed_line.replace(full_name.as_str(), short_name.as_str());
@@ -746,7 +704,6 @@ enum DeclKind {
     DiscriminatorEnum,
 }
 
-/// Look up the short form of a type name in the precomputed rename list.
 fn rename_lookup<'a>(
     renames: &'a [(String, String)],
     full_name: &str,
@@ -757,8 +714,6 @@ fn rename_lookup<'a>(
         .map(|(_, short)| short)
 }
 
-/// Peek forward from a `#[derive(...)]` line to determine what declaration
-/// kind follows. Stops at the first `pub struct` / `pub enum`.
 fn peek_decl_kind(
     lines: &[&str],
     derive_idx: usize,
@@ -780,16 +735,11 @@ fn peek_decl_kind(
     DeclKind::Struct
 }
 
-/// Find the first `pub enum` whose immediately-preceding attributes include
-/// `#[serde(tag = "…")]`. That enum is a discriminator (tagged) enum and is
-/// the schema root for JTD discriminator form.
 fn find_discriminator_enum_name(lines: &[&str]) -> Option<String> {
     for (i, line) in lines.iter().enumerate() {
         if !line.starts_with("pub enum ") {
             continue;
         }
-        // Walk backward through the contiguous run of attribute lines
-        // preceding this enum declaration.
         let mut j = i;
         while j > 0 {
             j -= 1;
@@ -805,7 +755,6 @@ fn find_discriminator_enum_name(lines: &[&str]) -> Option<String> {
     None
 }
 
-/// Extract the value of `tag = "…"` from a `#[serde(...)]` attribute line.
 fn extract_tag_attr(line: &str) -> Option<&str> {
     if !line.starts_with("#[serde(") {
         return None;
@@ -815,7 +764,6 @@ fn extract_tag_attr(line: &str) -> Option<&str> {
     Some(&after[..close_quote])
 }
 
-/// Extract the name from a `pub struct Foo` / `pub enum Foo` declaration line.
 fn extract_decl_name(line: &str, prefix: &str) -> Option<String> {
     let rest = line.strip_prefix(prefix)?;
     let name = rest.split([' ', '{']).next()?;
@@ -826,8 +774,6 @@ fn extract_decl_name(line: &str, prefix: &str) -> Option<String> {
     }
 }
 
-/// Strip `prefix` from `name` if `name` starts with it and is strictly longer.
-/// Returns `name` unchanged if the prefix doesn't apply.
 fn strip_prefix(name: &str, prefix: &str) -> String {
     if name != prefix && name.starts_with(prefix) && name.len() > prefix.len() {
         name[prefix.len()..].to_string()
@@ -836,8 +782,6 @@ fn strip_prefix(name: &str, prefix: &str) -> String {
     }
 }
 
-/// Replace a type name in a line only when it appears as an exact match
-/// (not as a prefix of a longer PascalCase name).
 fn replace_exact_type_name(line: &str, old_name: &str, new_name: &str) -> String {
     let mut result = String::new();
     let mut remaining = line;
@@ -847,10 +791,8 @@ fn replace_exact_type_name(line: &str, old_name: &str, new_name: &str) -> String
 
         let after = &remaining[pos + old_name.len()..];
 
-        // Check if the match is followed by an uppercase letter (part of a longer name)
         let next_char = after.chars().next();
         if next_char.map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
-            // This is a prefix of a longer name — don't replace
             result.push_str(old_name);
         } else {
             result.push_str(new_name);
@@ -863,7 +805,6 @@ fn replace_exact_type_name(line: &str, old_name: &str, new_name: &str) -> String
     result
 }
 
-/// Convert camelCase to snake_case.
 fn camel_to_snake(s: &str) -> String {
     let mut result = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -880,13 +821,6 @@ fn camel_to_snake(s: &str) -> String {
 }
 
 /// Post-process jtd-codegen Python output.
-///
-/// jtd-codegen's Python backend ignores `--root-name` and runs its own
-/// acronym-upcasing pass on the schema name (`api_server` → `APIServerConfig`,
-/// `http_config` → `HTTPConfig`, etc.), so the root class name drifts from
-/// what the generator config expects and from the Rust/TypeScript outputs.
-/// Rewrite the root class name so every language ends up with the same
-/// symbol.
 fn post_process_python(code: &str, expected_class_name: &str) -> String {
     let actual = find_python_root_class_name(code);
     let rewritten = match actual {
@@ -905,14 +839,6 @@ fn post_process_python(code: &str, expected_class_name: &str) -> String {
     )
 }
 
-/// Return the name of the root class in a jtd-codegen Python file.
-///
-/// For discriminator schemas, jtd-codegen emits the parent class first and
-/// variants that inherit from it afterwards (`class Variant(Root):`) — the
-/// root is whichever local class is referenced as a parent of another.
-///
-/// For plain schemas with sub-types, jtd-codegen emits the sub-types first
-/// and the root last, so the last top-level class is the root.
 fn find_python_root_class_name(code: &str) -> Option<String> {
     let mut classes: Vec<(String, Option<String>)> = Vec::new();
     for line in code.lines() {
@@ -965,7 +891,6 @@ fn post_process_typescript(code: &str) -> String {
 // Barrel file generation
 // =============================================================================
 
-/// Generate mod.rs for Rust.
 fn generate_rust_mod_rs(modules: &[(String, String)]) -> String {
     let mut content = String::from(
         "// Copyright (c) 2025 Jonathan Fontanez\n\
@@ -986,7 +911,6 @@ fn generate_rust_mod_rs(modules: &[(String, String)]) -> String {
     content
 }
 
-/// Generate __init__.py for Python.
 fn generate_python_init_py(modules: &[(String, String)]) -> String {
     let mut init_py = String::from(
         "# Copyright (c) 2025 Jonathan Fontanez\n\
@@ -1008,7 +932,6 @@ fn generate_python_init_py(modules: &[(String, String)]) -> String {
     init_py
 }
 
-/// Generate index.ts for TypeScript.
 fn generate_typescript_index_ts(modules: &[(String, String)]) -> String {
     let mut index_ts = String::from(
         "// Copyright (c) 2025 Jonathan Fontanez\n\
@@ -1028,12 +951,10 @@ fn generate_typescript_index_ts(modules: &[(String, String)]) -> String {
 // Name conversion helpers
 // =============================================================================
 
-/// Convert schema name to struct name (PascalCase).
 fn schema_name_to_struct_name(name: &str) -> String {
     let name = name.split('@').next().unwrap_or(name);
     let last_segment = name.split('.').next_back().unwrap_or(name);
 
-    // Handle special case for "config" suffix
     if last_segment == "config" {
         let segments: Vec<&str> = name.split('.').collect();
         if segments.len() >= 2 {
@@ -1042,7 +963,6 @@ fn schema_name_to_struct_name(name: &str) -> String {
         }
     }
 
-    // Handle channel suffixes like "1ch", "2ch"
     if last_segment
         .chars()
         .next()
@@ -1059,13 +979,11 @@ fn schema_name_to_struct_name(name: &str) -> String {
     to_pascal_case(last_segment)
 }
 
-/// Convert schema name to module name (full schema name with underscores).
 fn schema_name_to_module_name(name: &str) -> String {
     let name = name.split('@').next().unwrap_or(name);
     name.replace('.', "_").to_lowercase()
 }
 
-/// Convert to PascalCase.
 fn to_pascal_case(s: &str) -> String {
     let mut result = String::new();
     let mut capitalize_next = true;
@@ -1102,8 +1020,6 @@ mod tests {
 
     #[test]
     fn find_python_root_class_name_picks_last_for_plain_multiclass() {
-        // jtd-codegen emits sub-types first and the root last for plain
-        // schemas that have nested variant enums (e.g. WebrtcWhepConfig).
         let code = "class WebrtcWhepConfigWhep:\n    pass\nclass WebrtcWhepConfig:\n    pass\n";
         assert_eq!(
             find_python_root_class_name(code).as_deref(),
@@ -1113,8 +1029,6 @@ mod tests {
 
     #[test]
     fn find_python_root_class_name_picks_parent_for_discriminator() {
-        // For discriminator schemas the root is the parent class that
-        // variants inherit from.
         let code = "class EscalateRequest:\n    pass\nclass EscalateRequestAcquirePixelBuffer(EscalateRequest):\n    pass\n";
         assert_eq!(
             find_python_root_class_name(code).as_deref(),
@@ -1140,14 +1054,9 @@ mod tests {
     fn post_process_python_noop_when_names_match() {
         let code = "class WebrtcWhepConfig:\n    pass\n";
         let out = post_process_python(code, "WebrtcWhepConfig");
-        // Header added, body unchanged
         assert!(out.contains("class WebrtcWhepConfig:"));
         assert_eq!(out.matches("WebrtcWhepConfig").count(), 1);
     }
-
-    // ============================================================================
-    // Name conversion helpers — coverage added in the extraction PR (#400)
-    // ============================================================================
 
     #[test]
     fn schema_name_to_module_name_strips_version_suffix() {
@@ -1190,7 +1099,6 @@ mod tests {
 
     #[test]
     fn to_pascal_case_with_digits() {
-        // Digits force the next letter to uppercase.
         assert_eq!(to_pascal_case("h264_encoder"), "H264Encoder");
     }
 
@@ -1203,22 +1111,17 @@ mod tests {
 
     #[test]
     fn strip_prefix_only_when_strictly_longer() {
-        // Same-name input is left alone (the root struct itself).
         assert_eq!(strip_prefix("Foo", "Foo"), "Foo");
-        // Strict prefix is stripped.
         assert_eq!(strip_prefix("FooBar", "Foo"), "Bar");
-        // Non-prefix is left alone.
         assert_eq!(strip_prefix("Bar", "Foo"), "Bar");
     }
 
     #[test]
     fn replace_exact_type_name_skips_camelcase_neighbors() {
-        // `Foo` followed by uppercase is part of a longer name — leave alone.
         assert_eq!(
             replace_exact_type_name("FooBar field: Foo;", "Foo", "Renamed"),
             "FooBar field: Renamed;"
         );
-        // `Foo` in non-PascalCase context — replace.
         assert_eq!(
             replace_exact_type_name("type Foo;", "Foo", "Renamed"),
             "type Renamed;"

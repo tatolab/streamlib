@@ -19,7 +19,10 @@ clap = { version = "4.5", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-toml = { workspace = true }
+
+# Resolver + manifest types (the codegen pipeline ingests resolved package
+# sets produced by the streamlib-yaml resolver — Decision 7 of milestone 10).
+streamlib-idents = { path = "../streamlib-idents" }
 
 # Logging — library crates emit through tracing per docs/logging.md;
 # binary callers (xtask, streamlib-cli) initialize a subscriber.

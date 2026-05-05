@@ -3,6 +3,7 @@
 
 //! Generated from JTD schema using jtd-codegen. DO NOT EDIT.
 
+
 use serde::{Deserialize, Serialize};
 
 /// Configuration for camera capture (macOS/iOS)
@@ -11,14 +12,17 @@ use serde::{Deserialize, Serialize};
 pub struct CameraConfig {
     /// Camera device unique ID. If None, uses default camera
     #[serde(rename = "device_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
 
     /// Maximum frames per second (ceiling). If None, uses main display refresh
     /// rate
     #[serde(rename = "max_fps")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_fps: Option<f64>,
 
     /// Minimum frames per second (floor). Default: 60.0
     #[serde(rename = "min_fps")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub min_fps: Option<f64>,
 }

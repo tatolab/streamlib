@@ -1,6 +1,47 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
+# Schema YAML files this package owns. Drives the JTD-codegen pipeline
+# (`cargo xtask generate-schemas --project-dir libs/streamlib`) and the
+# build-script-generated embedded-schemas lookup. Replaces the legacy
+# `[package.metadata.streamlib].schemas` block in Cargo.toml (#402).
+schemas:
+  # Wire vocabulary (data types).
+  - schemas/com.tatolab.videoframe.yaml
+  - schemas/com.tatolab.audioframe.yaml
+  - schemas/com.tatolab.encodedvideoframe.yaml
+  - schemas/com.tatolab.encodedaudioframe.yaml
+  # Processor config schemas.
+  - schemas/com.streamlib.api_server.config@1.0.0.yaml
+  - schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
+  - schemas/com.streamlib.clap.effect.config@1.0.0.yaml
+  - schemas/com.streamlib.h264_decoder.config@1.0.0.yaml
+  - schemas/com.streamlib.h264_encoder.config@1.0.0.yaml
+  - schemas/com.streamlib.h265_decoder.config@1.0.0.yaml
+  - schemas/com.streamlib.h265_encoder.config@1.0.0.yaml
+  - schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml
+  - schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml
+  - schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml
+  - schemas/com.streamlib.opus_decoder.config@1.0.0.yaml
+  - schemas/com.streamlib.opus_encoder.config@1.0.0.yaml
+  - schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
+  - schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml
+  - schemas/com.tatolab.audio_capture.config@1.0.0.yaml
+  - schemas/com.tatolab.audio_channel_converter.config@1.0.0.yaml
+  - schemas/com.tatolab.audio_mixer.config@1.0.0.yaml
+  - schemas/com.tatolab.audio_output.config@1.0.0.yaml
+  - schemas/com.tatolab.audio_resampler.config@1.0.0.yaml
+  - schemas/com.tatolab.buffer_rechunker.config@1.0.0.yaml
+  - schemas/com.tatolab.camera.config@1.0.0.yaml
+  - schemas/com.tatolab.chord_generator.config@1.0.0.yaml
+  - schemas/com.tatolab.display.config@1.0.0.yaml
+  - schemas/com.tatolab.mp4_writer.config@1.0.0.yaml
+  - schemas/com.tatolab.screen_capture.config@1.0.0.yaml
+  - schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml
+  # Polyglot escalate IPC wire schemas (discriminator form).
+  - schemas/com.streamlib.escalate_request@1.0.0.yaml
+  - schemas/com.streamlib.escalate_response@1.0.0.yaml
+
 processors:
   # === Apple platform processors ===
 

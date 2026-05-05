@@ -25,7 +25,8 @@ export interface ApiServerConfig {
   log_path?: string;
 
   /**
-   * Runtime name for surface-share registration (auto-generated if not provided)
+   * Runtime name for surface-share registration (auto-generated if not
+   * provided)
    */
   name?: string;
 }

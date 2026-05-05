@@ -42,10 +42,15 @@ class Videoframe:
     Frame width in pixels
     """
 
-    texture_layout: 'Optional[int]' = None
+    fps: 'Optional[int]'
     """
-    Producer's published VkImageLayout for this frame's texture (#633).
-    Per-frame override of the per-surface current_image_layout published via
+    Source frame rate in frames per second (set by capture device)
+    """
+
+    texture_layout: 'Optional[int]'
+    """
+    Producer's published VkImageLayout for this frame's texture (#633). Per-
+    frame override of the per-surface current_image_layout published via
     surface-share register/update_layout. Encoded as the raw int32 VkImageLayout
     enumerant. Absent when the producer relies on the per-surface default.
     """
@@ -59,7 +64,8 @@ class Videoframe:
             _from_json_data(str, data.get("surface_id")),
             _from_json_data(str, data.get("timestamp_ns")),
             _from_json_data(int, data.get("width")),
-            _from_json_data(Optional[int], data.get("texture_layout")) if "texture_layout" in data else None,
+            _from_json_data(Optional[int], data.get("fps")),
+            _from_json_data(Optional[int], data.get("texture_layout")),
         )
 
     def to_json_data(self) -> Any:
@@ -69,8 +75,10 @@ class Videoframe:
         data["surface_id"] = _to_json_data(self.surface_id)
         data["timestamp_ns"] = _to_json_data(self.timestamp_ns)
         data["width"] = _to_json_data(self.width)
+        if self.fps is not None:
+             data["fps"] = _to_json_data(self.fps)
         if self.texture_layout is not None:
-            data["texture_layout"] = _to_json_data(self.texture_layout)
+             data["texture_layout"] = _to_json_data(self.texture_layout)
         return data
 
 def _from_json_data(cls: Any, data: Any) -> Any:

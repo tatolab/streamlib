@@ -209,68 +209,26 @@ required-features = []
 tonic-build = "0.12"
 prost-build = "0.13"
 
+# Build script reads `streamlib.yaml` to generate the embedded-schemas
+# lookup table (#402). Replaces the hand-curated match in
+# `src/core/embedded_schemas.rs` with a build-time-generated table.
+[build-dependencies]
+serde_yaml = { workspace = true }
+
 [package.metadata.docs.rs]
 # Generate docs for all platforms and features
 all-features = true
 targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 
-[package.metadata.streamlib]
-# Data type schemas (JTD format)
-schemas = [
-    "schemas/com.tatolab.videoframe.yaml",
-    "schemas/com.tatolab.audioframe.yaml",
-    "schemas/com.tatolab.encodedvideoframe.yaml",
-    "schemas/com.tatolab.encodedaudioframe.yaml",
-    # Config schemas (JTD format)
-    "schemas/com.streamlib.api_server.config@1.0.0.yaml",
-    "schemas/com.streamlib.clap.effect.config@1.0.0.yaml",
-    "schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml",
-    "schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml",
-    "schemas/com.tatolab.audio_capture.config@1.0.0.yaml",
-    "schemas/com.tatolab.audio_channel_converter.config@1.0.0.yaml",
-    "schemas/com.tatolab.audio_mixer.config@1.0.0.yaml",
-    "schemas/com.tatolab.audio_output.config@1.0.0.yaml",
-    "schemas/com.tatolab.audio_resampler.config@1.0.0.yaml",
-    "schemas/com.tatolab.buffer_rechunker.config@1.0.0.yaml",
-    "schemas/com.tatolab.camera.config@1.0.0.yaml",
-    "schemas/com.tatolab.chord_generator.config@1.0.0.yaml",
-    "schemas/com.tatolab.display.config@1.0.0.yaml",
-    "schemas/com.tatolab.mp4_writer.config@1.0.0.yaml",
-    "schemas/com.tatolab.screen_capture.config@1.0.0.yaml",
-    "schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml",
-    "schemas/com.streamlib.h264_encoder.config@1.0.0.yaml",
-    "schemas/com.streamlib.h264_decoder.config@1.0.0.yaml",
-    "schemas/com.streamlib.h265_encoder.config@1.0.0.yaml",
-    "schemas/com.streamlib.h265_decoder.config@1.0.0.yaml",
-    "schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml",
-    "schemas/com.streamlib.opus_encoder.config@1.0.0.yaml",
-    "schemas/com.streamlib.opus_decoder.config@1.0.0.yaml",
-    "schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml",
-    "schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml",
-    # Polyglot escalate IPC wire schemas (discriminator form)
-    "schemas/com.streamlib.escalate_request@1.0.0.yaml",
-    "schemas/com.streamlib.escalate_response@1.0.0.yaml",
-]
-
-# Processor schemas (co-located with Rust source)
-processors = [
-    "src/apple/processors/audio_capture.yaml",
-    "src/apple/processors/audio_output.yaml",
-    "src/apple/processors/camera.yaml",
-    "src/apple/processors/display.yaml",
-    "src/apple/processors/mp4_writer.yaml",
-    "src/apple/processors/screen_capture.yaml",
-    "src/core/processors/api_server.yaml",
-    "src/core/processors/audio_channel_converter.yaml",
-    "src/core/processors/audio_mixer.yaml",
-    "src/core/processors/audio_resampler.yaml",
-    "src/core/processors/buffer_rechunker.yaml",
-    "src/core/processors/chord_generator.yaml",
-    "src/core/processors/clap_effect.yaml",
-    "src/core/processors/simple_passthrough.yaml",
-    "src/core/processors/webrtc_whep.yaml",
-    "src/core/processors/webrtc_whip.yaml",
-]
+# [package.metadata.streamlib] removed in #402.
+# Schema list moved to `streamlib.yaml` (the single source of truth for
+# this package's schemas + dependencies). The `processors` array that
+# previously lived here referenced YAML files that did not exist on disk
+# — dead config, removed without replacement. Inline processor definitions
+# remain in `streamlib.yaml`'s `processors:` block.
+#
+# CI lint (`cargo xtask check-no-streamlib-metadata`, #402) rejects
+# re-introduction of this block.
 
 # MCP Server Binary removed - needs redesign for Phase 1
 # [[bin]]

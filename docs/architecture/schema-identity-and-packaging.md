@@ -2,11 +2,12 @@
 
 > **Living document.** Validate, update, critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
-> Reflects code state as of 2026-05-04 (PR for issue #399 — first
-> deliverable of milestone 10, *Schema Identity & Packaging*). The full
-> migration is staged across multiple PRs (#400, #401, #402, #404, plus
-> the 12 carve-out package issues); claims about *current* code are
-> point-in-time and stale fast.
+> Reflects code state as of 2026-05-05. Initial doc landed with #399;
+> #400 extracted `streamlib-jtd-codegen` and added `streamlib generate`;
+> #402 landed the resolver + lockfile + sentinel-substitution codegen
+> + cutover off legacy `[package.metadata.streamlib]` etc. The 12
+> carve-out packages and the wire-format migration (#404) remain ahead;
+> claims about *current* code are point-in-time and stale fast.
 
 ## Status
 
@@ -377,10 +378,15 @@ Then the generated files are written to each consumer's `_generated_/`
 directory. The `verify-schemas` gate re-runs the whole pipeline on
 CI and asserts byte-identical output.
 
-The `streamlib-jtd-codegen` crate (extracted by #400) owns this pipeline.
-The `streamlib-idents` crate (this PR) owns the structured types
-the pipeline reads and writes (`SchemaIdent`, `SemVer`,
-`PackageManifest`, `Lockfile`).
+The `streamlib-jtd-codegen` crate (extracted by #400, sentinel +
+ordering passes added in #402) owns this pipeline. The `streamlib-idents`
+crate owns the structured types the pipeline reads and writes
+(`SchemaIdent`, `SemVer`, `Manifest`, `PackageMetadata`, `Lockfile`)
+and the resolver that walks `streamlib.yaml` (`resolve`,
+`ResolvedPackages`, added in #402; superseded the original
+`PackageManifest` + `ProjectManifest` split with one unified
+`Manifest` type that tolerates runtime-side fields like `processors:`
+without `deny_unknown_fields` rejection).
 
 ## Anti-patterns
 
@@ -670,32 +676,68 @@ the cross-language need.
 
 - **Implementation**:
   - `libs/streamlib-idents/` — `SchemaIdent`, `SemVer`, `SemVerRange`,
-    `PackageManifest`, `ProjectManifest`, `Lockfile`.
-  - `xtask/src/check_schema_versions.rs` — CI lint.
-  - `.github/workflows/check-schema-versions.yml` — CI gate.
-- **Issue**: #399 — this PR.
+    `Manifest`, `PackageMetadata`, `Lockfile`. The `streamlib.yaml`
+    resolver (`resolve`, `resolve_with`, `ResolvedPackages`) lives here
+    too and walks path / git / `.slpkg` sources; the lockfile writer
+    (`write_lockfile`, `read_lockfile`) and `compute_content_hash`
+    helper are siblings of the resolver (#402).
+  - `libs/streamlib-jtd-codegen/` — three-pass codegen pipeline.
+    `sentinel.rs` substitutes cross-package refs with deterministic
+    sentinels and restores them as native imports; `ordering.rs`
+    stable-sorts every JSON object key before invoking `jtd-codegen`
+    (#402). Public entry `generate(GenerateOptions { project_dir, ... })`
+    drives `streamlib.yaml`-mode end-to-end; `generate_from_resolved`
+    is the lower-level entry for callers that already ran the resolver.
+  - `libs/streamlib/build.rs` — generates `embedded_schemas_table.rs`
+    in `OUT_DIR` from `streamlib.yaml`'s `schemas:` list, replacing
+    the hand-curated 21-arm match in `core/embedded_schemas.rs` (#402).
+  - `xtask/src/check_schema_versions.rs` — CI lint (no per-schema
+    `version` keys in YAML, #399).
+  - `xtask/src/check_no_streamlib_metadata.rs` — CI lint
+    (no `[package.metadata.streamlib]`, no `[tool.streamlib]`, no
+    top-level `streamlib` key in `deno.json` / `deno.jsonc`, #402).
+  - `.github/workflows/check-schema-versions.yml` — #399 CI gate.
+  - `.github/workflows/check-no-streamlib-metadata.yml` — #402 CI gate.
+- **Issues**: #399 (foundation), #400 (codegen extraction), #402
+  (resolver + cutover).
 - **Milestone**: [Schema Identity & Packaging (10)][m10] — freshness
   anchor for in-flight design.
 - **Tests**:
-  - `libs/streamlib-idents/src/{ident,semver,manifest,lockfile}.rs::tests`
+  - `libs/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
     — unit tests covering grammar conformance, semver-range matching,
-    typed deserialization, lockfile round-trip + diff stability.
+    typed deserialization, lockfile round-trip + diff stability,
+    content-hash determinism, and resolver scenarios (path / `.slpkg`
+    / transitive / diamond / id-mismatch / registry-not-implemented).
   - `libs/streamlib-idents/src/ident.rs` — `compile_fail` doctests on
-    each identifier type that lock the no-`parse`-API invariant
-    (proven real: temporarily add `pub fn parse(_: &str) -> Self` to
-    `SchemaIdent` and `cargo test --doc` reports
-    "Test compiled successfully, but it's marked `compile_fail`").
+    each identifier type that lock the no-`parse`-API invariant.
   - `libs/streamlib-idents/tests/no_parse_api.rs` — positive
     counterpart: locks the *allowed* construction pathways and
     asserts joined-string deserialization fails.
-  - `xtask/src/check_schema_versions.rs::tests` — fixture tests +
-    workspace smoke test.
+  - `libs/streamlib-jtd-codegen/src/{sentinel,ordering}.rs::tests`
+    — pre-pass / post-pass coverage for sentinel substitution,
+    deterministic property ordering, and per-language restore
+    (Rust / Python / TypeScript).
+  - `libs/streamlib/src/core/embedded_schemas.rs::tests` — table
+    populated from `streamlib.yaml`, no duplicate names, sorted output.
+  - `xtask/src/check_schema_versions.rs::tests` — #399 lint fixtures.
+  - `xtask/src/check_no_streamlib_metadata.rs::tests` — #402 lint
+    fixtures (passes-on-clean, fails-on-each-of-the-three-block-types,
+    skips `target/` and `_generated_/`).
+- **Closed**:
+  - #399 — foundation (`SchemaIdent`, `SemVer`, structural manifest /
+    lockfile types, no-`parse`-API doctests, schema-version CI lint).
+  - #400 — `streamlib-jtd-codegen` crate extraction + `streamlib generate`
+    CLI.
+  - #402 — resolver + lockfile + sentinel-substitution codegen +
+    cutover off legacy `[package.metadata.streamlib]`.
 - **Future research / follow-ups**:
-  - #400 (`streamlib-jtd-codegen` crate + CLI).
   - #401 (macros + example string migration).
-  - #402 (resolver + lockfile + cutover off legacy metadata).
   - #404 (`@tatolab/core` + IPC wire migration).
   - 12 carve-out package issues.
+  - Decision 8's `streamlib verify-schemas` CI determinism gate is
+    not yet implemented — separate follow-up. The resolver +
+    content-hashed lockfile (#402) are the load-bearing primitive
+    the gate will sit on.
 - **Sibling architecture docs**:
   - [`compute-kernel.md`](compute-kernel.md), [`graphics-kernel.md`](graphics-kernel.md),
     [`ray-tracing-kernel.md`](ray-tracing-kernel.md) — the kernel-shape
