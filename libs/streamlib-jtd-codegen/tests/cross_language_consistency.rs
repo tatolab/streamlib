@@ -77,6 +77,22 @@ fn field_order_consistent_across_runtimes_for_h264_encoder_config() {
     let py_fields = extract_python_dataclass_fields(&py_code);
     let ts_fields = extract_typescript_interface_fields(&ts_code);
 
+    // Catch a parser regression separately from an ordering regression: an
+    // empty list means the line-based extractor stopped matching the emit
+    // shape, not that the codegen produced an empty struct.
+    assert!(
+        !rust_fields.is_empty(),
+        "rust field-name parser found no fields — emit shape may have changed"
+    );
+    assert!(
+        !py_fields.is_empty(),
+        "python field-name parser found no fields — emit shape may have changed"
+    );
+    assert!(
+        !ts_fields.is_empty(),
+        "typescript field-name parser found no fields — emit shape may have changed"
+    );
+
     assert_eq!(
         rust_fields, EXPECTED_FIELDS,
         "rust field order differs from JTD lexicographic order"
