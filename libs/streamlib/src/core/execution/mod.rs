@@ -5,6 +5,6 @@
 
 pub mod thread_runner;
 
-// Re-export from streamlib-codegen-shared (shared with macros crate)
-pub use streamlib_codegen_shared::{ExecutionConfig, ProcessExecution, ThreadPriority};
+// Re-export from streamlib-processor-schema (shared with macros crate)
+pub use streamlib_processor_schema::{ExecutionConfig, ProcessExecution, ThreadPriority};
 pub use thread_runner::run_processor_loop;

@@ -57,7 +57,7 @@ pub async fn install(source: &str) -> Result<()> {
     for processor in &config.processors {
         if matches!(
             processor.runtime.language,
-            streamlib_codegen_shared::ProcessorLanguage::Python
+            streamlib_processor_schema::ProcessorLanguage::Python
         ) {
             println!("  Setting up Python venv for {}...", processor.name);
             streamlib::core::compiler::compiler_ops::ensure_processor_venv(

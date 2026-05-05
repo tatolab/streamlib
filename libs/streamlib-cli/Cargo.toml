@@ -19,7 +19,10 @@ path = "src/main.rs"
 streamlib = { path = "../streamlib" }
 
 # Schema types (processor YAML parsing)
-streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema" }
+
+# JTD-codegen pipeline (drives `streamlib generate`)
+streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen" }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive"] }

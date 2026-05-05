@@ -19,7 +19,7 @@ serde = { workspace = true }
 serde_yaml = { workspace = true }
 
 # Execution types (shared with streamlib for code generation)
-streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema" }
 
 
 [dev-dependencies]

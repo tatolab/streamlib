@@ -1,21 +1,75 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Generate code from JTD schemas using jtd-codegen for all languages.
+//! JTD-codegen pipeline: schema YAML files → typed Rust/Python/TypeScript bindings.
 //!
-//! All three languages (Rust, Python, TypeScript) use the same pipeline:
-//! 1. Read schema YAML files
-//! 2. Convert YAML → JSON
-//! 3. Call jtd-codegen with the appropriate --{language}-out flag
-//! 4. Post-process output (copyright headers, derives, etc.)
+//! All three languages share the same shape:
+//! 1. Resolve schema YAML files (from a project file, single file, or directory)
+//! 2. Convert each YAML schema → JSON
+//! 3. Invoke `jtd-codegen` with the language-specific output flag
+//! 4. Post-process output (copyright headers, naming fixups, derives, etc.)
+//! 5. Emit a barrel module file (`mod.rs` / `__init__.py` / `index.ts`)
+//!
+//! Public entry point: [`generate`].
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::RuntimeTarget;
+/// Target runtime language for schema code generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RuntimeTarget {
+    Rust,
+    Python,
+    Typescript,
+}
+
+/// Options for [`generate`].
+pub struct GenerateOptions {
+    /// Target runtime language.
+    pub runtime: RuntimeTarget,
+    /// Output directory for generated bindings.
+    pub output: PathBuf,
+    /// Read schema list from a project file (`Cargo.toml` or `pyproject.toml`).
+    pub project_file: Option<PathBuf>,
+    /// Process a single schema file.
+    pub schema_file: Option<PathBuf>,
+    /// Process all `.yaml` files in a directory.
+    pub schema_dir: Option<PathBuf>,
+    /// Workspace root used to resolve project-file-relative schema paths.
+    pub workspace_root: PathBuf,
+}
+
+/// Run the JTD-codegen pipeline.
+pub fn generate(opts: GenerateOptions) -> Result<()> {
+    let GenerateOptions {
+        runtime,
+        output,
+        project_file,
+        schema_file,
+        schema_dir,
+        workspace_root,
+    } = opts;
+
+    let schema_files =
+        resolve_schema_files(&workspace_root, project_file, schema_file, schema_dir)?;
+
+    if schema_files.is_empty() {
+        tracing::info!("No schemas found");
+        return Ok(());
+    }
+
+    tracing::info!("Found {} schemas", schema_files.len());
+
+    match runtime {
+        RuntimeTarget::Rust => run_jtd_codegen_rust(&schema_files, &output),
+        RuntimeTarget::Python => run_jtd_codegen_python(&schema_files, &output),
+        RuntimeTarget::Typescript => run_jtd_codegen_typescript(&schema_files, &output),
+    }
+}
 
 /// Cargo.toml structure for reading metadata.
 #[derive(Deserialize)]
@@ -66,33 +120,6 @@ struct JtdSchema {
 #[derive(Debug, Deserialize)]
 struct JtdMetadata {
     name: String,
-}
-
-pub fn run(
-    runtime: RuntimeTarget,
-    output: PathBuf,
-    project_file: Option<PathBuf>,
-    schema_file: Option<PathBuf>,
-    schema_dir: Option<PathBuf>,
-) -> Result<()> {
-    let workspace_root = crate::workspace_root()?;
-
-    // Resolve input schemas
-    let schema_files =
-        resolve_schema_files(&workspace_root, project_file, schema_file, schema_dir)?;
-
-    if schema_files.is_empty() {
-        println!("No schemas found");
-        return Ok(());
-    }
-
-    println!("Found {} schemas", schema_files.len());
-
-    match runtime {
-        RuntimeTarget::Rust => run_jtd_codegen_rust(&schema_files, &output),
-        RuntimeTarget::Python => run_jtd_codegen_python(&schema_files, &output),
-        RuntimeTarget::Typescript => run_jtd_codegen_typescript(&schema_files, &output),
-    }
 }
 
 /// Resolve schema YAML files from one of three input modes.
@@ -146,7 +173,7 @@ fn read_schema_paths(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| workspace_root.to_path_buf());
 
-    println!("Reading schemas from: {}", source_path.display());
+    tracing::info!("Reading schemas from: {}", source_path.display());
 
     let content = fs::read_to_string(&source_path)
         .with_context(|| format!("Failed to read {}", source_path.display()))?;
@@ -233,7 +260,7 @@ fn run_jtd_codegen_rust(schema_files: &[PathBuf], output_dir: &Path) -> Result<(
     let mut modules = Vec::new();
 
     for yaml_path in schema_files {
-        println!("  Processing: {}", yaml_path.display());
+        tracing::info!("  Processing: {}", yaml_path.display());
 
         let (module_name, struct_name, json_path) = prepare_schema(yaml_path, temp_dir.path())?;
 
@@ -277,7 +304,7 @@ fn run_jtd_codegen_rust(schema_files: &[PathBuf], output_dir: &Path) -> Result<(
     let mod_path = output_dir.join("mod.rs");
     fs::write(&mod_path, mod_rs).context("Failed to write mod.rs")?;
 
-    println!(
+    tracing::info!(
         "Generated {} Rust modules in {}",
         modules.len(),
         output_dir.display()
@@ -302,7 +329,7 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
     let mut modules: Vec<(String, String)> = Vec::new();
 
     for yaml_path in schema_files {
-        println!("  Processing: {}", yaml_path.display());
+        tracing::info!("  Processing: {}", yaml_path.display());
 
         let (module_name, class_name, json_path) = prepare_schema(yaml_path, temp_dir.path())?;
 
@@ -342,7 +369,7 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
         fs::write(&output_path, &processed_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
-        println!("    -> {}.py (class {})", module_name, class_name);
+        tracing::info!("    -> {}.py (class {})", module_name, class_name);
         modules.push((module_name, class_name));
     }
 
@@ -351,7 +378,7 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
     let init_path = output_dir.join("__init__.py");
     fs::write(&init_path, &init_py).context("Failed to write __init__.py")?;
 
-    println!(
+    tracing::info!(
         "Generated {} Python modules in {}",
         modules.len(),
         output_dir.display()
@@ -376,7 +403,7 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
     let mut modules: Vec<(String, String)> = Vec::new();
 
     for yaml_path in schema_files {
-        println!("  Processing: {}", yaml_path.display());
+        tracing::info!("  Processing: {}", yaml_path.display());
 
         let (module_name, class_name, json_path) = prepare_schema(yaml_path, temp_dir.path())?;
 
@@ -416,7 +443,7 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
         fs::write(&output_path, &processed_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
-        println!("    -> {}.ts (interface {})", module_name, class_name);
+        tracing::info!("    -> {}.ts (interface {})", module_name, class_name);
         modules.push((module_name, class_name));
     }
 
@@ -425,7 +452,7 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
     let index_path = output_dir.join("index.ts");
     fs::write(&index_path, &index_ts).context("Failed to write index.ts")?;
 
-    println!(
+    tracing::info!(
         "Generated {} TypeScript modules in {}",
         modules.len(),
         output_dir.display()
@@ -1038,6 +1065,28 @@ fn schema_name_to_module_name(name: &str) -> String {
     name.replace('.', "_").to_lowercase()
 }
 
+/// Convert to PascalCase.
+fn to_pascal_case(s: &str) -> String {
+    let mut result = String::new();
+    let mut capitalize_next = true;
+
+    for c in s.chars() {
+        if c == '_' || c == '-' {
+            capitalize_next = true;
+        } else if c.is_ascii_digit() {
+            result.push(c);
+            capitalize_next = true;
+        } else if capitalize_next {
+            result.push(c.to_ascii_uppercase());
+            capitalize_next = false;
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1095,26 +1144,139 @@ mod tests {
         assert!(out.contains("class WebrtcWhepConfig:"));
         assert_eq!(out.matches("WebrtcWhepConfig").count(), 1);
     }
-}
 
-/// Convert to PascalCase.
-fn to_pascal_case(s: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = true;
+    // ============================================================================
+    // Name conversion helpers — coverage added in the extraction PR (#400)
+    // ============================================================================
 
-    for c in s.chars() {
-        if c == '_' || c == '-' {
-            capitalize_next = true;
-        } else if c.is_ascii_digit() {
-            result.push(c);
-            capitalize_next = true;
-        } else if capitalize_next {
-            result.push(c.to_ascii_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(c);
-        }
+    #[test]
+    fn schema_name_to_module_name_strips_version_suffix() {
+        assert_eq!(
+            schema_name_to_module_name("com.tatolab.videoframe@1.0.0"),
+            "com_tatolab_videoframe"
+        );
     }
 
-    result
+    #[test]
+    fn schema_name_to_module_name_handles_no_version() {
+        assert_eq!(
+            schema_name_to_module_name("com.tatolab.simple_passthrough.config"),
+            "com_tatolab_simple_passthrough_config"
+        );
+    }
+
+    #[test]
+    fn schema_name_to_struct_name_handles_config_suffix() {
+        assert_eq!(
+            schema_name_to_struct_name("com.tatolab.camera.config@1.0.0"),
+            "CameraConfig"
+        );
+    }
+
+    #[test]
+    fn schema_name_to_struct_name_handles_plain() {
+        assert_eq!(
+            schema_name_to_struct_name("com.tatolab.videoframe@1.0.0"),
+            "Videoframe"
+        );
+    }
+
+    #[test]
+    fn to_pascal_case_basic() {
+        assert_eq!(to_pascal_case("hello_world"), "HelloWorld");
+        assert_eq!(to_pascal_case("hello-world"), "HelloWorld");
+        assert_eq!(to_pascal_case("hello"), "Hello");
+    }
+
+    #[test]
+    fn to_pascal_case_with_digits() {
+        // Digits force the next letter to uppercase.
+        assert_eq!(to_pascal_case("h264_encoder"), "H264Encoder");
+    }
+
+    #[test]
+    fn camel_to_snake_basic() {
+        assert_eq!(camel_to_snake("camelCase"), "camel_case");
+        assert_eq!(camel_to_snake("HTTPServer"), "h_t_t_p_server");
+        assert_eq!(camel_to_snake("snake_case"), "snake_case");
+    }
+
+    #[test]
+    fn strip_prefix_only_when_strictly_longer() {
+        // Same-name input is left alone (the root struct itself).
+        assert_eq!(strip_prefix("Foo", "Foo"), "Foo");
+        // Strict prefix is stripped.
+        assert_eq!(strip_prefix("FooBar", "Foo"), "Bar");
+        // Non-prefix is left alone.
+        assert_eq!(strip_prefix("Bar", "Foo"), "Bar");
+    }
+
+    #[test]
+    fn replace_exact_type_name_skips_camelcase_neighbors() {
+        // `Foo` followed by uppercase is part of a longer name — leave alone.
+        assert_eq!(
+            replace_exact_type_name("FooBar field: Foo;", "Foo", "Renamed"),
+            "FooBar field: Renamed;"
+        );
+        // `Foo` in non-PascalCase context — replace.
+        assert_eq!(
+            replace_exact_type_name("type Foo;", "Foo", "Renamed"),
+            "type Renamed;"
+        );
+    }
+
+    #[test]
+    fn extract_decl_name_handles_struct_and_enum() {
+        assert_eq!(
+            extract_decl_name("pub struct Foo {", "pub struct ").as_deref(),
+            Some("Foo")
+        );
+        assert_eq!(
+            extract_decl_name("pub enum Bar {", "pub enum ").as_deref(),
+            Some("Bar")
+        );
+        assert_eq!(extract_decl_name("fn other()", "pub struct "), None);
+    }
+
+    #[test]
+    fn extract_tag_attr_finds_serde_tag() {
+        assert_eq!(
+            extract_tag_attr("#[serde(tag = \"op\")]"),
+            Some("op")
+        );
+        assert_eq!(extract_tag_attr("#[derive(Debug)]"), None);
+    }
+
+    #[test]
+    fn generate_rust_mod_rs_emits_pub_mod_and_pub_use() {
+        let modules = vec![
+            ("foo".to_string(), "Foo".to_string()),
+            ("bar_baz".to_string(), "BarBaz".to_string()),
+        ];
+        let out = generate_rust_mod_rs(&modules);
+        assert!(out.contains("pub mod foo;"));
+        assert!(out.contains("pub mod bar_baz;"));
+        assert!(out.contains("pub use foo::Foo;"));
+        assert!(out.contains("pub use bar_baz::BarBaz;"));
+    }
+
+    #[test]
+    fn generate_python_init_py_emits_imports_and_all() {
+        let modules = vec![
+            ("foo".to_string(), "Foo".to_string()),
+            ("bar".to_string(), "Bar".to_string()),
+        ];
+        let out = generate_python_init_py(&modules);
+        assert!(out.contains("from .foo import Foo"));
+        assert!(out.contains("from .bar import Bar"));
+        assert!(out.contains("\"Foo\""));
+        assert!(out.contains("\"Bar\""));
+    }
+
+    #[test]
+    fn generate_typescript_index_ts_emits_re_exports() {
+        let modules = vec![("foo".to_string(), "Foo".to_string())];
+        let out = generate_typescript_index_ts(&modules);
+        assert!(out.contains("export * from \"./foo.ts\";"));
+    }
 }

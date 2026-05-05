@@ -1,0 +1,35 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-jtd-codegen"
+description = "JTD-codegen pipeline: schema YAML files → typed Rust/Python/TypeScript bindings"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+# CLI binding (RuntimeTarget derives clap::ValueEnum so xtask + streamlib-cli
+# can use it as a clap argument directly)
+clap = { version = "4.5", features = ["derive"] }
+
+# Manifest and schema parsing
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+toml = { workspace = true }
+
+# Logging — library crates emit through tracing per docs/logging.md;
+# binary callers (xtask, streamlib-cli) initialize a subscriber.
+tracing = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Temp directory for jtd-codegen invocation
+tempfile = "3.15"
+
+[lints]
+workspace = true

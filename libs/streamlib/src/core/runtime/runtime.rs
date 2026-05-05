@@ -390,7 +390,7 @@ impl StreamRuntime {
         let has_python_processors = config.processors.iter().any(|p| {
             matches!(
                 p.runtime.language,
-                streamlib_codegen_shared::ProcessorLanguage::Python
+                streamlib_processor_schema::ProcessorLanguage::Python
             )
         });
 
@@ -410,11 +410,11 @@ impl StreamRuntime {
         for proc_schema in &config.processors {
             // Map runtime language to ProcessorRuntime
             let runtime = match proc_schema.runtime.language {
-                streamlib_codegen_shared::ProcessorLanguage::Python => ProcessorRuntime::Python,
-                streamlib_codegen_shared::ProcessorLanguage::TypeScript => {
+                streamlib_processor_schema::ProcessorLanguage::Python => ProcessorRuntime::Python,
+                streamlib_processor_schema::ProcessorLanguage::TypeScript => {
                     ProcessorRuntime::TypeScript
                 }
-                streamlib_codegen_shared::ProcessorLanguage::Rust => {
+                streamlib_processor_schema::ProcessorLanguage::Rust => {
                     // Rust dylib plugins self-register via export_plugin! macro.
                     // Load the dylib once per project (all Rust processors in the
                     // same YAML share one dylib), then validate each processor
@@ -566,13 +566,13 @@ impl StreamRuntime {
 
             // Convert schema execution mode to runtime ExecutionConfig
             let execution = match &proc_schema.execution {
-                streamlib_codegen_shared::ProcessorSchemaExecution::Reactive => {
+                streamlib_processor_schema::ProcessorSchemaExecution::Reactive => {
                     ProcessExecution::Reactive
                 }
-                streamlib_codegen_shared::ProcessorSchemaExecution::Manual => {
+                streamlib_processor_schema::ProcessorSchemaExecution::Manual => {
                     ProcessExecution::Manual
                 }
-                streamlib_codegen_shared::ProcessorSchemaExecution::Continuous { interval_ms } => {
+                streamlib_processor_schema::ProcessorSchemaExecution::Continuous { interval_ms } => {
                     ProcessExecution::Continuous {
                         interval_ms: *interval_ms,
                     }
