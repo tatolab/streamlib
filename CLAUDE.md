@@ -542,6 +542,17 @@ make sense if the surrounding files were renamed or restructured.
   buffers, publish drops) without `init()`. Read before writing any test
   that uses PUBSUB events (shutdown, reconfigure) outside a full
   `StreamRuntime`.
+- @docs/learnings/udmabuf-camera-importer-mode.md —
+  `V4L2_MEMORY_DMABUF` importer mode for USB UVC cameras requires
+  `/dev/udmabuf` (or `/dev/dma_heap/system`) as the dma_buf
+  producer, NOT a Vulkan-exported VkBuffer. uvcvideo memcpys via
+  `dma_buf_vmap()`; NVIDIA's GPU dma_buf exporter has no `.vmap`
+  through at least driver 570. Doc covers udev rule + `render`
+  group membership on workstations and the `--device` bind-mount
+  recipe for containers. Read before working on Path C in
+  `linux/processors/camera.rs`, before standing up containerized
+  camera-capture E2E, or before adding any new dma_buf producer
+  that targets uvcvideo.
 - @docs/learnings/cross-process-vkimage-layout.md — Cross-process
   `VkImage` layout coordination. `VkImageLayout` is independent state
   per `VkDevice` by Vulkan spec — no shared mutable tracker. The

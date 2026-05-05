@@ -9,7 +9,7 @@ use vma::Alloc as _;
 use crate::core::rhi::{PixelFormat, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
-use crate::vulkan::rhi::HostVulkanTexture;
+use crate::vulkan::rhi::{HostVulkanPixelBuffer, HostVulkanTexture};
 use streamlib_consumer_rhi::VulkanLayout;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -27,6 +27,37 @@ const V4L2_BUFFER_COUNT: u32 = 4;
 
 /// Default V4L2 device path.
 const DEFAULT_DEVICE_PATH: &str = "/dev/video0";
+
+/// Opt-in flag for V4L2_MEMORY_DMABUF importer mode (Path C). Off by default
+/// while the path matures across hardware; selectable on the per-run command
+/// line for validation. Capability is still gated by the kernel's
+/// `V4L2_BUF_CAP_SUPPORTS_DMABUF` advertisement and the runtime REQBUFS probe;
+/// the env var only opts a supported configuration in.
+const ENV_USE_IMPORTER_DMA_BUF: &str = "STREAMLIB_CAMERA_USE_IMPORTER_DMA_BUF";
+
+/// Capture-loop input-buffer ownership: which side allocates the camera
+/// buffer ring, and which side imports.
+///
+/// All three paths feed the same downstream compute kernel (NV12/YUYV → RGBA).
+/// They differ in where the V4L2-written camera frame sits when the kernel
+/// reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CameraIoMode {
+    /// V4L2 owns MMAP buffers; CPU `memcpy`s each frame into a HOST_VISIBLE
+    /// SSBO before dispatch. Always available — used on virtual devices and
+    /// as the universal fallback.
+    MmapMemcpy,
+    /// V4L2 owns MMAP buffers; each is exported via `VIDIOC_EXPBUF` and
+    /// imported into Vulkan as a `VkBuffer`. Zero-copy on devices that
+    /// allow cross-device DMA-BUF import.
+    MmapExportImport,
+    /// GPU owns DMA-BUF-exportable HOST_VISIBLE `VkBuffer`s; each FD is
+    /// handed to V4L2 via `VIDIOC_QBUF(memory=V4L2_MEMORY_DMABUF, m.fd=...)`.
+    /// V4L2 / uvcvideo writes camera frames directly into GPU memory.
+    /// Sidesteps the cross-device DMA-BUF import limitation (#638) on
+    /// NVIDIA + USB by inverting buffer ownership.
+    DmaBufImport,
+}
 
 #[derive(Debug, Clone)]
 pub struct LinuxCameraDevice {
@@ -957,17 +988,49 @@ fn capture_thread_loop(
     );
 
     // -----------------------------------------------------------------------
-    // Runtime DMABUF probe — try exporting V4L2 MMAP buffer as DMA-BUF fd
-    // and importing into Vulkan. If either step fails, fall back to the
-    // existing MMAP + memcpy path.
+    // Capture-path selection — three input-buffer ownership shapes:
+    //
+    //   1. CameraIoMode::DmaBufImport (Path C, importer mode):
+    //      GPU allocates HOST_VISIBLE DMA-BUF VkBuffers, exports each FD,
+    //      V4L2 imports via VIDIOC_QBUF(memory=V4L2_MEMORY_DMABUF, m.fd).
+    //      uvcvideo / V4L2 writes camera frames directly into GPU memory.
+    //      Opt-in via STREAMLIB_CAMERA_USE_IMPORTER_DMA_BUF=1 plus a
+    //      runtime REQBUFS(DMABUF) capability probe. Sidesteps the
+    //      cross-device DMA-BUF import limitation (#638) on NVIDIA + USB
+    //      by inverting buffer ownership.
+    //
+    //   2. CameraIoMode::MmapExportImport (Path A, exporter mode):
+    //      V4L2 owns MMAP buffers, EXPBUF exports each as a DMA-BUF FD,
+    //      Vulkan imports via vkImportMemoryFdKHR. Gated off on the
+    //      drivers blocklisted under #638 (currently NVIDIA Linux).
+    //
+    //   3. CameraIoMode::MmapMemcpy (Path B, fallback):
+    //      V4L2 owns MMAP buffers, CPU memcpy into a HOST_VISIBLE SSBO.
+    //      Always available; used on virtual devices and when the other
+    //      paths' probes fail.
+    //
+    // Path C is tried first when opted in; on failure (or when not
+    // opted in) the existing Path A probe runs; Path B is the universal
+    // fallback.
     // -----------------------------------------------------------------------
     let device_fd = stream.handle().fd();
-    let mut use_dmabuf = false;
+    let mut io_mode = CameraIoMode::MmapMemcpy;
+
+    // Path A state (V4L2 owns MMAP buffer, GPU imports DMA-BUF FD).
     let mut dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize] = [-1; V4L2_BUFFER_COUNT as usize];
     let mut dmabuf_imported_buffers: [vk::Buffer; V4L2_BUFFER_COUNT as usize] =
         [vk::Buffer::null(); V4L2_BUFFER_COUNT as usize];
     let mut dmabuf_imported_memories: [vk::DeviceMemory; V4L2_BUFFER_COUNT as usize] =
         [vk::DeviceMemory::null(); V4L2_BUFFER_COUNT as usize];
+
+    // Path C state (userspace allocates dma_buf via /dev/udmabuf;
+    // V4L2 AND Vulkan both import the same FD). Each
+    // `HostVulkanPixelBuffer`'s Drop closes its imported VkDeviceMemory
+    // + VkBuffer; the V4L2-side FDs in `dmabuf_import_v4l2_fds` are
+    // closed at teardown after STREAMOFF + REQBUFS(DMABUF, count=0)
+    // releases V4L2's kernel-side dma_buf references.
+    let mut dmabuf_import_buffers: Vec<Arc<HostVulkanPixelBuffer>> = Vec::new();
+    let mut dmabuf_import_v4l2_fds: Vec<std::os::unix::io::RawFd> = Vec::new();
 
     // Check if the V4L2 driver is a virtual/platform device (vivid, v4l2loopback).
     // These allocate buffers in CPU system memory, so DMA-BUF import into the GPU
@@ -993,13 +1056,68 @@ fn capture_thread_loop(
         }
     };
 
+    // -----------------------------------------------------------------------
+    // Path C — V4L2_MEMORY_DMABUF importer mode probe.
+    //
+    // GPU allocates HOST_VISIBLE DMA-BUF-exportable VkBuffers, exports each
+    // FD, V4L2 imports via REQBUFS(DMABUF) + QBUF(memory=DMABUF, m.fd).
+    // Inverts buffer ownership compared to Path A — sidesteps the
+    // cross-device DMA-BUF import limitation (#638) on NVIDIA + USB by
+    // never importing into Vulkan: the buffer is GPU-native to begin with.
+    //
+    // Opt-in via STREAMLIB_CAMERA_USE_IMPORTER_DMA_BUF=1 because the path
+    // is hardware-sensitive: uvcvideo + USB + discrete NVIDIA is
+    // path-correct but PCIe-BAR-bounded (no latency win); embedded /
+    // CSI / PCIe-capture-card hardware is where the real benefit lives.
+    // The runtime probe (REQBUFS(DMABUF, count=N) returning success)
+    // is the authoritative gate — drivers without DMABUF importer
+    // support fall through to Path A or B regardless of the env opt-in.
+    // -----------------------------------------------------------------------
+    let want_importer_dma_buf = std::env::var(ENV_USE_IMPORTER_DMA_BUF)
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if want_importer_dma_buf && !is_virtual_device && vulkan_device.supports_external_memory() {
+        match try_setup_dma_buf_importer(
+            device_fd,
+            input_alloc_size,
+            vulkan_device,
+            &camera_name,
+        ) {
+            Ok(state) => {
+                dmabuf_import_buffers = state.buffers;
+                dmabuf_import_v4l2_fds = state.v4l2_fds;
+                io_mode = CameraIoMode::DmaBufImport;
+                tracing::info!(
+                    camera = camera_name,
+                    buffers_allocated = dmabuf_import_buffers.len(),
+                    "V4L2_MEMORY_DMABUF importer mode enabled (Path C — udmabuf-allocated, V4L2 + Vulkan dual-import)",
+                );
+            }
+            Err(e) => {
+                tracing::info!(
+                    camera = camera_name,
+                    error = %e,
+                    "DMA-BUF importer mode probe failed — falling through to Path A/B",
+                );
+            }
+        }
+    } else if want_importer_dma_buf {
+        tracing::info!(
+            camera = camera_name,
+            is_virtual = is_virtual_device,
+            external_memory = vulkan_device.supports_external_memory(),
+            "DMA-BUF importer mode requested but unavailable — virtual device or no external-memory support",
+        );
+    }
+
     // Skip the cross-device DMA-BUF probe on drivers where the failed
     // import attempt is empirically observed to perturb the engine's
     // OPAQUE_FD allocation accounting (issue #638). Today: NVIDIA Linux.
     // The MMAP+memcpy fallback below is unaffected.
     let supports_cross_device_dma_buf_probe =
         vulkan_device.supports_cross_device_dma_buf_probe();
-    if !supports_cross_device_dma_buf_probe {
+    if io_mode != CameraIoMode::DmaBufImport && !supports_cross_device_dma_buf_probe {
         tracing::info!(
             camera = camera_name,
             device = %vulkan_device.name(),
@@ -1008,7 +1126,8 @@ fn capture_thread_loop(
         );
     }
 
-    if vulkan_device.supports_external_memory()
+    if io_mode != CameraIoMode::DmaBufImport
+        && vulkan_device.supports_external_memory()
         && !is_virtual_device
         && supports_cross_device_dma_buf_probe
     {
@@ -1172,11 +1291,11 @@ fn capture_thread_loop(
             }
 
             if all_imported {
-                use_dmabuf = true;
+                io_mode = CameraIoMode::MmapExportImport;
                 tracing::info!(
                     camera = camera_name,
                     buffers_imported = V4L2_BUFFER_COUNT,
-                    "DMA-BUF zero-copy enabled",
+                    "DMA-BUF zero-copy enabled (Path A — V4L2-allocated, GPU-imported)",
                 );
             } else {
                 // Clean up any partially imported buffers
@@ -1210,8 +1329,13 @@ fn capture_thread_loop(
     // -----------------------------------------------------------------------
     let mut ping_pong_index: usize = 0;
 
-    // In DMABUF mode, manually start the V4L2 stream via raw ioctls
-    if use_dmabuf {
+    // Path A: manually start the V4L2 stream via raw ioctls. The Stream
+    // wrapper hasn't called STREAMON yet because we never invoked
+    // `stream.next()`; do it directly so DQBUF will return frames.
+    //
+    // Path C already issued REQBUFS(DMABUF) + QBUF + STREAMON inside
+    // `try_setup_dma_buf_importer` and is ready to dequeue.
+    if io_mode == CameraIoMode::MmapExportImport {
         unsafe {
             for i in 0..V4L2_BUFFER_COUNT {
                 let mut v4l2_buf: v4l::v4l_sys::v4l2_buffer = std::mem::zeroed();
@@ -1239,8 +1363,20 @@ fn capture_thread_loop(
         let mut v4l2_requeue_buf: Option<v4l::v4l_sys::v4l2_buffer> = None;
         let mut frame_sequence: u32 = 0;
 
-        if use_dmabuf {
-            // DMABUF path: raw V4L2 poll + DQBUF → imported VkBuffer (zero-copy)
+        if matches!(
+            io_mode,
+            CameraIoMode::MmapExportImport | CameraIoMode::DmaBufImport
+        ) {
+            // Zero-copy paths: raw V4L2 poll + DQBUF → imported VkBuffer
+            // (Path A: V4L2-allocated, GPU-imported via VIDIOC_EXPBUF;
+            //  Path C: GPU-allocated, V4L2-imported via VIDIOC_QBUF(DMABUF)).
+            // The two paths share the poll+DQBUF dance; they differ only
+            // in the v4l2_buf.memory tag (kernel needs to know which queue)
+            // and the VkBuffer table the buffer index resolves through.
+            let v4l2_memory = match io_mode {
+                CameraIoMode::DmaBufImport => v4l::memory::Memory::DmaBuf as u32,
+                _ => v4l::memory::Memory::Mmap as u32,
+            };
             unsafe {
                 let mut pollfd = libc::pollfd {
                     fd: device_fd,
@@ -1260,7 +1396,7 @@ fn capture_thread_loop(
 
                 let mut v4l2_buf: v4l::v4l_sys::v4l2_buffer = std::mem::zeroed();
                 v4l2_buf.type_ = v4l::buffer::Type::VideoCapture as u32;
-                v4l2_buf.memory = v4l::memory::Memory::Mmap as u32;
+                v4l2_buf.memory = v4l2_memory;
 
                 if libc::ioctl(
                     device_fd,
@@ -1276,7 +1412,10 @@ fn capture_thread_loop(
 
                 let buffer_index = v4l2_buf.index as usize;
                 frame_sequence = v4l2_buf.sequence;
-                input_ssbo_buffer = dmabuf_imported_buffers[buffer_index];
+                input_ssbo_buffer = match io_mode {
+                    CameraIoMode::DmaBufImport => dmabuf_import_buffers[buffer_index].buffer(),
+                    _ => dmabuf_imported_buffers[buffer_index],
+                };
                 v4l2_requeue_buf = Some(v4l2_buf);
             }
 
@@ -1481,8 +1620,16 @@ fn capture_thread_loop(
                 .subresource_range(color_subresource_range)
                 .build()];
 
+            // Imported VkBuffer (Path A or Path C) needs a SHADER_READ
+            // visibility barrier before the compute kernel can sample
+            // from it. Path B's HOST_VISIBLE+HOST_COHERENT SSBO is made
+            // visible by the persistent mapping itself — no Vulkan
+            // barrier needed.
             let dmabuf_buffer_barrier;
-            let buffer_barriers: &[vk::BufferMemoryBarrier2] = if use_dmabuf {
+            let buffer_barriers: &[vk::BufferMemoryBarrier2] = if matches!(
+                io_mode,
+                CameraIoMode::MmapExportImport | CameraIoMode::DmaBufImport
+            ) {
                 dmabuf_buffer_barrier = vk::BufferMemoryBarrier2::builder()
                     .src_stage_mask(vk::PipelineStageFlags2::NONE)
                     .src_access_mask(vk::AccessFlags2::NONE)
@@ -1725,7 +1872,11 @@ fn capture_thread_loop(
         }
 
         if frame_num == 0 {
-            let mode = if use_dmabuf { "DMA-BUF zero-copy" } else { "MMAP + memcpy" };
+            let mode = match io_mode {
+                CameraIoMode::DmaBufImport => "DMA-BUF importer (Path C — udmabuf-allocated, V4L2+Vulkan dual-import)",
+                CameraIoMode::MmapExportImport => "DMA-BUF exporter (Path A — V4L2-allocated, GPU-imported)",
+                CameraIoMode::MmapMemcpy => "MMAP + memcpy (Path B)",
+            };
             tracing::info!(
                 camera = camera_name,
                 mode,
@@ -1739,8 +1890,9 @@ fn capture_thread_loop(
             tracing::debug!(camera = camera_name, frame = frame_num, "frame milestone");
         }
 
-        // Toggle ping-pong index for next frame (MMAP path only)
-        if !use_dmabuf {
+        // Toggle ping-pong index for next frame (MMAP+memcpy path only).
+        // Zero-copy paths use the V4L2-driven buffer index instead.
+        if io_mode == CameraIoMode::MmapMemcpy {
             ping_pong_index = 1 - ping_pong_index;
         }
     }
@@ -1749,8 +1901,12 @@ fn capture_thread_loop(
     // Cleanup — destroy all compute pipeline resources
     // -----------------------------------------------------------------------
 
-    // Stop V4L2 stream in DMABUF mode (mmap stream Drop handles MMAP mode)
-    if use_dmabuf {
+    // Stop V4L2 stream in zero-copy modes (Path A or C started a stream
+    // via raw ioctl; the v4l mmap-stream Drop handles Path B's STREAMOFF).
+    if matches!(
+        io_mode,
+        CameraIoMode::MmapExportImport | CameraIoMode::DmaBufImport
+    ) {
         unsafe {
             let mut buf_type: u32 = v4l::buffer::Type::VideoCapture as u32;
             libc::ioctl(
@@ -1764,8 +1920,9 @@ fn capture_thread_loop(
     unsafe {
         let _ = device.device_wait_idle();
 
-        // Clean up DMABUF imported buffers
-        if use_dmabuf {
+        // Path A cleanup: destroy imported VkBuffer + free imported memory
+        // + close the FDs we obtained from VIDIOC_EXPBUF.
+        if io_mode == CameraIoMode::MmapExportImport {
             for i in 0..V4L2_BUFFER_COUNT as usize {
                 if dmabuf_imported_buffers[i] != vk::Buffer::null() {
                     device.destroy_buffer(dmabuf_imported_buffers[i], None);
@@ -1776,6 +1933,34 @@ fn capture_thread_loop(
                 if dmabuf_fds[i] >= 0 {
                     libc::close(dmabuf_fds[i]);
                 }
+            }
+        }
+
+        // Path C cleanup: REQBUFS(DMABUF, count=0) tells the kernel to
+        // detach from each imported dma_buf, dropping V4L2's kernel-
+        // side reference. After that, the userspace dma_buf FDs we
+        // held for QBUF/DQBUF cycles can be closed; the underlying
+        // memfd pages live exactly until the last reference goes
+        // away (V4L2's via REQBUFS(0), Vulkan's via VkDeviceMemory
+        // free, our userspace FD via close()).
+        if io_mode == CameraIoMode::DmaBufImport {
+            let mut req: v4l::v4l_sys::v4l2_requestbuffers = std::mem::zeroed();
+            req.count = 0;
+            req.type_ = v4l::buffer::Type::VideoCapture as u32;
+            req.memory = v4l::memory::Memory::DmaBuf as u32;
+            libc::ioctl(
+                device_fd,
+                v4l::v4l2::vidioc::VIDIOC_REQBUFS as libc::c_ulong,
+                &mut req,
+            );
+            // Drop Vulkan-imported VkBuffers first (frees imported
+            // VkDeviceMemory + unmaps), then close the userspace FDs.
+            // Order matters only for ref-counting hygiene; the kernel
+            // dma_buf is alive until the last reference drops
+            // regardless of order.
+            dmabuf_import_buffers.clear();
+            for fd in dmabuf_import_v4l2_fds.drain(..) {
+                libc::close(fd);
             }
         }
 
@@ -1798,6 +1983,520 @@ fn capture_thread_loop(
             }
         }
     }
+}
+
+/// V4L2 capability flag advertised in `v4l2_requestbuffers.capabilities`
+/// when the driver accepts `V4L2_MEMORY_DMABUF` for buffer exchange.
+/// Mirrors the kernel's `V4L2_BUF_CAP_SUPPORTS_DMABUF` constant; the
+/// `v4l-sys` crate doesn't re-export it, so we declare the bit locally.
+const V4L2_BUF_CAP_SUPPORTS_DMABUF: u32 = 0x00000004;
+
+/// `UDMABUF_CREATE = _IOW('u', 0x42, struct udmabuf_create)` from
+/// `include/uapi/linux/udmabuf.h`. libc has no udmabuf bindings;
+/// derive the constant by hand:
+///   _IOC_WRITE (1) << 30        = 0x40000000
+///   type 'u'   (0x75) << 8      = 0x00007500
+///   nr 0x42                     = 0x00000042
+///   sizeof(udmabuf_create) (24) << 16 = 0x00180000
+///   sum                         = 0x40187542
+const UDMABUF_CREATE_IOCTL: libc::c_ulong = 0x4018_7542;
+
+/// Linux UDMABUF_CREATE ioctl payload (`include/uapi/linux/udmabuf.h`).
+#[repr(C)]
+#[allow(non_camel_case_types)]
+struct udmabuf_create {
+    memfd: u32,
+    flags: u32,
+    offset: u64,
+    size: u64,
+}
+
+/// Allocate a kernel-side dma_buf of `size` bytes via `/dev/udmabuf`.
+///
+/// Returns a fresh dma_buf FD whose pages are ordinary anonymous system
+/// memory (not GPU BAR, not CMA, not VRAM). The dma_buf implements
+/// `ops->vmap()` cleanly — uvcvideo's `vb2_vmalloc_map_dmabuf` calls
+/// `dma_buf_vmap()` and `memcpy`s frame payload from its internal USB
+/// URB buffer into the resulting kernel virtual address. **This is why
+/// udmabuf is the right producer** for the importer-mode path on UVC
+/// cameras: the buffer is CPU-vmappable, kernel-targetable system RAM,
+/// shareable cross-driver via dma_buf semantics. Vulkan-exported
+/// buffers (e.g. `HostVulkanPixelBuffer::new` + `export_dma_buf_fd`)
+/// are not — NVIDIA's `nv_dma_buf_ops` does not implement `.vmap`, so
+/// uvcvideo's vmap call returns `-EINVAL`, REQBUFS+QBUF accept the FD
+/// but every per-buffer prepare fails, and DQBUF never fires.
+///
+/// Caller owns the returned FD. The underlying memfd is closed before
+/// return — udmabuf retains its own kernel-side reference to the
+/// memfd's pages until the dma_buf FD itself is closed.
+///
+/// Permissions: `/dev/udmabuf` is typically `0660 root:root`; deployed
+/// systems need a udev rule moving it to a non-root group (e.g.
+/// `KERNEL=="udmabuf", GROUP="render", MODE="0660"` in
+/// `/etc/udev/rules.d/99-streamlib-udmabuf.rules`).
+fn udmabuf_alloc(size: u64) -> Result<std::os::unix::io::RawFd> {
+    use std::os::unix::io::RawFd;
+
+    // udmabuf requires the memfd's size to be a multiple of PAGE_SIZE.
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page_size <= 0 {
+        return Err(StreamError::Configuration(format!(
+            "udmabuf_alloc: invalid PAGE_SIZE from sysconf: {page_size}"
+        )));
+    }
+    let page_size = page_size as u64;
+    let aligned = size
+        .checked_add(page_size - 1)
+        .ok_or_else(|| StreamError::Configuration(format!(
+            "udmabuf_alloc: size {size} overflows when page-aligning"
+        )))?
+        & !(page_size - 1);
+
+    // 1. memfd_create with sealing support (required by udmabuf).
+    let memfd: RawFd = unsafe {
+        libc::syscall(
+            libc::SYS_memfd_create,
+            b"streamlib-udmabuf\0".as_ptr() as *const libc::c_char,
+            (libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) as libc::c_uint,
+        ) as RawFd
+    };
+    if memfd < 0 {
+        return Err(StreamError::Configuration(format!(
+            "udmabuf_alloc: memfd_create failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // 2. ftruncate the memfd to the page-aligned size.
+    if unsafe { libc::ftruncate(memfd, aligned as libc::off_t) } != 0 {
+        let err = std::io::Error::last_os_error();
+        unsafe { libc::close(memfd) };
+        return Err(StreamError::Configuration(format!(
+            "udmabuf_alloc: ftruncate({aligned}) failed: {err}"
+        )));
+    }
+
+    // 3. Add F_SEAL_SHRINK so udmabuf knows the memfd's pages won't
+    //    be released out from under it.
+    if unsafe { libc::fcntl(memfd, libc::F_ADD_SEALS, libc::F_SEAL_SHRINK) } != 0 {
+        let err = std::io::Error::last_os_error();
+        unsafe { libc::close(memfd) };
+        return Err(StreamError::Configuration(format!(
+            "udmabuf_alloc: F_ADD_SEALS(F_SEAL_SHRINK) failed: {err}"
+        )));
+    }
+
+    // 4. Open /dev/udmabuf and issue UDMABUF_CREATE.
+    let udma_dev = unsafe {
+        libc::open(
+            b"/dev/udmabuf\0".as_ptr() as *const libc::c_char,
+            libc::O_RDWR | libc::O_CLOEXEC,
+        )
+    };
+    if udma_dev < 0 {
+        let err = std::io::Error::last_os_error();
+        unsafe { libc::close(memfd) };
+        return Err(StreamError::Configuration(format!(
+            "udmabuf_alloc: open(/dev/udmabuf) failed: {err}. \
+             /dev/udmabuf is typically 0660 root:root; install a udev rule \
+             granting non-root access (e.g. \
+             KERNEL==\"udmabuf\" GROUP=\"render\" MODE=\"0660\" in \
+             /etc/udev/rules.d/99-streamlib-udmabuf.rules)"
+        )));
+    }
+
+    let create = udmabuf_create {
+        memfd: memfd as u32,
+        flags: 0,
+        offset: 0,
+        size: aligned,
+    };
+    let dma_fd = unsafe {
+        libc::ioctl(udma_dev, UDMABUF_CREATE_IOCTL, &create)
+    };
+
+    // /dev/udmabuf and the original memfd are no longer needed —
+    // udmabuf holds its own ref to the memfd's pages, and the
+    // resulting dma_buf is independent of both the memfd and the
+    // /dev/udmabuf handle.
+    unsafe {
+        libc::close(udma_dev);
+        libc::close(memfd);
+    }
+
+    if dma_fd < 0 {
+        return Err(StreamError::Configuration(format!(
+            "udmabuf_alloc: UDMABUF_CREATE ioctl failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(dma_fd as RawFd)
+}
+
+/// `DMA_HEAP_IOCTL_ALLOC` ioctl number from `include/uapi/linux/dma-heap.h`.
+/// `_IOWR('H', 0x0, struct dma_heap_allocation_data)` resolves to
+/// `0xc018_4800` on every Linux ABI streamlib targets (verified via libc's
+/// `_IOWR` expansion against a 24-byte payload).
+#[allow(dead_code)] // alternate-producer infra; exercised by dma_heap_alloc_smoke
+const DMA_HEAP_IOCTL_ALLOC: libc::c_ulong = 0xc018_4800;
+
+/// `struct dma_heap_allocation_data` from `include/uapi/linux/dma-heap.h`.
+#[repr(C)]
+#[allow(non_camel_case_types, dead_code)] // alternate-producer infra
+struct dma_heap_allocation_data {
+    len: u64,
+    fd: u32,
+    fd_flags: u32,
+    heap_flags: u64,
+}
+
+/// Allocate a kernel-side dma_buf of `size` bytes via `/dev/dma_heap/system`.
+///
+/// Sibling of [`udmabuf_alloc`] with one architectural difference: the
+/// system dma-heap exporter (`drivers/dma-buf/heaps/system_heap.c`) is the
+/// modern, mainline-canonical path for userspace dma_buf allocation. udmabuf
+/// is older, exports anonymous memfd pages, and is sometimes treated as a
+/// special-case producer by GPU drivers' import logic; the system heap
+/// hands out the same kind of memory through the dma-heap framework that
+/// modern compositors and DRM stacks use. NVIDIA's `nv_dma_buf` import
+/// path empirically rejects udmabuf-backed FDs (`vkAllocateMemory` returns
+/// `VK_ERROR_OUT_OF_DEVICE_MEMORY` and `vkGetMemoryFdPropertiesKHR`
+/// returns `VK_ERROR_UNKNOWN`); the system heap is the next thing to try.
+///
+/// Both producers implement `dma_buf_ops::vmap`, so uvcvideo's V4L2 import
+/// path (which calls `dma_buf_vmap()` at QBUF time) works through either —
+/// the V4L2 side is producer-agnostic.
+///
+/// Caller owns the returned FD.
+///
+/// Permissions: `/dev/dma_heap/system` is typically `0600 root:root`;
+/// deployed systems need a udev rule moving it to a non-root group (e.g.
+/// `KERNEL=="system" SUBSYSTEM=="dma_heap" GROUP="render" MODE="0660"` in
+/// `/etc/udev/rules.d/99-streamlib-dma-heap.rules`).
+#[allow(dead_code)] // alternate-producer infra; exercised by dma_heap_alloc_smoke
+fn dma_heap_alloc(size: u64) -> Result<std::os::unix::io::RawFd> {
+    use std::os::unix::io::RawFd;
+
+    let heap_fd = unsafe {
+        libc::open(
+            b"/dev/dma_heap/system\0".as_ptr() as *const libc::c_char,
+            libc::O_RDWR | libc::O_CLOEXEC,
+        )
+    };
+    if heap_fd < 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(StreamError::Configuration(format!(
+            "dma_heap_alloc: open(/dev/dma_heap/system) failed: {err}. \
+             /dev/dma_heap/system is typically 0600 root:root; install a \
+             udev rule granting non-root access (e.g. KERNEL==\"system\" \
+             SUBSYSTEM==\"dma_heap\" GROUP=\"render\" MODE=\"0660\" in \
+             /etc/udev/rules.d/99-streamlib-dma-heap.rules)"
+        )));
+    }
+
+    let mut request = dma_heap_allocation_data {
+        len: size,
+        fd: 0,
+        fd_flags: (libc::O_RDWR | libc::O_CLOEXEC) as u32,
+        heap_flags: 0,
+    };
+    let rc = unsafe { libc::ioctl(heap_fd, DMA_HEAP_IOCTL_ALLOC, &mut request) };
+    unsafe { libc::close(heap_fd) };
+
+    if rc != 0 {
+        return Err(StreamError::Configuration(format!(
+            "dma_heap_alloc: DMA_HEAP_IOCTL_ALLOC failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(request.fd as RawFd)
+}
+
+/// State produced by [`try_setup_dma_buf_importer`] — the imported
+/// `HostVulkanPixelBuffer`s the compute kernel binds against, plus the
+/// dma_buf FDs handed to V4L2 (kept alive across the capture session
+/// because uvcvideo identifies imported buffers by FD value across the
+/// QBUF / DQBUF cycle).
+struct DmaBufImporterState {
+    /// One Vulkan-imported VkBuffer per ring slot. Each is bound to the
+    /// imported `VkDeviceMemory` from the matching udmabuf-allocated
+    /// dma_buf FD. The compute kernel's STORAGE_BUFFER binding sources
+    /// from these.
+    buffers: Vec<Arc<HostVulkanPixelBuffer>>,
+    /// One dma_buf FD per ring slot — owned by userspace, handed to
+    /// V4L2 via `VIDIOC_QBUF(memory=V4L2_MEMORY_DMABUF, m.fd=...)` for
+    /// every QBUF/DQBUF cycle. Closed only on teardown after STREAMOFF
+    /// + REQBUFS(0). Kernel-side V4L2 holds its own dma_buf reference
+    /// per attached buffer; closing these FDs at teardown drops the
+    /// userspace ref so the underlying memfd pages can be reclaimed
+    /// once V4L2 releases its kernel-side ref.
+    v4l2_fds: Vec<std::os::unix::io::RawFd>,
+}
+
+/// Set up V4L2 in `V4L2_MEMORY_DMABUF` importer mode (Path C).
+///
+/// **Architecture.** uvcvideo (and every other USB UVC driver in mainline
+/// Linux) uses `vb2_vmalloc_memops::map_dmabuf` which calls
+/// `dma_buf_vmap()` on every imported buffer; uvcvideo's URB completion
+/// handler then memcpies USB transfer payload into the resulting kernel
+/// virtual address. The driver does not, despite the name "importer
+/// mode," configure the camera's USB DMA controller to write directly
+/// into the imported buffer — `dma_buf` here is a kernel-side memory
+/// sharing primitive, not a hardware DMA target.
+///
+/// Consequence: the imported dma_buf MUST implement
+/// `dma_buf_ops::vmap()` returning a CPU-writable kernel virtual
+/// address backed by ordinary system RAM. NVIDIA's proprietary GPU
+/// driver does *not* implement `.vmap` on its exported dma_bufs (open-
+/// gpu-kernel-modules `nv_dma_buf_ops`), so a Vulkan-allocated +
+/// dma_buf-exported VkBuffer fails uvcvideo's vmap call with `-EINVAL`
+/// and DQBUF never fires.
+///
+/// The working shape: userspace allocates the dma_buf via
+/// `/dev/udmabuf` (anonymous-pages-backed, implements `.vmap` cleanly),
+/// hands the FD to V4L2 via `VIDIOC_QBUF(memory=V4L2_MEMORY_DMABUF)`,
+/// and imports the **same** dma_buf FD into Vulkan via
+/// `vkImportMemoryFdKHR(handleType=DMA_BUF_EXT)`. V4L2 vmap+memcpys
+/// camera frames into the buffer; the compute kernel reads the same
+/// memory through a STORAGE_BUFFER binding on the Vulkan-imported
+/// VkBuffer. Userspace pays no memcpy.
+///
+/// Sequence:
+///   1. Capability probe — REQBUFS(MMAP, count=0) returns the
+///      capabilities word; check `V4L2_BUF_CAP_SUPPORTS_DMABUF`.
+///   2. Release any prior MMAP allocation kernel-side. The
+///      `v4l::io::mmap::Stream` already issued REQBUFS(MMAP, N); we
+///      need to drop those slots before switching memory type.
+///   3. REQBUFS(DMABUF, N) — set up DMABUF importer queue.
+///   4. For each ring slot: allocate a dma_buf via `udmabuf_alloc`,
+///      `dup` the FD (one for V4L2, one for Vulkan); `vkImportMemoryFdKHR`
+///      consumes the Vulkan-side dup and binds it to a fresh VkBuffer
+///      via `HostVulkanPixelBuffer::from_dma_buf_fd`.
+///   5. QBUF each V4L2-side dma_buf FD into the V4L2 queue. Keep the
+///      FD open for the duration of the stream — V4L2 identifies
+///      imported buffers by FD value across QBUF/DQBUF cycles.
+///   6. STREAMON.
+///
+/// On any failure, the partial state is torn down (REQBUFS(0), close
+/// FDs, drop imported buffers) and an error is returned. The caller
+/// falls through to Path A or B.
+fn try_setup_dma_buf_importer(
+    device_fd: i32,
+    input_alloc_size: vk::DeviceSize,
+    vulkan_device: &Arc<crate::vulkan::rhi::HostVulkanDevice>,
+    camera_name: &str,
+) -> Result<DmaBufImporterState> {
+    use std::os::unix::io::RawFd;
+
+    // Helper: explicit REQBUFS(memory, count) — used in cleanup paths
+    // and the explicit MMAP→DMABUF transition.
+    let reqbufs = |count: u32, memory: u32| -> i32 {
+        unsafe {
+            let mut req: v4l::v4l_sys::v4l2_requestbuffers = std::mem::zeroed();
+            req.count = count;
+            req.type_ = v4l::buffer::Type::VideoCapture as u32;
+            req.memory = memory;
+            libc::ioctl(
+                device_fd,
+                v4l::v4l2::vidioc::VIDIOC_REQBUFS as libc::c_ulong,
+                &mut req,
+            )
+        }
+    };
+
+    // Step 1: capability probe.
+    let capabilities = unsafe {
+        let mut probe: v4l::v4l_sys::v4l2_requestbuffers = std::mem::zeroed();
+        probe.count = 0;
+        probe.type_ = v4l::buffer::Type::VideoCapture as u32;
+        probe.memory = v4l::memory::Memory::Mmap as u32;
+        if libc::ioctl(
+            device_fd,
+            v4l::v4l2::vidioc::VIDIOC_REQBUFS as libc::c_ulong,
+            &mut probe,
+        ) != 0
+        {
+            return Err(StreamError::Configuration(format!(
+                "REQBUFS capability probe failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        probe.capabilities
+    };
+    if (capabilities & V4L2_BUF_CAP_SUPPORTS_DMABUF) == 0 {
+        return Err(StreamError::Configuration(format!(
+            "V4L2 driver does not advertise V4L2_BUF_CAP_SUPPORTS_DMABUF (capabilities=0x{capabilities:08x})"
+        )));
+    }
+
+    // Step 2: release any prior MMAP allocation kernel-side.
+    let _ = reqbufs(0, v4l::memory::Memory::Mmap as u32);
+
+    // Step 3: REQBUFS(DMABUF, N).
+    let actual_count = unsafe {
+        let mut req: v4l::v4l_sys::v4l2_requestbuffers = std::mem::zeroed();
+        req.count = V4L2_BUFFER_COUNT;
+        req.type_ = v4l::buffer::Type::VideoCapture as u32;
+        req.memory = v4l::memory::Memory::DmaBuf as u32;
+        if libc::ioctl(
+            device_fd,
+            v4l::v4l2::vidioc::VIDIOC_REQBUFS as libc::c_ulong,
+            &mut req,
+        ) != 0
+        {
+            return Err(StreamError::Configuration(format!(
+                "REQBUFS(DMABUF, count={}) failed: {}",
+                V4L2_BUFFER_COUNT,
+                std::io::Error::last_os_error()
+            )));
+        }
+        req.count
+    };
+    if actual_count == 0 {
+        return Err(StreamError::Configuration(
+            "REQBUFS(DMABUF) returned count=0".into(),
+        ));
+    }
+
+    // (width, height, bpp=2) shape: project input_alloc_size onto a
+    // (pixels, 1) rectangle. `pixels * 2 == input_alloc_size` for YUYV
+    // (exact) and slightly oversized for NV12 (3/2 ratio). PixelFormat
+    // is metadata only — the buffer holds raw camera bytes regardless
+    // of tag.
+    let pixels = ((input_alloc_size + 1) / 2) as u32;
+
+    // Step 4: per-slot, allocate a udmabuf-backed dma_buf and import
+    // it into Vulkan as a VkBuffer.
+    //
+    // FD ownership:
+    //   - `v4l2_fd` is the original udmabuf-allocated FD; we keep it
+    //     open for the lifetime of the stream and hand it to V4L2 by
+    //     value at QBUF time.
+    //   - `vulkan_fd` is `dup(v4l2_fd)`; `import_dma_buf_memory` (via
+    //     `from_dma_buf_fd`) consumes it on success. On failure the
+    //     dup is closed by `from_dma_buf_fd`'s teardown helpers.
+    let mut buffers: Vec<Arc<HostVulkanPixelBuffer>> = Vec::with_capacity(actual_count as usize);
+    let mut v4l2_fds: Vec<RawFd> = Vec::with_capacity(actual_count as usize);
+
+    let cleanup_partial =
+        |buffers: &mut Vec<Arc<HostVulkanPixelBuffer>>, fds: &mut Vec<RawFd>| {
+            buffers.clear();
+            for fd in fds.drain(..) {
+                unsafe { libc::close(fd) };
+            }
+        };
+
+    for i in 0..actual_count {
+        // Producer: /dev/udmabuf (older API, anonymous memfd pages).
+        // [`dma_heap_alloc`] is also available as an alternative producer
+        // that uses the modern dma-heap framework over /dev/dma_heap/system;
+        // both implement dma_buf_ops::vmap so V4L2 import works either way.
+        // GPU-side import compatibility is the same on both today (NVIDIA
+        // proprietary rejects both, Mesa drivers accept both per
+        // architectural reasoning — Mesa-side empirical confirmation
+        // pending; see docs/learnings/udmabuf-camera-importer-mode.md).
+        let v4l2_fd = match udmabuf_alloc(input_alloc_size as u64) {
+            Ok(fd) => fd,
+            Err(e) => {
+                cleanup_partial(&mut buffers, &mut v4l2_fds);
+                let _ = reqbufs(0, v4l::memory::Memory::DmaBuf as u32);
+                return Err(StreamError::Configuration(format!(
+                    "Path C: udmabuf_alloc[{i}] failed: {e}"
+                )));
+            }
+        };
+
+        let vulkan_fd = unsafe { libc::dup(v4l2_fd) };
+        if vulkan_fd < 0 {
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(v4l2_fd) };
+            cleanup_partial(&mut buffers, &mut v4l2_fds);
+            let _ = reqbufs(0, v4l::memory::Memory::DmaBuf as u32);
+            return Err(StreamError::Configuration(format!(
+                "Path C: dup(udmabuf fd) for slot[{i}] failed: {err}"
+            )));
+        }
+
+        match HostVulkanPixelBuffer::from_dma_buf_fd(
+            vulkan_device,
+            vulkan_fd,
+            pixels,
+            1,
+            2,
+            PixelFormat::Rgba32,
+            input_alloc_size,
+        ) {
+            Ok(buf) => {
+                buffers.push(Arc::new(buf));
+                v4l2_fds.push(v4l2_fd);
+            }
+            Err(e) => {
+                // `from_dma_buf_fd`'s teardown helpers close the
+                // vulkan_fd on import failure.
+                unsafe { libc::close(v4l2_fd) };
+                cleanup_partial(&mut buffers, &mut v4l2_fds);
+                let _ = reqbufs(0, v4l::memory::Memory::DmaBuf as u32);
+                return Err(StreamError::GpuError(format!(
+                    "Path C: HostVulkanPixelBuffer::from_dma_buf_fd[{i}] failed: {e}"
+                )));
+            }
+        }
+    }
+
+    // Step 5: QBUF each V4L2-side dma_buf FD into the queue. The FDs
+    // remain owned by `v4l2_fds`; V4L2 takes its own kernel-side
+    // dma_buf reference via attach() on first QBUF.
+    for (i, &fd) in v4l2_fds.iter().enumerate() {
+        let buf_size = buffers[i].size();
+        let qbuf_result = unsafe {
+            let mut v4l2_buf: v4l::v4l_sys::v4l2_buffer = std::mem::zeroed();
+            v4l2_buf.type_ = v4l::buffer::Type::VideoCapture as u32;
+            v4l2_buf.memory = v4l::memory::Memory::DmaBuf as u32;
+            v4l2_buf.index = i as u32;
+            v4l2_buf.m.fd = fd;
+            v4l2_buf.length = buf_size as u32;
+            libc::ioctl(
+                device_fd,
+                v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                &mut v4l2_buf,
+            )
+        };
+        if qbuf_result != 0 {
+            let err = std::io::Error::last_os_error();
+            cleanup_partial(&mut buffers, &mut v4l2_fds);
+            let _ = reqbufs(0, v4l::memory::Memory::DmaBuf as u32);
+            return Err(StreamError::Configuration(format!(
+                "Path C: QBUF(DMABUF, fd={fd}, length={buf_size}, index={i}) failed: {err}"
+            )));
+        }
+    }
+
+    // Step 6: STREAMON.
+    let streamon_result = unsafe {
+        let mut buf_type: u32 = v4l::buffer::Type::VideoCapture as u32;
+        libc::ioctl(
+            device_fd,
+            v4l::v4l2::vidioc::VIDIOC_STREAMON as libc::c_ulong,
+            &mut buf_type,
+        )
+    };
+    if streamon_result != 0 {
+        let err = std::io::Error::last_os_error();
+        cleanup_partial(&mut buffers, &mut v4l2_fds);
+        let _ = reqbufs(0, v4l::memory::Memory::DmaBuf as u32);
+        return Err(StreamError::Configuration(format!(
+            "Path C: STREAMON failed: {err}"
+        )));
+    }
+
+    tracing::debug!(
+        camera = camera_name,
+        buffer_count = actual_count,
+        buffer_bytes = input_alloc_size,
+        "V4L2 importer mode setup complete (udmabuf-allocated, V4L2+Vulkan dual-import, REQBUFS+QBUF+STREAMON)"
+    );
+
+    Ok(DmaBufImporterState { buffers, v4l2_fds })
 }
 
 impl LinuxCameraProcessor::Processor {
@@ -1957,5 +2656,179 @@ mod tests {
             buf.len(),
             nonzero_count
         );
+    }
+
+    /// V4L2_MEMORY_DMABUF importer-mode capability + acceptance probe
+    /// against `/dev/video0`.
+    ///
+    /// Locks the wire shape Path C depends on at runtime: the kernel
+    /// advertises `V4L2_BUF_CAP_SUPPORTS_DMABUF` in the
+    /// `v4l2_requestbuffers.capabilities` word returned by REQBUFS with
+    /// `count=0`, and accepts a real REQBUFS(DMABUF, count=N) for the
+    /// hardware on this dev workstation. If a future refactor regresses
+    /// the ioctl shape (wrong type field, wrong memory enum value, wrong
+    /// capabilities bit), this test catches it.
+    ///
+    /// Ignored by default — needs real V4L2 hardware. Run via
+    /// `cargo test -p streamlib v4l2_dma_buf_importer_capability_probe -- --ignored --nocapture`
+    /// when validating Path C against Cam Link 4K (`/dev/video0`).
+    #[test]
+    #[ignore]
+    fn v4l2_dma_buf_importer_capability_probe() {
+        let dev = v4l::Device::with_path("/dev/video0")
+            .expect("Failed to open /dev/video0 — Path C validation requires real UVC hardware");
+        let fd = dev.handle().fd();
+
+        // Step 1: capability probe via REQBUFS(MMAP, count=0).
+        let capabilities = unsafe {
+            let mut probe: v4l::v4l_sys::v4l2_requestbuffers = std::mem::zeroed();
+            probe.count = 0;
+            probe.type_ = v4l::buffer::Type::VideoCapture as u32;
+            probe.memory = v4l::memory::Memory::Mmap as u32;
+            let rc = libc::ioctl(
+                fd,
+                v4l::v4l2::vidioc::VIDIOC_REQBUFS as libc::c_ulong,
+                &mut probe,
+            );
+            assert_eq!(
+                rc,
+                0,
+                "REQBUFS(MMAP, count=0) capability probe failed: {}",
+                std::io::Error::last_os_error()
+            );
+            probe.capabilities
+        };
+        println!(
+            "v4l2_requestbuffers.capabilities = 0x{capabilities:08x} (V4L2_BUF_CAP_SUPPORTS_DMABUF expected)"
+        );
+        assert_ne!(
+            capabilities & V4L2_BUF_CAP_SUPPORTS_DMABUF,
+            0,
+            "Driver does not advertise V4L2_BUF_CAP_SUPPORTS_DMABUF — Path C unreachable on this hardware"
+        );
+
+        // Step 2: acceptance probe via REQBUFS(DMABUF, count=4).
+        let returned_count = unsafe {
+            let mut req: v4l::v4l_sys::v4l2_requestbuffers = std::mem::zeroed();
+            req.count = V4L2_BUFFER_COUNT;
+            req.type_ = v4l::buffer::Type::VideoCapture as u32;
+            req.memory = v4l::memory::Memory::DmaBuf as u32;
+            let rc = libc::ioctl(
+                fd,
+                v4l::v4l2::vidioc::VIDIOC_REQBUFS as libc::c_ulong,
+                &mut req,
+            );
+            assert_eq!(
+                rc,
+                0,
+                "REQBUFS(DMABUF, count={}) failed: {}",
+                V4L2_BUFFER_COUNT,
+                std::io::Error::last_os_error()
+            );
+            req.count
+        };
+        assert!(
+            returned_count > 0,
+            "REQBUFS(DMABUF) returned count=0 — driver claimed support but rejected allocation"
+        );
+        println!(
+            "REQBUFS(DMABUF, count={}) → driver returned count={}",
+            V4L2_BUFFER_COUNT, returned_count
+        );
+
+        // Tear down: REQBUFS(DMABUF, count=0) so we don't leave the
+        // device in a partially-configured state for the next test.
+        unsafe {
+            let mut cleanup: v4l::v4l_sys::v4l2_requestbuffers = std::mem::zeroed();
+            cleanup.count = 0;
+            cleanup.type_ = v4l::buffer::Type::VideoCapture as u32;
+            cleanup.memory = v4l::memory::Memory::DmaBuf as u32;
+            let _ = libc::ioctl(
+                fd,
+                v4l::v4l2::vidioc::VIDIOC_REQBUFS as libc::c_ulong,
+                &mut cleanup,
+            );
+        }
+    }
+
+    /// Lock the udmabuf-allocator wire shape: `memfd_create` +
+    /// `F_SEAL_SHRINK` + `UDMABUF_CREATE` → fresh dma_buf FD that's
+    /// CPU-vmappable system memory, suitable as a V4L2 importer-mode
+    /// target.
+    ///
+    /// Ignored by default — needs `/dev/udmabuf` accessible to the
+    /// running user. Install a udev rule like
+    /// `KERNEL=="udmabuf", GROUP="render", MODE="0660"` in
+    /// `/etc/udev/rules.d/99-streamlib-udmabuf.rules` and add the
+    /// running user to `render`, then `sudo udevadm control --reload
+    /// && sudo udevadm trigger`. Or one-shot
+    /// `sudo chmod 0666 /dev/udmabuf` for a single test run.
+    ///
+    /// Run via `cargo test -p streamlib udmabuf_alloc_smoke -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore]
+    fn udmabuf_alloc_smoke() {
+        let size = 4 * 1024 * 1024; // 4 MiB — typical YUYV 1920x1080 frame
+        let fd = match udmabuf_alloc(size) {
+            Ok(fd) => fd,
+            Err(e) => panic!("udmabuf_alloc failed: {e}"),
+        };
+        assert!(fd >= 0, "udmabuf_alloc returned non-positive fd: {fd}");
+
+        // Confirm the fd refers to a dma_buf by querying its size via
+        // lseek(SEEK_END). dma_buf supports lseek for size discovery
+        // (kernel commit 9b495a5887 and friends).
+        let size_via_lseek = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
+        assert!(
+            size_via_lseek >= size as libc::off_t,
+            "lseek(dma_buf, SEEK_END) returned {size_via_lseek}, expected at least {size} \
+             (page-aligned)"
+        );
+
+        unsafe { libc::close(fd) };
+    }
+
+    /// Wire-shape probe of [`dma_heap_alloc`] — opens
+    /// `/dev/dma_heap/system`, issues `DMA_HEAP_IOCTL_ALLOC`, asserts the
+    /// returned dma_buf FD reports the requested size via
+    /// `lseek(SEEK_END)`. Sibling of [`udmabuf_alloc_smoke`] that exists
+    /// to isolate "dma_heap producer works on this host" from the broader
+    /// E2E. Skip if `/dev/dma_heap/system` isn't present or accessible.
+    ///
+    /// Run via `cargo test -p streamlib dma_heap_alloc_smoke -- --ignored
+    /// --nocapture`.
+    #[test]
+    #[ignore]
+    fn dma_heap_alloc_smoke() {
+        let access_probe = unsafe {
+            libc::access(
+                b"/dev/dma_heap/system\0".as_ptr() as *const libc::c_char,
+                libc::R_OK | libc::W_OK,
+            )
+        };
+        if access_probe != 0 {
+            eprintln!(
+                "Skipping — /dev/dma_heap/system not accessible. Install \
+                 the udev rule and add the running user to the render group."
+            );
+            return;
+        }
+
+        let size = 4 * 1024 * 1024;
+        let fd = match dma_heap_alloc(size) {
+            Ok(fd) => fd,
+            Err(e) => panic!("dma_heap_alloc failed: {e}"),
+        };
+        assert!(fd >= 0, "dma_heap_alloc returned non-positive fd: {fd}");
+
+        let size_via_lseek = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
+        assert!(
+            size_via_lseek >= size as libc::off_t,
+            "lseek(dma_buf, SEEK_END) returned {size_via_lseek}, expected at \
+             least {size} (page-aligned by the dma-heap)"
+        );
+
+        unsafe { libc::close(fd) };
     }
 }
