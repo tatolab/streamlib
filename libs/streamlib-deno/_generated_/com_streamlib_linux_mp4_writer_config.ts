@@ -8,7 +8,7 @@
 /**
  * Configuration for Linux MP4 video writing via ffmpeg encode + mux.
  */
-export interface LinuxMp4writerConfig {
+export interface LinuxMp4WriterConfig {
   /**
    * Fallback frame rate if not provided by upstream Videoframe.
    */

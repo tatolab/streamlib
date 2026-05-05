@@ -35,6 +35,22 @@ pub mod sentinel;
 
 pub use sentinel::SentinelTable;
 
+/// Root-name sentinel passed to `jtd-codegen --root-name`. The post-processor
+/// substitutes this back to the per-schema identifier from `streamlib.yaml`.
+///
+/// Sidesteps three known `jtd-codegen` v0.4.1 bugs uniformly across all three
+/// backends: digit-boundary lowercasing (`H264D` → `H264d`), Python-only
+/// acronym upcasing (`Api` → `API`), and inconsistent `--root-name` mangling
+/// shape per emit case (struct vs. discriminator vs. type alias). The sentinel
+/// is shaped so all three backends preserve it byte-identically — verified
+/// empirically; underscore-prefixed sentinels (e.g. `__ROOT__`) collapse to
+/// `Root` because jtd-codegen normalizes identifiers per its own rules.
+///
+/// Per-schema identifier sources are the schema's `metadata.name` field via
+/// [`schema_name_to_struct_name`]; the sentinel is a transport detail of the
+/// codegen pipeline and never appears in committed `_generated_/` output.
+const ROOT_NAME_SENTINEL: &str = "StreamlibCanonRoot";
+
 /// Target runtime language for schema code generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum RuntimeTarget {
@@ -265,7 +281,7 @@ fn run_jtd_codegen_rust(schema_files: &[PathBuf], output_dir: &Path) -> Result<(
             .arg("--rust-out")
             .arg(&temp_rust_out)
             .arg("--root-name")
-            .arg(&struct_name)
+            .arg(ROOT_NAME_SENTINEL)
             .arg("--")
             .arg(&json_path)
             .output()
@@ -332,7 +348,7 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
             .arg("--python-out")
             .arg(&temp_python_out)
             .arg("--root-name")
-            .arg(&class_name)
+            .arg(ROOT_NAME_SENTINEL)
             .arg("--")
             .arg(&json_path)
             .output()
@@ -403,7 +419,7 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
             .arg("--typescript-out")
             .arg(&temp_ts_out)
             .arg("--root-name")
-            .arg(&class_name)
+            .arg(ROOT_NAME_SENTINEL)
             .arg("--")
             .arg(&json_path)
             .output()
@@ -422,7 +438,7 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
             )
         })?;
 
-        let processed_code = post_process_typescript(&ts_code);
+        let processed_code = post_process_typescript(&ts_code, &class_name);
         let restored_code = sentinel::restore_typescript(&processed_code, &sentinel_table);
 
         let output_path = output_dir.join(format!("{}.ts", module_name));
@@ -478,33 +494,12 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
     let discriminator_enum_name = find_discriminator_enum_name(&lines);
     let is_discriminator = discriminator_enum_name.is_some();
 
-    let rewritten;
-    let code: &str = if !is_discriminator {
-        let root_struct_name = struct_names.last();
-        match root_struct_name {
-            Some(actual_root) if actual_root != expected_struct_name => {
-                let mut buf = String::new();
-                for line in lines.iter() {
-                    let new_line =
-                        replace_exact_type_name(line, actual_root, expected_struct_name);
-                    buf.push_str(&new_line);
-                    buf.push('\n');
-                }
-                rewritten = buf;
-                &rewritten
-            }
-            _ => code,
-        }
-    } else {
-        code
-    };
-
-    let post_lines: Vec<&str> = code.lines().collect();
+    let post_lines = &lines;
     let mut name_renames: Vec<(String, String)> = Vec::new();
     let discriminator_enum_ref = discriminator_enum_name.as_deref();
     if !is_discriminator {
         for name in &struct_names {
-            let short = strip_prefix(name, expected_struct_name);
+            let short = strip_prefix(name, ROOT_NAME_SENTINEL);
             if short != *name {
                 name_renames.push((name.clone(), short));
             }
@@ -694,7 +689,7 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
         result.push('\n');
     }
 
-    Ok(result)
+    Ok(result.replace(ROOT_NAME_SENTINEL, expected_struct_name))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -782,29 +777,6 @@ fn strip_prefix(name: &str, prefix: &str) -> String {
     }
 }
 
-fn replace_exact_type_name(line: &str, old_name: &str, new_name: &str) -> String {
-    let mut result = String::new();
-    let mut remaining = line;
-
-    while let Some(pos) = remaining.find(old_name) {
-        result.push_str(&remaining[..pos]);
-
-        let after = &remaining[pos + old_name.len()..];
-
-        let next_char = after.chars().next();
-        if next_char.map(|c| c.is_ascii_uppercase()).unwrap_or(false) {
-            result.push_str(old_name);
-        } else {
-            result.push_str(new_name);
-        }
-
-        remaining = after;
-    }
-
-    result.push_str(remaining);
-    result
-}
-
 fn camel_to_snake(s: &str) -> String {
     let mut result = String::new();
     for (i, c) in s.chars().enumerate() {
@@ -822,13 +794,7 @@ fn camel_to_snake(s: &str) -> String {
 
 /// Post-process jtd-codegen Python output.
 fn post_process_python(code: &str, expected_class_name: &str) -> String {
-    let actual = find_python_root_class_name(code);
-    let rewritten = match actual {
-        Some(ref name) if name != expected_class_name => {
-            code.replace(name.as_str(), expected_class_name)
-        }
-        _ => code.to_string(),
-    };
+    let rewritten = code.replace(ROOT_NAME_SENTINEL, expected_class_name);
 
     format!(
         "# Copyright (c) 2025 Jonathan Fontanez\n\
@@ -839,51 +805,16 @@ fn post_process_python(code: &str, expected_class_name: &str) -> String {
     )
 }
 
-fn find_python_root_class_name(code: &str) -> Option<String> {
-    let mut classes: Vec<(String, Option<String>)> = Vec::new();
-    for line in code.lines() {
-        let Some(rest) = line.strip_prefix("class ") else {
-            continue;
-        };
-        let name_end = rest.find(|c: char| c == '(' || c == ':' || c == ' ');
-        let (name, parent) = match name_end {
-            Some(idx) if rest.as_bytes().get(idx) == Some(&b'(') => {
-                let name = rest[..idx].to_string();
-                let after = &rest[idx + 1..];
-                let parent = after
-                    .find(')')
-                    .map(|end| after[..end].trim().to_string())
-                    .filter(|p| !p.is_empty());
-                (name, parent)
-            }
-            Some(idx) => (rest[..idx].to_string(), None),
-            None => (rest.to_string(), None),
-        };
-        if !name.is_empty() {
-            classes.push((name, parent));
-        }
-    }
-
-    let local_names: std::collections::HashSet<&str> =
-        classes.iter().map(|(n, _)| n.as_str()).collect();
-    for (_, parent) in &classes {
-        if let Some(p) = parent {
-            if local_names.contains(p.as_str()) {
-                return Some(p.clone());
-            }
-        }
-    }
-    classes.last().map(|(n, _)| n.clone())
-}
-
 /// Post-process jtd-codegen TypeScript output.
-fn post_process_typescript(code: &str) -> String {
+fn post_process_typescript(code: &str, expected_class_name: &str) -> String {
+    let rewritten = code.replace(ROOT_NAME_SENTINEL, expected_class_name);
+
     format!(
         "// Copyright (c) 2025 Jonathan Fontanez\n\
          // SPDX-License-Identifier: BUSL-1.1\n\
          //\n\
          // Generated from JTD schema using jtd-codegen. DO NOT EDIT.\n\n{}",
-        code
+        rewritten
     )
 }
 
@@ -1010,52 +941,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn find_python_root_class_name_skips_imports() {
-        let code = "import re\nfrom dataclasses import dataclass\n\n\n@dataclass\nclass APIServerConfig:\n    host: 'str'\n";
-        assert_eq!(
-            find_python_root_class_name(code).as_deref(),
-            Some("APIServerConfig")
-        );
+    fn post_process_python_substitutes_root_sentinel() {
+        let code = "@dataclass\nclass StreamlibCanonRoot:\n    @classmethod\n    def from_json_data(cls, data) -> 'StreamlibCanonRoot':\n        return cls()\n";
+        let out = post_process_python(code, "H264DecoderConfig");
+        assert!(out.contains("class H264DecoderConfig:"));
+        assert!(out.contains("-> 'H264DecoderConfig':"));
+        assert!(!out.contains("StreamlibCanonRoot"));
     }
 
     #[test]
-    fn find_python_root_class_name_picks_last_for_plain_multiclass() {
-        let code = "class WebrtcWhepConfigWhep:\n    pass\nclass WebrtcWhepConfig:\n    pass\n";
-        assert_eq!(
-            find_python_root_class_name(code).as_deref(),
-            Some("WebrtcWhepConfig")
-        );
-    }
-
-    #[test]
-    fn find_python_root_class_name_picks_parent_for_discriminator() {
-        let code = "class EscalateRequest:\n    pass\nclass EscalateRequestAcquirePixelBuffer(EscalateRequest):\n    pass\n";
-        assert_eq!(
-            find_python_root_class_name(code).as_deref(),
-            Some("EscalateRequest")
-        );
-    }
-
-    #[test]
-    fn find_python_root_class_name_none_when_no_class() {
-        assert_eq!(find_python_root_class_name("import re\n"), None);
-    }
-
-    #[test]
-    fn post_process_python_renames_upcased_acronym() {
-        let code = "@dataclass\nclass APIServerConfig:\n    @classmethod\n    def from_json_data(cls, data) -> 'APIServerConfig':\n        return cls()\n";
-        let out = post_process_python(code, "ApiServerConfig");
-        assert!(out.contains("class ApiServerConfig:"));
-        assert!(out.contains("-> 'ApiServerConfig':"));
-        assert!(!out.contains("APIServerConfig"));
-    }
-
-    #[test]
-    fn post_process_python_noop_when_names_match() {
-        let code = "class WebrtcWhepConfig:\n    pass\n";
+    fn post_process_python_substitutes_sub_types_via_prefix() {
+        let code = "class StreamlibCanonRootWhep:\n    pass\nclass StreamlibCanonRoot:\n    pass\n";
         let out = post_process_python(code, "WebrtcWhepConfig");
+        assert!(out.contains("class WebrtcWhepConfigWhep:"));
         assert!(out.contains("class WebrtcWhepConfig:"));
-        assert_eq!(out.matches("WebrtcWhepConfig").count(), 1);
+        assert!(!out.contains("StreamlibCanonRoot"));
+    }
+
+    #[test]
+    fn post_process_typescript_substitutes_root_sentinel() {
+        let code = "export interface StreamlibCanonRoot {\n}\n";
+        let out = post_process_typescript(code, "H264DecoderConfig");
+        assert!(out.contains("export interface H264DecoderConfig {"));
+        assert!(!out.contains("StreamlibCanonRoot"));
+    }
+
+    #[test]
+    fn post_process_typescript_substitutes_discriminator_union() {
+        let code = "export type StreamlibCanonRoot = StreamlibCanonRootBar | StreamlibCanonRootFoo;\nexport interface StreamlibCanonRootBar { op: \"bar\"; }\n";
+        let out = post_process_typescript(code, "EscalateRequest");
+        assert!(out.contains("export type EscalateRequest = EscalateRequestBar | EscalateRequestFoo;"));
+        assert!(out.contains("export interface EscalateRequestBar"));
+        assert!(!out.contains("StreamlibCanonRoot"));
+    }
+
+    #[test]
+    fn post_process_rust_substitutes_root_sentinel() {
+        let code = "// Code generated by jtd-codegen for Rust v0.4.1\n\nuse serde::{Deserialize, Serialize};\n\n#[derive(Serialize, Deserialize)]\npub struct StreamlibCanonRoot {}\n";
+        let out = post_process_rust(code, "H264DecoderConfig").unwrap();
+        assert!(out.contains("pub struct H264DecoderConfig {}"));
+        assert!(!out.contains("StreamlibCanonRoot"));
     }
 
     #[test]
@@ -1114,18 +1039,6 @@ mod tests {
         assert_eq!(strip_prefix("Foo", "Foo"), "Foo");
         assert_eq!(strip_prefix("FooBar", "Foo"), "Bar");
         assert_eq!(strip_prefix("Bar", "Foo"), "Bar");
-    }
-
-    #[test]
-    fn replace_exact_type_name_skips_camelcase_neighbors() {
-        assert_eq!(
-            replace_exact_type_name("FooBar field: Foo;", "Foo", "Renamed"),
-            "FooBar field: Renamed;"
-        );
-        assert_eq!(
-            replace_exact_type_name("type Foo;", "Foo", "Renamed"),
-            "type Renamed;"
-        );
     }
 
     #[test]
