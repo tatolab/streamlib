@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.28](https://github.com/tatolab/streamlib/compare/v0.4.27...v0.4.28) (2026-05-04)
+
+
+### Features
+
+* **adapter-skia:** producer-side QFOT release via dual-registration ([#645](https://github.com/tatolab/streamlib/issues/645)) ([#650](https://github.com/tatolab/streamlib/issues/650)) ([ba4ec9a](https://github.com/tatolab/streamlib/commit/ba4ec9a33734d6b410f1bd5f020999722355994a))
+* **blending-compositor:** rewrite on graphics-kernel + texture-cache RHI; Skia overlays Linux ports (closes [#485](https://github.com/tatolab/streamlib/issues/485)) ([#671](https://github.com/tatolab/streamlib/issues/671)) ([307817c](https://github.com/tatolab/streamlib/commit/307817ccb003c2b07df571a0c97438f755a28670))
+* **example,linux-python:** wire CrtFilmGrain + sandbox demo kernels out of engine ([#487](https://github.com/tatolab/streamlib/issues/487)) ([#690](https://github.com/tatolab/streamlib/issues/690)) ([9838d22](https://github.com/tatolab/streamlib/commit/9838d22aea17c7fe9dfdabaaa271b699fe375649))
+* **linux-python:** Cyberpunk Glitch + full-frame grade Linux port ([#486](https://github.com/tatolab/streamlib/issues/486)) ([#686](https://github.com/tatolab/streamlib/issues/686)) ([a0567f9](https://github.com/tatolab/streamlib/commit/a0567f901fa9e121c2710baa8b57757e3be5f217))
+* **polyglot:** subprocess escalate IPC for VulkanGraphicsKernel ([#656](https://github.com/tatolab/streamlib/issues/656)) ([#666](https://github.com/tatolab/streamlib/issues/666)) ([02c243a](https://github.com/tatolab/streamlib/commit/02c243a44dc0170c95332dbd56dffa2b71372117))
+* **polyglot:** subprocess escalate IPC for VulkanRayTracingKernel ([#667](https://github.com/tatolab/streamlib/issues/667)) ([#670](https://github.com/tatolab/streamlib/issues/670)) ([ed8b498](https://github.com/tatolab/streamlib/commit/ed8b498563528f18af525d0f32930ebcc55bf965))
+* **rhi:** VulkanGraphicsKernel — canonical graphics-pipeline kernel ([#609](https://github.com/tatolab/streamlib/issues/609)) ([#655](https://github.com/tatolab/streamlib/issues/655)) ([257c11f](https://github.com/tatolab/streamlib/commit/257c11fea197c4ed16355aeeec78b3b1d088914e))
+* **rhi:** VulkanRayTracingKernel + VulkanAccelerationStructure ([#610](https://github.com/tatolab/streamlib/issues/610)) ([#669](https://github.com/tatolab/streamlib/issues/669)) ([c086fd1](https://github.com/tatolab/streamlib/commit/c086fd154885bfb9ea1319172808a4151e407676))
+
 ## [0.4.27](https://github.com/tatolab/streamlib/compare/v0.4.26...v0.4.27) (2026-05-03)
 
 
