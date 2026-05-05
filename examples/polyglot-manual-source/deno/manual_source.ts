@@ -12,7 +12,7 @@
  * 2. The worker uses `MonotonicTimer` for drift-free pacing
  *    (NOT `setTimeout`).
  * 3. Each tick, the worker calls `ctx.outputs.write(...)` to publish a
- *    `Videoframe` over iceoryx2. The Rust counting-sink plugin
+ *    `VideoFrame` over iceoryx2. The Rust counting-sink plugin
  *    subscribes to the same iceoryx2 service and counts frames; the
  *    scenario binary reads the sink's stats file post-stop to verify
  *    frames flowed.
@@ -101,7 +101,7 @@ export default class PolyglotManualSource implements ManualProcessor {
   }
 
   private publishFrame(): void {
-    /** Publish one Videoframe on the `frame_out` port from this worker
+    /** Publish one VideoFrame on the `frame_out` port from this worker
      * task. Exercises the Deno cdylib's `Mutex` around the iceoryx2
      * publisher map (#604). */
     if (this.outputs === null) return;

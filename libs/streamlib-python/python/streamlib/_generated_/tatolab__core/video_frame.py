@@ -8,59 +8,77 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union, get_args, get_origin
+from typing import Any, Dict, Optional, Union, get_args, get_origin
 
 
 @dataclass
-class Encodedvideoframe:
+class VideoFrame:
     """
-    Encoded video frame with H.264/H.265 NAL unit data
-    """
-
-    data: 'List[int]'
-    """
-    Encoded NAL units (H.264/H.265 bitstream data)
+    Video frame for IPC - references GPU surface by ID
     """
 
-    frame_number: 'str'
+    frame_index: 'str'
     """
-    Sequential frame number (uint64 as string)
+    Sequential frame counter (uint64 as string - parse to native uint64)
     """
 
-    is_keyframe: 'bool'
+    height: 'int'
     """
-    Whether this is a keyframe (I-frame)
+    Frame height in pixels
+    """
+
+    surface_id: 'str'
+    """
+    GPU surface ID (IOSurface on macOS)
     """
 
     timestamp_ns: 'str'
     """
-    Monotonic timestamp in nanoseconds (int64 as string)
+    Monotonic timestamp in nanoseconds (int64 as string - parse to native int64)
+    """
+
+    width: 'int'
+    """
+    Frame width in pixels
     """
 
     fps: 'Optional[int]'
     """
-    Source frame rate in frames per second (pass-through from capture device)
+    Source frame rate in frames per second (set by capture device)
+    """
+
+    texture_layout: 'Optional[int]'
+    """
+    Producer's published VkImageLayout for this frame's texture (#633). Per-
+    frame override of the per-surface current_image_layout published via
+    surface-share register/update_layout. Encoded as the raw int32 VkImageLayout
+    enumerant. Absent when the producer relies on the per-surface default.
     """
 
 
     @classmethod
-    def from_json_data(cls, data: Any) -> 'Encodedvideoframe':
+    def from_json_data(cls, data: Any) -> 'VideoFrame':
         return cls(
-            _from_json_data(List[int], data.get("data")),
-            _from_json_data(str, data.get("frame_number")),
-            _from_json_data(bool, data.get("is_keyframe")),
+            _from_json_data(str, data.get("frame_index")),
+            _from_json_data(int, data.get("height")),
+            _from_json_data(str, data.get("surface_id")),
             _from_json_data(str, data.get("timestamp_ns")),
+            _from_json_data(int, data.get("width")),
             _from_json_data(Optional[int], data.get("fps")),
+            _from_json_data(Optional[int], data.get("texture_layout")),
         )
 
     def to_json_data(self) -> Any:
         data: Dict[str, Any] = {}
-        data["data"] = _to_json_data(self.data)
-        data["frame_number"] = _to_json_data(self.frame_number)
-        data["is_keyframe"] = _to_json_data(self.is_keyframe)
+        data["frame_index"] = _to_json_data(self.frame_index)
+        data["height"] = _to_json_data(self.height)
+        data["surface_id"] = _to_json_data(self.surface_id)
         data["timestamp_ns"] = _to_json_data(self.timestamp_ns)
+        data["width"] = _to_json_data(self.width)
         if self.fps is not None:
              data["fps"] = _to_json_data(self.fps)
+        if self.texture_layout is not None:
+             data["texture_layout"] = _to_json_data(self.texture_layout)
         return data
 
 def _from_json_data(cls: Any, data: Any) -> Any:

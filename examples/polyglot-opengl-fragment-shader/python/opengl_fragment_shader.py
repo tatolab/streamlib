@@ -5,7 +5,7 @@
 
 End-to-end gate for the subprocess `OpenGLContext` runtime (#530). The
 host pre-allocates a render-target-capable DMA-BUF surface and registers
-it with surface-share. This processor receives a trigger Videoframe,
+it with surface-share. This processor receives a trigger VideoFrame,
 opens the host surface through ``OpenGLContext.acquire_write`` (which
 imports the DMA-BUF as an `EGLImage` + `GL_TEXTURE_2D` and makes the
 adapter's EGL context current on the calling thread), uses raw ctypes

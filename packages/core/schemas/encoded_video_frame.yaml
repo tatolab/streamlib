@@ -1,11 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# JSON Type Definition (RFC 8927) schema for encoded video frames
+# JSON Type Definition (RFC 8927) schema for encoded video frames.
 
 metadata:
-  name: com.tatolab.encodedvideoframe
-  version: 1.0.0
+  type: EncodedVideoFrame
   description: "Encoded video frame with H.264/H.265 NAL unit data"
   read_mode: read_next_in_order
   buffer_size: 16

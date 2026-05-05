@@ -24,17 +24,17 @@ from .com_tatolab_audio_channel_converter_config import AudioChannelConverterCon
 from .com_tatolab_audio_mixer_config import AudioMixerConfig
 from .com_tatolab_audio_output_config import AudioOutputConfig
 from .com_tatolab_audio_resampler_config import AudioResamplerConfig
-from .com_tatolab_audioframe import Audioframe
 from .com_tatolab_buffer_rechunker_config import BufferRechunkerConfig
 from .com_tatolab_camera_config import CameraConfig
 from .com_tatolab_chord_generator_config import ChordGeneratorConfig
 from .com_tatolab_display_config import DisplayConfig
-from .com_tatolab_encodedaudioframe import Encodedaudioframe
-from .com_tatolab_encodedvideoframe import Encodedvideoframe
 from .com_tatolab_mp4_writer_config import Mp4WriterConfig
 from .com_tatolab_screen_capture_config import ScreenCaptureConfig
 from .com_tatolab_simple_passthrough_config import SimplePassthroughConfig
-from .com_tatolab_videoframe import Videoframe
+from .tatolab__core import AudioFrame
+from .tatolab__core import EncodedAudioFrame
+from .tatolab__core import EncodedVideoFrame
+from .tatolab__core import VideoFrame
 
 __all__ = [
     "ApiServerConfig",
@@ -58,15 +58,15 @@ __all__ = [
     "AudioMixerConfig",
     "AudioOutputConfig",
     "AudioResamplerConfig",
-    "Audioframe",
     "BufferRechunkerConfig",
     "CameraConfig",
     "ChordGeneratorConfig",
     "DisplayConfig",
-    "Encodedaudioframe",
-    "Encodedvideoframe",
     "Mp4WriterConfig",
     "ScreenCaptureConfig",
     "SimplePassthroughConfig",
-    "Videoframe",
+    "AudioFrame",
+    "EncodedAudioFrame",
+    "EncodedVideoFrame",
+    "VideoFrame",
 ]

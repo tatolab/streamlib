@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use super::audio_resample::{AudioResampler, ResamplingQuality};
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::Result;
 
 /// Convert audio frame to a different channel count.
-pub fn convert_channels(frame: &Audioframe, target_channels: u8) -> Audioframe {
+pub fn convert_channels(frame: &AudioFrame, target_channels: u8) -> AudioFrame {
     let source_channels = frame.channels;
 
     // Fast path: same channel count
@@ -104,7 +104,7 @@ pub fn convert_channels(frame: &Audioframe, target_channels: u8) -> Audioframe {
         }
     }
 
-    Audioframe {
+    AudioFrame {
         samples: output_samples,
         channels: target_channels,
         timestamp_ns: frame.timestamp_ns.clone(),
@@ -115,10 +115,10 @@ pub fn convert_channels(frame: &Audioframe, target_channels: u8) -> Audioframe {
 
 /// Resample audio frame to a different sample rate.
 pub fn resample_frame(
-    frame: &Audioframe,
+    frame: &AudioFrame,
     target_sample_rate: u32,
     quality: ResamplingQuality,
-) -> Result<Audioframe> {
+) -> Result<AudioFrame> {
     // Fast path: same sample rate
     if frame.sample_rate == target_sample_rate {
         return Ok(frame.clone());
@@ -135,7 +135,7 @@ pub fn resample_frame(
 
     let resampled_samples = resampler.resample(&frame.samples)?;
 
-    Ok(Audioframe {
+    Ok(AudioFrame {
         samples: resampled_samples,
         channels: frame.channels,
         timestamp_ns: frame.timestamp_ns.clone(),
@@ -146,11 +146,11 @@ pub fn resample_frame(
 
 /// Convert audio frame to match target configuration (channels + sample rate).
 pub fn convert_audio_frame(
-    frame: &Audioframe,
+    frame: &AudioFrame,
     target_channels: u8,
     target_sample_rate: u32,
     quality: ResamplingQuality,
-) -> Result<Audioframe> {
+) -> Result<AudioFrame> {
     // Step 1: Convert channels
     let frame = convert_channels(frame, target_channels);
 
@@ -178,7 +178,7 @@ impl AudioRechunker {
     }
 
     /// Process an input frame, returning an output frame if buffer is full.
-    pub fn process(&mut self, input: &Audioframe) -> Option<Audioframe> {
+    pub fn process(&mut self, input: &AudioFrame) -> Option<AudioFrame> {
         // Validate channel count
         if input.channels != self.channels {
             tracing::warn!(
@@ -200,7 +200,7 @@ impl AudioRechunker {
             // Extract exact amount needed
             let output_samples: Vec<f32> = self.buffer.drain(..target_total_samples).collect();
 
-            let frame = Audioframe {
+            let frame = AudioFrame {
                 samples: output_samples,
                 channels: self.channels,
                 timestamp_ns: input.timestamp_ns.clone(),
@@ -216,7 +216,7 @@ impl AudioRechunker {
     }
 
     /// Flush remaining samples as a potentially shorter frame.
-    pub fn flush(&mut self, timestamp_ns: i64, sample_rate: u32) -> Option<Audioframe> {
+    pub fn flush(&mut self, timestamp_ns: i64, sample_rate: u32) -> Option<AudioFrame> {
         let channels_usize = self.channels as usize;
 
         if self.buffer.is_empty() {
@@ -231,7 +231,7 @@ impl AudioRechunker {
 
         let output_samples: Vec<f32> = self.buffer.drain(..aligned_len).collect();
 
-        let frame = Audioframe {
+        let frame = AudioFrame {
             samples: output_samples,
             channels: self.channels,
             timestamp_ns: timestamp_ns.to_string(),
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_convert_mono_to_stereo() {
-        let frame = Audioframe {
+        let frame = AudioFrame {
             samples: vec![1.0, 2.0, 3.0],
             channels: 1,
             timestamp_ns: "0".to_string(),
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_convert_stereo_to_mono() {
-        let frame = Audioframe {
+        let frame = AudioFrame {
             samples: vec![1.0, 2.0, 3.0, 4.0],
             channels: 2,
             timestamp_ns: "0".to_string(),
@@ -293,7 +293,7 @@ mod tests {
         let mut rechunker = AudioRechunker::new(2, 2);
 
         // Input frame with exactly 2 samples per channel (4 total)
-        let frame = Audioframe {
+        let frame = AudioFrame {
             samples: vec![1.0, 2.0, 3.0, 4.0],
             channels: 2,
             timestamp_ns: "0".to_string(),
@@ -311,7 +311,7 @@ mod tests {
         let mut rechunker = AudioRechunker::new(2, 4);
 
         // First frame: 2 samples per channel (not enough)
-        let frame1 = Audioframe {
+        let frame1 = AudioFrame {
             samples: vec![1.0, 2.0, 3.0, 4.0],
             channels: 2,
             timestamp_ns: "0".to_string(),
@@ -321,7 +321,7 @@ mod tests {
         assert!(rechunker.process(&frame1).is_none());
 
         // Second frame: 2 more samples per channel (now enough)
-        let frame2 = Audioframe {
+        let frame2 = AudioFrame {
             samples: vec![5.0, 6.0, 7.0, 8.0],
             channels: 2,
             timestamp_ns: "100".to_string(),

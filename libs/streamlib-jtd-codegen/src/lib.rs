@@ -28,7 +28,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use streamlib_idents::{ResolvedPackages, ResolverOptions};
+use streamlib_idents::{ResolvedPackage, ResolvedPackages, ResolverOptions, SemVer};
 
 pub mod ordering;
 pub mod sentinel;
@@ -125,7 +125,11 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
         if !schema_path.exists() {
             anyhow::bail!("Schema file not found: {}", schema_path.display());
         }
-        return run_codegen(&[schema_path], runtime, &output);
+        let tasks = vec![SchemaTask {
+            schema_path,
+            package: None,
+        }];
+        return run_codegen_tasks(&tasks, runtime, &output);
     }
 
     if let Some(dir) = schema_dir {
@@ -141,7 +145,14 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
             }
         }
         files.sort();
-        return run_codegen(&files, runtime, &output);
+        let tasks: Vec<SchemaTask> = files
+            .into_iter()
+            .map(|schema_path| SchemaTask {
+                schema_path,
+                package: None,
+            })
+            .collect();
+        return run_codegen_tasks(&tasks, runtime, &output);
     }
 
     anyhow::bail!("No input specified. Use --project-dir, --schema-file, or --schema-dir");
@@ -149,42 +160,82 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
 
 /// Direct entry: run codegen against an already-resolved package set.
 ///
-/// The output layout is flat for now (one file per schema in `output`),
-/// matching the in-tree `_generated_/` shape pre-#402. When carve-out
-/// packages land, this layout will likely become per-package
-/// (`output/<org>__<package>/<file>`); the function keeps a stable name so
-/// callers don't churn.
+/// The output layout is mixed: schemas in package-flavor manifests with
+/// new-shape `metadata.type` declarations land in
+/// `output/<org>__<package>/<snake_type>.<ext>`; legacy schemas with
+/// reverse-DNS `metadata.name` declarations stay flat at
+/// `output/<reverse_dns>.<ext>`. The two co-exist during the staged
+/// per-package carve-out migration (#401, then per-package issues).
 pub fn generate_from_resolved(
     resolved: &ResolvedPackages,
     runtime: RuntimeTarget,
     output: &Path,
 ) -> Result<()> {
-    let mut all_schema_files: Vec<PathBuf> = Vec::new();
+    let mut tasks: Vec<SchemaTask> = Vec::new();
+    let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     for pkg in resolved.iter_all() {
-        all_schema_files.extend(pkg.schema_files.iter().cloned());
+        let pkg_ctx = PackageContext::from_resolved(pkg);
+        for schema_path in &pkg.schema_files {
+            if !seen.insert(schema_path.clone()) {
+                continue;
+            }
+            tasks.push(SchemaTask {
+                schema_path: schema_path.clone(),
+                package: pkg_ctx.clone(),
+            });
+        }
     }
-    all_schema_files.sort();
-    all_schema_files.dedup();
+    tasks.sort_by(|a, b| a.schema_path.cmp(&b.schema_path));
 
-    if all_schema_files.is_empty() {
+    if tasks.is_empty() {
         tracing::info!("No schemas to generate");
         return Ok(());
     }
 
-    run_codegen(&all_schema_files, runtime, output)
+    run_codegen_tasks(&tasks, runtime, output)
 }
 
-fn run_codegen(schema_files: &[PathBuf], runtime: RuntimeTarget, output: &Path) -> Result<()> {
-    if schema_files.is_empty() {
+/// Per-schema codegen task: the schema's path + the package context the
+/// resolver associated it with (None for orphan schemas in --schema-file or
+/// --schema-dir mode).
+#[derive(Debug, Clone)]
+pub struct SchemaTask {
+    pub schema_path: PathBuf,
+    pub package: Option<PackageContext>,
+}
+
+/// Package context propagated from `streamlib.yaml`'s `package:` block to
+/// codegen for a schema. The codegen needs `org`/`name`/`version` to derive
+/// per-package output layout and the structured `SchemaIdent` const literal
+/// it emits next to each generated type.
+#[derive(Debug, Clone)]
+pub struct PackageContext {
+    pub org: String,
+    pub name: String,
+    pub version: SemVer,
+}
+
+impl PackageContext {
+    fn from_resolved(pkg: &ResolvedPackage) -> Option<Self> {
+        pkg.manifest.package.as_ref().map(|p| Self {
+            org: p.org.as_str().to_string(),
+            name: p.name.as_str().to_string(),
+            version: p.version,
+        })
+    }
+}
+
+fn run_codegen_tasks(tasks: &[SchemaTask], runtime: RuntimeTarget, output: &Path) -> Result<()> {
+    if tasks.is_empty() {
         tracing::info!("No schemas found");
         return Ok(());
     }
-    tracing::info!("Found {} schemas", schema_files.len());
+    tracing::info!("Found {} schemas", tasks.len());
 
     match runtime {
-        RuntimeTarget::Rust => run_jtd_codegen_rust(schema_files, output),
-        RuntimeTarget::Python => run_jtd_codegen_python(schema_files, output),
-        RuntimeTarget::Typescript => run_jtd_codegen_typescript(schema_files, output),
+        RuntimeTarget::Rust => run_jtd_codegen_rust(tasks, output),
+        RuntimeTarget::Python => run_jtd_codegen_python(tasks, output),
+        RuntimeTarget::Typescript => run_jtd_codegen_typescript(tasks, output),
     }
 }
 
@@ -196,7 +247,93 @@ struct JtdSchema {
 
 #[derive(Debug, Deserialize)]
 struct JtdMetadata {
-    name: String,
+    /// Legacy joined-string identifier (`com.tatolab.videoframe`). Set on
+    /// schemas that haven't migrated to per-package layout yet.
+    #[serde(default)]
+    name: Option<String>,
+    /// New structured-identifier `type` segment (PascalCase, e.g. `VideoFrame`).
+    /// Set on schemas living inside a package-flavor `streamlib.yaml`. The
+    /// codegen derives the full `SchemaIdent { org, package, type, version }`
+    /// from this plus the enclosing package context.
+    #[serde(default, rename = "type")]
+    type_name: Option<String>,
+}
+
+/// Module + struct names + optional per-package subdirectory derived from a
+/// schema's metadata + the enclosing package context.
+///
+/// New-shape schemas (declaring `metadata.type`) live under
+/// `output/<package_subdir>/<module_name>.<ext>`; legacy schemas (declaring
+/// `metadata.name`) stay flat at `output/<module_name>.<ext>`.
+#[derive(Debug, Clone)]
+struct SchemaIdentity {
+    /// Module name at its level (no path components). New: snake_case type
+    /// name (`video_frame`); Old: full reverse-DNS module
+    /// (`com_tatolab_videoframe`).
+    module_name: String,
+    /// Type/struct name. New: PascalCase (`VideoFrame`); Old: legacy rule
+    /// (`Videoframe`).
+    struct_name: String,
+    /// `<org>__<package>` directory under `output/` for new-shape schemas;
+    /// `None` for legacy flat schemas.
+    package_subdir: Option<String>,
+}
+
+impl SchemaIdentity {
+    fn output_path(&self, output_root: &Path, ext: &str) -> PathBuf {
+        let mut p = output_root.to_path_buf();
+        if let Some(subdir) = &self.package_subdir {
+            p.push(subdir);
+        }
+        p.push(format!("{}.{}", self.module_name, ext));
+        p
+    }
+
+    /// Unique tempdir key — the codegen runs in tempdirs named per task to
+    /// avoid colliding when two schemas across packages happen to share a
+    /// snake_case module name.
+    fn temp_dir_key(&self) -> String {
+        match &self.package_subdir {
+            Some(subdir) => format!("{}__{}", subdir, self.module_name),
+            None => self.module_name.clone(),
+        }
+    }
+}
+
+fn classify_schema(yaml_content: &str, package: Option<&PackageContext>) -> Result<SchemaIdentity> {
+    let schema: JtdSchema = serde_yaml::from_str(yaml_content)
+        .context("Failed to parse YAML metadata")?;
+
+    if let Some(type_name) = &schema.metadata.type_name {
+        let pkg = package.with_context(|| {
+            format!(
+                "Schema declares metadata.type = {} but is not part of a package-flavor streamlib.yaml; codegen needs the enclosing org/package/version to derive the structured SchemaIdent",
+                type_name
+            )
+        })?;
+        let snake_type = pascal_to_snake(type_name);
+        let package_subdir = format!("{}__{}", pkg.org, pkg.name.replace('-', "_"));
+        return Ok(SchemaIdentity {
+            module_name: snake_type,
+            struct_name: type_name.clone(),
+            package_subdir: Some(package_subdir),
+        });
+    }
+
+    if let Some(name) = &schema.metadata.name {
+        let module_name = schema_name_to_module_name(name);
+        let struct_name = schema_name_to_struct_name(name);
+        return Ok(SchemaIdentity {
+            module_name,
+            struct_name,
+            package_subdir: None,
+        });
+    }
+
+    anyhow::bail!(
+        "Schema metadata must declare either `type` (new shape, requires enclosing \
+         package-flavor streamlib.yaml) or `name` (legacy reverse-DNS shape)"
+    )
 }
 
 // =============================================================================
@@ -222,59 +359,71 @@ fn verify_jtd_codegen() -> Result<()> {
 }
 
 /// Convert a schema YAML file to JSON, run the sentinel pre-pass + property
-/// ordering, and write the result to `temp_dir`. Returns the (module_name,
-/// struct_name, json_path, sentinel_table) tuple.
+/// ordering, and write the result to `temp_dir`. Returns the (identity,
+/// json_path, sentinel_table) tuple.
 fn prepare_schema(
-    yaml_path: &Path,
+    task: &SchemaTask,
     temp_dir: &Path,
-) -> Result<(String, String, PathBuf, SentinelTable)> {
+) -> Result<(SchemaIdentity, PathBuf, SentinelTable)> {
+    let yaml_path = &task.schema_path;
     let yaml_content = fs::read_to_string(yaml_path)
         .with_context(|| format!("Failed to read {}", yaml_path.display()))?;
 
-    let schema: JtdSchema = serde_yaml::from_str(&yaml_content)
-        .with_context(|| format!("Failed to parse {}", yaml_path.display()))?;
-
-    let module_name = schema_name_to_module_name(&schema.metadata.name);
-    let struct_name = schema_name_to_struct_name(&schema.metadata.name);
+    let identity = classify_schema(&yaml_content, task.package.as_ref())
+        .with_context(|| format!("Failed to classify {}", yaml_path.display()))?;
 
     // YAML → JSON value (mutable so we can run pre-passes on it).
     let mut json_value: serde_json::Value = serde_yaml::from_str(&yaml_content)
         .with_context(|| format!("Failed to parse YAML {}", yaml_path.display()))?;
+
+    // For new-shape schemas, jtd-codegen requires `metadata.name` to be set —
+    // strip our `metadata.type` field and synthesize `metadata.name` from the
+    // type name so the codegen sees a coherent JTD schema. The structured
+    // identifier is reconstructed at codegen-emit time from the package
+    // context.
+    if identity.package_subdir.is_some() {
+        if let Some(metadata) = json_value.get_mut("metadata").and_then(|v| v.as_object_mut()) {
+            metadata.remove("type");
+            metadata.insert(
+                "name".to_string(),
+                serde_json::Value::String(identity.struct_name.clone()),
+            );
+        }
+    }
 
     let mut sentinel_table = SentinelTable::default();
     sentinel::substitute(&mut json_value, &mut sentinel_table)
         .with_context(|| format!("Sentinel substitution failed for {}", yaml_path.display()))?;
     ordering::sort_object_keys_recursively(&mut json_value);
 
-    let json_filename = format!("{}.json", struct_name);
+    let json_filename = format!("{}.json", identity.temp_dir_key());
     let json_path = temp_dir.join(&json_filename);
     let json_content =
         serde_json::to_string_pretty(&json_value).context("Failed to serialize to JSON")?;
     fs::write(&json_path, &json_content)
         .with_context(|| format!("Failed to write {}", json_path.display()))?;
 
-    Ok((module_name, struct_name, json_path, sentinel_table))
+    Ok((identity, json_path, sentinel_table))
 }
 
 // =============================================================================
 // Rust codegen
 // =============================================================================
 
-fn run_jtd_codegen_rust(schema_files: &[PathBuf], output_dir: &Path) -> Result<()> {
+fn run_jtd_codegen_rust(tasks: &[SchemaTask], output_dir: &Path) -> Result<()> {
     verify_jtd_codegen()?;
 
     fs::create_dir_all(output_dir).context("Failed to create output directory")?;
     let temp_dir = tempfile::tempdir().context("Failed to create temp directory")?;
 
-    let mut modules = Vec::new();
+    let mut entries: Vec<SchemaIdentity> = Vec::new();
 
-    for yaml_path in schema_files {
-        tracing::info!("  Processing: {}", yaml_path.display());
+    for task in tasks {
+        tracing::info!("  Processing: {}", task.schema_path.display());
 
-        let (module_name, struct_name, json_path, sentinel_table) =
-            prepare_schema(yaml_path, temp_dir.path())?;
+        let (identity, json_path, sentinel_table) = prepare_schema(task, temp_dir.path())?;
 
-        let temp_rust_out = temp_dir.path().join(format!("rust_{}", module_name));
+        let temp_rust_out = temp_dir.path().join(format!("rust_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_rust_out)?;
 
         let output = Command::new("jtd-codegen")
@@ -289,31 +438,34 @@ fn run_jtd_codegen_rust(schema_files: &[PathBuf], output_dir: &Path) -> Result<(
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("jtd-codegen failed for {}: {}", yaml_path.display(), stderr);
+            anyhow::bail!("jtd-codegen failed for {}: {}", task.schema_path.display(), stderr);
         }
 
         let generated_mod = temp_rust_out.join("mod.rs");
         let generated_code = fs::read_to_string(&generated_mod).with_context(|| {
-            format!("Failed to read generated code for {}", yaml_path.display())
+            format!("Failed to read generated code for {}", task.schema_path.display())
         })?;
 
-        let processed_code = post_process_rust(&generated_code, &struct_name)?;
+        let processed_code = post_process_rust(&generated_code, &identity.struct_name)?;
         let restored_code = sentinel::restore_rust(&processed_code, &sentinel_table);
 
-        let output_path = output_dir.join(format!("{}.rs", module_name));
+        let output_path = identity.output_path(output_dir, "rs");
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create directory {}", parent.display())
+            })?;
+        }
         fs::write(&output_path, restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
-        modules.push((module_name, struct_name));
+        entries.push(identity);
     }
 
-    let mod_rs = generate_rust_mod_rs(&modules);
-    let mod_path = output_dir.join("mod.rs");
-    fs::write(&mod_path, mod_rs).context("Failed to write mod.rs")?;
+    write_rust_barrels(output_dir, &entries)?;
 
     tracing::info!(
         "Generated {} Rust modules in {}",
-        modules.len(),
+        entries.len(),
         output_dir.display()
     );
 
@@ -324,7 +476,7 @@ fn run_jtd_codegen_rust(schema_files: &[PathBuf], output_dir: &Path) -> Result<(
 // Python codegen
 // =============================================================================
 
-fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result<()> {
+fn run_jtd_codegen_python(tasks: &[SchemaTask], output_dir: &Path) -> Result<()> {
     verify_jtd_codegen()?;
 
     if output_dir.exists() {
@@ -333,15 +485,14 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
     fs::create_dir_all(output_dir).context("Failed to create output directory")?;
 
     let temp_dir = tempfile::tempdir().context("Failed to create temp directory")?;
-    let mut modules: Vec<(String, String)> = Vec::new();
+    let mut entries: Vec<SchemaIdentity> = Vec::new();
 
-    for yaml_path in schema_files {
-        tracing::info!("  Processing: {}", yaml_path.display());
+    for task in tasks {
+        tracing::info!("  Processing: {}", task.schema_path.display());
 
-        let (module_name, class_name, json_path, sentinel_table) =
-            prepare_schema(yaml_path, temp_dir.path())?;
+        let (identity, json_path, sentinel_table) = prepare_schema(task, temp_dir.path())?;
 
-        let temp_python_out = temp_dir.path().join(format!("python_{}", module_name));
+        let temp_python_out = temp_dir.path().join(format!("python_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_python_out)?;
 
         let output = Command::new("jtd-codegen")
@@ -356,35 +507,38 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("jtd-codegen failed for {}: {}", yaml_path.display(), stderr);
+            anyhow::bail!("jtd-codegen failed for {}: {}", task.schema_path.display(), stderr);
         }
 
         let generated_init = temp_python_out.join("__init__.py");
         let python_code = fs::read_to_string(&generated_init).with_context(|| {
             format!(
                 "Failed to read generated Python for {}",
-                yaml_path.display()
+                task.schema_path.display()
             )
         })?;
 
-        let processed_code = post_process_python(&python_code, &class_name);
+        let processed_code = post_process_python(&python_code, &identity.struct_name);
         let restored_code = sentinel::restore_python(&processed_code, &sentinel_table);
 
-        let output_path = output_dir.join(format!("{}.py", module_name));
+        let output_path = identity.output_path(output_dir, "py");
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create directory {}", parent.display())
+            })?;
+        }
         fs::write(&output_path, &restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
-        tracing::info!("    -> {}.py (class {})", module_name, class_name);
-        modules.push((module_name, class_name));
+        tracing::info!("    -> {} (class {})", output_path.display(), identity.struct_name);
+        entries.push(identity);
     }
 
-    let init_py = generate_python_init_py(&modules);
-    let init_path = output_dir.join("__init__.py");
-    fs::write(&init_path, &init_py).context("Failed to write __init__.py")?;
+    write_python_barrels(output_dir, &entries)?;
 
     tracing::info!(
         "Generated {} Python modules in {}",
-        modules.len(),
+        entries.len(),
         output_dir.display()
     );
 
@@ -395,7 +549,7 @@ fn run_jtd_codegen_python(schema_files: &[PathBuf], output_dir: &Path) -> Result
 // TypeScript codegen
 // =============================================================================
 
-fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Result<()> {
+fn run_jtd_codegen_typescript(tasks: &[SchemaTask], output_dir: &Path) -> Result<()> {
     verify_jtd_codegen()?;
 
     if output_dir.exists() {
@@ -404,15 +558,14 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
     fs::create_dir_all(output_dir).context("Failed to create output directory")?;
 
     let temp_dir = tempfile::tempdir().context("Failed to create temp directory")?;
-    let mut modules: Vec<(String, String)> = Vec::new();
+    let mut entries: Vec<SchemaIdentity> = Vec::new();
 
-    for yaml_path in schema_files {
-        tracing::info!("  Processing: {}", yaml_path.display());
+    for task in tasks {
+        tracing::info!("  Processing: {}", task.schema_path.display());
 
-        let (module_name, class_name, json_path, sentinel_table) =
-            prepare_schema(yaml_path, temp_dir.path())?;
+        let (identity, json_path, sentinel_table) = prepare_schema(task, temp_dir.path())?;
 
-        let temp_ts_out = temp_dir.path().join(format!("ts_{}", module_name));
+        let temp_ts_out = temp_dir.path().join(format!("ts_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_ts_out)?;
 
         let output = Command::new("jtd-codegen")
@@ -427,35 +580,38 @@ fn run_jtd_codegen_typescript(schema_files: &[PathBuf], output_dir: &Path) -> Re
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("jtd-codegen failed for {}: {}", yaml_path.display(), stderr);
+            anyhow::bail!("jtd-codegen failed for {}: {}", task.schema_path.display(), stderr);
         }
 
         let generated_index = temp_ts_out.join("index.ts");
         let ts_code = fs::read_to_string(&generated_index).with_context(|| {
             format!(
                 "Failed to read generated TypeScript for {}",
-                yaml_path.display()
+                task.schema_path.display()
             )
         })?;
 
-        let processed_code = post_process_typescript(&ts_code, &class_name);
+        let processed_code = post_process_typescript(&ts_code, &identity.struct_name);
         let restored_code = sentinel::restore_typescript(&processed_code, &sentinel_table);
 
-        let output_path = output_dir.join(format!("{}.ts", module_name));
+        let output_path = identity.output_path(output_dir, "ts");
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create directory {}", parent.display())
+            })?;
+        }
         fs::write(&output_path, &restored_code)
             .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
-        tracing::info!("    -> {}.ts (interface {})", module_name, class_name);
-        modules.push((module_name, class_name));
+        tracing::info!("    -> {} (interface {})", output_path.display(), identity.struct_name);
+        entries.push(identity);
     }
 
-    let index_ts = generate_typescript_index_ts(&modules);
-    let index_path = output_dir.join("index.ts");
-    fs::write(&index_path, &index_ts).context("Failed to write index.ts")?;
+    write_typescript_barrels(output_dir, &entries)?;
 
     tracing::info!(
         "Generated {} TypeScript modules in {}",
-        modules.len(),
+        entries.len(),
         output_dir.display()
     );
 
@@ -822,60 +978,163 @@ fn post_process_typescript(code: &str, expected_class_name: &str) -> String {
 // Barrel file generation
 // =============================================================================
 
-fn generate_rust_mod_rs(modules: &[(String, String)]) -> String {
-    let mut content = String::from(
+/// Group entries by their `package_subdir` (None = flat) into a deterministic
+/// ordering: legacy-flat entries first (sorted), then each per-package group
+/// (subdir-sorted, entries within each subdir-sorted).
+fn group_entries(
+    entries: &[SchemaIdentity],
+) -> (Vec<SchemaIdentity>, std::collections::BTreeMap<String, Vec<SchemaIdentity>>) {
+    let mut flat: Vec<SchemaIdentity> = Vec::new();
+    let mut groups: std::collections::BTreeMap<String, Vec<SchemaIdentity>> =
+        std::collections::BTreeMap::new();
+    for e in entries {
+        match &e.package_subdir {
+            Some(subdir) => groups.entry(subdir.clone()).or_default().push(e.clone()),
+            None => flat.push(e.clone()),
+        }
+    }
+    flat.sort_by(|a, b| a.module_name.cmp(&b.module_name));
+    for v in groups.values_mut() {
+        v.sort_by(|a, b| a.module_name.cmp(&b.module_name));
+    }
+    (flat, groups)
+}
+
+fn write_rust_barrels(output_dir: &Path, entries: &[SchemaIdentity]) -> Result<()> {
+    let (flat, groups) = group_entries(entries);
+
+    for (subdir, group) in &groups {
+        let mut content = String::from(
+            "// Copyright (c) 2025 Jonathan Fontanez\n\
+             // SPDX-License-Identifier: BUSL-1.1\n\n\
+             //! Generated schema types. DO NOT EDIT.\n\n",
+        );
+        for e in group {
+            content.push_str(&format!("pub mod {};\n", e.module_name));
+        }
+        content.push('\n');
+        for e in group {
+            content.push_str(&format!("pub use {}::{};\n", e.module_name, e.struct_name));
+        }
+        let path = output_dir.join(subdir).join("mod.rs");
+        fs::write(&path, content)
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+    }
+
+    let mut top = String::from(
         "// Copyright (c) 2025 Jonathan Fontanez\n\
          // SPDX-License-Identifier: BUSL-1.1\n\n\
          //! Generated schema types. DO NOT EDIT.\n\n",
     );
-
-    for (module_name, _) in modules {
-        content.push_str(&format!("pub mod {};\n", module_name));
+    for e in &flat {
+        top.push_str(&format!("pub mod {};\n", e.module_name));
     }
-
-    content.push('\n');
-
-    for (module_name, struct_name) in modules {
-        content.push_str(&format!("pub use {}::{};\n", module_name, struct_name));
+    for subdir in groups.keys() {
+        // The `<org>__<package>` separator uses double underscore so org and
+        // package names containing single underscores remain unambiguous; the
+        // resulting module name is non-snake_case by Rust convention. Allow
+        // it on the generated declaration so consumers don't see the warning.
+        top.push_str(&format!("#[allow(non_snake_case)]\npub mod {};\n", subdir));
     }
-
-    content
+    top.push('\n');
+    for e in &flat {
+        top.push_str(&format!("pub use {}::{};\n", e.module_name, e.struct_name));
+    }
+    for (subdir, group) in &groups {
+        for e in group {
+            top.push_str(&format!("pub use {}::{};\n", subdir, e.struct_name));
+        }
+    }
+    let mod_path = output_dir.join("mod.rs");
+    fs::write(&mod_path, top).context("Failed to write mod.rs")?;
+    Ok(())
 }
 
-fn generate_python_init_py(modules: &[(String, String)]) -> String {
-    let mut init_py = String::from(
+fn write_python_barrels(output_dir: &Path, entries: &[SchemaIdentity]) -> Result<()> {
+    let (flat, groups) = group_entries(entries);
+
+    for (subdir, group) in &groups {
+        let mut init_py = String::from(
+            "# Copyright (c) 2025 Jonathan Fontanez\n\
+             # SPDX-License-Identifier: BUSL-1.1\n\
+             #\n\
+             # Generated by jtd-codegen. DO NOT EDIT.\n\n",
+        );
+        for e in group {
+            init_py.push_str(&format!("from .{} import {}\n", e.module_name, e.struct_name));
+        }
+        init_py.push_str("\n__all__ = [\n");
+        for e in group {
+            init_py.push_str(&format!("    \"{}\",\n", e.struct_name));
+        }
+        init_py.push_str("]\n");
+        let path = output_dir.join(subdir).join("__init__.py");
+        fs::write(&path, init_py)
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+    }
+
+    let mut top = String::from(
         "# Copyright (c) 2025 Jonathan Fontanez\n\
          # SPDX-License-Identifier: BUSL-1.1\n\
          #\n\
          # Generated by jtd-codegen. DO NOT EDIT.\n\n",
     );
-
-    for (module_name, class_name) in modules {
-        init_py.push_str(&format!("from .{} import {}\n", module_name, class_name));
+    for e in &flat {
+        top.push_str(&format!("from .{} import {}\n", e.module_name, e.struct_name));
     }
-
-    init_py.push_str("\n__all__ = [\n");
-    for (_, class_name) in modules {
-        init_py.push_str(&format!("    \"{}\",\n", class_name));
+    for (subdir, group) in &groups {
+        for e in group {
+            top.push_str(&format!("from .{} import {}\n", subdir, e.struct_name));
+        }
     }
-    init_py.push_str("]\n");
-
-    init_py
+    top.push_str("\n__all__ = [\n");
+    for e in &flat {
+        top.push_str(&format!("    \"{}\",\n", e.struct_name));
+    }
+    for group in groups.values() {
+        for e in group {
+            top.push_str(&format!("    \"{}\",\n", e.struct_name));
+        }
+    }
+    top.push_str("]\n");
+    let init_path = output_dir.join("__init__.py");
+    fs::write(&init_path, top).context("Failed to write __init__.py")?;
+    Ok(())
 }
 
-fn generate_typescript_index_ts(modules: &[(String, String)]) -> String {
-    let mut index_ts = String::from(
+fn write_typescript_barrels(output_dir: &Path, entries: &[SchemaIdentity]) -> Result<()> {
+    let (flat, groups) = group_entries(entries);
+
+    for (subdir, group) in &groups {
+        let mut idx = String::from(
+            "// Copyright (c) 2025 Jonathan Fontanez\n\
+             // SPDX-License-Identifier: BUSL-1.1\n\
+             //\n\
+             // Generated by jtd-codegen. DO NOT EDIT.\n\n",
+        );
+        for e in group {
+            idx.push_str(&format!("export * from \"./{}.ts\";\n", e.module_name));
+        }
+        let path = output_dir.join(subdir).join("index.ts");
+        fs::write(&path, idx)
+            .with_context(|| format!("Failed to write {}", path.display()))?;
+    }
+
+    let mut top = String::from(
         "// Copyright (c) 2025 Jonathan Fontanez\n\
          // SPDX-License-Identifier: BUSL-1.1\n\
          //\n\
          // Generated by jtd-codegen. DO NOT EDIT.\n\n",
     );
-
-    for (module_name, _) in modules {
-        index_ts.push_str(&format!("export * from \"./{}.ts\";\n", module_name));
+    for e in &flat {
+        top.push_str(&format!("export * from \"./{}.ts\";\n", e.module_name));
     }
-
-    index_ts
+    for subdir in groups.keys() {
+        top.push_str(&format!("export * from \"./{}/index.ts\";\n", subdir));
+    }
+    let index_path = output_dir.join("index.ts");
+    fs::write(&index_path, top).context("Failed to write index.ts")?;
+    Ok(())
 }
 
 // =============================================================================
@@ -936,6 +1195,34 @@ fn to_pascal_case(s: &str) -> String {
     result
 }
 
+/// PascalCase or `H264Encoder`-style identifier → snake_case.
+///
+/// Rules:
+/// - Insert `_` before each uppercase that follows a lowercase or after a
+///   digit (so `VideoFrame` → `video_frame`, `H264Encoder` → `h264_encoder`).
+/// - Lowercase every letter.
+///
+/// Acronym sequences (`HTTPServer`) are NOT specially handled — schemas in
+/// this codebase don't use them, and the tests lock the simple rule.
+fn pascal_to_snake(s: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            let prev = result.chars().last();
+            let needs_underscore = prev
+                .map(|p| p.is_ascii_lowercase() || p.is_ascii_digit())
+                .unwrap_or(false);
+            if needs_underscore {
+                result.push('_');
+            }
+            result.push(c.to_ascii_lowercase());
+        } else {
+            result.push(c.to_ascii_lowercase());
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -986,8 +1273,8 @@ mod tests {
     #[test]
     fn schema_name_to_module_name_strips_version_suffix() {
         assert_eq!(
-            schema_name_to_module_name("com.tatolab.videoframe@1.0.0"),
-            "com_tatolab_videoframe"
+            schema_name_to_module_name("com.streamlib.h264_encoder.config@1.0.0"),
+            "com_streamlib_h264_encoder_config"
         );
     }
 
@@ -1010,9 +1297,101 @@ mod tests {
     #[test]
     fn schema_name_to_struct_name_handles_plain() {
         assert_eq!(
-            schema_name_to_struct_name("com.tatolab.videoframe@1.0.0"),
-            "Videoframe"
+            schema_name_to_struct_name("com.streamlib.escalate_request@1.0.0"),
+            "EscalateRequest"
         );
+    }
+
+    #[test]
+    fn pascal_to_snake_basic_types() {
+        assert_eq!(pascal_to_snake("VideoFrame"), "video_frame");
+        assert_eq!(pascal_to_snake("AudioFrame"), "audio_frame");
+        assert_eq!(pascal_to_snake("EncodedVideoFrame"), "encoded_video_frame");
+        assert_eq!(pascal_to_snake("EncodedAudioFrame"), "encoded_audio_frame");
+    }
+
+    #[test]
+    fn pascal_to_snake_handles_digit_to_letter_boundary() {
+        // H264Encoder: digit 4 then capital E → underscore inserted.
+        assert_eq!(pascal_to_snake("H264Encoder"), "h264_encoder");
+        assert_eq!(pascal_to_snake("H265DecoderConfig"), "h265_decoder_config");
+    }
+
+    #[test]
+    fn pascal_to_snake_single_word() {
+        assert_eq!(pascal_to_snake("Frame"), "frame");
+    }
+
+    #[test]
+    fn classify_schema_new_shape_with_package_context() {
+        let yaml = "metadata:\n  type: VideoFrame\nproperties: {}\n";
+        let pkg = PackageContext {
+            org: "tatolab".to_string(),
+            name: "core".to_string(),
+            version: SemVer::new(1, 0, 0),
+        };
+        let id = classify_schema(yaml, Some(&pkg)).unwrap();
+        assert_eq!(id.module_name, "video_frame");
+        assert_eq!(id.struct_name, "VideoFrame");
+        assert_eq!(id.package_subdir.as_deref(), Some("tatolab__core"));
+    }
+
+    #[test]
+    fn classify_schema_new_shape_dashes_in_package_become_underscores() {
+        let yaml = "metadata:\n  type: ScreenCapture\nproperties: {}\n";
+        let pkg = PackageContext {
+            org: "tatolab".to_string(),
+            name: "screen-capture".to_string(),
+            version: SemVer::new(1, 0, 0),
+        };
+        let id = classify_schema(yaml, Some(&pkg)).unwrap();
+        assert_eq!(id.package_subdir.as_deref(), Some("tatolab__screen_capture"));
+    }
+
+    #[test]
+    fn classify_schema_legacy_shape_no_package_required() {
+        let yaml = "metadata:\n  name: com.streamlib.h264_encoder.config\nproperties: {}\n";
+        let id = classify_schema(yaml, None).unwrap();
+        assert_eq!(id.module_name, "com_streamlib_h264_encoder_config");
+        assert_eq!(id.struct_name, "H264EncoderConfig");
+        assert!(id.package_subdir.is_none());
+    }
+
+    #[test]
+    fn classify_schema_new_shape_without_package_errors() {
+        let yaml = "metadata:\n  type: VideoFrame\nproperties: {}\n";
+        let err = classify_schema(yaml, None).unwrap_err();
+        assert!(format!("{}", err).contains("metadata.type"));
+    }
+
+    #[test]
+    fn classify_schema_neither_name_nor_type_errors() {
+        let yaml = "metadata:\n  description: nothing\nproperties: {}\n";
+        let err = classify_schema(yaml, None).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("type") && msg.contains("name"));
+    }
+
+    #[test]
+    fn schema_identity_output_path_per_package() {
+        let id = SchemaIdentity {
+            module_name: "video_frame".to_string(),
+            struct_name: "VideoFrame".to_string(),
+            package_subdir: Some("tatolab__core".to_string()),
+        };
+        let p = id.output_path(Path::new("/out"), "rs");
+        assert_eq!(p, PathBuf::from("/out/tatolab__core/video_frame.rs"));
+    }
+
+    #[test]
+    fn schema_identity_output_path_flat() {
+        let id = SchemaIdentity {
+            module_name: "com_streamlib_h264_encoder_config".to_string(),
+            struct_name: "H264EncoderConfig".to_string(),
+            package_subdir: None,
+        };
+        let p = id.output_path(Path::new("/out"), "rs");
+        assert_eq!(p, PathBuf::from("/out/com_streamlib_h264_encoder_config.rs"));
     }
 
     #[test]
@@ -1064,35 +1443,117 @@ mod tests {
     }
 
     #[test]
-    fn generate_rust_mod_rs_emits_pub_mod_and_pub_use() {
-        let modules = vec![
-            ("foo".to_string(), "Foo".to_string()),
-            ("bar_baz".to_string(), "BarBaz".to_string()),
+    fn group_entries_separates_flat_and_per_package() {
+        let entries = vec![
+            SchemaIdentity {
+                module_name: "video_frame".to_string(),
+                struct_name: "VideoFrame".to_string(),
+                package_subdir: Some("tatolab__core".to_string()),
+            },
+            SchemaIdentity {
+                module_name: "com_streamlib_h264_encoder_config".to_string(),
+                struct_name: "H264EncoderConfig".to_string(),
+                package_subdir: None,
+            },
+            SchemaIdentity {
+                module_name: "audio_frame".to_string(),
+                struct_name: "AudioFrame".to_string(),
+                package_subdir: Some("tatolab__core".to_string()),
+            },
         ];
-        let out = generate_rust_mod_rs(&modules);
-        assert!(out.contains("pub mod foo;"));
-        assert!(out.contains("pub mod bar_baz;"));
-        assert!(out.contains("pub use foo::Foo;"));
-        assert!(out.contains("pub use bar_baz::BarBaz;"));
+        let (flat, groups) = group_entries(&entries);
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].struct_name, "H264EncoderConfig");
+        assert_eq!(groups.len(), 1);
+        let core = groups.get("tatolab__core").unwrap();
+        assert_eq!(core.len(), 2);
+        // Sorted within group by module_name
+        assert_eq!(core[0].module_name, "audio_frame");
+        assert_eq!(core[1].module_name, "video_frame");
     }
 
     #[test]
-    fn generate_python_init_py_emits_imports_and_all() {
-        let modules = vec![
-            ("foo".to_string(), "Foo".to_string()),
-            ("bar".to_string(), "Bar".to_string()),
+    fn write_rust_barrels_top_level_and_per_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("tatolab__core")).unwrap();
+
+        let entries = vec![
+            SchemaIdentity {
+                module_name: "video_frame".to_string(),
+                struct_name: "VideoFrame".to_string(),
+                package_subdir: Some("tatolab__core".to_string()),
+            },
+            SchemaIdentity {
+                module_name: "com_streamlib_h264_encoder_config".to_string(),
+                struct_name: "H264EncoderConfig".to_string(),
+                package_subdir: None,
+            },
         ];
-        let out = generate_python_init_py(&modules);
-        assert!(out.contains("from .foo import Foo"));
-        assert!(out.contains("from .bar import Bar"));
-        assert!(out.contains("\"Foo\""));
-        assert!(out.contains("\"Bar\""));
+        write_rust_barrels(tmp.path(), &entries).unwrap();
+
+        let top = std::fs::read_to_string(tmp.path().join("mod.rs")).unwrap();
+        assert!(top.contains("pub mod com_streamlib_h264_encoder_config;"));
+        assert!(top.contains("pub mod tatolab__core;"));
+        assert!(top.contains("pub use com_streamlib_h264_encoder_config::H264EncoderConfig;"));
+        assert!(top.contains("pub use tatolab__core::VideoFrame;"));
+
+        let sub = std::fs::read_to_string(tmp.path().join("tatolab__core/mod.rs")).unwrap();
+        assert!(sub.contains("pub mod video_frame;"));
+        assert!(sub.contains("pub use video_frame::VideoFrame;"));
     }
 
     #[test]
-    fn generate_typescript_index_ts_emits_re_exports() {
-        let modules = vec![("foo".to_string(), "Foo".to_string())];
-        let out = generate_typescript_index_ts(&modules);
-        assert!(out.contains("export * from \"./foo.ts\";"));
+    fn write_python_barrels_re_exports_from_subpackages() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("tatolab__core")).unwrap();
+
+        let entries = vec![
+            SchemaIdentity {
+                module_name: "video_frame".to_string(),
+                struct_name: "VideoFrame".to_string(),
+                package_subdir: Some("tatolab__core".to_string()),
+            },
+            SchemaIdentity {
+                module_name: "com_streamlib_h264_encoder_config".to_string(),
+                struct_name: "H264EncoderConfig".to_string(),
+                package_subdir: None,
+            },
+        ];
+        write_python_barrels(tmp.path(), &entries).unwrap();
+
+        let top = std::fs::read_to_string(tmp.path().join("__init__.py")).unwrap();
+        assert!(top.contains("from .com_streamlib_h264_encoder_config import H264EncoderConfig"));
+        assert!(top.contains("from .tatolab__core import VideoFrame"));
+
+        let sub = std::fs::read_to_string(tmp.path().join("tatolab__core/__init__.py")).unwrap();
+        assert!(sub.contains("from .video_frame import VideoFrame"));
+        assert!(sub.contains("\"VideoFrame\""));
+    }
+
+    #[test]
+    fn write_typescript_barrels_re_exports_subpackage_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("tatolab__core")).unwrap();
+
+        let entries = vec![
+            SchemaIdentity {
+                module_name: "video_frame".to_string(),
+                struct_name: "VideoFrame".to_string(),
+                package_subdir: Some("tatolab__core".to_string()),
+            },
+            SchemaIdentity {
+                module_name: "com_streamlib_h264_encoder_config".to_string(),
+                struct_name: "H264EncoderConfig".to_string(),
+                package_subdir: None,
+            },
+        ];
+        write_typescript_barrels(tmp.path(), &entries).unwrap();
+
+        let top = std::fs::read_to_string(tmp.path().join("index.ts")).unwrap();
+        assert!(top.contains("export * from \"./com_streamlib_h264_encoder_config.ts\";"));
+        assert!(top.contains("export * from \"./tatolab__core/index.ts\";"));
+
+        let sub = std::fs::read_to_string(tmp.path().join("tatolab__core/index.ts")).unwrap();
+        assert!(sub.contains("export * from \"./video_frame.ts\";"));
     }
 }

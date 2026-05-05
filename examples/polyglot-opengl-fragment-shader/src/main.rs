@@ -233,7 +233,7 @@ fn main() -> Result<()> {
         }
     }
 
-    // Trigger source: BgraFileSource emits a few `Videoframe`s so the
+    // Trigger source: BgraFileSource emits a few `VideoFrame`s so the
     // polyglot processor's `process()` is invoked. The processor
     // ignores frame contents — it works on the pre-registered host
     // surface, not the trigger frame's pixel buffer.
@@ -321,7 +321,7 @@ fn main() -> Result<()> {
 }
 
 /// Write a tiny BGRA fixture file. BgraFileSource reads it
-/// frame-by-frame; the resulting `Videoframe`s are the trigger that
+/// frame-by-frame; the resulting `VideoFrame`s are the trigger that
 /// drives the polyglot processor's `process()` call.
 fn write_trigger_fixture() -> std::result::Result<PathBuf, String> {
     use std::fs::File;

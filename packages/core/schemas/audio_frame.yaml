@@ -1,11 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# JSON Type Definition (RFC 8927) schema for audio frames (1-8 channels)
+# JSON Type Definition (RFC 8927) schema for audio frames (1-8 channels).
 
 metadata:
-  name: com.tatolab.audioframe
-  version: 1.0.0
+  type: AudioFrame
   description: "Audio frame with interleaved samples (1-8 channels)"
   read_mode: read_next_in_order
   buffer_size: 32

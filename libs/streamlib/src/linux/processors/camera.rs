@@ -849,7 +849,7 @@ fn capture_thread_loop(
                 // Same SHADER_READ_ONLY_OPTIMAL declaration the in-process
                 // `register_texture_with_layout` below uses — the camera
                 // post-compute barrier transitions the texture to
-                // SHADER_READ_ONLY before publishing the Videoframe, so
+                // SHADER_READ_ONLY before publishing the VideoFrame, so
                 // by the time any cross-process consumer's lookup fires
                 // the actual contents match the declared layout (#633).
                 if let Err(e) = store.register_texture(
@@ -872,10 +872,10 @@ fn capture_thread_loop(
         // compute submit (see the post-copy barrier near the end of
         // process()) — declare that as the registration's initial layout so
         // consumers reaching the texture via
-        // `GpuContext::resolve_videoframe_registration` issue correct
+        // `GpuContext::resolve_video_frame_registration` issue correct
         // barriers. The texture is technically UNDEFINED at the moment of
         // this register call (no compute pass has run yet), but the camera
-        // only writes the corresponding Videoframe to its output port AFTER
+        // only writes the corresponding VideoFrame to its output port AFTER
         // the post-compute barrier transitions the texture to
         // SHADER_READ_ONLY_OPTIMAL — so by the time any consumer
         // dereferences the surface_id, the registered layout matches
@@ -1707,7 +1707,7 @@ fn capture_thread_loop(
         let surface_id = pool_id.to_string();
         let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
-        let ipc_frame = crate::_generated_::Videoframe {
+        let ipc_frame = crate::_generated_::VideoFrame {
             surface_id,
             width,
             height,

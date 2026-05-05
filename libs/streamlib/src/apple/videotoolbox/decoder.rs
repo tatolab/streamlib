@@ -16,7 +16,7 @@
 // **Reference**: Encoder implementation (encoder.rs) - inverse operations
 
 use super::{ffi, format};
-use crate::_generated_::Videoframe;
+use crate::_generated_::VideoFrame;
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoDecoderConfig};
 use std::collections::VecDeque;
@@ -204,13 +204,13 @@ impl VideoToolboxDecoder {
         Ok(())
     }
 
-    /// Decode H.264 NAL units to Videoframe.
+    /// Decode H.264 NAL units to VideoFrame.
     pub fn decode(
         &mut self,
         nal_units_annex_b: &[u8],
         timestamp_ns: i64,
         gpu: &GpuContext,
-    ) -> Result<Option<Videoframe>> {
+    ) -> Result<Option<VideoFrame>> {
         // Check if we have a decompression session
         let session = self.decompression_session.ok_or_else(|| {
             StreamError::Configuration(
@@ -357,7 +357,7 @@ impl VideoToolboxDecoder {
             }
         };
 
-        // Step 7: Convert CVPixelBuffer → Videoframe (IPC type)
+        // Step 7: Convert CVPixelBuffer → VideoFrame (IPC type)
         let video_frame = self.pixel_buffer_to_videoframe(decoded_frame, gpu)?;
 
         self.frame_count += 1;
@@ -373,12 +373,12 @@ impl VideoToolboxDecoder {
         Ok(Some(video_frame))
     }
 
-    /// Convert CVPixelBuffer (BGRA) to Videoframe (IPC type)
+    /// Convert CVPixelBuffer (BGRA) to VideoFrame (IPC type)
     fn pixel_buffer_to_videoframe(
         &self,
         decoded_frame: DecodedFrame,
         gpu: &GpuContext,
-    ) -> Result<Videoframe> {
+    ) -> Result<VideoFrame> {
         // Wrap CVPixelBuffer in RhiPixelBufferRef.
         // Use no_retain since the callback already retained the buffer.
         // When RhiPixelBufferRef is dropped, it will release the CVPixelBuffer.
@@ -412,8 +412,8 @@ impl VideoToolboxDecoder {
         // Blit decoded frame to pooled buffer
         gpu.blit_copy(&source_buffer, &dest_buffer)?;
 
-        // Construct Videoframe IPC type
-        Ok(Videoframe {
+        // Construct VideoFrame IPC type
+        Ok(VideoFrame {
             surface_id: pool_id.to_string(),
             width: source_buffer.width,
             height: source_buffer.height,

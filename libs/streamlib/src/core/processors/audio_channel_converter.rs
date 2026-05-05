@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::com_tatolab_audio_channel_converter_config::Mode;
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
 #[crate::processor("com.tatolab.audio_channel_converter")]
@@ -40,7 +40,7 @@ impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processo
         }
 
         // Read input frame from iceoryx2
-        let input_frame: Audioframe = self.inputs.read("audio_in")?;
+        let input_frame: AudioFrame = self.inputs.read("audio_in")?;
 
         // Validate input is mono (1 channel)
         if input_frame.channels != 1 {
@@ -87,7 +87,7 @@ impl crate::core::ReactiveProcessor for AudioChannelConverterProcessor::Processo
             }
         };
 
-        let output_frame = Audioframe {
+        let output_frame = AudioFrame {
             samples: output_samples,
             channels: output_channels,
             sample_rate: input_frame.sample_rate,

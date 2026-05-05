@@ -32,7 +32,7 @@ use streamlib::core::{
     GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
     StreamError,
 };
-use streamlib::Videoframe;
+use streamlib::VideoFrame;
 
 use crate::crt_film_grain_kernel::{
     CrtFilmGrainInput, CrtFilmGrainInputs, CrtFilmGrainOutput, SandboxedCrtFilmGrain,
@@ -137,7 +137,7 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }
-        let frame: Videoframe = self.inputs.read("video_in")?;
+        let frame: VideoFrame = self.inputs.read("video_in")?;
 
         let elapsed = self
             .start_time
@@ -157,7 +157,7 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
         // Resolve input texture + its current_layout via Path 1 / Path 2
         // (the upstream BlendingCompositor publishes a texture-backed
         // surface_id dual-registered in texture_cache + surface_store).
-        let input_registration = gpu_ctx.resolve_videoframe_registration(&frame)?;
+        let input_registration = gpu_ctx.resolve_video_frame_registration(&frame)?;
         let input_texture = input_registration.texture().clone();
         let input_layout = input_registration.current_layout();
 
@@ -176,7 +176,7 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
             slot.texture.width(),
             slot.texture.height(),
         );
-        let slot_registration = gpu_ctx.resolve_videoframe_registration(&slot_videoframe)?;
+        let slot_registration = gpu_ctx.resolve_video_frame_registration(&slot_videoframe)?;
         let slot_current_layout = slot_registration.current_layout();
 
         backend.kernel.dispatch(CrtFilmGrainInputs {
@@ -204,7 +204,7 @@ impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
         slot_registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
         input_registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
 
-        let output_frame = Videoframe {
+        let output_frame = VideoFrame {
             surface_id: slot.surface_id.clone(),
             width: slot.texture.width(),
             height: slot.texture.height(),
@@ -313,11 +313,11 @@ impl CrtFilmGrainProcessor::Processor {
     }
 }
 
-/// Synthesize a Videoframe pointing at one of our output ring slots —
+/// Synthesize a VideoFrame pointing at one of our output ring slots —
 /// used to look up its registration for layout reads. The slot is
 /// registered at setup time, so Path 1 resolves it without IPC.
-fn synth_slot_videoframe(surface_id: &str, width: u32, height: u32) -> Videoframe {
-    Videoframe {
+fn synth_slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFrame {
+    VideoFrame {
         surface_id: surface_id.to_string(),
         width,
         height,

@@ -12,7 +12,7 @@ processors:
     entrypoint: "dma_buf_consumer:DmaBufConsumer"
     inputs:
       - name: video_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
     outputs:
       - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'

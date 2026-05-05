@@ -8,11 +8,11 @@ processors:
         unsafe_send: true
     inputs:
       - name: video_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "Video frames to process"
     outputs:
       - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "Processed video frames"
 
   - name: com.tatolab.camera_to_cuda_copy
@@ -21,11 +21,11 @@ processors:
     execution: reactive
     inputs:
       - name: video_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "Camera ring texture (RGBA8 DMA-BUF) frame metadata"
     outputs:
       - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "Camera frame forwarded verbatim; cuda surface side-effect happens during process()"
 
   - name: com.tatolab.blending_compositor
@@ -37,18 +37,18 @@ processors:
         unsafe_send: true
     inputs:
       - name: video_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "Video frames (base layer)"
       - name: lower_third_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "Lower third overlay (RGBA with transparency)"
       - name: watermark_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "Watermark overlay (RGBA with transparency)"
       - name: pip_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "PiP overlay (avatar character with transparent background)"
     outputs:
       - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
         description: "Composited video frames"

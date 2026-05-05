@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Union, get_args, get_origin
 
 
 @dataclass
-class Audioframe:
+class AudioFrame:
     """
     Audio frame with interleaved samples (1-8 channels)
     """
@@ -44,7 +44,7 @@ class Audioframe:
 
 
     @classmethod
-    def from_json_data(cls, data: Any) -> 'Audioframe':
+    def from_json_data(cls, data: Any) -> 'AudioFrame':
         return cls(
             _from_json_data(int, data.get("channels")),
             _from_json_data(str, data.get("frame_index")),

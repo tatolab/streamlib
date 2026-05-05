@@ -48,9 +48,9 @@ pub struct AppleDisplayProcessor {
     /// Handle to poller thread (receives from inputs, sends to channel)
     poller_thread: Option<JoinHandle<()>>,
     /// Channel sender for passing frames from poller to render thread
-    frame_sender: Option<Sender<crate::_generated_::Videoframe>>,
+    frame_sender: Option<Sender<crate::_generated_::VideoFrame>>,
     /// Channel receiver for render thread to receive frames
-    frame_receiver: Option<Receiver<crate::_generated_::Videoframe>>,
+    frame_receiver: Option<Receiver<crate::_generated_::VideoFrame>>,
 }
 
 impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
@@ -281,7 +281,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                         continue;
                     }
 
-                    let ipc_frame: crate::_generated_::Videoframe = match inputs.read("video") {
+                    let ipc_frame: crate::_generated_::VideoFrame = match inputs.read("video") {
                         Ok(frame) => frame,
                         Err(e) => {
                             tracing::warn!("Display {}: Failed to read frame: {}", window_id, e);
@@ -290,7 +290,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                     };
 
                     // Resolve buffer from surface_id using GpuContext
-                    let buffer = match gpu_context.resolve_videoframe_buffer(&ipc_frame) {
+                    let buffer = match gpu_context.resolve_video_frame_buffer(&ipc_frame) {
                         Ok(buf) => buf,
                         Err(e) => {
                             tracing::warn!(

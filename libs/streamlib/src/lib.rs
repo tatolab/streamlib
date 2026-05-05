@@ -30,7 +30,7 @@ pub use core::logging;
 pub mod _generated_;
 
 // Re-export commonly used generated config types
-pub use _generated_::{ApiServerConfig, Encodedaudioframe, Encodedvideoframe, Videoframe};
+pub use _generated_::{ApiServerConfig, EncodedAudioFrame, EncodedVideoFrame, VideoFrame};
 
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("com.tatolab.camera")] - Processor definition by name lookup in streamlib.yaml

@@ -11,7 +11,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use streamlib::_generated_::Videoframe;
+use streamlib::_generated_::VideoFrame;
 use streamlib::core::rhi::PixelFormat;
 use streamlib::core::{GpuContextLimitedAccess, ManualProcessor, Result, RuntimeContextFullAccess, StreamError};
 use streamlib_plugin_abi::export_plugin;
@@ -64,7 +64,7 @@ impl ManualProcessor for GrayscaleProcessor::Processor {
                         continue;
                     }
 
-                    let frame: Videoframe = match inputs.read("video_in") {
+                    let frame: VideoFrame = match inputs.read("video_in") {
                         Ok(f) => f,
                         Err(e) => {
                             tracing::warn!("GrayscaleProcessor: failed to read frame: {}", e);
@@ -154,7 +154,7 @@ impl ManualProcessor for GrayscaleProcessor::Processor {
                     }
 
                     // Forward frame with new surface_id
-                    let output_frame = Videoframe {
+                    let output_frame = VideoFrame {
                         surface_id: pool_id.to_string(),
                         ..frame
                     };

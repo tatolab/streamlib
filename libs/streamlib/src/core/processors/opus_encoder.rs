@@ -5,7 +5,7 @@
 //
 // Encodes AudioFrame to EncodedAudioFrame using libopus.
 
-use crate::_generated_::{Audioframe, Encodedaudioframe};
+use crate::_generated_::{AudioFrame, EncodedAudioFrame};
 use crate::core::streaming::{AudioEncoderConfig, AudioEncoderOpus, OpusEncoder};
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
@@ -54,14 +54,14 @@ impl crate::core::ReactiveProcessor for OpusEncoderProcessor::Processor {
         if !self.inputs.has_data("audio_in") {
             return Ok(());
         }
-        let frame: Audioframe = self.inputs.read("audio_in")?;
+        let frame: AudioFrame = self.inputs.read("audio_in")?;
 
         let encoder = self
             .opus_encoder
             .as_mut()
             .ok_or_else(|| StreamError::Runtime("Opus encoder not initialized".into()))?;
 
-        let encoded: Encodedaudioframe = encoder.encode(&frame)?;
+        let encoded: EncodedAudioFrame = encoder.encode(&frame)?;
         self.outputs.write("encoded_audio_out", &encoded)?;
 
         self.frames_encoded += 1;

@@ -75,3 +75,7 @@ examples/camera-python-display/assets/*
 .cargo/config.toml
 
 plan.md
+
+# In-flight task handoff notes (working files for cross-session pickup,
+# not part of any PR). Pattern matches TASK-401.md, TASK-NNN.md, etc.
+TASK-*.md

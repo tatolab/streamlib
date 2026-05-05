@@ -3,11 +3,11 @@
 
 // Linux MP4 Writer Processor
 //
-// Accepts decoded Videoframe (raw RGBA pixels), pipes them to ffmpeg for
+// Accepts decoded VideoFrame (raw RGBA pixels), pipes them to ffmpeg for
 // encoding + muxing into an MP4 container with a silent audio track.
 // The writer knows nothing about codecs — ffmpeg handles encoding.
 
-use crate::_generated_::Videoframe;
+use crate::_generated_::VideoFrame;
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
@@ -20,7 +20,7 @@ use std::process::{Child, Command, Stdio};
 
 #[crate::processor("com.streamlib.linux_mp4_writer")]
 pub struct LinuxMp4WriterProcessor {
-    /// GPU context for resolving Videoframe pixel buffers.
+    /// GPU context for resolving VideoFrame pixel buffers.
     gpu_context: Option<GpuContextLimitedAccess>,
 
     /// ffmpeg child process (spawned on first frame).
@@ -74,17 +74,17 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }
-        let frame: Videoframe = self.inputs.read("video_in")?;
+        let frame: VideoFrame = self.inputs.read("video_in")?;
 
         let gpu_ctx = self
             .gpu_context
             .as_ref()
             .ok_or_else(|| StreamError::Runtime("GPU context not initialized".into()))?;
 
-        // Resolve Videoframe to pixel buffer for decoded NV12 data.
+        // Resolve VideoFrame to pixel buffer for decoded NV12 data.
         // Decoder outputs NV12 (Y + UV = W*H*3/2). ffmpeg converts to display RGB
         // internally — same as any consumer video player.
-        let pixel_buffer = gpu_ctx.resolve_videoframe_buffer(&frame)?;
+        let pixel_buffer = gpu_ctx.resolve_video_frame_buffer(&frame)?;
         let raw_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
         let frame_byte_size = (frame.width * frame.height * 4) as usize;
         let raw_data = unsafe { std::slice::from_raw_parts(raw_ptr, frame_byte_size) };

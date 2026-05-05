@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::{Result, StreamError};
 
 /// Opus audio decoder for real-time WebRTC streaming.
@@ -137,17 +137,17 @@ impl OpusDecoder {
         }
     }
 
-    /// Decode Opus packet directly to [`Audioframe`].
+    /// Decode Opus packet directly to [`AudioFrame`].
     pub fn decode_to_audio_frame(
         &mut self,
         packet: &[u8],
         timestamp_ns: i64,
-    ) -> Result<Audioframe> {
+    ) -> Result<AudioFrame> {
         let samples = self.decode(packet)?;
 
         // Samples are already interleaved stereo [L,R,L,R,...]
-        // Audioframe expects Vec<f32> with interleaved samples
-        Ok(Audioframe {
+        // AudioFrame expects Vec<f32> with interleaved samples
+        Ok(AudioFrame {
             samples,
             channels: 2, // stereo
             timestamp_ns: timestamp_ns.to_string(),

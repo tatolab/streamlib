@@ -27,7 +27,7 @@
 //!   └──────────────────┘                   │  applies Gaussian blur │
 //!                                          └────────────────────────┘
 //!
-//! BgraFileSource's emitted `Videoframe` is just the trigger that
+//! BgraFileSource's emitted `VideoFrame` is just the trigger that
 //! drives the polyglot processor's `process()` call — the polyglot
 //! processor ignores `frame.surface_id` and works on the
 //! cpu-readback host surface (id `1`) the host pre-registered.

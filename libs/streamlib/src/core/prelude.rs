@@ -18,4 +18,4 @@ pub use crate::core::{
 };
 
 // Re-export generated IPC types
-pub use crate::_generated_::{Audioframe, Videoframe};
+pub use crate::_generated_::{AudioFrame, VideoFrame};

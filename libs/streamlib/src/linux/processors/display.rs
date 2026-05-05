@@ -553,7 +553,7 @@ impl DisplayEventLoopHandler {
             return;
         }
 
-        let ipc_frame: crate::_generated_::Videoframe = match self.inputs.read("video") {
+        let ipc_frame: crate::_generated_::VideoFrame = match self.inputs.read("video") {
             Ok(frame) => frame,
             Err(e) => {
                 tracing::warn!("Display {}: Failed to read frame: {}", self.window_id, e);
@@ -571,7 +571,7 @@ impl DisplayEventLoopHandler {
         // adapter outputs) may arrive in a layout other than the descriptor
         // binding's claimed `SHADER_READ_ONLY_OPTIMAL`, and the wrong
         // claim is the bug #616 fixes.
-        let registration = match self.gpu_context.resolve_videoframe_registration(&ipc_frame) {
+        let registration = match self.gpu_context.resolve_video_frame_registration(&ipc_frame) {
             Ok(reg) => reg,
             Err(e) => {
                 tracing::warn!(
@@ -1004,7 +1004,7 @@ impl DisplayEventLoopHandler {
                     "display_{:03}_frame_{:06}_input_{:06}.png",
                     self.window_id, frame_idx, input_frame_index
                 ));
-                if let Ok(buf) = self.gpu_context.resolve_videoframe_buffer(&ipc_frame) {
+                if let Ok(buf) = self.gpu_context.resolve_video_frame_buffer(&ipc_frame) {
                     let vk_buf = &buf.buffer_ref().inner;
                     let mapped_ptr = vk_buf.mapped_ptr();
                     if !mapped_ptr.is_null() {

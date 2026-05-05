@@ -7,7 +7,7 @@
 // RTP, and outputs EncodedVideoFrame / EncodedAudioFrame.
 // Decoding is handled by downstream H264DecoderProcessor / OpusDecoderProcessor.
 
-use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
+use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use crate::core::media_clock::MediaClock;
 use crate::core::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
@@ -183,7 +183,7 @@ async fn run_whep_receive_loop(
                         let timestamp_ns = MediaClock::now().as_nanos() as i64;
                         video_frame_count += 1;
 
-                        let encoded = Encodedvideoframe {
+                        let encoded = EncodedVideoFrame {
                             data: annex_b_data,
                             fps: None,
                             timestamp_ns: timestamp_ns.to_string(),
@@ -211,7 +211,7 @@ async fn run_whep_receive_loop(
                 // Opus frame at 48kHz/20ms = 960 samples
                 let sample_count = (audio_sample_rate as f64 * 0.02) as u32;
 
-                let encoded = Encodedaudioframe {
+                let encoded = EncodedAudioFrame {
                     data: sample.payload.to_vec(),
                     timestamp_ns: timestamp_ns.to_string(),
                     sample_count,

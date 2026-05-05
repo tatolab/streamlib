@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 pub struct MoqCatalogTrackEntry {
     /// MoQ track name (derived from schema_name unless overridden).
     pub track_name: String,
-    /// StreamLib JTD schema name (e.g., "com.tatolab.encodedvideoframe@1.0.0").
+    /// StreamLib JTD schema name (e.g., "@tatolab/core/EncodedVideoFrame@1.0.0").
     pub schema_name: String,
     /// Source processor type that produces this track.
     pub source_processor_type: String,

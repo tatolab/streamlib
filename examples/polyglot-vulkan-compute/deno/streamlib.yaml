@@ -12,4 +12,4 @@ processors:
     entrypoint: "vulkan_compute.ts:default"
     inputs:
       - name: video_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'

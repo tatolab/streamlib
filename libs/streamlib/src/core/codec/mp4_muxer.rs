@@ -8,7 +8,7 @@
 //! - Linux: not yet supported (coming in a future release)
 
 use super::Mp4MuxerConfig;
-use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
+use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use crate::core::{Result, RuntimeContext};
 
 /// Platform-agnostic MP4 muxer.
@@ -34,12 +34,12 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded video frame.
-    pub fn write_video(&mut self, frame: &Encodedvideoframe) -> Result<()> {
+    pub fn write_video(&mut self, frame: &EncodedVideoFrame) -> Result<()> {
         self.inner.write_video(frame)
     }
 
     /// Write an encoded audio frame.
-    pub fn write_audio(&mut self, frame: &Encodedaudioframe) -> Result<()> {
+    pub fn write_audio(&mut self, frame: &EncodedAudioFrame) -> Result<()> {
         self.inner.write_audio(frame)
     }
 
@@ -60,14 +60,14 @@ impl Mp4Muxer {
     }
 
     /// Write an encoded video frame (unsupported platform).
-    pub fn write_video(&mut self, _frame: &Encodedvideoframe) -> Result<()> {
+    pub fn write_video(&mut self, _frame: &EncodedVideoFrame) -> Result<()> {
         Err(crate::core::StreamError::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))
     }
 
     /// Write an encoded audio frame (unsupported platform).
-    pub fn write_audio(&mut self, _frame: &Encodedaudioframe) -> Result<()> {
+    pub fn write_audio(&mut self, _frame: &EncodedAudioFrame) -> Result<()> {
         Err(crate::core::StreamError::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))

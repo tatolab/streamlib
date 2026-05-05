@@ -11,7 +11,7 @@
  * via `GpuContext::register_texture_with_layout` under a known UUID,
  * and installs a `RayTracingKernelBridge` wired to its
  * `VulkanRayTracingKernel` + `VulkanAccelerationStructure`. This
- * processor receives a trigger Videoframe, builds a single-triangle
+ * processor receives a trigger VideoFrame, builds a single-triangle
  * BLAS + identity TLAS via escalate IPC, registers the RT kernel,
  * and dispatches one `vkCmdTraceRaysKHR` against the host's
  * storage image.

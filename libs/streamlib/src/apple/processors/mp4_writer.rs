@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::{Audioframe, Videoframe};
+use crate::_generated_::{AudioFrame, VideoFrame};
 use crate::core::{
     sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError,
 };
@@ -38,7 +38,7 @@ pub struct AppleMp4WriterProcessor {
     pixel_buffer_adaptor: Option<Retained<AVAssetWriterInputPixelBufferAdaptor>>,
 
     // Runtime state
-    last_video_frame: Option<Videoframe>,
+    last_video_frame: Option<VideoFrame>,
     #[allow(dead_code)] // Reserved for A/V sync (future implementation)
     last_audio_timestamp_ns: i64,
     #[allow(dead_code)] // Reserved for A/V sync (future implementation)
@@ -55,7 +55,7 @@ pub struct AppleMp4WriterProcessor {
 
     // Latest frames for realtime streaming
     #[allow(dead_code)] // Reserved for realtime streaming mode
-    latest_video: Option<Videoframe>,
+    latest_video: Option<VideoFrame>,
 
     video_width: u32,
     video_height: u32,
@@ -249,7 +249,7 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 
         // Process every audio frame immediately
         while self.inputs.has_data("audio") {
-            let audio: Audioframe = self.inputs.read("audio")?;
+            let audio: AudioFrame = self.inputs.read("audio")?;
             let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
             let sample_count = audio.samples.len() / audio.channels as usize;
             trace!(
@@ -357,9 +357,9 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 }
 
 impl AppleMp4WriterProcessor::Processor {
-    /// Read a video frame from inputs (IPC Videoframe).
-    fn read_video_frame(&self) -> Result<Videoframe> {
-        let ipc_video: Videoframe = self.inputs.read("video")?;
+    /// Read a video frame from inputs (IPC VideoFrame).
+    fn read_video_frame(&self) -> Result<VideoFrame> {
+        let ipc_video: VideoFrame = self.inputs.read("video")?;
         Ok(ipc_video)
     }
 
@@ -762,7 +762,7 @@ impl AppleMp4WriterProcessor::Processor {
     }
 
     #[allow(dead_code)]
-    fn write_synced_frame(&mut self, audio: Audioframe, video: Videoframe) -> Result<()> {
+    fn write_synced_frame(&mut self, audio: AudioFrame, video: VideoFrame) -> Result<()> {
         let audio_timestamp_ns: i64 = audio.timestamp_ns.parse().unwrap_or(0);
         let video_timestamp_ns: i64 = video.timestamp_ns.parse().unwrap_or(0);
 
@@ -858,7 +858,7 @@ impl AppleMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn write_video_frame(&self, frame: &Videoframe) -> Result<()> {
+    fn write_video_frame(&self, frame: &VideoFrame) -> Result<()> {
         let pixel_buffer_adaptor = self.pixel_buffer_adaptor.as_ref().ok_or_else(|| {
             StreamError::Configuration("Pixel buffer adaptor not initialized".into())
         })?;
@@ -885,7 +885,7 @@ impl AppleMp4WriterProcessor::Processor {
             .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
 
         // Resolve buffer from surface_id
-        let buffer = gpu_context.resolve_videoframe_buffer(frame)?;
+        let buffer = gpu_context.resolve_video_frame_buffer(frame)?;
 
         // Step 1: GPU-accelerated conversion to NV12 using VTPixelTransferSession
         let nv12_pixel_buffer_ptr = pixel_transfer.convert_buffer_to_nv12(&buffer)?;
@@ -921,7 +921,7 @@ impl AppleMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn write_audio_frame(&self, frame: &Audioframe) -> Result<()> {
+    fn write_audio_frame(&self, frame: &AudioFrame) -> Result<()> {
         let audio_input = self
             .audio_input
             .as_ref()
@@ -934,7 +934,7 @@ impl AppleMp4WriterProcessor::Processor {
             return Ok(());
         }
 
-        // Audioframe stores samples as Vec<f32> with interleaved channels
+        // AudioFrame stores samples as Vec<f32> with interleaved channels
         // We need to convert f32 → i16 PCM for LPCM format
         let total_samples = frame.samples.len();
         let num_channels = frame.channels as usize;

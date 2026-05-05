@@ -1,15 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Encodedvideoframe;
-use crate::_generated_::Encodedaudioframe;
+use crate::_generated_::EncodedVideoFrame;
+use crate::_generated_::EncodedAudioFrame;
 use crate::core::{Result, StreamError};
 use bytes::Bytes;
 use std::time::Duration;
 
 /// Converts encoded H.264 video frame to webrtc Sample(s).
 pub fn convert_video_to_samples(
-    frame: &Encodedvideoframe,
+    frame: &EncodedVideoFrame,
     fps: u32,
 ) -> Result<Vec<webrtc::media::Sample>> {
     // Parse NAL units from Annex B format
@@ -39,7 +39,7 @@ pub fn convert_video_to_samples(
 
 /// Converts encoded Opus audio frame to webrtc Sample.
 pub fn convert_audio_to_sample(
-    frame: &Encodedaudioframe,
+    frame: &EncodedAudioFrame,
     sample_rate: u32,
 ) -> Result<webrtc::media::Sample> {
     // Calculate duration from sample count

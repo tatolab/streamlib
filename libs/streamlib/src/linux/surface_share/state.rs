@@ -71,7 +71,7 @@ pub struct SurfaceMetadata {
     /// lifted into the surface-share daemon so any peer (host engine,
     /// subprocess adapter, host adapter) can read or update it through
     /// the same wire format. Producers update on QFOT release;
-    /// consumers (`GpuContext::resolve_videoframe_registration` Path 2,
+    /// consumers (`GpuContext::resolve_video_frame_registration` Path 2,
     /// host-side adapters) read for the source layout of their first
     /// QFOT acquire barrier.
     ///

@@ -8,7 +8,7 @@
 /**
  * Encoded video frame with H.264/H.265 NAL unit data
  */
-export interface Encodedvideoframe {
+export interface EncodedVideoFrame {
   /**
    * Encoded NAL units (H.264/H.265 bitstream data)
    */

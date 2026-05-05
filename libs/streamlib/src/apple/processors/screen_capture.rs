@@ -194,7 +194,7 @@ define_class!(
 
             let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
 
-            let ipc_frame = crate::_generated_::Videoframe {
+            let ipc_frame = crate::_generated_::VideoFrame {
                 surface_id: surface_id_str,
                 width,
                 height,

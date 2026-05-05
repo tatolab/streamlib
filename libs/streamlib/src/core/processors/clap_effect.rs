@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::clap::ClapPluginHost;
 use crate::core::clap::{ParameterInfo, PluginInfo};
 use crate::core::utils::ProcessorAudioConverterTargetFormat;
@@ -230,7 +230,7 @@ impl crate::core::ManualProcessor for ClapEffectProcessor::Processor {
                     continue;
                 }
 
-                let input_frame: Audioframe = match inputs.read("audio_in") {
+                let input_frame: AudioFrame = match inputs.read("audio_in") {
                     Ok(f) => f,
                     Err(e) => {
                         tracing::error!("[ClapEffect] Read failed: {}", e);

@@ -6,7 +6,7 @@
 End-to-end gate for the cpu-readback subprocess runtime (#529). The
 host pre-allocates a cpu-readback surface, registers it with the
 adapter, and uploads a vertical-color-band input pattern. This
-processor receives a trigger Videoframe, opens the host surface
+processor receives a trigger VideoFrame, opens the host surface
 through ``CpuReadbackContext.acquire_write``, applies a Gaussian blur
 to the BGRA bytes, and releases — the host adapter flushes the
 modified bytes back into the surface's `VkImage`. After the runtime

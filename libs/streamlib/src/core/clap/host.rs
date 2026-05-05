@@ -18,7 +18,7 @@ use clack_host::{
 use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 
 use super::scanner::ClapScanner;
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::clap::{ParameterInfo, PluginInfo};
 use crate::core::{Result, StreamError};
 
@@ -500,7 +500,7 @@ impl ClapPluginHost {
         Ok(())
     }
 
-    pub fn process_audio(&mut self, input: &Audioframe) -> Result<Audioframe> {
+    pub fn process_audio(&mut self, input: &AudioFrame) -> Result<AudioFrame> {
         let num_samples = input.samples.len() / input.channels as usize;
 
         for i in 0..num_samples {
@@ -518,7 +518,7 @@ impl ClapPluginHost {
             output_samples.push(self.output_buffers[1][i]);
         }
 
-        Ok(Audioframe {
+        Ok(AudioFrame {
             samples: output_samples,
             channels: input.channels,
             timestamp_ns: input.timestamp_ns.clone(),

@@ -6,7 +6,7 @@
 // Hardware-accelerated H.264 encoding using Apple's VideoToolbox framework.
 // Supports GPU-accelerated texture conversion (wgpu → NV12) and real-time encoding.
 
-use crate::_generated_::{Encodedvideoframe, Videoframe};
+use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::apple::PixelTransferSession;
 use crate::core::rhi::{PixelBufferPoolId, RhiPixelBuffer};
 use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig};
@@ -35,7 +35,7 @@ pub struct VideoToolboxEncoder {
     pixel_transfer: Option<PixelTransferSession>,
 
     // For storing encoded output from callback
-    encoded_frames: Arc<Mutex<VecDeque<Encodedvideoframe>>>,
+    encoded_frames: Arc<Mutex<VecDeque<EncodedVideoFrame>>>,
 
     // Callback context that needs to be freed in Drop
     callback_context: Option<*mut std::ffi::c_void>,
@@ -100,7 +100,7 @@ impl VideoToolboxEncoder {
                     if status != ffi::NO_ERR {
                         // Clean up callback context on error - reconstruct Arc to decrement ref count
                         let _ = Arc::from_raw(
-                            callback_context as *const Mutex<VecDeque<Encodedvideoframe>>,
+                            callback_context as *const Mutex<VecDeque<EncodedVideoFrame>>,
                         );
                         return Err(StreamError::Runtime(format!(
                             "VTCompressionSessionCreate failed: {}",
@@ -242,7 +242,7 @@ impl VideoToolboxEncoder {
     }
 
     /// Encode a video frame.
-    pub fn encode(&mut self, frame: &Videoframe, gpu: &GpuContext) -> Result<Encodedvideoframe> {
+    pub fn encode(&mut self, frame: &VideoFrame, gpu: &GpuContext) -> Result<EncodedVideoFrame> {
         let session = self.compression_session.ok_or_else(|| {
             StreamError::Configuration("Compression session not initialized".into())
         })?;
@@ -463,7 +463,7 @@ impl Drop for VideoToolboxEncoder {
             // Safe now because VTCompressionSessionCompleteFrames() ensured all callbacks finished
             // Reconstruct Arc to decrement ref count and potentially drop the Mutex
             if let Some(context) = self.callback_context {
-                let _ = Arc::from_raw(context as *const Mutex<VecDeque<Encodedvideoframe>>);
+                let _ = Arc::from_raw(context as *const Mutex<VecDeque<EncodedVideoFrame>>);
                 tracing::debug!("[VideoToolbox] Callback context freed");
             }
         }
@@ -501,7 +501,7 @@ extern "C" fn compression_output_callback(
     // 2. The Mutex won't be freed until Drop calls Arc::from_raw()
     // 3. Drop calls VTCompressionSessionCompleteFrames() first, ensuring no callbacks are running
     let encoded_frames = unsafe {
-        let ptr = output_callback_ref_con as *const Mutex<VecDeque<Encodedvideoframe>>;
+        let ptr = output_callback_ref_con as *const Mutex<VecDeque<EncodedVideoFrame>>;
         &*ptr // Directly deref the raw pointer
     };
 
@@ -578,9 +578,9 @@ extern "C" fn compression_output_callback(
             annex_b_data
         };
 
-        let encoded_frame = Encodedvideoframe {
+        let encoded_frame = EncodedVideoFrame {
             data: final_data,
-            fps: None, // Set by caller from Videoframe metadata
+            fps: None, // Set by caller from VideoFrame metadata
             timestamp_ns: String::new(), // Will be set by caller
             is_keyframe,
             frame_number: String::new(), // Will be set by caller

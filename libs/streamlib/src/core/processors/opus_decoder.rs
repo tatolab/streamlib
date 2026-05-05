@@ -5,7 +5,7 @@
 //
 // Decodes EncodedAudioFrame (Opus bitstream) to AudioFrame using libopus.
 
-use crate::_generated_::{Audioframe, Encodedaudioframe};
+use crate::_generated_::{AudioFrame, EncodedAudioFrame};
 use crate::core::streaming::OpusDecoder;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
@@ -52,7 +52,7 @@ impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
         if !self.inputs.has_data("encoded_audio_in") {
             return Ok(());
         }
-        let encoded: Encodedaudioframe = self.inputs.read("encoded_audio_in")?;
+        let encoded: EncodedAudioFrame = self.inputs.read("encoded_audio_in")?;
 
         let decoder = self
             .opus_decoder
@@ -60,7 +60,7 @@ impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
             .ok_or_else(|| StreamError::Runtime("Opus decoder not initialized".into()))?;
 
         let timestamp_ns: i64 = encoded.timestamp_ns.parse().unwrap_or(0);
-        let frame: Audioframe = decoder.decode_to_audio_frame(&encoded.data, timestamp_ns)?;
+        let frame: AudioFrame = decoder.decode_to_audio_frame(&encoded.data, timestamp_ns)?;
         self.outputs.write("audio_out", &frame)?;
 
         self.frames_decoded += 1;

@@ -689,14 +689,27 @@ GitHub `Blocked by` edges) drives the order:
 3. **#402** — `streamlib.yaml` resolver + `streamlib.lock` + cutover
    off legacy `[package.metadata.streamlib]` etc. (atomic — absorbs
    #403 and #405).
-4. **#401** — processor short-name macros + sweep hardcoded
-   reverse-DNS literals across Rust + Python + Deno.
-5. **#404** — `@tatolab/core` package + IPC wire-format migration
-   to structured records. First end-to-end dogfooding of the
-   architecture.
+4. **#401** — `@tatolab/core` package + first end-to-end dogfooding
+   of the package format + sweep hardcoded reverse-DNS literals for
+   the four wire types across Rust + Python + Deno + IPC envelopes
+   for the four wire types.
+5. **#404** — processor short-name macros (Rust + Python + Deno
+   decorators) so processor source code stops hand-writing free-form
+   identifier strings.
 6. **#406** + **#408** + the **12 carve-out packages** — the long
    tail. By this point the architecture is proven and the carve-outs
    are mechanical.
+
+> ~~Earlier revision swapped #401 and #404 here: #401 was described
+> as "processor short-name macros + sweep" and #404 as "@tatolab/core
+> + IPC wire migration."~~ — Superseded 2026-05-05 during #401's
+> pickup (PR `feat/tatolab-core-package-401`). The issue bodies on
+> GitHub, the dependency graph (`#401 blocks #404`), and the issue
+> titles (`feat(packages): @tatolab/core ...` vs.
+> `feat(macros): processor short-name macros ...`) consistently say
+> the opposite of what this section originally claimed. The doc text
+> was stale; the issues are the source of truth and were left
+> unchanged.
 
 Each later issue is a planned consumer of this PR's foundation. The
 "no bad patterns left behind on engine changes" rule (CLAUDE.md) is

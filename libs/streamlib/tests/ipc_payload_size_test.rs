@@ -116,14 +116,14 @@ fn test_loan_256kb_succeeds_with_512kb_publisher_limit() {
 
 #[test]
 fn test_schema_max_payload_bytes_audioframe() {
-    let bytes = max_payload_bytes_for_schema("com.tatolab.audioframe");
+    let bytes = max_payload_bytes_for_schema("@tatolab/core/AudioFrame");
     assert_eq!(bytes, 65536, "audioframe should declare 64 KB");
 }
 
 #[test]
 fn test_schema_max_payload_bytes_audioframe_with_version_suffix() {
     // Schema names arrive from PROCESSOR_REGISTRY with a version like "@1.0.0" appended.
-    let bytes = max_payload_bytes_for_schema("com.tatolab.audioframe@1.0.0");
+    let bytes = max_payload_bytes_for_schema("@tatolab/core/AudioFrame@1.0.0");
     assert_eq!(
         bytes, 65536,
         "version suffix should be stripped before lookup"
@@ -132,7 +132,7 @@ fn test_schema_max_payload_bytes_audioframe_with_version_suffix() {
 
 #[test]
 fn test_schema_max_payload_bytes_encodedvideoframe() {
-    let bytes = max_payload_bytes_for_schema("com.tatolab.encodedvideoframe");
+    let bytes = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
     assert_eq!(
         bytes,
         512 * 1024,
@@ -142,7 +142,7 @@ fn test_schema_max_payload_bytes_encodedvideoframe() {
 
 #[test]
 fn test_schema_max_payload_bytes_videoframe() {
-    let bytes = max_payload_bytes_for_schema("com.tatolab.videoframe");
+    let bytes = max_payload_bytes_for_schema("@tatolab/core/VideoFrame");
     assert_eq!(
         bytes, 65536,
         "videoframe carries surface IDs only — 64 KB default is correct"
@@ -161,8 +161,8 @@ fn test_schema_max_payload_bytes_unknown_schema_returns_default() {
 
 #[test]
 fn test_encodedvideoframe_larger_than_audioframe() {
-    let audio = max_payload_bytes_for_schema("com.tatolab.audioframe");
-    let video = max_payload_bytes_for_schema("com.tatolab.encodedvideoframe");
+    let audio = max_payload_bytes_for_schema("@tatolab/core/AudioFrame");
+    let video = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
     assert!(
         video > audio,
         "encodedvideoframe ({} bytes) should declare more capacity than audioframe ({} bytes)",
@@ -188,7 +188,7 @@ fn test_audioframe_schema_publisher_rejects_256kb() {
         .open_or_create_service("streamlib/test/schema-audio-reject")
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_schema("com.tatolab.audioframe");
+    let max_bytes = max_payload_bytes_for_schema("@tatolab/core/AudioFrame");
     let publisher = service.create_publisher(max_bytes).unwrap();
 
     // 256 KB exceeds the 64 KB audioframe limit.
@@ -209,7 +209,7 @@ fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
         .open_or_create_service("streamlib/test/schema-video-ok")
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_schema("com.tatolab.encodedvideoframe");
+    let max_bytes = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
     let publisher = service.create_publisher(max_bytes).unwrap();
 
     let result = publisher.loan_slice_uninit(256 * 1024);
@@ -236,7 +236,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
         .unwrap();
 
     let data_size = 256 * 1024;
-    let max_bytes = max_payload_bytes_for_schema("com.tatolab.encodedvideoframe");
+    let max_bytes = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
     // Publisher sized like the FFI layer: schema max + header.
     let publisher = service.create_publisher(max_bytes).unwrap();
     let subscriber = service.create_subscriber().unwrap();
@@ -248,7 +248,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let total_len = FRAME_HEADER_SIZE + data_size;
     let mut frame = vec![0u8; total_len];
-    FrameHeader::new("dest_port", "com.tatolab.encodedvideoframe", 42, data_size as u32)
+    FrameHeader::new("dest_port", "@tatolab/core/EncodedVideoFrame", 42, data_size as u32)
         .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
 
@@ -278,7 +278,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let header = FrameHeader::read_from_slice(&buf);
     assert_eq!(header.port(), "dest_port");
-    assert_eq!(header.schema(), "com.tatolab.encodedvideoframe");
+    assert_eq!(header.schema(), "@tatolab/core/EncodedVideoFrame");
     assert_eq!(header.timestamp_ns, 42);
     assert_eq!(header.len as usize, data_size);
     assert_eq!(
@@ -299,7 +299,7 @@ fn test_encodedvideoframe_schema_publisher_subscriber_roundtrip_256kb() {
         .open_or_create_service("streamlib/test/schema-video-roundtrip")
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_schema("com.tatolab.encodedvideoframe");
+    let max_bytes = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
     let publisher = service.create_publisher(max_bytes).unwrap();
     let subscriber = service.create_subscriber().unwrap();
 

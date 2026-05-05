@@ -1,11 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# JSON Type Definition (RFC 8927) schema for video frames
+# JSON Type Definition (RFC 8927) schema for video frames.
 
 metadata:
-  name: com.tatolab.videoframe
-  version: 1.0.0
+  type: VideoFrame
   description: "Video frame for IPC - references GPU surface by ID"
   read_mode: skip_to_latest
   buffer_size: 4

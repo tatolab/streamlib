@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Union, get_args, get_origin
 
 
 @dataclass
-class Encodedaudioframe:
+class EncodedAudioFrame:
     """
     Encoded audio frame with Opus/AAC bitstream data
     """
@@ -34,7 +34,7 @@ class Encodedaudioframe:
 
 
     @classmethod
-    def from_json_data(cls, data: Any) -> 'Encodedaudioframe':
+    def from_json_data(cls, data: Any) -> 'EncodedAudioFrame':
         return cls(
             _from_json_data(List[int], data.get("data")),
             _from_json_data(int, data.get("sample_count")),

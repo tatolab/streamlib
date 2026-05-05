@@ -5,7 +5,7 @@
 //
 // Provides Opus encoding for real-time audio streaming.
 
-use crate::_generated_::{Audioframe, Encodedaudioframe};
+use crate::_generated_::{AudioFrame, EncodedAudioFrame};
 use crate::core::{Result, StreamError};
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ impl Default for AudioEncoderConfig {
 // ============================================================================
 
 pub trait AudioEncoderOpus: Send {
-    fn encode(&mut self, frame: &Audioframe) -> Result<Encodedaudioframe>;
+    fn encode(&mut self, frame: &AudioFrame) -> Result<EncodedAudioFrame>;
     fn config(&self) -> &AudioEncoderConfig;
     fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()>;
 }
@@ -53,7 +53,7 @@ pub trait AudioEncoderOpus: Send {
 /// Opus audio encoder for real-time WebRTC streaming.
 ///
 /// # Requirements
-/// - Input must be stereo (`Audioframe`)
+/// - Input must be stereo (`AudioFrame`)
 /// - Sample rate must be 48kHz
 /// - Frame size must be exactly 960 samples (20ms @ 48kHz)
 ///
@@ -133,7 +133,7 @@ impl OpusEncoder {
 }
 
 impl AudioEncoderOpus for OpusEncoder {
-    fn encode(&mut self, frame: &Audioframe) -> Result<Encodedaudioframe> {
+    fn encode(&mut self, frame: &AudioFrame) -> Result<EncodedAudioFrame> {
         // Validate sample rate
         if frame.sample_rate != 48000 {
             return Err(StreamError::Configuration(
@@ -157,7 +157,7 @@ impl AudioEncoderOpus for OpusEncoder {
             ));
         }
 
-        // Encode (opus expects interleaved f32, which is what Audioframe uses)
+        // Encode (opus expects interleaved f32, which is what AudioFrame uses)
         // Max packet size ~4KB is enough for worst case Opus output
         let encoded_data = self
             .encoder
@@ -171,7 +171,7 @@ impl AudioEncoderOpus for OpusEncoder {
             (actual_samples * 2 * 4) as f32 / encoded_data.len() as f32 // f32 = 4 bytes per sample
         );
 
-        Ok(Encodedaudioframe {
+        Ok(EncodedAudioFrame {
             data: encoded_data,
             timestamp_ns: frame.timestamp_ns.clone(),
             sample_count: actual_samples as u32,

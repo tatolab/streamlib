@@ -1,0 +1,20 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/core — canonical wire vocabulary.
+#
+# Streamlib's google.protobuf analogue: the four wire-stable types every
+# other package depends on. Per `docs/architecture/schema-identity-and-packaging.md`
+# Decision 5, this package ships at 1.0.0 from day one; breaking changes
+# require a deliberate v2 bump and downstream migration.
+package:
+  org: tatolab
+  name: core
+  version: 1.0.0
+  description: Canonical wire vocabulary (VideoFrame, AudioFrame, EncodedVideoFrame, EncodedAudioFrame)
+
+schemas:
+  - schemas/video_frame.yaml
+  - schemas/audio_frame.yaml
+  - schemas/encoded_video_frame.yaml
+  - schemas/encoded_audio_frame.yaml

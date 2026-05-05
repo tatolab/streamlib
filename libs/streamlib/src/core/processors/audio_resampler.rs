@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::com_tatolab_audio_resampler_config::Quality;
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
@@ -55,7 +55,7 @@ impl crate::core::ReactiveProcessor for AudioResamplerProcessor::Processor {
             return Ok(());
         }
 
-        let input_frame: Audioframe = self.inputs.read("audio_in")?;
+        let input_frame: AudioFrame = self.inputs.read("audio_in")?;
 
         // Store channels from first frame
         if self.channels == 0 {
@@ -102,7 +102,7 @@ impl crate::core::ReactiveProcessor for AudioResamplerProcessor::Processor {
             input_frame.samples.clone()
         };
 
-        let output_frame = Audioframe {
+        let output_frame = AudioFrame {
             samples: output_samples,
             channels: self.channels,
             sample_rate: self.output_sample_rate,

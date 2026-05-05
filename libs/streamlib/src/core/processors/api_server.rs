@@ -548,7 +548,7 @@ async fn list_schema_definitions() -> Json<Vec<String>> {
     path = "/api/schemas/{name}",
     tag = "schemas",
     params(
-        ("name" = String, Path, description = "Schema name (e.g. com.tatolab.videoframe)")
+        ("name" = String, Path, description = "Schema name (e.g. @tatolab/core/VideoFrame)")
     ),
     responses(
         (status = 200, description = "YAML schema definition", body = String),

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Videoframe;
+use crate::_generated_::VideoFrame;
 use crate::core::{Result, RuntimeContextFullAccess};
 
 #[crate::processor("com.tatolab.simple_passthrough")]
@@ -13,7 +13,7 @@ impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Read from iceoryx2 input mailbox and write to output
         if self.inputs.has_data("input") {
-            let frame: Videoframe = self.inputs.read("input")?;
+            let frame: VideoFrame = self.inputs.read("input")?;
             self.outputs.write("output", &frame)?;
         }
         Ok(())

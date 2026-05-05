@@ -8,7 +8,7 @@
 /**
  * Audio frame with interleaved samples (1-8 channels)
  */
-export interface Audioframe {
+export interface AudioFrame {
   /**
    * Number of audio channels (1-8)
    */
