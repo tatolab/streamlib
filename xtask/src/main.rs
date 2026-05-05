@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 pub mod check_boundaries;
+pub mod check_schema_versions;
 mod generate_schemas;
 pub mod lint_logging;
 
@@ -64,6 +65,12 @@ enum Commands {
     /// on the full `streamlib` crate, or privileged Vulkan calls outside
     /// the RHI. See `docs/architecture/subprocess-rhi-parity.md`.
     CheckBoundaries,
+
+    /// CI gate for the package-as-publication-unit rule from milestone 10.
+    /// Fails when any schema YAML declares a top-level `version` key
+    /// (versioning lives in `streamlib.yaml`, not in individual schemas).
+    /// See `docs/architecture/schema-identity-and-packaging.md`.
+    CheckSchemaVersions,
 }
 
 fn main() -> Result<()> {
@@ -79,6 +86,7 @@ fn main() -> Result<()> {
         } => generate_schemas::run(runtime, output, project_file, schema_file, schema_dir)?,
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
+        Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,
     }
 
     Ok(())
