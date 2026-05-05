@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 [package]
-name = "streamlib-codegen-shared"
-description = "Minimal types shared between streamlib and streamlib-macros for code generation"
+name = "streamlib-processor-schema"
+description = "Processor schema types and YAML parser shared between the streamlib runtime and streamlib-macros"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -17,7 +17,7 @@ mod config_descriptor;
 
 use proc_macro::TokenStream;
 use std::path::Path;
-use streamlib_codegen_shared::ProjectConfigMinimal;
+use streamlib_processor_schema::ProjectConfigMinimal;
 use syn::{parse_macro_input, DeriveInput, ItemStruct, LitStr};
 
 /// Main processor attribute macro.
@@ -59,7 +59,7 @@ fn parse_processor_name(attr: TokenStream) -> syn::Result<String> {
 fn load_processor_schema(
     processor_name: &str,
     item: &ItemStruct,
-) -> syn::Result<streamlib_codegen_shared::ProcessorSchema> {
+) -> syn::Result<streamlib_processor_schema::ProcessorSchema> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_err(|_| {
         syn::Error::new_spanned(
             item,

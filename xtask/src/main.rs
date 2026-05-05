@@ -7,12 +7,12 @@
 //!   cargo xtask generate-schemas --runtime rust --project-file libs/streamlib/Cargo.toml --output libs/streamlib/src/_generated_
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 
 pub mod check_boundaries;
 pub mod check_schema_versions;
-mod generate_schemas;
 pub mod lint_logging;
 
 #[derive(Parser)]
@@ -23,17 +23,13 @@ struct Cli {
     command: Commands,
 }
 
-/// Target runtime language for schema code generation.
-#[derive(Debug, Clone, ValueEnum)]
-pub enum RuntimeTarget {
-    Rust,
-    Python,
-    Typescript,
-}
-
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate code from JTD schemas using jtd-codegen
+    /// Generate code from JTD schemas using jtd-codegen.
+    ///
+    /// Thin wrapper around `streamlib-jtd-codegen`. The same pipeline is also
+    /// reachable as `streamlib generate` for non-Rust developers (no rustup
+    /// required).
     GenerateSchemas {
         /// Target language (default: rust)
         #[arg(long, default_value = "rust")]
@@ -74,6 +70,15 @@ enum Commands {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .without_time()
+        .init();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -83,7 +88,14 @@ fn main() -> Result<()> {
             project_file,
             schema_file,
             schema_dir,
-        } => generate_schemas::run(runtime, output, project_file, schema_file, schema_dir)?,
+        } => generate(GenerateOptions {
+            runtime,
+            output,
+            project_file,
+            schema_file,
+            schema_dir,
+            workspace_root: workspace_root()?,
+        })?,
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,

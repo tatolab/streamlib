@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use streamlib_jtd_codegen::RuntimeTarget;
 
 mod commands;
 
@@ -123,6 +124,32 @@ enum Commands {
     Pkg {
         #[command(subcommand)]
         action: PkgCommands,
+    },
+
+    /// Generate typed bindings from JTD schemas via the JTD-codegen pipeline.
+    ///
+    /// Same pipeline contributors run as `cargo xtask generate-schemas`,
+    /// reachable here without rustup.
+    Generate {
+        /// Target language (default: rust)
+        #[arg(long, default_value = "rust")]
+        runtime: RuntimeTarget,
+
+        /// Output directory (required)
+        #[arg(long)]
+        output: PathBuf,
+
+        /// Read schema list from a project file (Cargo.toml or pyproject.toml)
+        #[arg(long, group = "input")]
+        project_file: Option<PathBuf>,
+
+        /// Process a single schema file
+        #[arg(long, group = "input")]
+        schema_file: Option<PathBuf>,
+
+        /// Process all .yaml files in a directory
+        #[arg(long, group = "input")]
+        schema_dir: Option<PathBuf>,
     },
 }
 
@@ -242,6 +269,13 @@ async fn async_main(cli: Cli) -> Result<()> {
             PkgCommands::List => commands::pkg::list()?,
             PkgCommands::Remove { name } => commands::pkg::remove(&name)?,
         },
+        Some(Commands::Generate {
+            runtime,
+            output,
+            project_file,
+            schema_file,
+            schema_dir,
+        }) => commands::generate::run(runtime, output, project_file, schema_file, schema_dir)?,
         None => {
             Cli::parse_from(["streamlib", "--help"]);
         }

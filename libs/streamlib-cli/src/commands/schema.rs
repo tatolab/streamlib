@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use std::path::Path;
-use streamlib_codegen_shared::parse_processor_yaml_file;
+use streamlib_processor_schema::parse_processor_yaml_file;
 
 /// Validate a processor YAML schema file.
 pub fn validate_processor(path: &Path) -> Result<()> {

@@ -2,6 +2,13 @@
 
 **Status:** Architecture approved — ready for implementation planning.
 
+> **Note (2026-05-04):** references below to `streamlib-processor-schema`
+> were updated in place to `streamlib-processor-schema` after the
+> milestone-10 rename (see issue #400). The doc's substance is
+> unchanged — it's the same crate, same types, same parser, just under
+> a more specific name now that a sibling `streamlib-jtd-codegen`
+> crate also exists.
+
 ---
 
 ## Problem
@@ -17,7 +24,7 @@ Python and TypeScript processors define everything in `streamlib.yaml`. Rust pro
 
 ## Key Discovery
 
-Both paths already deserialize into the **exact same type**: `streamlib_codegen_shared::ProcessorSchema`.
+Both paths already deserialize into the **exact same type**: `streamlib_processor_schema::ProcessorSchema`.
 
 - The macro calls `parse_processor_yaml()` which returns `ProcessorSchema`
 - `ProjectConfig.processors` is `Vec<ProcessorSchema>`
@@ -59,7 +66,7 @@ load_processor_schema(processor_name, item)
 
 The old file-path code path is removed — no heuristic, no branching.
 
-### Shared crate: `libs/streamlib-codegen-shared/src/lib.rs`
+### Shared crate: `libs/streamlib-processor-schema/src/lib.rs`
 
 Add `ProjectConfigMinimal` struct:
 
@@ -167,7 +174,7 @@ Every `#[crate::processor("path/to/file.yaml")]` and `#[streamlib::processor("pa
 ### What doesn't change
 
 - `codegen.rs` — receives `ProcessorSchema` either way, generates identical code
-- `streamlib-codegen-shared` — `ProcessorSchema`, `parse_processor_yaml()` unchanged (only adds `ProjectConfigMinimal`)
+- `streamlib-processor-schema` — `ProcessorSchema`, `parse_processor_yaml()` unchanged (only adds `ProjectConfigMinimal`)
 - `load_project()` — continues reading `streamlib.yaml` at runtime
 - Python/TypeScript — unaffected
 
@@ -200,7 +207,7 @@ error: streamlib.yaml not found at /path/to/plugin/streamlib.yaml
 
 ## Migration Order
 
-1. Add `ProjectConfigMinimal` to `streamlib-codegen-shared`
+1. Add `ProjectConfigMinimal` to `streamlib-processor-schema`
 2. Replace `load_processor_schema()` in the macro — name-based lookup only
 3. Create `libs/streamlib/streamlib.yaml` with all 19 processor entries
 4. Update all 19 `#[crate::processor(...)]` invocations in `libs/streamlib/`
@@ -220,7 +227,7 @@ error: streamlib.yaml not found at /path/to/plugin/streamlib.yaml
 
 1. `cargo check` — full workspace compiles
 2. `cargo test -p streamlib` — library tests pass (including graph_tests with mock processors)
-3. `cargo test -p streamlib-codegen-shared` — schema parser tests pass
+3. `cargo test -p streamlib-processor-schema` — schema parser tests pass
 4. `cargo build -p grayscale-plugin` — plugin compiles with new syntax
 5. `cargo check -p camera-rust-plugin` — example still works
 6. `cargo check -p camera-python-display` — example still works

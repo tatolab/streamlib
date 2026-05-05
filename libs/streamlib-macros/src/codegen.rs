@@ -13,7 +13,7 @@
 use crate::analysis::AnalysisResult;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use streamlib_codegen_shared::ProcessorSchema;
+use streamlib_processor_schema::ProcessorSchema;
 use syn::ItemStruct;
 
 // ============================================================================
@@ -276,7 +276,7 @@ fn generate_processor_impl_from_schema(
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
-    use streamlib_codegen_shared::ProcessorSchemaExecution;
+    use streamlib_processor_schema::ProcessorSchemaExecution;
 
     let processor_name = &schema.name;
     let description = schema.description.as_deref().unwrap_or("Processor");

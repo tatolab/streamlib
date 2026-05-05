@@ -202,8 +202,12 @@ the `streamlib` CLI). Non-Rust developers regenerate bindings without
 ever installing rustup. `cargo xtask generate-schemas` remains as a
 thin contributor-only wrapper.
 
-The library crate behind both — `streamlib-codegen` — is what #400
-extracts from the current `xtask/src/generate_schemas.rs`.
+The library crate behind both — `streamlib-jtd-codegen` — is what #400
+extracts from the current `xtask/src/generate_schemas.rs`. (Originally
+proposed name `streamlib-codegen` was renamed during #400's PR to
+avoid collision with the existing `streamlib-codegen-shared` crate,
+which itself was renamed to `streamlib-processor-schema` to better
+describe its role — see the PR for naming-clarity rationale.)
 
 ### Decision 7 — sentinel-substitution codegen + deterministic ordering
 
@@ -373,7 +377,7 @@ Then the generated files are written to each consumer's `_generated_/`
 directory. The `verify-schemas` gate re-runs the whole pipeline on
 CI and asserts byte-identical output.
 
-The `streamlib-codegen` crate (extracted by #400) owns this pipeline.
+The `streamlib-jtd-codegen` crate (extracted by #400) owns this pipeline.
 The `streamlib-idents` crate (this PR) owns the structured types
 the pipeline reads and writes (`SchemaIdent`, `SemVer`,
 `PackageManifest`, `Lockfile`).
@@ -618,7 +622,7 @@ GitHub `Blocked by` edges) drives the order:
 
 1. **#541** + **#684** + **#399** — bug fixes (codegen idempotency,
    field ordering) and this foundation. Sibling-ready.
-2. **#400** — extract `streamlib-codegen` crate + add
+2. **#400** — extract `streamlib-jtd-codegen` crate + add
    `streamlib generate` CLI. Needs #399 for the structured types.
 3. **#402** — `streamlib.yaml` resolver + `streamlib.lock` + cutover
    off legacy `[package.metadata.streamlib]` etc. (atomic — absorbs
@@ -687,7 +691,7 @@ the cross-language need.
   - `xtask/src/check_schema_versions.rs::tests` — fixture tests +
     workspace smoke test.
 - **Future research / follow-ups**:
-  - #400 (`streamlib-codegen` crate + CLI).
+  - #400 (`streamlib-jtd-codegen` crate + CLI).
   - #401 (macros + example string migration).
   - #402 (resolver + lockfile + cutover off legacy metadata).
   - #404 (`@tatolab/core` + IPC wire migration).

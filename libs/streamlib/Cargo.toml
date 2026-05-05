@@ -25,8 +25,8 @@ moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url", "dep:ru
 strip_debug_logging = ["tracing/release_max_level_info"]
 
 [dependencies]
-# Execution types (shared with macros for code generation)
-streamlib-codegen-shared = { path = "../streamlib-codegen-shared" }
+# Processor schema types (shared with macros for code generation)
+streamlib-processor-schema = { path = "../streamlib-processor-schema" }
 
 # Procedural macros
 streamlib-macros = { path = "../streamlib-macros" }

@@ -58,12 +58,12 @@ pub fn pack(package_dir: &Path, output: Option<&Path>) -> Result<()> {
     for proc in &config.processors {
         if let Some(entrypoint) = &proc.entrypoint {
             let source_file = match proc.runtime.language {
-                streamlib_codegen_shared::ProcessorLanguage::Python => {
+                streamlib_processor_schema::ProcessorLanguage::Python => {
                     // "grayscale_processor:GrayscaleProcessor" → "grayscale_processor.py"
                     let module = entrypoint.split(':').next().unwrap_or(entrypoint);
                     format!("{}.py", module)
                 }
-                streamlib_codegen_shared::ProcessorLanguage::TypeScript => {
+                streamlib_processor_schema::ProcessorLanguage::TypeScript => {
                     // "halftone_processor.ts:HalftoneProcessor" → "halftone_processor.ts"
                     entrypoint
                         .split(':')
@@ -71,7 +71,7 @@ pub fn pack(package_dir: &Path, output: Option<&Path>) -> Result<()> {
                         .unwrap_or(entrypoint)
                         .to_string()
                 }
-                streamlib_codegen_shared::ProcessorLanguage::Rust => {
+                streamlib_processor_schema::ProcessorLanguage::Rust => {
                     continue; // Rust processors don't have source files to bundle
                 }
             };
@@ -93,7 +93,7 @@ pub fn pack(package_dir: &Path, output: Option<&Path>) -> Result<()> {
     let has_rust_processors = config.processors.iter().any(|p| {
         matches!(
             p.runtime.language,
-            streamlib_codegen_shared::ProcessorLanguage::Rust
+            streamlib_processor_schema::ProcessorLanguage::Rust
         )
     });
     if has_rust_processors {
