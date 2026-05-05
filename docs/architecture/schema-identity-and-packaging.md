@@ -388,6 +388,62 @@ and the resolver that walks `streamlib.yaml` (`resolve`,
 `Manifest` type that tolerates runtime-side fields like `processors:`
 without `deny_unknown_fields` rejection).
 
+### Root-name sentinel — sibling pattern at the `--root-name` boundary
+
+Cross-package references aren't the only place `jtd-codegen` v0.4.1
+mangles names. The same backend bugs (digit-boundary lowercasing
+across all three; Python-only acronym upcasing; inconsistent
+`--root-name` honoring across emit shapes) apply to **the root type
+name `--root-name` declares**. `H264DecoderConfig` lands as
+`H264decoderConfig` in TypeScript output even though that exact
+spelling was passed on the CLI. The fix mirrors the cross-package
+sentinel pattern at a different layer: pass a sentinel as
+`--root-name` that no backend mangles, then literal-substitute the
+sentinel back to the schema's `metadata.name`-derived identifier in
+each post-processor.
+
+Implementation: `ROOT_NAME_SENTINEL` const in
+`streamlib-jtd-codegen::lib.rs` carries `"StreamlibCanonRoot"` as
+the chosen sentinel value. Per-language `post_process_*` functions
+end with a single `code.replace(ROOT_NAME_SENTINEL, expected_name)`
+pass. The `ROOT_NAME_SENTINEL` value is a transport detail — it
+never appears in committed `_generated_/` output.
+
+The earlier proposal in #143 (`__ROOT__`) was disproven empirically
+during #541's pickup: `jtd-codegen` v0.4.1 normalizes
+underscore-prefixed identifiers, collapsing `__ROOT__` to `Root`
+across all three backends. Any sentinel must satisfy two
+constraints:
+
+- **Survive byte-identically** through all three backends (no
+  case-folding, no underscore stripping, no acronym up/down-casing).
+  CamelCase identifiers do; `__ROOT__`-shape identifiers do not.
+- **Be distinct enough that no real schema would emit it.**
+  `StreamlibCanonRoot` is internally namespaced; a `s/Streamlib/`
+  grep finds the implementation rather than user code.
+
+The sub-type prefix-strip pass in Rust's `post_process_rust` runs
+**before** the final sentinel substitution and operates on
+`ROOT_NAME_SENTINEL`-prefixed names (e.g., `StreamlibCanonRootRateControl`
+→ `RateControl`). Names that don't get stripped retain their
+sentinel prefix until the final `code.replace`, at which point
+`StreamlibCanonRootBar` becomes `EscalateRequestBar` — exactly the
+existing committed shape. Sub-type renames do **not** use a separate
+sentinel today; the prefix-strip heuristic still runs because
+sub-type identifiers aren't declared in `streamlib.yaml`. Replacing
+the sub-type prefix-strip heuristic with a per-sub-type sentinel
+is a follow-up if the heuristic ever surfaces a bug; today it works
+correctly because the input always has the
+`ROOT_NAME_SENTINEL`-prefixed shape.
+
+The two sentinel passes — cross-package `__STREAMLIB_REF_<hash>__`
+and `ROOT_NAME_SENTINEL` — operate on disjoint parts of the input
+(JTD `ref:` lines vs. the `--root-name` CLI arg), at disjoint
+layers (pre-codegen JSON manipulation vs. post-codegen string
+substitution), and never interact. Both implement the same
+architectural principle (no heuristic detection at the codegen
+boundary) at different surfaces.
+
 ## Anti-patterns
 
 These are explicit rejections — re-introducing any of them

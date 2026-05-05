@@ -8,5 +8,5 @@
 /**
  * Configuration for H.265 video decoding.
  */
-export interface H265decoderConfig {
+export interface H265DecoderConfig {
 }

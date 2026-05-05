@@ -8,7 +8,7 @@
 /**
  * Configuration for H.264 video encoding.
  */
-export interface H264encoderConfig {
+export interface H264EncoderConfig {
   /**
    * Target bitrate in bits per second (default: 2000000).
    */
