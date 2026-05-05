@@ -103,6 +103,7 @@ mod tests {
     use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTexture};
     use std::sync::Arc;
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_creates_image_view_for_valid_image() {
         let device = match HostVulkanDevice::new() {
@@ -131,6 +132,7 @@ mod tests {
         assert_ne!(view, vk::ImageView::null(), "image view handle must be non-null");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_returns_cached_view_for_same_image() {
         let device = match HostVulkanDevice::new() {
@@ -163,6 +165,7 @@ mod tests {
         assert_eq!(view_a, view_b, "same image must return the same cached VkImageView");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_flush_destroys_all_cached_views() {
         let device = match HostVulkanDevice::new() {

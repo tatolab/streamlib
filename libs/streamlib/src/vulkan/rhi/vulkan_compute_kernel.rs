@@ -1229,26 +1229,31 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn dispatch_matches_expected_blend_for_one_input() {
         assert_blend_for(1);
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn dispatch_matches_expected_blend_for_two_inputs() {
         assert_blend_for(2);
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn dispatch_matches_expected_blend_for_four_inputs() {
         assert_blend_for(4);
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn dispatch_matches_expected_blend_for_eight_inputs() {
         assert_blend_for(8);
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn kernel_bindings_reflect_descriptor() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1276,6 +1281,7 @@ mod tests {
         }
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn rejects_descriptor_with_mismatched_binding_kind() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1301,6 +1307,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn rejects_descriptor_missing_a_binding_the_shader_declares() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1328,6 +1335,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn rejects_descriptor_with_extra_binding_not_in_shader() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1354,6 +1362,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn rejects_push_constant_size_mismatch() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1375,6 +1384,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn dispatch_without_setting_bindings_fails_loud() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1398,6 +1408,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn dispatch_completes_within_reasonable_budget() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1523,6 +1534,7 @@ mod tests {
         let _ = dir; // keep the helper's tempdir name in scope
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn cache_miss_writes_cache_file_after_kernel_construction() {
@@ -1567,6 +1579,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn cache_hit_does_not_panic_or_break_kernel_construction() {
@@ -1612,6 +1625,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn corrupt_cache_blob_falls_back_to_recompile_and_overwrites() {
@@ -1648,6 +1662,7 @@ mod tests {
         });
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn read_only_cache_dir_does_not_break_kernel_construction() {

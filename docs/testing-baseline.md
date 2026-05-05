@@ -1,8 +1,17 @@
 # Workspace test baseline
 
-Canonical command and exclusion list for streamlib's unit + integration
-test suite. Use this when reporting test results for a PR so reviewers
-can spot silent test-coverage loss.
+Canonical command and exclusion list for streamlib's tier-1 unit-test
+suite. Use this when reporting test results for a PR so reviewers can
+spot silent test-coverage loss.
+
+**Two tiers, gated by a Cargo feature.** Tier 1 (this doc) is the
+default `cargo test` and runs in parallel — pure logic, parsers, mock-
+backed integration. Tier 2 is hardware-integration: `cargo test
+--features streamlib/hardware-tests --workspace -- --test-threads=1`,
+documented separately in [`testing-hardware.md`](testing-hardware.md).
+The split is enforced by `#[cfg_attr(not(feature = "hardware-tests"),
+ignore)]` on every test that constructs a real `HostVulkanDevice`,
+so a tier-2 test can never accidentally hang the tier-1 gate.
 
 **Do not use `cargo test -p streamlib` as the workspace baseline.** It
 covers only the top-level `streamlib` crate and misses the bulk of the

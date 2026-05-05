@@ -2232,6 +2232,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn new_rejects_zero_descriptor_sets_in_flight() {
         // descriptor_sets_in_flight = 0 must fail before any Vulkan call.
@@ -2257,6 +2258,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn new_rejects_descriptor_without_vertex_stage() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -2277,6 +2279,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn new_rejects_descriptor_without_fragment_stage() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -2297,6 +2300,7 @@ mod tests {
 
     // ---- Pipeline construction (GPU device required) ----------------------
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn constructs_display_blit_kernel() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -2317,6 +2321,7 @@ mod tests {
         assert_eq!(kernel.descriptor_sets_in_flight(), 2);
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn constructs_kernel_with_depth_stencil_enabled() {
         // Smoke test: pipeline creation succeeds when both
@@ -2358,6 +2363,7 @@ mod tests {
         assert_eq!(kernel.bindings().len(), 1);
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn constructs_kernel_with_alpha_blending() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -2377,6 +2383,7 @@ mod tests {
             .expect("alpha-blending kernel must construct");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn constructs_kernel_with_vertex_input_buffers() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -2419,6 +2426,7 @@ mod tests {
             .expect("vertex-input kernel must construct");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn frame_index_out_of_range_fails_loud() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -2463,6 +2471,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn dispatch_without_setting_bindings_fails_loud() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };

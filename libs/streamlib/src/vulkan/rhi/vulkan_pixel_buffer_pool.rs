@@ -148,6 +148,7 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_pool_acquire_returns_buffer() {
         let device = match HostVulkanDevice::new() {
@@ -173,6 +174,7 @@ mod tests {
         assert_ne!(pool_id, PixelBufferPoolId::new(), "pool id must be stable, not a fresh zero-id");
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_pool_exhaustion_returns_error() {
         let device = match HostVulkanDevice::new() {
@@ -199,6 +201,7 @@ mod tests {
         );
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_pool_reuses_buffer_after_release() {
         let device = match HostVulkanDevice::new() {

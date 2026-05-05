@@ -102,6 +102,7 @@ mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_creates_command_buffer() {
         let device = match HostVulkanDevice::new() {
@@ -117,6 +118,7 @@ mod tests {
         assert!(result.is_ok(), "command buffer allocation must succeed: {:?}", result.err());
     }
 
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn test_empty_command_buffer_commit_and_wait_completes() {
         let device = match HostVulkanDevice::new() {

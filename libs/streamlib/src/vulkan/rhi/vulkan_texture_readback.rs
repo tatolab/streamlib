@@ -878,6 +878,7 @@ mod tests {
 
     /// Positive: round-trip a known pattern through the readback
     /// primitive on a 32x32 texture.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn submit_then_wait_returns_expected_bytes() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -924,6 +925,7 @@ mod tests {
     /// Positive: multiple submits sequentially on a single handle. After
     /// each wait, the next submit must succeed and the bytes reflect
     /// the (re-filled) texture.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn multiple_sequential_submits_work() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -967,6 +969,7 @@ mod tests {
     }
 
     /// Negative: descriptor / texture mismatch must error at submit time.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn rejects_descriptor_mismatch() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1015,6 +1018,7 @@ mod tests {
 
     /// Negative: a second submit before the first ticket is waited
     /// returns InFlight.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn second_submit_before_wait_errors_in_flight() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1046,6 +1050,7 @@ mod tests {
     }
 
     /// Negative: a ticket from one handle is rejected by another.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn foreign_ticket_rejected() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1084,6 +1089,7 @@ mod tests {
     }
 
     /// Negative: try_read with no in-flight submission errors NoSubmission.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn try_read_with_no_submission_errors_no_submission() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1108,6 +1114,7 @@ mod tests {
     /// Multiple readback handles can be in flight concurrently.
     /// Validates the design assertion that parallel readbacks are
     /// achieved by holding N handles, not by parallelism on one.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn multiple_handles_can_be_in_flight_concurrently() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1146,6 +1153,7 @@ mod tests {
     }
 
     /// Drop on an idle handle must not panic.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn drop_on_idle_handle_no_panic() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
@@ -1165,6 +1173,7 @@ mod tests {
     /// Bytes-per-pixel for Bgra8Unorm and Rgba8Unorm: descriptor sizes
     /// match the staging buffer and constructed handles report the
     /// expected dimensions.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn descriptor_sizes_and_metadata_round_trip() {
         let device = match try_vulkan_device() { Some(d) => d, None => return };
