@@ -2,7 +2,7 @@
 
 **Status:** Architecture approved — ready for implementation planning.
 
-> **Note (2026-05-04):** references below to `streamlib-processor-schema`
+> **Note (2026-05-04):** references below to `streamlib-codegen-shared`
 > were updated in place to `streamlib-processor-schema` after the
 > milestone-10 rename (see issue #400). The doc's substance is
 > unchanged — it's the same crate, same types, same parser, just under
