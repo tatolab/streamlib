@@ -39,23 +39,14 @@ from . import log
 from . import clock
 from .clock import MonotonicTimer, monotonic_now_ns
 
-# Re-export decorators and schema API
+# Processor + port decorators. Schemas are not author-decorated in Python —
+# JTD-in-YAML is the canonical schema source and `streamlib generate` emits
+# Python dataclasses carrying `__streamlib_schema_ident__` directly. See
+# `docs/architecture/schema-identity-and-packaging.md`.
 from .decorators import (
-    # Processor decorators
     processor,
     input,
     output,
-    # Schema decorator
-    schema,
-    # Field descriptors
-    SchemaField,
-    f32,
-    f64,
-    i32,
-    i64,
-    u32,
-    u64,
-    bool_field,
 )
 
 # Structured schema identity (mirrors Rust's streamlib_idents::SchemaIdent)
@@ -82,20 +73,10 @@ __all__ = [
     "clock",
     "monotonic_now_ns",
     "MonotonicTimer",
-    # Processor decorators
+    # Processor + port decorators
     "processor",
     "input",
     "output",
-    # Schema API
-    "schema",
-    "SchemaField",
-    "f32",
-    "f64",
-    "i32",
-    "i64",
-    "u32",
-    "u64",
-    "bool_field",
     # Structured schema identity
     "SchemaIdent",
     "PixelFormat",
