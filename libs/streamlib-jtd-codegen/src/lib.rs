@@ -1181,11 +1181,22 @@ fn inject_schema_ident_python(
     // Inject the class attribute at `cursor`. Indented to four spaces,
     // matching the dataclass body. Wrapped on multiple lines so the version
     // string and structural commas read cleanly even for the longest
-    // identifiers.
-    let injection = format!(
-        "    __streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent(\n        org=\"{}\",\n        package=\"{}\",\n        type_=\"{}\",\n        version=\"{}\",\n    )\n\n",
+    // identifiers. The injection ends with the closing-`)` line's newline
+    // only — a separator blank line is emitted only when the source code
+    // doesn't already have one at `cursor` (i.e., when there's no
+    // class-docstring contributing the blank line). This keeps the
+    // post-docstring case from accumulating two blank lines on every
+    // regen.
+    let injection_body = format!(
+        "    __streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent(\n        org=\"{}\",\n        package=\"{}\",\n        type_=\"{}\",\n        version=\"{}\",\n    )\n",
         ident.org, ident.package, ident.type_name, ident.version,
     );
+    let needs_blank_separator = cursor < bytes.len() && bytes[cursor] != b'\n';
+    let injection = if needs_blank_separator {
+        format!("{}\n", injection_body)
+    } else {
+        injection_body
+    };
 
     let mut result = String::with_capacity(with_imports.len() + injection.len());
     result.push_str(&with_imports[..cursor]);

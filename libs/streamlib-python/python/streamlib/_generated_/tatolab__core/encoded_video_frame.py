@@ -24,7 +24,6 @@ class EncodedVideoFrame:
         version="1.0.0",
     )
 
-
     data: 'List[int]'
     """
     Encoded NAL units (H.264/H.265 bitstream data)

@@ -24,7 +24,6 @@ class EncodedAudioFrame:
         version="1.0.0",
     )
 
-
     data: 'List[int]'
     """
     Encoded audio bitstream data (Opus/AAC)

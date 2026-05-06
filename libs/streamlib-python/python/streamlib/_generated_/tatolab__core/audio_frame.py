@@ -24,7 +24,6 @@ class AudioFrame:
         version="1.0.0",
     )
 
-
     channels: 'int'
     """
     Number of audio channels (1-8)

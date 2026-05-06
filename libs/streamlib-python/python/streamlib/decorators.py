@@ -182,20 +182,18 @@ def input(
 
     Args:
         name: Port name. Defaults to the method name.
-        schema: A structured carrier — either a `SchemaIdent` instance
-            (cross-package or same-package) or a class decorated with
-            `@schema` (whose `__streamlib_schema_ident__` is read).
-            String forms (bare type name or joined `@org/pkg/Type@v`)
-            are rejected with a clear error.
+        schema: A structured carrier — either a `SchemaIdent` instance or
+            a codegen-emitted class that carries `__streamlib_schema_ident__`
+            as a class attribute (produced by `streamlib generate` from the
+            package's JTD/YAML schemas). String forms (bare type name or
+            joined `@org/pkg/Type@v`) are rejected with a clear error.
         description: Human-readable description for introspection.
 
     Example:
         ```python
-        from streamlib import input, SchemaIdent
+        from streamlib._generated_.tatolab__core import VideoFrame
 
-        VIDEO_FRAME = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
-
-        @input(schema=VIDEO_FRAME, description="RGB video input")
+        @input(schema=VideoFrame, description="RGB video input")
         def video_in(self): pass
         ```
     """

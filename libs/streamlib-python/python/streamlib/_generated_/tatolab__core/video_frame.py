@@ -24,7 +24,6 @@ class VideoFrame:
         version="1.0.0",
     )
 
-
     frame_index: 'str'
     """
     Sequential frame counter (uint64 as string - parse to native uint64)
