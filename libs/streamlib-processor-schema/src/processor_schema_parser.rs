@@ -29,17 +29,14 @@ pub fn parse_processor_yaml_file(path: &Path) -> SchemaResult<ProcessorSchema> {
 
 /// Validate a parsed processor schema.
 fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
-    // Validate name format (reverse domain notation)
+    // Name must be present. Both reverse-DNS (`com.example.foo`, used by
+    // legacy CLI inputs) and PascalCase short names (`Camera`, the new
+    // canonical shape resolved by the macro from `streamlib.yaml`'s
+    // `package:` block) are accepted — the standalone CLI validator
+    // doesn't have package context to enforce the new shape.
     if schema.name.is_empty() {
         return Err(SchemaError::MissingField {
             field: "name".to_string(),
-        });
-    }
-
-    if !schema.name.contains('.') {
-        return Err(SchemaError::InvalidName {
-            name: schema.name.clone(),
-            reason: "must use reverse domain notation (e.g., com.example.myprocessor)".to_string(),
         });
     }
 
@@ -210,16 +207,28 @@ outputs:
     }
 
     #[test]
-    fn test_processor_schema_invalid_name() {
+    fn test_processor_schema_accepts_pascal_case_short_name() {
+        // The CLI validator accepts both legacy reverse-DNS names and the
+        // new PascalCase short-name shape. Package-context validation is
+        // the macro's job; the standalone parser stays permissive.
         let yaml = r#"
-name: invalidname
+name: Camera
+version: 1.0.0
+"#;
+
+        let schema = parse_processor_yaml(yaml).unwrap();
+        assert_eq!(schema.name, "Camera");
+    }
+
+    #[test]
+    fn test_processor_schema_rejects_empty_name() {
+        let yaml = r#"
+name: ""
 version: 1.0.0
 "#;
 
         let result = parse_processor_yaml(yaml);
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("reverse domain notation"));
     }
 
     #[test]

@@ -83,6 +83,37 @@ fn test_processor_instantiation() {
     assert_eq!(processor.name(), "TestProcessor");
 }
 
+#[test]
+fn test_processor_schema_ident_resolves_from_package_block() {
+    // The macro emits `Processor::schema_ident()` returning the structured
+    // SchemaIdent composed from `streamlib.yaml`'s `package:` block plus
+    // the processor's PascalCase short name. This locks the codegen
+    // contract end-to-end: package metadata read, structured const emit,
+    // SchemaIdent::new + segment validators all wired through the
+    // generated module.
+    //
+    // Reverting the macro's `package:` resolution (e.g. hardcoding org)
+    // would flip this assertion — that's the regression the test guards.
+    let ident = TestProcessor::schema_ident();
+    assert_eq!(ident.org.as_str(), "tatolab");
+    assert_eq!(ident.package.as_str(), "streamlib");
+    assert_eq!(ident.r#type.as_str(), "TestProcessor");
+    assert_eq!(ident.version.major, 0);
+    assert_eq!(ident.version.minor, 4);
+    assert_eq!(ident.version.patch, 28);
+}
+
+#[test]
+fn test_processor_schema_ident_renders_canonical_joined_form() {
+    // The structured SchemaIdent's Display impl produces the canonical
+    // `@<org>/<package>/<Type>@<major.minor.patch>` joined form used by
+    // `max_payload_bytes_for_schema` and other lookup paths.
+    assert_eq!(
+        TestProcessor::schema_ident().to_string(),
+        "@tatolab/streamlib/TestProcessor@0.4.28"
+    );
+}
+
 // Test with config field
 #[derive(
     Debug,

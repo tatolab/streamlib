@@ -81,7 +81,6 @@ pub fn generate_from_processor_schema(
     let output_link_module = generate_output_link_module_from_schema(schema);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
-        schema_ident,
         &config_type,
         &config_field_name,
         &custom_fields,
@@ -325,7 +324,6 @@ fn generate_output_link_module_from_schema(schema: &ProcessorSchema) -> TokenStr
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
-    schema_ident: &SchemaIdent,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
@@ -405,8 +403,7 @@ fn generate_processor_impl_from_schema(
 
     let from_config_body =
         generate_from_config_from_schema(schema, config_field_name, custom_fields);
-    let descriptor_impl =
-        generate_descriptor_from_schema(schema, schema_ident, description, version);
+    let descriptor_impl = generate_descriptor_from_schema(schema, description, version);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     let update_config = config_field_name.as_ref().map(|name| {
@@ -595,7 +592,6 @@ fn generate_from_config_from_schema(
 /// Generate descriptor method from schema.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
-    _schema_ident: &SchemaIdent,
     description: &str,
     version: &str,
 ) -> TokenStream {
