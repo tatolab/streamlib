@@ -262,7 +262,7 @@ unsafe fn forward_iosurface_directly(
     }
 }
 
-#[crate::processor("com.tatolab.screen_capture")]
+#[crate::processor("ScreenCapture")]
 pub struct AppleScreenCaptureProcessor {
     /// GPU context for surface pooling (set in setup).
     gpu_context: Option<GpuContext>,

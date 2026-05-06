@@ -17,7 +17,7 @@ use vulkan_video::{Codec, SimpleDecoder, SimpleDecoderConfig};
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("com.streamlib.h264_decoder")]
+#[crate::processor("H264Decoder")]
 pub struct H264DecoderProcessor {
     /// Vulkan Video hardware decoder (shares RHI device).
     decoder: Option<SimpleDecoder>,

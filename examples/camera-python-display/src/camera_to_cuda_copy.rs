@@ -89,7 +89,7 @@ impl Default for CameraToCudaCopyConfig {
     }
 }
 
-#[streamlib::processor("com.tatolab.camera_to_cuda_copy")]
+#[streamlib::processor("CameraToCudaCopy")]
 pub struct CameraToCudaCopyProcessor {
     config: CameraToCudaCopyConfig,
     backend: GpuBackendStash,

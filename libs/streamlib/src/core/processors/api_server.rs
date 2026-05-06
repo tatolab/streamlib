@@ -183,7 +183,7 @@ struct ApiDoc;
 // Processor Definition
 // ============================================================================
 
-#[crate::processor("com.streamlib.api_server")]
+#[crate::processor("ApiServer")]
 pub struct ApiServerProcessor {
     runtime_ctx: Option<RuntimeContext>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,

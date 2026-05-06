@@ -527,7 +527,7 @@ impl StreamRuntime {
                     PortDescriptor::new(
                         &p.name,
                         p.description.as_deref().unwrap_or(""),
-                        &p.schema,
+                        p.schema.clone(),
                         true,
                     )
                 })
@@ -540,7 +540,7 @@ impl StreamRuntime {
                     PortDescriptor::new(
                         &p.name,
                         p.description.as_deref().unwrap_or(""),
-                        &p.schema,
+                        p.schema.clone(),
                         true,
                     )
                 })

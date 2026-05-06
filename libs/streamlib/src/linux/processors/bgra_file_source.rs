@@ -21,7 +21,7 @@ use std::sync::Arc;
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("com.streamlib.bgra_file_source")]
+#[crate::processor("BgraFileSource")]
 pub struct BgraFileSourceProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     is_running: Arc<AtomicBool>,

@@ -29,17 +29,14 @@ pub fn parse_processor_yaml_file(path: &Path) -> SchemaResult<ProcessorSchema> {
 
 /// Validate a parsed processor schema.
 fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
-    // Validate name format (reverse domain notation)
+    // Name must be present. Both reverse-DNS (`com.example.foo`, used by
+    // legacy CLI inputs) and PascalCase short names (`Camera`, the new
+    // canonical shape resolved by the macro from `streamlib.yaml`'s
+    // `package:` block) are accepted — the standalone CLI validator
+    // doesn't have package context to enforce the new shape.
     if schema.name.is_empty() {
         return Err(SchemaError::MissingField {
             field: "name".to_string(),
-        });
-    }
-
-    if !schema.name.contains('.') {
-        return Err(SchemaError::InvalidName {
-            name: schema.name.clone(),
-            reason: "must use reverse domain notation (e.g., com.example.myprocessor)".to_string(),
         });
     }
 
@@ -77,21 +74,14 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
         }
     }
 
-    // Validate input port schema references
+    // Validate input port schema references — port name presence + buffer
+    // size sanity. Schema shape is locked by [`PortSchemaSpec`]'s typed
+    // deserializer (rejects joined-string and other non-structured forms).
     for input in &schema.inputs {
         if input.name.is_empty() {
             return Err(SchemaError::InvalidName {
                 name: schema.name.clone(),
                 reason: "input port name cannot be empty".to_string(),
-            });
-        }
-        if !input.schema.contains('@') {
-            return Err(SchemaError::InvalidName {
-                name: input.schema.clone(),
-                reason: format!(
-                    "input '{}' schema must include version (e.g., com.example.frame@1.0.0)",
-                    input.name
-                ),
             });
         }
         if input.buffer_size == Some(0) {
@@ -105,21 +95,12 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
         }
     }
 
-    // Validate output port schema references
+    // Validate output port schema references — port name presence only.
     for output in &schema.outputs {
         if output.name.is_empty() {
             return Err(SchemaError::InvalidName {
                 name: schema.name.clone(),
                 reason: "output port name cannot be empty".to_string(),
-            });
-        }
-        if !output.schema.contains('@') {
-            return Err(SchemaError::InvalidName {
-                name: output.schema.clone(),
-                reason: format!(
-                    "output '{}' schema must include version (e.g., com.example.frame@1.0.0)",
-                    output.name
-                ),
             });
         }
     }
@@ -164,12 +145,12 @@ config:
 
 inputs:
   - name: image_in
-    schema: com.streamlib.video.frame@1.0.0
+    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
     description: "Input video frame"
 
 outputs:
   - name: image_out
-    schema: com.streamlib.video.frame@1.0.0
+    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
     description: "Blurred video frame"
 "#;
 
@@ -192,7 +173,10 @@ outputs:
 
         assert_eq!(schema.inputs.len(), 1);
         assert_eq!(schema.inputs[0].name, "image_in");
-        assert_eq!(schema.inputs[0].schema, "com.streamlib.video.frame@1.0.0");
+        assert_eq!(
+            schema.inputs[0].schema.to_string(),
+            "@streamlib/video/Frame@1.0.0"
+        );
 
         assert_eq!(schema.outputs.len(), 1);
         assert_eq!(schema.outputs[0].name, "image_out");
@@ -208,11 +192,11 @@ entrypoint: detector:ObjectDetector
 
 inputs:
   - name: frame
-    schema: com.streamlib.video.frame@1.0.0
+    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
 
 outputs:
   - name: detections
-    schema: com.example.detections@1.0.0
+    schema: { org: example, package: detector, type: Detections, version: 1.0.0 }
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
@@ -223,16 +207,28 @@ outputs:
     }
 
     #[test]
-    fn test_processor_schema_invalid_name() {
+    fn test_processor_schema_accepts_pascal_case_short_name() {
+        // The CLI validator accepts both legacy reverse-DNS names and the
+        // new PascalCase short-name shape. Package-context validation is
+        // the macro's job; the standalone parser stays permissive.
         let yaml = r#"
-name: invalidname
+name: Camera
+version: 1.0.0
+"#;
+
+        let schema = parse_processor_yaml(yaml).unwrap();
+        assert_eq!(schema.name, "Camera");
+    }
+
+    #[test]
+    fn test_processor_schema_rejects_empty_name() {
+        let yaml = r#"
+name: ""
 version: 1.0.0
 "#;
 
         let result = parse_processor_yaml(yaml);
         assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("reverse domain notation"));
     }
 
     #[test]
@@ -247,7 +243,10 @@ version: invalid
     }
 
     #[test]
-    fn test_processor_schema_input_missing_version() {
+    fn test_processor_schema_rejects_joined_string_port_schema() {
+        // Joined-string `com.streamlib.video.frame` (and the @-versioned
+        // variant) must be rejected — only `any` or 4-field structured
+        // maps are accepted (`PortSchemaSpec`'s typed deserializer).
         let yaml = r#"
 name: com.example.test
 version: 1.0.0
@@ -260,7 +259,27 @@ inputs:
         let result = parse_processor_yaml(yaml);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("must include version"));
+        assert!(
+            err.contains("4-field structured map") || err.contains("Joined-string"),
+            "expected structured-map rejection error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_processor_schema_accepts_any_port_schema() {
+        // `any` is the wildcard for ports that accept arbitrary serialized
+        // payloads (e.g. MoQ tracks).
+        let yaml = r#"
+name: com.example.test
+version: 1.0.0
+
+inputs:
+  - name: data
+    schema: any
+"#;
+
+        let schema = parse_processor_yaml(yaml).unwrap();
+        assert_eq!(schema.inputs[0].schema.to_string(), "any");
     }
 
     #[test]
@@ -310,7 +329,7 @@ version: 1.0.0
 
 inputs:
   - name: encoded_video_in
-    schema: com.tatolab.encodedvideoframe@1.0.0
+    schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
     read_mode: read_next_in_order
     buffer_size: 16
 "#;
@@ -332,7 +351,7 @@ version: 1.0.0
 
 inputs:
   - name: video
-    schema: com.streamlib.video.frame@1.0.0
+    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
@@ -349,7 +368,7 @@ version: 1.0.0
 
 inputs:
   - name: video
-    schema: com.streamlib.video.frame@1.0.0
+    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
     buffer_size: 0
 "#;
 

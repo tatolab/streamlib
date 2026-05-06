@@ -4,27 +4,39 @@ GitHub is the source of truth for work in this repo. Milestones group deliverabl
 
 This doc is the template every new issue should follow, and the contract agents (and humans) are expected to honor.
 
-## Keep issues low-resolution
+## Issue bodies carry the architecture for proposed work
 
-An issue captures the *goal* of a piece of work — the problem to
-solve, why it matters, and roughly how done looks. The high-resolution
-plan (specific file paths, exact test names, suggested implementation
-ordering, ruled-out approaches) decays as the surrounding code shifts,
-so capturing it in the issue body just creates staleness for the next
-agent to clean up. Resist the urge to be exhaustive.
+Architecture docs (`docs/architecture/*.md`) reflect merged-in code
+only. They never describe upcoming changes — a doc that says "after
+#404 the wire format will become X" creates false-current-state
+confusion when a future agent picks up a fresh branch.
 
-The picker's job is to research current state at pickup time and
-produce a fresh implementation plan; the filer's job is to capture
-the goal cleanly enough that a competent agent can pick it up cold
-and figure the rest out.
+That means **all proposed architecture lives in issue / milestone
+bodies until merged**: mermaid diagrams, BNF grammars, decision
+matrices, ADR-style trade-off discussions, sequenced migration
+plans, and any other design content for not-yet-shipped work goes
+into the issue that drives it. When the work merges, the
+architecture moves into a `docs/architecture/*.md` file describing
+the shipped state in current tense; the issue closes and the doc
+takes over.
+
+What that does **not** mean: high-resolution implementation
+specifics still don't belong in the issue body. Specific file
+paths, exact test function names, suggested implementation
+ordering, and ruled-out approaches decay as the surrounding code
+shifts, so capturing them in the issue body just creates staleness
+for the next agent to clean up. The picker re-derives the
+implementation plan at pickup time from current code state.
 
 What this means in practice:
 
 - **Description** is a short paragraph stating the goal, not a
   pre-implementation plan.
 - **Context** explains *why* the work matters and what constraints
-  bound it. It does not summarize an investigation that the picker
-  could redo themselves.
+  bound it. It carries the architectural commitment that makes
+  this the right shape — including any mermaid / BNF / decision
+  matrix needed for the picker to understand the design without
+  re-litigating it.
 - **Exit criteria** are 2–4 high-level deliverables that define
   "done," not a checklist of file edits.
 - **Tests / validation** describes the *shape* of validation needed
@@ -32,7 +44,8 @@ What this means in practice:
   function names.
 - **AI Agent Notes** are reserved for things the picker genuinely
   cannot derive from current code (a hidden invariant, a ruled-out
-  approach with a reason). When in doubt, leave it as "None."
+  approach with a reason, a load-bearing constraint not visible in
+  the code yet). When in doubt, leave it as "None."
 - **Phrase claims as "to the best of our current knowledge"** when
   the issue body must reference specific code or behavior. This
   signals to the picker that the claim deserves verification.
@@ -111,9 +124,13 @@ also", "context from #N", etc.).
 1. **GitHub is the source of truth.** Every issue — description, exit
    criteria, tests, dependency edges, AI-agent notes — lives in the
    issue itself. Local plan files are deprecated; don't create new ones.
-2. **Keep it low-resolution.** When in doubt, leave detail out. The
-   picker will research current state and produce the high-resolution
-   plan; specifics in the issue body just create staleness.
+2. **Architecture in, implementation specifics out.** Carry the
+   design content needed to understand the work (mermaid, BNF,
+   decision matrices, trade-off rationale) — that's what the issue
+   body is for now that architecture docs only describe shipped
+   code. But keep file paths, exact test function names, and
+   suggested ordering out — the picker re-derives those from
+   current code at pickup time and they rot fast.
 3. **Every issue includes an AI Agent Notes section** (wrapped in the
    `<!-- amos:ai-notes-begin -->` / `<!-- amos:ai-notes-end -->` markers
    so tooling can update it safely). Default to "None."; only add
@@ -155,7 +172,7 @@ ends up writing must pass in CI before the PR can merge. Test
 harnesses land first, tests land inside the issue that drives them,
 and the merge signal is automatic.
 
-## Example — a well-formed (low-resolution) issue
+## Example — a well-formed issue
 
 ```markdown
 ## Description

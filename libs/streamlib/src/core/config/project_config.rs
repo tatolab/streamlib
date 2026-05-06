@@ -238,7 +238,7 @@ env:
   MY_VAR: value
 
 processors:
-  - name: com.test.grayscale
+  - name: Grayscale
     version: "1.0.0"
     description: Grayscale processor
     runtime: python
@@ -246,10 +246,10 @@ processors:
     entrypoint: "grayscale_processor:GrayscaleProcessor"
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: {{ org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }}
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: {{ org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }}
 "#
         )
         .unwrap();
@@ -261,7 +261,7 @@ processors:
         assert_eq!(pkg.version, "0.1.0");
         assert_eq!(config.env.get("MY_VAR"), Some(&"value".to_string()));
         assert_eq!(config.processors.len(), 1);
-        assert_eq!(config.processors[0].name, "com.test.grayscale");
+        assert_eq!(config.processors[0].name, "Grayscale");
         assert_eq!(config.processors[0].inputs.len(), 1);
         assert_eq!(config.processors[0].outputs.len(), 1);
     }

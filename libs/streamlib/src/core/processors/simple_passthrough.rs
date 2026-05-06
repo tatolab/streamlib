@@ -4,7 +4,7 @@
 use crate::_generated_::VideoFrame;
 use crate::core::{Result, RuntimeContextFullAccess};
 
-#[crate::processor("com.tatolab.simple_passthrough")]
+#[crate::processor("SimplePassthrough")]
 pub struct SimplePassthroughProcessor;
 
 impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {

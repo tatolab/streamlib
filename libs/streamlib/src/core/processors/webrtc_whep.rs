@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("com.streamlib.webrtc_whep")]
+#[crate::processor("WebrtcWhep")]
 pub struct WebRtcWhepProcessor {
     // WHEP client (owns WebRTC session)
     whep_client: Option<WhepClient>,

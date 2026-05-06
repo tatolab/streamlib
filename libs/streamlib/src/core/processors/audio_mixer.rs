@@ -5,7 +5,7 @@ use crate::_generated_::com_tatolab_audio_mixer_config::Strategy;
 use crate::_generated_::AudioFrame;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
-#[crate::processor("com.tatolab.audio_mixer")]
+#[crate::processor("AudioMixer")]
 pub struct AudioMixerProcessor {
     sample_rate: u32,
     buffer_size: usize,

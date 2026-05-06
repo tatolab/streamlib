@@ -142,7 +142,7 @@ impl ProcessorInstanceFactory {
         {
             let mut schemas = self.schemas.write();
             for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.clone());
+                schemas.insert(port.data_type.to_string());
             }
         }
 
@@ -241,7 +241,7 @@ impl ProcessorInstanceFactory {
         {
             let mut schemas = self.schemas.write();
             for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.clone());
+                schemas.insert(port.data_type.to_string());
             }
         }
 
@@ -310,7 +310,7 @@ impl ProcessorInstanceFactory {
         {
             let mut schemas = self.schemas.write();
             for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.clone());
+                schemas.insert(port.data_type.to_string());
             }
         }
 

@@ -13,7 +13,7 @@ use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("com.streamlib.opus_encoder")]
+#[crate::processor("OpusEncoder")]
 pub struct OpusEncoderProcessor {
     /// Opus encoder.
     opus_encoder: Option<OpusEncoder>,

@@ -263,25 +263,31 @@ pub struct SchemaIdentOutput {
     pub version: SemanticVersionOutput,
 }
 
+impl From<&crate::core::SchemaIdent> for SchemaIdentOutput {
+    fn from(ident: &crate::core::SchemaIdent) -> Self {
+        Self {
+            org: ident.org.as_str().to_string(),
+            package: ident.package.as_str().to_string(),
+            type_name: ident.r#type.as_str().to_string(),
+            version: SemanticVersionOutput {
+                major: ident.version.major,
+                minor: ident.version.minor,
+                patch: ident.version.patch,
+            },
+        }
+    }
+}
+
 impl SchemaIdentOutput {
-    /// Resolve a joined-versioned identifier (e.g.
-    /// `"@tatolab/core/VideoFrame@1.0.0"`) into structured form via the
-    /// build-time embedded-schema segment table. Returns `None` for legacy
-    /// reverse-DNS schemas and unknown identifiers — the caller decides
-    /// whether to emit `null` or fail loudly.
-    pub fn try_from_joined(joined_versioned: &str) -> Option<Self> {
-        crate::core::embedded_schemas::lookup_schema_ident_segments(joined_versioned).map(|s| {
-            Self {
-                org: s.org.to_string(),
-                package: s.package.to_string(),
-                type_name: s.type_name.to_string(),
-                version: SemanticVersionOutput {
-                    major: s.version_major,
-                    minor: s.version_minor,
-                    patch: s.version_patch,
-                },
-            }
-        })
+    /// Resolve a structured port schema spec into the JSON-wire output
+    /// shape. `Any` ports yield `None` (the field is omitted on the wire).
+    pub fn from_port_spec(
+        spec: &crate::core::PortSchemaSpec,
+    ) -> Option<Self> {
+        match spec {
+            crate::core::PortSchemaSpec::Any => None,
+            crate::core::PortSchemaSpec::Specific(ident) => Some(Self::from(ident)),
+        }
     }
 }
 
@@ -346,7 +352,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
     fn from(port: &crate::core::graph::PortInfo) -> Self {
         Self {
             name: port.name.clone(),
-            data_type: SchemaIdentOutput::try_from_joined(&port.data_type),
+            data_type: SchemaIdentOutput::from_port_spec(&port.data_type),
             port_kind: PortKindOutput::from(port.port_kind),
         }
     }
@@ -452,7 +458,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
-            schema: SchemaIdentOutput::try_from_joined(&port.schema),
+            schema: SchemaIdentOutput::from_port_spec(&port.schema),
             required: port.required,
         }
     }
@@ -471,11 +477,27 @@ impl From<&crate::core::CodeExamples> for CodeExamplesOutput {
 #[cfg(test)]
 mod schema_ident_output_tests {
     use super::*;
+    use crate::core::{Org, Package, PortSchemaSpec, SchemaIdent, SemVer, TypeName};
+
+    fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
+        SchemaIdent::new(
+            Org::new(org).unwrap(),
+            Package::new(pkg).unwrap(),
+            TypeName::new(ty).unwrap(),
+            v,
+        )
+    }
 
     #[test]
-    fn try_from_joined_resolves_video_frame() {
-        let s = SchemaIdentOutput::try_from_joined("@tatolab/core/VideoFrame@1.0.0")
-            .expect("VideoFrame must be in the embedded segment table");
+    fn from_port_spec_resolves_specific_to_structured() {
+        let spec = PortSchemaSpec::Specific(ident(
+            "tatolab",
+            "core",
+            "VideoFrame",
+            SemVer::new(1, 0, 0),
+        ));
+        let s = SchemaIdentOutput::from_port_spec(&spec)
+            .expect("Specific must yield a structured output");
         assert_eq!(s.org, "tatolab");
         assert_eq!(s.package, "core");
         assert_eq!(s.type_name, "VideoFrame");
@@ -485,18 +507,10 @@ mod schema_ident_output_tests {
     }
 
     #[test]
-    fn try_from_joined_returns_none_for_legacy_reverse_dns() {
-        // Legacy reverse-DNS schemas have no structured-segment representation.
-        // The JSON wire shape is `null` for these.
-        assert!(
-            SchemaIdentOutput::try_from_joined("com.streamlib.h264_encoder.config@1.0.0")
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn try_from_joined_returns_none_for_unversioned() {
-        assert!(SchemaIdentOutput::try_from_joined("@tatolab/core/VideoFrame").is_none());
+    fn from_port_spec_returns_none_for_any() {
+        // `Any` is the wildcard for ports accepting arbitrary payloads.
+        // The JSON wire shape is `null` (skip_serializing_if = Option::is_none).
+        assert!(SchemaIdentOutput::from_port_spec(&PortSchemaSpec::Any).is_none());
     }
 
     #[test]
@@ -522,19 +536,24 @@ mod schema_ident_output_tests {
 
     #[test]
     fn port_info_output_emits_structured_data_type() {
-        // The graph JSON wire format lock — given a PortInfo carrying the
-        // joined-versioned form, the JSON output is a structured 4-key
-        // record matching `SchemaIdentOutput`.
+        // The graph JSON wire format lock — given a PortInfo carrying a
+        // structured `Specific(...)` spec, the JSON output is a structured
+        // 4-key record matching `SchemaIdentOutput`.
         let port = crate::core::graph::PortInfo {
             name: "video".to_string(),
-            data_type: "@tatolab/core/VideoFrame@1.0.0".to_string(),
+            data_type: PortSchemaSpec::Specific(ident(
+                "tatolab",
+                "core",
+                "VideoFrame",
+                SemVer::new(1, 0, 0),
+            )),
             port_kind: crate::core::graph::PortKind::Data,
         };
         let out = PortInfoOutput::from(&port);
         let s = out
             .data_type
             .as_ref()
-            .expect("known wire schema must resolve");
+            .expect("Specific must resolve");
         assert_eq!(s.org, "tatolab");
         assert_eq!(s.package, "core");
         assert_eq!(s.type_name, "VideoFrame");
@@ -550,20 +569,21 @@ mod schema_ident_output_tests {
     }
 
     #[test]
-    fn port_info_output_emits_null_for_legacy_schema() {
+    fn port_info_output_emits_null_for_any_wildcard() {
+        // `Any` ports (e.g. MoQ tracks) omit the `data_type` field on the
+        // wire — `skip_serializing_if = Option::is_none`.
         let port = crate::core::graph::PortInfo {
-            name: "config".to_string(),
-            data_type: "com.streamlib.h264_encoder.config@1.0.0".to_string(),
+            name: "data".to_string(),
+            data_type: PortSchemaSpec::Any,
             port_kind: crate::core::graph::PortKind::Data,
         };
         let out = PortInfoOutput::from(&port);
         assert!(out.data_type.is_none());
 
         let json = serde_json::to_value(&out).unwrap();
-        // Field is skipped when None (skip_serializing_if).
         assert!(
             json.get("data_type").is_none(),
-            "legacy schemas must omit the data_type field, not serialize as null/empty"
+            "Any-wildcard ports must omit the data_type field, not serialize as null/empty"
         );
     }
 
@@ -572,14 +592,19 @@ mod schema_ident_output_tests {
         let pd = crate::core::PortDescriptor::new(
             "video",
             "Video output",
-            "@tatolab/core/EncodedVideoFrame@1.0.0",
+            PortSchemaSpec::Specific(ident(
+                "tatolab",
+                "core",
+                "EncodedVideoFrame",
+                SemVer::new(1, 0, 0),
+            )),
             true,
         );
         let out = PortDescriptorOutput::from(&pd);
         let s = out
             .schema
             .as_ref()
-            .expect("known wire schema must resolve");
+            .expect("Specific must resolve");
         assert_eq!(s.org, "tatolab");
         assert_eq!(s.package, "core");
         assert_eq!(s.type_name, "EncodedVideoFrame");

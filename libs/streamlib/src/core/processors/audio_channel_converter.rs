@@ -5,7 +5,7 @@ use crate::_generated_::com_tatolab_audio_channel_converter_config::Mode;
 use crate::_generated_::AudioFrame;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
-#[crate::processor("com.tatolab.audio_channel_converter")]
+#[crate::processor("AudioChannelConverter")]
 pub struct AudioChannelConverterProcessor {
     frame_counter: u64,
 }

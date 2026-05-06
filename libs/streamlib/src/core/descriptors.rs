@@ -4,6 +4,7 @@
 //! Processor and port descriptor types for introspection.
 
 use serde::{Deserialize, Serialize};
+pub use streamlib_processor_schema::{Org, Package, PortSchemaSpec, SchemaIdent, SemVer, TypeName};
 
 /// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -21,8 +22,9 @@ pub enum ProcessorRuntime {
 pub struct PortDescriptor {
     pub name: String,
     pub description: String,
-    /// Reference to a schema by name.
-    pub schema: String,
+    /// Structured schema spec — `Any` (wildcard for MoQ-style ports) or a
+    /// fully-qualified [`SchemaIdent`].
+    pub schema: PortSchemaSpec,
     pub required: bool,
     /// Whether this port uses iceoryx2 IPC.
     #[serde(default)]
@@ -33,13 +35,13 @@ impl PortDescriptor {
     pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
-        schema: impl Into<String>,
+        schema: PortSchemaSpec,
         required: bool,
     ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
-            schema: schema.into(),
+            schema,
             required,
             is_iceoryx2: false,
         }
@@ -49,12 +51,12 @@ impl PortDescriptor {
     pub fn iceoryx2(
         name: impl Into<String>,
         description: impl Into<String>,
-        schema: impl Into<String>,
+        schema: PortSchemaSpec,
     ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
-            schema: schema.into(),
+            schema,
             required: true,
             is_iceoryx2: true,
         }

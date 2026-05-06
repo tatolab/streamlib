@@ -33,7 +33,7 @@ pub mod _generated_;
 pub use _generated_::{ApiServerConfig, EncodedAudioFrame, EncodedVideoFrame, VideoFrame};
 
 // Re-export attribute macros for processor syntax:
-// - #[streamlib::processor("com.tatolab.camera")] - Processor definition by name lookup in streamlib.yaml
+// - #[streamlib::processor("Camera")] - Processor definition by name lookup in streamlib.yaml
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
 pub use streamlib_macros::{processor, ConfigDescriptor};
 

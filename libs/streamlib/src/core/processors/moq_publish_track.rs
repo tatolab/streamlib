@@ -16,7 +16,7 @@ use std::sync::Arc;
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("com.streamlib.moq_publish_track")]
+#[crate::processor("MoqPublishTrack")]
 pub struct MoqPublishTrackProcessor {
     /// Shared MoQ publish session (from RuntimeContext).
     shared_publish_session: Option<Arc<Mutex<MoqPublishSession>>>,

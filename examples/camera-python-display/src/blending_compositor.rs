@@ -120,7 +120,7 @@ struct GpuBackend {
     output_ring: Vec<OutputSlot>,
 }
 
-#[streamlib::processor("com.tatolab.blending_compositor")]
+#[streamlib::processor("BlendingCompositor")]
 pub struct BlendingCompositorProcessor {
     config: BlendingCompositorConfig,
 
