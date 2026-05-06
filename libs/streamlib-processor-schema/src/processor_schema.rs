@@ -1,8 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use streamlib_idents::SchemaIdent;
 
 // ============================================================================
@@ -81,6 +85,37 @@ impl std::fmt::Display for PortSchemaSpec {
     }
 }
 
+impl JsonSchema for PortSchemaSpec {
+    fn schema_name() -> String {
+        "PortSchemaSpec".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_processor_schema::PortSchemaSpec")
+    }
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let any_literal = Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            enum_values: Some(vec![serde_json::Value::String("any".into())]),
+            ..Default::default()
+        });
+        let structured = generator.subschema_for::<SchemaIdent>();
+        Schema::Object(SchemaObject {
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "Either the literal `any` (wildcard, accepts any payload) or a structured 4-field SchemaIdent map."
+                        .into(),
+                ),
+                ..Default::default()
+            })),
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![any_literal, structured]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+}
+
 /// Runtime language for a processor.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -92,8 +127,36 @@ pub enum ProcessorLanguage {
     TypeScript,
 }
 
+impl JsonSchema for ProcessorLanguage {
+    fn schema_name() -> String {
+        "ProcessorLanguage".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_processor_schema::ProcessorLanguage")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        Schema::Object(SchemaObject {
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "Processor runtime language. `deno` is accepted as an alias for `typescript`."
+                        .into(),
+                ),
+                ..Default::default()
+            })),
+            instance_type: Some(InstanceType::String.into()),
+            enum_values: Some(vec![
+                serde_json::Value::String("rust".into()),
+                serde_json::Value::String("python".into()),
+                serde_json::Value::String("typescript".into()),
+                serde_json::Value::String("deno".into()),
+            ]),
+            ..Default::default()
+        })
+    }
+}
+
 /// Language-specific runtime options.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct RuntimeOptions {
     /// [Rust] Generate unsafe Send impl for !Send processors (AVFoundation, etc.)
     #[serde(default)]
@@ -114,7 +177,7 @@ enum RuntimeConfigHelper {
 }
 
 /// Full runtime configuration object.
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 pub struct RuntimeConfigFull {
     /// Language runtime (rust, python, typescript). Defaults to rust.
     #[serde(default)]
@@ -185,6 +248,33 @@ impl<'de> Deserialize<'de> for RuntimeConfig {
         D: serde::Deserializer<'de>,
     {
         RuntimeConfigHelper::deserialize(deserializer).map(RuntimeConfig::from)
+    }
+}
+
+impl JsonSchema for RuntimeConfig {
+    fn schema_name() -> String {
+        "RuntimeConfig".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_processor_schema::RuntimeConfig")
+    }
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let simple = generator.subschema_for::<ProcessorLanguage>();
+        let full = generator.subschema_for::<RuntimeConfigFull>();
+        Schema::Object(SchemaObject {
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "Runtime configuration: either a bare language string (`rust`, `python`, `typescript`) or a `{ language, options, env }` object."
+                        .into(),
+                ),
+                ..Default::default()
+            })),
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![simple, full]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
     }
 }
 
@@ -310,8 +400,75 @@ impl<'de> Deserialize<'de> for ProcessorSchemaExecution {
     }
 }
 
+impl JsonSchema for ProcessorSchemaExecution {
+    fn schema_name() -> String {
+        "ProcessorSchemaExecution".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_processor_schema::ProcessorSchemaExecution")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        let simple = Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::String.into()),
+            enum_values: Some(vec![
+                serde_json::Value::String("reactive".into()),
+                serde_json::Value::String("manual".into()),
+                serde_json::Value::String("continuous".into()),
+            ]),
+            ..Default::default()
+        });
+        let continuous_object = {
+            use schemars::schema::{ObjectValidation, SingleOrVec};
+            let mut props = schemars::Map::new();
+            props.insert(
+                "type".into(),
+                Schema::Object(SchemaObject {
+                    instance_type: Some(InstanceType::String.into()),
+                    enum_values: Some(vec![serde_json::Value::String("continuous".into())]),
+                    ..Default::default()
+                }),
+            );
+            props.insert(
+                "interval_ms".into(),
+                Schema::Object(SchemaObject {
+                    instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Integer))),
+                    number: Some(Box::new(schemars::schema::NumberValidation {
+                        minimum: Some(0.0),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }),
+            );
+            Schema::Object(SchemaObject {
+                instance_type: Some(InstanceType::Object.into()),
+                object: Some(Box::new(ObjectValidation {
+                    properties: props,
+                    required: ["type".to_string()].into_iter().collect(),
+                    additional_properties: Some(Box::new(Schema::Bool(false))),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })
+        };
+        Schema::Object(SchemaObject {
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "Execution mode: `reactive`, `manual`, `continuous` (string), or `{ type: continuous, interval_ms: N }`."
+                        .into(),
+                ),
+                ..Default::default()
+            })),
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![simple, continuous_object]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
+}
+
 /// A port definition within a processor schema.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProcessorPortSchema {
     /// Port name (e.g., "video_in").
     pub name: String,
@@ -329,7 +486,7 @@ pub struct ProcessorPortSchema {
 }
 
 /// Config definition within a processor schema.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProcessorConfigSchema {
     /// Config field name (e.g., "config").
     pub name: String,
@@ -338,7 +495,7 @@ pub struct ProcessorConfigSchema {
 }
 
 /// A state field definition within a processor schema.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProcessorStateField {
     /// Field name (e.g., "buffer").
     pub name: String,
@@ -351,7 +508,7 @@ pub struct ProcessorStateField {
 }
 
 /// A complete processor schema definition parsed from YAML.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ProcessorSchema {
     /// Processor name in reverse domain notation (e.g., "com.example.blur").
     pub name: String,

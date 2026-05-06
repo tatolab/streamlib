@@ -1,0 +1,53 @@
+name: Check Manifest Schema
+
+# CI gate for `streamlib.yaml`'s JSON Schema (#714).
+#
+# `cargo xtask check-manifest-schema` makes three assertions:
+#   1. `schemas/streamlib.schema.json` matches what the Rust types in
+#      `streamlib-processor-schema::StreamlibYaml` currently emit (drift
+#      from Rust → fail; reminds the author to run
+#      `cargo xtask emit-manifest-schema`).
+#   2. Every committed `streamlib.yaml` carries the
+#      `# yaml-language-server: $schema=...` magic comment so editors
+#      with `yaml-language-server` (Red Hat YAML extension, JetBrains,
+#      nvim) load the schema for autocomplete + lint.
+#   3. Every committed `streamlib.yaml` validates against the schema —
+#      catches manifests that drift away from the canonical shape.
+#
+# See also `docs/architecture/schema-identity-and-packaging.md`.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  xtask-check-manifest-schema:
+    name: xtask check-manifest-schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-xtask-${{ hashFiles('xtask/Cargo.toml', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-xtask-
+
+      - name: cargo xtask check-manifest-schema
+        run: cargo xtask check-manifest-schema
+
+      - name: cargo test -p xtask manifest_schema (unit tests)
+        run: cargo test -p xtask manifest_schema

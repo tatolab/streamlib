@@ -18,6 +18,7 @@ thiserror = { workspace = true }
 sha2 = { workspace = true }
 zip = "2.2"
 tracing = { workspace = true }
+schemars = "0.8"  # JSON Schema generation for streamlib.yaml editor support
 
 [dev-dependencies]
 serde_yaml = { workspace = true }

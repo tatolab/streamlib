@@ -1,0 +1,489 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StreamlibYaml",
+  "description": "Schema-source-of-truth for `streamlib.yaml`.\n\nEditor schema only — runtime parsing happens via the narrower views described in the module-level docs. `deny_unknown_fields` makes the emitted JSON Schema set `additionalProperties: false`, so editors lint typos like `procesors:` instead of silently accepting them.",
+  "type": "object",
+  "properties": {
+    "dependencies": {
+      "description": "Dependency declarations, keyed by `@org/name`.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/DependencySpec"
+      }
+    },
+    "env": {
+      "description": "Environment variables to inject into subprocess runtimes.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "package": {
+      "description": "Package metadata. Present on package-flavor manifests (publishable); absent on project-flavor manifests (consumers like applications or examples).",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PackageMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "processors": {
+      "description": "Inline processor definitions consumed by the runtime.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/ProcessorSchema"
+      }
+    },
+    "schemas": {
+      "description": "Explicit list of schema YAML files this package owns, relative to the manifest's directory. When omitted, the resolver auto-discovers `schemas/*.yaml` in the manifest dir.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "DependencySpec": {
+      "description": "Dependency declaration: a bare semver-range string (registry shorthand), or one of the structured `{ version }` / `{ path }` / `{ git, rev }` maps.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/SemVerRange"
+        },
+        {
+          "$ref": "#/definitions/RegistryDependency"
+        },
+        {
+          "$ref": "#/definitions/PathDependency"
+        },
+        {
+          "$ref": "#/definitions/GitDependency"
+        }
+      ]
+    },
+    "GitDependency": {
+      "type": "object",
+      "required": [
+        "git",
+        "rev"
+      ],
+      "properties": {
+        "git": {
+          "type": "string"
+        },
+        "rev": {
+          "description": "Pinned commit. Branch / tag refs are deliberately not supported — pinning is required for reproducible resolution. Mirrors the workspace rule from `CLAUDE.md` (`Conventions → Dependencies`).",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Org": {
+      "description": "Org segment of an identifier (the @org part).",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "Package": {
+      "description": "Package segment of an identifier (the `package` part of `@org/package/Type@version`).",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "PackageMetadata": {
+      "description": "Package metadata. `version` lives here and ONLY here — per the package-as-publication-unit rule (CI lint rejects per-schema versions).",
+      "type": "object",
+      "required": [
+        "name",
+        "org",
+        "version"
+      ],
+      "properties": {
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "$ref": "#/definitions/Package"
+        },
+        "org": {
+          "$ref": "#/definitions/Org"
+        },
+        "version": {
+          "$ref": "#/definitions/SemVer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PathDependency": {
+      "type": "object",
+      "required": [
+        "path"
+      ],
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PortSchemaSpec": {
+      "description": "Either the literal `any` (wildcard, accepts any payload) or a structured 4-field SchemaIdent map.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "any"
+          ]
+        },
+        {
+          "$ref": "#/definitions/SchemaIdent"
+        }
+      ]
+    },
+    "ProcessorConfigSchema": {
+      "description": "Config definition within a processor schema.",
+      "type": "object",
+      "required": [
+        "name",
+        "schema"
+      ],
+      "properties": {
+        "name": {
+          "description": "Config field name (e.g., \"config\").",
+          "type": "string"
+        },
+        "schema": {
+          "description": "Schema reference with version (e.g., \"com.example.blur.config@1.0.0\").",
+          "type": "string"
+        }
+      }
+    },
+    "ProcessorLanguage": {
+      "description": "Processor runtime language. `deno` is accepted as an alias for `typescript`.",
+      "type": "string",
+      "enum": [
+        "rust",
+        "python",
+        "typescript",
+        "deno"
+      ]
+    },
+    "ProcessorPortSchema": {
+      "description": "A port definition within a processor schema.",
+      "type": "object",
+      "required": [
+        "name",
+        "schema"
+      ],
+      "properties": {
+        "buffer_size": {
+          "description": "Ring buffer capacity for this input port.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "description": {
+          "description": "Human-readable description.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Port name (e.g., \"video_in\").",
+          "type": "string"
+        },
+        "read_mode": {
+          "description": "Read mode for this input port (e.g., \"skip_to_latest\", \"read_next_in_order\").",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "description": "Structured schema spec — either `any` or a 4-field [`SchemaIdent`].",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PortSchemaSpec"
+            }
+          ]
+        }
+      }
+    },
+    "ProcessorSchema": {
+      "description": "A complete processor schema definition parsed from YAML.",
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "config": {
+          "description": "Config schema reference.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProcessorConfigSchema"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "description": "Human-readable description.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "entrypoint": {
+          "description": "Entrypoint for non-Rust runtimes (e.g., \"src.blur:BlurProcessor\").",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "execution": {
+          "description": "Execution mode (reactive, manual, continuous).",
+          "default": "reactive",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProcessorSchemaExecution"
+            }
+          ]
+        },
+        "inputs": {
+          "description": "Input port definitions.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProcessorPortSchema"
+          }
+        },
+        "name": {
+          "description": "Processor name in reverse domain notation (e.g., \"com.example.blur\").",
+          "type": "string"
+        },
+        "outputs": {
+          "description": "Output port definitions.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProcessorPortSchema"
+          }
+        },
+        "runtime": {
+          "description": "Runtime configuration (language, options, env).",
+          "default": "rust",
+          "allOf": [
+            {
+              "$ref": "#/definitions/RuntimeConfig"
+            }
+          ]
+        },
+        "state": {
+          "description": "State fields (internal processor state, Default-initialized).",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ProcessorStateField"
+          }
+        },
+        "version": {
+          "description": "Processor version (e.g., \"1.0.0\").",
+          "type": "string"
+        }
+      }
+    },
+    "ProcessorSchemaExecution": {
+      "description": "Execution mode: `reactive`, `manual`, `continuous` (string), or `{ type: continuous, interval_ms: N }`.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "reactive",
+            "manual",
+            "continuous"
+          ]
+        },
+        {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "interval_ms": {
+              "type": "integer",
+              "minimum": 0.0
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "continuous"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ProcessorStateField": {
+      "description": "A state field definition within a processor schema.",
+      "type": "object",
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "default": {
+          "description": "Default value expression (e.g., \"Vec::new()\", \"0\", \"0\").",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Field name (e.g., \"buffer\").",
+          "type": "string"
+        },
+        "type": {
+          "description": "Rust type (e.g., \"Vec<f32>\", \"u32\", \"u64\").",
+          "type": "string"
+        }
+      }
+    },
+    "RegistryDependency": {
+      "type": "object",
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "version": {
+          "$ref": "#/definitions/SemVerRange"
+        }
+      },
+      "additionalProperties": false
+    },
+    "RuntimeConfig": {
+      "description": "Runtime configuration: either a bare language string (`rust`, `python`, `typescript`) or a `{ language, options, env }` object.",
+      "oneOf": [
+        {
+          "$ref": "#/definitions/ProcessorLanguage"
+        },
+        {
+          "$ref": "#/definitions/RuntimeConfigFull"
+        }
+      ]
+    },
+    "RuntimeConfigFull": {
+      "description": "Full runtime configuration object.",
+      "type": "object",
+      "properties": {
+        "env": {
+          "description": "Environment variables for subprocess runtimes.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "language": {
+          "description": "Language runtime (rust, python, typescript). Defaults to rust.",
+          "default": "rust",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProcessorLanguage"
+            }
+          ]
+        },
+        "options": {
+          "description": "Language-specific options.",
+          "default": {
+            "unsafe_send": false,
+            "python_version": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/RuntimeOptions"
+            }
+          ]
+        }
+      }
+    },
+    "RuntimeOptions": {
+      "description": "Language-specific runtime options.",
+      "type": "object",
+      "properties": {
+        "python_version": {
+          "description": "[Python] Required Python version spec (e.g., \">=3.10\"). Python runtime only.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unsafe_send": {
+          "description": "[Rust] Generate unsafe Send impl for !Send processors (AVFoundation, etc.)",
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "SchemaIdent": {
+      "description": "Structured schema identifier — the four-field map form of `@org/package/Type@version`.",
+      "type": "object",
+      "required": [
+        "org",
+        "package",
+        "type",
+        "version"
+      ],
+      "properties": {
+        "org": {
+          "$ref": "#/definitions/Org"
+        },
+        "package": {
+          "$ref": "#/definitions/Package"
+        },
+        "type": {
+          "$ref": "#/definitions/TypeName"
+        },
+        "version": {
+          "$ref": "#/definitions/SemVer"
+        }
+      }
+    },
+    "SemVer": {
+      "description": "Three-part semantic version `MAJOR.MINOR.PATCH` (no pre-release / build metadata).",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "SemVerRange": {
+      "description": "SemVer range matcher: `=1.2.3` exact, `>=1.2.3` lower bound, `^1.2.3` caret (npm), `~1.2.3` tilde, or bare `1.2.3` (exact).",
+      "type": "string",
+      "pattern": "^(\\^|~|>=|=)?[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "TypeName": {
+      "description": "Type segment of a schema identifier (PascalCase, the `Type` part of `@org/package/Type@version`).",
+      "type": "string",
+      "pattern": "^[A-Z][A-Za-z0-9]*$"
+    }
+  }
+}

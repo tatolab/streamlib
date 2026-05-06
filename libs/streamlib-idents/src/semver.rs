@@ -1,7 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{InstanceType, Schema, SchemaObject};
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -92,6 +96,21 @@ impl<'de> Deserialize<'de> for SemVer {
     }
 }
 
+impl JsonSchema for SemVer {
+    fn schema_name() -> String {
+        "SemVer".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::SemVer")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        semver_string_schema(
+            "Three-part semantic version `MAJOR.MINOR.PATCH` (no pre-release / build metadata).",
+            r"^[0-9]+\.[0-9]+\.[0-9]+$",
+        )
+    }
+}
+
 /// SemVer range matcher. Supported operators (npm-flavoured subset chosen for
 /// what `streamlib.yaml` actually needs):
 ///
@@ -176,6 +195,36 @@ impl<'de> Deserialize<'de> for SemVerRange {
         let raw = String::deserialize(d)?;
         Self::from_str(&raw).map_err(serde::de::Error::custom)
     }
+}
+
+impl JsonSchema for SemVerRange {
+    fn schema_name() -> String {
+        "SemVerRange".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::SemVerRange")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        semver_string_schema(
+            "SemVer range matcher: `=1.2.3` exact, `>=1.2.3` lower bound, `^1.2.3` caret (npm), `~1.2.3` tilde, or bare `1.2.3` (exact).",
+            r"^(\^|~|>=|=)?[0-9]+\.[0-9]+\.[0-9]+$",
+        )
+    }
+}
+
+fn semver_string_schema(description: &str, pattern: &str) -> Schema {
+    Schema::Object(SchemaObject {
+        metadata: Some(Box::new(schemars::schema::Metadata {
+            description: Some(description.into()),
+            ..Default::default()
+        })),
+        instance_type: Some(InstanceType::String.into()),
+        string: Some(Box::new(schemars::schema::StringValidation {
+            pattern: Some(pattern.into()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]

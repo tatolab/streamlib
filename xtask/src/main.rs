@@ -15,6 +15,7 @@ pub mod check_boundaries;
 pub mod check_no_streamlib_metadata;
 pub mod check_schema_versions;
 pub mod lint_logging;
+pub mod manifest_schema;
 
 #[derive(Parser)]
 #[command(name = "xtask")]
@@ -77,6 +78,18 @@ enum Commands {
     /// source of truth is `streamlib.yaml`; see
     /// `docs/architecture/schema-identity-and-packaging.md` (anti-pattern 4).
     CheckNoStreamlibMetadata,
+
+    /// Regenerate `schemas/streamlib.schema.json` from the Rust
+    /// [`StreamlibYaml`](streamlib_processor_schema::StreamlibYaml) source of
+    /// truth (#714). Editors with `yaml-language-server` consume this schema
+    /// for autocomplete + lint on every `streamlib.yaml`.
+    EmitManifestSchema,
+
+    /// CI gate for the streamlib.yaml schema (#714). Three assertions:
+    /// (1) committed schema matches what Rust currently emits, (2) every
+    /// `streamlib.yaml` carries the `# yaml-language-server: $schema=...`
+    /// header, (3) every `streamlib.yaml` validates against the schema.
+    CheckManifestSchema,
 }
 
 fn main() -> Result<()> {
@@ -113,6 +126,8 @@ fn main() -> Result<()> {
         Commands::CheckNoStreamlibMetadata => {
             check_no_streamlib_metadata::run(&workspace_root()?)?
         }
+        Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
+        Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
     }
 
     Ok(())

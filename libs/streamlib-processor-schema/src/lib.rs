@@ -5,6 +5,7 @@
 
 mod execution_config;
 mod process_execution;
+mod streamlib_yaml;
 mod thread_priority;
 
 pub mod error;
@@ -13,6 +14,7 @@ pub mod processor_schema_parser;
 
 pub use execution_config::ExecutionConfig;
 pub use process_execution::ProcessExecution;
+pub use streamlib_yaml::StreamlibYaml;
 pub use thread_priority::ThreadPriority;
 
 // Processor schema re-exports
