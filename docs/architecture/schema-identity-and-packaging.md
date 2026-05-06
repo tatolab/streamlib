@@ -1,23 +1,16 @@
 # Schema identity & packaging
 
-> **Living document.** Validate, update, critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
-> Reflects code state as of 2026-05-05. Initial doc landed with #399;
-> #400 extracted `streamlib-jtd-codegen` and added `streamlib generate`;
-> #402 landed the resolver + lockfile + sentinel-substitution codegen
-> + cutover off legacy `[package.metadata.streamlib]` etc. The 12
-> carve-out packages and the wire-format migration (#404) remain ahead;
-> claims about *current* code are point-in-time and stale fast.
+> Current known state of the schema-identity surface. Subject to
+> staleness or drift — verify against the code before relying on any
+> claim. Not authoritative, not enforcement.
 
-## Status
+## What this document describes
 
-This document is the canonical architecture brief for milestone 10. It
-ships alongside the `streamlib-idents` Rust crate (the first code-level
-expression of the design); future agents should read this doc for
-design context and the [milestone-10 description][m10] for current
-pickup ordering.
-
-[m10]: https://github.com/tatolab/streamlib/milestone/10
+The architecture surface shared across the `streamlib-idents` and
+`streamlib-jtd-codegen` crates: identifier grammar, package manifest
+formats, dependency resolver, lockfile, the codegen pipeline, and the
+anti-patterns the design rules out. Every claim below describes
+behavior that ships in current code.
 
 ## Why this exists
 
@@ -40,20 +33,19 @@ three independent strands:
 
 The fix is one cohesive architecture covering identifier grammar,
 package manifest, dependency resolution, code generation, and
-distribution. The rest of milestone 10 implements it.
+distribution.
 
 ## Architectural decisions
 
-These are load-bearing — relaxing any of them brings back the failure
-mode that motivated the whole milestone.
+These are the load-bearing design choices the current code rests on.
+Relaxing any of them brings back the failure mode this architecture
+was shaped against.
 
 ### Decision 1 — `@org/package/Type@version` identifier grammar
 
-Replaces `com.tatolab.videoframe@1.0.0` (reverse-DNS, lowercase, no
-package boundary in the name) with `@tatolab/core/VideoFrame@1.0.0`
-(npm-style scope, explicit package, PascalCase type name, semver).
-
-The grammar (BNF):
+Schema identifiers take the npm-style form `@tatolab/core/VideoFrame@1.0.0`:
+scoped org, explicit package, PascalCase type name, semver. The
+grammar (BNF):
 
 ```ebnf
 identifier   ::= "@" org "/" package "/" type "@" version
@@ -151,9 +143,7 @@ collapse this to a single dimension per package.
 
 A CI lint (`cargo xtask check-schema-versions`, wired into
 `.github/workflows/check-schema-versions.yml`) rejects any schema
-YAML declaring a top-level `version` key. The wider lint that also
-rejects `metadata.version` ships when the schema files are migrated
-to the new shape (in #401 / #402).
+YAML declaring a top-level `version` key.
 
 ### Decision 4 — `streamlib.lock` for content-hash resolution
 
@@ -173,42 +163,18 @@ Discipline (mirrors `Cargo.lock`):
 
 The four wire-stable types every other package depends on
 (`VideoFrame`, `AudioFrame`, `EncodedVideoFrame`, `EncodedAudioFrame`)
-live in a single `@tatolab/core` package. This is streamlib's
-`google.protobuf` analogue. `@tatolab/core` ships at `1.0.0` from day
-one; breaking changes require a deliberate v2 bump and downstream
-migration.
-
-Twelve carve-out packages live under `packages/` and depend on
-`@tatolab/core`:
-
-| Package | Owner of |
-|---|---|
-| `@tatolab/audio` | audio capture / output / mixer / channel-converter / resampler / chord-generator / buffer-rechunker |
-| `@tatolab/camera` | camera capture |
-| `@tatolab/display` | display / window / swapchain |
-| `@tatolab/h264` | H.264 encoder + decoder |
-| `@tatolab/h265` | H.265 encoder + decoder |
-| `@tatolab/opus` | Opus encoder + decoder |
-| `@tatolab/mp4` | MP4 writer (Apple + Linux variants) |
-| `@tatolab/webrtc` | WHEP + WHIP |
-| `@tatolab/moq` | MoQ publish + subscribe tracks |
-| `@tatolab/api-server` | runtime API server |
-| `@tatolab/clap` | CLAP audio plugin host |
-| `@tatolab/screen-capture` | screen capture |
+live in a single `@tatolab/core` package at `packages/core/`. This is
+streamlib's `google.protobuf` analogue. `@tatolab/core` ships at
+`1.0.0` from day one; breaking changes require a deliberate v2 bump
+and downstream migration.
 
 ### Decision 6 — universal `streamlib generate` CLI
 
 Code generation goes through `streamlib generate` (a subcommand on
 the `streamlib` CLI). Non-Rust developers regenerate bindings without
 ever installing rustup. `cargo xtask generate-schemas` remains as a
-thin contributor-only wrapper.
-
-The library crate behind both — `streamlib-jtd-codegen` — is what #400
-extracts from the current `xtask/src/generate_schemas.rs`. (Originally
-proposed name `streamlib-codegen` was renamed during #400's PR to
-avoid collision with the existing `streamlib-codegen-shared` crate,
-which itself was renamed to `streamlib-processor-schema` to better
-describe its role — see the PR for naming-clarity rationale.)
+thin contributor-only wrapper. The library crate behind both is
+`streamlib-jtd-codegen`.
 
 ### Decision 7 — sentinel-substitution codegen + deterministic ordering
 
@@ -226,17 +192,6 @@ field orderings + name manglings across runs and across backends
 
 Together these eliminate the per-backend mangling drift that bled
 silent fix-PRs every quarter.
-
-### Decision 8 — `streamlib verify-schemas` CI determinism gate
-
-A CI gate (`streamlib verify-schemas`, wired on every PR) runs
-`streamlib generate` and asserts the generated bindings are
-byte-identical to what's checked in. If they aren't, the PR fails
-and the author re-runs `streamlib generate` locally.
-
-This is where the `streamlib.lock` content hash becomes load-bearing:
-the gate proves that committed `_generated_/` matches the lockfile's
-inputs.
 
 ## Manifest formats
 
@@ -349,10 +304,9 @@ packages:
 | `content_hash` | Namespace-prefixed (`sha256:…`) so future hash-algorithm migrations don't break parsing. |
 
 The content hash is computed over the resolved package's contents
-(deterministic pass over schemas + manifest). This is what the
-`verify-schemas` CI gate compares against — the gate catches both
-"someone hand-edited generated code" and "someone bumped a dep
-without re-locking."
+(deterministic pass over schemas + manifest). It's the load-bearing
+primitive that lets a determinism gate prove committed `_generated_/`
+matches the lockfile's inputs.
 
 ## Sentinel-substitution codegen contract
 
@@ -375,18 +329,16 @@ Code generation runs in three passes:
    backends and across runs).
 
 Then the generated files are written to each consumer's `_generated_/`
-directory. The `verify-schemas` gate re-runs the whole pipeline on
-CI and asserts byte-identical output.
+directory.
 
-The `streamlib-jtd-codegen` crate (extracted by #400, sentinel +
-ordering passes added in #402) owns this pipeline. The `streamlib-idents`
-crate owns the structured types the pipeline reads and writes
-(`SchemaIdent`, `SemVer`, `Manifest`, `PackageMetadata`, `Lockfile`)
-and the resolver that walks `streamlib.yaml` (`resolve`,
-`ResolvedPackages`, added in #402; superseded the original
-`PackageManifest` + `ProjectManifest` split with one unified
-`Manifest` type that tolerates runtime-side fields like `processors:`
-without `deny_unknown_fields` rejection).
+The `streamlib-jtd-codegen` crate owns this pipeline. The
+`streamlib-idents` crate owns the structured types the pipeline reads
+and writes (`SchemaIdent`, `SemVer`, `Manifest`, `PackageMetadata`,
+`Lockfile`) and the resolver that walks `streamlib.yaml` (`resolve`,
+`ResolvedPackages`). `Manifest` deserialization tolerates runtime-side
+fields (`processors:`, `env:`) without `deny_unknown_fields` rejection
+so one `streamlib.yaml` carries both the schema-identity surface and
+the runtime configuration.
 
 ### Root-name sentinel — sibling pattern at the `--root-name` boundary
 
@@ -409,15 +361,13 @@ end with a single `code.replace(ROOT_NAME_SENTINEL, expected_name)`
 pass. The `ROOT_NAME_SENTINEL` value is a transport detail — it
 never appears in committed `_generated_/` output.
 
-The earlier proposal in #143 (`__ROOT__`) was disproven empirically
-during #541's pickup: `jtd-codegen` v0.4.1 normalizes
-underscore-prefixed identifiers, collapsing `__ROOT__` to `Root`
-across all three backends. Any sentinel must satisfy two
-constraints:
+Any sentinel must satisfy two constraints:
 
 - **Survive byte-identically** through all three backends (no
   case-folding, no underscore stripping, no acronym up/down-casing).
-  CamelCase identifiers do; `__ROOT__`-shape identifiers do not.
+  CamelCase identifiers do; `__ROOT__`-shape identifiers do not
+  (`jtd-codegen` v0.4.1 normalizes underscore-prefixed identifiers,
+  collapsing `__ROOT__` to `Root` across all three backends).
 - **Be distinct enough that no real schema would emit it.**
   `StreamlibCanonRoot` is internally namespaced; a `s/Streamlib/`
   grep finds the implementation rather than user code.
@@ -427,14 +377,10 @@ The sub-type prefix-strip pass in Rust's `post_process_rust` runs
 `ROOT_NAME_SENTINEL`-prefixed names (e.g., `StreamlibCanonRootRateControl`
 → `RateControl`). Names that don't get stripped retain their
 sentinel prefix until the final `code.replace`, at which point
-`StreamlibCanonRootBar` becomes `EscalateRequestBar` — exactly the
-existing committed shape. Sub-type renames do **not** use a separate
-sentinel today; the prefix-strip heuristic still runs because
-sub-type identifiers aren't declared in `streamlib.yaml`. Replacing
-the sub-type prefix-strip heuristic with a per-sub-type sentinel
-is a follow-up if the heuristic ever surfaces a bug; today it works
-correctly because the input always has the
-`ROOT_NAME_SENTINEL`-prefixed shape.
+`StreamlibCanonRootBar` becomes `EscalateRequestBar` — the existing
+committed shape. Sub-type renames don't use a separate sentinel; the
+prefix-strip heuristic operates on `ROOT_NAME_SENTINEL`-prefixed
+input, which the upstream sentinel pass guarantees.
 
 The two sentinel passes — cross-package `__STREAMLIB_REF_<hash>__`
 and `ROOT_NAME_SENTINEL` — operate on disjoint parts of the input
@@ -458,13 +404,13 @@ structured boundary.
 
 The two allowed construction pathways:
 
-- **Codegen-emitted const literals** — `SchemaIdent::new(Org::new("tatolab").unwrap(), …)`
+- **Codegen-emitted construction** — `SchemaIdent::new(Org::new("tatolab").unwrap(), …)`
   lands in the macro-generated processor module at build time, exposed via
   a `pub fn schema_ident() -> SchemaIdent` on each `#[streamlib::processor("Camera")]`-
-  decorated module. (Originally specified as a top-level `SCHEMA_IDENT: SchemaIdent`
-  const; the function form ships in #404 because `SchemaIdent`'s validating
-  constructors don't fit a `const` context. The function call is the same
-  one-line read at every call site, fully resolved at codegen.)
+  decorated module. The function form (rather than a `const`) is forced
+  by `SchemaIdent`'s validating constructors — `Org::new` / `Package::new`
+  / `TypeName::new` aren't `const fn`. The function call is fully
+  resolved at codegen and reads as a single line at every call site.
 - **Typed YAML / JSON deserialization** — each segment is its own
   field in the source document; `serde` reads the structured shape
   directly into `SchemaIdent { org, package, r#type, version }`.
@@ -496,25 +442,15 @@ graph.add_edge(VIDEO_FRAME_IDENT, …);   // No org/package on the wire
 ```
 
 The package-internal short-name pattern (`#[streamlib::processor("Camera")]`
-— positional PascalCase short name) is the **only** shorthand mechanism
-in the architecture. Cross-package references in graph JSON, IPC envelopes,
-generated code, and lockfiles carry a fully-qualified `SchemaIdent { org,
-package, type, version }` structured record.
-
-> ~~Earlier revisions of this section showed the named-arg form
-> `#[streamlib::processor(name = "Camera")]`.~~ — Superseded 2026-05-05 by
-> #404. The macro takes a positional PascalCase short name (`"Camera"`),
-> resolves `org`/`package`/`version` from the enclosing
-> `streamlib.yaml`'s `package:` block, and emits a function returning the
-> full structured `SchemaIdent` per processor module
-> (`Processor::schema_ident()`). The named-arg form was the doc's
-> aspirational shape; the positional form is what landed and what every
-> in-tree call site uses today.
-
-When the macro emits per-package consts, those consts hold a
-*structured* `SchemaIdent` — the consumer can read its fields, but
-serializing across a wire surface always emits the full structured
-record.
+— positional PascalCase short name resolved against the enclosing
+`streamlib.yaml`'s `package:` block, exposed via
+`Processor::schema_ident()`) is the **only** shorthand mechanism in the
+architecture. Cross-package references in graph JSON, IPC envelopes,
+generated code, and lockfiles carry a fully-qualified
+`SchemaIdent { org, package, type, version }` structured record. The
+macro-emitted `schema_ident()` returns the structured record; consumers
+can read its fields, but serializing across a wire surface always emits
+the full structured shape.
 
 ### 3. Per-schema `version` field
 
@@ -528,207 +464,22 @@ versions collapse this to a single dimension per package.
 
 ### 4. Legacy metadata blocks in language-native manifests
 
-After #402 lands, `Cargo.toml` does not contain
-`[package.metadata.streamlib]`, `pyproject.toml` does not contain
-`[tool.streamlib]`, and `deno.json` has no `streamlib` block. The
-single source of truth is `streamlib.yaml` for every runtime; the
-resolver feeds the resolved set into each language's codegen
-pipeline.
-
-CI lint (added in #402) rejects re-introductions.
+`Cargo.toml` does not contain `[package.metadata.streamlib]`,
+`pyproject.toml` does not contain `[tool.streamlib]`, and `deno.json`
+has no `streamlib` block. The single source of truth is
+`streamlib.yaml` for every runtime; the resolver feeds the resolved
+set into each language's codegen pipeline. A CI lint
+(`cargo xtask check-no-streamlib-metadata`) rejects re-introductions.
 
 ### 5. Hand-curated `embedded_schemas.rs`-style match statements
 
-Pre-#402, `libs/streamlib/src/core/embedded_schemas.rs` had a
-hand-curated `match` mapping schema IDs to embedded YAML strings.
-Two failure modes: (a) easy to forget to add a new schema; (b)
-silent drift when a schema renamed but the match arm didn't.
-
-The replacement is resolver-driven: the resolved package set
-populates a `SchemaIdent`-keyed lookup table at build time. Adding
-a schema means declaring it in your `streamlib.yaml`; nothing else.
-
-## Rosetta — current → new identifier mapping
-
-Every current `com.streamlib.*` / `com.tatolab.*` identifier maps to
-a `@org/package/Type@version` form below. The migration is staged:
-
-- **Wire types** (`@tatolab/core`) migrate in **#404**.
-- **Processor names + their config schemas** migrate in **#401**
-  (the macro rewrite is what makes the short-name pattern available)
-  and the carve-out package issues (one per package).
-- **Polyglot escalate IPC** migrates in #404 alongside the wire-type
-  migration (it's the same wire surface).
-
-### Wire vocabulary → `@tatolab/core@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.tatolab.videoframe@1.0.0` | `@tatolab/core/VideoFrame@1.0.0` |
-| `com.tatolab.audioframe@1.0.0` | `@tatolab/core/AudioFrame@1.0.0` |
-| `com.tatolab.encodedvideoframe@1.0.0` | `@tatolab/core/EncodedVideoFrame@1.0.0` |
-| `com.tatolab.encodedaudioframe@1.0.0` | `@tatolab/core/EncodedAudioFrame@1.0.0` |
-
-### Audio package → `@tatolab/audio@1.0.0`
-
-| Current processor / schema | New |
-|---|---|
-| `com.tatolab.audio_capture` | `@tatolab/audio/AudioCapture@1.0.0` |
-| `com.tatolab.audio_capture.config@1.0.0` | `@tatolab/audio/AudioCaptureConfig@1.0.0` |
-| `com.tatolab.audio_output` | `@tatolab/audio/AudioOutput@1.0.0` |
-| `com.tatolab.audio_output.config@1.0.0` | `@tatolab/audio/AudioOutputConfig@1.0.0` |
-| `com.tatolab.audio_mixer` | `@tatolab/audio/AudioMixer@1.0.0` |
-| `com.tatolab.audio_mixer.config@1.0.0` | `@tatolab/audio/AudioMixerConfig@1.0.0` |
-| `com.tatolab.audio_channel_converter` | `@tatolab/audio/AudioChannelConverter@1.0.0` |
-| `com.tatolab.audio_channel_converter.config@1.0.0` | `@tatolab/audio/AudioChannelConverterConfig@1.0.0` |
-| `com.tatolab.audio_resampler` | `@tatolab/audio/AudioResampler@1.0.0` |
-| `com.tatolab.audio_resampler.config@1.0.0` | `@tatolab/audio/AudioResamplerConfig@1.0.0` |
-| `com.tatolab.buffer_rechunker` | `@tatolab/audio/BufferRechunker@1.0.0` |
-| `com.tatolab.buffer_rechunker.config@1.0.0` | `@tatolab/audio/BufferRechunkerConfig@1.0.0` |
-| `com.tatolab.chord_generator` | `@tatolab/audio/ChordGenerator@1.0.0` |
-| `com.tatolab.chord_generator.config@1.0.0` | `@tatolab/audio/ChordGeneratorConfig@1.0.0` |
-
-### Camera package → `@tatolab/camera@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.tatolab.camera` | `@tatolab/camera/Camera@1.0.0` |
-| `com.tatolab.camera.config@1.0.0` | `@tatolab/camera/CameraConfig@1.0.0` |
-
-### Display package → `@tatolab/display@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.tatolab.display` | `@tatolab/display/Display@1.0.0` |
-| `com.tatolab.display.config@1.0.0` | `@tatolab/display/DisplayConfig@1.0.0` |
-
-### H.264 package → `@tatolab/h264@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.streamlib.h264_encoder` | `@tatolab/h264/H264Encoder@1.0.0` |
-| `com.streamlib.h264_encoder.config@1.0.0` | `@tatolab/h264/H264EncoderConfig@1.0.0` |
-| `com.streamlib.h264_decoder` | `@tatolab/h264/H264Decoder@1.0.0` |
-| `com.streamlib.h264_decoder.config@1.0.0` | `@tatolab/h264/H264DecoderConfig@1.0.0` |
-
-### H.265 package → `@tatolab/h265@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.streamlib.h265_encoder` | `@tatolab/h265/H265Encoder@1.0.0` |
-| `com.streamlib.h265_encoder.config@1.0.0` | `@tatolab/h265/H265EncoderConfig@1.0.0` |
-| `com.streamlib.h265_decoder` | `@tatolab/h265/H265Decoder@1.0.0` |
-| `com.streamlib.h265_decoder.config@1.0.0` | `@tatolab/h265/H265DecoderConfig@1.0.0` |
-
-### Opus package → `@tatolab/opus@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.streamlib.opus_encoder` | `@tatolab/opus/OpusEncoder@1.0.0` |
-| `com.streamlib.opus_encoder.config@1.0.0` | `@tatolab/opus/OpusEncoderConfig@1.0.0` |
-| `com.streamlib.opus_decoder` | `@tatolab/opus/OpusDecoder@1.0.0` |
-| `com.streamlib.opus_decoder.config@1.0.0` | `@tatolab/opus/OpusDecoderConfig@1.0.0` |
-
-### MP4 package → `@tatolab/mp4@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.tatolab.mp4_writer` | `@tatolab/mp4/Mp4Writer@1.0.0` |
-| `com.tatolab.mp4_writer.config@1.0.0` | `@tatolab/mp4/Mp4WriterConfig@1.0.0` |
-| `com.streamlib.linux_mp4_writer` | `@tatolab/mp4/LinuxMp4Writer@1.0.0` |
-| `com.streamlib.linux_mp4_writer.config@1.0.0` | `@tatolab/mp4/LinuxMp4WriterConfig@1.0.0` |
-
-### WebRTC package → `@tatolab/webrtc@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.streamlib.webrtc_whep` | `@tatolab/webrtc/WhepReceiver@1.0.0` |
-| `com.streamlib.webrtc_whep.config@1.0.0` | `@tatolab/webrtc/WhepReceiverConfig@1.0.0` |
-| `com.streamlib.webrtc_whip` | `@tatolab/webrtc/WhipSender@1.0.0` |
-| `com.streamlib.webrtc_whip.config@1.0.0` | `@tatolab/webrtc/WhipSenderConfig@1.0.0` |
-
-### MoQ package → `@tatolab/moq@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.streamlib.moq_publish_track` | `@tatolab/moq/PublishTrack@1.0.0` |
-| `com.streamlib.moq_publish_track.config@1.0.0` | `@tatolab/moq/PublishTrackConfig@1.0.0` |
-| `com.streamlib.moq_subscribe_track` | `@tatolab/moq/SubscribeTrack@1.0.0` |
-| `com.streamlib.moq_subscribe_track.config@1.0.0` | `@tatolab/moq/SubscribeTrackConfig@1.0.0` |
-
-### API server package → `@tatolab/api-server@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.streamlib.api_server` | `@tatolab/api-server/ApiServer@1.0.0` |
-| `com.streamlib.api_server.config@1.0.0` | `@tatolab/api-server/ApiServerConfig@1.0.0` |
-
-### CLAP package → `@tatolab/clap@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.streamlib.clap.effect` | `@tatolab/clap/ClapEffect@1.0.0` |
-| `com.streamlib.clap.effect.config@1.0.0` | `@tatolab/clap/ClapEffectConfig@1.0.0` |
-
-### Screen-capture package → `@tatolab/screen-capture@1.0.0`
-
-| Current | New |
-|---|---|
-| `com.tatolab.screen_capture` | `@tatolab/screen-capture/ScreenCapture@1.0.0` |
-| `com.tatolab.screen_capture.config@1.0.0` | `@tatolab/screen-capture/ScreenCaptureConfig@1.0.0` |
-
-### Internal / not-yet-packaged
-
-These don't fit one of the 12 carve-outs but exist in the current
-schema set. They'll either land in their own carve-out package or
-be folded into an existing one — TBD per the per-carve-out issues.
-
-| Current | Likely destination |
-|---|---|
-| `com.streamlib.bgra_file_source` | `@tatolab/sources/BgraFileSource@1.0.0` (new package) |
-| `com.streamlib.escalate_request@1.0.0` | `@streamlib/escalate/EscalateRequest@1.0.0` (escalate IPC; #404) |
-| `com.streamlib.escalate_response@1.0.0` | `@streamlib/escalate/EscalateResponse@1.0.0` (#404) |
-| `com.tatolab.simple_passthrough` | test-only — likely stays under a `@streamlib/test` namespace |
-| `com.streamlib.test.*` | test-only — `@streamlib/test/...@0.1.0` (kept off the public registry) |
-
-## Pickup order (multi-PR migration plan)
-
-The architecture lands across many PRs. The dependency graph (per
-GitHub `Blocked by` edges) drives the order:
-
-1. **#541** + **#684** + **#399** — bug fixes (codegen idempotency,
-   field ordering) and this foundation. Sibling-ready.
-2. **#400** — extract `streamlib-jtd-codegen` crate + add
-   `streamlib generate` CLI. Needs #399 for the structured types.
-3. **#402** — `streamlib.yaml` resolver + `streamlib.lock` + cutover
-   off legacy `[package.metadata.streamlib]` etc. (atomic — absorbs
-   #403 and #405).
-4. **#401** — `@tatolab/core` package + first end-to-end dogfooding
-   of the package format + sweep hardcoded reverse-DNS literals for
-   the four wire types across Rust + Python + Deno + IPC envelopes
-   for the four wire types.
-5. **#404** — processor short-name macros (Rust + Python + Deno
-   decorators) so processor source code stops hand-writing free-form
-   identifier strings.
-6. **#406** + **#408** + the **12 carve-out packages** — the long
-   tail. By this point the architecture is proven and the carve-outs
-   are mechanical.
-
-> ~~Earlier revision swapped #401 and #404 here: #401 was described
-> as "processor short-name macros + sweep" and #404 as "@tatolab/core
-> + IPC wire migration."~~ — Superseded 2026-05-05 during #401's
-> pickup (PR `feat/tatolab-core-package-401`). The issue bodies on
-> GitHub, the dependency graph (`#401 blocks #404`), and the issue
-> titles (`feat(packages): @tatolab/core ...` vs.
-> `feat(macros): processor short-name macros ...`) consistently say
-> the opposite of what this section originally claimed. The doc text
-> was stale; the issues are the source of truth and were left
-> unchanged.
-
-Each later issue is a planned consumer of this PR's foundation. The
-"no bad patterns left behind on engine changes" rule (CLAUDE.md) is
-explicitly relaxed across the milestone — the migration is staged
-across PRs by design, not bandaided on top of one giant PR.
+The embedded-schemas table at `libs/streamlib/src/core/embedded_schemas.rs`
+is build-script-driven: `build.rs` walks the resolver's full dependency
+graph and emits the `(canonical_identifier, yaml_body)` pairs into
+`OUT_DIR/embedded_schemas_table.rs`. Adding a schema means declaring
+it in your `streamlib.yaml`; nothing else. Hand-curated match arms
+mapping schema IDs to embedded YAML strings are not allowed — they
+silently drift when a schema renames or is added.
 
 ## Why no Python / Deno parity in v1
 
@@ -763,28 +514,25 @@ the cross-language need.
     resolver (`resolve`, `resolve_with`, `ResolvedPackages`) lives here
     too and walks path / git / `.slpkg` sources; the lockfile writer
     (`write_lockfile`, `read_lockfile`) and `compute_content_hash`
-    helper are siblings of the resolver (#402).
+    helper are siblings of the resolver.
   - `libs/streamlib-jtd-codegen/` — three-pass codegen pipeline.
     `sentinel.rs` substitutes cross-package refs with deterministic
     sentinels and restores them as native imports; `ordering.rs`
-    stable-sorts every JSON object key before invoking `jtd-codegen`
-    (#402). Public entry `generate(GenerateOptions { project_dir, ... })`
+    stable-sorts every JSON object key before invoking `jtd-codegen`.
+    Public entry `generate(GenerateOptions { project_dir, ... })`
     drives `streamlib.yaml`-mode end-to-end; `generate_from_resolved`
-    is the lower-level entry for callers that already ran the resolver.
+    is the lower-level entry for callers that already ran the
+    resolver.
   - `libs/streamlib/build.rs` — generates `embedded_schemas_table.rs`
-    in `OUT_DIR` from `streamlib.yaml`'s `schemas:` list, replacing
-    the hand-curated 21-arm match in `core/embedded_schemas.rs` (#402).
+    in `OUT_DIR` from `streamlib.yaml`'s `schemas:` list.
   - `xtask/src/check_schema_versions.rs` — CI lint (no per-schema
-    `version` keys in YAML, #399).
+    `version` keys in YAML).
   - `xtask/src/check_no_streamlib_metadata.rs` — CI lint
     (no `[package.metadata.streamlib]`, no `[tool.streamlib]`, no
-    top-level `streamlib` key in `deno.json` / `deno.jsonc`, #402).
-  - `.github/workflows/check-schema-versions.yml` — #399 CI gate.
-  - `.github/workflows/check-no-streamlib-metadata.yml` — #402 CI gate.
-- **Issues**: #399 (foundation), #400 (codegen extraction), #402
-  (resolver + cutover).
-- **Milestone**: [Schema Identity & Packaging (10)][m10] — freshness
-  anchor for in-flight design.
+    top-level `streamlib` key in `deno.json` / `deno.jsonc`).
+  - `.github/workflows/check-schema-versions.yml` — schema-version CI gate.
+  - `.github/workflows/check-no-streamlib-metadata.yml` —
+    legacy-metadata CI gate.
 - **Tests**:
   - `libs/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
     — unit tests covering grammar conformance, semver-range matching,
@@ -802,32 +550,17 @@ the cross-language need.
     (Rust / Python / TypeScript).
   - `libs/streamlib/src/core/embedded_schemas.rs::tests` — table
     populated from `streamlib.yaml`, no duplicate names, sorted output.
-  - `xtask/src/check_schema_versions.rs::tests` — #399 lint fixtures.
-  - `xtask/src/check_no_streamlib_metadata.rs::tests` — #402 lint
-    fixtures (passes-on-clean, fails-on-each-of-the-three-block-types,
-    skips `target/` and `_generated_/`).
-- **Closed**:
-  - #399 — foundation (`SchemaIdent`, `SemVer`, structural manifest /
-    lockfile types, no-`parse`-API doctests, schema-version CI lint).
-  - #400 — `streamlib-jtd-codegen` crate extraction + `streamlib generate`
-    CLI.
-  - #402 — resolver + lockfile + sentinel-substitution codegen +
-    cutover off legacy `[package.metadata.streamlib]`.
-- **Future research / follow-ups**:
-  - #401 (macros + example string migration).
-  - #404 (`@tatolab/core` + IPC wire migration).
-  - 12 carve-out package issues.
-  - Decision 8's `streamlib verify-schemas` CI determinism gate is
-    not yet implemented — separate follow-up. The resolver +
-    content-hashed lockfile (#402) are the load-bearing primitive
-    the gate will sit on.
+  - `xtask/src/check_schema_versions.rs::tests` — schema-version
+    lint fixtures.
+  - `xtask/src/check_no_streamlib_metadata.rs::tests` —
+    legacy-metadata lint fixtures.
 - **Sibling architecture docs**:
   - [`compute-kernel.md`](compute-kernel.md), [`graphics-kernel.md`](graphics-kernel.md),
     [`ray-tracing-kernel.md`](ray-tracing-kernel.md) — the kernel-shape
     doc family.
-  - [`subprocess-rhi-parity.md`](subprocess-rhi-parity.md) — the polyglot
-    capability split this milestone fits alongside.
+  - [`subprocess-rhi-parity.md`](subprocess-rhi-parity.md) — the
+    polyglot capability split this surface fits alongside.
   - [`texture-registration.md`](texture-registration.md) — engine-wide
     record pattern (`TextureRegistration`) that mirrors the same
-    "single canonical record per concern" shape this milestone applies
+    "single canonical record per concern" shape this surface applies
     to identifiers.

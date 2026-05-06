@@ -125,7 +125,7 @@ When presenting design choices for engine work, recommend the production-grade o
 
 **Issues are goals, not specs.** An issue captures the *intent* of the work — the problem to solve, why it matters, and roughly how done looks. The specific exit-criteria checkboxes, file paths, suggested orderings, and AI Agent Notes inside an issue body are the best understanding *as of when the issue was filed*; they go stale fast as code lands, dependencies close, or the surrounding architecture shifts. **When you pick up a task, treat the issue as the goal but research current state before locking the plan.** Re-read the referenced files, check whether referenced code still exists in the shape claimed, verify whether listed follow-ups have already been filed, confirm whether flagged "defects" are still defects. Then announce a *fresh* task plan that supersedes the issue body where evidence has shifted — and update the issue body in place per the markdown-editing rules below (strike through stale items with reasoning, don't silently rewrite). Don't be dogmatic about checking off every original criterion if the world has moved; do hit the goal.
 
-**Writing issues:** every new issue follows the template in @docs/issue-template.md — Description / Context / Exit criteria / Tests or validation / Related / AI Agent Notes. **Keep issues low-resolution by default.** State the goal, the constraints, and what "done" looks like in broad strokes; do *not* try to capture every file path, exact test name, suggested implementation order, or detailed plan in the issue body. That high-resolution detail decays as code shifts, and a future agent picking up the issue will re-derive it anyway. The picker's job is to research current state and produce the implementation plan; the filer's job is to capture the goal cleanly. Cross-cutting concerns (linux, macos, polyglot, ci, frozen) are labels, not milestones. Test harnesses are their own issues. Dependency edges (`blocked by` / `blocks` / `parent`) are native GitHub relationships, not text. Use the `/amos-file` skill to draft new issues — it handles the template, milestone inference, and relationships in one pass.
+**Writing issues:** every new issue follows the template in @docs/issue-template.md — Description / Context / Exit criteria / Tests or validation / Related / AI Agent Notes. **Issue bodies carry the architecture content for proposed work.** Architecture docs (`docs/architecture/*.md`) reflect merged-in code only and never describe upcoming changes; mermaid diagrams, BNF grammars, decision matrices, ADR-style trade-off discussions, sequenced migration plans, and any other design content for not-yet-shipped work all live in the relevant issue / milestone body until merged. Keep implementation specifics (exact file paths, test function names, suggested ordering) **out** of the issue body — those rot fast and the picker re-derives them at pickup time. The picker's job is to research current state and produce the implementation plan; the filer's job is to capture the goal AND the architecture proposal cleanly enough that a competent agent can pick the issue up cold without re-litigating the design. Cross-cutting concerns (linux, macos, polyglot, ci, frozen) are labels, not milestones. Test harnesses are their own issues. Dependency edges (`blocked by` / `blocks` / `parent`) are native GitHub relationships, not text. Use the `/amos-file` skill to draft new issues — it handles the template, milestone inference, and relationships in one pass.
 
 **Specialty workflows** live at `.claude/workflows/<label>.md`. Add a new one by dropping a file there and labeling relevant issues. `/amos:next` loads every matching file into context before starting work. Current workflows:
 - `.claude/workflows/ci.md` — for `ci`-labeled issues (negative test + green baseline evidence required)
@@ -411,6 +411,55 @@ hints), read the doc end-to-end first — the boundaries are deliberate.
 - `/refine-name <current_name>` - Get MORE explicit naming suggestions (never shorter)
 
 ---
+
+## Architecture documentation discipline
+
+**`docs/architecture/*.md` describes the current known state of the
+system, subject to staleness or drift.** A reader who has never seen
+the code should be able to skim an arch doc and walk away with a
+working mental model of how the system is shaped right now —
+identifier grammars the validators enforce, manifest formats the
+parsers accept, invariants the `compile_fail` doctests lock, files
+that exist on disk. Drift is expected and tolerated: a doc claim is
+the best understanding when last edited, nothing more. Verify
+against the code before relying on anything load-bearing.
+
+What architecture docs are **not**:
+
+- Not GitHub-aware. They don't reference issues, milestones, PRs, or
+  any project-management tracker. The codebase is the only thing
+  they describe; tracker references rot the moment the tracker
+  changes hands.
+- Not dated. No "as of YYYY-MM-DD," no "last updated," no embedded
+  timestamps. Git history covers freshness — embedding the date in
+  the doc just adds a second field that goes stale on every edit.
+- Not authoritative. They're a convenience read; a doc that says
+  "do X" is a hypothesis about the current code, not a command (per
+  "Editing markdown documentation" below).
+- Not enforcement. Architecture docs do not validate or gate
+  functionality — code, tests, type-system invariants, and CI lints
+  do that. A doc claim is never the reason something is correct.
+- Not history. They don't describe superseded designs, never-merged
+  proposals, or "this used to be X." The git log holds history.
+- Not a roadmap. They don't describe proposed work, planned
+  migrations, upcoming PR sequences, or "this will become X after
+  some change lands." Forward-looking content creates
+  false-current-state confusion when a future agent picks up a
+  fresh branch and can't tell whether X is what the code does or
+  what the code might do.
+
+Proposed architecture lives in **issue / milestone bodies** while
+in flight. Mermaid diagrams, BNF grammars, ADR-style trade-off
+discussions, sequenced migration plans, decision matrices — all of
+that goes in the issue body until the work merges. When the work
+merges, the architecture moves into a `docs/architecture/*.md` file
+describing the shipped state in current tense; the issue closes and
+the doc takes over. The arch doc itself never references the
+originating issue.
+
+This applies retroactively: existing architecture docs that carry
+proposed-work, GitHub-tracker, or historical-supersession content
+should be cleaned up to current-known-state.
 
 ## Editing markdown documentation
 
