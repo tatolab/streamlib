@@ -13,7 +13,7 @@ import {
   assertEquals,
   assertThrows,
 } from "@std/assert";
-import { dirname, fromFileUrl, join } from "@std/path";
+import { join } from "@std/path";
 
 import { SchemaIdent } from "./schema_ident.ts";
 import {
@@ -146,8 +146,6 @@ async function makeFixture(
   await Deno.writeTextFile(modulePath, moduleBody);
   return { dir, manifestPath, modulePath };
 }
-
-const SDK_DIR = dirname(fromFileUrl(import.meta.url));
 
 function moduleHeader(): string {
   const decoratorsUrl = new URL("./decorators.ts", import.meta.url).href;
@@ -460,9 +458,3 @@ Deno.test("@processor collects @input + @output port metadata", async () => {
   }
 });
 
-// Anchor the SDK_DIR test — silences unused-var lint for the constant.
-Deno.test("SDK_DIR is the directory holding decorators.ts", () => {
-  const expected = fromFileUrl(new URL("./", import.meta.url));
-  // join() normalizes trailing slashes; compare via dirname round-trip.
-  assertEquals(SDK_DIR + "/", expected);
-});
