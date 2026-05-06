@@ -32,10 +32,11 @@
  * is accepted but unused on the Deno side).
  */
 
-import type {
-  ReactiveProcessor,
-  RuntimeContextFullAccess,
-  RuntimeContextLimitedAccess,
+import {
+  processor,
+  type ReactiveProcessor,
+  type RuntimeContextFullAccess,
+  type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 import { CudaContext } from "../../../libs/streamlib-deno/adapters/cuda.ts";
 
@@ -50,6 +51,7 @@ interface CudaInferenceConfig {
 const DEVICE_TYPE_CUDA = 2;
 const DEVICE_TYPE_CUDA_HOST = 3;
 
+@processor("CudaInferenceProcessor", import.meta.url)
 export default class CudaInferenceProcessor implements ReactiveProcessor {
   private surfaceId: bigint = 0n;
   private width = 0;
@@ -60,7 +62,7 @@ export default class CudaInferenceProcessor implements ReactiveProcessor {
   private lastError: string | null = null;
 
   setup(ctx: RuntimeContextFullAccess): void {
-    const cfg = ctx.config as CudaInferenceConfig;
+    const cfg = ctx.config as unknown as CudaInferenceConfig;
     const sidRaw = cfg.cuda_surface_id;
     if (typeof sidRaw !== "number" && typeof sidRaw !== "bigint") {
       throw new Error(

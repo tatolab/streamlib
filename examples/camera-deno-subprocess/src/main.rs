@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     }))?;
 
     let halftone = runtime.add_processor(ProcessorSpec::new(
-        "com.tatolab.halftone-ts",
+        "HalftoneProcessor",
         serde_json::json!({}),
     ))?;
 

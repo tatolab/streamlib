@@ -100,7 +100,7 @@ impl RuntimeKind {
     fn processor_name(self) -> &'static str {
         match self {
             Self::Python => "CpuReadbackBlur",
-            Self::Deno => "com.tatolab.cpu_readback_blur_deno",
+            Self::Deno => "CpuReadbackBlurProcessor",
         }
     }
 }

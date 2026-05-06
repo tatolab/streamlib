@@ -174,7 +174,10 @@ export class CpuReadbackContext {
   // deno-lint-ignore no-explicit-any
   private readonly symbols: any;
   private readonly rt: Deno.PointerObject;
-  private readonly triggerCallback: Deno.UnsafeCallback;
+  private readonly triggerCallback: Deno.UnsafeCallback<{
+    readonly parameters: readonly ["pointer", "u64", "u32"];
+    readonly result: "u64";
+  }>;
   private readonly surfaceIds = new Map<string, bigint>();
   private readonly resolvedHandles = new Map<
     string,
@@ -352,7 +355,7 @@ export class CpuReadbackContext {
       surfaceId,
       "image_to_buffer",
     );
-    _pendingTimelineValue = BigInt(response.timeline_value);
+    _pendingTimelineValue = BigInt(response.timeline_value ?? 0);
 
     const buf = new Uint8Array(VIEW_STRUCT_SIZE);
     const fn = blocking
@@ -395,7 +398,7 @@ export class CpuReadbackContext {
               surfaceIdSnapshot,
               "buffer_to_image",
             );
-            _pendingTimelineValue = BigInt(flushResponse.timeline_value);
+            _pendingTimelineValue = BigInt(flushResponse.timeline_value ?? 0);
           } catch (e) {
             // Surface flush failure through the polyglot unified
             // logging pathway; the cdylib logs its own context too.

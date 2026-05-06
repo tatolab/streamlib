@@ -32,14 +32,16 @@
  */
 
 import {
+  log,
   type ManualProcessor,
   monotonicNowNs,
   MonotonicTimer,
-  log,
+  processor,
   type RuntimeContextFullAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 import type { OutputPorts } from "../../../libs/streamlib-deno/types.ts";
 
+@processor("PolyglotManualSource", import.meta.url)
 export default class PolyglotManualSource implements ManualProcessor {
   private intervalNs = 33n * 1_000_000n;
   private width = 32;

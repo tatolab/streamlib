@@ -60,7 +60,7 @@ impl RuntimeKind {
     fn processor_name(self) -> &'static str {
         match self {
             Self::Python => "DmaBufConsumer",
-            Self::Deno => "com.tatolab.dma_buf_consumer_deno",
+            Self::Deno => "DmaBufConsumer",
         }
     }
 }

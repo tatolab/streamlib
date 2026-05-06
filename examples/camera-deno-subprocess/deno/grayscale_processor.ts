@@ -8,13 +8,15 @@
  * directly for zero-copy processing, and writes output frames.
  */
 
-import type {
-  ReactiveProcessor,
-  RuntimeContextFullAccess,
-  RuntimeContextLimitedAccess,
+import {
+  processor,
+  type ReactiveProcessor,
+  type RuntimeContextFullAccess,
+  type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import type { VideoFrame } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
+import type { VideoFrame } from "../../../libs/streamlib-deno/_generated_/tatolab__core/video_frame.ts";
 
+@processor("GrayscaleProcessor", import.meta.url)
 export default class GrayscaleProcessor implements ReactiveProcessor {
   setup(ctx: RuntimeContextFullAccess): void {
     console.error("[GrayscaleProcessor] setup — config:", JSON.stringify(ctx.config));

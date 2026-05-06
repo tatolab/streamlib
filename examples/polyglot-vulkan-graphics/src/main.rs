@@ -100,7 +100,7 @@ impl RuntimeKind {
     fn processor_name(self) -> &'static str {
         match self {
             Self::Python => "VulkanGraphics",
-            Self::Deno => "com.tatolab.vulkan_graphics_deno",
+            Self::Deno => "VulkanGraphicsProcessor",
         }
     }
 }

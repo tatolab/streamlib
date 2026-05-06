@@ -25,10 +25,11 @@
  * rgen_spv_hex, rmiss_spv_hex, rchit_spv_hex.
  */
 
-import type {
-  ReactiveProcessor,
-  RuntimeContextFullAccess,
-  RuntimeContextLimitedAccess,
+import {
+  processor,
+  type ReactiveProcessor,
+  type RuntimeContextFullAccess,
+  type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 import { VulkanContext } from "../../../libs/streamlib-deno/adapters/vulkan.ts";
 
@@ -86,6 +87,7 @@ function identityTransform(): readonly number[] {
   ];
 }
 
+@processor("VulkanRayTracingProcessor", import.meta.url)
 export default class VulkanRayTracingProcessor implements ReactiveProcessor {
   private uuid = "";
   private width = 0;

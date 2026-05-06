@@ -1,10 +1,11 @@
 package:
+  org: tatolab
   name: polyglot-dma-buf-consumer-deno
   version: "0.1.0"
   description: "Linux DMA-BUF consumer — Deno twin of the Python polyglot E2E"
 
 processors:
-  - name: com.tatolab.dma_buf_consumer_deno
+  - name: DmaBufConsumer
     version: "1.0.0"
     description: "Resolves an upstream surface_id to a DMA-BUF, locks/reads it, and forwards the frame downstream"
     runtime: deno

@@ -85,7 +85,7 @@ impl RuntimeKind {
     fn processor_name(self) -> &'static str {
         match self {
             Self::Python => "PolyglotManualSource",
-            Self::Deno => "com.tatolab.polyglot_manual_source_deno",
+            Self::Deno => "PolyglotManualSource",
         }
     }
 }

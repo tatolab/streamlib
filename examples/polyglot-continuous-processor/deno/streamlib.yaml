@@ -1,10 +1,11 @@
 package:
+  org: tatolab
   name: polyglot-continuous-processor-deno
   version: "0.1.0"
   description: "Polyglot continuous processor (#542) — Deno process() driven by monotonic-clock timerfd"
 
 processors:
-  - name: com.tatolab.polyglot_continuous_processor_deno
+  - name: PolyglotContinuousProcessor
     version: "1.0.0"
     description: "Continuous processor: process() called by the runner at interval_ms cadence (now timerfd-paced); each call writes the tick count + a monotonic timestamp into the host cpu-readback surface. Reference example for the no-setTimeout pacing contract."
     runtime: deno

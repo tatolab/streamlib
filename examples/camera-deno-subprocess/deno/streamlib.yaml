@@ -1,10 +1,11 @@
 package:
+  org: tatolab
   name: camera-deno-subprocess
   version: "0.1.0"
   description: "TypeScript/Deno video processors using subprocess architecture"
 
 processors:
-  - name: com.tatolab.grayscale-ts
+  - name: GrayscaleProcessor
     version: "1.0.0"
     description: "Grayscale processor — TypeScript/Deno"
     runtime: deno
@@ -17,7 +18,7 @@ processors:
       - name: video_out
         schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
 
-  - name: com.tatolab.halftone-ts
+  - name: HalftoneProcessor
     version: "1.0.0"
     description: "Halftone dot pattern via TypeGPU/WebGPU compute shader"
     runtime: deno

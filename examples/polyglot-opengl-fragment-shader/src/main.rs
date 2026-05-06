@@ -74,7 +74,7 @@ impl RuntimeKind {
     fn processor_name(self) -> &'static str {
         match self {
             Self::Python => "OpenGlFragmentShader",
-            Self::Deno => "com.tatolab.opengl_fragment_shader_deno",
+            Self::Deno => "OpenGlFragmentShaderProcessor",
         }
     }
 }
