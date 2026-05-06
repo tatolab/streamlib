@@ -98,7 +98,7 @@ impl RuntimeKind {
 
     fn processor_name(self) -> &'static str {
         match self {
-            Self::Python => "com.tatolab.cuda_inference",
+            Self::Python => "CudaInference",
             Self::Deno => "com.tatolab.cuda_inference_deno",
         }
     }

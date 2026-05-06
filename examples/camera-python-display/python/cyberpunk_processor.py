@@ -17,9 +17,12 @@ import math
 
 import skia
 
-from streamlib import processor, input, output
+from streamlib import SchemaIdent, processor, input, output
 
 logger = logging.getLogger(__name__)
+
+# Cross-package schema reference — declared once and reused on every port.
+VIDEO_FRAME = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
 
 # OpenGL constants (not exposed by skia-python)
 GL_RGBA8 = 0x8058
@@ -175,7 +178,7 @@ def draw_spray_paint_tag(canvas, x, y, scale=1.0, time_offset=0.0):
 # Cyberpunk Processor
 # =============================================================================
 
-@processor(name="CyberpunkProcessor", description="Cyberpunk overlay with Skia GPU rendering")
+@processor("CyberpunkProcessor")
 class CyberpunkProcessor:
     """Applies cyberpunk color grading and spray paint watermark using Skia.
 
@@ -187,11 +190,11 @@ class CyberpunkProcessor:
     - Stable GL texture IDs (create once, update per-frame)
     """
 
-    @input(schema="VideoFrame")
+    @input(schema=VIDEO_FRAME)
     def video_in(self):
         pass
 
-    @output(schema="VideoFrame")
+    @output(schema=VIDEO_FRAME)
     def video_out(self):
         pass
 

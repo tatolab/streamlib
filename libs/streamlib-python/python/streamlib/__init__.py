@@ -56,10 +56,10 @@ from .decorators import (
     u32,
     u64,
     bool_field,
-    # Deprecated aliases
-    input_port,
-    output_port,
 )
+
+# Structured schema identity (mirrors Rust's streamlib_idents::SchemaIdent)
+from .schema_ident import SchemaIdent
 
 # Re-export capability-typed runtime context views for processor authors
 from .processor_context import (
@@ -96,9 +96,8 @@ __all__ = [
     "u32",
     "u64",
     "bool_field",
-    # Deprecated aliases
-    "input_port",
-    "output_port",
+    # Structured schema identity
+    "SchemaIdent",
     "PixelFormat",
     # Capability-typed runtime context
     "RuntimeContextFullAccess",

@@ -1,10 +1,11 @@
 package:
+  org: tatolab
   name: polyglot-dma-buf-consumer
   version: "0.1.0"
   description: "Linux DMA-BUF consumer — resolves host camera surfaces via the surface-share service"
 
 processors:
-  - name: com.tatolab.dma_buf_consumer
+  - name: DmaBufConsumer
     version: "1.0.0"
     description: "Resolves an upstream surface_id to a DMA-BUF, locks/reads it, and forwards the frame downstream"
     runtime: python

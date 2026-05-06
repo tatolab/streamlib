@@ -40,7 +40,7 @@ fn main() -> Result<()> {
     }))?;
 
     let grayscale = runtime.add_processor(ProcessorSpec::new(
-        "com.tatolab.grayscale",
+        "Grayscale",
         serde_json::json!({}),
     ))?;
 

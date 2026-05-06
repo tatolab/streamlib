@@ -481,30 +481,52 @@ it in your `streamlib.yaml`; nothing else. Hand-curated match arms
 mapping schema IDs to embedded YAML strings are not allowed — they
 silently drift when a schema renames or is added.
 
-## Why no Python / Deno parity in v1
+## Polyglot SchemaIdent parity
 
-The `streamlib-idents` crate ships Rust-only. Python and Deno do
-not get matching `SchemaIdent` validators / range matchers in v1 —
-deliberately scope-cut.
+The `streamlib-idents` crate's full surface (range matching,
+lockfile read/write, content-hash resolver, codegen pipeline)
+is Rust-only. The Python SDK carries a focused subset matched
+to the authoring path:
 
-The reason is structural, not ergonomic: **structured-everywhere
-eliminates the need for non-Rust callers to validate identifiers.**
-Python and Deno consume `SchemaIdent` records that have already been
-validated upstream (by codegen at build time, or by the Rust host
-on inbound IPC). No subprocess-side parser exists, because no
-subprocess-side parsing happens.
+- **`streamlib.SchemaIdent`** — frozen dataclass mirroring the
+  Rust 4-field shape with the same regex-validating constructors
+  (org / package / type / version follow the same grammar that
+  `streamlib_idents::Org` / `Package` / `TypeName` / `SemVer`
+  enforce). No `parse` / `from_str` API; the joined `__str__` form
+  is render-only and never round-trips through a parser.
+- **`streamlib._manifest`** — hand-rolled minimal YAML reader
+  that extracts the `package: { org, name, version }` block plus
+  the processor-name list. Avoids adding PyYAML as the SDK's first
+  runtime dep. Full manifest deserialization stays Rust-side.
+- **`@streamlib.processor("PascalCase")`** — mirrors Rust's
+  `#[streamlib::processor("Camera")]` proc-macro: positional
+  PascalCase short name resolved at decoration time against the
+  enclosing package's `streamlib.yaml`. The decorator validates
+  that the short name appears in the manifest's `processors:`
+  list and attaches `__streamlib_schema_ident__: SchemaIdent` to
+  the class.
+- **`@streamlib.input(schema=...)` / `@streamlib.output(schema=...)`**
+  — accept a `SchemaIdent` instance or a class that carries
+  `__streamlib_schema_ident__`. Bare-string and joined-string
+  forms are rejected at decoration time, mirroring the no-parse
+  invariant on the Rust side.
 
-If a future non-Rust caller actually needs to validate identifiers
-locally (e.g. a Python tool authoring `streamlib.yaml` programmatically),
-file a follow-up at that point. Building three parser-parity test
-corpora upfront for hypothetical consumers is exactly the burden the
-structured-everywhere decision exists to eliminate.
+The reason for the focused subset rather than full parity:
+structured-everywhere eliminates the need for non-Rust callers to
+*validate identifiers* at runtime. Polyglot SDKs consume already-
+validated records produced by Rust codegen or inbound IPC. The
+Python SDK's local validators run only at authoring time —
+guarding against manifest-vs-decorator drift, not validating
+wire-format input.
 
-This is the same shape as the polyglot rule's escape clause
+Range matching, lockfile resolution, and the codegen pipeline
+stay Rust-side because no non-Rust caller currently exercises
+them. This matches the polyglot rule's escape clause
 (`.claude/workflows/polyglot.md`): *"the only legitimate split is
-schema-only / language-specific by construction"* — here the split is
-"language-specific by construction," because the design eliminates
-the cross-language need.
+schema-only / language-specific by construction"* — the deeper
+crate functionality (range matching, lockfile, codegen) is
+"language-specific by construction" while basic identity
+validation is mirrored across runtimes that need it.
 
 ## Reference
 
@@ -533,6 +555,16 @@ the cross-language need.
   - `.github/workflows/check-schema-versions.yml` — schema-version CI gate.
   - `.github/workflows/check-no-streamlib-metadata.yml` —
     legacy-metadata CI gate.
+  - `libs/streamlib-python/python/streamlib/schema_ident.py` —
+    Python `SchemaIdent` dataclass with regex-validating
+    constructors and render-only joined `__str__`.
+  - `libs/streamlib-python/python/streamlib/_manifest.py` —
+    hand-rolled minimal YAML reader for `package:` block +
+    `processors[].name` list.
+  - `libs/streamlib-python/python/streamlib/decorators.py` —
+    `@processor("PascalCase")` / `@input` / `@output`
+    decorators; manifest-driven structured ident attached at
+    decoration time.
 - **Tests**:
   - `libs/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
     — unit tests covering grammar conformance, semver-range matching,
@@ -554,6 +586,14 @@ the cross-language need.
     lint fixtures.
   - `xtask/src/check_no_streamlib_metadata.rs::tests` —
     legacy-metadata lint fixtures.
+  - `libs/streamlib-python/python/streamlib/tests/test_processor_decorator.py`
+    — `SchemaIdent` validation, `@processor` manifest-driven
+    decoration paths, `@input` / `@output` schema rejection of
+    bare-string and joined-string forms.
+  - `libs/streamlib-python/python/streamlib/tests/test_manifest_reader.py`
+    — minimal YAML reader edge cases (quoted scalars, comments,
+    nested processor bodies, missing fields, name-first ordering
+    constraint).
 - **Sibling architecture docs**:
   - [`compute-kernel.md`](compute-kernel.md), [`graphics-kernel.md`](graphics-kernel.md),
     [`ray-tracing-kernel.md`](ray-tracing-kernel.md) — the kernel-shape
