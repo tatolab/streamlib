@@ -29,10 +29,11 @@
  * `examples/polyglot-vulkan-compute/shaders/mandelbrot.comp`).
  */
 
-import type {
-  ReactiveProcessor,
-  RuntimeContextFullAccess,
-  RuntimeContextLimitedAccess,
+import {
+  processor,
+  type ReactiveProcessor,
+  type RuntimeContextFullAccess,
+  type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 import {
   VkImageLayout,
@@ -47,6 +48,7 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
+@processor("VulkanComputeProcessor", import.meta.url)
 export default class VulkanComputeProcessor implements ReactiveProcessor {
   private uuid = "";
   private width = 0;

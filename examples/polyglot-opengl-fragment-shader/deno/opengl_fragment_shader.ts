@@ -35,10 +35,11 @@
  *     Surface height in pixels.
  */
 
-import type {
-  ReactiveProcessor,
-  RuntimeContextFullAccess,
-  RuntimeContextLimitedAccess,
+import {
+  processor,
+  type ReactiveProcessor,
+  type RuntimeContextFullAccess,
+  type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 import { OpenGLContext } from "../../../libs/streamlib-deno/adapters/opengl.ts";
 import {
@@ -268,6 +269,7 @@ function linkProgram(gl: any, vs: number, fs: number): number {
 // Processor
 // =============================================================================
 
+@processor("OpenGlFragmentShaderProcessor", import.meta.url)
 export default class OpenGlFragmentShaderProcessor implements ReactiveProcessor {
   private uuid = "";
   private width = 0;

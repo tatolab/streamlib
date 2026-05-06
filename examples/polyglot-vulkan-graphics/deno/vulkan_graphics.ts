@@ -25,10 +25,11 @@
  * vertex_spv_hex, fragment_spv_hex.
  */
 
-import type {
-  ReactiveProcessor,
-  RuntimeContextFullAccess,
-  RuntimeContextLimitedAccess,
+import {
+  processor,
+  type ReactiveProcessor,
+  type RuntimeContextFullAccess,
+  type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 import {
   VkImageLayout,
@@ -80,6 +81,7 @@ function trianglePipelineState():
 // `GraphicsShaderStageFlags`.
 const STAGE_VERTEX = 1;
 
+@processor("VulkanGraphicsProcessor", import.meta.url)
 export default class VulkanGraphicsProcessor implements ReactiveProcessor {
   private uuid = "";
   private width = 0;

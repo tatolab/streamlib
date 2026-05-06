@@ -34,6 +34,7 @@ import {
 import {
   STREAMLIB_ADAPTER_ABI_VERSION,
   type StreamlibSurface,
+  type SurfaceAccessGuard,
 } from "../surface_adapter.ts";
 
 export { STREAMLIB_ADAPTER_ABI_VERSION };

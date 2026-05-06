@@ -1,10 +1,11 @@
 package:
+  org: tatolab
   name: polyglot-vulkan-compute-deno
   version: "0.1.0"
   description: "Polyglot Vulkan adapter scenario (#531) — Deno Mandelbrot compute kernel dispatched against a host DMA-BUF VkImage"
 
 processors:
-  - name: com.tatolab.vulkan_compute_deno
+  - name: VulkanComputeProcessor
     version: "1.0.0"
     description: "Acquires a host-pre-registered render-target DMA-BUF surface as a VkImage, dispatches a Mandelbrot compute shader, releases"
     runtime: deno

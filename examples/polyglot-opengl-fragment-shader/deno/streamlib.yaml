@@ -1,10 +1,11 @@
 package:
+  org: tatolab
   name: polyglot-opengl-fragment-shader-deno
   version: "0.1.0"
   description: "Polyglot OpenGL adapter scenario (#530) — Deno plasma fragment shader rendered into a host DMA-BUF surface"
 
 processors:
-  - name: com.tatolab.opengl_fragment_shader_deno
+  - name: OpenGlFragmentShaderProcessor
     version: "1.0.0"
     description: "Acquires a host-pre-registered render-target DMA-BUF surface as a GL_TEXTURE_2D, renders a plasma-effect fragment shader, releases"
     runtime: deno

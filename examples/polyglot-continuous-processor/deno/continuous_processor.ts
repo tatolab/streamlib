@@ -28,10 +28,12 @@ import {
   type ContinuousProcessor,
   log,
   monotonicNowNs,
+  processor,
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 
+@processor("PolyglotContinuousProcessor", import.meta.url)
 export default class PolyglotContinuousProcessor
   implements ContinuousProcessor {
   private outputFile = "";

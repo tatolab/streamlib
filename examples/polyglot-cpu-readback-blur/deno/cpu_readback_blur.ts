@@ -26,13 +26,15 @@
  *         Gaussian sigma.
  */
 
-import type {
-  ReactiveProcessor,
-  RuntimeContextFullAccess,
-  RuntimeContextLimitedAccess,
+import {
+  processor,
+  type ReactiveProcessor,
+  type RuntimeContextFullAccess,
+  type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
 import { CpuReadbackContext } from "../../../libs/streamlib-deno/adapters/cpu_readback.ts";
 
+@processor("CpuReadbackBlurProcessor", import.meta.url)
 export default class CpuReadbackBlurProcessor implements ReactiveProcessor {
   private surfaceId: bigint = 0n;
   private kernelSize = 11;
