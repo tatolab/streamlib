@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::com_tatolab_audio_mixer_config::Strategy;
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
 #[crate::processor("com.tatolab.audio_mixer")]
@@ -45,8 +45,8 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             return Ok(());
         }
 
-        let left_frame: Audioframe = self.inputs.read("left")?;
-        let right_frame: Audioframe = self.inputs.read("right")?;
+        let left_frame: AudioFrame = self.inputs.read("left")?;
+        let right_frame: AudioFrame = self.inputs.read("right")?;
 
         // Validate both inputs are mono (1 channel)
         if left_frame.channels != 1 {
@@ -132,7 +132,7 @@ impl crate::core::ReactiveProcessor for AudioMixerProcessor::Processor {
             stereo_samples.push(final_right);
         }
 
-        let output_frame = Audioframe {
+        let output_frame = AudioFrame {
             samples: stereo_samples,
             channels: 2, // Stereo output
             sample_rate: self.sample_rate,

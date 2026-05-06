@@ -59,9 +59,23 @@ const symbols = {
     result: "i32" as const,
   },
 
-  // Output
+  // Output. Schema identifier passed as six structured args
+  // (org/package/type C-strings + 3 u32 versions) per #401 phase 2.
   sldn_output_publish: {
-    parameters: ["pointer", "buffer", "buffer", "buffer", "buffer", "usize", "buffer"] as const,
+    parameters: [
+      "pointer", // ctx
+      "buffer", // service_name
+      "buffer", // port_name
+      "buffer", // dest_port
+      "buffer", // schema_org
+      "buffer", // schema_package
+      "buffer", // schema_type
+      "u32", // schema_version_major
+      "u32", // schema_version_minor
+      "u32", // schema_version_patch
+      "usize", // max_payload_bytes
+      "buffer", // notify_service_name
+    ] as const,
     result: "i32" as const,
   },
   sldn_output_write: {

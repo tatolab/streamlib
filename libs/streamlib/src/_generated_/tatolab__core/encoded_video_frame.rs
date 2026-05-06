@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Encoded video frame with H.264/H.265 NAL unit data
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Encodedvideoframe {
+pub struct EncodedVideoFrame {
     /// Encoded NAL units (H.264/H.265 bitstream data)
     #[serde(rename = "data")]
     pub data: Vec<u8>,

@@ -8,7 +8,7 @@ escalate-IPC compute (#550). The host pre-allocates a render-target-
 capable DMA-BUF surface AND an exportable `VulkanTimelineSemaphore`,
 registers both with surface-share, and installs a
 `ComputeKernelBridge` wired to its `VulkanComputeKernel`. This
-processor receives a trigger Videoframe, opens the host surface
+processor receives a trigger VideoFrame, opens the host surface
 through ``VulkanContext.acquire_write`` (which imports the DMA-BUF
 as a ``VkImage`` in the subprocess and imports the timeline via
 ``from_imported_opaque_fd``), and calls

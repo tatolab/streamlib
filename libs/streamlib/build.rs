@@ -22,94 +22,250 @@ fn main() {
     generate_embedded_schemas_table();
 }
 
-/// Read `streamlib.yaml`'s `schemas:` list and emit a generated Rust file
-/// in `OUT_DIR/embedded_schemas_table.rs` containing a static table mapping
-/// each schema's `metadata.name` to `include_str!()` of its YAML body.
+/// Walk `streamlib.yaml`'s `schemas:` list AND its `dependencies:` block
+/// (per #401) to emit two generated tables in `OUT_DIR/embedded_schemas_table.rs`:
 ///
-/// The file is `include!`ed by `src/core/embedded_schemas.rs` (per #402),
-/// replacing the hand-curated 21-arm match that historically drifted
-/// against the on-disk schema set.
+/// 1. `EMBEDDED_SCHEMAS: &[(canonical_identifier, yaml_body)]` — covers
+///    both legacy reverse-DNS and new structured identifiers.
+/// 2. `EMBEDDED_SCHEMA_IDENT_SEGMENTS: &[(joined_versioned_key, org, package,
+///    type, version_major, version_minor, version_patch)]` — covers ONLY
+///    new-shape schemas declaring `metadata.type` inside a package-flavor
+///    manifest. Legacy reverse-DNS schemas have no structured segment
+///    representation and are deliberately excluded (#401 phase 2).
+///
+/// The canonical identifier in table 1 is:
+/// - For legacy schemas declaring `metadata.name` (reverse-DNS): the
+///   `metadata.name` value verbatim.
+/// - For new-shape schemas declaring `metadata.type` inside a package-flavor
+///   manifest: the joined `@<org>/<package>/<Type>` (no version suffix).
+///
+/// Both tables are sorted by their first column for diff-stable output and
+/// to support binary-search lookups. The file is `include!`ed by
+/// `src/core/embedded_schemas.rs`, replacing the hand-curated match that
+/// historically drifted against the on-disk set.
 fn generate_embedded_schemas_table() {
     use std::path::PathBuf;
+    use streamlib_idents::resolve;
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let manifest_path = PathBuf::from(&manifest_dir).join("streamlib.yaml");
     println!("cargo:rerun-if-changed={}", manifest_path.display());
 
-    let manifest_text = std::fs::read_to_string(&manifest_path).unwrap_or_else(|e| {
+    let manifest_dir_path = PathBuf::from(&manifest_dir);
+    let resolved = resolve(&manifest_dir_path).unwrap_or_else(|e| {
         panic!(
-            "Failed to read {}: {} (#402 requires streamlib.yaml as the schemas source of truth)",
-            manifest_path.display(),
+            "Failed to resolve streamlib.yaml dependency graph at {}: {}",
+            manifest_dir_path.display(),
             e
         )
     });
 
-    let yaml: serde_yaml::Value = serde_yaml::from_str(&manifest_text)
-        .expect("Failed to parse streamlib.yaml: invalid YAML");
+    let mut name_entries: Vec<(String, String)> = Vec::new();
+    let mut segment_entries: Vec<SegmentRow> = Vec::new();
 
-    let schemas_list = yaml
-        .get("schemas")
-        .and_then(|v| v.as_sequence())
-        .unwrap_or_else(|| {
-            panic!(
-                "streamlib.yaml must declare a `schemas:` array. Add the schema list before \
-                 generating bindings (see #402 for the migration off [package.metadata.streamlib])"
-            )
-        });
+    for pkg in resolved.iter_all() {
+        for schema_path in &pkg.schema_files {
+            println!("cargo:rerun-if-changed={}", schema_path.display());
 
-    let mut entries: Vec<(String, String)> = Vec::with_capacity(schemas_list.len());
-    for schema_value in schemas_list {
-        let rel_path = schema_value
-            .as_str()
-            .expect("streamlib.yaml `schemas:` entries must be strings");
-        let abs_path = PathBuf::from(&manifest_dir).join(rel_path);
-        println!("cargo:rerun-if-changed={}", abs_path.display());
-
-        let schema_text = std::fs::read_to_string(&abs_path).unwrap_or_else(|e| {
-            panic!("Failed to read schema {}: {}", abs_path.display(), e)
-        });
-        let schema_yaml: serde_yaml::Value = serde_yaml::from_str(&schema_text)
-            .unwrap_or_else(|e| panic!("Failed to parse schema {}: {}", abs_path.display(), e));
-
-        let name = schema_yaml
-            .get("metadata")
-            .and_then(|m| m.get("name"))
-            .and_then(|n| n.as_str())
-            .unwrap_or_else(|| {
-                panic!(
-                    "schema {} missing `metadata.name` — required for embedded-schemas lookup",
-                    abs_path.display()
-                )
+            let schema_text = std::fs::read_to_string(schema_path).unwrap_or_else(|e| {
+                panic!("Failed to read schema {}: {}", schema_path.display(), e)
             });
+            let schema_yaml: serde_yaml::Value =
+                serde_yaml::from_str(&schema_text).unwrap_or_else(|e| {
+                    panic!("Failed to parse schema {}: {}", schema_path.display(), e)
+                });
 
-        entries.push((name.to_string(), rel_path.to_string()));
+            let resolved_schema = resolve_schema_identity(&schema_yaml, pkg, schema_path);
+            let include_path_literal = include_path_literal(&manifest_dir_path, schema_path);
+            name_entries.push((resolved_schema.canonical.clone(), include_path_literal));
+
+            if let Some(seg) = resolved_schema.segments {
+                segment_entries.push(seg);
+            }
+        }
     }
 
-    // Sort by name for deterministic output.
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    name_entries.sort_by(|a, b| a.0.cmp(&b.0));
+    segment_entries.sort_by(|a, b| a.joined_versioned.cmp(&b.joined_versioned));
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
     let out_path = PathBuf::from(out_dir).join("embedded_schemas_table.rs");
 
     let mut buf = String::new();
     buf.push_str("// AUTOGENERATED by build.rs from streamlib.yaml. DO NOT EDIT.\n\n");
-    buf.push_str("/// Embedded schemas table — `(metadata.name, yaml_body)` pairs.\n");
+    buf.push_str("/// Embedded schemas table — `(canonical_identifier, yaml_body)` pairs.\n");
     buf.push_str("///\n");
     buf.push_str(
-        "/// Populated by `build.rs` from the `schemas:` list in `streamlib.yaml`.\n",
+        "/// Populated by `build.rs` walking `streamlib.yaml` + its dependency graph.\n",
     );
-    buf.push_str("/// Replaces the hand-curated 21-arm match that drifted against the\n");
-    buf.push_str("/// on-disk schema set (resolved by #402).\n");
+    buf.push_str(
+        "/// Canonical identifiers carry the unversioned form (no @<semver> suffix); the\n",
+    );
+    buf.push_str(
+        "/// runtime lookup helpers strip the version when callers pass it (#401).\n",
+    );
     buf.push_str("pub(crate) const EMBEDDED_SCHEMAS: &[(&str, &str)] = &[\n");
-    for (name, rel) in &entries {
+    for (name, include_lit) in &name_entries {
+        buf.push_str(&format!("    (\"{}\", {}),\n", name, include_lit));
+    }
+    buf.push_str("];\n\n");
+
+    buf.push_str(
+        "/// Structured segments for every new-shape schema in the resolver dep graph.\n",
+    );
+    buf.push_str("///\n");
+    buf.push_str(
+        "/// Tuple shape: `(joined_versioned_key, org, package, type, major, minor, patch)`.\n",
+    );
+    buf.push_str(
+        "/// Sorted by `joined_versioned_key` for binary-search lookups + diff-stable output.\n",
+    );
+    buf.push_str(
+        "/// Legacy reverse-DNS schemas (those declaring `metadata.name` only) are excluded\n",
+    );
+    buf.push_str(
+        "/// — they have no structured `(org, package, type)` representation by design.\n",
+    );
+    buf.push_str("/// Consumed at the wire boundary by `lookup_schema_ident_segments` to convert\n");
+    buf.push_str(
+        "/// a joined-string identifier into structured segments without a parser (#401 phase 2).\n",
+    );
+    buf.push_str(
+        "pub(crate) const EMBEDDED_SCHEMA_IDENT_SEGMENTS:\n    \
+        &[(&str, &str, &str, &str, u32, u32, u32)] = &[\n",
+    );
+    for seg in &segment_entries {
         buf.push_str(&format!(
-            "    (\"{}\", include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{}\"))),\n",
-            name, rel
+            "    (\"{}\", \"{}\", \"{}\", \"{}\", {}, {}, {}),\n",
+            seg.joined_versioned,
+            seg.org,
+            seg.package,
+            seg.type_name,
+            seg.major,
+            seg.minor,
+            seg.patch,
         ));
     }
     buf.push_str("];\n");
 
     std::fs::write(&out_path, &buf).expect("Failed to write embedded_schemas_table.rs");
+}
+
+/// Resolved identity for a schema: the canonical (unversioned) lookup key,
+/// plus — for new-shape schemas only — the structured segments and version.
+struct ResolvedSchemaIdentity {
+    canonical: String,
+    segments: Option<SegmentRow>,
+}
+
+struct SegmentRow {
+    joined_versioned: String,
+    org: String,
+    package: String,
+    type_name: String,
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+/// Resolve a schema's identity from its parsed YAML + the package context.
+///
+/// New-shape schemas (declaring `metadata.type` inside a package-flavor
+/// manifest) get both a canonical unversioned key and a structured segment
+/// row. Legacy reverse-DNS schemas (declaring `metadata.name`) get only the
+/// canonical key — there's no structured segment representation for them.
+fn resolve_schema_identity(
+    schema_yaml: &serde_yaml::Value,
+    pkg: &streamlib_idents::ResolvedPackage,
+    schema_path: &std::path::Path,
+) -> ResolvedSchemaIdentity {
+    let metadata = schema_yaml.get("metadata").unwrap_or_else(|| {
+        panic!("schema {} missing `metadata` block", schema_path.display())
+    });
+
+    if let Some(type_name) = metadata.get("type").and_then(|t| t.as_str()) {
+        let pkg_meta = pkg.manifest.package.as_ref().unwrap_or_else(|| {
+            panic!(
+                "schema {} declares metadata.type but its enclosing manifest is not a \
+                 package-flavor streamlib.yaml (no `package:` block)",
+                schema_path.display()
+            )
+        });
+        let org = pkg_meta.org.as_str().to_string();
+        let package = pkg_meta.name.as_str().to_string();
+        let major = pkg_meta.version.major;
+        let minor = pkg_meta.version.minor;
+        let patch = pkg_meta.version.patch;
+        let canonical = format!("@{}/{}/{}", org, package, type_name);
+        let joined_versioned = format!("{}@{}.{}.{}", canonical, major, minor, patch);
+        return ResolvedSchemaIdentity {
+            canonical,
+            segments: Some(SegmentRow {
+                joined_versioned,
+                org,
+                package,
+                type_name: type_name.to_string(),
+                major,
+                minor,
+                patch,
+            }),
+        };
+    }
+
+    if let Some(name) = metadata.get("name").and_then(|n| n.as_str()) {
+        // Legacy reverse-DNS — strip any trailing @<semver> for canonical form.
+        return ResolvedSchemaIdentity {
+            canonical: strip_semver_suffix(name).to_string(),
+            segments: None,
+        };
+    }
+
+    panic!(
+        "schema {} must declare either `metadata.type` (new shape) or \
+         `metadata.name` (legacy reverse-DNS) — required for embedded-schemas lookup",
+        schema_path.display()
+    )
+}
+
+/// Build the `include_str!(...)` literal for a schema body. Schemas owned
+/// by the in-tree manifest go through `CARGO_MANIFEST_DIR` (relocatable);
+/// schemas pulled in from path dependencies use the absolute resolved path
+/// (the lockfile content-hash gate guarantees deterministic regen).
+fn include_path_literal(
+    manifest_dir: &std::path::Path,
+    schema_path: &std::path::Path,
+) -> String {
+    if let Ok(rel) = schema_path.strip_prefix(manifest_dir) {
+        format!(
+            "include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{}\"))",
+            rel.to_string_lossy()
+        )
+    } else {
+        format!("include_str!(\"{}\")", schema_path.to_string_lossy())
+    }
+}
+
+/// Strip a trailing `@MAJOR.MINOR.PATCH` semver suffix. Returns the input
+/// unchanged when there's no version suffix or when the trailing `@` opens
+/// a non-semver string (the leading `@` of `@org/...` identifiers does not
+/// open a version, so this strips the LAST `@` only when followed by
+/// dotted digits).
+fn strip_semver_suffix(name: &str) -> &str {
+    if let Some(at_pos) = name.rfind('@') {
+        let suffix = &name[at_pos + 1..];
+        if is_semver(suffix) {
+            return &name[..at_pos];
+        }
+    }
+    name
+}
+
+fn is_semver(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 #[cfg(target_os = "linux")]

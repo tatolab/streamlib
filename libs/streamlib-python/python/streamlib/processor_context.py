@@ -143,11 +143,22 @@ def load_native_lib(lib_path):
     lib.slpn_input_set_read_mode.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int32]
     lib.slpn_input_set_read_mode.restype = ctypes.c_int32
 
-    # Output
+    # Output. Schema identifier is passed as six structured args
+    # (org/package/type C-strings + 3 u32 versions) per #401 phase 2's
+    # structured-everywhere wire format.
     lib.slpn_output_publish.argtypes = [
-        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p,
-        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_size_t,
-        ctypes.c_char_p,  # notify_service_name (may be empty/null)
+        ctypes.c_void_p,    # ctx
+        ctypes.c_char_p,    # service_name
+        ctypes.c_char_p,    # port_name
+        ctypes.c_char_p,    # dest_port
+        ctypes.c_char_p,    # schema_org
+        ctypes.c_char_p,    # schema_package
+        ctypes.c_char_p,    # schema_type
+        ctypes.c_uint32,    # schema_version_major
+        ctypes.c_uint32,    # schema_version_minor
+        ctypes.c_uint32,    # schema_version_patch
+        ctypes.c_size_t,    # max_payload_bytes
+        ctypes.c_char_p,    # notify_service_name (may be empty/null)
     ]
     lib.slpn_output_publish.restype = ctypes.c_int32
     lib.slpn_output_write.argtypes = [

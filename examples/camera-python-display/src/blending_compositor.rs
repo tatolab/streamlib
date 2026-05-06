@@ -8,7 +8,7 @@
 //! display's refresh rate (60 Hz fallback). Each tick reads the latest
 //! frame from each input port (older queued frames are dropped by the
 //! port's `SkipToLatest` read mode), resolves the input frames'
-//! [`StreamTexture`]s via `GpuContext::resolve_videoframe_registration`
+//! [`StreamTexture`]s via `GpuContext::resolve_video_frame_registration`
 //! (Path 1 — same-process texture cache), picks the next slot in a
 //! ring of pre-allocated render-target output `StreamTexture`s,
 //! dispatches the compositor's graphics kernel into it, and emits the
@@ -40,7 +40,7 @@ use streamlib::core::{
     GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError,
 };
 use streamlib::iceoryx2::{InputMailboxes, OutputWriter};
-use streamlib::Videoframe;
+use streamlib::VideoFrame;
 
 // Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
 // the transitional rationale (this kernel previously lived in the
@@ -468,7 +468,7 @@ fn compose_one_frame(
     backend: &GpuBackend,
 ) -> Result<()> {
     // Resolve each upstream layer's texture + current layout via the
-    // engine's `resolve_videoframe_registration` (Path 1 same-process
+    // engine's `resolve_video_frame_registration` (Path 1 same-process
     // texture cache). When a port has no new frame this tick (the
     // producer's clock didn't align with ours), reuse the prior
     // tick's resolved layer — see [`LoopState`] for the rationale.
@@ -505,7 +505,7 @@ fn compose_one_frame(
     // declaration); on subsequent cycles it is SHADER_READ_ONLY_OPTIMAL
     // (left there by the prior render's post-barrier).
     let output_registration =
-        gpu_ctx.resolve_videoframe_registration(&slot_videoframe(
+        gpu_ctx.resolve_video_frame_registration(&slot_videoframe(
             &slot.surface_id,
             width,
             height,
@@ -552,7 +552,7 @@ fn compose_one_frame(
     // we registered it in the texture cache at setup time.
     let count = frame_count.fetch_add(1, Ordering::Relaxed);
     let timestamp_ns = (count as i64) * 16_666_667;
-    let output_frame = Videoframe {
+    let output_frame = VideoFrame {
         surface_id: slot.surface_id.clone(),
         width,
         height,
@@ -601,8 +601,8 @@ fn refresh_layer(
     if !inputs.has_data(port) {
         return Ok(());
     }
-    let frame: Videoframe = inputs.read(port)?;
-    let registration = gpu_ctx.resolve_videoframe_registration(&frame)?;
+    let frame: VideoFrame = inputs.read(port)?;
+    let registration = gpu_ctx.resolve_video_frame_registration(&frame)?;
     let texture = registration.texture().clone();
     *last = Some(ResolvedLayer {
         registration,
@@ -611,11 +611,11 @@ fn refresh_layer(
     Ok(())
 }
 
-/// Synthesize a Videoframe pointing at one of our output ring slots —
+/// Synthesize a VideoFrame pointing at one of our output ring slots —
 /// used to look up its registration for layout reads. The slot was
 /// registered at setup time, so Path 1 resolves it without IPC.
-fn slot_videoframe(surface_id: &str, width: u32, height: u32) -> Videoframe {
-    Videoframe {
+fn slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFrame {
+    VideoFrame {
         surface_id: surface_id.to_string(),
         width,
         height,

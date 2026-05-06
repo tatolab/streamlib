@@ -81,13 +81,13 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
             .ok_or_else(|| StreamError::Runtime("MoQ session not connected".into()))?
             .lock();
 
-        // Detect keyframe by checking the is_keyframe field in the serialized Encodedvideoframe.
+        // Detect keyframe by checking the is_keyframe field in the serialized EncodedVideoFrame.
         // The msgpack contains a boolean field "is_keyframe". Rather than scanning raw bytes
         // for NAL patterns (which produces false positives on msgpack envelope bytes),
         // deserialize just enough to check the keyframe flag.
         let is_keyframe = if self.track_name == "video" {
             // Quick check: try to deserialize and check is_keyframe field
-            rmp_serde::from_slice::<crate::_generated_::Encodedvideoframe>(&bytes)
+            rmp_serde::from_slice::<crate::_generated_::EncodedVideoFrame>(&bytes)
                 .map(|frame| frame.is_keyframe)
                 .unwrap_or(false)
         } else {

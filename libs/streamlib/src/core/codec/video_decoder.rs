@@ -8,7 +8,7 @@
 //! - Linux: not yet supported (coming in a future release via nvpro-vulkan-video)
 
 use super::VideoDecoderConfig;
-use crate::_generated_::Videoframe;
+use crate::_generated_::VideoFrame;
 use crate::core::{GpuContext, Result, RuntimeContext};
 
 /// Platform-agnostic video decoder.
@@ -49,7 +49,7 @@ impl VideoDecoder {
         nal_units_annex_b: &[u8],
         timestamp_ns: i64,
         gpu: &GpuContext,
-    ) -> Result<Option<Videoframe>> {
+    ) -> Result<Option<VideoFrame>> {
         self.inner.decode(nal_units_annex_b, timestamp_ns, gpu)
     }
 }
@@ -77,7 +77,7 @@ impl VideoDecoder {
         _nal_units_annex_b: &[u8],
         _timestamp_ns: i64,
         _gpu: &GpuContext,
-    ) -> Result<Option<Videoframe>> {
+    ) -> Result<Option<VideoFrame>> {
         Err(crate::core::StreamError::Configuration(
             "Video decoding not supported on this platform".into(),
         ))

@@ -1,11 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# JSON Type Definition (RFC 8927) schema for encoded audio frames
+# JSON Type Definition (RFC 8927) schema for encoded audio frames.
 
 metadata:
-  name: com.tatolab.encodedaudioframe
-  version: 1.0.0
+  type: EncodedAudioFrame
   description: "Encoded audio frame with Opus/AAC bitstream data"
   read_mode: skip_to_latest
   buffer_size: 8

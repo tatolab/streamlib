@@ -10,7 +10,7 @@ Demonstrates the canonical `execution: manual` worker-thread idiom:
 2. The worker uses :class:`streamlib.MonotonicTimer` for drift-free
    pacing (NOT ``time.sleep``).
 3. Each tick, the worker calls ``ctx.outputs.write(...)`` to publish a
-   ``Videoframe`` over iceoryx2 to the destination input port. The
+   ``VideoFrame`` over iceoryx2 to the destination input port. The
    counting-sink Rust plugin (``examples/polyglot-manual-source/plugin``)
    subscribes to that port and counts frames; the scenario binary reads
    the sink's stats file post-stop to verify frames flowed.
@@ -45,8 +45,8 @@ class PolyglotManualSource:
 
     Config keys:
         interval_ms (int, default 33): tick interval. 33ms ≈ 30fps.
-        width (int, default 32): width to claim on the published Videoframe.
-        height (int, default 32): height to claim on the published Videoframe.
+        width (int, default 32): width to claim on the published VideoFrame.
+        height (int, default 32): height to claim on the published VideoFrame.
         surface_id_prefix (str, default "polyglot-manual-source"): prefix
             for the synthetic surface_id field on each frame. Sinks that
             simply count don't need a real GPU surface; using a synthetic
@@ -109,13 +109,13 @@ class PolyglotManualSource:
                     self._publish_frame()
 
     def _publish_frame(self) -> None:
-        """Publish one Videoframe on the `frame_out` port from this worker
+        """Publish one VideoFrame on the `frame_out` port from this worker
         thread. Exercises the cdylib Mutex around the iceoryx2 publisher
         map (#604) — pre-fix, this raced with any other ``slpn_*`` call
         from the runner's main thread and was instant UB."""
         self._frame_count += 1
         ts_ns = streamlib.monotonic_now_ns()
-        # The Videoframe schema accepts a synthetic surface_id (it's a
+        # The VideoFrame schema accepts a synthetic surface_id (it's a
         # string used by the consumer to look up a GPU surface — a sink
         # that just counts doesn't need a real one).
         frame = {

@@ -11,15 +11,16 @@ use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::{FrameHeader, FRAME_HEADER_SIZE};
+use super::{FrameHeader, SchemaIdentWire, FRAME_HEADER_SIZE};
 use crate::core::error::{Result, StreamError};
 use crate::core::media_clock::MediaClock;
 
-/// One downstream connection: schema, destination port, publisher, and a
-/// notifier into the destination's paired iceoryx2 Event service that wakes
-/// the downstream processor's listener-fd-multiplexed runner loop.
+/// One downstream connection: structured schema identifier, destination
+/// port, publisher, and a notifier into the destination's paired iceoryx2
+/// Event service that wakes the downstream processor's listener-fd-
+/// multiplexed runner loop.
 struct DownstreamConnection {
-    schema: String,
+    schema_ident: SchemaIdentWire,
     dest_port: String,
     publisher: Publisher<ipc::Service, [u8], ()>,
     notifier: Notifier<ipc::Service>,
@@ -51,10 +52,16 @@ impl OutputWriter {
     ///
     /// Each call adds a new publisher+notifier+routing pair. Multiple connections per
     /// output port enables fan-out (one source port → multiple destinations).
+    ///
+    /// `schema_ident` is the structured wire identifier the publisher will
+    /// stamp into every [`FrameHeader`] for this connection. Callers
+    /// resolve it once at wiring time via
+    /// [`crate::core::embedded_schemas::schema_ident_wire_from_joined`]
+    /// and pass the result here — no parser runs on the per-frame hot path.
     pub fn add_connection(
         &self,
         output_port: &str,
-        schema: &str,
+        schema_ident: SchemaIdentWire,
         dest_port: &str,
         publisher: Publisher<ipc::Service, [u8], ()>,
         notifier: Notifier<ipc::Service>,
@@ -64,7 +71,7 @@ impl OutputWriter {
             .entry(output_port.to_string())
             .or_default()
             .push(DownstreamConnection {
-                schema: schema.to_string(),
+                schema_ident,
                 dest_port: dest_port.to_string(),
                 publisher,
                 notifier,
@@ -103,7 +110,7 @@ impl OutputWriter {
         for conn in port_connections {
             let total_len = FRAME_HEADER_SIZE + data.len();
             let mut frame = vec![0u8; total_len];
-            FrameHeader::new(&conn.dest_port, &conn.schema, timestamp_ns, data.len() as u32)
+            FrameHeader::new(&conn.dest_port, conn.schema_ident, timestamp_ns, data.len() as u32)
                 .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
             frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
 
@@ -146,7 +153,7 @@ impl OutputWriter {
         for conn in port_connections {
             let total_len = FRAME_HEADER_SIZE + data.len();
             let mut frame = vec![0u8; total_len];
-            FrameHeader::new(&conn.dest_port, &conn.schema, timestamp_ns, data.len() as u32)
+            FrameHeader::new(&conn.dest_port, conn.schema_ident, timestamp_ns, data.len() as u32)
                 .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
             frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
 
@@ -238,7 +245,9 @@ mod tests {
         let listener = notify.listener_builder().create().unwrap();
 
         let writer = OutputWriter::new();
-        writer.add_connection("out", "schema", "in", publisher, notifier);
+        let schema_ident =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+        writer.add_connection("out", schema_ident, "in", publisher, notifier);
 
         // Pre-flight: the listener has no events queued.
         let mut count: usize = 0;

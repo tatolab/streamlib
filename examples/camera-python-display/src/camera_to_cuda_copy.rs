@@ -22,7 +22,7 @@ use std::sync::Arc;
 use streamlib::core::{
     Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError,
 };
-use streamlib::Videoframe;
+use streamlib::VideoFrame;
 
 #[cfg(target_os = "linux")]
 use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
@@ -120,7 +120,7 @@ impl streamlib::core::ReactiveProcessor for CameraToCudaCopyProcessor::Processor
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }
-        let frame: Videoframe = self.inputs.read("video_in")?;
+        let frame: VideoFrame = self.inputs.read("video_in")?;
         self.process_frame_inner(&frame)?;
         // Forward the frame downstream verbatim — AvatarCharacter still
         // needs the camera surface_id for its ModernGL background
@@ -247,7 +247,7 @@ impl CameraToCudaCopyProcessor::Processor {
     }
 
     #[cfg(target_os = "linux")]
-    fn process_frame_inner(&mut self, frame: &Videoframe) -> Result<()> {
+    fn process_frame_inner(&mut self, frame: &VideoFrame) -> Result<()> {
         let backend = self.backend.as_ref().ok_or_else(|| {
             StreamError::Configuration("CameraToCudaCopy: backend not initialized".into())
         })?;
@@ -256,9 +256,9 @@ impl CameraToCudaCopyProcessor::Processor {
         // produces RGBA8 ring textures registered under fresh UUIDs
         // and rotates through them; `frame.surface_id` carries the
         // current ring slot's UUID.
-        let texture = backend.gpu_ctx.resolve_videoframe_texture(frame).map_err(|e| {
+        let texture = backend.gpu_ctx.resolve_video_frame_texture(frame).map_err(|e| {
             StreamError::Configuration(format!(
-                "CameraToCudaCopy: resolve_videoframe_texture('{}'): {e}",
+                "CameraToCudaCopy: resolve_video_frame_texture('{}'): {e}",
                 frame.surface_id
             ))
         })?;
@@ -313,7 +313,7 @@ impl CameraToCudaCopyProcessor::Processor {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn process_frame_inner(&mut self, _frame: &Videoframe) -> Result<()> {
+    fn process_frame_inner(&mut self, _frame: &VideoFrame) -> Result<()> {
         Err(StreamError::Configuration(
             "CameraToCudaCopy: only supported on Linux".into(),
         ))

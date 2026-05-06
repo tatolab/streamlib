@@ -8,7 +8,7 @@ runtime (#656). The host pre-allocates a render-target-capable
 DMA-BUF surface AND an exportable `VulkanTimelineSemaphore`,
 registers both with surface-share, and installs a
 ``GraphicsKernelBridge`` wired to its ``VulkanGraphicsKernel``. This
-processor receives a trigger Videoframe, opens the host surface
+processor receives a trigger VideoFrame, opens the host surface
 through ``VulkanContext.acquire_write``, and calls
 ``VulkanContext.dispatch_graphics`` — which routes through escalate
 IPC's ``register_graphics_kernel`` + ``run_graphics_draw`` ops to

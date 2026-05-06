@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::utils::ProcessorAudioConverterTargetFormat;
 use crate::core::{Result, RuntimeContextFullAccess, StreamError};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -70,7 +70,7 @@ pub struct LinuxAudioOutputProcessor {
     buffer_size: usize,
     // Ring buffer for passing frames from input thread to audio callback
     // Producer is wrapped in Arc<Mutex> so it can be shared with the polling thread
-    frame_producer: Arc<Mutex<Option<Producer<Audioframe>>>>,
+    frame_producer: Arc<Mutex<Option<Producer<AudioFrame>>>>,
     // Polling thread state
     polling_thread: Option<thread::JoinHandle<()>>,
     stop_polling: Arc<AtomicBool>,
@@ -165,7 +165,7 @@ impl crate::core::ManualProcessor for LinuxAudioOutputProcessor::Processor {
 
         // Create ring buffer for passing frames from polling thread to audio callback
         // Size of 256 frames provides ~5s of buffer at 48kHz with 1024-sample frames
-        let (producer, consumer) = RingBuffer::<Audioframe>::new(256);
+        let (producer, consumer) = RingBuffer::<AudioFrame>::new(256);
 
         let consumer = Arc::new(Mutex::new(consumer));
         let consumer_for_callback = Arc::clone(&consumer);
@@ -260,7 +260,7 @@ impl crate::core::ManualProcessor for LinuxAudioOutputProcessor::Processor {
                 let inputs = unsafe { inputs_ptr.get() };
 
                 if inputs.has_data("audio") {
-                    if let Ok(frame) = inputs.read::<Audioframe>("audio") {
+                    if let Ok(frame) = inputs.read::<AudioFrame>("audio") {
                         // SAFETY: Exclusive mutable access, thread joins before self drops
                         let audio = unsafe { audio_ptr.get_mut() };
 

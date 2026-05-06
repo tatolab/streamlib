@@ -7,7 +7,7 @@
 // (EncodedAudioFrame), RTP-packetizes them, and sends via WebRTC WHIP.
 // Encoding is handled by upstream H264EncoderProcessor / OpusEncoderProcessor.
 
-use crate::_generated_::{Encodedaudioframe, Encodedvideoframe};
+use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use crate::core::streaming::{convert_audio_to_sample, convert_video_to_samples};
 use crate::core::streaming::{WhipClient, WhipConfig};
 use crate::core::{media_clock::MediaClock, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
@@ -81,13 +81,13 @@ impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
 
     fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         // Read pre-encoded video and audio
-        let encoded_video: Option<Encodedvideoframe> = if self.inputs.has_data("encoded_video_in") {
+        let encoded_video: Option<EncodedVideoFrame> = if self.inputs.has_data("encoded_video_in") {
             self.inputs.read("encoded_video_in").ok()
         } else {
             None
         };
 
-        let encoded_audio: Option<Encodedaudioframe> = if self.inputs.has_data("encoded_audio_in") {
+        let encoded_audio: Option<EncodedAudioFrame> = if self.inputs.has_data("encoded_audio_in") {
             self.inputs.read("encoded_audio_in").ok()
         } else {
             None
@@ -178,7 +178,7 @@ impl WebRtcWhipProcessor::Processor {
     }
 
     /// Send pre-encoded video frame via WebRTC.
-    fn send_encoded_video(&mut self, encoded: &Encodedvideoframe) -> Result<()> {
+    fn send_encoded_video(&mut self, encoded: &EncodedVideoFrame) -> Result<()> {
         if !self.session_started || encoded.data.is_empty() {
             return Ok(());
         }
@@ -207,7 +207,7 @@ impl WebRtcWhipProcessor::Processor {
     }
 
     /// Send pre-encoded audio frame via WebRTC.
-    fn send_encoded_audio(&mut self, encoded: &Encodedaudioframe) -> Result<()> {
+    fn send_encoded_audio(&mut self, encoded: &EncodedAudioFrame) -> Result<()> {
         if !self.session_started {
             return Ok(());
         }

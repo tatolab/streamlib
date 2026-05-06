@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::context::AudioTickContext;
 use crate::core::{Result, RuntimeContextFullAccess};
 use parking_lot::Mutex;
@@ -147,7 +147,7 @@ impl crate::core::ManualProcessor for ChordGeneratorProcessor::Processor {
 
                 let counter = frame_counter.fetch_add(1, Ordering::SeqCst);
 
-                let chord_frame = Audioframe {
+                let chord_frame = AudioFrame {
                     samples: stereo_samples,
                     channels: 2,
                     sample_rate,

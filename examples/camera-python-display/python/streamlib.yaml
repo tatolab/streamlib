@@ -12,10 +12,10 @@ processors:
     entrypoint: "avatar_character:AvatarCharacter"
     inputs:
       - name: video_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
     outputs:
       - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
 
   - name: com.tatolab.cyberpunk_lower_third
     version: "1.0.0"
@@ -27,7 +27,7 @@ processors:
     entrypoint: "cyberpunk_lower_third:CyberpunkLowerThird"
     outputs:
       - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
 
   - name: com.tatolab.cyberpunk_watermark
     version: "1.0.0"
@@ -39,7 +39,7 @@ processors:
     entrypoint: "cyberpunk_watermark:CyberpunkWatermark"
     outputs:
       - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
 
   - name: com.tatolab.cyberpunk_glitch
     version: "1.0.0"
@@ -49,7 +49,7 @@ processors:
     entrypoint: "cyberpunk_glitch:CyberpunkGlitch"
     inputs:
       - name: video_in
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'
     outputs:
       - name: video_out
-        schema: com.tatolab.videoframe@1.0.0
+        schema: '@tatolab/core/VideoFrame@1.0.0'

@@ -94,6 +94,31 @@ def _load_processor_class(entrypoint: str, project_path: str):
     return getattr(module, class_name)
 
 
+def _schema_ident_segments(schema_ident):
+    """Extract the six structured segments from a schema-ident JSON object.
+
+    `schema_ident` is the structured `{org, package, type, version: {major,
+    minor, patch}}` record emitted by the Rust host's compiler IPC envelope
+    (#401 phase 2), or `None` for legacy reverse-DNS / unknown identifiers.
+
+    Returns a `(org, package, type, major, minor, patch)` 6-tuple. Empty
+    strings + zero versions when the schema is `None` or malformed — the
+    cdylib accepts that as "no schema declared", same as the pre-#401
+    behaviour for legacy schemas. No parser runs anywhere on this path:
+    each segment is read from its own typed field.
+    """
+    if not isinstance(schema_ident, dict):
+        return ("", "", "", 0, 0, 0)
+    org = schema_ident.get("org") or ""
+    package = schema_ident.get("package") or ""
+    type_name = schema_ident.get("type") or ""
+    version = schema_ident.get("version") or {}
+    major = version.get("major") or 0
+    minor = version.get("minor") or 0
+    patch = version.get("patch") or 0
+    return (org, package, type_name, int(major), int(minor), int(patch))
+
+
 def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=None):
     """Set up native FFI state with iceoryx2 subscriptions and publishers."""
     config = msg.get("config")
@@ -150,12 +175,21 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
                 service=notify_service_name,
             )
 
-    # Create publishers for output iceoryx2 services
+    # Create publishers for output iceoryx2 services.
+    #
+    # Wire shape (#401 phase 2): the per-output `schema` field is structured —
+    # `{ org, package, type, version: {major, minor, patch} }` — or `null` for
+    # legacy reverse-DNS / unknown identifiers. The structured form arrives
+    # from the host's compiler IPC envelope and is passed to the cdylib FFI
+    # as six separate args (3 segment C-strings + 3 u32 versions). No parser
+    # ever runs on the way to the wire bytes.
     for out in ports.get("outputs", []):
         port_name = out["name"]
         dest_port = out["dest_port"]
         dest_service = out["dest_service_name"]
-        schema_name = out.get("schema_name", "")
+        schema_org, schema_pkg, schema_type, ver_major, ver_minor, ver_patch = (
+            _schema_ident_segments(out.get("schema"))
+        )
         dest_notify_service = out.get("dest_notify_service_name", "")
         log.info(
             "Publishing to output",
@@ -169,7 +203,12 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             dest_service.encode("utf-8"),
             port_name.encode("utf-8"),
             dest_port.encode("utf-8"),
-            schema_name.encode("utf-8"),
+            schema_org.encode("utf-8"),
+            schema_pkg.encode("utf-8"),
+            schema_type.encode("utf-8"),
+            ver_major,
+            ver_minor,
+            ver_patch,
             out.get("max_payload_bytes", 65536),
             dest_notify_service.encode("utf-8"),
         )

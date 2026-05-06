@@ -7,7 +7,7 @@ End-to-end gate for the CUDA subprocess runtime (#591). The host
 pre-allocates one HOST_VISIBLE OPAQUE_FD-exportable ``VkBuffer`` and
 one exportable timeline semaphore, registers the pair via
 surface-share so the subprocess can ``check_out`` both FDs in one
-shot. This processor receives a trigger Videoframe, opens the host
+shot. This processor receives a trigger VideoFrame, opens the host
 surface through ``CudaContext.acquire_write`` to upload a real test
 image, then through ``CudaContext.acquire_read`` to run YOLOv8n via
 ``torch.from_dlpack`` zero-copy on the imported CUDA memory, and

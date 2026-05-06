@@ -6,7 +6,7 @@
 // Thin wrapper around vulkan_video::SimpleDecoder using the shared RHI
 // HostVulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
 
-use crate::_generated_::{Encodedvideoframe, Videoframe};
+use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::rhi::PixelFormat;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
@@ -102,7 +102,7 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
         if !self.inputs.has_data("encoded_video_in") {
             return Ok(());
         }
-        let encoded: Encodedvideoframe = self.inputs.read("encoded_video_in")?;
+        let encoded: EncodedVideoFrame = self.inputs.read("encoded_video_in")?;
 
         let gpu_ctx = self
             .gpu_context
@@ -150,7 +150,7 @@ impl crate::core::ReactiveProcessor for H264DecoderProcessor::Processor {
             // Carry the encoder's input-frame index (`frame_number`) through to the
             // decoded output so downstream consumers (PSNR rig, display PNG sampler)
             // can pair each decoded frame with the reference input.
-            let video_frame = Videoframe {
+            let video_frame = VideoFrame {
                 surface_id,
                 width,
                 height,

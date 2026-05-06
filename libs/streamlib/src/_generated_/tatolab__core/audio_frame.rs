@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Audio frame with interleaved samples (1-8 channels)
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Audioframe {
+pub struct AudioFrame {
     /// Number of audio channels (1-8)
     #[serde(rename = "channels")]
     pub channels: u8,

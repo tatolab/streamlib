@@ -212,8 +212,11 @@ prost-build = "0.13"
 # Build script reads `streamlib.yaml` to generate the embedded-schemas
 # lookup table (#402). Replaces the hand-curated match in
 # `src/core/embedded_schemas.rs` with a build-time-generated table.
+# streamlib-idents resolves the package's `dependencies:` block at build
+# time so build.rs picks up wire-type schemas from @tatolab/core (#401).
 [build-dependencies]
 serde_yaml = { workspace = true }
+streamlib-idents = { path = "../streamlib-idents" }
 
 [package.metadata.docs.rs]
 # Generate docs for all platforms and features

@@ -3,7 +3,7 @@
 
 //! Counting sink for the polyglot-manual-source example (#604).
 //!
-//! Subscribes to a `Videoframe` input port via iceoryx2, counts every
+//! Subscribes to a `VideoFrame` input port via iceoryx2, counts every
 //! frame received in `process()`, and writes a JSON stats file on
 //! `teardown()`. The scenario binary reads the stats file post-stop to
 //! verify the polyglot manual source actually published frames over
@@ -19,7 +19,7 @@
 #![cfg(target_os = "linux")]
 
 use std::path::PathBuf;
-use streamlib::_generated_::Videoframe;
+use streamlib::_generated_::VideoFrame;
 use streamlib::core::{
     Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError,
 };
@@ -57,7 +57,7 @@ impl streamlib::core::ReactiveProcessor for PolyglotManualSourceCountingSink::Pr
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }
-        let frame: Videoframe = self.inputs.read("video_in")?;
+        let frame: VideoFrame = self.inputs.read("video_in")?;
         let ts: u64 = frame.timestamp_ns.parse().unwrap_or(0);
         if self.frame_counter == 0 {
             self.first_ns = ts;

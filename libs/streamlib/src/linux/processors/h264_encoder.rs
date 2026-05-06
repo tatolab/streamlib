@@ -10,7 +10,7 @@
 // The camera's GPU-resident textures are on the same device, so encode_image()
 // accepts them directly (zero-copy).
 
-use crate::_generated_::{Encodedvideoframe, Videoframe};
+use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 
@@ -25,7 +25,7 @@ pub struct H264EncoderProcessor {
     /// Vulkan Video hardware encoder (shares RHI device).
     encoder: Option<SimpleEncoder>,
 
-    /// GPU context for resolving Videoframe textures.
+    /// GPU context for resolving VideoFrame textures.
     gpu_context: Option<GpuContextLimitedAccess>,
 
     /// Frames encoded counter.
@@ -119,7 +119,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
         if !self.inputs.has_data("video_in") {
             return Ok(());
         }
-        let frame: Videoframe = self.inputs.read("video_in")?;
+        let frame: VideoFrame = self.inputs.read("video_in")?;
 
         let gpu_ctx = self
             .gpu_context
@@ -131,7 +131,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
             .as_mut()
             .ok_or_else(|| StreamError::Runtime("H.264 encoder not initialized".into()))?;
 
-        let texture = gpu_ctx.resolve_videoframe_texture(&frame)?;
+        let texture = gpu_ctx.resolve_video_frame_texture(&frame)?;
         let image_view = texture.inner.image_view().map_err(|e| {
             StreamError::GpuError(format!("Failed to get image view: {e}"))
         })?;
@@ -144,7 +144,7 @@ impl crate::core::ReactiveProcessor for H264EncoderProcessor::Processor {
         })?;
 
         for packet in packets {
-            let encoded = Encodedvideoframe {
+            let encoded = EncodedVideoFrame {
                 data: packet.data,
                 fps: frame_fps,
                 is_keyframe: packet.is_keyframe,

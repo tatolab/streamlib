@@ -16,7 +16,7 @@
 //!   python tests/iceoryx2-cross-language/python/echo_test.py
 
 use iceoryx2::prelude::*;
-use streamlib::iceoryx2::{FramePayload, PortKey, SchemaName};
+use streamlib::iceoryx2::{FramePayload, PortKey, SchemaIdentWire};
 
 fn main() {
     println!("=== iceoryx2 Cross-Language Validation Test (Rust) ===");
@@ -24,13 +24,13 @@ fn main() {
 
     // Print struct sizes for comparison with Python
     println!("Struct sizes:");
-    println!("  PortKey:      {} bytes", std::mem::size_of::<PortKey>());
+    println!("  PortKey:         {} bytes", std::mem::size_of::<PortKey>());
     println!(
-        "  SchemaName:   {} bytes",
-        std::mem::size_of::<SchemaName>()
+        "  SchemaIdentWire: {} bytes",
+        std::mem::size_of::<SchemaIdentWire>()
     );
     println!(
-        "  FramePayload: {} bytes",
+        "  FramePayload:    {} bytes",
         std::mem::size_of::<FramePayload>()
     );
     println!();
@@ -70,11 +70,18 @@ fn main() {
     let test_data = rmp_serde::to_vec_named(&serde_json::json!({"hello": "world", "count": 42}))
         .expect("Failed to serialize test data");
 
-    let payload = FramePayload::new("test_port", "test_schema", 12345, &test_data);
+    // Wire-format-stable structured ident — every cross-language run uses
+    // the same `(org, package, type, version)` so the Python echo can
+    // round-trip the bytes verbatim. The struct is `Copy`, so we keep one
+    // canonical instance and reuse it.
+    let test_schema_ident =
+        SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
+            .expect("test schema ident segments fit the wire format");
+    let payload = FramePayload::new("test_port", test_schema_ident, 12345, &test_data);
 
     println!("Publishing test payload:");
     println!("  port_key:     '{}'", payload.port());
-    println!("  schema_name:  '{}'", payload.schema());
+    println!("  schema_ident: '{}'", payload.schema().render_joined());
     println!("  timestamp_ns: {}", payload.timestamp_ns);
     println!("  data_len:     {} bytes", payload.len);
     println!();
@@ -104,7 +111,7 @@ fn main() {
                 let echo = sample.payload();
                 println!("Received echo from Python:");
                 println!("  port_key:     '{}'", echo.port());
-                println!("  schema_name:  '{}'", echo.schema());
+                println!("  schema_ident: '{}'", echo.schema().render_joined());
                 println!("  timestamp_ns: {}", echo.timestamp_ns);
                 println!("  data_len:     {} bytes", echo.len);
                 println!();
@@ -119,10 +126,13 @@ fn main() {
                     );
                     passed = false;
                 }
-                if echo.schema() != "test_schema" {
+                // Byte-identical check on the structured 128-byte schema_ident
+                // block — this is the cross-language ABI lock.
+                if echo.schema() != &test_schema_ident {
                     println!(
-                        "FAIL: schema_name mismatch: expected 'test_schema', got '{}'",
-                        echo.schema()
+                        "FAIL: schema_ident mismatch: expected '{}', got '{}'",
+                        test_schema_ident.render_joined(),
+                        echo.schema().render_joined()
                     );
                     passed = false;
                 }

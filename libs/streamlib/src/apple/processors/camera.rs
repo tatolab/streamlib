@@ -243,7 +243,7 @@ define_class!(
             // Create IPC frame with surface_id as string
             // The receiving process will use check_out_surface() or IOSurfaceLookup(id) to access the surface
             let capture_fps = ctx.capture_fps.load(Ordering::Acquire);
-            let ipc_frame = crate::_generated_::Videoframe {
+            let ipc_frame = crate::_generated_::VideoFrame {
                 surface_id: surface_id_str,
                 width,
                 height,
@@ -562,7 +562,7 @@ impl AppleCameraProcessor::Processor {
                 let _: () = msg_send![&device, setActiveVideoMaxFrameDuration: max_duration];
             }
 
-            // Store negotiated fps in callback context for Videoframe metadata.
+            // Store negotiated fps in callback context for VideoFrame metadata.
             if let Some(ctx) = CAMERA_CALLBACK_CONTEXT.get() {
                 ctx.capture_fps.store(max_fps as u32, Ordering::Release);
             }

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Videoframe;
+use crate::_generated_::VideoFrame;
 use crate::core::context::TextureRegistration;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
@@ -390,7 +390,7 @@ pub struct GpuContext {
     /// (e.g. last-known Vulkan image layout). Mirrors the per-surface
     /// state pattern used by `streamlib-adapter-vulkan::SurfaceState`,
     /// lifted to engine-wide scope so consumers reaching textures via
-    /// `resolve_videoframe_registration` get the same lifecycle metadata
+    /// `resolve_video_frame_registration` get the same lifecycle metadata
     /// adapter consumers do.
     texture_cache: Arc<Mutex<HashMap<String, Arc<TextureRegistration>>>>,
     /// Cache of textures backing surface-share-registered pixel buffers
@@ -612,8 +612,8 @@ impl GpuContext {
         Ok(buffer)
     }
 
-    /// Resolve a Videoframe's buffer from its surface_id.
-    pub fn resolve_videoframe_buffer(&self, frame: &Videoframe) -> Result<RhiPixelBuffer> {
+    /// Resolve a VideoFrame's buffer from its surface_id.
+    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<RhiPixelBuffer> {
         let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
         self.get_pixel_buffer(&pool_id)
     }
@@ -625,7 +625,7 @@ impl GpuContext {
     /// post-allocation layout (e.g. camera ring textures left in
     /// `SHADER_READ_ONLY_OPTIMAL` after compute) should use
     /// [`Self::register_texture_with_layout`] instead so consumers
-    /// reaching the texture via [`Self::resolve_videoframe_registration`]
+    /// reaching the texture via [`Self::resolve_video_frame_registration`]
     /// can issue correct layout transitions.
     pub fn register_texture(&self, id: &str, texture: StreamTexture) {
         #[cfg(target_os = "linux")]
@@ -657,9 +657,9 @@ impl GpuContext {
         cache.insert(id.to_string(), registration);
     }
 
-    /// Resolve a Videoframe's full registration record (texture + layout).
+    /// Resolve a VideoFrame's full registration record (texture + layout).
     ///
-    /// Same lookup path as [`Self::resolve_videoframe_texture`] but
+    /// Same lookup path as [`Self::resolve_video_frame_texture`] but
     /// returns the registration so consumers can read `current_layout`
     /// for barrier-source correctness.
     ///
@@ -674,9 +674,9 @@ impl GpuContext {
     /// owned texture in `SHADER_READ_ONLY_OPTIMAL` after the upload
     /// pipeline runs (`upload_buffer_to_image` ends in that layout —
     /// see `vulkan_device.rs`); the registration declares it.
-    pub fn resolve_videoframe_registration(
+    pub fn resolve_video_frame_registration(
         &self,
-        frame: &Videoframe,
+        frame: &VideoFrame,
     ) -> Result<Arc<TextureRegistration>> {
         // Path 1: same-process texture cache (fastest)
         {
@@ -693,7 +693,7 @@ impl GpuContext {
         // QFOT acquire step (#633): the consumer-side VkImage was just
         // created with `initialLayout = UNDEFINED`. The producer's
         // post-release `VkImageLayout` is sourced from (priority order):
-        //   1. `Videoframe.texture_layout` — per-frame override for
+        //   1. `VideoFrame.texture_layout` — per-frame override for
         //      producers that vary layout per frame.
         //   2. The surface-share IPC's per-surface `current_image_layout`
         //      — published at registration via `register_texture` and
@@ -771,15 +771,15 @@ impl GpuContext {
         )))
     }
 
-    /// Resolve a Videoframe's texture — unified entry point for consumers
+    /// Resolve a VideoFrame's texture — unified entry point for consumers
     /// that don't need layout metadata.
     ///
-    /// Thin projection over [`Self::resolve_videoframe_registration`].
+    /// Thin projection over [`Self::resolve_video_frame_registration`].
     /// Layout-aware consumers (display, future encoders) should call
-    /// `resolve_videoframe_registration` directly so they can issue
+    /// `resolve_video_frame_registration` directly so they can issue
     /// correct barriers.
-    pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
-        Ok(self.resolve_videoframe_registration(frame)?.texture().clone())
+    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<StreamTexture> {
+        Ok(self.resolve_video_frame_registration(frame)?.texture().clone())
     }
 
     /// Acquire a new output texture with a UUID, register it in the cache.
@@ -1733,9 +1733,9 @@ impl GpuContextLimitedAccess {
         self.inner.get_pixel_buffer(pool_id)
     }
 
-    /// Resolve a [`Videoframe`]'s buffer from its surface_id.
-    pub fn resolve_videoframe_buffer(&self, frame: &Videoframe) -> Result<RhiPixelBuffer> {
-        self.inner.resolve_videoframe_buffer(frame)
+    /// Resolve a [`VideoFrame`]'s buffer from its surface_id.
+    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<RhiPixelBuffer> {
+        self.inner.resolve_video_frame_buffer(frame)
     }
 
     /// Register a texture in the same-process texture cache.
@@ -1756,17 +1756,17 @@ impl GpuContextLimitedAccess {
             .register_texture_with_layout(id, texture, initial_layout);
     }
 
-    /// Resolve a [`Videoframe`]'s full registration record (texture + layout).
-    pub fn resolve_videoframe_registration(
+    /// Resolve a [`VideoFrame`]'s full registration record (texture + layout).
+    pub fn resolve_video_frame_registration(
         &self,
-        frame: &Videoframe,
+        frame: &VideoFrame,
     ) -> Result<Arc<TextureRegistration>> {
-        self.inner.resolve_videoframe_registration(frame)
+        self.inner.resolve_video_frame_registration(frame)
     }
 
-    /// Resolve a [`Videoframe`]'s texture (Split: cache hit).
-    pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
-        self.inner.resolve_videoframe_texture(frame)
+    /// Resolve a [`VideoFrame`]'s texture (Split: cache hit).
+    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<StreamTexture> {
+        self.inner.resolve_video_frame_texture(frame)
     }
 
     /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
@@ -1876,9 +1876,9 @@ impl GpuContextFullAccess {
         self.inner.get_pixel_buffer(pool_id)
     }
 
-    /// Resolve a [`Videoframe`]'s buffer from its surface_id.
-    pub fn resolve_videoframe_buffer(&self, frame: &Videoframe) -> Result<RhiPixelBuffer> {
-        self.inner.resolve_videoframe_buffer(frame)
+    /// Resolve a [`VideoFrame`]'s buffer from its surface_id.
+    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<RhiPixelBuffer> {
+        self.inner.resolve_video_frame_buffer(frame)
     }
 
     /// Register a texture in the same-process texture cache.
@@ -1899,17 +1899,17 @@ impl GpuContextFullAccess {
             .register_texture_with_layout(id, texture, initial_layout);
     }
 
-    /// Resolve a [`Videoframe`]'s full registration record (texture + layout).
-    pub fn resolve_videoframe_registration(
+    /// Resolve a [`VideoFrame`]'s full registration record (texture + layout).
+    pub fn resolve_video_frame_registration(
         &self,
-        frame: &Videoframe,
+        frame: &VideoFrame,
     ) -> Result<Arc<TextureRegistration>> {
-        self.inner.resolve_videoframe_registration(frame)
+        self.inner.resolve_video_frame_registration(frame)
     }
 
-    /// Resolve a [`Videoframe`]'s texture.
-    pub fn resolve_videoframe_texture(&self, frame: &Videoframe) -> Result<StreamTexture> {
-        self.inner.resolve_videoframe_texture(frame)
+    /// Resolve a [`VideoFrame`]'s texture.
+    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<StreamTexture> {
+        self.inner.resolve_video_frame_texture(frame)
     }
 
     /// Acquire a new output texture with a UUID and register it in the cache.
@@ -2151,8 +2151,8 @@ mod tests {
 
         gpu.register_texture(surface_id, texture.clone());
 
-        // Resolve via Videoframe
-        let frame = crate::_generated_::Videoframe {
+        // Resolve via VideoFrame
+        let frame = crate::_generated_::VideoFrame {
             surface_id: surface_id.to_string(),
             width: 640,
             height: 480,
@@ -2162,7 +2162,7 @@ mod tests {
             texture_layout: None,
         };
 
-        let resolved = gpu.resolve_videoframe_texture(&frame).expect("texture cache miss");
+        let resolved = gpu.resolve_video_frame_texture(&frame).expect("texture cache miss");
         assert_eq!(resolved.width(), 640);
         assert_eq!(resolved.height(), 480);
 
@@ -2194,7 +2194,7 @@ mod tests {
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         );
 
-        let frame = crate::_generated_::Videoframe {
+        let frame = crate::_generated_::VideoFrame {
             surface_id: surface_id.to_string(),
             width: 640,
             height: 480,
@@ -2205,7 +2205,7 @@ mod tests {
         };
 
         let registration = gpu
-            .resolve_videoframe_registration(&frame)
+            .resolve_video_frame_registration(&frame)
             .expect("registration cache miss");
         assert_eq!(
             registration.current_layout(),
@@ -2216,7 +2216,7 @@ mod tests {
         // Update flow — consumer barriers transition + advance layout.
         registration.update_layout(VulkanLayout::TRANSFER_SRC_OPTIMAL);
         let registration2 = gpu
-            .resolve_videoframe_registration(&frame)
+            .resolve_video_frame_registration(&frame)
             .expect("second resolve");
         assert_eq!(
             registration2.current_layout(),
@@ -2230,12 +2230,12 @@ mod tests {
             .create_texture(&desc)
             .expect("second texture creation failed");
         gpu.register_texture("test-surface-default-layout", texture2);
-        let frame2 = crate::_generated_::Videoframe {
+        let frame2 = crate::_generated_::VideoFrame {
             surface_id: "test-surface-default-layout".to_string(),
             ..frame
         };
         let registration3 = gpu
-            .resolve_videoframe_registration(&frame2)
+            .resolve_video_frame_registration(&frame2)
             .expect("default-layout resolve");
         assert_eq!(
             registration3.current_layout(),
@@ -2243,10 +2243,10 @@ mod tests {
             "register_texture without explicit layout defaults to UNDEFINED"
         );
 
-        println!("register_texture_with_layout + resolve_videoframe_registration: OK");
+        println!("register_texture_with_layout + resolve_video_frame_registration: OK");
     }
 
-    /// Issue #633 — `Videoframe.texture_layout` is an optional i32
+    /// Issue #633 — `VideoFrame.texture_layout` is an optional i32
     /// field that producers may set to override the per-surface
     /// `current_image_layout` from surface-share IPC. Lock the
     /// serialization shape: present when set, absent when None
@@ -2257,7 +2257,7 @@ mod tests {
     /// case starts emitting `"texture_layout":null`.
     #[test]
     fn videoframe_texture_layout_serialization_round_trip() {
-        let with_layout = crate::_generated_::Videoframe {
+        let with_layout = crate::_generated_::VideoFrame {
             surface_id: "s".to_string(),
             width: 8,
             height: 8,
@@ -2274,7 +2274,7 @@ mod tests {
             "set texture_layout must round-trip"
         );
 
-        let absent = crate::_generated_::Videoframe {
+        let absent = crate::_generated_::VideoFrame {
             surface_id: "s".to_string(),
             width: 8,
             height: 8,
@@ -2292,10 +2292,10 @@ mod tests {
         // Round-trip through a JSON string: deserialize must recover
         // the field both directions (set → Some, absent → None).
         let serialized = serde_json::to_string(&with_layout).unwrap();
-        let parsed: crate::_generated_::Videoframe = serde_json::from_str(&serialized).unwrap();
+        let parsed: crate::_generated_::VideoFrame = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed.texture_layout, Some(5));
         let serialized_absent = serde_json::to_string(&absent).unwrap();
-        let parsed_absent: crate::_generated_::Videoframe =
+        let parsed_absent: crate::_generated_::VideoFrame =
             serde_json::from_str(&serialized_absent).unwrap();
         assert_eq!(parsed_absent.texture_layout, None);
     }
@@ -2311,7 +2311,7 @@ mod tests {
         };
 
         // Cache miss returns error (no texture registered, no surface-share service)
-        let frame = crate::_generated_::Videoframe {
+        let frame = crate::_generated_::VideoFrame {
             surface_id: "nonexistent-surface".to_string(),
             width: 640,
             height: 480,
@@ -2320,7 +2320,7 @@ mod tests {
             fps: None,
             texture_layout: None,
         };
-        assert!(gpu.resolve_videoframe_texture(&frame).is_err());
+        assert!(gpu.resolve_video_frame_texture(&frame).is_err());
 
         // Timeline semaphore sharing via Clone
         assert_eq!(gpu.camera_timeline_semaphore(), 0);

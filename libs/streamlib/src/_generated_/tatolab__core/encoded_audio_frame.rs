@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Encoded audio frame with Opus/AAC bitstream data
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Encodedaudioframe {
+pub struct EncodedAudioFrame {
     /// Encoded audio bitstream data (Opus/AAC)
     #[serde(rename = "data")]
     pub data: Vec<u8>,

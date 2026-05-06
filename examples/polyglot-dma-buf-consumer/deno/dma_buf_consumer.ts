@@ -31,7 +31,7 @@ import type {
   RuntimeContextFullAccess,
   RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import type { Videoframe } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
+import type { VideoFrame } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
 
 const BOGUS_SURFACE_ID = "00000000-0000-0000-0000-000000000000";
 
@@ -55,7 +55,7 @@ export default class DmaBufConsumer implements ReactiveProcessor {
   }
 
   process(ctx: RuntimeContextLimitedAccess): void {
-    const result = ctx.inputs.read<Videoframe>("video_in");
+    const result = ctx.inputs.read<VideoFrame>("video_in");
     if (!result) return;
     const { value: frame, timestampNs } = result;
 

@@ -8,7 +8,7 @@
 /**
  * Video frame for IPC - references GPU surface by ID
  */
-export interface Videoframe {
+export interface VideoFrame {
   /**
    * Sequential frame counter (uint64 as string - parse to native uint64)
    */

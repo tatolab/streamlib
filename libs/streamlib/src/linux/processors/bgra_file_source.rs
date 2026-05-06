@@ -4,10 +4,10 @@
 // BGRA File Source Processor
 //
 // Reads a raw BGRA file frame-by-frame and publishes each frame as a
-// Videoframe through the processor graph. Used for testing encode/decode
+// VideoFrame through the processor graph. Used for testing encode/decode
 // pipelines with pre-generated fixture files.
 
-use crate::_generated_::Videoframe;
+use crate::_generated_::VideoFrame;
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::rhi::PixelFormat;
 use crate::core::{Result, RuntimeContextFullAccess, StreamError};
@@ -160,7 +160,7 @@ fn source_thread_loop(
         }
 
         // Upload the pixel buffer as a GPU texture so downstream encoder
-        // processors (which read via `resolve_videoframe_texture`) can
+        // processors (which read via `resolve_video_frame_texture`) can
         // consume the frame. `upload_pixel_buffer_as_texture` allocates a
         // new DEVICE_LOCAL texture so it's FullAccess-only and must be
         // escalated.
@@ -178,7 +178,7 @@ fn source_thread_loop(
         let timestamp_ns =
             clock_start.elapsed().as_nanos() as i64 + frame_idx as i64 * frame_interval_ns;
 
-        let video_frame = Videoframe {
+        let video_frame = VideoFrame {
             surface_id,
             width,
             height,

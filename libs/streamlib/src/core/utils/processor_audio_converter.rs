@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::core::utils::audio_utils::{convert_channels, AudioRechunker};
 use crate::core::Result;
@@ -74,9 +74,9 @@ impl ProcessorAudioConverter {
     /// Returns 0 or more output frames (0 when accumulating for resampler/rechunker).
     pub fn convert(
         &mut self,
-        frame: &Audioframe,
+        frame: &AudioFrame,
         target: &ProcessorAudioConverterTargetFormat,
-    ) -> Result<Vec<Audioframe>> {
+    ) -> Result<Vec<AudioFrame>> {
         let source_sample_rate = frame.sample_rate;
         let source_channels = frame.channels;
 
@@ -156,7 +156,7 @@ impl ProcessorAudioConverter {
                 .extend_from_slice(&after_channels.samples);
 
             // Feed the resampler in exact chunk_size portions
-            let mut resampled_output: Vec<Audioframe> = Vec::new();
+            let mut resampled_output: Vec<AudioFrame> = Vec::new();
 
             while self.pre_resample_buffer.len() >= interleaved_chunk_size {
                 let chunk: Vec<f32> = self
@@ -166,7 +166,7 @@ impl ProcessorAudioConverter {
 
                 let resampled_samples = self.resampler.as_mut().unwrap().resample(&chunk)?;
 
-                resampled_output.push(Audioframe {
+                resampled_output.push(AudioFrame {
                     samples: resampled_samples,
                     channels: channels_after_conversion,
                     sample_rate: target_rate,
@@ -209,7 +209,7 @@ impl ProcessorAudioConverter {
                 if let Some(f) = rechunker.process(resampled) {
                     frames.push(f);
                     // Pump remaining buffered data
-                    let empty = Audioframe {
+                    let empty = AudioFrame {
                         samples: vec![],
                         channels: resampled.channels,
                         sample_rate: resampled.sample_rate,

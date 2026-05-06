@@ -8,7 +8,7 @@
 /**
  * Encoded audio frame with Opus/AAC bitstream data
  */
-export interface Encodedaudioframe {
+export interface EncodedAudioFrame {
   /**
    * Encoded audio bitstream data (Opus/AAC)
    */

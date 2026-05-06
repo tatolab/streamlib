@@ -91,7 +91,10 @@ struct SubscriberState {
 
 struct PublisherState {
     publisher: Publisher<ipc::Service, [u8], ()>,
-    schema_name: String,
+    /// Structured schema identifier stamped into every outgoing
+    /// `FrameHeader.schema_ident` block. Resolved once at publisher
+    /// creation from the structured FFI args (#401 phase 2).
+    schema_ident: streamlib_ipc_types::SchemaIdentWire,
     dest_port: String,
     /// Notifier into the destination's paired Event service. Some when the
     /// destination wired a notify_service_name; None for legacy callers.
@@ -581,6 +584,12 @@ pub unsafe extern "C" fn slpn_input_read(
 /// (legacy / no-notify path). When non-empty, `slpn_output_write` will call
 /// `notify()` after every successful `send()`.
 ///
+/// The schema identifier is passed as six structured arguments
+/// (`schema_org`, `schema_package`, `schema_type`, `schema_version_major`,
+/// `schema_version_minor`, `schema_version_patch`) per the structured-everywhere
+/// rule (#401 phase 2). Empty C strings are accepted and produce a zero-length
+/// segment in the wire format.
+///
 /// Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_output_publish(
@@ -588,7 +597,12 @@ pub unsafe extern "C" fn slpn_output_publish(
     service_name: *const c_char,
     port_name: *const c_char,
     dest_port: *const c_char,
-    schema_name: *const c_char,
+    schema_org: *const c_char,
+    schema_package: *const c_char,
+    schema_type: *const c_char,
+    schema_version_major: u32,
+    schema_version_minor: u32,
+    schema_version_patch: u32,
     max_payload_bytes: usize,
     notify_service_name: *const c_char,
 ) -> i32 {
@@ -608,9 +622,25 @@ pub unsafe extern "C" fn slpn_output_publish(
         Some(s) => s,
         None => return -1,
     };
-    let schema = match unsafe { c_str_to_str(schema_name) } {
-        Some(s) => s,
-        None => return -1,
+    let schema_org_str = unsafe { c_str_to_str(schema_org) }.unwrap_or("");
+    let schema_pkg_str = unsafe { c_str_to_str(schema_package) }.unwrap_or("");
+    let schema_type_str = unsafe { c_str_to_str(schema_type) }.unwrap_or("");
+    let schema_ident = match streamlib_ipc_types::SchemaIdentWire::from_segments(
+        schema_org_str,
+        schema_pkg_str,
+        schema_type_str,
+        schema_version_major,
+        schema_version_minor,
+        schema_version_patch,
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::error!(
+                "[slpn:{}] Invalid schema ident segments for '{}': {}",
+                ctx.processor_id, service_name, e
+            );
+            return -1;
+        }
     };
 
     let service_name_iox = match ServiceName::new(service_name) {
@@ -700,7 +730,7 @@ pub unsafe extern "C" fn slpn_output_publish(
         port_name.to_string(),
         PublisherState {
             publisher,
-            schema_name: schema.to_string(),
+            schema_ident,
             dest_port: dest_port_str.to_string(),
             notifier,
         },
@@ -759,7 +789,7 @@ pub unsafe extern "C" fn slpn_output_write(
 
     let total_len = FRAME_HEADER_SIZE + data_slice.len();
     let mut frame = vec![0u8; total_len];
-    FrameHeader::new(&state.dest_port, &state.schema_name, timestamp_ns, data_slice.len() as u32)
+    FrameHeader::new(&state.dest_port, state.schema_ident, timestamp_ns, data_slice.len() as u32)
         .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(data_slice);
 

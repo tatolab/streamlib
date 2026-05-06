@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::Audioframe;
+use crate::_generated_::AudioFrame;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 #[crate::processor("com.tatolab.buffer_rechunker")]
@@ -40,7 +40,7 @@ impl crate::core::ReactiveProcessor for BufferRechunkerProcessor::Processor {
             return Ok(());
         }
 
-        let input_frame: Audioframe = self.inputs.read("audio_in")?;
+        let input_frame: AudioFrame = self.inputs.read("audio_in")?;
 
         // Store sample rate and channels from first frame
         if self.sample_rate == 0 {
@@ -59,7 +59,7 @@ impl crate::core::ReactiveProcessor for BufferRechunkerProcessor::Processor {
         while self.buffer.len() >= target_interleaved_size {
             let chunk: Vec<f32> = self.buffer.drain(..target_interleaved_size).collect();
 
-            let output_frame = Audioframe {
+            let output_frame = AudioFrame {
                 samples: chunk,
                 channels: self.channels,
                 sample_rate: self.sample_rate,

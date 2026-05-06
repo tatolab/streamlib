@@ -19,7 +19,7 @@ import type {
   RuntimeContextFullAccess,
   RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import type { Videoframe } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
+import type { VideoFrame } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
 
 const HALFTONE_WGSL = /* wgsl */`
 @group(0) @binding(0) var<storage, read> inputPixels: array<u32>;
@@ -226,7 +226,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
   }
 
   async process(ctx: RuntimeContextLimitedAccess): Promise<void> {
-    const result = ctx.inputs.read<Videoframe>("video_in");
+    const result = ctx.inputs.read<VideoFrame>("video_in");
     if (!result || !this.gpu) return;
 
     const { value: frame, timestampNs } = result;
@@ -323,7 +323,7 @@ export default class HalftoneProcessor implements ReactiveProcessor {
 
     // --- Forward downstream ---
     this.frameIndex++;
-    const outputFrame: Videoframe = {
+    const outputFrame: VideoFrame = {
       surface_id: slot.handleId,
       width,
       height,

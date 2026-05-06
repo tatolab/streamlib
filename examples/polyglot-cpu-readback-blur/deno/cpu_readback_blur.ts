@@ -5,7 +5,7 @@
  * Polyglot cpu-readback blur processor — Deno twin of
  * `python/cpu_readback_blur.py` (#529).
  *
- * Receives a trigger Videoframe, opens the host-pre-allocated
+ * Receives a trigger VideoFrame, opens the host-pre-allocated
  * cpu-readback surface through `CpuReadbackContext.acquireWrite`,
  * applies a hand-rolled separable Gaussian blur to the BGRA bytes,
  * and releases — the host adapter flushes CPU→GPU. After the runtime

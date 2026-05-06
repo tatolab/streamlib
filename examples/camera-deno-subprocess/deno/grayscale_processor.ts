@@ -13,7 +13,7 @@ import type {
   RuntimeContextFullAccess,
   RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import type { Videoframe } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
+import type { VideoFrame } from "../../../libs/streamlib-deno/_generated_/com_tatolab_videoframe.ts";
 
 export default class GrayscaleProcessor implements ReactiveProcessor {
   setup(ctx: RuntimeContextFullAccess): void {
@@ -21,7 +21,7 @@ export default class GrayscaleProcessor implements ReactiveProcessor {
   }
 
   process(ctx: RuntimeContextLimitedAccess): void {
-    const result = ctx.inputs.read<Videoframe>("video_in");
+    const result = ctx.inputs.read<VideoFrame>("video_in");
     if (!result) return;
 
     const { value: frame, timestampNs } = result;
