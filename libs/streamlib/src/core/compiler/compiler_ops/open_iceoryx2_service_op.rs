@@ -10,15 +10,49 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::context::RuntimeContext;
-use crate::core::embedded_schemas::max_payload_bytes_for_schema;
+use crate::core::embedded_schemas::{max_payload_bytes_for_schema, schema_ident_wire_from_joined};
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
     LinkUniqueId, ProcessorInstanceComponent, SubprocessHandleComponent,
 };
+use crate::core::json_schema::SchemaIdentOutput;
 use crate::core::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
 use crate::core::ProcessorUniqueId;
-use crate::iceoryx2::MAX_FANIN_PER_DESTINATION;
+use crate::iceoryx2::{SchemaIdentWire, MAX_FANIN_PER_DESTINATION};
+
+/// Resolve a joined-versioned schema string (e.g. `"@tatolab/core/VideoFrame@1.0.0"`)
+/// into a JSON value: a structured `SchemaIdentOutput` object on success, or
+/// `Value::Null` for legacy reverse-DNS / unknown identifiers. Callers that
+/// need both shapes (legacy and new) include the result with a `null` fallback
+/// so subprocess-side parsers can branch on presence.
+fn schema_ident_json(joined: &str) -> serde_json::Value {
+    SchemaIdentOutput::try_from_joined(joined)
+        .map(|s| {
+            serde_json::to_value(s).expect("SchemaIdentOutput must serialize cleanly")
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
+/// Resolve a joined-versioned schema string into structured wire bytes for
+/// the iceoryx2 producer. For new-shape `@org/pkg/Type@v` identifiers the
+/// build-time segment table provides the structured form. For empty /
+/// legacy reverse-DNS strings (where no structured representation exists),
+/// emits a default zero-segment `SchemaIdentWire` and a `tracing::debug` —
+/// downstream consumers see an unset routing tag, matching the behaviour
+/// of the joined-string predecessor when fed those inputs.
+fn schema_ident_wire_for_producer(joined: &str) -> SchemaIdentWire {
+    match schema_ident_wire_from_joined(joined) {
+        Ok(wire) => wire,
+        Err(e) => {
+            tracing::debug!(
+                "schema {:?} has no structured wire form, using default zero-segment wire bytes: {}",
+                joined, e
+            );
+            SchemaIdentWire::default()
+        }
+    }
+}
 
 use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
 use super::spawn_python_native_subprocess_op::PythonNativeSubprocessHostProcessor;
@@ -327,7 +361,7 @@ fn open_iceoryx2_pubsub(
         if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
             output_writer.add_connection(
                 source_port,
-                &output_schema,
+                schema_ident_wire_for_producer(&output_schema),
                 dest_port,
                 publisher,
                 notifier,
@@ -455,7 +489,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 "dest_port": dest_port,
                 "dest_service_name": service_name,
                 "dest_notify_service_name": notify_service_name,
-                "schema_name": output_schema,
+                "schema": schema_ident_json(&output_schema),
                 "max_payload_bytes": max_payload,
             }));
         } else if let Some(python_native_host) = source_guard
@@ -469,7 +503,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                     "dest_port": dest_port,
                     "dest_service_name": service_name,
                     "dest_notify_service_name": notify_service_name,
-                    "schema_name": output_schema,
+                    "schema": schema_ident_json(&output_schema),
                     "max_payload_bytes": max_payload,
                 }));
         }
@@ -583,7 +617,7 @@ fn open_iceoryx2_subprocess_to_rust(
                 "dest_port": dest_port,
                 "dest_service_name": service_name,
                 "dest_notify_service_name": notify_service_name,
-                "schema_name": output_schema,
+                "schema": schema_ident_json(&output_schema),
                 "max_payload_bytes": max_payload,
             }));
             tracing::debug!(
@@ -601,7 +635,7 @@ fn open_iceoryx2_subprocess_to_rust(
                     "dest_port": dest_port,
                     "dest_service_name": service_name,
                     "dest_notify_service_name": notify_service_name,
-                    "schema_name": output_schema,
+                    "schema": schema_ident_json(&output_schema),
                     "max_payload_bytes": max_payload,
                 }));
             tracing::debug!(
@@ -713,7 +747,7 @@ fn open_iceoryx2_rust_to_subprocess(
         if let Some(output_writer) = source_guard.get_iceoryx2_output_writer() {
             output_writer.add_connection(
                 source_port,
-                &output_schema,
+                schema_ident_wire_for_producer(&output_schema),
                 dest_port,
                 publisher,
                 notifier,

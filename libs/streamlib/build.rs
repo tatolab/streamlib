@@ -23,20 +23,26 @@ fn main() {
 }
 
 /// Walk `streamlib.yaml`'s `schemas:` list AND its `dependencies:` block
-/// (per #401) to emit a generated Rust file in
-/// `OUT_DIR/embedded_schemas_table.rs` containing a static table of
-/// `(canonical_identifier, yaml_body)` pairs covering both the in-tree
-/// schemas and every schema reachable through resolved package
-/// dependencies (e.g. `@tatolab/core`'s wire types).
+/// (per #401) to emit two generated tables in `OUT_DIR/embedded_schemas_table.rs`:
 ///
-/// The canonical identifier is:
+/// 1. `EMBEDDED_SCHEMAS: &[(canonical_identifier, yaml_body)]` — covers
+///    both legacy reverse-DNS and new structured identifiers.
+/// 2. `EMBEDDED_SCHEMA_IDENT_SEGMENTS: &[(joined_versioned_key, org, package,
+///    type, version_major, version_minor, version_patch)]` — covers ONLY
+///    new-shape schemas declaring `metadata.type` inside a package-flavor
+///    manifest. Legacy reverse-DNS schemas have no structured segment
+///    representation and are deliberately excluded (#401 phase 2).
+///
+/// The canonical identifier in table 1 is:
 /// - For legacy schemas declaring `metadata.name` (reverse-DNS): the
 ///   `metadata.name` value verbatim.
 /// - For new-shape schemas declaring `metadata.type` inside a package-flavor
 ///   manifest: the joined `@<org>/<package>/<Type>` (no version suffix).
 ///
-/// The file is `include!`ed by `src/core/embedded_schemas.rs`, replacing the
-/// hand-curated match that historically drifted against the on-disk set.
+/// Both tables are sorted by their first column for diff-stable output and
+/// to support binary-search lookups. The file is `include!`ed by
+/// `src/core/embedded_schemas.rs`, replacing the hand-curated match that
+/// historically drifted against the on-disk set.
 fn generate_embedded_schemas_table() {
     use std::path::PathBuf;
     use streamlib_idents::resolve;
@@ -54,7 +60,8 @@ fn generate_embedded_schemas_table() {
         )
     });
 
-    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut name_entries: Vec<(String, String)> = Vec::new();
+    let mut segment_entries: Vec<SegmentRow> = Vec::new();
 
     for pkg in resolved.iter_all() {
         for schema_path in &pkg.schema_files {
@@ -68,13 +75,18 @@ fn generate_embedded_schemas_table() {
                     panic!("Failed to parse schema {}: {}", schema_path.display(), e)
                 });
 
-            let canonical_name = canonical_name_for_schema(&schema_yaml, pkg, schema_path);
+            let resolved_schema = resolve_schema_identity(&schema_yaml, pkg, schema_path);
             let include_path_literal = include_path_literal(&manifest_dir_path, schema_path);
-            entries.push((canonical_name, include_path_literal));
+            name_entries.push((resolved_schema.canonical.clone(), include_path_literal));
+
+            if let Some(seg) = resolved_schema.segments {
+                segment_entries.push(seg);
+            }
         }
     }
 
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    name_entries.sort_by(|a, b| a.0.cmp(&b.0));
+    segment_entries.sort_by(|a, b| a.joined_versioned.cmp(&b.joined_versioned));
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
     let out_path = PathBuf::from(out_dir).join("embedded_schemas_table.rs");
@@ -93,21 +105,80 @@ fn generate_embedded_schemas_table() {
         "/// runtime lookup helpers strip the version when callers pass it (#401).\n",
     );
     buf.push_str("pub(crate) const EMBEDDED_SCHEMAS: &[(&str, &str)] = &[\n");
-    for (name, include_lit) in &entries {
+    for (name, include_lit) in &name_entries {
         buf.push_str(&format!("    (\"{}\", {}),\n", name, include_lit));
+    }
+    buf.push_str("];\n\n");
+
+    buf.push_str(
+        "/// Structured segments for every new-shape schema in the resolver dep graph.\n",
+    );
+    buf.push_str("///\n");
+    buf.push_str(
+        "/// Tuple shape: `(joined_versioned_key, org, package, type, major, minor, patch)`.\n",
+    );
+    buf.push_str(
+        "/// Sorted by `joined_versioned_key` for binary-search lookups + diff-stable output.\n",
+    );
+    buf.push_str(
+        "/// Legacy reverse-DNS schemas (those declaring `metadata.name` only) are excluded\n",
+    );
+    buf.push_str(
+        "/// — they have no structured `(org, package, type)` representation by design.\n",
+    );
+    buf.push_str("/// Consumed at the wire boundary by `lookup_schema_ident_segments` to convert\n");
+    buf.push_str(
+        "/// a joined-string identifier into structured segments without a parser (#401 phase 2).\n",
+    );
+    buf.push_str(
+        "pub(crate) const EMBEDDED_SCHEMA_IDENT_SEGMENTS:\n    \
+        &[(&str, &str, &str, &str, u32, u32, u32)] = &[\n",
+    );
+    for seg in &segment_entries {
+        buf.push_str(&format!(
+            "    (\"{}\", \"{}\", \"{}\", \"{}\", {}, {}, {}),\n",
+            seg.joined_versioned,
+            seg.org,
+            seg.package,
+            seg.type_name,
+            seg.major,
+            seg.minor,
+            seg.patch,
+        ));
     }
     buf.push_str("];\n");
 
     std::fs::write(&out_path, &buf).expect("Failed to write embedded_schemas_table.rs");
 }
 
-/// Derive the canonical (unversioned) lookup key for a schema, given its
-/// parsed YAML and the package context it was resolved under.
-fn canonical_name_for_schema(
+/// Resolved identity for a schema: the canonical (unversioned) lookup key,
+/// plus — for new-shape schemas only — the structured segments and version.
+struct ResolvedSchemaIdentity {
+    canonical: String,
+    segments: Option<SegmentRow>,
+}
+
+struct SegmentRow {
+    joined_versioned: String,
+    org: String,
+    package: String,
+    type_name: String,
+    major: u32,
+    minor: u32,
+    patch: u32,
+}
+
+/// Resolve a schema's identity from its parsed YAML + the package context.
+///
+/// New-shape schemas (declaring `metadata.type` inside a package-flavor
+/// manifest) get both a canonical unversioned key and a structured segment
+/// row. Legacy reverse-DNS schemas (declaring `metadata.name`) get only the
+/// canonical key — there's no structured segment representation for them.
+fn resolve_schema_identity(
     schema_yaml: &serde_yaml::Value,
     pkg: &streamlib_idents::ResolvedPackage,
     schema_path: &std::path::Path,
-) -> String {
+) -> ResolvedSchemaIdentity {
     let metadata = schema_yaml.get("metadata").unwrap_or_else(|| {
         panic!("schema {} missing `metadata` block", schema_path.display())
     });
@@ -120,17 +191,33 @@ fn canonical_name_for_schema(
                 schema_path.display()
             )
         });
-        return format!(
-            "@{}/{}/{}",
-            pkg_meta.org.as_str(),
-            pkg_meta.name.as_str(),
-            type_name
-        );
+        let org = pkg_meta.org.as_str().to_string();
+        let package = pkg_meta.name.as_str().to_string();
+        let major = pkg_meta.version.major;
+        let minor = pkg_meta.version.minor;
+        let patch = pkg_meta.version.patch;
+        let canonical = format!("@{}/{}/{}", org, package, type_name);
+        let joined_versioned = format!("{}@{}.{}.{}", canonical, major, minor, patch);
+        return ResolvedSchemaIdentity {
+            canonical,
+            segments: Some(SegmentRow {
+                joined_versioned,
+                org,
+                package,
+                type_name: type_name.to_string(),
+                major,
+                minor,
+                patch,
+            }),
+        };
     }
 
     if let Some(name) = metadata.get("name").and_then(|n| n.as_str()) {
         // Legacy reverse-DNS — strip any trailing @<semver> for canonical form.
-        return strip_semver_suffix(name).to_string();
+        return ResolvedSchemaIdentity {
+            canonical: strip_semver_suffix(name).to_string(),
+            segments: None,
+        };
     }
 
     panic!(

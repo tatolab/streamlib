@@ -54,6 +54,57 @@ function fatalPreInstall(message: string): never {
   Deno.exit(1);
 }
 
+/**
+ * Structured schema-ident envelope as it arrives in the host's compiler IPC
+ * messages (#401 phase 2). Each port-wiring `outputs[].schema` field is
+ * either this object or `null` for legacy reverse-DNS / unknown identifiers.
+ */
+interface SchemaIdentEnvelope {
+  org: string;
+  package: string;
+  type: string;
+  version: { major: number; minor: number; patch: number };
+}
+
+/**
+ * Six-tuple representation of a structured schema identifier, ready for the
+ * cdylib FFI. Each segment maps to one C-string arg; the version triplet
+ * maps to three u32 args. Empty / zero values represent
+ * "no schema declared" — the cdylib treats them the same as the pre-#401
+ * legacy reverse-DNS path.
+ */
+interface SchemaIdentSegments {
+  org: string;
+  package: string;
+  type: string;
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+/**
+ * Extract the six structured segments from a schema-ident envelope. No
+ * parser ever runs — each field is read directly from its own typed
+ * property in the JSON. Returns empty strings + zero versions when the
+ * envelope is `null` or missing required fields.
+ */
+function schemaIdentSegments(
+  schema: SchemaIdentEnvelope | null | undefined,
+): SchemaIdentSegments {
+  if (!schema || typeof schema !== "object") {
+    return { org: "", package: "", type: "", major: 0, minor: 0, patch: 0 };
+  }
+  const version = schema.version;
+  return {
+    org: typeof schema.org === "string" ? schema.org : "",
+    package: typeof schema.package === "string" ? schema.package : "",
+    type: typeof schema.type === "string" ? schema.type : "",
+    major: typeof version?.major === "number" ? version.major : 0,
+    minor: typeof version?.minor === "number" ? version.minor : 0,
+    patch: typeof version?.patch === "number" ? version.patch : 0,
+  };
+}
+
 // ============================================================================
 // Bridge protocol — length-prefixed JSON over the dedicated
 // `STREAMLIB_ESCALATE_FD` socketpair. fd0/fd1 stay free for log capture
@@ -252,7 +303,11 @@ async function main(): Promise<void> {
               dest_port: string;
               dest_service_name: string;
               dest_notify_service_name?: string;
-              schema_name: string;
+              // Wire shape (#401 phase 2): structured ident, or null for
+              // legacy reverse-DNS / unknown identifiers. The host's
+              // compiler IPC envelope emits `null` rather than omitting
+              // the key, so the type is `null | object`.
+              schema?: SchemaIdentEnvelope | null;
               max_payload_bytes?: number;
             }[];
           }) ?? { inputs: [], outputs: [] };
@@ -300,15 +355,28 @@ async function main(): Promise<void> {
             }
           }
 
-          // Create publishers for output iceoryx2 services
+          // Create publishers for output iceoryx2 services.
+          //
+          // Wire shape (#401 phase 2): each output's `schema` field is
+          // structured — `{org, package, type, version: {major, minor,
+          // patch}}` — or null for legacy reverse-DNS / unknown
+          // identifiers. We pass the segments to the cdylib FFI as six
+          // separate args (3 segment C-strings + 3 u32 versions). No
+          // parser ever runs on this path.
           const outputPorts = ports.outputs ?? [];
           for (const output of outputPorts) {
             const destNotify = output.dest_notify_service_name ?? "";
+            const segs = schemaIdentSegments(output.schema);
             log.info("Publishing to output", {
               port: output.name,
               dest_port: output.dest_port,
               service: output.dest_service_name,
-              schema: output.schema_name,
+              schema_org: segs.org || null,
+              schema_package: segs.package || null,
+              schema_type: segs.type || null,
+              schema_version: segs.org
+                ? `${segs.major}.${segs.minor}.${segs.patch}`
+                : null,
               notify_service: destNotify || null,
             });
             const result = lib.symbols.sldn_output_publish(
@@ -316,7 +384,12 @@ async function main(): Promise<void> {
               cString(output.dest_service_name),
               cString(output.name),
               cString(output.dest_port),
-              cString(output.schema_name),
+              cString(segs.org),
+              cString(segs.package),
+              cString(segs.type),
+              segs.major,
+              segs.minor,
+              segs.patch,
               BigInt(output.max_payload_bytes ?? 65536),
               cString(destNotify),
             );

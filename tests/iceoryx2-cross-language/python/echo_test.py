@@ -27,7 +27,12 @@ from iceoryx2 import ServiceName, ServiceType
 # Add parent path to import streamlib frame_payload
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[3] / "libs" / "streamlib-python" / "python"))
 
-from streamlib.frame_payload import FramePayload, PortKey, SchemaName
+from streamlib.frame_payload import (
+    FramePayload,
+    PortKey,
+    SchemaIdentWire,
+    SCHEMA_IDENT_WIRE_SIZE,
+)
 
 
 def main():
@@ -36,10 +41,19 @@ def main():
 
     # Print struct sizes for comparison with Rust
     print("Struct sizes:")
-    print(f"  PortKey:      {ctypes.sizeof(PortKey)} bytes")
-    print(f"  SchemaName:   {ctypes.sizeof(SchemaName)} bytes")
-    print(f"  FramePayload: {ctypes.sizeof(FramePayload)} bytes")
+    print(f"  PortKey:         {ctypes.sizeof(PortKey)} bytes")
+    print(f"  SchemaIdentWire: {ctypes.sizeof(SchemaIdentWire)} bytes")
+    print(f"  FramePayload:    {ctypes.sizeof(FramePayload)} bytes")
     print()
+
+    # Cross-language ABI lock — the Rust + Python layouts MUST agree
+    # byte-for-byte on the 128-byte SchemaIdentWire. Tripping this fails
+    # before any data is exchanged.
+    assert ctypes.sizeof(SchemaIdentWire) == SCHEMA_IDENT_WIRE_SIZE, (
+        f"Python SchemaIdentWire layout drifted from Rust: "
+        f"got {ctypes.sizeof(SchemaIdentWire)} bytes, expected "
+        f"{SCHEMA_IDENT_WIRE_SIZE}"
+    )
 
     # Create iceoryx2 node
     node = iceoryx2.NodeBuilder.new().create(ServiceType.Ipc)
@@ -81,20 +95,37 @@ def main():
             data = payload.get_data()
 
             print("Received payload from Rust:")
-            print(f"  port_key:     '{port}'")
-            print(f"  schema_name:  '{schema}'")
+            print(f"  port_key:        '{port}'")
+            print(f"  schema_ident:    '{schema.render_joined()}'")
+            print(f"    org:           '{schema.org_str()}'")
+            print(f"    package:       '{schema.package_str()}'")
+            print(f"    type:          '{schema.type_str()}'")
+            print(f"    version:       {schema.version_major}.{schema.version_minor}.{schema.version_patch}")
             print(f"  timestamp_ns: {timestamp}")
             print(f"  data_len:     {len(data)} bytes")
             print()
 
-            # Validate
+            # Validate — Rust side publishes the canonical
+            # `(tatolab, core, VideoFrame, 1.0.0)` 4-tuple as the
+            # cross-language wire-format anchor.
             passed = True
 
             if port != "test_port":
                 print(f"FAIL: port_key mismatch: expected 'test_port', got '{port}'")
                 passed = False
-            if schema != "test_schema":
-                print(f"FAIL: schema_name mismatch: expected 'test_schema', got '{schema}'")
+            if (
+                schema.org_str() != "tatolab"
+                or schema.package_str() != "core"
+                or schema.type_str() != "VideoFrame"
+                or schema.version_major != 1
+                or schema.version_minor != 0
+                or schema.version_patch != 0
+            ):
+                print(
+                    "FAIL: schema_ident mismatch: expected "
+                    f"'@tatolab/core/VideoFrame@1.0.0', got "
+                    f"'{schema.render_joined()}'"
+                )
                 passed = False
             if timestamp != 12345:
                 print(f"FAIL: timestamp_ns mismatch: expected 12345, got {timestamp}")
