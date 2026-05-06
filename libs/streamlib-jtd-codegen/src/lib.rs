@@ -990,9 +990,9 @@ struct SchemaIdentEmit {
 /// project header. When `schema_ident` is `Some` (new-shape schemas with a
 /// `metadata.type` and an enclosing package-flavor `streamlib.yaml`),
 /// additionally injects a `__streamlib_schema_ident__: ClassVar[SchemaIdent]`
-/// class attribute so `@input(schema=GeneratedClass)` resolves to a
-/// structured `SchemaIdent` without an authoring `@schema` decorator (which
-/// is intentionally not part of the SDK; see issue #704).
+/// class attribute so `@input(schema=GeneratedClass)` /
+/// `@output(schema=GeneratedClass)` in the Python SDK resolves the
+/// structured ident off the class without any authoring affordance.
 fn post_process_python(
     code: &str,
     expected_class_name: &str,

@@ -240,10 +240,9 @@ def _resolve_schema_ident(schema_arg) -> Optional[SchemaIdent]:
     Accepts:
         - `None` (port has no declared schema)
         - `SchemaIdent` instance (returned as-is)
-        - a class with `__streamlib_schema_ident__` attribute carrying a
-          `SchemaIdent` (codegen-emitted classes from `streamlib generate`
-          carry this automatically; authors do not write the attribute by
-          hand and there is no `@schema` authoring decorator)
+        - a codegen-emitted class carrying `__streamlib_schema_ident__`
+          as a `ClassVar[SchemaIdent]` attribute (produced by
+          `streamlib generate` from the package's JTD/YAML schemas)
 
     Rejects:
         - any string (bare type name OR joined `@org/pkg/Type@v` form)
