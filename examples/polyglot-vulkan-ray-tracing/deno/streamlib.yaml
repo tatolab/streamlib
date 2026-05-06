@@ -12,4 +12,4 @@ processors:
     entrypoint: "vulkan_ray_tracing.ts:default"
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }

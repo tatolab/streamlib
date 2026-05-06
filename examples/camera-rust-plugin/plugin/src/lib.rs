@@ -24,7 +24,7 @@ unsafe extern "C" {
     fn CVPixelBufferGetBytesPerRow(pixel_buffer: *mut c_void) -> usize;
 }
 
-#[streamlib::processor("com.tatolab.grayscale_rust")]
+#[streamlib::processor("GrayscaleRust")]
 pub struct GrayscaleProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     running: Arc<AtomicBool>,

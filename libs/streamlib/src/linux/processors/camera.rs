@@ -34,7 +34,7 @@ pub struct LinuxCameraDevice {
     pub name: String,
 }
 
-#[crate::processor("com.tatolab.camera")]
+#[crate::processor("Camera")]
 pub struct LinuxCameraProcessor {
     camera_name: String,
     gpu_context: Option<GpuContextLimitedAccess>,

@@ -17,7 +17,7 @@ pub struct AppleAudioInputDevice {
     pub is_default: bool,
 }
 
-#[crate::processor("com.tatolab.audio_capture")]
+#[crate::processor("AudioCapture")]
 pub struct AppleAudioCaptureProcessor {
     device_info: Option<AppleAudioInputDevice>,
     _device: Option<Device>,

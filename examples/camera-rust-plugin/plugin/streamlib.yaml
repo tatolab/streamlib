@@ -1,17 +1,18 @@
 package:
+  org: tatolab
   name: camera-rust-plugin
-  version: "0.1.0"
+  version: 0.1.0
   description: "Grayscale video effect as Rust dylib plugin"
 
 processors:
-  - name: com.tatolab.grayscale_rust
-    version: "1.0.0"
+  - name: GrayscaleRust
+    version: 1.0.0
     description: "Grayscale video effect (Rust dylib plugin)"
     runtime: rust
     execution: manual
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }

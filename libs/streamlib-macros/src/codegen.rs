@@ -13,15 +13,51 @@
 use crate::analysis::AnalysisResult;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use streamlib_processor_schema::ProcessorSchema;
+use streamlib_processor_schema::{PortSchemaSpec, ProcessorSchema, SchemaIdent};
 use syn::ItemStruct;
+
+/// Emit a `SchemaIdent` literal expression. Inputs are pre-validated by the
+/// manifest parser so the `expect("validated")` calls are infallible.
+fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
+    let org = ident.org.as_str();
+    let pkg = ident.package.as_str();
+    let ty = ident.r#type.as_str();
+    let major = ident.version.major;
+    let minor = ident.version.minor;
+    let patch = ident.version.patch;
+    quote! {
+        ::streamlib::core::SchemaIdent::new(
+            ::streamlib::core::Org::new(#org).expect("validated by manifest parser"),
+            ::streamlib::core::Package::new(#pkg).expect("validated by manifest parser"),
+            ::streamlib::core::TypeName::new(#ty).expect("validated by manifest parser"),
+            ::streamlib::core::SemVer::new(#major, #minor, #patch),
+        )
+    }
+}
+
+/// Emit a `PortSchemaSpec` literal expression.
+fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
+    match spec {
+        PortSchemaSpec::Any => quote! { ::streamlib::core::PortSchemaSpec::Any },
+        PortSchemaSpec::Specific(ident) => {
+            let inner = schema_ident_tokens(ident);
+            quote! { ::streamlib::core::PortSchemaSpec::Specific(#inner) }
+        }
+    }
+}
 
 // ============================================================================
 // YAML-based code generation
 // ============================================================================
 
-/// Generate a processor module from a YAML ProcessorSchema.
-pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchema) -> TokenStream {
+/// Generate a processor module from a YAML ProcessorSchema and the resolved
+/// structured [`SchemaIdent`] (org/package/type/version composed from the
+/// enclosing `streamlib.yaml`'s `package:` block + processor short name).
+pub fn generate_from_processor_schema(
+    item: &ItemStruct,
+    schema: &ProcessorSchema,
+    schema_ident: &SchemaIdent,
+) -> TokenStream {
     let module_name = &item.ident;
 
     // Derive config type from schema reference if present
@@ -45,10 +81,25 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
     let output_link_module = generate_output_link_module_from_schema(schema);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
+        schema_ident,
         &config_type,
         &config_field_name,
         &custom_fields,
     );
+
+    let schema_ident_const = {
+        let ident_tokens = schema_ident_tokens(schema_ident);
+        quote! {
+            /// Structured wire identity for this processor —
+            /// `@<org>/<package>/<Type>@<version>` resolved at codegen
+            /// from sibling `streamlib.yaml`'s `package:` block plus
+            /// the processor's PascalCase short name.
+            #[allow(dead_code)]
+            pub fn schema_ident() -> ::streamlib::core::SchemaIdent {
+                #ident_tokens
+            }
+        }
+    };
 
     // Generate unsafe Send impl if required (for !Send types like AVFoundation)
     let unsafe_send_impl = if schema.runtime.options.unsafe_send {
@@ -78,6 +129,8 @@ pub fn generate_from_processor_schema(item: &ItemStruct, schema: &ProcessorSchem
 
             /// Configuration type for this processor.
             pub type Config = #config_type;
+
+            #schema_ident_const
 
             /// Create a [`ProcessorSpec`] for adding this processor to a runtime.
             ///
@@ -272,6 +325,7 @@ fn generate_output_link_module_from_schema(schema: &ProcessorSchema) -> TokenStr
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
+    schema_ident: &SchemaIdent,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
@@ -351,7 +405,8 @@ fn generate_processor_impl_from_schema(
 
     let from_config_body =
         generate_from_config_from_schema(schema, config_field_name, custom_fields);
-    let descriptor_impl = generate_descriptor_from_schema(schema, description, version);
+    let descriptor_impl =
+        generate_descriptor_from_schema(schema, schema_ident, description, version);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     let update_config = config_field_name.as_ref().map(|name| {
@@ -540,6 +595,7 @@ fn generate_from_config_from_schema(
 /// Generate descriptor method from schema.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
+    _schema_ident: &SchemaIdent,
     description: &str,
     version: &str,
 ) -> TokenStream {
@@ -552,13 +608,13 @@ fn generate_descriptor_from_schema(
         .iter()
         .map(|p| {
             let port_name = &p.name;
-            let port_schema = &p.schema;
+            let port_schema_tokens = port_schema_spec_tokens(&p.schema);
             let port_desc = p.description.as_deref().unwrap_or("");
             quote! {
                 .with_input(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
-                    schema: #port_schema.to_string(),
+                    schema: #port_schema_tokens,
                     required: true,
                     is_iceoryx2: true,
                 })
@@ -572,13 +628,13 @@ fn generate_descriptor_from_schema(
         .iter()
         .map(|p| {
             let port_name = &p.name;
-            let port_schema = &p.schema;
+            let port_schema_tokens = port_schema_spec_tokens(&p.schema);
             let port_desc = p.description.as_deref().unwrap_or("");
             quote! {
                 .with_output(::streamlib::core::PortDescriptor {
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
-                    schema: #port_schema.to_string(),
+                    schema: #port_schema_tokens,
                     required: true,
                     is_iceoryx2: true,
                 })
@@ -586,7 +642,8 @@ fn generate_descriptor_from_schema(
         })
         .collect();
 
-    // Config schema reference (if present)
+    // Config schema reference (if present) — config schemas keep the legacy
+    // reverse-DNS string form until #702 renames the schema files on disk.
     let config_schema = schema.config.as_ref().map(|c| {
         let schema_ref = &c.schema;
         quote! {

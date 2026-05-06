@@ -20,7 +20,7 @@ use crate::core::JsonSerializableComponent;
 // =============================================================================
 
 /// Mock processor for testing graph operations.
-#[crate::processor("com.streamlib.test.mock_processor")]
+#[crate::processor("TestMockProcessor")]
 struct MockProcessor;
 
 impl crate::core::ManualProcessor for MockProcessor::Processor {
@@ -45,7 +45,7 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 }
 
 /// Processor with only output ports.
-#[crate::processor("com.streamlib.test.mock_output_only_processor")]
+#[crate::processor("TestMockOutputOnlyProcessor")]
 struct MockOutputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
@@ -70,7 +70,7 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 }
 
 /// Processor with only input ports.
-#[crate::processor("com.streamlib.test.mock_input_only_processor")]
+#[crate::processor("TestMockInputOnlyProcessor")]
 struct MockInputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
@@ -248,7 +248,7 @@ mod query_ops {
         assert!(found.is_some());
         assert_eq!(
             found.unwrap().processor_type,
-            "com.streamlib.test.mock_processor"
+            "TestMockProcessor"
         );
     }
 
@@ -346,9 +346,9 @@ mod query_ops {
             .collect();
 
         assert_eq!(types.len(), 3);
-        assert!(types.contains(&"com.streamlib.test.mock_processor".to_string()));
-        assert!(types.contains(&"com.streamlib.test.mock_output_only_processor".to_string()));
-        assert!(types.contains(&"com.streamlib.test.mock_input_only_processor".to_string()));
+        assert!(types.contains(&"TestMockProcessor".to_string()));
+        assert!(types.contains(&"TestMockOutputOnlyProcessor".to_string()));
+        assert!(types.contains(&"TestMockInputOnlyProcessor".to_string()));
     }
 }
 
@@ -497,7 +497,7 @@ mod filter_ops {
         let mock_processors: Vec<_> = graph
             .traversal()
             .v(())
-            .filter(|n| n.processor_type == "com.streamlib.test.mock_processor")
+            .filter(|n| n.processor_type == "TestMockProcessor")
             .ids();
 
         assert_eq!(mock_processors.len(), 2);

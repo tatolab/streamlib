@@ -4,7 +4,7 @@
 use crate::_generated_::AudioFrame;
 use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[crate::processor("com.tatolab.buffer_rechunker")]
+#[crate::processor("BufferRechunker")]
 pub struct BufferRechunkerProcessor {
     buffer: Vec<f32>,
     sample_rate: u32,

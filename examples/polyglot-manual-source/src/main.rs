@@ -51,7 +51,7 @@ const INTERVAL_MS: u32 = 33;
 /// gate robust against CI jitter.
 const MIN_FRAMES_RECEIVED: u32 = 20;
 
-const COUNTING_SINK_PROCESSOR: &str = "com.tatolab.polyglot_manual_source_counting_sink";
+const COUNTING_SINK_PROCESSOR: &str = "PolyglotManualSourceCountingSink";
 const COUNTING_SINK_PLUGIN_DYLIB: &str = "libpolyglot_manual_source_counting_sink_plugin.so";
 /// Env var the counting sink reads to know where to write JSON stats.
 /// Set unconditionally before `runtime.start()` so the sink picks it up

@@ -30,7 +30,7 @@ const MAX_RETRY_DELAY_MS: u64 = 10_000;
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("com.streamlib.moq_subscribe_track")]
+#[crate::processor("MoqSubscribeTrack")]
 pub struct MoqSubscribeTrackProcessor {
     /// Runtime context for tokio handle and shared sessions.
     runtime_context: Option<RuntimeContext>,

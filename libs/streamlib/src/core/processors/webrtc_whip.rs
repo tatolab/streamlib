@@ -28,7 +28,7 @@ enum WhipClientMessage {
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("com.streamlib.webrtc_whip")]
+#[crate::processor("WebrtcWhip")]
 pub struct WebRtcWhipProcessor {
     // Session state
     session_started: bool,

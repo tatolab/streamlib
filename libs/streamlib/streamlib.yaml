@@ -4,6 +4,12 @@
 # Wire vocabulary now lives in @tatolab/core (#401). The four canonical
 # wire types (VideoFrame, AudioFrame, EncodedVideoFrame, EncodedAudioFrame)
 # are pulled in via this dependency rather than declared inline.
+package:
+  org: tatolab
+  name: streamlib
+  version: 0.4.28
+  description: "Cross-platform real-time media framework"
+
 dependencies:
   "@tatolab/core":
     path: ../../packages/core
@@ -47,7 +53,7 @@ schemas:
 processors:
   # === Apple platform processors ===
 
-  - name: com.tatolab.camera
+  - name: Camera
     version: 1.0.0
     description: "Captures video from macOS cameras using AVFoundation"
     execution: manual
@@ -56,10 +62,10 @@ processors:
       schema: com.tatolab.camera.config@1.0.0
     outputs:
       - name: video
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Live video frames from the camera
 
-  - name: com.tatolab.display
+  - name: Display
     version: 1.0.0
     description: "Displays video frames in a window using Metal with vsync"
     execution: manual
@@ -68,12 +74,12 @@ processors:
       schema: com.tatolab.display.config@1.0.0
     inputs:
       - name: video
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Video frames to display in the window
         read_mode: skip_to_latest
         buffer_size: 4
 
-  - name: com.tatolab.audio_capture
+  - name: AudioCapture
     version: 1.0.0
     description: "Captures mono audio from macOS microphones in device-native format"
     execution: manual
@@ -86,10 +92,10 @@ processors:
       schema: com.tatolab.audio_capture.config@1.0.0
     outputs:
       - name: audio
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Captured mono audio frames in device-native sample rate
 
-  - name: com.tatolab.audio_output
+  - name: AudioOutput
     version: 1.0.0
     description: "Plays audio through speakers/headphones using CoreAudio"
     execution: manual
@@ -102,12 +108,12 @@ processors:
       schema: com.tatolab.audio_output.config@1.0.0
     inputs:
       - name: audio
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Stereo audio frame to play through speakers
         read_mode: read_next_in_order
         buffer_size: 32
 
-  - name: com.tatolab.mp4_writer
+  - name: Mp4Writer
     version: 1.0.0
     description: "Writes stereo audio and video to MP4 file with A/V synchronization"
     execution: reactive
@@ -120,17 +126,17 @@ processors:
       schema: com.tatolab.mp4_writer.config@1.0.0
     inputs:
       - name: audio
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Stereo audio frames to write to MP4
         read_mode: read_next_in_order
         buffer_size: 32
       - name: video
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Video frames to write to MP4
         read_mode: skip_to_latest
         buffer_size: 4
 
-  - name: com.tatolab.screen_capture
+  - name: ScreenCapture
     version: 1.0.0
     description: "Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)"
     execution: manual
@@ -142,12 +148,12 @@ processors:
       schema: com.tatolab.screen_capture.config@1.0.0
     outputs:
       - name: video
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Captured video frames from screen content
 
   # === Core processors ===
 
-  - name: com.streamlib.api_server
+  - name: ApiServer
     version: 1.0.0
     description: "Runtime api server for streamlib"
     execution: manual
@@ -155,7 +161,7 @@ processors:
       name: config
       schema: com.streamlib.api_server.config@1.0.0
 
-  - name: com.tatolab.simple_passthrough
+  - name: SimplePassthrough
     version: 1.0.0
     description: "Passes video frames through unchanged (for testing)"
     execution: manual
@@ -164,16 +170,16 @@ processors:
       schema: com.tatolab.simple_passthrough.config@1.0.0
     inputs:
       - name: input
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Video frame input
         read_mode: skip_to_latest
         buffer_size: 4
     outputs:
       - name: output
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Video frame output (unchanged)
 
-  - name: com.tatolab.audio_channel_converter
+  - name: AudioChannelConverter
     version: 1.0.0
     description: "Converts mono audio to stereo using configurable channel mapping"
     execution: reactive
@@ -182,16 +188,16 @@ processors:
       schema: com.tatolab.audio_channel_converter.config@1.0.0
     inputs:
       - name: audio_in
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Audio input (validates channel count at runtime)
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio_out
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Audio output with converted channel count
 
-  - name: com.tatolab.audio_mixer
+  - name: AudioMixer
     version: 1.0.0
     description: "Mixes two mono signals (left and right) into a stereo signal"
     execution: reactive
@@ -200,21 +206,21 @@ processors:
       schema: com.tatolab.audio_mixer.config@1.0.0
     inputs:
       - name: left
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Left channel mono audio (validates 1 channel at runtime)
         read_mode: read_next_in_order
         buffer_size: 32
       - name: right
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Right channel mono audio (validates 1 channel at runtime)
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Mixed stereo audio output (2 channels)
 
-  - name: com.tatolab.audio_resampler
+  - name: AudioResampler
     version: 1.0.0
     description: "Resamples audio from source to target sample rate (preserves channel count)"
     execution: reactive
@@ -223,16 +229,16 @@ processors:
       schema: com.tatolab.audio_resampler.config@1.0.0
     inputs:
       - name: audio_in
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Audio input (any channel count)
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio_out
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Resampled audio output (same channel count as input)
 
-  - name: com.tatolab.buffer_rechunker
+  - name: BufferRechunker
     version: 1.0.0
     description: "Rechunks variable-sized audio buffers into fixed-size chunks (preserves channel count)"
     execution: reactive
@@ -241,16 +247,16 @@ processors:
       schema: com.tatolab.buffer_rechunker.config@1.0.0
     inputs:
       - name: audio_in
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Variable-sized audio input (any channel count)
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio_out
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Fixed-size audio output (same channel count as input)
 
-  - name: com.tatolab.chord_generator
+  - name: ChordGenerator
     version: 1.0.0
     description: "Generates a C major chord (C4, E4, G4) pre-mixed into a stereo output"
     execution:
@@ -260,10 +266,10 @@ processors:
       schema: com.tatolab.chord_generator.config@1.0.0
     outputs:
       - name: chord
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Stereo audio output with C major chord (2 channels)
 
-  - name: com.streamlib.clap.effect
+  - name: ClapEffect
     version: 1.0.0
     description: "CLAP audio plugin processor with parameter control and automation"
     execution: manual
@@ -272,16 +278,16 @@ processors:
       schema: com.streamlib.clap.effect.config@1.0.0
     inputs:
       - name: audio_in
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Stereo audio frame to process through CLAP plugin (2 channels)
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio_out
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Processed stereo audio frame from CLAP plugin (2 channels)
 
-  - name: com.streamlib.webrtc_whep
+  - name: WebrtcWhep
     version: 1.0.0
     description: "Receives video and audio from WHEP endpoint (WebRTC egress)"
     execution: manual
@@ -292,13 +298,13 @@ processors:
       schema: com.streamlib.webrtc_whep.config@1.0.0
     outputs:
       - name: encoded_video_out
-        schema: '@tatolab/core/EncodedVideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
         description: H.264 encoded video frames from WHEP stream
       - name: encoded_audio_out
-        schema: '@tatolab/core/EncodedAudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedAudioFrame, version: 1.0.0 }
         description: Opus encoded audio frames from WHEP stream
 
-  - name: com.streamlib.webrtc_whip
+  - name: WebrtcWhip
     version: 1.0.0
     description: "Streams pre-encoded video and audio via WebRTC WHIP"
     execution: reactive
@@ -309,19 +315,19 @@ processors:
       schema: com.streamlib.webrtc_whip.config@1.0.0
     inputs:
       - name: encoded_video_in
-        schema: '@tatolab/core/EncodedVideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
         description: H.264 encoded video frames to stream
         read_mode: read_next_in_order
         buffer_size: 16
       - name: encoded_audio_in
-        schema: '@tatolab/core/EncodedAudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedAudioFrame, version: 1.0.0 }
         description: Opus encoded audio frames to stream
         read_mode: skip_to_latest
         buffer_size: 8
 
   # === Linux File Source ===
 
-  - name: com.streamlib.bgra_file_source
+  - name: BgraFileSource
     version: 1.0.0
     description: "Streams raw BGRA frames from a file as Videoframes"
     execution: manual
@@ -332,12 +338,12 @@ processors:
       schema: com.streamlib.bgra_file_source.config@1.0.0
     outputs:
       - name: video
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Video frames read from the BGRA file
 
   # === Linux MP4 Writer ===
 
-  - name: com.streamlib.linux_mp4_writer
+  - name: LinuxMp4Writer
     version: 1.0.0
     description: "Writes video frames to MP4 via ffmpeg encode + mux with silent audio track"
     execution: reactive
@@ -348,14 +354,14 @@ processors:
       schema: com.streamlib.linux_mp4_writer.config@1.0.0
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Decoded video frames (raw pixels) to encode and write
         read_mode: skip_to_latest
         buffer_size: 4
 
   # === Codecs ===
 
-  - name: com.streamlib.h264_encoder
+  - name: H264Encoder
     version: 1.0.0
     description: "Encodes VideoFrame to EncodedVideoFrame (H.264) via Vulkan Video"
     execution: reactive
@@ -366,16 +372,16 @@ processors:
       schema: com.streamlib.h264_encoder.config@1.0.0
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Raw video frames to encode
         read_mode: read_next_in_order
         buffer_size: 8
     outputs:
       - name: encoded_video_out
-        schema: '@tatolab/core/EncodedVideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
         description: H.264 encoded video frames
 
-  - name: com.streamlib.h264_decoder
+  - name: H264Decoder
     version: 1.0.0
     description: "Decodes EncodedVideoFrame (H.264) to VideoFrame via Vulkan Video"
     execution: reactive
@@ -386,16 +392,16 @@ processors:
       schema: com.streamlib.h264_decoder.config@1.0.0
     inputs:
       - name: encoded_video_in
-        schema: '@tatolab/core/EncodedVideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
         description: H.264 encoded video frames to decode
         read_mode: read_next_in_order
         buffer_size: 16
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Decoded video frames
 
-  - name: com.streamlib.h265_encoder
+  - name: H265Encoder
     version: 1.0.0
     description: "Encodes VideoFrame to EncodedVideoFrame (H.265) via Vulkan Video"
     execution: reactive
@@ -406,16 +412,16 @@ processors:
       schema: com.streamlib.h265_encoder.config@1.0.0
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Raw video frames to encode
         read_mode: read_next_in_order
         buffer_size: 8
     outputs:
       - name: encoded_video_out
-        schema: '@tatolab/core/EncodedVideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
         description: H.265 encoded video frames
 
-  - name: com.streamlib.h265_decoder
+  - name: H265Decoder
     version: 1.0.0
     description: "Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video"
     execution: reactive
@@ -426,16 +432,16 @@ processors:
       schema: com.streamlib.h265_decoder.config@1.0.0
     inputs:
       - name: encoded_video_in
-        schema: '@tatolab/core/EncodedVideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
         description: H.265 encoded video frames to decode
         read_mode: read_next_in_order
         buffer_size: 16
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Decoded video frames
 
-  - name: com.streamlib.opus_encoder
+  - name: OpusEncoder
     version: 1.0.0
     description: "Encodes AudioFrame to EncodedAudioFrame (Opus)"
     execution: reactive
@@ -446,16 +452,16 @@ processors:
       schema: com.streamlib.opus_encoder.config@1.0.0
     inputs:
       - name: audio_in
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Raw audio frames to encode
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: encoded_audio_out
-        schema: '@tatolab/core/EncodedAudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedAudioFrame, version: 1.0.0 }
         description: Opus encoded audio frames
 
-  - name: com.streamlib.opus_decoder
+  - name: OpusDecoder
     version: 1.0.0
     description: "Decodes EncodedAudioFrame (Opus) to AudioFrame"
     execution: reactive
@@ -466,18 +472,18 @@ processors:
       schema: com.streamlib.opus_decoder.config@1.0.0
     inputs:
       - name: encoded_audio_in
-        schema: '@tatolab/core/EncodedAudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: EncodedAudioFrame, version: 1.0.0 }
         description: Opus encoded audio frames to decode
         read_mode: skip_to_latest
         buffer_size: 8
     outputs:
       - name: audio_out
-        schema: '@tatolab/core/AudioFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
         description: Decoded audio frames
 
   # === MoQ Streaming ===
 
-  - name: com.streamlib.moq_publish_track
+  - name: MoqPublishTrack
     version: 1.0.0
     description: "Publishes raw bytes from a single graph input to a named MoQ track"
     execution: reactive
@@ -491,7 +497,7 @@ processors:
         schema: any
         description: Input data to publish to MoQ track (any serialized type)
 
-  - name: com.streamlib.moq_subscribe_track
+  - name: MoqSubscribeTrack
     version: 1.0.0
     description: "Subscribes to a named MoQ track and outputs raw bytes to the graph"
     execution: manual
@@ -507,63 +513,63 @@ processors:
 
   # === Test mock processors ===
 
-  - name: com.streamlib.test.mock_processor
+  - name: TestMockProcessor
     version: 1.0.0
     description: "Mock processor for testing graph operations"
     execution: manual
     inputs:
       - name: in1
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Test input port 1
       - name: in2
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Test input port 2
     outputs:
       - name: out1
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Test output port 1
       - name: out2
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Test output port 2
 
-  - name: com.streamlib.test.mock_input_only_processor
+  - name: TestMockInputOnlyProcessor
     version: 1.0.0
     description: "Mock processor with only input ports for testing"
     execution: manual
     inputs:
       - name: in1
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Test input port 1
       - name: in2
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Test input port 2
 
-  - name: com.streamlib.test.mock_output_only_processor
+  - name: TestMockOutputOnlyProcessor
     version: 1.0.0
     description: "Mock processor with only output ports for testing"
     execution: manual
     outputs:
       - name: out1
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Test output port 1
       - name: out2
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: Test output port 2
 
   # === Test attribute macro processors ===
 
-  - name: com.streamlib.test.processor
+  - name: TestProcessor
     version: 1.0.0
     description: "Test processor for attribute macro tests"
     execution: manual
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
 
-  - name: com.streamlib.test.configured_processor
+  - name: TestConfiguredProcessor
     version: 1.0.0
     description: "Test processor with config for attribute macro tests"
     execution: continuous

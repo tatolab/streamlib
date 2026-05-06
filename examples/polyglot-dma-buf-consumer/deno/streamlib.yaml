@@ -12,7 +12,7 @@ processors:
     entrypoint: "dma_buf_consumer.ts:default"
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }

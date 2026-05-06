@@ -27,7 +27,7 @@ use streamlib_plugin_abi::export_plugin;
 
 const OUTPUT_ENV_VAR: &str = "STREAMLIB_POLYGLOT_MANUAL_SOURCE_SINK_OUTPUT";
 
-#[streamlib::processor("com.tatolab.polyglot_manual_source_counting_sink")]
+#[streamlib::processor("PolyglotManualSourceCountingSink")]
 pub struct PolyglotManualSourceCountingSink {
     output_file: Option<PathBuf>,
     frame_counter: u64,

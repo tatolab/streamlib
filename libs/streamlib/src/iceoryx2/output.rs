@@ -55,9 +55,9 @@ impl OutputWriter {
     ///
     /// `schema_ident` is the structured wire identifier the publisher will
     /// stamp into every [`FrameHeader`] for this connection. Callers
-    /// resolve it once at wiring time via
-    /// [`crate::core::embedded_schemas::schema_ident_wire_from_joined`]
-    /// and pass the result here — no parser runs on the per-frame hot path.
+    /// build it once at wiring time from the port's structured
+    /// `PortSchemaSpec` via [`SchemaIdentWire::from_segments`] — no
+    /// parser runs on the per-frame hot path.
     pub fn add_connection(
         &self,
         output_port: &str,

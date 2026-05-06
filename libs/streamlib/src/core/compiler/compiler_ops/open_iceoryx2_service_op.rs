@@ -10,7 +10,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::context::RuntimeContext;
-use crate::core::embedded_schemas::{max_payload_bytes_for_schema, schema_ident_wire_from_joined};
+use crate::core::embedded_schemas::max_payload_bytes_for_port_spec;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
@@ -18,39 +18,36 @@ use crate::core::graph::{
 };
 use crate::core::json_schema::SchemaIdentOutput;
 use crate::core::processors::{ProcessorInstance, PROCESSOR_REGISTRY};
+use crate::core::PortSchemaSpec;
 use crate::core::ProcessorUniqueId;
 use crate::iceoryx2::{SchemaIdentWire, MAX_FANIN_PER_DESTINATION};
 
-/// Resolve a joined-versioned schema string (e.g. `"@tatolab/core/VideoFrame@1.0.0"`)
-/// into a JSON value: a structured `SchemaIdentOutput` object on success, or
-/// `Value::Null` for legacy reverse-DNS / unknown identifiers. Callers that
-/// need both shapes (legacy and new) include the result with a `null` fallback
-/// so subprocess-side parsers can branch on presence.
-fn schema_ident_json(joined: &str) -> serde_json::Value {
-    SchemaIdentOutput::try_from_joined(joined)
-        .map(|s| {
-            serde_json::to_value(s).expect("SchemaIdentOutput must serialize cleanly")
-        })
+/// Render a port's structured schema spec as the JSON value embedded in the
+/// subprocess wiring envelope: a structured `SchemaIdentOutput` object for
+/// `Specific(...)`, or `Value::Null` for `Any` (the wildcard MoQ-style port).
+/// Subprocess-side parsers branch on `null` to detect wildcard ports.
+fn schema_ident_json(spec: &PortSchemaSpec) -> serde_json::Value {
+    SchemaIdentOutput::from_port_spec(spec)
+        .map(|s| serde_json::to_value(s).expect("SchemaIdentOutput must serialize cleanly"))
         .unwrap_or(serde_json::Value::Null)
 }
 
-/// Resolve a joined-versioned schema string into structured wire bytes for
-/// the iceoryx2 producer. For new-shape `@org/pkg/Type@v` identifiers the
-/// build-time segment table provides the structured form. For empty /
-/// legacy reverse-DNS strings (where no structured representation exists),
-/// emits a default zero-segment `SchemaIdentWire` and a `tracing::debug` —
-/// downstream consumers see an unset routing tag, matching the behaviour
-/// of the joined-string predecessor when fed those inputs.
-fn schema_ident_wire_for_producer(joined: &str) -> SchemaIdentWire {
-    match schema_ident_wire_from_joined(joined) {
-        Ok(wire) => wire,
-        Err(e) => {
-            tracing::debug!(
-                "schema {:?} has no structured wire form, using default zero-segment wire bytes: {}",
-                joined, e
-            );
-            SchemaIdentWire::default()
-        }
+/// Resolve a port's structured schema spec into the iceoryx2 wire-routing
+/// tag. `Any` ports yield the default zero-segment wire bytes (unset routing
+/// tag — preserves the existing wildcard semantics). `Specific(...)` ports
+/// build the wire bytes directly from the validated structured fields.
+fn schema_ident_wire_for_producer(spec: &PortSchemaSpec) -> SchemaIdentWire {
+    match spec {
+        PortSchemaSpec::Any => SchemaIdentWire::default(),
+        PortSchemaSpec::Specific(ident) => SchemaIdentWire::from_segments(
+            ident.org.as_str(),
+            ident.package.as_str(),
+            ident.r#type.as_str(),
+            ident.version.major,
+            ident.version.minor,
+            ident.version.patch,
+        )
+        .expect("validated SchemaIdent fits in SchemaIdentWire bounds"),
     }
 }
 
@@ -347,7 +344,7 @@ fn open_iceoryx2_pubsub(
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
-    let publisher = service.create_publisher(max_payload_bytes_for_schema(&output_schema))?;
+    let publisher = service.create_publisher(max_payload_bytes_for_port_spec(&output_schema))?;
     let notifier = notify_service.create_notifier()?;
     tracing::debug!(
         "Created iceoryx2 Publisher+Notifier for '{}' -> service '{}'",
@@ -474,7 +471,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
             })
             .unwrap_or_default()
     };
-    let max_payload = max_payload_bytes_for_schema(&output_schema);
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema);
 
     // Store output wiring info on the source subprocess
     {
@@ -605,7 +602,7 @@ fn open_iceoryx2_subprocess_to_rust(
                 .unwrap_or_default()
         };
 
-        let max_payload = max_payload_bytes_for_schema(&output_schema);
+        let max_payload = max_payload_bytes_for_port_spec(&output_schema);
         let source_proc_arc = get_single_processor(graph, source_proc_id)?;
         let mut source_guard = source_proc_arc.lock();
         if let Some(deno_host) = source_guard
@@ -737,7 +734,7 @@ fn open_iceoryx2_rust_to_subprocess(
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
-    let max_payload = max_payload_bytes_for_schema(&output_schema);
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema);
     let publisher = service.create_publisher(max_payload)?;
     let notifier = notify_service.create_notifier()?;
 
@@ -830,7 +827,7 @@ mod tests {
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                "com.streamlib.test.mock_output_only_processor",
+                "TestMockOutputOnlyProcessor",
                 serde_json::Value::Null,
             ))
             .first()
@@ -843,7 +840,7 @@ mod tests {
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                "com.streamlib.test.mock_input_only_processor",
+                "TestMockInputOnlyProcessor",
                 serde_json::Value::Null,
             ))
             .first()

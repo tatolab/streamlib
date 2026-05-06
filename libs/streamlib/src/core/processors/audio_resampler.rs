@@ -15,7 +15,7 @@ fn quality_to_resampling_quality(quality: &Quality) -> ResamplingQuality {
     }
 }
 
-#[crate::processor("com.tatolab.audio_resampler")]
+#[crate::processor("AudioResampler")]
 pub struct AudioResamplerProcessor {
     resampler: Option<AudioResampler>,
     output_sample_rate: u32,

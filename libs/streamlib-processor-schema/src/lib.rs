@@ -18,15 +18,25 @@ pub use thread_priority::ThreadPriority;
 // Processor schema re-exports
 pub use error::{SchemaError, SchemaResult};
 pub use processor_schema::{
-    compute_schema_id, to_pascal_case, to_snake_case, ProcessorConfigSchema, ProcessorLanguage,
-    ProcessorPortSchema, ProcessorSchema, ProcessorSchemaExecution, ProcessorStateField,
-    RuntimeConfig, RuntimeOptions,
+    compute_schema_id, to_pascal_case, to_snake_case, PortSchemaSpec, ProcessorConfigSchema,
+    ProcessorLanguage, ProcessorPortSchema, ProcessorSchema, ProcessorSchemaExecution,
+    ProcessorStateField, RuntimeConfig, RuntimeOptions,
 };
 pub use processor_schema_parser::{parse_processor_yaml, parse_processor_yaml_file};
 
-/// Minimal project config for parsing only the `processors` field from `streamlib.yaml`.
+// Re-export structured-identity types so consumers (the macro, runtime
+// loaders) reach `SchemaIdent`, `Org`, `Package`, etc. through this crate
+// without depending on `streamlib-idents` directly.
+pub use streamlib_idents::{Org, Package, PackageMetadata, SchemaIdent, SemVer, TypeName};
+
+/// Minimal project config for the macro: surfaces the `package:` block (so
+/// processor short names can be resolved to a structured [`SchemaIdent`])
+/// and the `processors:` list. The resolver in `streamlib-idents` handles
+/// the full dependency graph; this is a focused view for codegen.
 #[derive(serde::Deserialize)]
 pub struct ProjectConfigMinimal {
+    #[serde(default)]
+    pub package: Option<PackageMetadata>,
     #[serde(default)]
     pub processors: Vec<ProcessorSchema>,
 }

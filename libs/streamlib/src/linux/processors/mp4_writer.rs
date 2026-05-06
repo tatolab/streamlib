@@ -18,7 +18,7 @@ use std::process::{Child, Command, Stdio};
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("com.streamlib.linux_mp4_writer")]
+#[crate::processor("LinuxMp4Writer")]
 pub struct LinuxMp4WriterProcessor {
     /// GPU context for resolving VideoFrame pixel buffers.
     gpu_context: Option<GpuContextLimitedAccess>,

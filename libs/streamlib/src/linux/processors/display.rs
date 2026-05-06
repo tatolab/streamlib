@@ -35,7 +35,7 @@ pub struct LinuxWindowId(pub u64);
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
-#[crate::processor("com.tatolab.display")]
+#[crate::processor("Display")]
 pub struct LinuxDisplayProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     window_id: LinuxWindowId,

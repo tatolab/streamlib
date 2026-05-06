@@ -10,7 +10,7 @@ use streamlib::core::GeneratedProcessor;
 use streamlib::core::{EmptyConfig, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 // Define a simple processor using YAML schema
-#[streamlib::processor("com.streamlib.test.processor")]
+#[streamlib::processor("TestProcessor")]
 pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
@@ -80,7 +80,7 @@ fn test_processor_instantiation() {
     let processor = TestProcessor::Processor::from_config(EmptyConfig).unwrap();
 
     // Verify it has the expected name from YAML schema
-    assert_eq!(processor.name(), "com.streamlib.test.processor");
+    assert_eq!(processor.name(), "TestProcessor");
 }
 
 // Test with config field
@@ -103,7 +103,7 @@ mod _generated_ {
     pub use super::ConfiguredProcessorConfig;
 }
 
-#[streamlib::processor("com.streamlib.test.configured_processor")]
+#[streamlib::processor("TestConfiguredProcessor")]
 pub struct ConfiguredProcessor;
 
 impl streamlib::ContinuousProcessor for ConfiguredProcessor::Processor {

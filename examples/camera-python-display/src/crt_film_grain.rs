@@ -104,7 +104,7 @@ impl Default for CrtFilmGrainConfig {
     }
 }
 
-#[streamlib::processor("com.tatolab.crt_film_grain")]
+#[streamlib::processor("CrtFilmGrain")]
 pub struct CrtFilmGrainProcessor {
     config: CrtFilmGrainConfig,
     gpu_context: Option<GpuContextLimitedAccess>,

@@ -19,9 +19,7 @@
 use std::time::{Duration, Instant};
 
 use iceoryx2::prelude::*;
-use streamlib::core::embedded_schemas::{
-    max_payload_bytes_for_schema, schema_ident_wire_from_joined,
-};
+use streamlib::core::embedded_schemas::max_payload_bytes_for_schema;
 use streamlib::iceoryx2::{
     FrameHeader, Iceoryx2Node, SchemaIdentWire, FRAME_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
@@ -250,8 +248,9 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let total_len = FRAME_HEADER_SIZE + data_size;
     let mut frame = vec![0u8; total_len];
-    let schema_ident = schema_ident_wire_from_joined("@tatolab/core/EncodedVideoFrame@1.0.0")
-        .expect("EncodedVideoFrame must resolve to structured wire bytes");
+    let schema_ident =
+        SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0)
+            .expect("EncodedVideoFrame segments fit SchemaIdentWire bounds");
     FrameHeader::new("dest_port", schema_ident, 42, data_size as u32)
         .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);

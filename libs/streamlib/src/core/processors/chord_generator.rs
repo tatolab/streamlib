@@ -53,7 +53,7 @@ struct OscillatorState {
     osc_g4: SineOscillator,
 }
 
-#[crate::processor("com.tatolab.chord_generator")]
+#[crate::processor("ChordGenerator")]
 pub struct ChordGeneratorProcessor {
     /// Shared oscillator state for the audio clock callback.
     oscillators: Arc<Mutex<Option<OscillatorState>>>,

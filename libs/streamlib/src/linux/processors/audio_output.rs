@@ -58,7 +58,7 @@ pub struct LinuxAudioDevice {
     pub is_default: bool,
 }
 
-#[crate::processor("com.tatolab.audio_output")]
+#[crate::processor("AudioOutput")]
 pub struct LinuxAudioOutputProcessor {
     device_id: Option<usize>,
     device_name: String,

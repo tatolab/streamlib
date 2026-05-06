@@ -3,10 +3,83 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use streamlib_idents::SchemaIdent;
 
 // ============================================================================
 // Processor Schema Types
 // ============================================================================
+
+/// Schema spec for a port — either a fully-qualified [`SchemaIdent`] or the
+/// `Any` wildcard for ports that accept arbitrary serialized payloads (used
+/// today by MoQ publish/subscribe tracks).
+///
+/// YAML accepts only two shapes:
+/// - `schema: any` — wildcard
+/// - `schema: { org, package, type, version }` — 4-field structured map
+///
+/// Joined-string `'@org/pkg/Type@version'` shorthand is rejected per the
+/// `joined_string_is_not_a_valid_yaml_shape` invariant in
+/// `streamlib-idents`.
+///
+/// `Default` resolves to [`PortSchemaSpec::Any`] — the most permissive
+/// shape. Used by callers that build a `PortInfo` before the routing tag
+/// is known (e.g. graph-builder fallbacks); a default `Any` carries no
+/// false specificity.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PortSchemaSpec {
+    #[default]
+    Any,
+    Specific(SchemaIdent),
+}
+
+impl Serialize for PortSchemaSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            PortSchemaSpec::Any => serializer.serialize_str("any"),
+            PortSchemaSpec::Specific(ident) => ident.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PortSchemaSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match value {
+            serde_yaml::Value::String(s) if s == "any" => Ok(PortSchemaSpec::Any),
+            serde_yaml::Value::String(s) => Err(D::Error::custom(format!(
+                "port schema must be either `any` or a 4-field structured map \
+                 ({{ org, package, type, version }}); got string `{}`. Joined-string \
+                 shorthand is not allowed (`docs/architecture/schema-identity-and-packaging.md`).",
+                s
+            ))),
+            mapping @ serde_yaml::Value::Mapping(_) => {
+                let ident: SchemaIdent =
+                    serde_yaml::from_value(mapping).map_err(D::Error::custom)?;
+                Ok(PortSchemaSpec::Specific(ident))
+            }
+            other => Err(D::Error::custom(format!(
+                "port schema must be either `any` or a 4-field structured map; got {:?}",
+                other
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Display for PortSchemaSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PortSchemaSpec::Any => f.write_str("any"),
+            PortSchemaSpec::Specific(ident) => ident.fmt(f),
+        }
+    }
+}
 
 /// Runtime language for a processor.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -242,8 +315,8 @@ impl<'de> Deserialize<'de> for ProcessorSchemaExecution {
 pub struct ProcessorPortSchema {
     /// Port name (e.g., "video_in").
     pub name: String,
-    /// Schema reference with version (e.g., "com.tatolab.videoframe@1.0.0").
-    pub schema: String,
+    /// Structured schema spec — either `any` or a 4-field [`SchemaIdent`].
+    pub schema: PortSchemaSpec,
     /// Human-readable description.
     #[serde(default)]
     pub description: Option<String>,

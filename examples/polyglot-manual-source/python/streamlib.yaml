@@ -12,4 +12,4 @@ processors:
     entrypoint: "manual_source:PolyglotManualSource"
     outputs:
       - name: frame_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }

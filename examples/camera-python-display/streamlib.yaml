@@ -1,5 +1,11 @@
+package:
+  org: tatolab
+  name: camera-python-display
+  version: 0.1.0
+  description: "Camera + Python processor + Display example with CRT/film-grain, CUDA copy, and blending compositor processors"
+
 processors:
-  - name: com.tatolab.crt_film_grain
+  - name: CrtFilmGrain
     version: 1.0.0
     description: "CRT display + 80s film grain effect"
     execution: reactive
@@ -8,27 +14,27 @@ processors:
         unsafe_send: true
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "Video frames to process"
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "Processed video frames"
 
-  - name: com.tatolab.camera_to_cuda_copy
+  - name: CameraToCudaCopy
     version: 1.0.0
     description: "Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal (#612)"
     execution: reactive
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "Camera ring texture (RGBA8 DMA-BUF) frame metadata"
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "Camera frame forwarded verbatim; cuda surface side-effect happens during process()"
 
-  - name: com.tatolab.blending_compositor
+  - name: BlendingCompositor
     version: 1.0.0
     description: "Multi-layer alpha blending compositor with PiP support"
     execution: manual
@@ -37,18 +43,18 @@ processors:
         unsafe_send: true
     inputs:
       - name: video_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "Video frames (base layer)"
       - name: lower_third_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "Lower third overlay (RGBA with transparency)"
       - name: watermark_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "Watermark overlay (RGBA with transparency)"
       - name: pip_in
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "PiP overlay (avatar character with transparent background)"
     outputs:
       - name: video_out
-        schema: '@tatolab/core/VideoFrame@1.0.0'
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
         description: "Composited video frames"

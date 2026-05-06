@@ -458,9 +458,13 @@ structured boundary.
 
 The two allowed construction pathways:
 
-- **Codegen-emitted const literals** — `SCHEMA_IDENT: SchemaIdent =
-  SchemaIdent::new(Org::new("tatolab").unwrap(), …)` lands in the
-  generated `_generated_/` files at build time.
+- **Codegen-emitted const literals** — `SchemaIdent::new(Org::new("tatolab").unwrap(), …)`
+  lands in the macro-generated processor module at build time, exposed via
+  a `pub fn schema_ident() -> SchemaIdent` on each `#[streamlib::processor("Camera")]`-
+  decorated module. (Originally specified as a top-level `SCHEMA_IDENT: SchemaIdent`
+  const; the function form ships in #404 because `SchemaIdent`'s validating
+  constructors don't fit a `const` context. The function call is the same
+  one-line read at every call site, fully resolved at codegen.)
 - **Typed YAML / JSON deserialization** — each segment is its own
   field in the source document; `serde` reads the structured shape
   directly into `SchemaIdent { org, package, r#type, version }`.
@@ -491,11 +495,21 @@ use tatolab_core::VIDEO_FRAME_IDENT;
 graph.add_edge(VIDEO_FRAME_IDENT, …);   // No org/package on the wire
 ```
 
-The package-internal short-name pattern (`#[streamlib::processor(name =
-"Camera")]`) is the **only** shorthand mechanism in the architecture.
-Cross-package references in graph JSON, IPC envelopes, generated
-code, and lockfiles carry a fully-qualified `SchemaIdent { org,
+The package-internal short-name pattern (`#[streamlib::processor("Camera")]`
+— positional PascalCase short name) is the **only** shorthand mechanism
+in the architecture. Cross-package references in graph JSON, IPC envelopes,
+generated code, and lockfiles carry a fully-qualified `SchemaIdent { org,
 package, type, version }` structured record.
+
+> ~~Earlier revisions of this section showed the named-arg form
+> `#[streamlib::processor(name = "Camera")]`.~~ — Superseded 2026-05-05 by
+> #404. The macro takes a positional PascalCase short name (`"Camera"`),
+> resolves `org`/`package`/`version` from the enclosing
+> `streamlib.yaml`'s `package:` block, and emits a function returning the
+> full structured `SchemaIdent` per processor module
+> (`Processor::schema_ident()`). The named-arg form was the doc's
+> aspirational shape; the positional form is what landed and what every
+> in-tree call site uses today.
 
 When the macro emits per-package consts, those consts hold a
 *structured* `SchemaIdent` — the consumer can read its fields, but
