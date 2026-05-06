@@ -211,7 +211,7 @@ fn main() -> Result<()> {
         "fps": FPS,
     });
     let canvas = runtime.add_processor(ProcessorSpec::new(
-        "com.tatolab.skia_canvas",
+        "SkiaCanvas",
         canvas_config,
     ))?;
     println!("+ Skia canvas processor: {canvas}");

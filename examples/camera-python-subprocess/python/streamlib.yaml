@@ -1,10 +1,11 @@
 package:
+  org: tatolab
   name: camera-python-subprocess
   version: "0.1.0"
   description: "Grayscale processor — converts video frames to grayscale via Python subprocess"
 
 processors:
-  - name: com.tatolab.grayscale
+  - name: Grayscale
     version: "1.0.0"
     description: "Grayscale processor — converts video frames to grayscale via Python subprocess"
     runtime: python

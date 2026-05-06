@@ -1,10 +1,11 @@
 package:
+  org: tatolab
   name: cyberpunk-processor
   version: "0.1.0"
   description: "Cyberpunk video overlay processors using isolated subprocess architecture"
 
 processors:
-  - name: com.tatolab.avatar_character
+  - name: AvatarCharacter
     version: "1.0.0"
     description: "MediaPipe pose detection + stylized 3D character as PiP overlay"
     runtime: python
@@ -17,7 +18,7 @@ processors:
       - name: video_out
         schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
 
-  - name: com.tatolab.cyberpunk_lower_third
+  - name: CyberpunkLowerThird
     version: "1.0.0"
     description: "Cyberpunk animated lower third overlay — continuous RGBA generator"
     runtime: python
@@ -29,7 +30,7 @@ processors:
       - name: video_out
         schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
 
-  - name: com.tatolab.cyberpunk_watermark
+  - name: CyberpunkWatermark
     version: "1.0.0"
     description: "Spray paint style watermark overlay — continuous RGBA generator"
     runtime: python
@@ -41,12 +42,25 @@ processors:
       - name: video_out
         schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
 
-  - name: com.tatolab.cyberpunk_glitch
+  - name: CyberpunkGlitch
     version: "1.0.0"
     description: "Glitch post-processing — RGB separation, scanlines, slice displacement"
     runtime: python
     execution: reactive
     entrypoint: "cyberpunk_glitch:CyberpunkGlitch"
+    inputs:
+      - name: video_in
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+    outputs:
+      - name: video_out
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+
+  - name: CyberpunkProcessor
+    version: "1.0.0"
+    description: "Cyberpunk overlay with Skia GPU rendering — reference @processor adopter"
+    runtime: python
+    execution: reactive
+    entrypoint: "cyberpunk_processor:CyberpunkProcessor"
     inputs:
       - name: video_in
         schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
