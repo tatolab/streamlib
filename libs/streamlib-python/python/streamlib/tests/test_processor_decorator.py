@@ -239,15 +239,6 @@ class TestPortSchemaResolution:
         assert isinstance(video_in._streamlib_input_port["schema"], SchemaIdent)
         assert video_in._streamlib_input_port["schema"].type_ == "VideoFrame"
 
-    def test_legacy_at_schema_class_directs_to_followup(self) -> None:
-        class LegacySchema:
-            __streamlib_schema__ = {"name": "VideoFrame", "fields": []}
-
-        with pytest.raises(TypeError, match="#704"):
-            @input(schema=LegacySchema)
-            def video_in(self):
-                pass
-
     def test_class_without_schema_metadata_rejected(self) -> None:
         class Plain:
             pass
@@ -263,3 +254,44 @@ class TestPortSchemaResolution:
             pass
 
         assert control._streamlib_input_port["schema"] is None
+
+
+# =============================================================================
+# Codegen-emitted classes carry __streamlib_schema_ident__
+# =============================================================================
+
+
+class TestGeneratedSchemaIdents:
+    """Lock the codegen → `@input(schema=GeneratedClass)` path end-to-end.
+
+    Imports a real codegen-emitted class from the in-tree `_generated_/`
+    tree and asserts the structured `SchemaIdent` attribute it carries
+    matches the manifest-declared identity. If `streamlib generate` is
+    rerun, this test catches a regression in the post-processor's
+    SchemaIdent injection.
+    """
+
+    def test_video_frame_carries_structured_schema_ident(self) -> None:
+        from streamlib._generated_.tatolab__core import VideoFrame
+
+        ident = getattr(VideoFrame, "__streamlib_schema_ident__", None)
+        assert isinstance(ident, SchemaIdent), (
+            "VideoFrame must carry __streamlib_schema_ident__: SchemaIdent. "
+            "If this fails, rerun `cargo xtask generate-schemas --runtime python "
+            "--project-dir libs/streamlib --output libs/streamlib-python/python/streamlib/_generated_`."
+        )
+        assert ident.org == "tatolab"
+        assert ident.package == "core"
+        assert ident.type_ == "VideoFrame"
+        assert ident.version == "1.0.0"
+
+    def test_input_port_resolves_codegen_emitted_class(self) -> None:
+        from streamlib._generated_.tatolab__core import AudioFrame
+
+        @input(schema=AudioFrame)
+        def audio_in(self):
+            pass
+
+        resolved = audio_in._streamlib_input_port["schema"]
+        assert isinstance(resolved, SchemaIdent)
+        assert resolved == SchemaIdent("tatolab", "core", "AudioFrame", "1.0.0")

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Decorators for defining StreamLib processors and schemas in Python.
+"""Decorators for defining StreamLib processors in Python.
 
 `@processor("PascalCase")` mirrors Rust's `#[streamlib::processor("Camera")]`
 proc-macro: a positional PascalCase short name that the decorator resolves
@@ -12,9 +12,14 @@ as `__streamlib_schema_ident__`.
 
 Schema references in port declarations (`@input(schema=...)` /
 `@output(schema=...)`) are cross-package by definition. The only accepted
-forms are a `SchemaIdent` instance or a `@schema`-decorated class. Bare
-type names and joined-string identifiers are rejected — see the
-architecture preamble in issue #700 and
+forms are a [`SchemaIdent`][streamlib.schema_ident.SchemaIdent] instance
+or a codegen-emitted class carrying `__streamlib_schema_ident__` as a
+class attribute (produced by `streamlib generate` from the package's
+JTD/YAML schemas). There is no Python-side authoring decorator for
+declaring new schemas — JTD-in-YAML is the canonical schema source, and
+deriving JTD from Python field declarations would leak Python-native
+expressivity that doesn't translate cross-language. See the architecture
+preamble in issue #704 and
 `docs/architecture/schema-identity-and-packaging.md`.
 
 Timestamps
@@ -38,125 +43,11 @@ human-facing display.
 from __future__ import annotations
 
 import inspect
-import sys
 from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import Optional, Type, Union
 
 from ._manifest import ManifestParseError, read_manifest_summary
 from .schema_ident import SchemaIdent
-
-
-# =============================================================================
-# Schema Field Descriptors
-# =============================================================================
-
-
-class SchemaField:
-    """Descriptor for a field in a schema.
-
-    Used by the field descriptor functions (f32, i64, etc.) to define
-    schema fields. The @schema decorator collects these into a
-    Rust-backed DynamicDataFrameSchema.
-    """
-
-    def __init__(
-        self,
-        primitive_type: str,
-        shape: Optional[List[int]] = None,
-        description: str = "",
-    ):
-        self.primitive_type = primitive_type
-        self.shape = shape or []
-        self.description = description
-
-    def __repr__(self) -> str:
-        if self.shape:
-            return f"SchemaField({self.primitive_type}, shape={self.shape})"
-        return f"SchemaField({self.primitive_type})"
-
-
-def f32(shape: Optional[List[int]] = None, description: str = "") -> SchemaField:
-    """Define a 32-bit float field."""
-    return SchemaField("f32", shape, description)
-
-
-def f64(shape: Optional[List[int]] = None, description: str = "") -> SchemaField:
-    """Define a 64-bit float field."""
-    return SchemaField("f64", shape, description)
-
-
-def i32(shape: Optional[List[int]] = None, description: str = "") -> SchemaField:
-    """Define a 32-bit signed integer field."""
-    return SchemaField("i32", shape, description)
-
-
-def i64(shape: Optional[List[int]] = None, description: str = "") -> SchemaField:
-    """Define a 64-bit signed integer field."""
-    return SchemaField("i64", shape, description)
-
-
-def u32(shape: Optional[List[int]] = None, description: str = "") -> SchemaField:
-    """Define a 32-bit unsigned integer field."""
-    return SchemaField("u32", shape, description)
-
-
-def u64(shape: Optional[List[int]] = None, description: str = "") -> SchemaField:
-    """Define a 64-bit unsigned integer field."""
-    return SchemaField("u64", shape, description)
-
-
-def bool_field(description: str = "") -> SchemaField:
-    """Define a boolean field.
-
-    Named ``bool_field`` to avoid shadowing Python's ``bool`` builtin.
-    """
-    return SchemaField("bool", None, description)
-
-
-# =============================================================================
-# Schema Decorator (untouched here; structured-ident parity tracked in #704)
-# =============================================================================
-
-
-def schema(name: Optional[str] = None):
-    """Define a custom data schema backed by Rust.
-
-    The decorated class should have class attributes that are SchemaField
-    instances (created via f32, i64, bool_field, etc.). The decorator
-    collects these fields and creates a Rust-backed DynamicDataFrameSchema.
-
-    NOTE: The structured-`SchemaIdent` parity migration for `@schema`
-    tracks in issue #704 (filed alongside #700). This decorator's shape
-    is unchanged in #700 — it still attaches a `__streamlib_schema__` dict
-    carrier; #704 replaces that with `__streamlib_schema_ident__: SchemaIdent`.
-    """
-
-    def decorator(cls):
-        schema_name = name or cls.__name__
-
-        fields = []
-        for attr_name in dir(cls):
-            if attr_name.startswith("_"):
-                continue
-            attr_value = getattr(cls, attr_name, None)
-            if isinstance(attr_value, SchemaField):
-                fields.append(
-                    {
-                        "name": attr_name,
-                        "primitive_type": attr_value.primitive_type,
-                        "shape": attr_value.shape,
-                        "description": attr_value.description,
-                    }
-                )
-
-        cls.__streamlib_schema__ = {
-            "name": schema_name,
-            "fields": fields,
-        }
-
-        return cls
-
-    return decorator
 
 
 # =============================================================================
@@ -291,20 +182,18 @@ def input(
 
     Args:
         name: Port name. Defaults to the method name.
-        schema: A structured carrier — either a `SchemaIdent` instance
-            (cross-package or same-package) or a class decorated with
-            `@schema` (whose `__streamlib_schema_ident__` is read).
-            String forms (bare type name or joined `@org/pkg/Type@v`)
-            are rejected with a clear error.
+        schema: A structured carrier — either a `SchemaIdent` instance or
+            a codegen-emitted class that carries `__streamlib_schema_ident__`
+            as a class attribute (produced by `streamlib generate` from the
+            package's JTD/YAML schemas). String forms (bare type name or
+            joined `@org/pkg/Type@v`) are rejected with a clear error.
         description: Human-readable description for introspection.
 
     Example:
         ```python
-        from streamlib import input, SchemaIdent
+        from streamlib._generated_.tatolab__core import VideoFrame
 
-        VIDEO_FRAME = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
-
-        @input(schema=VIDEO_FRAME, description="RGB video input")
+        @input(schema=VideoFrame, description="RGB video input")
         def video_in(self): pass
         ```
     """
@@ -351,10 +240,9 @@ def _resolve_schema_ident(schema_arg) -> Optional[SchemaIdent]:
     Accepts:
         - `None` (port has no declared schema)
         - `SchemaIdent` instance (returned as-is)
-        - a class with `__streamlib_schema_ident__` attribute (a
-          `@schema`-decorated class once #704 lands; today these classes
-          carry `__streamlib_schema__` legacy dict — that path is rejected
-          with guidance until #704)
+        - a codegen-emitted class carrying `__streamlib_schema_ident__`
+          as a `ClassVar[SchemaIdent]` attribute (produced by
+          `streamlib generate` from the package's JTD/YAML schemas)
 
     Rejects:
         - any string (bare type name OR joined `@org/pkg/Type@v` form)
@@ -377,18 +265,13 @@ def _resolve_schema_ident(schema_arg) -> Optional[SchemaIdent]:
         ident = getattr(schema_arg, "__streamlib_schema_ident__", None)
         if isinstance(ident, SchemaIdent):
             return ident
-        if hasattr(schema_arg, "__streamlib_schema__"):
-            raise TypeError(
-                f"schema={schema_arg.__name__}: this class is decorated with the "
-                f"legacy `@schema(name=...)` form whose structured-ident parity "
-                f"lands in #704. Pass a `SchemaIdent` instance directly until then."
-            )
         raise TypeError(
             f"schema={schema_arg.__name__}: class does not carry a structured "
-            f"SchemaIdent. Decorate it with `@schema(\"PascalCase\")` (post-#704) "
-            f"or pass a `SchemaIdent` instance directly."
+            f"SchemaIdent. Import a codegen-emitted class from "
+            f"streamlib._generated_.<package>, or pass a `SchemaIdent` "
+            f"instance directly."
         )
     raise TypeError(
         f"schema={schema_arg!r}: unsupported type {type(schema_arg).__name__}. "
-        f"Pass a `SchemaIdent` instance or a `@schema`-decorated class."
+        f"Pass a `SchemaIdent` instance or a codegen-emitted schema class."
     )

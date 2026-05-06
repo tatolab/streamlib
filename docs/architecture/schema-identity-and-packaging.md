@@ -510,6 +510,22 @@ to the authoring path:
   `__streamlib_schema_ident__`. Bare-string and joined-string
   forms are rejected at decoration time, mirroring the no-parse
   invariant on the Rust side.
+- **Schemas enter Python only through codegen.** Authors import
+  generated dataclasses from `streamlib._generated_.<package>`
+  (or their own package's `_generated_/`); the codegen Python
+  post-processor injects
+  `__streamlib_schema_ident__: ClassVar[SchemaIdent] =
+  SchemaIdent(org=…, package=…, type_=…, version=…)` as a class
+  attribute on every new-shape (`metadata.type` + package
+  context) generated dataclass, so `@input(schema=GeneratedClass)`
+  resolves to a structured `SchemaIdent` directly. There is no
+  language-side authoring affordance for declaring schemas —
+  JTD-in-YAML is the canonical schema source, and deriving JTD
+  from Python field declarations would leak Python-native
+  expressivity (custom classes, numpy types, pydantic types)
+  that doesn't translate cross-language. The same constraint
+  applies to Rust and Deno: schemas are always YAML-authored,
+  generated code is what authors import.
 
 The reason for the focused subset rather than full parity:
 structured-everywhere eliminates the need for non-Rust callers to
@@ -527,6 +543,25 @@ schema-only / language-specific by construction"* — the deeper
 crate functionality (range matching, lockfile, codegen) is
 "language-specific by construction" while basic identity
 validation is mirrored across runtimes that need it.
+
+### Codegen-emitted `SCHEMA_IDENT` (Python today; Rust + TS pending)
+
+Decision 2 above lists "codegen-emitted const records
+(`SCHEMA_IDENT: SchemaIdent { … }`)" as a structured-everywhere
+surface. To the best of our current knowledge as of issue #704,
+the Python post-processor in `streamlib-jtd-codegen` is the only
+one that emits the structured ident on generated types
+(`__streamlib_schema_ident__: ClassVar[SchemaIdent]`). The Rust
+and TypeScript post-processors emit the dataclass / struct /
+interface body but no `SCHEMA_IDENT` const yet. Python is the
+load-bearing case because `@streamlib.input(schema=...)` /
+`@streamlib.output(schema=...)` resolves the structured ident
+*off the class* via `__streamlib_schema_ident__`; Rust and TS
+have no analogous runtime resolution path that requires the
+const today. Bringing those backends to parity (so `Generated
+struct VideoFrame { … }` carries a `pub const SCHEMA_IDENT:
+SchemaIdent = …` and the TS interface analogue) is filed as a
+follow-up to #704.
 
 ## Reference
 

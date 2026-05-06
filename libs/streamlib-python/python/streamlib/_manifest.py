@@ -3,7 +3,7 @@
 
 """Minimal hand-rolled YAML reader for `streamlib.yaml` package metadata.
 
-Reads only the shape needed by the `@processor` / `@schema` decorators:
+Reads only the shape needed by the `@processor` decorator:
 
 - top-level `package: { org, name, version, ... }` block
 - top-level `processors:` list, returning the `name` of each entry

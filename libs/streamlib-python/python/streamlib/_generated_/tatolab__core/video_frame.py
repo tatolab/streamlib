@@ -8,7 +8,8 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional, Union, get_args, get_origin
+from typing import Any, ClassVar, Dict, Optional, Union, get_args, get_origin
+from streamlib.schema_ident import SchemaIdent
 
 
 @dataclass
@@ -16,6 +17,12 @@ class VideoFrame:
     """
     Video frame for IPC - references GPU surface by ID
     """
+    __streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent(
+        org="tatolab",
+        package="core",
+        type_="VideoFrame",
+        version="1.0.0",
+    )
 
     frame_index: 'str'
     """
