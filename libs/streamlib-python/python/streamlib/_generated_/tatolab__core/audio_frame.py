@@ -8,7 +8,8 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Union, get_args, get_origin
+from typing import Any, ClassVar, Dict, List, Optional, Union, get_args, get_origin
+from streamlib.schema_ident import SchemaIdent
 
 
 @dataclass
@@ -16,6 +17,13 @@ class AudioFrame:
     """
     Audio frame with interleaved samples (1-8 channels)
     """
+    __streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent(
+        org="tatolab",
+        package="core",
+        type_="AudioFrame",
+        version="1.0.0",
+    )
+
 
     channels: 'int'
     """

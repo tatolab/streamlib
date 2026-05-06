@@ -518,7 +518,27 @@ fn run_jtd_codegen_python(tasks: &[SchemaTask], output_dir: &Path) -> Result<()>
             )
         })?;
 
-        let processed_code = post_process_python(&python_code, &identity.struct_name);
+        // New-shape schemas (declaring `metadata.type` under a package-flavor
+        // streamlib.yaml) carry a structured `SchemaIdent` on every emitted
+        // class. Legacy `metadata.name`-shape schemas have no enclosing package
+        // context to construct from and are emitted as plain dataclasses;
+        // authors who reference them construct `SchemaIdent` directly until
+        // #702 migrates them off reverse-DNS.
+        let schema_ident_emit: Option<SchemaIdentEmit> = if identity.package_subdir.is_some() {
+            task.package.as_ref().map(|p| SchemaIdentEmit {
+                org: p.org.clone(),
+                package: p.name.clone(),
+                type_name: identity.struct_name.clone(),
+                version: p.version.to_string(),
+            })
+        } else {
+            None
+        };
+        let processed_code = post_process_python(
+            &python_code,
+            &identity.struct_name,
+            schema_ident_emit.as_ref(),
+        );
         let restored_code = sentinel::restore_python(&processed_code, &sentinel_table);
 
         let output_path = identity.output_path(output_dir, "py");
@@ -948,17 +968,230 @@ fn camel_to_snake(s: &str) -> String {
     result
 }
 
+/// Codegen-emit shape for a structured schema identifier. Carries the four
+/// segments the post-processors weave into generated language sources so a
+/// generated class is self-identifying without an authoring decorator.
+///
+/// Constructed at the run-codegen call site from the schema's enclosing
+/// `PackageContext` (org / package / version) and the schema's
+/// `metadata.type` (PascalCase). Legacy `metadata.name`-shape schemas have
+/// no enclosing package context and therefore no `SchemaIdentEmit`.
+#[derive(Debug, Clone)]
+struct SchemaIdentEmit {
+    org: String,
+    package: String,
+    type_name: String,
+    version: String,
+}
+
 /// Post-process jtd-codegen Python output.
-fn post_process_python(code: &str, expected_class_name: &str) -> String {
+///
+/// Always strips the `ROOT_NAME_SENTINEL` placeholder and prepends the
+/// project header. When `schema_ident` is `Some` (new-shape schemas with a
+/// `metadata.type` and an enclosing package-flavor `streamlib.yaml`),
+/// additionally injects a `__streamlib_schema_ident__: ClassVar[SchemaIdent]`
+/// class attribute so `@input(schema=GeneratedClass)` resolves to a
+/// structured `SchemaIdent` without an authoring `@schema` decorator (which
+/// is intentionally not part of the SDK; see issue #704).
+fn post_process_python(
+    code: &str,
+    expected_class_name: &str,
+    schema_ident: Option<&SchemaIdentEmit>,
+) -> String {
     let rewritten = code.replace(ROOT_NAME_SENTINEL, expected_class_name);
 
-    format!(
+    let with_header = format!(
         "# Copyright (c) 2025 Jonathan Fontanez\n\
          # SPDX-License-Identifier: BUSL-1.1\n\
          #\n\
          # Generated from JTD schema using jtd-codegen. DO NOT EDIT.\n\n{}",
         rewritten
-    )
+    );
+
+    match schema_ident {
+        Some(ident) => inject_schema_ident_python(&with_header, expected_class_name, ident),
+        None => with_header,
+    }
+}
+
+/// Rewrite the generated Python code so the `from typing import …` line
+/// imports `ClassVar` (adding it alphabetically when absent) and a
+/// `from streamlib.schema_ident import SchemaIdent` line follows it.
+///
+/// jtd-codegen v0.4.1 emits a single `from typing import …` line whose
+/// import set varies per schema (e.g. some include `List`, most don't).
+/// Parsing the line preserves whatever set the codegen produced rather
+/// than depending on a literal string match.
+///
+/// Falls back to prepending fresh imports below the project header when
+/// no `from typing import` line is present (defensive — every jtd-codegen
+/// v0.4.1 emit currently has one).
+fn inject_typing_imports(code: &str) -> String {
+    const SCHEMA_IDENT_IMPORT: &str = "from streamlib.schema_ident import SchemaIdent";
+    let typing_prefix = "from typing import ";
+    let mut output = String::with_capacity(code.len() + 64);
+    let mut handled = false;
+
+    for line in code.split_inclusive('\n') {
+        if !handled && line.trim_start().starts_with(typing_prefix) {
+            let trim_start = line.find(typing_prefix).unwrap();
+            let prefix_end = trim_start + typing_prefix.len();
+            // Keep any trailing `\n` (or trailing whitespace) on the original line.
+            let (imports_str, line_tail) = match line[prefix_end..].find('\n') {
+                Some(nl_idx) => (
+                    &line[prefix_end..prefix_end + nl_idx],
+                    &line[prefix_end + nl_idx..],
+                ),
+                None => (&line[prefix_end..], ""),
+            };
+            let mut names: Vec<String> = imports_str
+                .split(',')
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+                .collect();
+            if !names.iter().any(|n| n == "ClassVar") {
+                names.push("ClassVar".to_string());
+            }
+            names.sort();
+            names.dedup();
+            output.push_str(&line[..trim_start]);
+            output.push_str(typing_prefix);
+            output.push_str(&names.join(", "));
+            output.push_str(line_tail);
+            // Emit the SchemaIdent import on the next physical line.
+            // `line_tail` already carries the original line's `\n`; if it
+            // didn't, append one so the SchemaIdent import isn't glued to
+            // the typing line.
+            if !line_tail.contains('\n') {
+                output.push('\n');
+            }
+            output.push_str(SCHEMA_IDENT_IMPORT);
+            output.push('\n');
+            handled = true;
+            continue;
+        }
+        output.push_str(line);
+    }
+
+    if !handled {
+        // Fallback: prepend imports immediately after the project header.
+        let marker = "# Generated from JTD schema using jtd-codegen. DO NOT EDIT.\n";
+        if let Some(idx) = output.find(marker) {
+            let insert_at = idx + marker.len();
+            let injection = format!("\nfrom typing import ClassVar\n{}\n", SCHEMA_IDENT_IMPORT);
+            output.insert_str(insert_at, &injection);
+        } else {
+            // No project header either — prepend at the very top.
+            output.insert_str(
+                0,
+                &format!("from typing import ClassVar\n{}\n", SCHEMA_IDENT_IMPORT),
+            );
+        }
+    }
+
+    output
+}
+
+/// Inject `__streamlib_schema_ident__` onto a generated Python dataclass.
+///
+/// Two surgeries on the post-`ROOT_NAME_SENTINEL`-substitution code:
+///
+/// 1. Extend the existing `from typing import …` line to include `ClassVar`
+///    and add a `from streamlib.schema_ident import SchemaIdent` line right
+///    after it. The typing import is always emitted by jtd-codegen v0.4.1
+///    for new-shape schemas (they all have `Optional` fields).
+/// 2. Find the first `class <expected_class_name>:` declaration and inject
+///    the class attribute right after the optional class docstring (or
+///    directly after the class line when there's no docstring), so the
+///    attribute is the first non-docstring statement in the class body.
+///    `ClassVar[SchemaIdent]` opts the attribute out of dataclass field
+///    treatment.
+fn inject_schema_ident_python(
+    code: &str,
+    class_name: &str,
+    ident: &SchemaIdentEmit,
+) -> String {
+    // 1. Extend the existing `from typing import …` line to include `ClassVar`
+    //    and inject `from streamlib.schema_ident import SchemaIdent` right
+    //    after it. The exact set of imports varies per schema (some include
+    //    `List`, some don't, etc.), so parse the line and rewrite it rather
+    //    than literal-matching one specific shape.
+    let with_imports = inject_typing_imports(code);
+
+    // 2. Inject the class attribute after the class declaration + optional
+    //    docstring. Locate the class declaration first.
+    let class_marker = format!("class {}:", class_name);
+    let class_idx = match with_imports.find(&class_marker) {
+        Some(idx) => idx,
+        None => return with_imports, // class line not found; emit unchanged
+    };
+
+    // Cursor sits at the newline that ends the `class X:` line.
+    let mut cursor = class_idx + class_marker.len();
+    let bytes = with_imports.as_bytes();
+
+    // Advance past the trailing newline of the class declaration.
+    if cursor < bytes.len() && bytes[cursor] == b'\n' {
+        cursor += 1;
+    }
+
+    // Skip blank / whitespace-only lines between class line and any docstring.
+    while cursor < bytes.len() {
+        let line_end = with_imports[cursor..]
+            .find('\n')
+            .map(|n| cursor + n)
+            .unwrap_or(bytes.len());
+        let line = &with_imports[cursor..line_end];
+        if line.trim().is_empty() {
+            cursor = if line_end < bytes.len() { line_end + 1 } else { line_end };
+        } else {
+            break;
+        }
+    }
+
+    // Detect and skip an optional triple-quoted docstring.
+    if cursor + 3 <= bytes.len() {
+        let leading = &with_imports[cursor..];
+        let trimmed = leading.trim_start();
+        let leading_ws_len = leading.len() - trimmed.len();
+        let triple = if trimmed.starts_with("\"\"\"") {
+            Some("\"\"\"")
+        } else if trimmed.starts_with("'''") {
+            Some("'''")
+        } else {
+            None
+        };
+        if let Some(triple) = triple {
+            // Position of the docstring opener.
+            let opener_start = cursor + leading_ws_len;
+            let after_opener = opener_start + 3;
+            // Find the matching closing triple-quote.
+            if let Some(close_rel) = with_imports[after_opener..].find(triple) {
+                let close_end = after_opener + close_rel + 3;
+                // Advance cursor past the docstring's trailing newline.
+                let line_end = with_imports[close_end..]
+                    .find('\n')
+                    .map(|n| close_end + n + 1)
+                    .unwrap_or(bytes.len());
+                cursor = line_end;
+            }
+        }
+    }
+
+    // Inject the class attribute at `cursor`. Indented to four spaces,
+    // matching the dataclass body. Wrapped on multiple lines so the version
+    // string and structural commas read cleanly even for the longest
+    // identifiers.
+    let injection = format!(
+        "    __streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent(\n        org=\"{}\",\n        package=\"{}\",\n        type_=\"{}\",\n        version=\"{}\",\n    )\n\n",
+        ident.org, ident.package, ident.type_name, ident.version,
+    );
+
+    let mut result = String::with_capacity(with_imports.len() + injection.len());
+    result.push_str(&with_imports[..cursor]);
+    result.push_str(&injection);
+    result.push_str(&with_imports[cursor..]);
+    result
 }
 
 /// Post-process jtd-codegen TypeScript output.
@@ -1230,7 +1463,7 @@ mod tests {
     #[test]
     fn post_process_python_substitutes_root_sentinel() {
         let code = "@dataclass\nclass StreamlibCanonRoot:\n    @classmethod\n    def from_json_data(cls, data) -> 'StreamlibCanonRoot':\n        return cls()\n";
-        let out = post_process_python(code, "H264DecoderConfig");
+        let out = post_process_python(code, "H264DecoderConfig", None);
         assert!(out.contains("class H264DecoderConfig:"));
         assert!(out.contains("-> 'H264DecoderConfig':"));
         assert!(!out.contains("StreamlibCanonRoot"));
@@ -1239,10 +1472,80 @@ mod tests {
     #[test]
     fn post_process_python_substitutes_sub_types_via_prefix() {
         let code = "class StreamlibCanonRootWhep:\n    pass\nclass StreamlibCanonRoot:\n    pass\n";
-        let out = post_process_python(code, "WebrtcWhepConfig");
+        let out = post_process_python(code, "WebrtcWhepConfig", None);
         assert!(out.contains("class WebrtcWhepConfigWhep:"));
         assert!(out.contains("class WebrtcWhepConfig:"));
         assert!(!out.contains("StreamlibCanonRoot"));
+    }
+
+    #[test]
+    fn post_process_python_legacy_schema_omits_schema_ident() {
+        // Legacy `metadata.name`-shape schemas have no enclosing package
+        // context. The Python emit stays a plain dataclass — no
+        // `__streamlib_schema_ident__` injection, no `ClassVar`/`SchemaIdent`
+        // imports added.
+        let code = "from typing import Any, Dict, Optional, Union, get_args, get_origin\n\n@dataclass\nclass StreamlibCanonRoot:\n    \"\"\"Legacy schema\"\"\"\n\n    field_a: 'str'\n";
+        let out = post_process_python(code, "LegacyConfig", None);
+        assert!(!out.contains("__streamlib_schema_ident__"));
+        assert!(!out.contains("ClassVar"));
+        assert!(!out.contains("from streamlib.schema_ident"));
+        assert!(out.contains("class LegacyConfig:"));
+    }
+
+    #[test]
+    fn post_process_python_new_shape_emits_schema_ident_after_docstring() {
+        // New-shape (`metadata.type` + package context) schemas grow a
+        // ClassVar-typed `__streamlib_schema_ident__` attribute right after
+        // the class docstring, plus the matching imports. Inserts BEFORE
+        // the original blank line so the field annotations stay where they
+        // were — preserving the visual separation.
+        let code = "from typing import Any, Dict, Optional, Union, get_args, get_origin\n\n@dataclass\nclass StreamlibCanonRoot:\n    \"\"\"\n    Multi-line\n    description\n    \"\"\"\n\n    width: 'int'\n    \"\"\"width docstring\"\"\"\n";
+        let ident = SchemaIdentEmit {
+            org: "tatolab".to_string(),
+            package: "core".to_string(),
+            type_name: "VideoFrame".to_string(),
+            version: "1.0.0".to_string(),
+        };
+        let out = post_process_python(code, "VideoFrame", Some(&ident));
+        assert!(out.contains("from typing import Any, ClassVar, Dict, Optional, Union, get_args, get_origin"));
+        assert!(out.contains("from streamlib.schema_ident import SchemaIdent"));
+        assert!(out.contains("__streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent("));
+        assert!(out.contains("org=\"tatolab\""));
+        assert!(out.contains("package=\"core\""));
+        assert!(out.contains("type_=\"VideoFrame\""));
+        assert!(out.contains("version=\"1.0.0\""));
+        // The injection lands inside the class body — the SchemaIdent
+        // construction sits between the docstring and the `width` field
+        // (no `width:` line falls between the close-quote and the
+        // injection start).
+        let ident_idx = out.find("__streamlib_schema_ident__").unwrap();
+        let docstring_close_idx = out
+            .rfind("description\n    \"\"\"")
+            .map(|idx| idx + "description\n    \"\"\"".len())
+            .unwrap();
+        let width_field_idx = out.find("width: 'int'").unwrap();
+        assert!(docstring_close_idx < ident_idx);
+        assert!(ident_idx < width_field_idx);
+    }
+
+    #[test]
+    fn post_process_python_new_shape_handles_no_docstring() {
+        // Defensive: if a future jtd-codegen emit drops the class docstring
+        // for some reason, the schema_ident attribute lands directly after
+        // the class line.
+        let code = "from typing import Any, Dict, Optional, Union, get_args, get_origin\n\n@dataclass\nclass StreamlibCanonRoot:\n    width: 'int'\n";
+        let ident = SchemaIdentEmit {
+            org: "tatolab".to_string(),
+            package: "core".to_string(),
+            type_name: "VideoFrame".to_string(),
+            version: "1.0.0".to_string(),
+        };
+        let out = post_process_python(code, "VideoFrame", Some(&ident));
+        let class_line_idx = out.find("class VideoFrame:").unwrap();
+        let ident_idx = out.find("__streamlib_schema_ident__").unwrap();
+        let width_field_idx = out.find("width: 'int'").unwrap();
+        assert!(class_line_idx < ident_idx);
+        assert!(ident_idx < width_field_idx);
     }
 
     #[test]
