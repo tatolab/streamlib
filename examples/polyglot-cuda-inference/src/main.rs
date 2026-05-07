@@ -50,6 +50,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use streamlib::core::context::GpuContext;
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::host_rhi::{
@@ -96,10 +97,20 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_name(self) -> &'static str {
+    fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => "CudaInference",
-            Self::Deno => "CudaInferenceProcessor",
+            Self::Python => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-cuda-inference").unwrap(),
+                TypeName::new("CudaInference").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
+            Self::Deno => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-cuda-inference-deno").unwrap(),
+                TypeName::new("CudaInferenceProcessor").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
         }
     }
 }
@@ -225,7 +236,7 @@ fn main() -> Result<()> {
         "output_path": output_png.to_string_lossy(),
     });
     let inference = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_name(),
+        runtime_kind.processor_ident(),
         inference_config,
     ))?;
     println!("+ Inference:      {inference}");

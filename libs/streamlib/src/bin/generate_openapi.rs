@@ -21,12 +21,13 @@ use utoipa::OpenApi;
 // We need to duplicate this because the original is private to the processor module
 
 use serde::{Deserialize, Serialize};
-use streamlib::core::json_schema::{GraphResponse, RegistryResponse};
+use streamlib::core::json_schema::{GraphResponse, RegistryResponse, SchemaIdentOutput};
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct CreateProcessorRequest {
-    /// The processor type name (e.g., "CameraProcessor", "DisplayProcessor")
-    processor_type: String,
+    /// Structured processor identity — the four-field map form of
+    /// `@org/package/Type@version`.
+    processor_type: SchemaIdentOutput,
     /// Processor-specific configuration as JSON
     config: serde_json::Value,
 }

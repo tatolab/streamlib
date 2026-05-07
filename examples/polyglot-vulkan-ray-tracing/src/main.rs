@@ -46,6 +46,7 @@ use streamlib::core::context::{
     RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
     RayTracingShaderStageWire, TlasRegisterDecl,
 };
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{
     RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
     RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, StreamTexture,
@@ -102,10 +103,20 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_name(self) -> &'static str {
+    fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => "VulkanRayTracing",
-            Self::Deno => "VulkanRayTracingProcessor",
+            Self::Python => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-vulkan-ray-tracing").unwrap(),
+                TypeName::new("VulkanRayTracing").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
+            Self::Deno => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-vulkan-ray-tracing-deno").unwrap(),
+                TypeName::new("VulkanRayTracingProcessor").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
         }
     }
 }
@@ -663,7 +674,7 @@ fn main() -> Result<()> {
         "rchit_spv_hex": bytes_to_hex(SCENE_RCHIT_SPV),
     });
     let rt = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_name(),
+        runtime_kind.processor_ident(),
         rt_config,
     ))?;
     println!("+ Vulkan ray-tracing processor: {rt}");

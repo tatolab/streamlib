@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::core::descriptors::SchemaIdent;
 use crate::core::error::Result;
 use crate::core::graph::ProcessorUniqueId;
 use serde::{Deserialize, Serialize};
@@ -266,12 +267,12 @@ pub enum RuntimeEvent {
     /// Emitted when compiler will create a processor instance
     CompilerWillCreateProcessor {
         processor_id: ProcessorUniqueId,
-        processor_type: String,
+        processor_type: SchemaIdent,
     },
     /// Emitted when compiler did create a processor instance
     CompilerDidCreateProcessor {
         processor_id: ProcessorUniqueId,
-        processor_type: String,
+        processor_type: SchemaIdent,
     },
     /// Emitted when compiler will destroy a processor instance
     CompilerWillDestroyProcessor {
@@ -316,7 +317,7 @@ pub enum RuntimeEvent {
     // ===== Factory/Registration Events =====
     /// Emitted when a new processor type is registered with the factory
     RuntimeDidRegisterProcessorType {
-        processor_type: String,
+        processor_type: SchemaIdent,
     },
 }
 

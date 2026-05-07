@@ -7,12 +7,18 @@ use crate::core::{Result, StreamError};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
+use streamlib_processor_schema::{Org, Package, SemVer};
 
-/// Package-level metadata from `streamlib.yaml`.
+/// Package-level metadata from `streamlib.yaml`. Structured fields per the
+/// architecture's "structured-everywhere" rule — every published streamlib
+/// package owns its own `streamlib.yaml` with `package: { org, name,
+/// version }`, and the runtime composes processor identities from these
+/// typed segments.
 #[derive(Debug, Deserialize)]
 pub struct PackageMetadata {
-    pub name: String,
-    pub version: String,
+    pub org: Org,
+    pub name: Package,
+    pub version: SemVer,
     #[serde(default)]
     pub description: Option<String>,
     /// Minimum compatible StreamLib version (e.g. ">=0.3.0").
@@ -230,6 +236,7 @@ env:
             file,
             r#"
 package:
+  org: tatolab
   name: test-package
   version: "0.1.0"
   description: Test package
@@ -257,8 +264,9 @@ processors:
         let config = ProjectConfig::load(dir.path()).unwrap();
         assert!(config.package.is_some());
         let pkg = config.package.unwrap();
-        assert_eq!(pkg.name, "test-package");
-        assert_eq!(pkg.version, "0.1.0");
+        assert_eq!(pkg.org.as_str(), "tatolab");
+        assert_eq!(pkg.name.as_str(), "test-package");
+        assert_eq!(pkg.version.to_string(), "0.1.0");
         assert_eq!(config.env.get("MY_VAR"), Some(&"value".to_string()));
         assert_eq!(config.processors.len(), 1);
         assert_eq!(config.processors[0].name, "Grayscale");

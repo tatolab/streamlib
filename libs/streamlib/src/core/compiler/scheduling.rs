@@ -41,11 +41,16 @@ impl SchedulingStrategy {
 }
 
 /// Determine scheduling strategy for a processor based on its type.
+///
+/// The PascalCase short-name segment of the structured ident drives the
+/// heuristic — package/org are intentionally ignored so any package
+/// shipping a processor whose short name contains "Audio", "Camera",
+/// etc. picks up the right thread priority.
 pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> SchedulingStrategy {
-    let processor_type = &node.processor_type;
+    let type_name = node.processor_type.r#type.as_str();
 
     // Camera processors - dedicated thread with high priority
-    if processor_type == "CameraProcessor" || processor_type.contains("Camera") {
+    if type_name == "CameraProcessor" || type_name.contains("Camera") {
         return SchedulingStrategy::DedicatedThread {
             priority: ThreadPriority::High,
             name: Some(format!("camera-{}", node.id)),
@@ -53,7 +58,7 @@ pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> Schedul
     }
 
     // Display processors - dedicated thread with high priority
-    if processor_type == "DisplayProcessor" || processor_type.contains("Display") {
+    if type_name == "DisplayProcessor" || type_name.contains("Display") {
         return SchedulingStrategy::DedicatedThread {
             priority: ThreadPriority::High,
             name: Some(format!("display-{}", node.id)),
@@ -61,9 +66,9 @@ pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> Schedul
     }
 
     // Audio processors get real-time priority
-    if processor_type.contains("Audio")
-        || processor_type.contains("Microphone")
-        || processor_type.contains("Speaker")
+    if type_name.contains("Audio")
+        || type_name.contains("Microphone")
+        || type_name.contains("Speaker")
     {
         return SchedulingStrategy::DedicatedThread {
             priority: ThreadPriority::RealTime,
@@ -72,10 +77,10 @@ pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> Schedul
     }
 
     // Video encoding/decoding gets high priority
-    if processor_type.contains("Encoder")
-        || processor_type.contains("Decoder")
-        || processor_type.contains("H264")
-        || processor_type.contains("H265")
+    if type_name.contains("Encoder")
+        || type_name.contains("Decoder")
+        || type_name.contains("H264")
+        || type_name.contains("H265")
     {
         return SchedulingStrategy::DedicatedThread {
             priority: ThreadPriority::High,
@@ -84,7 +89,7 @@ pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> Schedul
     }
 
     // Compositors get real-time priority (video processing with strict timing)
-    if processor_type.contains("Compositor") {
+    if type_name.contains("Compositor") {
         return SchedulingStrategy::DedicatedThread {
             priority: ThreadPriority::RealTime,
             name: Some(format!("compositor-{}", node.id)),
@@ -101,10 +106,26 @@ pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> Schedul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+
+    fn ident(short_name: &str) -> SchemaIdent {
+        SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("streamlib").unwrap(),
+            TypeName::new(short_name).unwrap(),
+            SemVer::new(1, 0, 0),
+        )
+    }
 
     #[test]
     fn test_scheduling_camera() {
-        let node = ProcessorNode::new("CameraProcessor", "CameraProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            ident("CameraProcessor"),
+            "CameraProcessor",
+            None,
+            vec![],
+            vec![],
+        );
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
                 assert_eq!(priority, ThreadPriority::High);
@@ -115,7 +136,7 @@ mod tests {
     #[test]
     fn test_scheduling_audio() {
         let node = ProcessorNode::new(
-            "AudioCaptureProcessor",
+            ident("AudioCaptureProcessor"),
             "AudioCaptureProcessor",
             None,
             vec![],
@@ -130,7 +151,13 @@ mod tests {
 
     #[test]
     fn test_scheduling_encoder() {
-        let node = ProcessorNode::new("H264Encoder", "H264Encoder", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            ident("H264Encoder"),
+            "H264Encoder",
+            None,
+            vec![],
+            vec![],
+        );
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
                 assert_eq!(priority, ThreadPriority::High);
@@ -140,7 +167,13 @@ mod tests {
 
     #[test]
     fn test_scheduling_generic() {
-        let node = ProcessorNode::new("SomeProcessor", "SomeProcessor", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            ident("SomeProcessor"),
+            "SomeProcessor",
+            None,
+            vec![],
+            vec![],
+        );
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority, .. } => {
                 assert_eq!(priority, ThreadPriority::Normal);

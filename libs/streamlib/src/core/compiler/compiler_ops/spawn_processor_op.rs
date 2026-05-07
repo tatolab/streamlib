@@ -59,10 +59,10 @@ pub(crate) fn spawn_processor(
             .traversal()
             .v(processor_id)
             .first()
-            .map(|n| n.processor_type().to_string())
-            .unwrap_or_default();
-        PROCESSOR_REGISTRY
-            .descriptor(&proc_type)
+            .map(|n| n.processor_type().clone());
+        proc_type
+            .as_ref()
+            .and_then(|ident| PROCESSOR_REGISTRY.descriptor(ident))
             .map(|d| d.runtime.clone())
             .unwrap_or(ProcessorRuntime::Rust)
     };

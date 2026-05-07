@@ -30,9 +30,11 @@ pub struct GraphResponse {
 pub struct ProcessorNodeOutput {
     /// Unique identifier for this processor instance.
     pub id: String,
-    /// The processor type name (e.g., "CameraProcessor", "DisplayProcessor").
+    /// Structured processor identity — `@org/package/Type@version`
+    /// rendered as four typed fields on the wire (the structured-everywhere
+    /// rule). The joined `Display` form is render-only.
     #[serde(rename = "type")]
-    pub processor_type: String,
+    pub processor_type: SchemaIdentOutput,
     /// Display name for UI. May differ from type for hosted processors.
     pub display_name: String,
     /// Processor configuration as JSON.
@@ -155,8 +157,9 @@ pub enum ProcessorRuntimeOutput {
 /// Descriptor for a processor type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorDescriptorOutput {
-    /// Processor type name.
-    pub name: String,
+    /// Structured processor identity — `@org/package/Type@version`
+    /// rendered as four typed fields on the wire.
+    pub name: SchemaIdentOutput,
     /// Human-readable description.
     pub description: String,
     /// Semantic version string.
@@ -329,7 +332,7 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
     fn from(node: &crate::core::graph::ProcessorNode) -> Self {
         Self {
             id: node.id.to_string(),
-            processor_type: node.processor_type.clone(),
+            processor_type: SchemaIdentOutput::from(&node.processor_type),
             display_name: node.display_name.clone(),
             config: node.config.clone(),
             config_checksum: node.config_checksum,
@@ -414,7 +417,7 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
 impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
     fn from(desc: &crate::core::ProcessorDescriptor) -> Self {
         Self {
-            name: desc.name.clone(),
+            name: SchemaIdentOutput::from(&desc.name),
             description: desc.description.clone(),
             version: desc.version.clone(),
             repository: desc.repository.clone(),

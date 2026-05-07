@@ -43,6 +43,7 @@ use streamlib::core::context::{
     GraphicsKernelRunDraw, GraphicsPipelineStateWire, PolygonModeWire,
     PrimitiveTopologyWire,
 };
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{
     AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
@@ -97,10 +98,20 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_name(self) -> &'static str {
+    fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => "VulkanGraphics",
-            Self::Deno => "VulkanGraphicsProcessor",
+            Self::Python => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-vulkan-graphics").unwrap(),
+                TypeName::new("VulkanGraphics").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
+            Self::Deno => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-vulkan-graphics-deno").unwrap(),
+                TypeName::new("VulkanGraphicsProcessor").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
         }
     }
 }
@@ -675,7 +686,7 @@ fn main() -> Result<()> {
         "fragment_spv_hex": bytes_to_hex(TRIANGLE_FRAG_SPV),
     });
     let graphics = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_name(),
+        runtime_kind.processor_ident(),
         graphics_config,
     ))?;
     println!("+ Vulkan graphics processor: {graphics}");

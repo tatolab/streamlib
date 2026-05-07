@@ -6,6 +6,7 @@ use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use crate::PROCESSOR_REGISTRY;
 use crate::{
     core::{
+        descriptors::{Org, Package, SchemaIdent, SemVer, TypeName},
         Result, RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
     },
     ProcessorSpec,
@@ -120,8 +121,11 @@ struct AppState {
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct CreateProcessorRequest {
-    /// The processor type name (e.g., "CameraProcessor", "DisplayProcessor")
-    processor_type: String,
+    /// Structured processor identity — the four-field map form of
+    /// `@org/package/Type@version`. The structured-everywhere rule
+    /// applies on the HTTP API too — bare strings like
+    /// `"CameraProcessor"` are rejected at deserialize time.
+    processor_type: SchemaIdentOutput,
     /// Processor-specific configuration as JSON
     config: serde_json::Value,
 }
@@ -147,7 +151,8 @@ struct IdResponse {
 // Note: RegistryResponse is now defined in crate::core::json_schema
 // and imported below for the get_registry handler.
 use crate::core::json_schema::{
-    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput, SemanticVersionOutput,
+    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput, SchemaIdentOutput,
+    SemanticVersionOutput,
 };
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -399,7 +404,22 @@ async fn create_processor(
     State(state): State<AppState>,
     Json(body): Json<CreateProcessorRequest>,
 ) -> std::result::Result<Json<IdResponse>, axum::http::StatusCode> {
-    let spec = ProcessorSpec::new(&body.processor_type, body.config);
+    // Convert SchemaIdentOutput → SchemaIdent through the typed segment
+    // validators (Org::new / Package::new / TypeName::new / SemVer::new).
+    // This is typed conversion, not parsing — there is no `SchemaIdent::parse`.
+    let SchemaIdentOutput {
+        org,
+        package,
+        type_name,
+        version,
+    } = body.processor_type;
+    let ident = SchemaIdent::new(
+        Org::new(org).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
+        Package::new(package).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
+        TypeName::new(type_name).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
+        SemVer::new(version.major, version.minor, version.patch),
+    );
+    let spec = ProcessorSpec::new(ident, body.config);
 
     state
         .runtime_ctx
@@ -568,12 +588,19 @@ async fn get_openapi_spec(State(state): State<AppState>) -> Json<utoipa::openapi
 }
 
 /// Returns the MoQ broadcast catalog with active published tracks.
+///
+/// The schema and source-processor identity for each track are not yet
+/// plumbed through `MoqSessions::published_track_names`; they're emitted
+/// as `None` until a future ticket extends the session API to carry the
+/// structured ident alongside the track name. The track entries still
+/// serialize cleanly — `schema` and `source_processor_type` are
+/// `skip_serializing_if = Option::is_none`.
 #[cfg(feature = "moq")]
 async fn get_moq_catalog(State(state): State<AppState>) -> Json<crate::core::streaming::MoqBroadcastCatalog> {
     let sessions = state.runtime_ctx.moq_sessions();
     let mut catalog = crate::core::streaming::MoqBroadcastCatalog::new();
     for track_name in sessions.published_track_names() {
-        catalog.add_track(&track_name, "", "", &track_name);
+        catalog.add_track(&track_name, None, None, &track_name);
     }
     Json(catalog)
 }

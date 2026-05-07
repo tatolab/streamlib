@@ -22,6 +22,7 @@
 //! ```
 
 use std::path::PathBuf;
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::{CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime};
 
@@ -93,7 +94,12 @@ fn main() -> Result<()> {
     }))?;
 
     let grayscale = runtime.add_processor(ProcessorSpec::new(
-        "com.tatolab.grayscale_rust",
+        SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("camera-rust-plugin").unwrap(),
+            TypeName::new("GrayscaleRust").unwrap(),
+            SemVer::new(0, 1, 0),
+        ),
         serde_json::Value::Null,
     ))?;
 

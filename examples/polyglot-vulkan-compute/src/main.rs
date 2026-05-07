@@ -36,6 +36,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use streamlib::core::context::ComputeKernelBridge;
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{
     derive_bindings_from_spirv, ComputeKernelDescriptor, StreamTexture, TextureFormat,
     TextureReadbackDescriptor, TextureSourceLayout,
@@ -86,10 +87,20 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_name(self) -> &'static str {
+    fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => "VulkanCompute",
-            Self::Deno => "VulkanComputeProcessor",
+            Self::Python => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-vulkan-compute").unwrap(),
+                TypeName::new("VulkanCompute").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
+            Self::Deno => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-vulkan-compute-deno").unwrap(),
+                TypeName::new("VulkanComputeProcessor").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
         }
     }
 }
@@ -379,7 +390,7 @@ fn main() -> Result<()> {
         "shader_spv_hex": spv_hex,
     });
     let compute = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_name(),
+        runtime_kind.processor_ident(),
         compute_config,
     ))?;
     println!("+ Vulkan compute processor: {compute}");

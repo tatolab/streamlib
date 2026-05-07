@@ -8,15 +8,17 @@ use super::super::components::{
 };
 use super::super::{GraphNodeWithComponents, GraphWeight, InputLinkPortRef, OutputLinkPortRef};
 use super::{PortInfo, ProcessorNodePorts, ProcessorUniqueId};
+use crate::core::descriptors::SchemaIdent;
 use crate::core::utils::compute_json_checksum;
 
 /// Node in the processor graph with embedded component storage.
 #[derive(Serialize, Deserialize)]
 pub struct ProcessorNode {
     pub id: ProcessorUniqueId,
+    /// Structured processor identity — `@org/package/Type@version`.
     #[serde(rename = "type")]
-    pub processor_type: String,
-    /// Display name for UI. Defaults to processor_type if not overridden.
+    pub processor_type: SchemaIdent,
+    /// Display name for UI. Defaults to the processor's PascalCase short name if not overridden.
     pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
@@ -63,14 +65,12 @@ impl std::fmt::Debug for ProcessorNode {
 impl ProcessorNode {
     /// Create a new processor node. The ID is generated automatically using cuid2.
     pub fn new(
-        processor_type: impl Into<String>,
+        processor_type: SchemaIdent,
         display_name: impl Into<String>,
         config: Option<serde_json::Value>,
         inputs: Vec<PortInfo>,
         outputs: Vec<PortInfo>,
     ) -> Self {
-        let processor_type = processor_type.into();
-
         let config_checksum = config.as_ref().map(compute_json_checksum).unwrap_or(0);
         Self {
             id: ProcessorUniqueId::new(),
@@ -90,7 +90,7 @@ impl ProcessorNode {
         self.config = Some(config);
     }
 
-    pub fn processor_type(&self) -> &str {
+    pub fn processor_type(&self) -> &SchemaIdent {
         &self.processor_type
     }
 

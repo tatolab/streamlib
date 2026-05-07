@@ -72,16 +72,17 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
         .traversal_mut()
         .v(proc_id)
         .first()
-        .map(|n| n.processor_type().to_string())
-        .unwrap_or_default();
+        .map(|n| n.processor_type().clone());
 
     // Check runtime type from descriptor
-    if let Some(descriptor) = PROCESSOR_REGISTRY.descriptor(&proc_type) {
-        if matches!(
-            descriptor.runtime,
-            crate::core::descriptors::ProcessorRuntime::TypeScript
-        ) {
-            return true;
+    if let Some(proc_type) = proc_type.as_ref() {
+        if let Some(descriptor) = PROCESSOR_REGISTRY.descriptor(proc_type) {
+            if matches!(
+                descriptor.runtime,
+                crate::core::descriptors::ProcessorRuntime::TypeScript
+            ) {
+                return true;
+            }
         }
     }
 
@@ -318,11 +319,11 @@ fn open_iceoryx2_pubsub(
             .traversal_mut()
             .v(source_proc_id)
             .first()
-            .map(|node| node.processor_type().to_string())
-            .unwrap_or_default();
+            .map(|node| node.processor_type().clone());
 
-        PROCESSOR_REGISTRY
-            .port_info(&source_proc_type)
+        source_proc_type
+            .as_ref()
+            .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
             .and_then(|(_, outputs)| {
                 outputs
                     .iter()
@@ -458,11 +459,11 @@ fn open_iceoryx2_subprocess_to_subprocess(
             .traversal_mut()
             .v(source_proc_id)
             .first()
-            .map(|node| node.processor_type().to_string())
-            .unwrap_or_default();
+            .map(|node| node.processor_type().clone());
 
-        PROCESSOR_REGISTRY
-            .port_info(&source_proc_type)
+        source_proc_type
+            .as_ref()
+            .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
             .and_then(|(_, outputs)| {
                 outputs
                     .iter()
@@ -588,11 +589,11 @@ fn open_iceoryx2_subprocess_to_rust(
                 .traversal_mut()
                 .v(source_proc_id)
                 .first()
-                .map(|node| node.processor_type().to_string())
-                .unwrap_or_default();
+                .map(|node| node.processor_type().clone());
 
-            PROCESSOR_REGISTRY
-                .port_info(&source_proc_type)
+            source_proc_type
+                .as_ref()
+                .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
                 .and_then(|(_, outputs)| {
                     outputs
                         .iter()
@@ -715,11 +716,11 @@ fn open_iceoryx2_rust_to_subprocess(
             .traversal_mut()
             .v(source_proc_id)
             .first()
-            .map(|node| node.processor_type().to_string())
-            .unwrap_or_default();
+            .map(|node| node.processor_type().clone());
 
-        PROCESSOR_REGISTRY
-            .port_info(&source_proc_type)
+        source_proc_type
+            .as_ref()
+            .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
             .and_then(|(_, outputs)| {
                 outputs
                     .iter()
@@ -820,14 +821,36 @@ fn open_iceoryx2_rust_to_subprocess(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::descriptors::SchemaIdent;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::processors::ProcessorSpec;
+
+    /// Look up a registered mock processor's structured ident by its
+    /// PascalCase short name. The mock processors live in
+    /// `graph::graph_tests` and self-register via the `#[processor]`
+    /// macro at link time; their full ident is composed from
+    /// `libs/streamlib/streamlib.yaml`'s `package:` block — so reading
+    /// the version off the registry rather than hardcoding it keeps
+    /// these tests robust to package-version bumps.
+    fn lookup_registered_ident(short: &str) -> SchemaIdent {
+        PROCESSOR_REGISTRY
+            .list_registered()
+            .into_iter()
+            .find(|d| d.name.r#type.as_str() == short)
+            .map(|d| d.name)
+            .unwrap_or_else(|| {
+                panic!(
+                    "processor with PascalCase short name `{}` must be in the registry",
+                    short
+                )
+            })
+    }
 
     fn add_mock_output_only(graph: &mut Graph) -> String {
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                "TestMockOutputOnlyProcessor",
+                lookup_registered_ident("TestMockOutputOnlyProcessor"),
                 serde_json::Value::Null,
             ))
             .first()
@@ -840,7 +863,7 @@ mod tests {
         graph
             .traversal_mut()
             .add_v(ProcessorSpec::new(
-                "TestMockInputOnlyProcessor",
+                lookup_registered_ident("TestMockInputOnlyProcessor"),
                 serde_json::Value::Null,
             ))
             .first()

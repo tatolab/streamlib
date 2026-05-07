@@ -30,6 +30,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{
     TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
 };
@@ -71,10 +72,20 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_name(self) -> &'static str {
+    fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => "OpenGlFragmentShader",
-            Self::Deno => "OpenGlFragmentShaderProcessor",
+            Self::Python => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-opengl-fragment-shader").unwrap(),
+                TypeName::new("OpenGlFragmentShader").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
+            Self::Deno => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-opengl-fragment-shader-deno").unwrap(),
+                TypeName::new("OpenGlFragmentShaderProcessor").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
         }
     }
 }
@@ -264,7 +275,7 @@ fn main() -> Result<()> {
         "height": SURFACE_SIZE,
     });
     let shader = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_name(),
+        runtime_kind.processor_ident(),
         shader_config,
     ))?;
     println!("+ Fragment shader: {shader}");
