@@ -8,6 +8,15 @@ package:
 dependencies:
   "@tatolab/core": "^1.0.0"
 
+# Dev-time override (#717): point `@tatolab/core` at the in-tree
+# packages/core source so the runtime resolves to it without an
+# `streamlib pkg install`. `streamlib pack` rejects yamls whose
+# `patch:` block carries `path:` entries, so this consumer is dev-
+# only — the customer-facing flow goes through the installed cache.
+patch:
+  "@tatolab/core":
+    path: ../../../packages/core
+
 processors:
   - name: Grayscale
     version: "1.0.0"

@@ -30,7 +30,7 @@
       ]
     },
     "patch": {
-      "description": "Workspace-level resolution overrides. Mirrors Cargo's `[patch.crates-io]` shape — only meaningful on the workspace root.",
+      "description": "Per-consumer resolution overrides. Mirrors Cargo's `[patch.crates-io]` shape but lives in the consumer's own yaml — no workspace walk-up. `streamlib pack` rejects yamls whose `patch:` block contains any `path:` entries (path overrides are dev-time only, not publishable).",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/DependencySpec"
@@ -52,17 +52,6 @@
       "items": {
         "type": "string"
       }
-    },
-    "workspace": {
-      "description": "Workspace marker. Set on the workspace-root `streamlib.yaml`; the runtime walks up the path tree looking for it and consults [`Self::patch`] for canonical-dep resolution.",
-      "anyOf": [
-        {
-          "$ref": "#/definitions/WorkspaceConfig"
-        },
-        {
-          "type": "null"
-        }
-      ]
     }
   },
   "additionalProperties": false,
@@ -508,11 +497,6 @@
       "description": "Type segment of a schema identifier (PascalCase, the `Type` part of `@org/package/Type@version`).",
       "type": "string",
       "pattern": "^[A-Z][A-Za-z0-9]*$"
-    },
-    "WorkspaceConfig": {
-      "description": "Workspace marker block. Reserved for future fields like `members:` and `exclude:`; presence of an empty `workspace: {}` is sufficient to mark a manifest as the workspace root today.",
-      "type": "object",
-      "additionalProperties": false
     }
   }
 }

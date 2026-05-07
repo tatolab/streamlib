@@ -13,42 +13,44 @@ use crate::error::{ResolverError, ResolverResult};
 use crate::ident::{Org, Package, PackageRef};
 use crate::semver::{SemVer, SemVerRange};
 
-/// `streamlib.yaml` — single source of truth for a package, project, or
-/// workspace root.
+/// `streamlib.yaml` — single source of truth for a package or project.
 ///
 /// **Package flavor** has a `package:` block declaring `org`/`name`/`version`
 /// and is publishable. **Project flavor** has no `package:` block; it's a
-/// consumer like an application or example. **Workspace flavor** has a
-/// `workspace:` block (cargo-style); the runtime walks up the path tree
-/// looking for it and consults its `patch:` table to resolve
-/// canonical-form dependency declarations to source-tree paths, git
-/// pins, or version overrides.
+/// consumer like an application or example.
 ///
-/// The resolver reads `package`, `dependencies`, and `schemas`. Other top-level
-/// fields like `processors:` and `env:` are runtime concerns owned by the
-/// streamlib runtime; they are tolerated here without being interpreted, so
-/// one `streamlib.yaml` carries both schema-identity and runtime
-/// configuration without splitting into two files.
+/// Each manifest is **standalone**: it carries its own dep declarations
+/// (`dependencies:`) and optional dev-time overrides (`patch:`) without
+/// reaching into a tree-level shared registry. The streamlib model
+/// matches `wrangler.toml` / `Cargo.toml` per-package shape — there is
+/// no workspace walk-up; what you see in the yaml is what the runtime
+/// resolves against.
+///
+/// The resolver reads `package`, `dependencies`, `patch`, and `schemas`.
+/// Other top-level fields like `processors:` and `env:` are runtime
+/// concerns owned by the streamlib runtime; they are tolerated here
+/// without being interpreted, so one `streamlib.yaml` carries both
+/// schema-identity and runtime configuration without splitting into
+/// two files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<PackageMetadata>,
 
-    /// Workspace marker. Presence of this block flags the manifest as the
-    /// workspace root; the runtime's walk-up discovery stops here and
-    /// consults [`Self::patch`] for canonical-dep resolution.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace: Option<WorkspaceConfig>,
-
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dependencies: BTreeMap<PackageRef, DependencySpec>,
 
-    /// Workspace-level resolution overrides. Keyed by canonical
-    /// [`PackageRef`]; mirrors Cargo's `[patch.crates-io]` shape — consumer
-    /// yamls declare what they depend on (always canonical-form), the
-    /// workspace patch table declares which copy of each dep to use
-    /// (path / git / version). Only meaningful when [`Self::workspace`]
-    /// is set.
+    /// Per-consumer resolution overrides. Mirrors Cargo's
+    /// `[patch.crates-io]` shape but lives in the consumer's own yaml
+    /// (no workspace walk-up). When the runtime / resolver iterates a
+    /// dep declared in [`Self::dependencies`], it consults this table
+    /// before falling through to the installed-package cache.
+    ///
+    /// Path-flavor entries are dev-time overrides only — `streamlib pack`
+    /// rejects yamls whose `patch:` table contains any `path:` entries
+    /// (mirrors `npm publish` / `cargo publish` rejecting path deps).
+    /// Path patches are validated strictly at parse time: a missing path
+    /// is a hard error so the dev knows immediately to fix the manifest.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub patch: BTreeMap<PackageRef, DependencySpec>,
 
@@ -58,13 +60,6 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schemas: Option<Vec<PathBuf>>,
 }
-
-/// Workspace marker block. Reserved for future fields like `members:` and
-/// `exclude:`; presence of an empty `workspace: {}` is sufficient to mark a
-/// manifest as the workspace root today.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct WorkspaceConfig {}
 
 impl Manifest {
     /// Conventional file name.
@@ -90,13 +85,6 @@ impl Manifest {
     /// True when this manifest declares its own `package:` block (publishable).
     pub fn is_package_flavor(&self) -> bool {
         self.package.is_some()
-    }
-
-    /// True when this manifest carries a `workspace:` marker block. The
-    /// runtime's walk-up discovery stops at the nearest workspace-flavor
-    /// manifest and consults its `patch:` table.
-    pub fn is_workspace_flavor(&self) -> bool {
-        self.workspace.is_some()
     }
 
     /// Canonical [`PackageRef`] for this manifest, when it's a package
@@ -296,44 +284,57 @@ dependencies:
     }
 
     #[test]
-    fn workspace_flavor_with_patch_table() {
-        // Workspace-root manifest. Cargo idiom: `[workspace]` block plus
-        // `[patch.crates-io]` for resolution overrides. The streamlib analog:
-        // `workspace: {}` plus `patch:` keyed on canonical PackageRef.
+    fn manifest_carries_per_consumer_patch_table() {
+        // Each consumer manifest carries its own `patch:` block alongside
+        // `dependencies:`. No workspace walk-up — what's in this yaml is
+        // what gets resolved against. Mirrors npm's package.json carrying
+        // its own `overrides:` and Cargo's per-package `[patch]`.
         let yaml = r#"
-workspace: {}
+package:
+  org: tatolab
+  name: consumer
+  version: 1.0.0
+dependencies:
+  "@tatolab/core": "^1.0.0"
 patch:
   "@tatolab/core":
-    path: packages/core
+    path: ../packages/core
   "@tatolab/h264":
     git: https://github.com/tatolab/h264-fork
     rev: abc123
-  "@tatolab/moq":
-    version: "^2.0.0"
 "#;
         let m: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert!(m.workspace.is_some(), "workspace flag must round-trip");
-        assert_eq!(m.patch.len(), 3);
+        assert!(m.is_package_flavor());
+        assert_eq!(m.dependencies.len(), 1);
+        assert_eq!(m.patch.len(), 2);
 
         match m.patch.get(&pkg_ref("tatolab", "core")).unwrap() {
-            DependencySpec::Path(p) => assert_eq!(p.path, PathBuf::from("packages/core")),
+            DependencySpec::Path(p) => assert_eq!(p.path, PathBuf::from("../packages/core")),
             other => panic!("expected Path patch, got {:?}", other),
         }
         match m.patch.get(&pkg_ref("tatolab", "h264")).unwrap() {
             DependencySpec::Git(g) => assert_eq!(g.rev, "abc123"),
             other => panic!("expected Git patch, got {:?}", other),
         }
-        match m.patch.get(&pkg_ref("tatolab", "moq")).unwrap() {
-            DependencySpec::Registry(r) => assert_eq!(r.version.to_string(), "^2.0.0"),
-            other => panic!("expected Registry patch, got {:?}", other),
-        }
     }
 
     #[test]
-    fn non_workspace_manifest_has_no_workspace_block() {
-        let yaml = "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n";
+    fn manifest_without_patch_block_round_trips_cleanly() {
+        // The "customer-shape" yaml: declares deps canonically, no
+        // dev-time patches. This is what a published / installed yaml
+        // looks like — pack rejects the path-flavored variant, so the
+        // wire form a customer sees never carries path overrides.
+        let yaml = r#"
+package:
+  org: tatolab
+  name: consumer
+  version: 1.0.0
+dependencies:
+  "@tatolab/core": "^1.0.0"
+"#;
         let m: Manifest = serde_yaml::from_str(yaml).unwrap();
-        assert!(m.workspace.is_none());
+        assert!(m.is_package_flavor());
+        assert_eq!(m.dependencies.len(), 1);
         assert!(m.patch.is_empty());
     }
 

@@ -51,6 +51,15 @@ pub struct ProjectConfig {
     /// validates the canonical `@org/name` shape at YAML-read time.
     #[serde(default)]
     pub dependencies: BTreeMap<PackageRef, DependencySpec>,
+
+    /// Per-consumer resolution overrides. Mirrors Cargo's
+    /// `[patch.crates-io]` shape but lives in the consumer's own yaml —
+    /// no workspace walk-up. When the runtime iterates a dep declared in
+    /// [`Self::dependencies`], it consults this table before falling
+    /// through to the installed-package cache. Path-flavor entries are
+    /// dev-time overrides only; `streamlib pack` rejects them.
+    #[serde(default)]
+    pub patch: BTreeMap<PackageRef, DependencySpec>,
 }
 
 impl ProjectConfig {

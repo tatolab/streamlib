@@ -359,21 +359,19 @@ impl StreamRuntime {
         // The dep map is `BTreeMap<PackageRef, DependencySpec>` end-to-end
         // — `PackageRef`'s typed Deserialize validates the `@org/name` shape
         // at YAML-read time so the lookup site below never parses a string.
-        // Resolution follows a three-tier chain (mirrors Cargo's workspace
-        // `[patch.crates-io]` shape):
+        // Resolution chain (mirrors Cargo's `[patch.crates-io]` shape, but
+        // per-consumer rather than workspace-level):
         //
-        //   1. **Path** — resolve relative to the consumer's manifest dir
-        //      and recurse. Used by every dev-tree dep that doesn't go
-        //      through a publishable lookup.
-        //   2. **Registry / Git** — consult the workspace `[patch]` table,
-        //      then the installed-package cache, then surface an
-        //      actionable error. Workspace-patch resolution treats the
-        //      patch entry as if it were declared inline at the consumer
-        //      site (path → recurse, git → fail until git resolution
-        //      lands, registry → fall through to installed cache).
+        //   1. **Consumer's own `patch:` table** — overrides the dep
+        //      declaration when present. Path entries resolve relative
+        //      to the consumer's manifest dir; missing paths fail with
+        //      a clear error (strict validation, npm/wrangler-style).
+        //   2. **Installed-package cache** (`InstalledPackageManifest`).
+        //   3. **Actionable error** — neither tier covers the dep.
         if !config.dependencies.is_empty() {
             for (dep_ref, spec) in &config.dependencies {
-                let dep_path = self.resolve_dependency_path(project_path, dep_ref, spec)?;
+                let dep_path =
+                    self.resolve_dependency_path(project_path, dep_ref, spec, &config.patch)?;
                 tracing::info!(
                     "Loading dependency '{}' from {}",
                     dep_ref,
@@ -1318,22 +1316,37 @@ impl StreamRuntime {
     /// Resolve a single dependency declaration to a directory the runtime
     /// can recurse into via [`Self::load_project`].
     ///
-    /// Resolution chain (mirrors Cargo's workspace `[patch.crates-io]`):
+    /// Resolution chain (mirrors Cargo's `[patch.crates-io]`, per-consumer):
     ///
-    /// 1. **Path** — relative to the consumer's manifest dir.
-    /// 2. **Registry / Git** — consult workspace `[patch]` first; if hit,
-    ///    treat the patch entry as if it were the inline declaration. If
-    ///    no patch entry, look the canonical `PackageRef` up in the
-    ///    installed-package cache (`InstalledPackageManifest`). Otherwise
-    ///    surface an actionable error.
+    /// 1. **Consumer's own `patch:` table** — overrides the dep declaration
+    ///    when present. Path entries resolve relative to the consumer's
+    ///    manifest dir and are validated strictly: a missing path is a
+    ///    hard error so the dev knows immediately to fix the manifest.
+    /// 2. **Direct path declaration** in `dependencies:` (legacy / pre-canonical
+    ///    deps). Resolves relative to the consumer dir, no existence check
+    ///    yet (`load_project` will surface the missing manifest error
+    ///    downstream).
+    /// 3. **Installed-package cache** (`InstalledPackageManifest`).
+    /// 4. **Actionable error** — registry/git deps with no matching patch
+    ///    or installed entry.
     fn resolve_dependency_path(
         &self,
         consumer_dir: &std::path::Path,
         dep_ref: &streamlib_idents::PackageRef,
         spec: &streamlib_idents::DependencySpec,
+        patch: &std::collections::BTreeMap<
+            streamlib_idents::PackageRef,
+            streamlib_idents::DependencySpec,
+        >,
     ) -> Result<std::path::PathBuf> {
         use streamlib_idents::DependencySpec;
 
+        // Tier 1: consumer's own `patch:` table.
+        if let Some(patch_spec) = patch.get(dep_ref) {
+            return self.resolve_consumer_patch(consumer_dir, dep_ref, patch_spec);
+        }
+
+        // Tier 2-4: dispatch on the dep declaration's flavor.
         match spec {
             DependencySpec::Path(p) => Ok(if p.path.is_absolute() {
                 p.path.clone()
@@ -1341,54 +1354,68 @@ impl StreamRuntime {
                 consumer_dir.join(&p.path)
             }),
             DependencySpec::Registry(_) | DependencySpec::Git(_) => {
-                if let Some(patched) = self.lookup_workspace_patch(consumer_dir, dep_ref)? {
-                    return Ok(patched);
-                }
                 if let Some(installed) = self.lookup_installed_package(dep_ref)? {
                     return Ok(installed);
                 }
                 Err(StreamError::Configuration(format!(
                     "Dependency '{dep_ref}' could not be resolved. \
-                     No matching `[patch]` entry was found in any workspace-root \
-                     `streamlib.yaml` walking up from {}, and no matching package \
-                     is installed (run `streamlib pkg list` to see installed \
-                     packages, `streamlib pkg install <slpkg>` to install one).",
+                     No matching `patch:` entry was found in {}/{}, and no matching \
+                     package is installed (run `streamlib pkg list` to see \
+                     installed packages, `streamlib pkg install <slpkg>` to \
+                     install one).",
                     consumer_dir.display(),
+                    streamlib_idents::Manifest::FILE_NAME,
                 )))
             }
         }
     }
 
-    /// Walk up from `consumer_dir` to find a workspace-root `streamlib.yaml`
-    /// and consult its `patch:` table for `dep_ref`. Returns the resolved
-    /// path (path-style patches are resolved relative to the workspace root)
-    /// or `None` when no workspace ancestor exists or the patch table has
-    /// no entry for this dep. Path resolution is shared with the build-time
-    /// resolver via [`streamlib_idents::lookup_workspace_patch`] — single
-    /// source of truth for the patch-resolution rule.
-    fn lookup_workspace_patch(
+    /// Resolve a consumer-scoped `patch:` entry to an absolute path the
+    /// runtime can recurse into. Path-flavor patches are validated
+    /// strictly — a missing path is a hard error so the dev knows
+    /// immediately to fix the manifest (npm / wrangler-style strictness;
+    /// CLAUDE.md "make the right way easy and the wrong way hard").
+    fn resolve_consumer_patch(
         &self,
         consumer_dir: &std::path::Path,
         dep_ref: &streamlib_idents::PackageRef,
-    ) -> Result<Option<std::path::PathBuf>> {
-        use streamlib_idents::WorkspacePatchLookup;
+        patch_spec: &streamlib_idents::DependencySpec,
+    ) -> Result<std::path::PathBuf> {
+        use streamlib_idents::DependencySpec;
 
-        let Some(workspace) = streamlib_idents::discover_workspace(consumer_dir) else {
-            return Ok(None);
-        };
-        match streamlib_idents::lookup_workspace_patch(&workspace, dep_ref) {
-            WorkspacePatchLookup::Path(p) => Ok(Some(p)),
-            WorkspacePatchLookup::Missing => Ok(None),
-            WorkspacePatchLookup::UnsupportedShape => Err(StreamError::Configuration(format!(
-                "Workspace `[patch]` entry for '{dep_ref}' at {} is a \
-                 registry/git override, but the workspace-patch resolver \
-                 only supports path overrides today. Declare a `path:` \
-                 patch entry pointing at a local directory.",
-                workspace
-                    .root
-                    .join(streamlib_idents::Manifest::FILE_NAME)
-                    .display(),
-            ))),
+        match patch_spec {
+            DependencySpec::Path(p) => {
+                let abs = if p.path.is_absolute() {
+                    p.path.clone()
+                } else {
+                    consumer_dir.join(&p.path)
+                };
+                if !abs.exists() {
+                    return Err(StreamError::Configuration(format!(
+                        "patch entry for '{dep_ref}' in {}/{} points at \
+                         `{}` which does not exist. Path patches are \
+                         dev-time overrides — they must resolve to a \
+                         real directory at parse time. Either fix the \
+                         path or remove the patch entry.",
+                        consumer_dir.display(),
+                        streamlib_idents::Manifest::FILE_NAME,
+                        abs.display(),
+                    )));
+                }
+                Ok(abs)
+            }
+            DependencySpec::Git(_) | DependencySpec::Registry(_) => {
+                Err(StreamError::Configuration(format!(
+                    "patch entry for '{dep_ref}' in {}/{} is git/registry \
+                     flavored. The runtime only supports `path:` patches \
+                     today; git/registry patch resolution is a future \
+                     follow-up. Either remove the patch entry (falling \
+                     back to the installed-package cache) or declare a \
+                     `path:` entry pointing at a local checkout.",
+                    consumer_dir.display(),
+                    streamlib_idents::Manifest::FILE_NAME,
+                )))
+            }
         }
     }
 
@@ -1671,30 +1698,19 @@ dependencies:
         );
     }
 
-    /// Workspace `[patch]` resolution: when a consumer declares a registry
-    /// dep `"@tatolab/x": "^1.0.0"` and a workspace-root `streamlib.yaml`
-    /// up the path tree carries a `patch:` entry pointing at a local path,
-    /// `load_project` recurses into the patched location. Mirrors Cargo's
-    /// `[patch.crates-io]` resolution; mentally reverting the workspace
-    /// walk-up makes this fail because the registry arm would fall through
-    /// to the actionable-error branch.
+    /// Consumer-scoped `patch:` resolution: when a consumer declares a
+    /// registry-form dep AND its own `patch:` block has an entry for that
+    /// dep pointing at a local path, `load_project` recurses into the
+    /// patched location. Mirrors Cargo's `[patch.crates-io]` semantics
+    /// but per-consumer (no workspace walk-up). Mentally reverting the
+    /// patch lookup in `resolve_dependency_path` makes this fail because
+    /// the registry arm would fall through to the installed-cache tier
+    /// (which is empty in this test).
     #[test]
     #[serial]
-    fn test_load_project_resolves_registry_dep_via_workspace_patch() {
+    fn test_load_project_resolves_registry_dep_via_consumer_patch() {
         let runtime = StreamRuntime::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
-
-        // Workspace root: declares the patch table.
-        std::fs::write(
-            tmp.path().join("streamlib.yaml"),
-            r#"
-workspace: {}
-patch:
-  "@tatolab/b":
-    path: b
-"#,
-        )
-        .unwrap();
 
         // Patched dep target.
         let b = tmp.path().join("b");
@@ -1705,7 +1721,8 @@ patch:
         )
         .unwrap();
 
-        // Consumer in a sibling dir, declares a registry-style dep.
+        // Consumer in a sibling dir, declares a registry-style dep AND a
+        // path-flavor patch in its own yaml. No tree-level state.
         let a = tmp.path().join("a");
         std::fs::create_dir(&a).unwrap();
         std::fs::write(
@@ -1717,22 +1734,61 @@ package:
   version: "0.1.0"
 dependencies:
   "@tatolab/b": "^0.1.0"
+patch:
+  "@tatolab/b":
+    path: ../b
 "#,
         )
         .unwrap();
 
         runtime
             .load_project(&a)
-            .expect("workspace patch must resolve the registry dep to b/");
+            .expect("consumer-scoped patch must resolve the registry dep to ../b/");
     }
 
-    /// Installed-cache resolution: when no workspace ancestor exists
-    /// (consumer is outside any workspace), a registry dep falls through
-    /// to the `InstalledPackageManifest` lookup and recurses into the
-    /// matching slpkg cache directory. Mirrors the production load-from-
-    /// installed-package flow; mentally reverting the installed-cache
-    /// tier in `resolve_dependency_path` makes this fail because the
-    /// chain would short-circuit to the actionable-error branch.
+    /// Strict patch validation: when the consumer's `patch:` block points
+    /// at a path that doesn't exist, `load_project` errors clearly so the
+    /// dev knows immediately to fix the manifest. npm/wrangler-style
+    /// strictness — the "make the right way easy and the wrong way hard"
+    /// rule from CLAUDE.md applied to manifest validation. Mentally
+    /// reverting the existence check in `resolve_consumer_patch` would
+    /// surface a downstream "manifest not found" error from `load_project`
+    /// instead of a clear "patch path doesn't exist" error.
+    #[test]
+    #[serial]
+    fn test_load_project_strict_errors_on_missing_patch_path() {
+        let runtime = StreamRuntime::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: a
+  version: "0.1.0"
+dependencies:
+  "@tatolab/b": "^0.1.0"
+patch:
+  "@tatolab/b":
+    path: ./does-not-exist
+"#,
+        )
+        .unwrap();
+
+        let err = runtime
+            .load_project(tmp.path())
+            .expect_err("missing patch path must error strictly");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("@tatolab/b"),
+            "error must surface the canonical dep ref, got: {msg}"
+        );
+        assert!(
+            msg.contains("does-not-exist") && msg.contains("does not exist"),
+            "error must call out the missing patch path, got: {msg}"
+        );
+    }
+
     /// Drops a previously-saved `STREAMLIB_HOME` environment variable
     /// state when the test scope ends, so a sandboxed `STREAMLIB_HOME`
     /// override doesn't leak into the next `#[serial]` test.
@@ -1792,8 +1848,9 @@ dependencies:
         });
         installed.save().unwrap();
 
-        // The consumer lives in a totally separate tempdir — NO workspace
-        // ancestor — so the registry dep can't be resolved via patches.
+        // Customer-shape consumer: declares the dep canonically with NO
+        // `patch:` block — exactly the yaml shape that ships in slpkgs.
+        // Resolution must fall through to the installed-package cache.
         let consumer = tempfile::tempdir().unwrap();
         std::fs::write(
             consumer.path().join("streamlib.yaml"),
@@ -1807,20 +1864,6 @@ dependencies:
 "#,
         )
         .unwrap();
-
-        // Precondition: the test sandbox must NOT have a workspace
-        // ancestor — that's what proves we're testing the installed-cache
-        // tier and not silently short-circuiting through workspace-patch
-        // resolution. Defends against running tests with a non-default
-        // `TMPDIR` pointing inside a streamlib checkout.
-        assert!(
-            streamlib_idents::discover_workspace(consumer.path()).is_none(),
-            "test sandbox at {} has a workspace ancestor; the test would \
-             short-circuit through workspace-patch resolution instead of \
-             exercising the installed-cache tier. Set TMPDIR to a path \
-             outside any streamlib repo.",
-            consumer.path().display()
-        );
 
         let runtime = StreamRuntime::new().unwrap();
         runtime

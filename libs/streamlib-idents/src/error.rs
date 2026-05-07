@@ -114,12 +114,6 @@ pub enum ResolverError {
     #[error("registry dependency `{name}` requires a registry, but the v1 resolver does not yet ship one")]
     RegistryNotImplemented { name: String },
 
-    #[error("workspace `[patch]` entry for `{name}` at `{}` is a registry/git override, but the resolver only supports path overrides today (declare a `path:` patch entry pointing at a local directory)", workspace_root.display())]
-    WorkspacePatchUnsupportedShape {
-        name: String,
-        workspace_root: PathBuf,
-    },
-
     #[error("io error at `{path}`: {source}")]
     Io {
         path: PathBuf,

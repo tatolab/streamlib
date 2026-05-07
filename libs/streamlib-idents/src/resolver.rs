@@ -156,14 +156,28 @@ pub fn resolve_with(
     // canonical-string lookup-key invariants the resolver previously
     // hand-validated in `parse_dep_key` are now enforced by `PackageRef`'s
     // Deserialize at YAML-read time — invalid keys never reach this code.
+    //
+    // Each queue entry carries (consumer_dir, deps, patch): when iterating
+    // the consumer's deps we consult the SAME consumer's `patch:` table
+    // for resolution overrides. No tree-level walk-up — what's in the
+    // consumer's manifest is what the resolver sees.
     let mut packages: BTreeMap<String, ResolvedPackage> = BTreeMap::new();
-    let mut queue: VecDeque<(PathBuf, BTreeMap<PackageRef, DependencySpec>)> = VecDeque::new();
-    queue.push_back((root.root_dir.clone(), root.manifest.dependencies.clone()));
+    let mut queue: VecDeque<QueueEntry> = VecDeque::new();
+    queue.push_back(QueueEntry {
+        consumer_dir: root.root_dir.clone(),
+        dependencies: root.manifest.dependencies.clone(),
+        patch: root.manifest.patch.clone(),
+    });
 
     let mut visiting: HashSet<String> = HashSet::new();
 
-    while let Some((consumer_dir, deps)) = queue.pop_front() {
-        for (dep_ref, spec) in deps {
+    while let Some(QueueEntry {
+        consumer_dir,
+        dependencies,
+        patch,
+    }) = queue.pop_front()
+    {
+        for (dep_ref, spec) in dependencies {
             // Lockfile + return-shape are still keyed on the canonical
             // joined-string form (yaml map keys are strings on disk). The
             // typed PackageRef is the in-memory primary; `Display` is the
@@ -179,18 +193,17 @@ pub fn resolve_with(
                 return Err(ResolverError::CircularDependency { chain: dep_id });
             }
 
-            let resolved = resolve_one(
-                &consumer_dir,
-                &dep_ref,
-                &dep_id,
-                &spec,
-                &cache_dir,
-            )?;
+            let resolved =
+                resolve_one(&consumer_dir, &dep_ref, &dep_id, &spec, &patch, &cache_dir)?;
 
             check_resolved_id_matches(&resolved, &dep_id, &consumer_dir)?;
             check_resolved_satisfies_spec(&resolved, &spec, &consumer_dir, &dep_id)?;
 
-            queue.push_back((resolved.root_dir.clone(), resolved.manifest.dependencies.clone()));
+            queue.push_back(QueueEntry {
+                consumer_dir: resolved.root_dir.clone(),
+                dependencies: resolved.manifest.dependencies.clone(),
+                patch: resolved.manifest.patch.clone(),
+            });
             packages.insert(dep_id.clone(), resolved);
             visiting.remove(&dep_id);
         }
@@ -199,20 +212,31 @@ pub fn resolve_with(
     Ok(ResolvedPackages { root, packages })
 }
 
+struct QueueEntry {
+    consumer_dir: PathBuf,
+    dependencies: BTreeMap<PackageRef, DependencySpec>,
+    patch: BTreeMap<PackageRef, DependencySpec>,
+}
+
 fn resolve_one(
     consumer_dir: &Path,
     dep_ref: &PackageRef,
     dep_id: &str,
     spec: &DependencySpec,
+    patch: &BTreeMap<PackageRef, DependencySpec>,
     cache_dir: &Path,
 ) -> ResolverResult<ResolvedPackage> {
-    match spec {
-        DependencySpec::Path(path_dep) => resolve_path_dependency(
-            consumer_dir,
-            dep_id,
-            path_dep,
-            cache_dir,
-        ),
+    // Consumer's `patch:` table overrides the dep declaration when present.
+    // Mirrors Cargo's `[patch.crates-io]` semantics: dependencies declare
+    // *what* the consumer needs, the patch table declares *which copy* to
+    // use. Path-flavor patches resolve relative to the consumer's manifest
+    // dir; missing paths fail loudly so the dev knows to fix the
+    // declaration (npm/wrangler-style strict validation).
+    let effective_spec = patch.get(dep_ref).unwrap_or(spec);
+    match effective_spec {
+        DependencySpec::Path(path_dep) => {
+            resolve_path_dependency(consumer_dir, dep_id, path_dep, cache_dir)
+        }
         DependencySpec::Git(git_dep) => {
             let target = fetch_git(dep_id, &git_dep.git, &git_dep.rev, cache_dir)?;
             let manifest = Manifest::load(&target)?;
@@ -225,29 +249,9 @@ fn resolve_one(
                 },
             )
         }
-        DependencySpec::Registry(_) => {
-            // Registry deps resolve through the workspace `[patch]` table
-            // (#717). The resolver mirrors the runtime's three-tier chain
-            // for codegen/lockfile purposes — if the patch entry redirects
-            // to a path or git location, recurse through `resolve_one`
-            // with the patched spec. Without a workspace patch, the
-            // resolver still fails (no registry server in v1).
-            if let Some(patched_path) =
-                lookup_workspace_patch_path(consumer_dir, dep_ref)?
-            {
-                return resolve_path_dependency(
-                    consumer_dir,
-                    dep_id,
-                    &crate::manifest::PathDependency {
-                        path: patched_path,
-                    },
-                    cache_dir,
-                );
-            }
-            Err(ResolverError::RegistryNotImplemented {
-                name: dep_id.to_string(),
-            })
-        }
+        DependencySpec::Registry(_) => Err(ResolverError::RegistryNotImplemented {
+            name: dep_id.to_string(),
+        }),
     }
 }
 
@@ -287,34 +291,6 @@ fn resolve_path_dependency(
     let manifest = Manifest::load(&abs)?;
     let relative = path_dep.path.clone();
     build_resolved_package(manifest, abs, ResolvedSource::Path { relative })
-}
-
-/// Walk up from `consumer_dir` for a workspace-flavor manifest and
-/// consult its `patch:` table for `dep_ref`. Returns the absolute path
-/// to redirect to when a path-style patch entry is found; `None`
-/// otherwise. Path resolution is shared with the runtime
-/// (`runtime.lookup_workspace_patch`) via
-/// [`crate::workspace::lookup_workspace_patch`] — single source of
-/// truth for the patch-resolution rule.
-fn lookup_workspace_patch_path(
-    consumer_dir: &Path,
-    dep_ref: &PackageRef,
-) -> ResolverResult<Option<PathBuf>> {
-    use crate::workspace::WorkspacePatchLookup;
-
-    let Some(workspace) = crate::workspace::discover_workspace(consumer_dir) else {
-        return Ok(None);
-    };
-    match crate::workspace::lookup_workspace_patch(&workspace, dep_ref) {
-        WorkspacePatchLookup::Path(p) => Ok(Some(p)),
-        WorkspacePatchLookup::Missing => Ok(None),
-        WorkspacePatchLookup::UnsupportedShape => {
-            Err(ResolverError::WorkspacePatchUnsupportedShape {
-                name: dep_ref.to_string(),
-                workspace_root: workspace.root,
-            })
-        }
-    }
 }
 
 fn build_resolved_package(

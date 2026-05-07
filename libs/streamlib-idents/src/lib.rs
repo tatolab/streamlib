@@ -14,7 +14,6 @@ mod lockfile;
 mod manifest;
 mod resolver;
 mod semver;
-mod workspace;
 
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
 pub use ident::{
@@ -26,12 +25,8 @@ pub use lockfile::{
 };
 pub use manifest::{
     DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,
-    WorkspaceConfig,
 };
 pub use resolver::{
     resolve, resolve_with, ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
 };
 pub use semver::{SemVer, SemVerRange};
-pub use workspace::{
-    discover_workspace, lookup_workspace_patch, DiscoveredWorkspace, WorkspacePatchLookup,
-};
