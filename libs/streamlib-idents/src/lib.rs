@@ -32,4 +32,6 @@ pub use resolver::{
     resolve, resolve_with, ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
 };
 pub use semver::{SemVer, SemVerRange};
-pub use workspace::{discover_workspace, DiscoveredWorkspace};
+pub use workspace::{
+    discover_workspace, lookup_workspace_patch, DiscoveredWorkspace, WorkspacePatchLookup,
+};

@@ -292,30 +292,23 @@ fn resolve_path_dependency(
 /// Walk up from `consumer_dir` for a workspace-flavor manifest and
 /// consult its `patch:` table for `dep_ref`. Returns the absolute path
 /// to redirect to when a path-style patch entry is found; `None`
-/// otherwise. Workspace-level `path:` entries are resolved relative
-/// to the workspace root (the same idiom Cargo uses for
-/// `[patch.crates-io] foo = { path = "vendor/foo" }`).
-///
-/// Patch entries that are themselves `Registry` or `Git` are not
-/// supported by the resolver today — workspace overrides are concrete
-/// pointers, not further indirections.
+/// otherwise. Path resolution is shared with the runtime
+/// (`runtime.lookup_workspace_patch`) via
+/// [`crate::workspace::lookup_workspace_patch`] — single source of
+/// truth for the patch-resolution rule.
 fn lookup_workspace_patch_path(
     consumer_dir: &Path,
     dep_ref: &PackageRef,
 ) -> ResolverResult<Option<PathBuf>> {
+    use crate::workspace::WorkspacePatchLookup;
+
     let Some(workspace) = crate::workspace::discover_workspace(consumer_dir) else {
         return Ok(None);
     };
-    let Some(patch_spec) = workspace.manifest.patch.get(dep_ref) else {
-        return Ok(None);
-    };
-    match patch_spec {
-        DependencySpec::Path(p) => Ok(Some(if p.path.is_absolute() {
-            p.path.clone()
-        } else {
-            workspace.root.join(&p.path)
-        })),
-        DependencySpec::Registry(_) | DependencySpec::Git(_) => {
+    match crate::workspace::lookup_workspace_patch(&workspace, dep_ref) {
+        WorkspacePatchLookup::Path(p) => Ok(Some(p)),
+        WorkspacePatchLookup::Missing => Ok(None),
+        WorkspacePatchLookup::UnsupportedShape => {
             Err(ResolverError::WorkspacePatchUnsupportedShape {
                 name: dep_ref.to_string(),
                 workspace_root: workspace.root,

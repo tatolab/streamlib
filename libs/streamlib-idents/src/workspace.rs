@@ -15,7 +15,8 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::manifest::Manifest;
+use crate::ident::PackageRef;
+use crate::manifest::{DependencySpec, Manifest};
 
 /// Outcome of walking up from a starting path looking for the nearest
 /// workspace-flavor `streamlib.yaml`.
@@ -26,6 +27,54 @@ pub struct DiscoveredWorkspace {
     /// Parsed manifest at the workspace root. The `workspace:` and `patch:`
     /// fields are the load-bearing ones for resolution.
     pub manifest: Manifest,
+}
+
+/// Outcome of looking up `dep_ref` in a discovered workspace's
+/// `[patch]` table. The shared shape both the runtime and the
+/// resolver match against — keeps the resolution rule from drifting
+/// between the two crates.
+#[derive(Debug, Clone)]
+pub enum WorkspacePatchLookup {
+    /// Patch entry is a path override; absolutized against the workspace
+    /// root (Cargo's `[patch.crates-io] foo = { path = "vendor/foo" }`
+    /// idiom).
+    Path(PathBuf),
+    /// Patch entry is a registry/git override. The resolver and runtime
+    /// only support path overrides today — workspace-level overrides
+    /// must be concrete pointers, not further indirections. Callers
+    /// error with their own type.
+    UnsupportedShape,
+    /// No patch entry for this dep — caller falls through to the next
+    /// resolution tier (installed-package cache or actionable error).
+    Missing,
+}
+
+/// Look `dep_ref` up in `workspace.manifest.patch`. Single source of
+/// truth for the patch-resolution rule across the runtime
+/// (`runtime.load_project`) and the resolver
+/// (`streamlib_idents::resolve`); both crates call this helper and
+/// map [`WorkspacePatchLookup::UnsupportedShape`] to their own error
+/// type.
+pub fn lookup_workspace_patch(
+    workspace: &DiscoveredWorkspace,
+    dep_ref: &PackageRef,
+) -> WorkspacePatchLookup {
+    let Some(patch_spec) = workspace.manifest.patch.get(dep_ref) else {
+        return WorkspacePatchLookup::Missing;
+    };
+    match patch_spec {
+        DependencySpec::Path(p) => {
+            let abs = if p.path.is_absolute() {
+                p.path.clone()
+            } else {
+                workspace.root.join(&p.path)
+            };
+            WorkspacePatchLookup::Path(abs)
+        }
+        DependencySpec::Registry(_) | DependencySpec::Git(_) => {
+            WorkspacePatchLookup::UnsupportedShape
+        }
+    }
 }
 
 /// Walk up from `start` looking for a `streamlib.yaml` whose
@@ -67,8 +116,7 @@ pub fn discover_workspace(start: &Path) -> Option<DiscoveredWorkspace> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ident::{Org, Package, PackageRef};
-    use crate::manifest::DependencySpec;
+    use crate::ident::{Org, Package};
 
     fn pkg_ref(org: &str, name: &str) -> PackageRef {
         PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
@@ -146,6 +194,43 @@ patch:
 
         // No workspace ancestor anywhere up the tree.
         assert!(discover_workspace(&project).is_none());
+    }
+
+    #[test]
+    fn lookup_patch_path_resolves_relative_to_workspace_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(Manifest::FILE_NAME),
+            r#"
+workspace: {}
+patch:
+  "@tatolab/core":
+    path: packages/core
+  "@tatolab/h264":
+    git: https://github.com/tatolab/h264-fork
+    rev: abc123
+"#,
+        )
+        .unwrap();
+
+        let workspace = discover_workspace(tmp.path()).unwrap();
+
+        // Path override → absolutized against the workspace root.
+        let core_lookup = lookup_workspace_patch(&workspace, &pkg_ref("tatolab", "core"));
+        match core_lookup {
+            WorkspacePatchLookup::Path(p) => {
+                assert_eq!(p, workspace.root.join("packages/core"));
+            }
+            other => panic!("expected Path lookup, got {:?}", other),
+        }
+
+        // Git/Registry overrides → UnsupportedShape (caller errors).
+        let h264_lookup = lookup_workspace_patch(&workspace, &pkg_ref("tatolab", "h264"));
+        assert!(matches!(h264_lookup, WorkspacePatchLookup::UnsupportedShape));
+
+        // Missing dep → Missing (caller falls through to next tier).
+        let missing_lookup = lookup_workspace_patch(&workspace, &pkg_ref("tatolab", "missing"));
+        assert!(matches!(missing_lookup, WorkspacePatchLookup::Missing));
     }
 
     #[test]

@@ -1363,41 +1363,32 @@ impl StreamRuntime {
     /// and consult its `patch:` table for `dep_ref`. Returns the resolved
     /// path (path-style patches are resolved relative to the workspace root)
     /// or `None` when no workspace ancestor exists or the patch table has
-    /// no entry for this dep.
-    ///
-    /// Patch entries that are themselves `Registry` or `Git` flavor surface
-    /// as configuration errors — workspace patches are meant to redirect
-    /// canonical declarations to a *concrete* location, so a registry/git
-    /// patch entry has no further resolution path today (revisit if the
-    /// workspace-level shape grows).
+    /// no entry for this dep. Path resolution is shared with the build-time
+    /// resolver via [`streamlib_idents::lookup_workspace_patch`] — single
+    /// source of truth for the patch-resolution rule.
     fn lookup_workspace_patch(
         &self,
         consumer_dir: &std::path::Path,
         dep_ref: &streamlib_idents::PackageRef,
     ) -> Result<Option<std::path::PathBuf>> {
-        use streamlib_idents::DependencySpec;
+        use streamlib_idents::WorkspacePatchLookup;
 
         let Some(workspace) = streamlib_idents::discover_workspace(consumer_dir) else {
             return Ok(None);
         };
-        let Some(patch_spec) = workspace.manifest.patch.get(dep_ref) else {
-            return Ok(None);
-        };
-        match patch_spec {
-            DependencySpec::Path(p) => Ok(Some(if p.path.is_absolute() {
-                p.path.clone()
-            } else {
-                workspace.root.join(&p.path)
-            })),
-            DependencySpec::Registry(_) | DependencySpec::Git(_) => {
-                Err(StreamError::Configuration(format!(
-                    "Workspace `[patch]` entry for '{dep_ref}' at {} is a \
-                     registry/git override, but the runtime's workspace-patch \
-                     resolver only supports path overrides today. Declare a \
-                     `path:` patch entry pointing at a local directory.",
-                    workspace.root.join(streamlib_idents::Manifest::FILE_NAME).display(),
-                )))
-            }
+        match streamlib_idents::lookup_workspace_patch(&workspace, dep_ref) {
+            WorkspacePatchLookup::Path(p) => Ok(Some(p)),
+            WorkspacePatchLookup::Missing => Ok(None),
+            WorkspacePatchLookup::UnsupportedShape => Err(StreamError::Configuration(format!(
+                "Workspace `[patch]` entry for '{dep_ref}' at {} is a \
+                 registry/git override, but the workspace-patch resolver \
+                 only supports path overrides today. Declare a `path:` \
+                 patch entry pointing at a local directory.",
+                workspace
+                    .root
+                    .join(streamlib_idents::Manifest::FILE_NAME)
+                    .display(),
+            ))),
         }
     }
 
@@ -1816,6 +1807,20 @@ dependencies:
 "#,
         )
         .unwrap();
+
+        // Precondition: the test sandbox must NOT have a workspace
+        // ancestor — that's what proves we're testing the installed-cache
+        // tier and not silently short-circuiting through workspace-patch
+        // resolution. Defends against running tests with a non-default
+        // `TMPDIR` pointing inside a streamlib checkout.
+        assert!(
+            streamlib_idents::discover_workspace(consumer.path()).is_none(),
+            "test sandbox at {} has a workspace ancestor; the test would \
+             short-circuit through workspace-patch resolution instead of \
+             exercising the installed-cache tier. Set TMPDIR to a path \
+             outside any streamlib repo.",
+            consumer.path().display()
+        );
 
         let runtime = StreamRuntime::new().unwrap();
         runtime
