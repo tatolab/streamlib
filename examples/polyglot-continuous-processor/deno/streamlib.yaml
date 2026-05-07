@@ -5,6 +5,14 @@ package:
   version: "0.1.0"
   description: "Polyglot continuous processor (#542) — Deno process() driven by monotonic-clock timerfd"
 
+# Reference yaml for the structured-deps shape landed in #716. Declares
+# `@tatolab/core` as a path dep so the runtime parser is exercised end
+# to end against a real consumer manifest. The full sweep across every
+# consumer yaml is owned by #717.
+dependencies:
+  "@tatolab/core":
+    path: ../../../packages/core
+
 processors:
   - name: PolyglotContinuousProcessor
     version: "1.0.0"

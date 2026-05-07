@@ -35,6 +35,10 @@ hardware-tests = []
 # Processor schema types (shared with macros for code generation)
 streamlib-processor-schema = { path = "../streamlib-processor-schema" }
 
+# Schema identity + manifest types (one source of truth for the
+# structured `dependencies:` shape consumed at runtime).
+streamlib-idents = { path = "../streamlib-idents" }
+
 # Procedural macros
 streamlib-macros = { path = "../streamlib-macros" }
 

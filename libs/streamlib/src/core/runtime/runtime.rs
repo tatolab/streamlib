@@ -354,23 +354,40 @@ impl StreamRuntime {
 
         config.check_streamlib_version_compatibility()?;
 
-        // Load dependency packages first (schemas/processors they export)
+        // Load dependency packages first (schemas/processors they export).
+        //
+        // The dep schema is the same `BTreeMap<String, DependencySpec>` that
+        // the resolver and the JSON Schema source-of-truth (`StreamlibYaml`)
+        // consume. Path-style deps resolve relative to the manifest dir and
+        // recurse through `load_project`; registry/git deps fall back to the
+        // installed-package cache (or fail with an actionable error).
         if !config.dependencies.is_empty() {
             use crate::core::config::InstalledPackageManifest;
+            use streamlib_idents::DependencySpec;
 
-            let manifest = InstalledPackageManifest::load()?;
-            for dep_name in &config.dependencies {
-                let entry = manifest.find_by_name(dep_name).ok_or_else(|| {
-                    StreamError::Configuration(format!(
-                        "Dependency '{}' is not installed. Install it with: streamlib pkg install <path.slpkg>",
-                        dep_name
-                    ))
-                })?;
-                let dep_path =
-                    crate::core::streamlib_home::get_cached_package_dir(&entry.cache_dir);
+            let installed_manifest = InstalledPackageManifest::load()?;
+            for (dep_key, spec) in &config.dependencies {
+                let dep_path = match spec {
+                    DependencySpec::Path(p) => {
+                        if p.path.is_absolute() {
+                            p.path.clone()
+                        } else {
+                            project_path.join(&p.path)
+                        }
+                    }
+                    DependencySpec::Registry(_) | DependencySpec::Git(_) => {
+                        let entry = installed_manifest.find_by_name(dep_key).ok_or_else(|| {
+                            StreamError::Configuration(format!(
+                                "Dependency '{}' is not installed. Install it with: streamlib pkg install <path.slpkg>",
+                                dep_key
+                            ))
+                        })?;
+                        crate::core::streamlib_home::get_cached_package_dir(&entry.cache_dir)
+                    }
+                };
                 tracing::info!(
                     "Loading dependency '{}' from {}",
-                    dep_name,
+                    dep_key,
                     dep_path.display()
                 );
                 self.load_project(&dep_path)?;
@@ -1490,6 +1507,85 @@ mod tests {
     fn test_runtime_creation() {
         let _runtime = StreamRuntime::new();
         // Runtime creates successfully
+    }
+
+    /// Path-style dep recursion: `runtime.load_project(A)` must walk into
+    /// `B` (declared as `path: ../b`) and parse its manifest. The negative
+    /// counterpart below proves recursion actually happens — not just that
+    /// the parser tolerates the structured shape.
+    #[test]
+    #[serial]
+    fn test_load_project_recurses_into_path_dep() {
+        let runtime = StreamRuntime::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Project A — empty processors, declares path dep to ../b
+        let a = tmp.path().join("a");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::write(
+            a.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: a
+  version: "0.1.0"
+dependencies:
+  "@tatolab/b":
+    path: ../b
+"#,
+        )
+        .unwrap();
+
+        // Project B — leaf, empty processors
+        let b = tmp.path().join("b");
+        std::fs::create_dir(&b).unwrap();
+        std::fs::write(
+            b.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: b
+  version: "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        runtime
+            .load_project(&a)
+            .expect("load_project should recurse into path dep without error");
+    }
+
+    /// Negative pair to the test above: when `B`'s manifest is missing,
+    /// the recursion must fail and propagate the error. Mentally reverting
+    /// the recursion in `load_project` would make this test pass falsely
+    /// — that's why both are needed.
+    #[test]
+    #[serial]
+    fn test_load_project_path_dep_missing_manifest_propagates_error() {
+        let runtime = StreamRuntime::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::write(
+            a.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: a
+  version: "0.1.0"
+dependencies:
+  "@tatolab/missing":
+    path: ../does-not-exist
+"#,
+        )
+        .unwrap();
+
+        let result = runtime.load_project(&a);
+        assert!(
+            result.is_err(),
+            "load_project must error when a path dep target has no streamlib.yaml"
+        );
     }
 
     #[test]
