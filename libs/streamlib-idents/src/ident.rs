@@ -1,7 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{InstanceType, Schema, SchemaObject};
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
 use std::fmt;
 
 use crate::error::{IdentError, IdentResult};
@@ -55,6 +59,21 @@ impl<'de> Deserialize<'de> for Org {
     }
 }
 
+impl JsonSchema for Org {
+    fn schema_name() -> String {
+        "Org".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::Org")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        ident_string_schema(
+            "Org segment of an identifier (the @org part).",
+            r"^[a-z][a-z0-9-]*$",
+        )
+    }
+}
+
 /// Package segment.
 ///
 /// Constructed via [`Package::new`] (validating) or typed deserialization.
@@ -100,6 +119,21 @@ impl<'de> Deserialize<'de> for Package {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(d)?;
         Self::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for Package {
+    fn schema_name() -> String {
+        "Package".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::Package")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        ident_string_schema(
+            "Package segment of an identifier (the `package` part of `@org/package/Type@version`).",
+            r"^[a-z][a-z0-9-]*$",
+        )
     }
 }
 
@@ -151,6 +185,21 @@ impl<'de> Deserialize<'de> for TypeName {
     }
 }
 
+impl JsonSchema for TypeName {
+    fn schema_name() -> String {
+        "TypeName".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::TypeName")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        ident_string_schema(
+            "Type segment of a schema identifier (PascalCase, the `Type` part of `@org/package/Type@version`).",
+            r"^[A-Z][A-Za-z0-9]*$",
+        )
+    }
+}
+
 /// Structured schema identifier — `@org/package/Type@version`.
 ///
 /// Constructed via codegen-emitted const literals or via typed YAML/JSON
@@ -176,7 +225,10 @@ impl<'de> Deserialize<'de> for TypeName {
 /// use streamlib_idents::SchemaIdent;
 /// let _: SchemaIdent = "@tatolab/core/VideoFrame@1.0.0".parse().unwrap();
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
+#[schemars(
+    description = "Structured schema identifier — the four-field map form of `@org/package/Type@version`."
+)]
 pub struct SchemaIdent {
     pub org: Org,
     pub package: Package,
@@ -265,6 +317,21 @@ pub fn validate_type(s: &str) -> IdentResult<()> {
 
 fn is_lower_alnum_or_hyphen(c: char) -> bool {
     matches!(c, 'a'..='z' | '0'..='9' | '-')
+}
+
+fn ident_string_schema(description: &str, pattern: &str) -> Schema {
+    Schema::Object(SchemaObject {
+        metadata: Some(Box::new(schemars::schema::Metadata {
+            description: Some(description.into()),
+            ..Default::default()
+        })),
+        instance_type: Some(InstanceType::String.into()),
+        string: Some(Box::new(schemars::schema::StringValidation {
+            pattern: Some(pattern.into()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]

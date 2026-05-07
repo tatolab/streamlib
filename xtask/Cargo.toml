@@ -11,6 +11,10 @@ publish = false
 # JTD-codegen pipeline (extracted in #400) — xtask is a thin wrapper.
 streamlib-jtd-codegen = { path = "../libs/streamlib-jtd-codegen" }
 
+# JSON Schema source-of-truth for streamlib.yaml — emit-manifest-schema serialises
+# `schemars::schema_for!(StreamlibYaml)` from this crate (#714).
+streamlib-processor-schema = { path = "../libs/streamlib-processor-schema" }
+
 # Logging — needed to surface tracing::info! output from streamlib-jtd-codegen.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -20,13 +24,20 @@ clap = { version = "4.5", features = ["derive"] }
 
 # Serialization for reading Cargo.toml and JTD schemas
 serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = "0.9"
 toml = "0.8"
+
+# JSON Schema generation (#714) — same major as the rest of the workspace.
+schemars = "0.8"
+
+# JSON Schema validation for check-manifest-schema (#714).
+jsonschema = { version = "0.30", default-features = false }
 
 # Error handling
 anyhow = "1.0"
 
-# Recursive file walk for lint-logging
+# Recursive file walk for lint-logging + check-manifest-schema
 walkdir = "2.5"
 
 # Rust AST parsing for lint-logging — matches clippy's disallowed_macros

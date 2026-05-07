@@ -1,7 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use schemars::r#gen::SchemaGenerator;
+use schemars::schema::{Schema, SchemaObject, SubschemaValidation};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -20,7 +24,7 @@ use crate::semver::{SemVer, SemVerRange};
 /// streamlib runtime; they are tolerated here without being interpreted, so
 /// one `streamlib.yaml` carries both schema-identity and runtime
 /// configuration without splitting into two files.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<PackageMetadata>,
@@ -75,7 +79,7 @@ impl Manifest {
 
 /// Package metadata. `version` lives here and ONLY here — per the
 /// package-as-publication-unit rule (CI lint rejects per-schema versions).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PackageMetadata {
     pub org: Org,
@@ -102,19 +106,19 @@ pub enum DependencySpec {
     Git(GitDependency),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryDependency {
     pub version: SemVerRange,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PathDependency {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GitDependency {
     pub git: String,
@@ -122,6 +126,35 @@ pub struct GitDependency {
     /// pinning is required for reproducible resolution. Mirrors the
     /// workspace rule from `CLAUDE.md` (`Conventions → Dependencies`).
     pub rev: String,
+}
+
+impl JsonSchema for DependencySpec {
+    fn schema_name() -> String {
+        "DependencySpec".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::DependencySpec")
+    }
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let semver_range = generator.subschema_for::<SemVerRange>();
+        let registry = generator.subschema_for::<RegistryDependency>();
+        let path = generator.subschema_for::<PathDependency>();
+        let git = generator.subschema_for::<GitDependency>();
+        Schema::Object(SchemaObject {
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "Dependency declaration: a bare semver-range string (registry shorthand), or one of the structured `{ version }` / `{ path }` / `{ git, rev }` maps."
+                        .into(),
+                ),
+                ..Default::default()
+            })),
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![semver_range, registry, path, git]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+    }
 }
 
 // Custom Deserialize: a bare string `^1.2.3` is sugar for a Registry

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
@@ -259,8 +260,7 @@ processors:
   - name: ChordGenerator
     version: 1.0.0
     description: "Generates a C major chord (C4, E4, G4) pre-mixed into a stereo output"
-    execution:
-      type: Manual
+    execution: manual
     config:
       name: config
       schema: com.tatolab.chord_generator.config@1.0.0
