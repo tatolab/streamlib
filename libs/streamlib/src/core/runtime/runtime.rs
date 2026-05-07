@@ -359,13 +359,13 @@ impl StreamRuntime {
         // The dep schema is the same `BTreeMap<String, DependencySpec>` that
         // the resolver and the JSON Schema source-of-truth (`StreamlibYaml`)
         // consume. Path-style deps resolve relative to the manifest dir and
-        // recurse through `load_project`; registry/git deps fall back to the
-        // installed-package cache (or fail with an actionable error).
+        // recurse through `load_project`. Registry/git deps require canonical
+        // `@org/name` install-manifest keys + workspace `[patch]` resolution,
+        // which arrive in #717; until then they error explicitly here so no
+        // string parser sneaks into the lookup site.
         if !config.dependencies.is_empty() {
-            use crate::core::config::InstalledPackageManifest;
             use streamlib_idents::DependencySpec;
 
-            let installed_manifest = InstalledPackageManifest::load()?;
             for (dep_key, spec) in &config.dependencies {
                 let dep_path = match spec {
                     DependencySpec::Path(p) => {
@@ -376,13 +376,12 @@ impl StreamRuntime {
                         }
                     }
                     DependencySpec::Registry(_) | DependencySpec::Git(_) => {
-                        let entry = installed_manifest.find_by_name(dep_key).ok_or_else(|| {
-                            StreamError::Configuration(format!(
-                                "Dependency '{}' is not installed. Install it with: streamlib pkg install <path.slpkg>",
-                                dep_key
-                            ))
-                        })?;
-                        crate::core::streamlib_home::get_cached_package_dir(&entry.cache_dir)
+                        return Err(StreamError::Configuration(format!(
+                            "Registry/git dep '{dep_key}' is not yet supported \
+                             (pending #717: canonical install-manifest keys + \
+                             workspace [patch] resolution). Use a path-style \
+                             declaration in a workspace patch file once #717 lands."
+                        )));
                     }
                 };
                 tracing::info!(
@@ -1585,6 +1584,46 @@ dependencies:
         assert!(
             result.is_err(),
             "load_project must error when a path dep target has no streamlib.yaml"
+        );
+    }
+
+    /// Registry/git deps are not yet supported — the canonical
+    /// install-manifest + workspace `[patch]` resolution chain arrives in
+    /// #717. Until then the runtime errors explicitly so no string parser
+    /// sneaks into the lookup site. The error must surface the canonical
+    /// `@org/name` key the user wrote AND point at #717.
+    #[test]
+    #[serial]
+    fn test_load_project_registry_dep_errors_pending_717() {
+        let runtime = StreamRuntime::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+
+        let a = tmp.path().join("a");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::write(
+            a.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: a
+  version: "0.1.0"
+dependencies:
+  "@tatolab/missing": "^1.0.0"
+"#,
+        )
+        .unwrap();
+
+        let err = runtime
+            .load_project(&a)
+            .expect_err("registry dep must error explicitly until #717 lands");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("@tatolab/missing"),
+            "error must surface the canonical `@org/name` key, got: {msg}"
+        );
+        assert!(
+            msg.contains("#717"),
+            "error must point at #717 so the picker has a follow-up reference, got: {msg}"
         );
     }
 
