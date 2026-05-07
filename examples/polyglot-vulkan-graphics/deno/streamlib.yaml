@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Polyglot Vulkan adapter scenario (#656) — Deno triangle vertex/fragment graphics kernel rendered into a host DMA-BUF VkImage"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: VulkanGraphicsProcessor
     version: "1.0.0"

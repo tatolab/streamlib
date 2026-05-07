@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Polyglot CUDA adapter inference (#591) — Deno DLPack-capsule structural validation against host OPAQUE_FD VkBuffer"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: CudaInferenceProcessor
     version: "1.0.0"

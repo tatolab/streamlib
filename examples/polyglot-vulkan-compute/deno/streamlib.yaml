@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Polyglot Vulkan adapter scenario (#531) — Deno Mandelbrot compute kernel dispatched against a host DMA-BUF VkImage"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: VulkanComputeProcessor
     version: "1.0.0"

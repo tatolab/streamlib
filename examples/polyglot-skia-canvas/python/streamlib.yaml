@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Polyglot Skia adapter scenario (#577) — Python Skia processor (composed on the OpenGL adapter via skia-python's GrDirectContext.MakeGL) draws a canvas into a host DMA-BUF VkImage via streamlib.adapters.skia.SkiaContext"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: SkiaCanvas
     version: "1.0.0"

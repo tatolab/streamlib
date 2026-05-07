@@ -5,6 +5,9 @@ package:
   version: 0.1.0
   description: "Grayscale video effect as Rust dylib plugin"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: GrayscaleRust
     version: 1.0.0

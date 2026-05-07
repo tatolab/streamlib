@@ -12,8 +12,7 @@ package:
   description: "Cross-platform real-time media framework"
 
 dependencies:
-  "@tatolab/core":
-    path: ../../packages/core
+  "@tatolab/core": "^1.0.0"
 
 # Schema YAML files this package owns. Drives the JTD-codegen pipeline
 # (`cargo xtask generate-schemas --project-dir libs/streamlib`) and the

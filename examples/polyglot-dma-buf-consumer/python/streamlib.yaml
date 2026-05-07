@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Linux DMA-BUF consumer — resolves host camera surfaces via the surface-share service"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: DmaBufConsumer
     version: "1.0.0"

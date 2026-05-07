@@ -14,17 +14,22 @@ mod lockfile;
 mod manifest;
 mod resolver;
 mod semver;
+mod workspace;
 
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
-pub use ident::{validate_org, validate_package, validate_type, Org, Package, SchemaIdent, TypeName};
+pub use ident::{
+    validate_org, validate_package, validate_type, Org, Package, PackageRef, SchemaIdent, TypeName,
+};
 pub use lockfile::{
     compute_content_hash, hash_content, read_lockfile, write_lockfile, Lockfile, LockfileEntry,
     LockfileSource, LOCKFILE_NAME,
 };
 pub use manifest::{
     DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,
+    WorkspaceConfig,
 };
 pub use resolver::{
     resolve, resolve_with, ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
 };
 pub use semver::{SemVer, SemVerRange};
+pub use workspace::{discover_workspace, DiscoveredWorkspace};

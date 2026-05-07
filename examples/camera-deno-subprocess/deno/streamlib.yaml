@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "TypeScript/Deno video processors using subprocess architecture"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: GrayscaleProcessor
     version: "1.0.0"

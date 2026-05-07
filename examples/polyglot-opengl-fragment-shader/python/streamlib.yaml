@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Polyglot OpenGL adapter scenario (#530) — Python Mandelbrot fragment shader rendered into a host DMA-BUF surface"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: OpenGlFragmentShader
     version: "1.0.0"

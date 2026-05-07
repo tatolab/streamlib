@@ -21,6 +21,10 @@ streamlib = { path = "../streamlib" }
 # Schema types (processor YAML parsing)
 streamlib-processor-schema = { path = "../streamlib-processor-schema" }
 
+# Manifest + workspace + dependency-spec types for `streamlib pack` /
+# `pkg install` / `pkg remove` — typed PackageRef, Manifest schema, etc.
+streamlib-idents = { path = "../streamlib-idents" }
+
 # JTD-codegen pipeline (drives `streamlib generate`)
 streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen" }
 

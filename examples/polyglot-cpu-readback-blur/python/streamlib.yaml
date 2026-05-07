@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Polyglot cpu-readback adapter blur (#529) — Python cv2.GaussianBlur with numpy fallback"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: CpuReadbackBlur
     version: "1.0.0"

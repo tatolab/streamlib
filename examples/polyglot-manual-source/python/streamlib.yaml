@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Polyglot manual source (#542 / #604) — Python worker thread paced by MonotonicTimer publishes Videoframes via iceoryx2"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: PolyglotManualSource
     version: "1.0.0"

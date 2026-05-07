@@ -5,6 +5,9 @@ package:
   version: "0.1.0"
   description: "Polyglot Vulkan adapter scenario (#667) — Python ray-traced triangle via host VulkanRayTracingKernel + AS escalate IPC"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
 processors:
   - name: VulkanRayTracing
     version: "1.0.0"

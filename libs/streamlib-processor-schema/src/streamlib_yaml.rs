@@ -22,7 +22,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use streamlib_idents::{DependencySpec, PackageMetadata};
+use streamlib_idents::{DependencySpec, PackageMetadata, PackageRef, WorkspaceConfig};
 
 use crate::ProcessorSchema;
 
@@ -41,9 +41,20 @@ pub struct StreamlibYaml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<PackageMetadata>,
 
-    /// Dependency declarations, keyed by `@org/name`.
+    /// Workspace marker. Set on the workspace-root `streamlib.yaml`; the
+    /// runtime walks up the path tree looking for it and consults
+    /// [`Self::patch`] for canonical-dep resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceConfig>,
+
+    /// Dependency declarations, keyed by canonical `@org/name`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub dependencies: BTreeMap<String, DependencySpec>,
+    pub dependencies: BTreeMap<PackageRef, DependencySpec>,
+
+    /// Workspace-level resolution overrides. Mirrors Cargo's
+    /// `[patch.crates-io]` shape — only meaningful on the workspace root.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub patch: BTreeMap<PackageRef, DependencySpec>,
 
     /// Explicit list of schema YAML files this package owns, relative to the
     /// manifest's directory. When omitted, the resolver auto-discovers

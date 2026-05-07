@@ -7,7 +7,7 @@ use crate::core::{Result, StreamError};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use streamlib_idents::DependencySpec;
+use streamlib_idents::{DependencySpec, PackageRef};
 use streamlib_processor_schema::{Org, Package, SemVer};
 
 /// Package-level metadata from `streamlib.yaml`. Structured fields per the
@@ -42,13 +42,15 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub processors: Vec<streamlib_processor_schema::ProcessorSchema>,
 
-    /// Package dependencies, keyed by `@org/name`. Mirrors
+    /// Package dependencies, keyed by canonical [`PackageRef`]. Mirrors
     /// [`streamlib_idents::Manifest::dependencies`] and the JSON Schema
     /// source-of-truth `StreamlibYaml` so a single declaration shape
     /// flows through the resolver, the editor schema, and the runtime
-    /// loader.
+    /// loader. The typed-key contract from #717 means the runtime never
+    /// parses a string at the lookup site — `PackageRef`'s `Deserialize`
+    /// validates the canonical `@org/name` shape at YAML-read time.
     #[serde(default)]
-    pub dependencies: BTreeMap<String, DependencySpec>,
+    pub dependencies: BTreeMap<PackageRef, DependencySpec>,
 }
 
 impl ProjectConfig {
@@ -231,6 +233,10 @@ env:
         assert!(config.env.is_empty());
     }
 
+    fn pkg_ref(org: &str, name: &str) -> PackageRef {
+        PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
+    }
+
     #[test]
     fn test_load_with_path_dependency() {
         let dir = TempDir::new().unwrap();
@@ -247,9 +253,12 @@ dependencies:
 
         let config = ProjectConfig::load(dir.path()).unwrap();
         assert_eq!(config.dependencies.len(), 1);
+        // Typed-key lookup. Mentally reverting `dependencies` to
+        // `BTreeMap<String, _>` would force a string-parser at this lookup
+        // site, which is the structured-everywhere anti-pattern.
         let spec = config
             .dependencies
-            .get("@tatolab/core")
+            .get(&pkg_ref("tatolab", "core"))
             .expect("@tatolab/core dep present");
         match spec {
             DependencySpec::Path(p) => {
@@ -274,7 +283,7 @@ dependencies:
 
         let config = ProjectConfig::load(dir.path()).unwrap();
         assert_eq!(config.dependencies.len(), 1);
-        match config.dependencies.get("@tatolab/core").unwrap() {
+        match config.dependencies.get(&pkg_ref("tatolab", "core")).unwrap() {
             DependencySpec::Registry(r) => {
                 assert_eq!(r.version.to_string(), "^1.0.0");
             }
@@ -298,13 +307,36 @@ dependencies:
         .unwrap();
 
         let config = ProjectConfig::load(dir.path()).unwrap();
-        match config.dependencies.get("@tatolab/moq").unwrap() {
+        match config.dependencies.get(&pkg_ref("tatolab", "moq")).unwrap() {
             DependencySpec::Git(g) => {
                 assert_eq!(g.git, "https://github.com/tatolab/moq");
                 assert_eq!(g.rev, "abc123def456");
             }
             other => panic!("expected Git dep, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_load_rejects_invalid_canonical_key_at_parse_time() {
+        // Post-#717: bare `tatolab/core` (no `@` prefix) fails to
+        // deserialize as a `PackageRef` and surfaces as a yaml-parse error
+        // before any runtime code runs. The structural invariant — that
+        // invalid dep keys can't reach the lookup site — is locked here;
+        // mentally reverting the `BTreeMap<PackageRef, _>` migration would
+        // make this test hit a `Result::Ok` instead of an `Err`, since
+        // `BTreeMap<String, _>` accepts any string.
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("streamlib.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dependencies:
+  "tatolab/core": "^1.0.0"
+"#,
+        )
+        .unwrap();
+        let result = ProjectConfig::load(dir.path());
+        assert!(result.is_err(), "missing @ prefix must fail to deserialize");
     }
 
     #[test]
