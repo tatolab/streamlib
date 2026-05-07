@@ -407,7 +407,39 @@ impl StreamRuntime {
         let mut registered_count = 0usize;
         let mut rust_dylib_loaded = false;
 
+        // Resolve package metadata once per project — every dynamically
+        // registered processor in this manifest uses these typed segments
+        // to compose its full structured `SchemaIdent`.
+        let package_metadata = config.package.as_ref().ok_or_else(|| {
+            StreamError::Configuration(format!(
+                "{} at {} declares processors but is missing a `package:` block. \
+                 The structured-everywhere processor identity rule requires \
+                 `package: {{ org, name, version }}` to compose each processor's \
+                 SchemaIdent.",
+                ProjectConfig::FILE_NAME,
+                project_path.display(),
+            ))
+        })?;
+
         for proc_schema in &config.processors {
+            // Compose the structured processor ident from the manifest's
+            // package metadata + the processor's PascalCase short name.
+            let proc_type_name = streamlib_processor_schema::TypeName::new(&proc_schema.name)
+                .map_err(|e| {
+                    StreamError::Configuration(format!(
+                        "processor short name `{}` in {} is not valid PascalCase: {}",
+                        proc_schema.name,
+                        project_path.display(),
+                        e
+                    ))
+                })?;
+            let proc_schema_ident = crate::core::descriptors::SchemaIdent::new(
+                package_metadata.org.clone(),
+                package_metadata.name.clone(),
+                proc_type_name,
+                package_metadata.version.clone(),
+            );
+
             // Map runtime language to ProcessorRuntime
             let runtime = match proc_schema.runtime.language {
                 streamlib_processor_schema::ProcessorLanguage::Python => ProcessorRuntime::Python,
@@ -500,17 +532,19 @@ impl StreamRuntime {
                         );
                     }
 
-                    // Validate the processor was registered by the dylib
+                    // Validate the processor was registered by the dylib —
+                    // compare by structured `SchemaIdent`, not bare PascalCase
+                    // (two packages can declare the same short name).
                     let registered = crate::core::processors::PROCESSOR_REGISTRY
                         .list_registered()
                         .iter()
-                        .any(|desc| desc.name == proc_schema.name);
+                        .any(|desc| desc.name == proc_schema_ident);
                     if !registered {
                         return Err(StreamError::Configuration(format!(
                             "Processor '{}' declared in streamlib.yaml but not \
                              registered by the dylib. Ensure export_plugin!() \
                              includes this processor.",
-                            proc_schema.name
+                            proc_schema_ident
                         )));
                     }
 
@@ -547,7 +581,7 @@ impl StreamRuntime {
                 .collect();
 
             let mut descriptor = ProcessorDescriptor::new(
-                &proc_schema.name,
+                proc_schema_ident.clone(),
                 proc_schema.description.as_deref().unwrap_or(""),
             )
             .with_version(&proc_schema.version)

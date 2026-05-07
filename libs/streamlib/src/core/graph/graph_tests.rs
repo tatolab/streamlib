@@ -247,7 +247,7 @@ mod query_ops {
         let found = graph.traversal().v(id.as_str()).first();
         assert!(found.is_some());
         assert_eq!(
-            found.unwrap().processor_type,
+            found.unwrap().processor_type.r#type.as_str(),
             "TestMockProcessor"
         );
     }
@@ -338,17 +338,17 @@ mod query_ops {
             .traversal_mut()
             .add_v(MockInputOnlyProcessor::Processor::node(Default::default()));
 
-        let types: Vec<_> = graph
+        let type_short_names: Vec<String> = graph
             .traversal()
             .v(())
             .iter()
-            .map(|n| n.processor_type.clone())
+            .map(|n| n.processor_type.r#type.as_str().to_string())
             .collect();
 
-        assert_eq!(types.len(), 3);
-        assert!(types.contains(&"TestMockProcessor".to_string()));
-        assert!(types.contains(&"TestMockOutputOnlyProcessor".to_string()));
-        assert!(types.contains(&"TestMockInputOnlyProcessor".to_string()));
+        assert_eq!(type_short_names.len(), 3);
+        assert!(type_short_names.contains(&"TestMockProcessor".to_string()));
+        assert!(type_short_names.contains(&"TestMockOutputOnlyProcessor".to_string()));
+        assert!(type_short_names.contains(&"TestMockInputOnlyProcessor".to_string()));
     }
 }
 
@@ -497,7 +497,7 @@ mod filter_ops {
         let mock_processors: Vec<_> = graph
             .traversal()
             .v(())
-            .filter(|n| n.processor_type == "TestMockProcessor")
+            .filter(|n| n.processor_type.r#type.as_str() == "TestMockProcessor")
             .ids();
 
         assert_eq!(mock_processors.len(), 2);

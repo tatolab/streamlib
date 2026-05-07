@@ -571,7 +571,7 @@ pub(crate) fn create_python_native_subprocess_host_constructor(
             processor_id: node.id.to_string(),
             processor_config: node.config.clone(),
             execution_config,
-            descriptor_name: descriptor_clone.name.clone(),
+            descriptor_name: descriptor_clone.name.to_string(),
             subprocess_dead: false,
             native_lib_path: native_lib_path.clone(),
             input_port_wiring: Vec::new(),

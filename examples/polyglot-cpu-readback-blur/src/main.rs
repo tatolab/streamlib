@@ -50,6 +50,7 @@ use std::time::Duration;
 use streamlib::core::context::{
     CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext,
 };
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::host_rhi::{
@@ -97,10 +98,20 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_name(self) -> &'static str {
+    fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => "CpuReadbackBlur",
-            Self::Deno => "CpuReadbackBlurProcessor",
+            Self::Python => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-cpu-readback-blur").unwrap(),
+                TypeName::new("CpuReadbackBlur").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
+            Self::Deno => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-cpu-readback-blur-deno").unwrap(),
+                TypeName::new("CpuReadbackBlurProcessor").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
         }
     }
 }
@@ -238,7 +249,7 @@ fn main() -> Result<()> {
         "sigma": sigma,
     });
     let blur = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_name(),
+        runtime_kind.processor_ident(),
         blur_config,
     ))?;
     println!("+ Blur:           {blur}");

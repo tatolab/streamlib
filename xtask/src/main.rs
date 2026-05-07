@@ -13,6 +13,7 @@ use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 
 pub mod check_boundaries;
 pub mod check_no_streamlib_metadata;
+pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod lint_logging;
 pub mod manifest_schema;
@@ -79,6 +80,13 @@ enum Commands {
     /// `docs/architecture/schema-identity-and-packaging.md` (anti-pattern 4).
     CheckNoStreamlibMetadata,
 
+    /// CI gate for the structured-everywhere `ProcessorSpec` rule from
+    /// #707. Fails on `ProcessorSpec::new("PascalCase", ...)` — every
+    /// call site must take a structured `SchemaIdent` (built via
+    /// `SchemaIdent::new(...)` or via the macro-emitted
+    /// `<Module>::schema_ident()`).
+    CheckProcessorSpecNew,
+
     /// Regenerate `schemas/streamlib.schema.json` from the Rust
     /// [`StreamlibYaml`](streamlib_processor_schema::StreamlibYaml) source of
     /// truth (#714). Editors with `yaml-language-server` consume this schema
@@ -126,6 +134,7 @@ fn main() -> Result<()> {
         Commands::CheckNoStreamlibMetadata => {
             check_no_streamlib_metadata::run(&workspace_root()?)?
         }
+        Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
     }

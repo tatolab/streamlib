@@ -18,8 +18,12 @@ impl<'a> TraversalSourceMut<'a> {
             };
         };
 
-        // Resolve display_name: use override if provided, otherwise default to type name
-        let display_name = spec.display_name.unwrap_or_else(|| spec.name.clone());
+        // Resolve display_name: override if provided, otherwise default to the
+        // PascalCase short-name segment of the structured ident (`SchemaIdent`'s
+        // joined `Display` form is too verbose for UIs).
+        let display_name = spec
+            .display_name
+            .unwrap_or_else(|| spec.name.r#type.as_str().to_string());
 
         // Build ProcessorNode with resolved port info
         let node = ProcessorNode::new(spec.name, display_name, Some(spec.config), inputs, outputs);

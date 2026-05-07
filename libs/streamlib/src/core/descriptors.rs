@@ -113,7 +113,8 @@ impl ConfigDescriptor for () {
 /// Describes a processor with its ports and configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorDescriptor {
-    pub name: String,
+    /// Structured processor identity — `@org/package/Type@version`.
+    pub name: SchemaIdent,
     pub description: String,
     pub version: String,
     pub repository: String,
@@ -132,9 +133,9 @@ pub struct ProcessorDescriptor {
 }
 
 impl ProcessorDescriptor {
-    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
+    pub fn new(name: SchemaIdent, description: impl Into<String>) -> Self {
         Self {
-            name: name.into(),
+            name,
             description: description.into(),
             version: String::new(),
             repository: String::new(),

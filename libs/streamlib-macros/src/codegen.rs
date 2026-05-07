@@ -81,22 +81,20 @@ pub fn generate_from_processor_schema(
     let output_link_module = generate_output_link_module_from_schema(schema);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
+        schema_ident,
         &config_type,
         &config_field_name,
         &custom_fields,
     );
 
-    let schema_ident_const = {
-        let ident_tokens = schema_ident_tokens(schema_ident);
-        quote! {
-            /// Structured wire identity for this processor —
-            /// `@<org>/<package>/<Type>@<version>` resolved at codegen
-            /// from sibling `streamlib.yaml`'s `package:` block plus
-            /// the processor's PascalCase short name.
-            #[allow(dead_code)]
-            pub fn schema_ident() -> ::streamlib::core::SchemaIdent {
-                #ident_tokens
-            }
+    let schema_ident_const = quote! {
+        /// Structured wire identity for this processor —
+        /// `@<org>/<package>/<Type>@<version>` resolved at codegen
+        /// from sibling `streamlib.yaml`'s `package:` block plus
+        /// the processor's PascalCase short name.
+        #[allow(dead_code)]
+        pub fn schema_ident() -> ::streamlib::core::SchemaIdent {
+            Processor::schema_ident()
         }
     };
 
@@ -324,6 +322,7 @@ fn generate_output_link_module_from_schema(schema: &ProcessorSchema) -> TokenStr
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
+    schema_ident: &SchemaIdent,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
@@ -333,6 +332,7 @@ fn generate_processor_impl_from_schema(
     let processor_name = &schema.name;
     let description = schema.description.as_deref().unwrap_or("Processor");
     let version = &schema.version;
+    let schema_ident_literal = schema_ident_tokens(schema_ident);
 
     // Derive execution mode from schema
     let (
@@ -417,13 +417,24 @@ fn generate_processor_impl_from_schema(
 
     quote! {
         impl Processor {
-            /// Processor name for registration and lookup.
+            /// Processor PascalCase short name (the `type` segment of the
+            /// structured [`SchemaIdent`](::streamlib::core::SchemaIdent)).
+            /// Use [`Processor::schema_ident`] for the full structured identity.
             pub const NAME: &'static str = #processor_name;
 
-            /// Create a ProcessorSpec for adding this processor to a runtime.
+            /// Returns the structured wire identity for this processor —
+            /// `@<org>/<package>/<Type>@<version>` resolved at codegen
+            /// time from the sibling `streamlib.yaml`'s `package:` block
+            /// plus the processor's PascalCase short name.
+            pub fn schema_ident() -> ::streamlib::core::SchemaIdent {
+                #schema_ident_literal
+            }
+
+            /// Create a [`ProcessorSpec`](::streamlib::core::ProcessorSpec)
+            /// for adding this processor to a runtime.
             pub fn node(config: #config_type) -> ::streamlib::core::ProcessorSpec {
                 ::streamlib::core::ProcessorSpec {
-                    name: Self::NAME.to_string(),
+                    name: Self::schema_ident(),
                     config: ::streamlib::serde_json::to_value(&config)
                         .expect("Config serialization failed"),
                     display_name: None,
@@ -595,7 +606,7 @@ fn generate_descriptor_from_schema(
     description: &str,
     version: &str,
 ) -> TokenStream {
-    let name = &schema.name;
+    let _name = &schema.name; // PascalCase short name retained for identifier checks elsewhere
     let repository = "https://github.com/tatolab/streamlib";
 
     // iceoryx2-based input ports
@@ -650,7 +661,7 @@ fn generate_descriptor_from_schema(
     quote! {
         fn descriptor() -> Option<::streamlib::core::ProcessorDescriptor> {
             Some(
-                ::streamlib::core::ProcessorDescriptor::new(#name, #description)
+                ::streamlib::core::ProcessorDescriptor::new(Processor::schema_ident(), #description)
                     .with_version(#version)
                     .with_repository(#repository)
                     #config_schema

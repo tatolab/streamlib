@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 
 use parking_lot::RwLock;
 
+use crate::core::descriptors::SchemaIdent;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{DynGeneratedProcessor, GeneratedProcessor};
@@ -47,9 +48,13 @@ pub struct RegisterResult {
 
 /// Factory for compile-time registered Rust processors.
 pub struct ProcessorInstanceFactory {
-    constructors: RwLock<HashMap<String, private::ConstructorFn>>,
-    port_info: RwLock<HashMap<String, (Vec<PortInfo>, Vec<PortInfo>)>>,
-    descriptors: RwLock<HashMap<String, ProcessorDescriptor>>,
+    constructors: RwLock<HashMap<SchemaIdent, private::ConstructorFn>>,
+    port_info: RwLock<HashMap<SchemaIdent, (Vec<PortInfo>, Vec<PortInfo>)>>,
+    descriptors: RwLock<HashMap<SchemaIdent, ProcessorDescriptor>>,
+    /// Set of port-data-type schema strings (`PortSchemaSpec` rendered as
+    /// `Display`). Orthogonal to the processor-identity HashMaps above —
+    /// tracks the universe of port schemas any registered processor exposes,
+    /// for `known_schemas()` / `is_schema_known()` debugging surface only.
     schemas: RwLock<HashSet<String>>,
 }
 
@@ -182,7 +187,7 @@ impl ProcessorInstanceFactory {
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: type_name,
+                processor_type: type_name.clone(),
             }),
         );
     }
@@ -261,7 +266,7 @@ impl ProcessorInstanceFactory {
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: type_name,
+                processor_type: type_name.clone(),
             }),
         );
 
@@ -329,14 +334,14 @@ impl ProcessorInstanceFactory {
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: type_name,
+                processor_type: type_name.clone(),
             }),
         );
 
         Ok(())
     }
 
-    pub fn can_create(&self, processor_type: &str) -> bool {
+    pub fn can_create(&self, processor_type: &SchemaIdent) -> bool {
         self.constructors.read().contains_key(processor_type)
     }
 
@@ -352,16 +357,19 @@ impl ProcessorInstanceFactory {
         constructor(node)
     }
 
-    pub fn port_info(&self, processor_type: &str) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+    pub fn port_info(
+        &self,
+        processor_type: &SchemaIdent,
+    ) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
         self.port_info.read().get(processor_type).cloned()
     }
 
-    pub fn is_registered(&self, processor_type: &str) -> bool {
+    pub fn is_registered(&self, processor_type: &SchemaIdent) -> bool {
         self.constructors.read().contains_key(processor_type)
     }
 
     /// Get the descriptor for a processor type, if registered.
-    pub fn descriptor(&self, processor_type: &str) -> Option<ProcessorDescriptor> {
+    pub fn descriptor(&self, processor_type: &SchemaIdent) -> Option<ProcessorDescriptor> {
         self.descriptors.read().get(processor_type).cloned()
     }
 
@@ -380,5 +388,101 @@ impl ProcessorInstanceFactory {
     /// Check if a schema string is known from any registered processor port.
     pub fn is_schema_known(&self, schema: &str) -> bool {
         self.schemas.read().contains(schema)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::descriptors::{Org, Package, SemVer, TypeName};
+
+    fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
+        SchemaIdent::new(
+            Org::new(org).unwrap(),
+            Package::new(pkg).unwrap(),
+            TypeName::new(ty).unwrap(),
+            v,
+        )
+    }
+
+    fn unit_descriptor(name: SchemaIdent) -> ProcessorDescriptor {
+        ProcessorDescriptor::new(name, "test")
+    }
+
+    #[test]
+    fn identical_pascal_case_from_different_org_package_pairs_coexist() {
+        // Two packages each ship a `Camera` processor — same PascalCase
+        // short name, different `(org, package)` pair. Pre-#707 this
+        // collided in the `String`-keyed registry; post-#707 the
+        // structured key disambiguates them and both registrations
+        // succeed cleanly.
+        let factory = ProcessorInstanceFactory::new();
+
+        let camera_a = ident("acme", "core", "Camera", SemVer::new(1, 0, 0));
+        let camera_b = ident("contoso", "core", "Camera", SemVer::new(1, 0, 0));
+
+        factory
+            .register_descriptor_only(unit_descriptor(camera_a.clone()))
+            .expect("first Camera must register cleanly");
+        factory
+            .register_descriptor_only(unit_descriptor(camera_b.clone()))
+            .expect(
+                "second Camera (different org) must register cleanly — \
+                 the structured key disambiguates @acme/core/Camera@1.0.0 \
+                 from @contoso/core/Camera@1.0.0",
+            );
+
+        assert!(factory.descriptor(&camera_a).is_some());
+        assert!(factory.descriptor(&camera_b).is_some());
+        assert_eq!(factory.list_registered().len(), 2);
+    }
+
+    #[test]
+    fn duplicate_full_4_tuple_returns_clear_error() {
+        // Two registrations of the SAME structured ident must fail with
+        // an actionable error variant — the new typed key doesn't
+        // accidentally tolerate exact 4-tuple collisions.
+        let factory = ProcessorInstanceFactory::new();
+        let id = ident("acme", "core", "Camera", SemVer::new(1, 0, 0));
+
+        factory
+            .register_descriptor_only(unit_descriptor(id.clone()))
+            .expect("first registration succeeds");
+
+        let err = factory
+            .register_descriptor_only(unit_descriptor(id.clone()))
+            .expect_err("duplicate 4-tuple must be rejected");
+
+        match err {
+            StreamError::Configuration(msg) => {
+                assert!(
+                    msg.contains("already registered"),
+                    "error must name the collision; got: {msg}"
+                );
+                // The Display form of the offending ident is in the
+                // message — that's what humans need to see.
+                assert!(
+                    msg.contains("@acme/core/Camera@1.0.0"),
+                    "error must render the structured ident; got: {msg}"
+                );
+            }
+            other => panic!("expected Configuration variant; got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn version_difference_disambiguates_otherwise_identical_ident() {
+        // Major-version bumps of the same `(org, package, type)` are
+        // distinct registrations — locks the package-as-publication-unit
+        // invariant from the milestone description.
+        let factory = ProcessorInstanceFactory::new();
+        let v1 = ident("acme", "core", "Camera", SemVer::new(1, 0, 0));
+        let v2 = ident("acme", "core", "Camera", SemVer::new(2, 0, 0));
+
+        factory.register_descriptor_only(unit_descriptor(v1.clone())).unwrap();
+        factory.register_descriptor_only(unit_descriptor(v2.clone())).unwrap();
+
+        assert!(factory.descriptor(&v1).is_some());
+        assert!(factory.descriptor(&v2).is_some());
     }
 }

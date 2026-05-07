@@ -28,6 +28,7 @@
 
 use std::path::PathBuf;
 
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::{
     CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
@@ -57,10 +58,20 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_name(self) -> &'static str {
+    fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => "DmaBufConsumer",
-            Self::Deno => "DmaBufConsumer",
+            Self::Python => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-dma-buf-consumer").unwrap(),
+                TypeName::new("DmaBufConsumer").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
+            Self::Deno => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-dma-buf-consumer-deno").unwrap(),
+                TypeName::new("DmaBufConsumer").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
         }
     }
 }
@@ -143,7 +154,7 @@ fn main() -> Result<()> {
         "force_bad_surface_id": negative,
     });
     let consumer = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_name(),
+        runtime_kind.processor_ident(),
         consumer_config,
     ))?;
     println!("+ Consumer: {consumer}");

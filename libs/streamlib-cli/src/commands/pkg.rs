@@ -73,8 +73,8 @@ pub async fn install(source: &str) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to load packages manifest: {}", e))?;
 
     let entry = InstalledPackageEntry {
-        name: package.name.clone(),
-        version: package.version.clone(),
+        name: package.name.to_string(),
+        version: package.version.to_string(),
         description: package.description.clone(),
         installed_from: source.to_string(),
         installed_at: chrono::Utc::now().to_rfc3339(),

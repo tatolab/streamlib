@@ -99,11 +99,11 @@ fn run_string_mode() -> Result<()> {
     // Add processors using string-based API (REST API style)
     // =========================================================================
 
-    // Simulate receiving JSON from REST API:
-    // { "processor": "CameraProcessor", "config": { "device_id": null } }
+    // Simulate receiving the structured-spec form a REST API client sends —
+    // the wire format is the four-field `SchemaIdent` map.
     println!("📷 Adding camera processor (string mode)...");
     let camera_spec = ProcessorSpec::new(
-        "CameraProcessor",
+        CameraProcessor::schema_ident(),
         serde_json::json!({
             "device_id": null
         }),
@@ -111,11 +111,9 @@ fn run_string_mode() -> Result<()> {
     let camera = runtime.add_processor(camera_spec)?;
     println!("✓ Camera added: {}\n", camera);
 
-    // Simulate receiving JSON from REST API:
-    // { "processor": "DisplayProcessor", "config": { "width": 3840, "height": 2160, ... } }
     println!("🖥️  Adding display processor (string mode)...");
     let display_spec = ProcessorSpec::new(
-        "DisplayProcessor",
+        DisplayProcessor::schema_ident(),
         serde_json::json!({
             "width": 1920,
             "height": 1080,
@@ -128,7 +126,7 @@ fn run_string_mode() -> Result<()> {
 
     println!("🌐 Adding API server processor (string mode)...");
     runtime.add_processor(ProcessorSpec::new(
-        "ApiServerProcessor",
+        ApiServerProcessor::schema_ident(),
         serde_json::json!({
             "host": "127.0.0.1",
             "port": 9000

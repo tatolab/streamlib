@@ -23,6 +23,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::descriptors::SchemaIdent;
 use crate::core::{ProcessorSpec, Result, StreamError};
 
 /// Declarative graph definition loaded from JSON/YAML files.
@@ -52,11 +53,12 @@ pub struct ProcessorDefinition {
     /// as `"alias.port_name"`.
     pub alias: String,
 
-    /// Processor type name (must exist in PROCESSOR_REGISTRY).
-    ///
-    /// Examples: "CameraProcessor", "DisplayProcessor", "PythonContinuousHostProcessor"
+    /// Structured processor identity — `@org/package/Type@version` rendered
+    /// as four typed fields. The structured-everywhere rule applies on the
+    /// graph-file wire format too — bare strings like `"CameraProcessor"`
+    /// are rejected at deserialize time (no parser shim).
     #[serde(rename = "type")]
-    pub processor_type: String,
+    pub processor_type: SchemaIdent,
 
     /// Processor configuration as JSON.
     ///
@@ -112,7 +114,7 @@ fn parse_port_ref(s: &str) -> Result<ParsedPortRef<'_>> {
 impl ProcessorDefinition {
     /// Convert to a ProcessorSpec for runtime instantiation.
     pub fn to_processor_spec(&self) -> ProcessorSpec {
-        ProcessorSpec::new(&self.processor_type, self.config.clone())
+        ProcessorSpec::new(self.processor_type.clone(), self.config.clone())
     }
 }
 
@@ -189,29 +191,85 @@ impl GraphFileDefinition {
 mod tests {
     use super::*;
 
+    /// Helper for tests — a structured 4-field type literal at @tatolab/streamlib.
+    /// `SemVer` deserializes from the dotted string form `"1.0.0"`, not a
+    /// `{major, minor, patch}` object — see `streamlib-idents::semver`.
+    fn structured_type(short: &str) -> String {
+        format!(
+            r#"{{ "org": "tatolab", "package": "streamlib", "type": "{}", "version": "1.0.0" }}"#,
+            short
+        )
+    }
+
     #[test]
     fn test_parse_simple_graph() {
-        let json = r#"{
-            "name": "test-pipeline",
-            "processors": [
-                { "alias": "camera", "type": "CameraProcessor", "config": {} },
-                { "alias": "display", "type": "DisplayProcessor", "config": { "width": 1920 } }
-            ],
-            "connections": [
-                { "from": "camera.video", "to": "display.video" }
-            ]
-        }"#;
+        let json = format!(
+            r#"{{
+                "name": "test-pipeline",
+                "processors": [
+                    {{ "alias": "camera", "type": {}, "config": {{}} }},
+                    {{ "alias": "display", "type": {}, "config": {{ "width": 1920 }} }}
+                ],
+                "connections": [
+                    {{ "from": "camera.video", "to": "display.video" }}
+                ]
+            }}"#,
+            structured_type("CameraProcessor"),
+            structured_type("DisplayProcessor"),
+        );
 
-        let def = GraphFileDefinition::from_json_str(json).unwrap();
+        let def = GraphFileDefinition::from_json_str(&json).unwrap();
 
         assert_eq!(def.name, Some("test-pipeline".to_string()));
         assert_eq!(def.processors.len(), 2);
         assert_eq!(def.processors[0].alias, "camera");
-        assert_eq!(def.processors[0].processor_type, "CameraProcessor");
+        assert_eq!(
+            def.processors[0].processor_type.r#type.as_str(),
+            "CameraProcessor"
+        );
+        assert_eq!(def.processors[0].processor_type.org.as_str(), "tatolab");
         assert_eq!(def.processors[1].alias, "display");
         assert_eq!(def.connections.len(), 1);
         assert_eq!(def.connections[0].from, "camera.video");
         assert_eq!(def.connections[0].to, "display.video");
+    }
+
+    #[test]
+    fn test_round_trip_serde_preserves_structured_processor_type() {
+        let json = format!(
+            r#"{{
+                "processors": [
+                    {{ "alias": "camera", "type": {}, "config": {{}} }}
+                ]
+            }}"#,
+            structured_type("CameraProcessor"),
+        );
+        let def = GraphFileDefinition::from_json_str(&json).unwrap();
+        let back = serde_json::to_value(&def).unwrap();
+        let proc_type = &back["processors"][0]["type"];
+        assert!(
+            proc_type.is_object(),
+            "processor_type must round-trip as a structured object, not a string"
+        );
+        assert_eq!(proc_type["org"], "tatolab");
+        assert_eq!(proc_type["package"], "streamlib");
+        assert_eq!(proc_type["type"], "CameraProcessor");
+        // `SemVer` serializes as the dotted string form, not a structured
+        // {major, minor, patch} object — see `streamlib-idents::semver`.
+        assert_eq!(proc_type["version"], "1.0.0");
+    }
+
+    #[test]
+    fn test_bare_string_processor_type_is_rejected() {
+        // Pre-1.0 forbids parser shims — a bare string `"CameraProcessor"`
+        // for the type field must fail to deserialize.
+        let json = r#"{
+            "processors": [
+                { "alias": "camera", "type": "CameraProcessor", "config": {} }
+            ]
+        }"#;
+        let res = GraphFileDefinition::from_json_str(json);
+        assert!(res.is_err(), "bare string processor_type must be rejected");
     }
 
     #[test]
@@ -233,29 +291,36 @@ mod tests {
 
     #[test]
     fn test_validate_duplicate_alias() {
-        let json = r#"{
-            "processors": [
-                { "alias": "cam", "type": "CameraProcessor", "config": {} },
-                { "alias": "cam", "type": "DisplayProcessor", "config": {} }
-            ]
-        }"#;
+        let json = format!(
+            r#"{{
+                "processors": [
+                    {{ "alias": "cam", "type": {}, "config": {{}} }},
+                    {{ "alias": "cam", "type": {}, "config": {{}} }}
+                ]
+            }}"#,
+            structured_type("CameraProcessor"),
+            structured_type("DisplayProcessor"),
+        );
 
-        let def = GraphFileDefinition::from_json_str(json).unwrap();
+        let def = GraphFileDefinition::from_json_str(&json).unwrap();
         assert!(def.validate().is_err());
     }
 
     #[test]
     fn test_validate_unknown_alias_in_connection() {
-        let json = r#"{
-            "processors": [
-                { "alias": "camera", "type": "CameraProcessor", "config": {} }
-            ],
-            "connections": [
-                { "from": "camera.video", "to": "unknown.video" }
-            ]
-        }"#;
+        let json = format!(
+            r#"{{
+                "processors": [
+                    {{ "alias": "camera", "type": {}, "config": {{}} }}
+                ],
+                "connections": [
+                    {{ "from": "camera.video", "to": "unknown.video" }}
+                ]
+            }}"#,
+            structured_type("CameraProcessor"),
+        );
 
-        let def = GraphFileDefinition::from_json_str(json).unwrap();
+        let def = GraphFileDefinition::from_json_str(&json).unwrap();
         assert!(def.validate().is_err());
     }
 

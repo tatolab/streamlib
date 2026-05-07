@@ -40,6 +40,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib::{ProcessorSpec, Result, StreamRuntime};
 
@@ -51,8 +52,16 @@ const INTERVAL_MS: u32 = 33;
 /// gate robust against CI jitter.
 const MIN_FRAMES_RECEIVED: u32 = 20;
 
-const COUNTING_SINK_PROCESSOR: &str = "PolyglotManualSourceCountingSink";
 const COUNTING_SINK_PLUGIN_DYLIB: &str = "libpolyglot_manual_source_counting_sink_plugin.so";
+
+fn counting_sink_processor_ident() -> SchemaIdent {
+    SchemaIdent::new(
+        Org::new("tatolab").unwrap(),
+        Package::new("polyglot-manual-source-counting-sink").unwrap(),
+        TypeName::new("PolyglotManualSourceCountingSink").unwrap(),
+        SemVer::new(0, 1, 0),
+    )
+}
 /// Env var the counting sink reads to know where to write JSON stats.
 /// Set unconditionally before `runtime.start()` so the sink picks it up
 /// in `setup()` even if the host hasn't yet exec'd the test binary.
@@ -82,10 +91,20 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_name(self) -> &'static str {
+    fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => "PolyglotManualSource",
-            Self::Deno => "PolyglotManualSource",
+            Self::Python => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-manual-source").unwrap(),
+                TypeName::new("PolyglotManualSource").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
+            Self::Deno => SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("polyglot-manual-source-deno").unwrap(),
+                TypeName::new("PolyglotManualSource").unwrap(),
+                SemVer::new(0, 1, 0),
+            ),
         }
     }
 }
@@ -183,7 +202,7 @@ fn run() -> Result<SinkReport> {
 
     // 3. Add processors.
     let manual = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_name(),
+        runtime_kind.processor_ident(),
         serde_json::json!({
             "interval_ms": INTERVAL_MS,
         }),
@@ -191,7 +210,7 @@ fn run() -> Result<SinkReport> {
     println!("+ ManualSource: {manual}");
 
     let sink = runtime.add_processor(ProcessorSpec::new(
-        COUNTING_SINK_PROCESSOR,
+        counting_sink_processor_ident(),
         // Sink reads its output path from `SINK_OUTPUT_ENV_VAR` set above —
         // pass an empty config so the macro-derived `EmptyConfig` (the
         // default for processors without a YAML config schema) deserializes

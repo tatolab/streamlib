@@ -47,7 +47,7 @@ impl GraphInspector {
 
         Some(ProcessorSnapshot {
             id: id.clone(),
-            processor_type: node.processor_type.clone(),
+            processor_type: node.processor_type().clone(),
             state,
             throughput_fps: metrics.throughput_fps,
             latency: LatencyStats {
