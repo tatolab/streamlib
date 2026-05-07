@@ -589,20 +589,17 @@ async fn get_openapi_spec(State(state): State<AppState>) -> Json<utoipa::openapi
 
 /// Returns the MoQ broadcast catalog with active published tracks.
 ///
-/// The schema and source-processor identity for each track are not yet
-/// plumbed through `MoqSessions::published_track_names`; they're emitted
-/// as `None` until a future ticket extends the session API to carry the
-/// structured ident alongside the track name. The track entries still
-/// serialize cleanly — `schema` and `source_processor_type` are
-/// `skip_serializing_if = Option::is_none`.
+/// Each track carries the structured `SchemaIdent` for its wire schema and
+/// the producer's structured processor type, populated at iceoryx2 link
+/// wiring time (see `compiler_ops::open_iceoryx2_service_op`).
 #[cfg(feature = "moq")]
 async fn get_moq_catalog(State(state): State<AppState>) -> Json<crate::core::streaming::MoqBroadcastCatalog> {
     let sessions = state.runtime_ctx.moq_sessions();
-    let mut catalog = crate::core::streaming::MoqBroadcastCatalog::new();
-    for track_name in sessions.published_track_names() {
-        catalog.add_track(&track_name, None, None, &track_name);
-    }
-    Json(catalog)
+    let tracks = sessions.published_tracks();
+    Json(crate::core::streaming::MoqBroadcastCatalog {
+        tracks,
+        ..Default::default()
+    })
 }
 
 // ============================================================================

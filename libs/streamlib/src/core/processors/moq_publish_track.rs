@@ -40,8 +40,9 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
         // Get the shared publish session from the runtime (one QUIC connection, N tracks)
         let session = ctx.moq_sessions().get_publish_session().await?;
 
-        // Register this track in the catalog
-        ctx.moq_sessions().register_published_track(&self.track_name);
+        // Catalog registration runs at the iceoryx2 op boundary
+        // (`open_iceoryx2_service_op`), where the upstream's structured
+        // schema and processor type are in scope. Setup runs after that.
 
         tracing::info!(
             broadcast = %ctx.moq_sessions().broadcast_path(),

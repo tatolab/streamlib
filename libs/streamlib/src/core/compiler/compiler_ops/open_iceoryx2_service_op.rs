@@ -10,6 +10,8 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::context::RuntimeContext;
+#[cfg(feature = "moq")]
+use crate::core::descriptors::SchemaIdent;
 use crate::core::embedded_schemas::max_payload_bytes_for_port_spec;
 use crate::core::error::{Result, StreamError};
 use crate::core::graph::{
@@ -53,6 +55,43 @@ fn schema_ident_wire_for_producer(spec: &PortSchemaSpec) -> SchemaIdentWire {
 
 use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
 use super::spawn_python_native_subprocess_op::PythonNativeSubprocessHostProcessor;
+
+/// If the destination of a wired link is `MoqPublishTrack`, register the
+/// link's structured schema and the upstream processor's structured type
+/// into `sessions`. Runs while opening the iceoryx2 service — strictly
+/// before the destination's `setup()` — so the `/api/moq/catalog`
+/// endpoint reflects every wired track from the moment its publisher is
+/// wired.
+#[cfg(feature = "moq")]
+fn register_moq_track_if_dest_is_moq_publisher(
+    dest_processor: &Arc<Mutex<ProcessorInstance>>,
+    dest_proc_id: &ProcessorUniqueId,
+    source_proc_type: Option<&SchemaIdent>,
+    output_schema: &PortSchemaSpec,
+    source_port: &str,
+    sessions: &crate::core::streaming::SharedMoqSessions,
+) {
+    use crate::core::processors::moq_publish_track::MoqPublishTrackProcessor;
+    let track_name = {
+        let mut guard = dest_processor.lock();
+        match guard
+            .as_any_mut()
+            .downcast_mut::<MoqPublishTrackProcessor::Processor>()
+        {
+            Some(p) => p
+                .config
+                .track_name
+                .clone()
+                .unwrap_or_else(|| dest_proc_id.to_string()),
+            None => return,
+        }
+    };
+    let schema = match output_schema {
+        PortSchemaSpec::Specific(s) => Some(s),
+        PortSchemaSpec::Any => None,
+    };
+    sessions.register_published_track(&track_name, schema, source_proc_type, source_port);
+}
 
 /// Check if a processor is a subprocess (Python, TypeScript, etc.)
 fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
@@ -312,26 +351,26 @@ fn open_iceoryx2_pubsub(
         dest_proc_id
     );
 
-    // Look up schema for the output port before creating the publisher so we can size
-    // the shared memory slot correctly via max_payload_bytes_for_schema.
-    let output_schema = {
-        let source_proc_type = graph
-            .traversal_mut()
-            .v(source_proc_id)
-            .first()
-            .map(|node| node.processor_type().clone());
-
-        source_proc_type
-            .as_ref()
-            .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
-            .and_then(|(_, outputs)| {
-                outputs
-                    .iter()
-                    .find(|p| p.name == source_port)
-                    .map(|p| p.data_type.clone())
-            })
-            .unwrap_or_default()
-    };
+    // Resolve the source processor's structured type and the output port's
+    // schema spec. Both are needed downstream — the schema sizes the
+    // iceoryx2 publisher's shared-memory slot, and the source ident +
+    // schema together feed the MoQ catalog when the destination is a
+    // `MoqPublishTrack`.
+    let source_proc_type = graph
+        .traversal_mut()
+        .v(source_proc_id)
+        .first()
+        .map(|node| node.processor_type().clone());
+    let output_schema = source_proc_type
+        .as_ref()
+        .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
+        .and_then(|(_, outputs)| {
+            outputs
+                .iter()
+                .find(|p| p.name == source_port)
+                .map(|p| p.data_type.clone())
+        })
+        .unwrap_or_default();
 
     tracing::debug!(
         "Output port '{}' has schema '{}'",
@@ -413,6 +452,18 @@ fn open_iceoryx2_pubsub(
             }
         }
     }
+
+    // Catalog hook: register this link's source ident + schema if the
+    // destination is a MoQ publisher.
+    #[cfg(feature = "moq")]
+    register_moq_track_if_dest_is_moq_publisher(
+        dest_processor,
+        dest_proc_id,
+        source_proc_type.as_ref(),
+        &output_schema,
+        source_port,
+        runtime_ctx.moq_sessions(),
+    );
 
     // Set link state to Wired
     let link = graph
@@ -580,29 +631,28 @@ fn open_iceoryx2_subprocess_to_rust(
     let service = iceoryx2_node.open_or_create_service(&service_name)?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
+    // Resolve source processor's structured type and the output port's
+    // schema spec — both feed both the iceoryx2 wiring and the MoQ
+    // catalog hook below.
+    let source_proc_type = graph
+        .traversal_mut()
+        .v(source_proc_id)
+        .first()
+        .map(|node| node.processor_type().clone());
+    let output_schema = source_proc_type
+        .as_ref()
+        .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
+        .and_then(|(_, outputs)| {
+            outputs
+                .iter()
+                .find(|p| p.name == source_port)
+                .map(|p| p.data_type.clone())
+        })
+        .unwrap_or_default();
+
     // Source is subprocess - it creates its own publisher and notifier via FFI.
     // Store output wiring info on the subprocess processor so it can publish via FFI.
     {
-        // Look up schema for the output port from the registry
-        let output_schema = {
-            let source_proc_type = graph
-                .traversal_mut()
-                .v(source_proc_id)
-                .first()
-                .map(|node| node.processor_type().clone());
-
-            source_proc_type
-                .as_ref()
-                .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
-                .and_then(|(_, outputs)| {
-                    outputs
-                        .iter()
-                        .find(|p| p.name == source_port)
-                        .map(|p| p.data_type.clone())
-                })
-                .unwrap_or_default()
-        };
-
         let max_payload = max_payload_bytes_for_port_spec(&output_schema);
         let source_proc_arc = get_single_processor(graph, source_proc_id)?;
         let mut source_guard = source_proc_arc.lock();
@@ -671,6 +721,19 @@ fn open_iceoryx2_subprocess_to_rust(
             }
         }
     }
+
+    // Catalog hook: register this link's source ident + schema if the
+    // destination is a MoQ publisher. Subprocess sources contribute their
+    // structured processor type from the graph node — same as Rust→Rust.
+    #[cfg(feature = "moq")]
+    register_moq_track_if_dest_is_moq_publisher(
+        dest_processor,
+        dest_proc_id,
+        source_proc_type.as_ref(),
+        &output_schema,
+        source_port,
+        runtime_ctx.moq_sessions(),
+    );
 
     // Set link state to Wired
     let link = graph
@@ -919,5 +982,129 @@ mod tests {
         let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
         reject_overcap_destination_fanin(&mut graph, &dest_uid)
             .expect("fan-in == cap must succeed");
+    }
+
+    #[cfg(feature = "moq")]
+    mod moq_catalog_hook {
+        use super::*;
+        use crate::core::descriptors::{Org, Package, SemVer, TypeName};
+        use crate::core::graph::ProcessorNode;
+        use crate::core::streaming::SharedMoqSessions;
+        use crate::core::PortInfo;
+
+        fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
+            SchemaIdent::new(
+                Org::new(org).unwrap(),
+                Package::new(pkg).unwrap(),
+                TypeName::new(ty).unwrap(),
+                v,
+            )
+        }
+
+        fn make_processor_instance(short_name: &str) -> Arc<Mutex<ProcessorInstance>> {
+            let processor_type = lookup_registered_ident(short_name);
+            let node = ProcessorNode::new(
+                processor_type,
+                short_name,
+                None,
+                Vec::<PortInfo>::new(),
+                Vec::<PortInfo>::new(),
+            );
+            let instance = PROCESSOR_REGISTRY
+                .create(&node)
+                .expect("processor must instantiate from default config");
+            Arc::new(Mutex::new(instance))
+        }
+
+        #[test]
+        fn registers_track_when_destination_is_moq_publisher() {
+            let sessions = SharedMoqSessions::new("test-runtime");
+            let dest = make_processor_instance("MoqPublishTrack");
+            let dest_id: ProcessorUniqueId = "moq_publisher_node".into();
+            let source_proc_type = ident("tatolab", "h264", "H264Encoder", SemVer::new(1, 0, 0));
+            let schema_ident = ident("tatolab", "core", "EncodedVideoFrame", SemVer::new(1, 0, 0));
+            let output_schema = PortSchemaSpec::Specific(schema_ident.clone());
+
+            register_moq_track_if_dest_is_moq_publisher(
+                &dest,
+                &dest_id,
+                Some(&source_proc_type),
+                &output_schema,
+                "video_out",
+                &sessions,
+            );
+
+            let tracks = sessions.published_tracks();
+            assert_eq!(tracks.len(), 1, "MoqPublishTrack destination must register one track");
+            let entry = &tracks[0];
+            assert_eq!(
+                entry.track_name, "moq_publisher_node",
+                "track_name defaults to dest_proc_id when config has no override"
+            );
+            assert_eq!(entry.source_port_name, "video_out");
+            let s = entry.schema.as_ref().expect("structured schema must be carried");
+            assert_eq!(s.type_name, "EncodedVideoFrame");
+            let p = entry
+                .source_processor_type
+                .as_ref()
+                .expect("structured source processor type must be carried");
+            assert_eq!(p.type_name, "H264Encoder");
+        }
+
+        #[test]
+        fn skips_registration_when_destination_is_not_moq_publisher() {
+            let sessions = SharedMoqSessions::new("test-runtime");
+            // TestMockInputOnlyProcessor isn't a MoqPublishTrack — the
+            // helper must early-return without registering anything.
+            let dest = make_processor_instance("TestMockInputOnlyProcessor");
+            let dest_id: ProcessorUniqueId = "non_moq_dest".into();
+            let source_proc_type = ident("tatolab", "h264", "H264Encoder", SemVer::new(1, 0, 0));
+            let schema_ident = ident("tatolab", "core", "EncodedVideoFrame", SemVer::new(1, 0, 0));
+            let output_schema = PortSchemaSpec::Specific(schema_ident);
+
+            register_moq_track_if_dest_is_moq_publisher(
+                &dest,
+                &dest_id,
+                Some(&source_proc_type),
+                &output_schema,
+                "video_out",
+                &sessions,
+            );
+
+            assert!(
+                sessions.published_tracks().is_empty(),
+                "non-MoqPublishTrack destination must not register a track"
+            );
+        }
+
+        #[test]
+        fn omits_schema_when_output_port_is_wildcard() {
+            let sessions = SharedMoqSessions::new("test-runtime");
+            let dest = make_processor_instance("MoqPublishTrack");
+            let dest_id: ProcessorUniqueId = "wildcard_publisher".into();
+            let source_proc_type =
+                ident("tatolab", "streamlib", "SimplePassthrough", SemVer::new(1, 0, 0));
+
+            register_moq_track_if_dest_is_moq_publisher(
+                &dest,
+                &dest_id,
+                Some(&source_proc_type),
+                &PortSchemaSpec::Any,
+                "passthrough_out",
+                &sessions,
+            );
+
+            let tracks = sessions.published_tracks();
+            assert_eq!(tracks.len(), 1);
+            assert!(
+                tracks[0].schema.is_none(),
+                "wildcard upstream port must register with schema=None"
+            );
+            let p = tracks[0]
+                .source_processor_type
+                .as_ref()
+                .expect("source processor type still flows through wildcard");
+            assert_eq!(p.type_name, "SimplePassthrough");
+        }
     }
 }

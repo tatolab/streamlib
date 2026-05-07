@@ -7,6 +7,8 @@
 // Uses moq-transport (cloudflare/moq-rs) for the MoQ protocol and
 // web-transport-quinn for the underlying QUIC/WebTransport connection.
 
+use crate::core::descriptors::SchemaIdent;
+use crate::core::streaming::moq_catalog::MoqCatalogTrackEntry;
 use crate::core::{Result, StreamError};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -517,8 +519,11 @@ pub struct SharedMoqSessions {
     broadcast_path: String,
     publish_session: Arc<tokio::sync::OnceCell<Arc<Mutex<MoqPublishSession>>>>,
     subscribe_session: Arc<tokio::sync::OnceCell<Arc<MoqSubscribeSession>>>,
-    /// Track names currently being published (for catalog).
-    published_tracks: Arc<Mutex<Vec<String>>>,
+    /// Tracks currently being published, with their structured catalog
+    /// metadata. Keyed by `track_name`; reinserting an existing track
+    /// replaces the prior entry so a re-wired link picks up updated
+    /// schema / source-processor identity.
+    published_tracks: Arc<Mutex<Vec<MoqCatalogTrackEntry>>>,
 }
 
 impl SharedMoqSessions {
@@ -564,21 +569,134 @@ impl SharedMoqSessions {
         Ok(Arc::clone(session))
     }
 
-    /// Register a track name as published (for catalog).
-    pub fn register_published_track(&self, track_name: &str) {
+    /// Register a track as published, capturing the structured catalog
+    /// metadata. `schema` is the wire schema flowing on this track;
+    /// `source_processor_type` is the producer's structured type. `None`
+    /// for either is permitted when the upstream link can't supply it
+    /// (e.g. a wildcard `Any` port). Reinserting an existing
+    /// `track_name` replaces the prior entry.
+    pub fn register_published_track(
+        &self,
+        track_name: &str,
+        schema: Option<&SchemaIdent>,
+        source_processor_type: Option<&SchemaIdent>,
+        source_port_name: &str,
+    ) {
+        use crate::core::json_schema::SchemaIdentOutput;
+        let entry = MoqCatalogTrackEntry {
+            track_name: track_name.to_string(),
+            schema: schema.map(SchemaIdentOutput::from),
+            source_processor_type: source_processor_type.map(SchemaIdentOutput::from),
+            source_port_name: source_port_name.to_string(),
+        };
         let mut tracks = self.published_tracks.lock();
-        if !tracks.contains(&track_name.to_string()) {
-            tracks.push(track_name.to_string());
+        if let Some(slot) = tracks.iter_mut().find(|t| t.track_name == track_name) {
+            *slot = entry;
+        } else {
+            tracks.push(entry);
         }
     }
 
-    /// Get all published track names.
-    pub fn published_track_names(&self) -> Vec<String> {
+    /// Get all published tracks with their structured catalog metadata.
+    pub fn published_tracks(&self) -> Vec<MoqCatalogTrackEntry> {
         self.published_tracks.lock().clone()
     }
 
     /// Get the broadcast path (for logging/discovery).
     pub fn broadcast_path(&self) -> &str {
         &self.broadcast_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::descriptors::{Org, Package, SemVer, TypeName};
+
+    fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
+        SchemaIdent::new(
+            Org::new(org).unwrap(),
+            Package::new(pkg).unwrap(),
+            TypeName::new(ty).unwrap(),
+            v,
+        )
+    }
+
+    #[test]
+    fn register_published_track_round_trips_structured_fields() {
+        let sessions = SharedMoqSessions::new("test-runtime");
+        let schema = ident("tatolab", "core", "EncodedVideoFrame", SemVer::new(1, 0, 0));
+        let proc_type = ident("tatolab", "h264", "H264Encoder", SemVer::new(1, 0, 0));
+
+        sessions.register_published_track(
+            "encoder/video_out",
+            Some(&schema),
+            Some(&proc_type),
+            "video_out",
+        );
+
+        let tracks = sessions.published_tracks();
+        assert_eq!(tracks.len(), 1);
+        let entry = &tracks[0];
+        assert_eq!(entry.track_name, "encoder/video_out");
+        assert_eq!(entry.source_port_name, "video_out");
+        let s = entry.schema.as_ref().expect("schema must be carried");
+        assert_eq!(s.org, "tatolab");
+        assert_eq!(s.package, "core");
+        assert_eq!(s.type_name, "EncodedVideoFrame");
+        assert_eq!(s.version.major, 1);
+        let p = entry
+            .source_processor_type
+            .as_ref()
+            .expect("source processor type must be carried");
+        assert_eq!(p.type_name, "H264Encoder");
+    }
+
+    #[test]
+    fn register_published_track_omits_optional_fields_when_unknown() {
+        let sessions = SharedMoqSessions::new("test-runtime");
+
+        // Wildcard upstream — no schema, no source processor type.
+        sessions.register_published_track("wildcard_track", None, None, "out");
+
+        let tracks = sessions.published_tracks();
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].track_name, "wildcard_track");
+        assert!(tracks[0].schema.is_none());
+        assert!(tracks[0].source_processor_type.is_none());
+    }
+
+    #[test]
+    fn register_published_track_replaces_entry_for_same_track_name() {
+        let sessions = SharedMoqSessions::new("test-runtime");
+        let initial = ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0));
+        let updated = ident("tatolab", "core", "EncodedVideoFrame", SemVer::new(1, 0, 0));
+
+        sessions.register_published_track("video", Some(&initial), None, "video_out");
+        sessions.register_published_track("video", Some(&updated), None, "video_out");
+
+        let tracks = sessions.published_tracks();
+        assert_eq!(tracks.len(), 1, "duplicate track names must dedup, not stack");
+        let s = tracks[0].schema.as_ref().expect("schema carried");
+        assert_eq!(
+            s.type_name, "EncodedVideoFrame",
+            "second registration must overwrite the first"
+        );
+    }
+
+    #[test]
+    fn register_published_track_keeps_distinct_entries_for_distinct_track_names() {
+        let sessions = SharedMoqSessions::new("test-runtime");
+        let video_schema = ident("tatolab", "core", "EncodedVideoFrame", SemVer::new(1, 0, 0));
+        let audio_schema = ident("tatolab", "core", "EncodedAudioFrame", SemVer::new(1, 0, 0));
+
+        sessions.register_published_track("video", Some(&video_schema), None, "video_out");
+        sessions.register_published_track("audio", Some(&audio_schema), None, "audio_out");
+
+        let tracks = sessions.published_tracks();
+        assert_eq!(tracks.len(), 2);
+        let names: Vec<&str> = tracks.iter().map(|t| t.track_name.as_str()).collect();
+        assert!(names.contains(&"video"));
+        assert!(names.contains(&"audio"));
     }
 }
