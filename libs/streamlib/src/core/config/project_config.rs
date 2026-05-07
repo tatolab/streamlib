@@ -5,8 +5,9 @@
 
 use crate::core::{Result, StreamError};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use streamlib_idents::DependencySpec;
 use streamlib_processor_schema::{Org, Package, SemVer};
 
 /// Package-level metadata from `streamlib.yaml`. Structured fields per the
@@ -41,10 +42,13 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub processors: Vec<streamlib_processor_schema::ProcessorSchema>,
 
-    /// Package dependencies (installed package names whose processors/schemas
-    /// must be loaded before this package).
+    /// Package dependencies, keyed by `@org/name`. Mirrors
+    /// [`streamlib_idents::Manifest::dependencies`] and the JSON Schema
+    /// source-of-truth `StreamlibYaml` so a single declaration shape
+    /// flows through the resolver, the editor schema, and the runtime
+    /// loader.
     #[serde(default)]
-    pub dependencies: Vec<String>,
+    pub dependencies: BTreeMap<String, DependencySpec>,
 }
 
 impl ProjectConfig {
@@ -225,6 +229,103 @@ env:
 
         let config = ProjectConfig::load(dir.path()).unwrap();
         assert!(config.env.is_empty());
+    }
+
+    #[test]
+    fn test_load_with_path_dependency() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("streamlib.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dependencies:
+  "@tatolab/core":
+    path: ../../packages/core
+"#,
+        )
+        .unwrap();
+
+        let config = ProjectConfig::load(dir.path()).unwrap();
+        assert_eq!(config.dependencies.len(), 1);
+        let spec = config
+            .dependencies
+            .get("@tatolab/core")
+            .expect("@tatolab/core dep present");
+        match spec {
+            DependencySpec::Path(p) => {
+                assert_eq!(p.path.to_str().unwrap(), "../../packages/core");
+            }
+            other => panic!("expected Path dep, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_load_with_registry_dependency_short_form() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("streamlib.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dependencies:
+  "@tatolab/core": "^1.0.0"
+"#,
+        )
+        .unwrap();
+
+        let config = ProjectConfig::load(dir.path()).unwrap();
+        assert_eq!(config.dependencies.len(), 1);
+        match config.dependencies.get("@tatolab/core").unwrap() {
+            DependencySpec::Registry(r) => {
+                assert_eq!(r.version.to_string(), "^1.0.0");
+            }
+            other => panic!("expected Registry dep, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_load_with_git_dependency() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("streamlib.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dependencies:
+  "@tatolab/moq":
+    git: https://github.com/tatolab/moq
+    rev: abc123def456
+"#,
+        )
+        .unwrap();
+
+        let config = ProjectConfig::load(dir.path()).unwrap();
+        match config.dependencies.get("@tatolab/moq").unwrap() {
+            DependencySpec::Git(g) => {
+                assert_eq!(g.git, "https://github.com/tatolab/moq");
+                assert_eq!(g.rev, "abc123def456");
+            }
+            other => panic!("expected Git dep, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_load_rejects_legacy_sequence_dependencies() {
+        // Pre-#716 ProjectConfig accepted `dependencies: [name1, name2]`. The
+        // shape now matches the JSON Schema source-of-truth and the resolver,
+        // so a bare sequence must error rather than silently parse against a
+        // mismatched type.
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("streamlib.yaml");
+        std::fs::write(
+            &config_path,
+            r#"
+dependencies:
+  - some-installed-package
+"#,
+        )
+        .unwrap();
+
+        let result = ProjectConfig::load(dir.path());
+        assert!(result.is_err(), "legacy sequence-shaped deps must error");
     }
 
     #[test]
