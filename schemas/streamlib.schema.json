@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "dependencies": {
-      "description": "Dependency declarations, keyed by `@org/name`.",
+      "description": "Dependency declarations, keyed by canonical `@org/name`.",
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/DependencySpec"
@@ -28,6 +28,13 @@
           "type": "null"
         }
       ]
+    },
+    "patch": {
+      "description": "Per-consumer resolution overrides. Mirrors Cargo's `[patch.crates-io]` shape but lives in the consumer's own yaml — no workspace walk-up. `streamlib pack` rejects yamls whose `patch:` block contains any `path:` entries (path overrides are dev-time only, not publishable).",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/DependencySpec"
+      }
     },
     "processors": {
       "description": "Inline processor definitions consumed by the runtime.",

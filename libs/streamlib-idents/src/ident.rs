@@ -137,6 +137,85 @@ impl JsonSchema for Package {
     }
 }
 
+/// Canonical package reference — `@org/name` (no type, no version).
+///
+/// Structured pair of [`Org`] and [`Package`]. Wire form is the joined
+/// `"@org/name"` string (used as YAML map keys and in user-facing output)
+/// — `Display` emits it, `Deserialize` reads it. Constructed via
+/// [`PackageRef::new`] (validating the underlying `Org` / `Package`) or
+/// via typed YAML/JSON deserialization. No `parse` API — gated below
+/// with a `compile_fail` doctest.
+///
+/// ```compile_fail
+/// use streamlib_idents::PackageRef;
+/// let _ = PackageRef::parse("@tatolab/core");
+/// ```
+///
+/// ```compile_fail
+/// use streamlib_idents::PackageRef;
+/// let _: PackageRef = "@tatolab/core".parse().unwrap();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackageRef {
+    pub org: Org,
+    pub name: Package,
+}
+
+impl PackageRef {
+    /// Construct from already-validated [`Org`] and [`Package`].
+    pub fn new(org: Org, name: Package) -> Self {
+        Self { org, name }
+    }
+}
+
+impl fmt::Display for PackageRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "@{}/{}", self.org, self.name)
+    }
+}
+
+impl Serialize for PackageRef {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for PackageRef {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(d)?;
+        let stripped = raw.strip_prefix('@').ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "PackageRef must start with '@', got '{}'",
+                raw
+            ))
+        })?;
+        let (org_str, name_str) = stripped.split_once('/').ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "PackageRef must have shape '@org/name', got '{}'",
+                raw
+            ))
+        })?;
+        let org = Org::new(org_str).map_err(serde::de::Error::custom)?;
+        let name = Package::new(name_str).map_err(serde::de::Error::custom)?;
+        Ok(Self { org, name })
+    }
+}
+
+impl JsonSchema for PackageRef {
+    fn schema_name() -> String {
+        "PackageRef".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::PackageRef")
+    }
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        ident_string_schema(
+            "Canonical package reference of the form `@org/name`.",
+            r"^@[a-z][a-z0-9-]*/[a-z][a-z0-9-]*$",
+        )
+    }
+}
+
 /// Type segment (PascalCase).
 ///
 /// Constructed via [`TypeName::new`] (validating) or typed deserialization.
@@ -489,5 +568,74 @@ version: 1.0.0
 ";
         let res: Result<SchemaIdent, _> = serde_yaml::from_str(yaml);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn package_ref_round_trips_canonical_form() {
+        let r = PackageRef::new(Org::new("tatolab").unwrap(), Package::new("core").unwrap());
+        assert_eq!(r.to_string(), "@tatolab/core");
+        let yaml = serde_yaml::to_string(&r).unwrap();
+        // Serialize emits the canonical string (with implicit YAML quoting if any).
+        let back: PackageRef = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(r, back);
+        assert_eq!(r.org.as_str(), "tatolab");
+        assert_eq!(r.name.as_str(), "core");
+    }
+
+    #[test]
+    fn package_ref_deserializes_from_canonical_string() {
+        let r: PackageRef = serde_yaml::from_str(r#""@tatolab/core""#).unwrap();
+        assert_eq!(r.org.as_str(), "tatolab");
+        assert_eq!(r.name.as_str(), "core");
+    }
+
+    #[test]
+    fn package_ref_rejects_missing_at_prefix() {
+        let res: Result<PackageRef, _> = serde_yaml::from_str(r#""tatolab/core""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn package_ref_rejects_missing_slash() {
+        let res: Result<PackageRef, _> = serde_yaml::from_str(r#""@tatolab""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn package_ref_rejects_invalid_org_segment() {
+        // Uppercase first char in org is invalid.
+        let res: Result<PackageRef, _> = serde_yaml::from_str(r#""@Tatolab/core""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn package_ref_rejects_invalid_package_segment() {
+        // Uppercase first char in package is invalid.
+        let res: Result<PackageRef, _> = serde_yaml::from_str(r#""@tatolab/Core""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn package_ref_rejects_extra_segments() {
+        // `@org/name/extra` must not parse as a PackageRef — that's the
+        // SchemaIdent shape (which has its own typed deserialization).
+        let res: Result<PackageRef, _> = serde_yaml::from_str(r#""@tatolab/core/extra""#);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn package_ref_works_as_btreemap_key() {
+        // YAML map keys deserialize through the same Deserialize impl, so
+        // declaring `BTreeMap<PackageRef, _>` and reading a yaml map
+        // works seamlessly.
+        use std::collections::BTreeMap;
+        let yaml = r#"
+"@tatolab/core": 1
+"@tatolab/h264": 2
+"#;
+        let m: BTreeMap<PackageRef, u32> = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(m.len(), 2);
+        let core = PackageRef::new(Org::new("tatolab").unwrap(), Package::new("core").unwrap());
+        assert_eq!(m.get(&core), Some(&1));
     }
 }

@@ -29,7 +29,9 @@ pub use processor_schema_parser::{parse_processor_yaml, parse_processor_yaml_fil
 // Re-export structured-identity types so consumers (the macro, runtime
 // loaders) reach `SchemaIdent`, `Org`, `Package`, etc. through this crate
 // without depending on `streamlib-idents` directly.
-pub use streamlib_idents::{Org, Package, PackageMetadata, SchemaIdent, SemVer, TypeName};
+pub use streamlib_idents::{
+    Org, Package, PackageMetadata, PackageRef, SchemaIdent, SemVer, TypeName,
+};
 
 /// Minimal project config for the macro: surfaces the `package:` block (so
 /// processor short names can be resolved to a structured [`SchemaIdent`])

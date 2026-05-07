@@ -68,13 +68,19 @@ pub async fn install(source: &str) -> Result<()> {
         }
     }
 
-    // Add to installed packages manifest
+    // Add to installed packages manifest. Identity is the canonical
+    // `@org/name` PackageRef — the typed-key contract from #717 means
+    // entries with the same short name from different orgs no longer
+    // collide.
     let mut manifest = InstalledPackageManifest::load()
         .map_err(|e| anyhow::anyhow!("Failed to load packages manifest: {}", e))?;
 
     let entry = InstalledPackageEntry {
-        name: package.name.to_string(),
-        version: package.version.to_string(),
+        name: streamlib_processor_schema::PackageRef::new(
+            package.org.clone(),
+            package.name.clone(),
+        ),
+        version: package.version,
         description: package.description.clone(),
         installed_from: source.to_string(),
         installed_at: chrono::Utc::now().to_rfc3339(),
@@ -210,15 +216,20 @@ pub fn list() -> Result<()> {
     Ok(())
 }
 
-/// Remove an installed package.
+/// Remove an installed package. The argument must be the canonical
+/// `@org/name` form — the typed-key contract introduced in #717 means
+/// bare short names like `core` no longer disambiguate which package to
+/// remove.
 pub fn remove(name: &str) -> Result<()> {
+    let package_ref = parse_canonical_package_ref(name)?;
+
     let mut manifest = InstalledPackageManifest::load()
         .map_err(|e| anyhow::anyhow!("Failed to load packages manifest: {}", e))?;
 
-    let entry = match manifest.remove_by_name(name) {
+    let entry = match manifest.remove_by_ref(&package_ref) {
         Some(e) => e,
         None => {
-            anyhow::bail!("Package '{}' is not installed.", name);
+            anyhow::bail!("Package '{}' is not installed.", package_ref);
         }
     };
 
@@ -235,7 +246,23 @@ pub fn remove(name: &str) -> Result<()> {
         .save()
         .map_err(|e| anyhow::anyhow!("Failed to save packages manifest: {}", e))?;
 
-    println!("Removed package '{}'.", name);
+    println!("Removed package '{}'.", package_ref);
 
     Ok(())
+}
+
+/// Convert a CLI-supplied canonical-form string (`@org/name`) into a
+/// typed [`streamlib_processor_schema::PackageRef`] via the official
+/// Deserialize path. Wraps the round-trip with a CLI-friendly error so
+/// users see "expected `@org/name`" rather than a serde parse error.
+fn parse_canonical_package_ref(arg: &str) -> Result<streamlib_processor_schema::PackageRef> {
+    serde_yaml::from_value::<streamlib_processor_schema::PackageRef>(serde_yaml::Value::String(
+        arg.to_string(),
+    ))
+    .with_context(|| {
+        format!(
+            "Invalid canonical package reference '{}'. Expected `@org/name` form (e.g. `@tatolab/core`).",
+            arg
+        )
+    })
 }

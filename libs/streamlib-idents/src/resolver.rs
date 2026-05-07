@@ -16,9 +16,10 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::error::{ResolverError, ResolverResult};
+use crate::git::fetch_git;
+use crate::ident::PackageRef;
 use crate::lockfile::{compute_content_hash, Lockfile, LockfileEntry, LockfileSource};
 use crate::manifest::{DependencySpec, Manifest};
 
@@ -151,15 +152,37 @@ pub fn resolve_with(
         ResolvedSource::Root,
     )?;
 
+    // The dep map is now typed end-to-end: `BTreeMap<PackageRef, _>`. The
+    // canonical-string lookup-key invariants the resolver previously
+    // hand-validated in `parse_dep_key` are now enforced by `PackageRef`'s
+    // Deserialize at YAML-read time — invalid keys never reach this code.
+    //
+    // Each queue entry carries (consumer_dir, deps, patch): when iterating
+    // the consumer's deps we consult the SAME consumer's `patch:` table
+    // for resolution overrides. No tree-level walk-up — what's in the
+    // consumer's manifest is what the resolver sees.
     let mut packages: BTreeMap<String, ResolvedPackage> = BTreeMap::new();
-    let mut queue: VecDeque<(PathBuf, BTreeMap<String, DependencySpec>)> = VecDeque::new();
-    queue.push_back((root.root_dir.clone(), root.manifest.dependencies.clone()));
+    let mut queue: VecDeque<QueueEntry> = VecDeque::new();
+    queue.push_back(QueueEntry {
+        consumer_dir: root.root_dir.clone(),
+        dependencies: root.manifest.dependencies.clone(),
+        patch: root.manifest.patch.clone(),
+    });
 
     let mut visiting: HashSet<String> = HashSet::new();
 
-    while let Some((consumer_dir, deps)) = queue.pop_front() {
-        for (dep_key, spec) in deps {
-            let dep_id = parse_dep_key(&dep_key, &consumer_dir.join(Manifest::FILE_NAME))?;
+    while let Some(QueueEntry {
+        consumer_dir,
+        dependencies,
+        patch,
+    }) = queue.pop_front()
+    {
+        for (dep_ref, spec) in dependencies {
+            // Lockfile + return-shape are still keyed on the canonical
+            // joined-string form (yaml map keys are strings on disk). The
+            // typed PackageRef is the in-memory primary; `Display` is the
+            // wire form, used here only for the lockfile key.
+            let dep_id = dep_ref.to_string();
 
             if let Some(existing) = packages.get(&dep_id) {
                 check_existing_satisfies_spec(existing, &spec, &consumer_dir, &dep_id)?;
@@ -170,17 +193,17 @@ pub fn resolve_with(
                 return Err(ResolverError::CircularDependency { chain: dep_id });
             }
 
-            let resolved = resolve_one(
-                &consumer_dir,
-                &dep_id,
-                &spec,
-                &cache_dir,
-            )?;
+            let resolved =
+                resolve_one(&consumer_dir, &dep_ref, &dep_id, &spec, &patch, &cache_dir)?;
 
             check_resolved_id_matches(&resolved, &dep_id, &consumer_dir)?;
             check_resolved_satisfies_spec(&resolved, &spec, &consumer_dir, &dep_id)?;
 
-            queue.push_back((resolved.root_dir.clone(), resolved.manifest.dependencies.clone()));
+            queue.push_back(QueueEntry {
+                consumer_dir: resolved.root_dir.clone(),
+                dependencies: resolved.manifest.dependencies.clone(),
+                patch: resolved.manifest.patch.clone(),
+            });
             packages.insert(dep_id.clone(), resolved);
             visiting.remove(&dep_id);
         }
@@ -189,73 +212,30 @@ pub fn resolve_with(
     Ok(ResolvedPackages { root, packages })
 }
 
-fn parse_dep_key(key: &str, manifest_path: &Path) -> ResolverResult<String> {
-    // `@org/name` form, validated lightly here. Full grammar checks belong to
-    // the Org/Package newtype constructors when we promote dep keys to
-    // typed records — for now, treat any non-empty `@x/y` shape as ok.
-    if !key.starts_with('@') {
-        return Err(ResolverError::InvalidDependencyKey {
-            path: manifest_path.to_path_buf(),
-            dep_key: key.to_string(),
-            actual: key.to_string(),
-        });
-    }
-    let rest = &key[1..];
-    let mut parts = rest.split('/');
-    let org = parts.next().unwrap_or("");
-    let name = parts.next().unwrap_or("");
-    if org.is_empty() || name.is_empty() || parts.next().is_some() {
-        return Err(ResolverError::InvalidDependencyKey {
-            path: manifest_path.to_path_buf(),
-            dep_key: key.to_string(),
-            actual: key.to_string(),
-        });
-    }
-    Ok(key.to_string())
+struct QueueEntry {
+    consumer_dir: PathBuf,
+    dependencies: BTreeMap<PackageRef, DependencySpec>,
+    patch: BTreeMap<PackageRef, DependencySpec>,
 }
 
 fn resolve_one(
     consumer_dir: &Path,
+    dep_ref: &PackageRef,
     dep_id: &str,
     spec: &DependencySpec,
+    patch: &BTreeMap<PackageRef, DependencySpec>,
     cache_dir: &Path,
 ) -> ResolverResult<ResolvedPackage> {
-    match spec {
+    // Consumer's `patch:` table overrides the dep declaration when present.
+    // Mirrors Cargo's `[patch.crates-io]` semantics: dependencies declare
+    // *what* the consumer needs, the patch table declares *which copy* to
+    // use. Path-flavor patches resolve relative to the consumer's manifest
+    // dir; missing paths fail loudly so the dev knows to fix the
+    // declaration (npm/wrangler-style strict validation).
+    let effective_spec = patch.get(dep_ref).unwrap_or(spec);
+    match effective_spec {
         DependencySpec::Path(path_dep) => {
-            let abs = if path_dep.path.is_absolute() {
-                path_dep.path.clone()
-            } else {
-                consumer_dir.join(&path_dep.path)
-            };
-            if !abs.exists() {
-                return Err(ResolverError::PathDependencyNotFound {
-                    name: dep_id.to_string(),
-                    path: abs,
-                });
-            }
-            // `.slpkg` archive (path-flavored): extract first.
-            if abs.extension().and_then(|s| s.to_str()) == Some("slpkg") {
-                let extracted = extract_slpkg(&abs, cache_dir)?;
-                let manifest = Manifest::load(&extracted)?;
-                return build_resolved_package(
-                    manifest,
-                    extracted,
-                    ResolvedSource::Slpkg { archive: abs },
-                );
-            }
-            if !abs.is_dir() {
-                return Err(ResolverError::PathDependencyNotDirectory {
-                    name: dep_id.to_string(),
-                    path: abs,
-                });
-            }
-            let manifest = Manifest::load(&abs)?;
-            let relative = path_dep.path.clone();
-            build_resolved_package(
-                manifest,
-                abs,
-                ResolvedSource::Path { relative },
-            )
+            resolve_path_dependency(consumer_dir, dep_id, path_dep, cache_dir)
         }
         DependencySpec::Git(git_dep) => {
             let target = fetch_git(dep_id, &git_dep.git, &git_dep.rev, cache_dir)?;
@@ -273,6 +253,44 @@ fn resolve_one(
             name: dep_id.to_string(),
         }),
     }
+}
+
+fn resolve_path_dependency(
+    consumer_dir: &Path,
+    dep_id: &str,
+    path_dep: &crate::manifest::PathDependency,
+    cache_dir: &Path,
+) -> ResolverResult<ResolvedPackage> {
+    let abs = if path_dep.path.is_absolute() {
+        path_dep.path.clone()
+    } else {
+        consumer_dir.join(&path_dep.path)
+    };
+    if !abs.exists() {
+        return Err(ResolverError::PathDependencyNotFound {
+            name: dep_id.to_string(),
+            path: abs,
+        });
+    }
+    // `.slpkg` archive (path-flavored): extract first.
+    if abs.extension().and_then(|s| s.to_str()) == Some("slpkg") {
+        let extracted = extract_slpkg(&abs, cache_dir)?;
+        let manifest = Manifest::load(&extracted)?;
+        return build_resolved_package(
+            manifest,
+            extracted,
+            ResolvedSource::Slpkg { archive: abs },
+        );
+    }
+    if !abs.is_dir() {
+        return Err(ResolverError::PathDependencyNotDirectory {
+            name: dep_id.to_string(),
+            path: abs,
+        });
+    }
+    let manifest = Manifest::load(&abs)?;
+    let relative = path_dep.path.clone();
+    build_resolved_package(manifest, abs, ResolvedSource::Path { relative })
 }
 
 fn build_resolved_package(
@@ -454,64 +472,6 @@ fn default_cache_dir() -> ResolverResult<PathBuf> {
     Ok(home.join(".streamlib").join("resolver-cache"))
 }
 
-fn fetch_git(name: &str, url: &str, rev: &str, cache_dir: &Path) -> ResolverResult<PathBuf> {
-    let safe = url
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect::<String>();
-    let target = cache_dir.join("git").join(format!("{}_{}", safe, rev));
-
-    let manifest_path = target.join(Manifest::FILE_NAME);
-    if manifest_path.exists() {
-        return Ok(target);
-    }
-
-    std::fs::create_dir_all(&target).map_err(|e| ResolverError::Io {
-        path: target.clone(),
-        source: e,
-    })?;
-
-    let clone = Command::new("git")
-        .args(["clone", "--quiet", url, "."])
-        .current_dir(&target)
-        .output()
-        .map_err(|e| ResolverError::GitDependencyFailed {
-            name: name.to_string(),
-            url: url.to_string(),
-            message: format!("git clone invocation failed: {e}"),
-        })?;
-    if !clone.status.success() {
-        return Err(ResolverError::GitDependencyFailed {
-            name: name.to_string(),
-            url: url.to_string(),
-            message: String::from_utf8_lossy(&clone.stderr).trim().to_string(),
-        });
-    }
-
-    let checkout = Command::new("git")
-        .args(["checkout", "--quiet", rev])
-        .current_dir(&target)
-        .output()
-        .map_err(|e| ResolverError::GitDependencyFailed {
-            name: name.to_string(),
-            url: url.to_string(),
-            message: format!("git checkout invocation failed: {e}"),
-        })?;
-    if !checkout.status.success() {
-        return Err(ResolverError::GitDependencyFailed {
-            name: name.to_string(),
-            url: url.to_string(),
-            message: format!(
-                "git checkout {} failed: {}",
-                rev,
-                String::from_utf8_lossy(&checkout.stderr).trim()
-            ),
-        });
-    }
-
-    Ok(target)
-}
-
 fn extract_slpkg(archive: &Path, cache_dir: &Path) -> ResolverResult<PathBuf> {
     let archive_bytes = std::fs::read(archive).map_err(|e| ResolverError::SlpkgExtractFailed {
         path: archive.to_path_buf(),
@@ -685,6 +645,12 @@ dependencies:
 
     #[test]
     fn resolve_invalid_dep_key_shape() {
+        // Post-#717 the canonical-key shape is enforced at YAML parse time
+        // by `PackageRef::Deserialize`, not in the resolver. A bare
+        // `"tatolab/core"` (missing `@` prefix) fails to deserialize as a
+        // PackageRef and surfaces as a `ManifestParse` error. The structural
+        // intent — that invalid shapes can't reach the resolver's lookup
+        // logic — is preserved; the rejection just moves earlier.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("project");
         write_streamlib_yaml(
@@ -696,7 +662,11 @@ dependencies:
 "#,
         );
         let err = resolve(&root).unwrap_err();
-        assert!(matches!(err, ResolverError::InvalidDependencyKey { .. }));
+        assert!(
+            matches!(err, ResolverError::ManifestParse { .. }),
+            "expected ManifestParse, got {:?}",
+            err,
+        );
     }
 
     #[test]

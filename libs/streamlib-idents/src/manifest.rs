@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{ResolverError, ResolverResult};
-use crate::ident::{Org, Package};
+use crate::ident::{Org, Package, PackageRef};
 use crate::semver::{SemVer, SemVerRange};
 
 /// `streamlib.yaml` — single source of truth for a package or project.
@@ -19,18 +19,40 @@ use crate::semver::{SemVer, SemVerRange};
 /// and is publishable. **Project flavor** has no `package:` block; it's a
 /// consumer like an application or example.
 ///
-/// The resolver reads `package`, `dependencies`, and `schemas`. Other top-level
-/// fields like `processors:` and `env:` are runtime concerns owned by the
-/// streamlib runtime; they are tolerated here without being interpreted, so
-/// one `streamlib.yaml` carries both schema-identity and runtime
-/// configuration without splitting into two files.
+/// Each manifest is **standalone**: it carries its own dep declarations
+/// (`dependencies:`) and optional dev-time overrides (`patch:`) without
+/// reaching into a tree-level shared registry. The streamlib model
+/// matches `wrangler.toml` / `Cargo.toml` per-package shape — there is
+/// no workspace walk-up; what you see in the yaml is what the runtime
+/// resolves against.
+///
+/// The resolver reads `package`, `dependencies`, `patch`, and `schemas`.
+/// Other top-level fields like `processors:` and `env:` are runtime
+/// concerns owned by the streamlib runtime; they are tolerated here
+/// without being interpreted, so one `streamlib.yaml` carries both
+/// schema-identity and runtime configuration without splitting into
+/// two files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package: Option<PackageMetadata>,
 
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub dependencies: BTreeMap<String, DependencySpec>,
+    pub dependencies: BTreeMap<PackageRef, DependencySpec>,
+
+    /// Per-consumer resolution overrides. Mirrors Cargo's
+    /// `[patch.crates-io]` shape but lives in the consumer's own yaml
+    /// (no workspace walk-up). When the runtime / resolver iterates a
+    /// dep declared in [`Self::dependencies`], it consults this table
+    /// before falling through to the installed-package cache.
+    ///
+    /// Path-flavor entries are dev-time overrides only — `streamlib pack`
+    /// rejects yamls whose `patch:` table contains any `path:` entries
+    /// (mirrors `npm publish` / `cargo publish` rejecting path deps).
+    /// Path patches are validated strictly at parse time: a missing path
+    /// is a hard error so the dev knows immediately to fix the manifest.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub patch: BTreeMap<PackageRef, DependencySpec>,
 
     /// Explicit list of schema YAML files this package owns, relative to the
     /// manifest's directory. When `None`, the resolver auto-discovers
@@ -65,15 +87,22 @@ impl Manifest {
         self.package.is_some()
     }
 
-    /// Canonical `"@org/name"` key for this manifest, when it's a package
-    /// flavor. The key form is what the lockfile uses to identify packages
-    /// — the structured-everywhere rule applies to schema *identifiers*; the
-    /// lockfile key is a deliberate joined form so YAML map keys stay
-    /// readable.
-    pub fn package_id(&self) -> Option<String> {
+    /// Canonical [`PackageRef`] for this manifest, when it's a package
+    /// flavor. Consumers that need the joined `"@org/name"` string form
+    /// (e.g. for lockfile keys, log messages) call `.to_string()` on the
+    /// returned ref — the typed shape stays primary, the joined form
+    /// stays render-only.
+    pub fn package_ref(&self) -> Option<PackageRef> {
         self.package
             .as_ref()
-            .map(|p| format!("@{}/{}", p.org.as_str(), p.name.as_str()))
+            .map(|p| PackageRef::new(p.org.clone(), p.name.clone()))
+    }
+
+    /// Joined-string convenience for the canonical [`PackageRef`]. Prefer
+    /// [`Self::package_ref`] in code; this is here for the resolver's
+    /// internal lockfile-key + log-message paths.
+    pub fn package_id(&self) -> Option<String> {
+        self.package_ref().map(|r| r.to_string())
     }
 }
 
@@ -190,6 +219,10 @@ impl<'de> Deserialize<'de> for DependencySpec {
 mod tests {
     use super::*;
 
+    fn pkg_ref(org: &str, name: &str) -> PackageRef {
+        PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
+    }
+
     #[test]
     fn package_flavor_round_trip() {
         let yaml = "
@@ -207,6 +240,7 @@ dependencies: {}
         assert_eq!(pkg.name.as_str(), "core");
         assert_eq!(pkg.version, SemVer::new(1, 0, 0));
         assert_eq!(m.package_id().as_deref(), Some("@tatolab/core"));
+        assert_eq!(m.package_ref(), Some(pkg_ref("tatolab", "core")));
         assert!(m.dependencies.is_empty());
     }
 
@@ -226,23 +260,82 @@ dependencies:
         assert_eq!(m.package_id(), None);
         assert_eq!(m.dependencies.len(), 3);
 
-        match m.dependencies.get("@tatolab/core").unwrap() {
+        // Typed-key lookup — `BTreeMap<PackageRef, DependencySpec>` accepts
+        // PackageRef keys directly. Mentally reverting to `BTreeMap<String, _>`
+        // would force a string parser at the lookup site, which is the
+        // structured-everywhere anti-pattern.
+        match m.dependencies.get(&pkg_ref("tatolab", "core")).unwrap() {
             DependencySpec::Registry(r) => assert_eq!(r.version.to_string(), "^1.0.0"),
             other => panic!("expected Registry, got {:?}", other),
         }
 
-        match m.dependencies.get("@tatolab/h264").unwrap() {
+        match m.dependencies.get(&pkg_ref("tatolab", "h264")).unwrap() {
             DependencySpec::Path(p) => assert_eq!(p.path, PathBuf::from("../h264")),
             other => panic!("expected Path, got {:?}", other),
         }
 
-        match m.dependencies.get("@tatolab/moq").unwrap() {
+        match m.dependencies.get(&pkg_ref("tatolab", "moq")).unwrap() {
             DependencySpec::Git(g) => {
                 assert_eq!(g.git, "https://github.com/tatolab/moq");
                 assert_eq!(g.rev, "abc123def456");
             }
             other => panic!("expected Git, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn manifest_carries_per_consumer_patch_table() {
+        // Each consumer manifest carries its own `patch:` block alongside
+        // `dependencies:`. No workspace walk-up — what's in this yaml is
+        // what gets resolved against. Mirrors npm's package.json carrying
+        // its own `overrides:` and Cargo's per-package `[patch]`.
+        let yaml = r#"
+package:
+  org: tatolab
+  name: consumer
+  version: 1.0.0
+dependencies:
+  "@tatolab/core": "^1.0.0"
+patch:
+  "@tatolab/core":
+    path: ../packages/core
+  "@tatolab/h264":
+    git: https://github.com/tatolab/h264-fork
+    rev: abc123
+"#;
+        let m: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(m.is_package_flavor());
+        assert_eq!(m.dependencies.len(), 1);
+        assert_eq!(m.patch.len(), 2);
+
+        match m.patch.get(&pkg_ref("tatolab", "core")).unwrap() {
+            DependencySpec::Path(p) => assert_eq!(p.path, PathBuf::from("../packages/core")),
+            other => panic!("expected Path patch, got {:?}", other),
+        }
+        match m.patch.get(&pkg_ref("tatolab", "h264")).unwrap() {
+            DependencySpec::Git(g) => assert_eq!(g.rev, "abc123"),
+            other => panic!("expected Git patch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn manifest_without_patch_block_round_trips_cleanly() {
+        // The "customer-shape" yaml: declares deps canonically, no
+        // dev-time patches. This is what a published / installed yaml
+        // looks like — pack rejects the path-flavored variant, so the
+        // wire form a customer sees never carries path overrides.
+        let yaml = r#"
+package:
+  org: tatolab
+  name: consumer
+  version: 1.0.0
+dependencies:
+  "@tatolab/core": "^1.0.0"
+"#;
+        let m: Manifest = serde_yaml::from_str(yaml).unwrap();
+        assert!(m.is_package_flavor());
+        assert_eq!(m.dependencies.len(), 1);
+        assert!(m.patch.is_empty());
     }
 
     #[test]

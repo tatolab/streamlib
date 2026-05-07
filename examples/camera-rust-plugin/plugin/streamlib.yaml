@@ -5,6 +5,14 @@ package:
   version: 0.1.0
   description: "Grayscale video effect as Rust dylib plugin"
 
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this (#717).
+patch:
+  "@tatolab/core":
+    path: ../../../packages/core
+
 processors:
   - name: GrayscaleRust
     version: 1.0.0

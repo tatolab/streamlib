@@ -356,37 +356,25 @@ impl StreamRuntime {
 
         // Load dependency packages first (schemas/processors they export).
         //
-        // The dep schema is the same `BTreeMap<String, DependencySpec>` that
-        // the resolver and the JSON Schema source-of-truth (`StreamlibYaml`)
-        // consume. Path-style deps resolve relative to the manifest dir and
-        // recurse through `load_project`. Registry/git deps require canonical
-        // `@org/name` install-manifest keys + workspace `[patch]` resolution,
-        // which arrive in #717; until then they error explicitly here so no
-        // string parser sneaks into the lookup site.
+        // The dep map is `BTreeMap<PackageRef, DependencySpec>` end-to-end
+        // — `PackageRef`'s typed Deserialize validates the `@org/name` shape
+        // at YAML-read time so the lookup site below never parses a string.
+        // Resolution chain (mirrors Cargo's `[patch.crates-io]` shape, but
+        // per-consumer rather than workspace-level):
+        //
+        //   1. **Consumer's own `patch:` table** — overrides the dep
+        //      declaration when present. Path entries resolve relative
+        //      to the consumer's manifest dir; missing paths fail with
+        //      a clear error (strict validation, npm/wrangler-style).
+        //   2. **Installed-package cache** (`InstalledPackageManifest`).
+        //   3. **Actionable error** — neither tier covers the dep.
         if !config.dependencies.is_empty() {
-            use streamlib_idents::DependencySpec;
-
-            for (dep_key, spec) in &config.dependencies {
-                let dep_path = match spec {
-                    DependencySpec::Path(p) => {
-                        if p.path.is_absolute() {
-                            p.path.clone()
-                        } else {
-                            project_path.join(&p.path)
-                        }
-                    }
-                    DependencySpec::Registry(_) | DependencySpec::Git(_) => {
-                        return Err(StreamError::Configuration(format!(
-                            "Registry/git dep '{dep_key}' is not yet supported \
-                             (pending #717: canonical install-manifest keys + \
-                             workspace [patch] resolution). Use a path-style \
-                             declaration in a workspace patch file once #717 lands."
-                        )));
-                    }
-                };
+            for (dep_ref, spec) in &config.dependencies {
+                let dep_path =
+                    self.resolve_dependency_path(project_path, dep_ref, spec, &config.patch)?;
                 tracing::info!(
                     "Loading dependency '{}' from {}",
-                    dep_key,
+                    dep_ref,
                     dep_path.display()
                 );
                 self.load_project(&dep_path)?;
@@ -1324,6 +1312,146 @@ impl StreamRuntime {
 
         self.load_graph_file(&def)
     }
+
+    /// Resolve a single dependency declaration to a directory the runtime
+    /// can recurse into via [`Self::load_project`].
+    ///
+    /// Resolution chain (mirrors Cargo's `[patch.crates-io]`, per-consumer):
+    ///
+    /// 1. **Consumer's own `patch:` table** — overrides the dep declaration
+    ///    when present. Path entries resolve relative to the consumer's
+    ///    manifest dir and are validated strictly: a missing path is a
+    ///    hard error so the dev knows immediately to fix the manifest.
+    /// 2. **Direct path declaration** in `dependencies:` (legacy / pre-canonical
+    ///    deps). Resolves relative to the consumer dir, no existence check
+    ///    yet (`load_project` will surface the missing manifest error
+    ///    downstream).
+    /// 3. **Installed-package cache** (`InstalledPackageManifest`).
+    /// 4. **Actionable error** — registry/git deps with no matching patch
+    ///    or installed entry.
+    fn resolve_dependency_path(
+        &self,
+        consumer_dir: &std::path::Path,
+        dep_ref: &streamlib_idents::PackageRef,
+        spec: &streamlib_idents::DependencySpec,
+        patch: &std::collections::BTreeMap<
+            streamlib_idents::PackageRef,
+            streamlib_idents::DependencySpec,
+        >,
+    ) -> Result<std::path::PathBuf> {
+        use streamlib_idents::DependencySpec;
+
+        // Tier 1: consumer's own `patch:` table.
+        if let Some(patch_spec) = patch.get(dep_ref) {
+            return self.resolve_consumer_patch(consumer_dir, dep_ref, patch_spec);
+        }
+
+        // Tier 2-4: dispatch on the dep declaration's flavor.
+        match spec {
+            DependencySpec::Path(p) => Ok(if p.path.is_absolute() {
+                p.path.clone()
+            } else {
+                consumer_dir.join(&p.path)
+            }),
+            DependencySpec::Registry(_) | DependencySpec::Git(_) => {
+                if let Some(installed) = self.lookup_installed_package(dep_ref)? {
+                    return Ok(installed);
+                }
+                Err(StreamError::Configuration(format!(
+                    "Dependency '{dep_ref}' could not be resolved. \
+                     No matching `patch:` entry was found in {}/{}, and no matching \
+                     package is installed (run `streamlib pkg list` to see \
+                     installed packages, `streamlib pkg install <slpkg>` to \
+                     install one).",
+                    consumer_dir.display(),
+                    streamlib_idents::Manifest::FILE_NAME,
+                )))
+            }
+        }
+    }
+
+    /// Resolve a consumer-scoped `patch:` entry to an absolute path the
+    /// runtime can recurse into.
+    ///
+    /// - `path:` patches: validated strictly — missing path is a hard
+    ///   error so the dev knows immediately to fix the manifest
+    ///   (npm / wrangler-style strictness; CLAUDE.md "make the right
+    ///   way easy and the wrong way hard").
+    /// - `git:` patches: cloned at the pinned rev to the shared
+    ///   resolver cache (`~/.streamlib/resolver-cache/git/`). Idempotent
+    ///   — a previously-cloned checkout is reused. Same helper the
+    ///   build-time resolver uses, so checkouts are shared across
+    ///   codegen and runtime startups.
+    /// - `version:` (registry) patches: not yet supported — the v1
+    ///   resolver doesn't ship a registry. Consumers either declare a
+    ///   git/path patch or rely on the installed-package cache.
+    fn resolve_consumer_patch(
+        &self,
+        consumer_dir: &std::path::Path,
+        dep_ref: &streamlib_idents::PackageRef,
+        patch_spec: &streamlib_idents::DependencySpec,
+    ) -> Result<std::path::PathBuf> {
+        use streamlib_idents::DependencySpec;
+
+        match patch_spec {
+            DependencySpec::Path(p) => {
+                let abs = if p.path.is_absolute() {
+                    p.path.clone()
+                } else {
+                    consumer_dir.join(&p.path)
+                };
+                if !abs.exists() {
+                    return Err(StreamError::Configuration(format!(
+                        "patch entry for '{dep_ref}' in {}/{} points at \
+                         `{}` which does not exist. Path patches are \
+                         dev-time overrides — they must resolve to a \
+                         real directory at parse time. Either fix the \
+                         path or remove the patch entry.",
+                        consumer_dir.display(),
+                        streamlib_idents::Manifest::FILE_NAME,
+                        abs.display(),
+                    )));
+                }
+                Ok(abs)
+            }
+            DependencySpec::Git(g) => {
+                let cache_dir = crate::core::streamlib_home::get_streamlib_home()
+                    .join("resolver-cache");
+                streamlib_idents::fetch_git(
+                    &dep_ref.to_string(),
+                    &g.git,
+                    &g.rev,
+                    &cache_dir,
+                )
+                .map_err(|e| StreamError::Configuration(e.to_string()))
+            }
+            DependencySpec::Registry(_) => Err(StreamError::Configuration(format!(
+                "patch entry for '{dep_ref}' in {}/{} is registry-flavored. \
+                 The v1 resolver doesn't ship a registry — declare a \
+                 `path:` or `git:` patch entry, or remove the patch and \
+                 rely on the installed-package cache.",
+                consumer_dir.display(),
+                streamlib_idents::Manifest::FILE_NAME,
+            ))),
+        }
+    }
+
+    /// Look the canonical [`streamlib_idents::PackageRef`] up in the
+    /// installed-package cache (`InstalledPackageManifest`). Returns the
+    /// extracted slpkg cache directory when present.
+    fn lookup_installed_package(
+        &self,
+        dep_ref: &streamlib_idents::PackageRef,
+    ) -> Result<Option<std::path::PathBuf>> {
+        use crate::core::config::InstalledPackageManifest;
+        use crate::core::streamlib_home::get_cached_package_dir;
+
+        let manifest = InstalledPackageManifest::load()?;
+        let Some(entry) = manifest.find_by_ref(dep_ref) else {
+            return Ok(None);
+        };
+        Ok(Some(get_cached_package_dir(&entry.cache_dir)))
+    }
 }
 
 /// Extract a .slpkg ZIP archive to the package cache.
@@ -1587,14 +1715,276 @@ dependencies:
         );
     }
 
-    /// Registry/git deps are not yet supported — the canonical
-    /// install-manifest + workspace `[patch]` resolution chain arrives in
-    /// #717. Until then the runtime errors explicitly so no string parser
-    /// sneaks into the lookup site. The error must surface the canonical
-    /// `@org/name` key the user wrote AND point at #717.
+    /// Consumer-scoped `patch:` resolution: when a consumer declares a
+    /// registry-form dep AND its own `patch:` block has an entry for that
+    /// dep pointing at a local path, `load_project` recurses into the
+    /// patched location. Mirrors Cargo's `[patch.crates-io]` semantics
+    /// but per-consumer (no workspace walk-up). Mentally reverting the
+    /// patch lookup in `resolve_dependency_path` makes this fail because
+    /// the registry arm would fall through to the installed-cache tier
+    /// (which is empty in this test).
     #[test]
     #[serial]
-    fn test_load_project_registry_dep_errors_pending_717() {
+    fn test_load_project_resolves_registry_dep_via_consumer_patch() {
+        let runtime = StreamRuntime::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Patched dep target.
+        let b = tmp.path().join("b");
+        std::fs::create_dir(&b).unwrap();
+        std::fs::write(
+            b.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: b\n  version: \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // Consumer in a sibling dir, declares a registry-style dep AND a
+        // path-flavor patch in its own yaml. No tree-level state.
+        let a = tmp.path().join("a");
+        std::fs::create_dir(&a).unwrap();
+        std::fs::write(
+            a.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: a
+  version: "0.1.0"
+dependencies:
+  "@tatolab/b": "^0.1.0"
+patch:
+  "@tatolab/b":
+    path: ../b
+"#,
+        )
+        .unwrap();
+
+        runtime
+            .load_project(&a)
+            .expect("consumer-scoped patch must resolve the registry dep to ../b/");
+    }
+
+    /// Git-flavor patch resolution: when a consumer's `patch:` block
+    /// declares a `git:` entry pinned at a specific rev, `load_project`
+    /// clones the URL via the shared `streamlib_idents::fetch_git`
+    /// helper (same code the build-time resolver uses) and recurses
+    /// into the checkout. Mentally swapping the git arm in
+    /// `resolve_consumer_patch` for the previous "git/registry not
+    /// supported" error would make this test surface that error
+    /// instead of succeeding.
+    #[test]
+    #[serial]
+    fn test_load_project_resolves_git_patch_via_shared_helper() {
+        // Build a minimal local git repo with a `streamlib.yaml` that
+        // declares `@tatolab/b`. `git clone <local-path>` works without
+        // a network — this is a real fetch through the same helper the
+        // resolver uses, exercised end-to-end.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("b-repo");
+        std::fs::create_dir(&repo).unwrap();
+
+        let run_git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .expect("git invocation");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+
+        run_git(&["init", "--quiet"]);
+        run_git(&["config", "user.email", "test@example.com"]);
+        run_git(&["config", "user.name", "test"]);
+        std::fs::write(
+            repo.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: b\n  version: \"0.1.0\"\n",
+        )
+        .unwrap();
+        run_git(&["add", "streamlib.yaml"]);
+        run_git(&["commit", "--quiet", "-m", "initial"]);
+        let rev_output = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .expect("git rev-parse");
+        let rev = String::from_utf8(rev_output.stdout).unwrap().trim().to_string();
+
+        // Sandbox STREAMLIB_HOME so the git clone lands in tempdir, not
+        // the real user cache (and to avoid leaking checkouts across
+        // test runs).
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        // SAFETY: `#[serial]` serializes every StreamRuntime test in this
+        // module, so concurrent env-var mutation can't tear other tests.
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+
+        // Consumer in a separate tempdir, declares a registry-style dep
+        // and a git-flavor patch pointing at the local repo.
+        let consumer = tempfile::tempdir().unwrap();
+        std::fs::write(
+            consumer.path().join("streamlib.yaml"),
+            format!(
+                r#"
+package:
+  org: tatolab
+  name: consumer
+  version: "0.1.0"
+dependencies:
+  "@tatolab/b": "^0.1.0"
+patch:
+  "@tatolab/b":
+    git: "{}"
+    rev: "{}"
+"#,
+                repo.display(),
+                rev,
+            ),
+        )
+        .unwrap();
+
+        let runtime = StreamRuntime::new().unwrap();
+        runtime
+            .load_project(consumer.path())
+            .expect("git patch must clone the local repo and recurse into it");
+    }
+
+    /// Strict patch validation: when the consumer's `patch:` block points
+    /// at a path that doesn't exist, `load_project` errors clearly so the
+    /// dev knows immediately to fix the manifest. npm/wrangler-style
+    /// strictness — the "make the right way easy and the wrong way hard"
+    /// rule from CLAUDE.md applied to manifest validation. Mentally
+    /// reverting the existence check in `resolve_consumer_patch` would
+    /// surface a downstream "manifest not found" error from `load_project`
+    /// instead of a clear "patch path doesn't exist" error.
+    #[test]
+    #[serial]
+    fn test_load_project_strict_errors_on_missing_patch_path() {
+        let runtime = StreamRuntime::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: a
+  version: "0.1.0"
+dependencies:
+  "@tatolab/b": "^0.1.0"
+patch:
+  "@tatolab/b":
+    path: ./does-not-exist
+"#,
+        )
+        .unwrap();
+
+        let err = runtime
+            .load_project(tmp.path())
+            .expect_err("missing patch path must error strictly");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("@tatolab/b"),
+            "error must surface the canonical dep ref, got: {msg}"
+        );
+        assert!(
+            msg.contains("does-not-exist") && msg.contains("does not exist"),
+            "error must call out the missing patch path, got: {msg}"
+        );
+    }
+
+    /// Drops a previously-saved `STREAMLIB_HOME` environment variable
+    /// state when the test scope ends, so a sandboxed `STREAMLIB_HOME`
+    /// override doesn't leak into the next `#[serial]` test.
+    struct StreamlibHomeRestore(Option<std::ffi::OsString>);
+    impl Drop for StreamlibHomeRestore {
+        fn drop(&mut self) {
+            // SAFETY: `#[serial]` makes every test in this module
+            // exclusive — no concurrent reader of `STREAMLIB_HOME`.
+            unsafe {
+                match self.0.take() {
+                    Some(v) => std::env::set_var("STREAMLIB_HOME", v),
+                    None => std::env::remove_var("STREAMLIB_HOME"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_project_resolves_registry_dep_via_installed_cache() {
+        // Sandbox: STREAMLIB_HOME → tempdir so the test doesn't interact
+        // with the real `~/.streamlib/packages.yaml`.
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        // SAFETY: `#[serial]` serializes every StreamRuntime test in this
+        // module, so concurrent env-var mutation can't tear other tests.
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+
+        // The "extracted slpkg cache" directory the InstalledPackageManifest
+        // entry will point at. Contains the dep package's manifest.
+        let cache_root = sandbox.path().join("cache/packages");
+        std::fs::create_dir_all(&cache_root).unwrap();
+        let dep_cache_dir = cache_root.join("b-0.1.0");
+        std::fs::create_dir(&dep_cache_dir).unwrap();
+        std::fs::write(
+            dep_cache_dir.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: b\n  version: \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        // Pre-populate the installed-package manifest with a canonical-key
+        // entry for `@tatolab/b` pointing at the cache dir above.
+        let mut installed = crate::core::config::InstalledPackageManifest::default();
+        installed.add(crate::core::config::InstalledPackageEntry {
+            name: streamlib_idents::PackageRef::new(
+                streamlib_processor_schema::Org::new("tatolab").unwrap(),
+                streamlib_processor_schema::Package::new("b").unwrap(),
+            ),
+            version: streamlib_processor_schema::SemVer::new(0, 1, 0),
+            description: None,
+            installed_from: "test".into(),
+            installed_at: "1970-01-01T00:00:00Z".into(),
+            cache_dir: "b-0.1.0".to_string(),
+        });
+        installed.save().unwrap();
+
+        // Customer-shape consumer: declares the dep canonically with NO
+        // `patch:` block — exactly the yaml shape that ships in slpkgs.
+        // Resolution must fall through to the installed-package cache.
+        let consumer = tempfile::tempdir().unwrap();
+        std::fs::write(
+            consumer.path().join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: consumer
+  version: "0.1.0"
+dependencies:
+  "@tatolab/b": "^0.1.0"
+"#,
+        )
+        .unwrap();
+
+        let runtime = StreamRuntime::new().unwrap();
+        runtime
+            .load_project(consumer.path())
+            .expect("registry dep must resolve via installed-package cache");
+    }
+
+    /// When neither a workspace `[patch]` entry nor an installed-package
+    /// cache hit covers a registry dep, the runtime must surface an
+    /// actionable error that names the canonical key and points the user
+    /// at `streamlib pkg install`. The error is the runtime's last-resort
+    /// signal that resolution exhausted both tiers; mentally reverting
+    /// either tier (workspace lookup, installed-cache lookup) would make
+    /// this test surface a different error path, breaking the contract.
+    #[test]
+    #[serial]
+    fn test_load_project_unresolvable_registry_dep_errors_actionably() {
         let runtime = StreamRuntime::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
 
@@ -1615,15 +2005,15 @@ dependencies:
 
         let err = runtime
             .load_project(&a)
-            .expect_err("registry dep must error explicitly until #717 lands");
+            .expect_err("unresolvable registry dep must error");
         let msg = format!("{}", err);
         assert!(
             msg.contains("@tatolab/missing"),
             "error must surface the canonical `@org/name` key, got: {msg}"
         );
         assert!(
-            msg.contains("#717"),
-            "error must point at #717 so the picker has a follow-up reference, got: {msg}"
+            msg.contains("streamlib pkg install") || msg.contains("workspace"),
+            "error must point at the resolution paths the user can act on, got: {msg}"
         );
     }
 
