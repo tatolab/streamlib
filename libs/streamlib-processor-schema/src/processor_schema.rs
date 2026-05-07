@@ -157,6 +157,7 @@ impl JsonSchema for ProcessorLanguage {
 
 /// Language-specific runtime options.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeOptions {
     /// [Rust] Generate unsafe Send impl for !Send processors (AVFoundation, etc.)
     #[serde(default)]
@@ -178,6 +179,7 @@ enum RuntimeConfigHelper {
 
 /// Full runtime configuration object.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeConfigFull {
     /// Language runtime (rust, python, typescript). Defaults to rust.
     #[serde(default)]
@@ -469,6 +471,7 @@ impl JsonSchema for ProcessorSchemaExecution {
 
 /// A port definition within a processor schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessorPortSchema {
     /// Port name (e.g., "video_in").
     pub name: String,
@@ -487,6 +490,7 @@ pub struct ProcessorPortSchema {
 
 /// Config definition within a processor schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessorConfigSchema {
     /// Config field name (e.g., "config").
     pub name: String,
@@ -496,6 +500,7 @@ pub struct ProcessorConfigSchema {
 
 /// A state field definition within a processor schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessorStateField {
     /// Field name (e.g., "buffer").
     pub name: String,
@@ -509,6 +514,7 @@ pub struct ProcessorStateField {
 
 /// A complete processor schema definition parsed from YAML.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProcessorSchema {
     /// Processor name in reverse domain notation (e.g., "com.example.blur").
     pub name: String,

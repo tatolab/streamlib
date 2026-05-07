@@ -163,7 +163,8 @@
           "description": "Schema reference with version (e.g., \"com.example.blur.config@1.0.0\").",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ProcessorLanguage": {
       "description": "Processor runtime language. `deno` is accepted as an alias for `typescript`.",
@@ -221,7 +222,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ProcessorSchema": {
       "description": "A complete processor schema definition parsed from YAML.",
@@ -309,7 +311,8 @@
           "description": "Processor version (e.g., \"1.0.0\").",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "ProcessorSchemaExecution": {
       "description": "Execution mode: `reactive`, `manual`, `continuous` (string), or `{ type: continuous, interval_ms: N }`.",
@@ -367,7 +370,8 @@
           "description": "Rust type (e.g., \"Vec<f32>\", \"u32\", \"u64\").",
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "RegistryDependency": {
       "type": "object",
@@ -425,7 +429,8 @@
             }
           ]
         }
-      }
+      },
+      "additionalProperties": false
     },
     "RuntimeOptions": {
       "description": "Language-specific runtime options.",
@@ -444,7 +449,8 @@
           "default": false,
           "type": "boolean"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "SchemaIdent": {
       "description": "Structured schema identifier — the four-field map form of `@org/package/Type@version`.",
