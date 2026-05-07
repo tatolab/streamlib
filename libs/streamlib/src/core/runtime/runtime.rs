@@ -1371,10 +1371,20 @@ impl StreamRuntime {
     }
 
     /// Resolve a consumer-scoped `patch:` entry to an absolute path the
-    /// runtime can recurse into. Path-flavor patches are validated
-    /// strictly — a missing path is a hard error so the dev knows
-    /// immediately to fix the manifest (npm / wrangler-style strictness;
-    /// CLAUDE.md "make the right way easy and the wrong way hard").
+    /// runtime can recurse into.
+    ///
+    /// - `path:` patches: validated strictly — missing path is a hard
+    ///   error so the dev knows immediately to fix the manifest
+    ///   (npm / wrangler-style strictness; CLAUDE.md "make the right
+    ///   way easy and the wrong way hard").
+    /// - `git:` patches: cloned at the pinned rev to the shared
+    ///   resolver cache (`~/.streamlib/resolver-cache/git/`). Idempotent
+    ///   — a previously-cloned checkout is reused. Same helper the
+    ///   build-time resolver uses, so checkouts are shared across
+    ///   codegen and runtime startups.
+    /// - `version:` (registry) patches: not yet supported — the v1
+    ///   resolver doesn't ship a registry. Consumers either declare a
+    ///   git/path patch or rely on the installed-package cache.
     fn resolve_consumer_patch(
         &self,
         consumer_dir: &std::path::Path,
@@ -1404,18 +1414,25 @@ impl StreamRuntime {
                 }
                 Ok(abs)
             }
-            DependencySpec::Git(_) | DependencySpec::Registry(_) => {
-                Err(StreamError::Configuration(format!(
-                    "patch entry for '{dep_ref}' in {}/{} is git/registry \
-                     flavored. The runtime only supports `path:` patches \
-                     today; git/registry patch resolution is a future \
-                     follow-up. Either remove the patch entry (falling \
-                     back to the installed-package cache) or declare a \
-                     `path:` entry pointing at a local checkout.",
-                    consumer_dir.display(),
-                    streamlib_idents::Manifest::FILE_NAME,
-                )))
+            DependencySpec::Git(g) => {
+                let cache_dir = crate::core::streamlib_home::get_streamlib_home()
+                    .join("resolver-cache");
+                streamlib_idents::fetch_git(
+                    &dep_ref.to_string(),
+                    &g.git,
+                    &g.rev,
+                    &cache_dir,
+                )
+                .map_err(|e| StreamError::Configuration(e.to_string()))
             }
+            DependencySpec::Registry(_) => Err(StreamError::Configuration(format!(
+                "patch entry for '{dep_ref}' in {}/{} is registry-flavored. \
+                 The v1 resolver doesn't ship a registry — declare a \
+                 `path:` or `git:` patch entry, or remove the patch and \
+                 rely on the installed-package cache.",
+                consumer_dir.display(),
+                streamlib_idents::Manifest::FILE_NAME,
+            ))),
         }
     }
 
@@ -1744,6 +1761,93 @@ patch:
         runtime
             .load_project(&a)
             .expect("consumer-scoped patch must resolve the registry dep to ../b/");
+    }
+
+    /// Git-flavor patch resolution: when a consumer's `patch:` block
+    /// declares a `git:` entry pinned at a specific rev, `load_project`
+    /// clones the URL via the shared `streamlib_idents::fetch_git`
+    /// helper (same code the build-time resolver uses) and recurses
+    /// into the checkout. Mentally swapping the git arm in
+    /// `resolve_consumer_patch` for the previous "git/registry not
+    /// supported" error would make this test surface that error
+    /// instead of succeeding.
+    #[test]
+    #[serial]
+    fn test_load_project_resolves_git_patch_via_shared_helper() {
+        // Build a minimal local git repo with a `streamlib.yaml` that
+        // declares `@tatolab/b`. `git clone <local-path>` works without
+        // a network — this is a real fetch through the same helper the
+        // resolver uses, exercised end-to-end.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("b-repo");
+        std::fs::create_dir(&repo).unwrap();
+
+        let run_git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .status()
+                .expect("git invocation");
+            assert!(status.success(), "git {:?} failed", args);
+        };
+
+        run_git(&["init", "--quiet"]);
+        run_git(&["config", "user.email", "test@example.com"]);
+        run_git(&["config", "user.name", "test"]);
+        std::fs::write(
+            repo.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: b\n  version: \"0.1.0\"\n",
+        )
+        .unwrap();
+        run_git(&["add", "streamlib.yaml"]);
+        run_git(&["commit", "--quiet", "-m", "initial"]);
+        let rev_output = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&repo)
+            .output()
+            .expect("git rev-parse");
+        let rev = String::from_utf8(rev_output.stdout).unwrap().trim().to_string();
+
+        // Sandbox STREAMLIB_HOME so the git clone lands in tempdir, not
+        // the real user cache (and to avoid leaking checkouts across
+        // test runs).
+        let sandbox = tempfile::tempdir().unwrap();
+        let prev_home = std::env::var_os("STREAMLIB_HOME");
+        // SAFETY: `#[serial]` serializes every StreamRuntime test in this
+        // module, so concurrent env-var mutation can't tear other tests.
+        unsafe {
+            std::env::set_var("STREAMLIB_HOME", sandbox.path());
+        }
+        let _restore = StreamlibHomeRestore(prev_home);
+
+        // Consumer in a separate tempdir, declares a registry-style dep
+        // and a git-flavor patch pointing at the local repo.
+        let consumer = tempfile::tempdir().unwrap();
+        std::fs::write(
+            consumer.path().join("streamlib.yaml"),
+            format!(
+                r#"
+package:
+  org: tatolab
+  name: consumer
+  version: "0.1.0"
+dependencies:
+  "@tatolab/b": "^0.1.0"
+patch:
+  "@tatolab/b":
+    git: "{}"
+    rev: "{}"
+"#,
+                repo.display(),
+                rev,
+            ),
+        )
+        .unwrap();
+
+        let runtime = StreamRuntime::new().unwrap();
+        runtime
+            .load_project(consumer.path())
+            .expect("git patch must clone the local repo and recurse into it");
     }
 
     /// Strict patch validation: when the consumer's `patch:` block points

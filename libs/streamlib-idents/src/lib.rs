@@ -9,6 +9,7 @@
 //! none should be added — see `docs/architecture/schema-identity-and-packaging.md`.
 
 mod error;
+mod git;
 mod ident;
 mod lockfile;
 mod manifest;
@@ -16,6 +17,7 @@ mod resolver;
 mod semver;
 
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
+pub use git::fetch_git;
 pub use ident::{
     validate_org, validate_package, validate_type, Org, Package, PackageRef, SchemaIdent, TypeName,
 };
