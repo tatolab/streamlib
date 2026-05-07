@@ -9,9 +9,10 @@
 //
 // Automatically retries on connection loss with exponential backoff.
 
+use crate::core::context::RuntimeContext;
 use crate::core::media_clock::MediaClock;
 use crate::core::streaming::{MoqSubscribeSession, MoqTrackReader};
-use crate::core::{Result, RuntimeContextFullAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 use crate::iceoryx2::OutputWriter;
 use std::future::Future;
 use std::sync::Arc;
@@ -40,20 +41,31 @@ pub struct MoqSubscribeTrackProcessor {
 }
 
 impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
-    fn setup(&mut self, ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {
-        self.runtime_context = Some(ctx.clone());
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        // Stash a cloned RuntimeContext so the long-lived async receive
+        // loop spawned in start() can reach tokio_handle + moq_sessions
+        // without holding the borrowed FullAccess view.
+        self.runtime_context = Some(ctx.clone_runtime_context());
 
+        let broadcast_path = ctx.moq_sessions().broadcast_path().to_string();
+        let track_name = self.config.track_name.clone();
         async move {
             tracing::info!(
-                broadcast = %ctx.moq_sessions().broadcast_path(),
-                track = %self.config.track_name,
+                broadcast = %broadcast_path,
+                track = %track_name,
                 "[MoqSubscribeTrack] Configured (will connect on start)"
             );
             Ok(())
         }
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         tracing::info!("[MoqSubscribeTrack] Shutting down");
 
         if let Some(tx) = self.shutdown_signal_sender.take() {
@@ -62,14 +74,20 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
 
         self.runtime_context.take();
         tracing::info!("[MoqSubscribeTrack] Shutdown complete");
-        Ok(())
-    }
-
-    fn on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    fn on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+    fn on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    fn on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
