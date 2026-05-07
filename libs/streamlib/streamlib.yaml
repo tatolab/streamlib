@@ -14,11 +14,7 @@ package:
 dependencies:
   "@tatolab/core": "^1.0.0"
 
-# Dev-time override (#717): point `@tatolab/core` at the in-tree
-# packages/core source so the libs/streamlib build.rs resolver finds
-# it. `streamlib pack` rejects yamls whose `patch:` block carries
-# `path:` entries, mirroring `npm publish` / `cargo publish` —
-# patches are project-local, not publishable.
+# Dev-time path override; `streamlib pack` rejects this (#717).
 patch:
   "@tatolab/core":
     path: ../../packages/core
