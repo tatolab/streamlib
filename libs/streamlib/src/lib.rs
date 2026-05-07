@@ -48,28 +48,10 @@ pub use core::{
     video_audio_delta_ms,
     video_audio_synchronized,
     video_audio_synchronized_with_tolerance,
-    // TODO: Migrate to iceoryx2 API
-    // AudioCaptureConfig,
-    AudioChannelConverterProcessor,
     AudioCodec,
-    // TODO: Migrate to iceoryx2 API
-    // AudioDevice,
-    // TODO: Migrate to iceoryx2 API
-    // AudioInputDevice,
-    AudioMixerProcessor,
-    // TODO: Migrate to iceoryx2 API
-    // AudioOutputConfig,
-    AudioResamplerProcessor,
-    BufferRechunkerProcessor,
-    // TODO: Migrate to iceoryx2 API
-    // CameraConfig,
-    // CameraDevice,
-    ChordGeneratorProcessor,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
-    // TODO: Migrate to iceoryx2 API
-    // DisplayConfig,
     GlContext,
     GlTextureBinding,
     GpuContext,
@@ -80,8 +62,6 @@ pub use core::{
     ManualProcessor,
     Mp4Muxer,
     Mp4MuxerConfig,
-    // TODO: Migrate to iceoryx2 API
-    // Mp4WriterConfig,
     NativeTextureHandle,
     OutputPortMarker,
     ParameterAutomation,
@@ -96,6 +76,8 @@ pub use core::{
     Result,
     RtpTimestampCalculator,
     RuntimeContext,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
     StreamError,
     StreamTexture,
     TextureDescriptor,
@@ -105,8 +87,6 @@ pub use core::{
     TextureUsages,
     TimeContext,
     VideoCodec,
-    // TODO: Migrate to iceoryx2 API
-    // WindowId,
     DEFAULT_SYNC_TOLERANCE_MS,
     FOURCC_H264,
     PROCESSOR_REGISTRY,
@@ -139,25 +119,19 @@ pub(crate) mod linux;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 
-// Apple processor re-exports (migrated to iceoryx2 API)
+// Apple processor re-exports
+// Audio capture / output processors live in `@tatolab/audio` (#672).
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    AppleAudioCaptureProcessor as AudioCaptureProcessor,
-    AppleAudioOutputProcessor as AudioOutputProcessor,
     AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
     AppleMp4WriterProcessor as Mp4WriterProcessor,
     AppleScreenCaptureProcessor as ScreenCaptureProcessor,
-    // MetalDevice,
-    // VideoToolbox encoder (config types are in core::codec):
-    // VideoToolboxEncoder,
 };
 
 // Linux processor re-exports
 #[cfg(target_os = "linux")]
 pub use linux::{
-    LinuxAudioCaptureProcessor as AudioCaptureProcessor,
-    LinuxAudioOutputProcessor as AudioOutputProcessor,
     LinuxCameraProcessor as CameraProcessor,
     LinuxDisplayProcessor as DisplayProcessor,
 };

@@ -19,15 +19,19 @@ fn main() {
 #[cfg(target_os = "linux")]
 use streamlib::_generated_::com_streamlib_webrtc_whip_config::{Audio, Video, Whip};
 #[cfg(target_os = "linux")]
-use streamlib::_generated_::com_tatolab_audio_channel_converter_config::Mode;
-#[cfg(target_os = "linux")]
-use streamlib::_generated_::com_tatolab_audio_resampler_config::Quality;
-#[cfg(target_os = "linux")]
 use streamlib::{
-    input, output, request_audio_permission, request_camera_permission, AudioCaptureProcessor,
-    AudioChannelConverterProcessor, AudioResamplerProcessor, BufferRechunkerProcessor,
-    CameraProcessor, H264EncoderConfig, H264EncoderProcessor, OpusEncoderConfig,
-    OpusEncoderProcessor, Result, StreamRuntime, WebRtcWhipProcessor,
+    input, output, request_audio_permission, request_camera_permission, CameraProcessor,
+    H264EncoderConfig, H264EncoderProcessor, OpusEncoderConfig, OpusEncoderProcessor, Result,
+    StreamRuntime, WebRtcWhipProcessor,
+};
+#[cfg(target_os = "linux")]
+use streamlib_audio::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
+#[cfg(target_os = "linux")]
+use streamlib_audio::_generated_::tatolab__audio::audio_resampler_config::Quality;
+#[cfg(target_os = "linux")]
+use streamlib_audio::{
+    AudioCaptureProcessor, AudioChannelConverterProcessor, AudioResamplerProcessor,
+    BufferRechunkerProcessor,
 };
 
 #[cfg(target_os = "linux")]

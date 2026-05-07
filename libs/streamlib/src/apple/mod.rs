@@ -33,12 +33,8 @@ pub mod thread_priority;
 pub use audio_clock::CoreAudioClock;
 pub use pixel_transfer::PixelTransferSession;
 
-// Sources and sinks migrated to iceoryx2 API
+// Audio capture / output processors live in `@tatolab/audio` (#672).
 pub use processors::{
-    // Sources
-    AppleAudioCaptureProcessor,
-    // Sinks
-    AppleAudioOutputProcessor,
     AppleCameraProcessor,
     AppleDisplayProcessor,
     AppleMp4WriterProcessor,

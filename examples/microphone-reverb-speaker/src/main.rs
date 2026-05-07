@@ -17,9 +17,11 @@ fn main() {
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::{
-    input, output, request_audio_permission, AudioCaptureProcessor, AudioOutputProcessor,
-    ClapEffectProcessor, ClapScanner, Result, StreamRuntime,
+    input, output, request_audio_permission, ClapEffectProcessor, ClapScanner, Result,
+    StreamRuntime,
 };
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib_audio::{AudioCaptureProcessor, AudioOutputProcessor};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn main() -> Result<()> {

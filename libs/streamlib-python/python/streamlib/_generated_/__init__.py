@@ -19,18 +19,18 @@ from .com_streamlib_opus_decoder_config import OpusDecoderConfig
 from .com_streamlib_opus_encoder_config import OpusEncoderConfig
 from .com_streamlib_webrtc_whep_config import WebrtcWhepConfig
 from .com_streamlib_webrtc_whip_config import WebrtcWhipConfig
-from .com_tatolab_audio_capture_config import AudioCaptureConfig
-from .com_tatolab_audio_channel_converter_config import AudioChannelConverterConfig
-from .com_tatolab_audio_mixer_config import AudioMixerConfig
-from .com_tatolab_audio_output_config import AudioOutputConfig
-from .com_tatolab_audio_resampler_config import AudioResamplerConfig
-from .com_tatolab_buffer_rechunker_config import BufferRechunkerConfig
 from .com_tatolab_camera_config import CameraConfig
-from .com_tatolab_chord_generator_config import ChordGeneratorConfig
 from .com_tatolab_display_config import DisplayConfig
 from .com_tatolab_mp4_writer_config import Mp4WriterConfig
 from .com_tatolab_screen_capture_config import ScreenCaptureConfig
 from .com_tatolab_simple_passthrough_config import SimplePassthroughConfig
+from .tatolab__audio import AudioCaptureConfig
+from .tatolab__audio import AudioChannelConverterConfig
+from .tatolab__audio import AudioMixerConfig
+from .tatolab__audio import AudioOutputConfig
+from .tatolab__audio import AudioResamplerConfig
+from .tatolab__audio import BufferRechunkerConfig
+from .tatolab__audio import ChordGeneratorConfig
 from .tatolab__core import AudioFrame
 from .tatolab__core import EncodedAudioFrame
 from .tatolab__core import EncodedVideoFrame
@@ -53,18 +53,18 @@ __all__ = [
     "OpusEncoderConfig",
     "WebrtcWhepConfig",
     "WebrtcWhipConfig",
+    "CameraConfig",
+    "DisplayConfig",
+    "Mp4WriterConfig",
+    "ScreenCaptureConfig",
+    "SimplePassthroughConfig",
     "AudioCaptureConfig",
     "AudioChannelConverterConfig",
     "AudioMixerConfig",
     "AudioOutputConfig",
     "AudioResamplerConfig",
     "BufferRechunkerConfig",
-    "CameraConfig",
     "ChordGeneratorConfig",
-    "DisplayConfig",
-    "Mp4WriterConfig",
-    "ScreenCaptureConfig",
-    "SimplePassthroughConfig",
     "AudioFrame",
     "EncodedAudioFrame",
     "EncodedVideoFrame",

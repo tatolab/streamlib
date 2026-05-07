@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib" }
+streamlib-audio = { path = "../../packages/audio" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
 libc = "0.2"

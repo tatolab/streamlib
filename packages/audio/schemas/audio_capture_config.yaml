@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for AudioCapture config.
+
+metadata:
+  type: AudioCaptureConfig
+  description: "Configuration for audio capture (CoreAudio on macOS, ALSA on Linux)"
+
+optionalProperties:
+  device_id:
+    metadata:
+      description: "Audio input device name. If None, uses default device"
+    type: string
