@@ -144,10 +144,16 @@ pub mod linux_surface_share {
     pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    feature = "backend-vulkan",
+    all(target_os = "linux", not(feature = "backend-metal"))
+))]
 pub mod host_rhi;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(
+    feature = "backend-vulkan",
+    all(target_os = "linux", not(feature = "backend-metal"))
+))]
 pub use host_rhi::{HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostStreamTextureExt};
 
 // WebRTC streaming (cross-platform)

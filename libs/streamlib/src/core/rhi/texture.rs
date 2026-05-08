@@ -224,7 +224,6 @@ impl StreamTexture {
             metal_texture: Some(arc_texture),
         }
     }
-
 }
 
 // Privileged Host-flavor accessors (`from_vulkan`, `vulkan_inner`)
