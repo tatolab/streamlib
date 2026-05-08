@@ -32,11 +32,11 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tempfile::TempDir;
 use tracing::subscriber::{DefaultGuard, NoSubscriber};
 
-use streamlib_engine::core::logging::{
+use streamlib_engine::core::runtime::RuntimeUniqueId;
+use streamlib_engine::logging::{
     init_for_tests, LogLevel, LoggingTunables, RuntimeLogEvent, StreamlibLoggingConfig,
     StreamlibLoggingGuard,
 };
-use streamlib_engine::core::runtime::RuntimeUniqueId;
 
 fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {
     unsafe {

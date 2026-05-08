@@ -18,11 +18,11 @@
 
 use std::time::{Duration, Instant};
 
-use iceoryx2::prelude::*;
-use streamlib_engine::core::embedded_schemas::max_payload_bytes_for_schema;
-use streamlib_engine::iceoryx2::{
+use super::max_payload_bytes_for_schema;
+use crate::iceoryx2::{
     FrameHeader, Iceoryx2Node, SchemaIdentWire, FRAME_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
+use iceoryx2::prelude::*;
 
 // =============================================================================
 // A) Direct iceoryx2 slice limit tests

@@ -1,30 +1,40 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// Integration test for pubsub module — tests the full iceoryx2 transport layer.
-//
-// Each test that requires iceoryx2 creates its own PubSub::new() + Iceoryx2Node::new()
-// instance with a unique runtime_id for isolation (no global state).
-//
-// IMPORTANT: PubSub::subscribe() takes ownership of the Arc but only stores a Weak ref
-// internally. Callers MUST keep a strong reference alive for the subscriber thread to run.
-// Always use `bus.subscribe(topic, listener.clone())` and keep `listener` on the stack.
-//
-// Synchronization strategy:
-// - Uses std::sync::mpsc channels for delivery notification (no sleep-based waits)
-// - Uses retry-publish pattern to handle the race between subscriber thread startup
-//   and the first publish (PubSub provides no readiness signal)
+//! Integration tests for the pubsub module — exercises the full
+//! iceoryx2 transport layer.
+//!
+//! Each test that requires iceoryx2 creates its own `PubSub::new()` +
+//! `Iceoryx2Node::new()` instance with a unique runtime_id for
+//! isolation (no global state).
+//!
+//! `PubSub::subscribe()` takes ownership of the `Arc` but only stores
+//! a `Weak` ref internally. Callers MUST keep a strong reference
+//! alive for the subscriber thread to run. Always use
+//! `bus.subscribe(topic, listener.clone())` and keep `listener` on
+//! the stack.
+//!
+//! Synchronization strategy:
+//! - Uses `std::sync::mpsc` channels for delivery notification (no
+//!   sleep-based waits)
+//! - Uses retry-publish pattern to handle the race between subscriber
+//!   thread startup and the first publish (PubSub provides no
+//!   readiness signal)
+//!
+//! Lives in-source (rather than `tests/`) because the pubsub module
+//! is `pub(crate)` — see `core/mod.rs`.
 
+use super::bus::PubSub;
+use super::events::{
+    topics, Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState,
+    ProcessorEvent, RuntimeEvent,
+};
+use crate::iceoryx2::{Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use streamlib_engine::core::pubsub::{
-    topics, Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState,
-    ProcessorEvent, PubSub, RuntimeEvent,
-};
-use streamlib_engine::iceoryx2::{Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -47,7 +57,7 @@ impl CountingListener {
 }
 
 impl EventListener for CountingListener {
-    fn on_event(&mut self, _event: &Event) -> streamlib_engine::core::error::Result<()> {
+    fn on_event(&mut self, _event: &Event) -> crate::core::error::Result<()> {
         self.count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -59,7 +69,7 @@ struct ChannelListener {
 }
 
 impl EventListener for ChannelListener {
-    fn on_event(&mut self, event: &Event) -> streamlib_engine::core::error::Result<()> {
+    fn on_event(&mut self, event: &Event) -> crate::core::error::Result<()> {
         let _ = self.sender.send(event.clone());
         Ok(())
     }
@@ -187,7 +197,7 @@ fn test_iceoryx2_direct_delivery() {
     // Publish
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     let bytes = rmp_serde::to_vec_named(&event).unwrap();
-    let payload = streamlib_engine::iceoryx2::EventPayload::new("test", 12345, &bytes);
+    let payload = crate::iceoryx2::EventPayload::new("test", 12345, &bytes);
 
     let sample = publisher.loan_uninit().expect("loan");
     let sample = sample.write_payload(payload);
@@ -196,7 +206,7 @@ fn test_iceoryx2_direct_delivery() {
     // Receive
     match subscriber.receive() {
         Ok(Some(sample)) => {
-            let p: &streamlib_engine::iceoryx2::EventPayload = &*sample;
+            let p: &crate::iceoryx2::EventPayload = &*sample;
             let received: Event = rmp_serde::from_slice(p.data()).unwrap();
             assert_eq!(received.topic(), event.topic());
         }
@@ -253,7 +263,7 @@ fn test_iceoryx2_cross_thread_delivery() {
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        let payload = streamlib_engine::iceoryx2::EventPayload::new("test", 12345, b"hello");
+        let payload = crate::iceoryx2::EventPayload::new("test", 12345, b"hello");
         let sample = publisher.loan_uninit().expect("loan");
         let sample = sample.write_payload(payload);
         sample.send().expect("send");
@@ -314,7 +324,7 @@ fn test_iceoryx2_pubsub_pattern_mimic() {
 
         let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
         let bytes = rmp_serde::to_vec_named(&event).unwrap();
-        let payload = streamlib_engine::iceoryx2::EventPayload::new(topic, 12345, &bytes);
+        let payload = crate::iceoryx2::EventPayload::new(topic, 12345, &bytes);
 
         let sample = publisher.loan_uninit().expect("loan");
         let sample = sample.write_payload(payload);
@@ -342,10 +352,6 @@ fn test_pubsub_publish_sends_to_iceoryx2() {
     //
     // This bypasses PubSub's subscriber thread to isolate whether the bug
     // is in publish (send side) or subscribe (receive side).
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter("trace")
-        .with_test_writer()
-        .try_init();
 
     let runtime_id = format!("test-pub-sends-{}", uuid::Uuid::new_v4());
     let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
@@ -435,7 +441,7 @@ fn test_pubsub_publish_sends_to_iceoryx2() {
         .expect("c-pub service");
     let c_publisher = c_pub_service.create_publisher().expect("c-publisher");
     let bytes = rmp_serde::to_vec_named(&event).unwrap();
-    let c_payload = streamlib_engine::iceoryx2::EventPayload::new("input:window", 12345, &bytes);
+    let c_payload = crate::iceoryx2::EventPayload::new("input:window", 12345, &bytes);
     let c_sample = c_publisher.loan_uninit().expect("loan");
     let c_sample = c_sample.write_payload(c_payload);
     c_sample.send().expect("send");
@@ -485,7 +491,7 @@ fn test_oncelock_node_delivery() {
 
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     let bytes = rmp_serde::to_vec_named(&event).unwrap();
-    let payload = streamlib_engine::iceoryx2::EventPayload::new("input:keyboard", 12345, &bytes);
+    let payload = crate::iceoryx2::EventPayload::new("input:keyboard", 12345, &bytes);
 
     // Use *&payload to mimic PubSub's `write_payload(*payload)` (copy from reference)
     let sample = publisher.loan_uninit().expect("loan");

@@ -5,6 +5,3 @@
 
 mod inspector;
 mod snapshots;
-
-pub use inspector::GraphInspector;
-pub use snapshots::{GraphHealth, LatencyStats, LinkSnapshot, ProcessorSnapshot};

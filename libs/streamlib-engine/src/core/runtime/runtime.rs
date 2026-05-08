@@ -174,9 +174,9 @@ impl Runner {
         tracing::info!("Creating Runner with ID: {}", runtime_id);
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
-        let streamlib_home = crate::core::get_streamlib_home();
+        let streamlib_home = crate::core::streamlib_home::get_streamlib_home();
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
-        crate::core::run_init_hooks(&streamlib_home)?;
+        crate::core::runtime_hooks::run_init_hooks(&streamlib_home)?;
 
         // Register all processors from inventory before any add_processor calls.
         // This populates the global registry with link-time registered processors.
