@@ -74,9 +74,9 @@ match done_rx.recv_timeout(Duration::from_secs(5)) {
 
 Any test that uses PUBSUB events (shutdown, reconfigure, etc.) outside
 of a full `StreamRuntime`. Currently:
-- `libs/streamlib/src/core/utils/loop_control.rs` — `test_shutdown_event_exits_loop`
+- `libs/streamlib-engine/src/core/utils/loop_control.rs` — `test_shutdown_event_exits_loop`
 
 ## Reference
 - Fix commit in #252 (ash → vulkanalia migration branch)
-- PUBSUB implementation: `libs/streamlib/src/core/pubsub.rs`
-- iceoryx2 node: `libs/streamlib/src/iceoryx2/mod.rs`
+- PUBSUB implementation: `libs/streamlib-engine/src/core/pubsub.rs`
+- iceoryx2 node: `libs/streamlib-engine/src/iceoryx2/mod.rs`

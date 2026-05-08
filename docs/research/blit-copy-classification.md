@@ -37,7 +37,7 @@ below for the shape callers take.
 ### Trait
 
 ```rust
-// libs/streamlib/src/core/rhi/blitter.rs
+// libs/streamlib-engine/src/core/rhi/blitter.rs
 pub trait RhiBlitter: Send + Sync {
     fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()>;
     unsafe fn blit_copy_iosurface_raw(
@@ -53,7 +53,7 @@ pub trait RhiBlitter: Send + Sync {
 
 ### Metal backend — cache grows on cold key
 
-`libs/streamlib/src/metal/rhi/blitter.rs`.
+`libs/streamlib-engine/src/metal/rhi/blitter.rs`.
 
 `MetalBlitter` owns `texture_cache: Mutex<HashMap<u32, SendableTexture>>`
 keyed by **destination IOSurface ID**. Every `blit_copy` /
@@ -90,7 +90,7 @@ Mitigating factors:
 
 ### Vulkan backend — no cache, no cold-key growth
 
-`libs/streamlib/src/vulkan/rhi/vulkan_blitter.rs`.
+`libs/streamlib-engine/src/vulkan/rhi/vulkan_blitter.rs`.
 
 `VulkanBlitter` has no persistent state keyed by (width, height, format,
 usage). `clear_cache()` is a no-op. `blit_copy` does, however, allocate
@@ -113,7 +113,7 @@ is Apple-only.
 The only path that invalidates a pre-warmed Metal blitter cache is
 `GpuContext::clear_blitter_cache() → RhiBlitter::clear_cache()`.
 
-- Defined on the trait (`libs/streamlib/src/core/rhi/blitter.rs:28`).
+- Defined on the trait (`libs/streamlib-engine/src/core/rhi/blitter.rs:28`).
 - Public on `GpuContext` (and its `LimitedAccess` / `FullAccess`
   wrappers at `gpu_context.rs:1102` and `gpu_context.rs:1255`).
 - **Not called from any production code path** — grep across
@@ -137,9 +137,9 @@ ScreenCaptureKit / VideoToolbox callback closures (effectively
 
 | File | Line | Call |
 |---|---|---|
-| `libs/streamlib/src/apple/processors/screen_capture.rs` | 171 (→ 242) | `gpu_context.blit_copy_iosurface` |
-| `libs/streamlib/src/apple/processors/camera.rs` | 236 (→ 325) | `gpu_context.blit_copy_iosurface` |
-| `libs/streamlib/src/apple/videotoolbox/decoder.rs` | 413 | `gpu.blit_copy` |
+| `libs/streamlib-engine/src/apple/processors/screen_capture.rs` | 171 (→ 242) | `gpu_context.blit_copy_iosurface` |
+| `libs/streamlib-engine/src/apple/processors/camera.rs` | 236 (→ 325) | `gpu_context.blit_copy_iosurface` |
+| `libs/streamlib-engine/src/apple/videotoolbox/decoder.rs` | 413 | `gpu.blit_copy` |
 
 Linux processors do not call `blit_copy`. The Vulkan backend's lack of
 cache is therefore not load-bearing for the classification — it's the
@@ -208,6 +208,6 @@ not "add a helper."
 - Design doc: [`docs/design/gpu-capability-sandbox.md`](../design/gpu-capability-sandbox.md) §1, §8.Q2
 - Upstream ticket: [#346](https://github.com/tatolab/streamlib/issues/346)
 - Downstream ticket: [#324 Restrict `GpuContextLimitedAccess` API surface to safe ops](https://github.com/tatolab/streamlib/issues/324)
-- Metal blitter: `libs/streamlib/src/metal/rhi/blitter.rs`
-- Vulkan blitter: `libs/streamlib/src/vulkan/rhi/vulkan_blitter.rs`
-- Blitter trait: `libs/streamlib/src/core/rhi/blitter.rs`
+- Metal blitter: `libs/streamlib-engine/src/metal/rhi/blitter.rs`
+- Vulkan blitter: `libs/streamlib-engine/src/vulkan/rhi/vulkan_blitter.rs`
+- Blitter trait: `libs/streamlib-engine/src/core/rhi/blitter.rs`

@@ -210,7 +210,7 @@ path = "tests/bin/log_emit_1000.rs"
 name = "surface_share_crash_helper"
 path = "tests/bin/surface_share_crash_helper.rs"
 # Subprocess fixture for the EPOLLHUP watchdog integration test
-# (libs/streamlib/tests/surface_share_subprocess_crash.rs). Linux only.
+# (libs/streamlib-engine/tests/surface_share_subprocess_crash.rs). Linux only.
 required-features = []
 
 # Build dependencies for protobuf compilation (surface-share service gRPC)

@@ -82,7 +82,7 @@ This is a subset of `ProjectConfig` — only the `processors` field. Located in 
 
 ### New streamlib.yaml files
 
-**`libs/streamlib/streamlib.yaml`** — 19 processors (16 built-in + 3 test mocks):
+**`libs/streamlib-engine/streamlib.yaml`** — 19 processors (16 built-in + 3 test mocks):
 
 | Processor | Source |
 |-----------|--------|
@@ -121,25 +121,25 @@ Every `#[crate::processor("path/to/file.yaml")]` and `#[streamlib::processor("pa
 
 | File | Old | New |
 |------|-----|-----|
-| `libs/streamlib/src/apple/processors/camera.rs` | `#[crate::processor("src/apple/processors/camera.yaml")]` | `#[crate::processor("com.tatolab.camera")]` |
-| `libs/streamlib/src/apple/processors/display.rs` | `#[crate::processor("src/apple/processors/display.yaml")]` | `#[crate::processor("com.tatolab.display")]` |
-| `libs/streamlib/src/apple/processors/audio_capture.rs` | `#[crate::processor("src/apple/processors/audio_capture.yaml")]` | `#[crate::processor("com.tatolab.audio_capture")]` |
-| `libs/streamlib/src/apple/processors/audio_output.rs` | `#[crate::processor("src/apple/processors/audio_output.yaml")]` | `#[crate::processor("com.tatolab.audio_output")]` |
-| `libs/streamlib/src/apple/processors/mp4_writer.rs` | `#[crate::processor("src/apple/processors/mp4_writer.yaml")]` | `#[crate::processor("com.tatolab.mp4_writer")]` |
-| `libs/streamlib/src/apple/processors/screen_capture.rs` | `#[crate::processor("src/apple/processors/screen_capture.yaml")]` | `#[crate::processor("com.tatolab.screen_capture")]` |
-| `libs/streamlib/src/core/processors/api_server.rs` | `#[crate::processor("src/core/processors/api_server.yaml")]` | `#[crate::processor("com.streamlib.api_server")]` |
-| `libs/streamlib/src/core/processors/simple_passthrough.rs` | `#[crate::processor("src/core/processors/simple_passthrough.yaml")]` | `#[crate::processor("com.tatolab.simple_passthrough")]` |
-| `libs/streamlib/src/core/processors/audio_channel_converter.rs` | `#[crate::processor("src/core/processors/audio_channel_converter.yaml")]` | `#[crate::processor("com.tatolab.audio_channel_converter")]` |
-| `libs/streamlib/src/core/processors/audio_mixer.rs` | `#[crate::processor("src/core/processors/audio_mixer.yaml")]` | `#[crate::processor("com.tatolab.audio_mixer")]` |
-| `libs/streamlib/src/core/processors/audio_resampler.rs` | `#[crate::processor("src/core/processors/audio_resampler.yaml")]` | `#[crate::processor("com.tatolab.audio_resampler")]` |
-| `libs/streamlib/src/core/processors/buffer_rechunker.rs` | `#[crate::processor("src/core/processors/buffer_rechunker.yaml")]` | `#[crate::processor("com.tatolab.buffer_rechunker")]` |
-| `libs/streamlib/src/core/processors/chord_generator.rs` | `#[crate::processor("src/core/processors/chord_generator.yaml")]` | `#[crate::processor("com.tatolab.chord_generator")]` |
-| `libs/streamlib/src/core/processors/clap_effect.rs` | `#[crate::processor("src/core/processors/clap_effect.yaml")]` | `#[crate::processor("com.streamlib.clap.effect")]` |
-| `libs/streamlib/src/core/processors/webrtc_whip.rs` | `#[crate::processor("src/core/processors/webrtc_whip.yaml")]` | `#[crate::processor("com.streamlib.webrtc_whip")]` |
-| `libs/streamlib/src/core/processors/webrtc_whep.rs` | `#[crate::processor("src/core/processors/webrtc_whep.yaml")]` | `#[crate::processor("com.streamlib.webrtc_whep")]` |
-| `libs/streamlib/src/core/graph/graph_tests.rs` | `#[crate::processor("schemas/processors/test/mock_processor.yaml")]` | `#[crate::processor("com.streamlib.test.mock_processor")]` |
-| `libs/streamlib/src/core/graph/graph_tests.rs` | `#[crate::processor("schemas/processors/test/mock_output_only_processor.yaml")]` | `#[crate::processor("com.streamlib.test.mock_output_only_processor")]` |
-| `libs/streamlib/src/core/graph/graph_tests.rs` | `#[crate::processor("schemas/processors/test/mock_input_only_processor.yaml")]` | `#[crate::processor("com.streamlib.test.mock_input_only_processor")]` |
+| `libs/streamlib-engine/src/apple/processors/camera.rs` | `#[crate::processor("src/apple/processors/camera.yaml")]` | `#[crate::processor("com.tatolab.camera")]` |
+| `libs/streamlib-engine/src/apple/processors/display.rs` | `#[crate::processor("src/apple/processors/display.yaml")]` | `#[crate::processor("com.tatolab.display")]` |
+| `libs/streamlib-engine/src/apple/processors/audio_capture.rs` | `#[crate::processor("src/apple/processors/audio_capture.yaml")]` | `#[crate::processor("com.tatolab.audio_capture")]` |
+| `libs/streamlib-engine/src/apple/processors/audio_output.rs` | `#[crate::processor("src/apple/processors/audio_output.yaml")]` | `#[crate::processor("com.tatolab.audio_output")]` |
+| `libs/streamlib-engine/src/apple/processors/mp4_writer.rs` | `#[crate::processor("src/apple/processors/mp4_writer.yaml")]` | `#[crate::processor("com.tatolab.mp4_writer")]` |
+| `libs/streamlib-engine/src/apple/processors/screen_capture.rs` | `#[crate::processor("src/apple/processors/screen_capture.yaml")]` | `#[crate::processor("com.tatolab.screen_capture")]` |
+| `libs/streamlib-engine/src/core/processors/api_server.rs` | `#[crate::processor("src/core/processors/api_server.yaml")]` | `#[crate::processor("com.streamlib.api_server")]` |
+| `libs/streamlib-engine/src/core/processors/simple_passthrough.rs` | `#[crate::processor("src/core/processors/simple_passthrough.yaml")]` | `#[crate::processor("com.tatolab.simple_passthrough")]` |
+| `libs/streamlib-engine/src/core/processors/audio_channel_converter.rs` | `#[crate::processor("src/core/processors/audio_channel_converter.yaml")]` | `#[crate::processor("com.tatolab.audio_channel_converter")]` |
+| `libs/streamlib-engine/src/core/processors/audio_mixer.rs` | `#[crate::processor("src/core/processors/audio_mixer.yaml")]` | `#[crate::processor("com.tatolab.audio_mixer")]` |
+| `libs/streamlib-engine/src/core/processors/audio_resampler.rs` | `#[crate::processor("src/core/processors/audio_resampler.yaml")]` | `#[crate::processor("com.tatolab.audio_resampler")]` |
+| `libs/streamlib-engine/src/core/processors/buffer_rechunker.rs` | `#[crate::processor("src/core/processors/buffer_rechunker.yaml")]` | `#[crate::processor("com.tatolab.buffer_rechunker")]` |
+| `libs/streamlib-engine/src/core/processors/chord_generator.rs` | `#[crate::processor("src/core/processors/chord_generator.yaml")]` | `#[crate::processor("com.tatolab.chord_generator")]` |
+| `libs/streamlib-engine/src/core/processors/clap_effect.rs` | `#[crate::processor("src/core/processors/clap_effect.yaml")]` | `#[crate::processor("com.streamlib.clap.effect")]` |
+| `libs/streamlib-engine/src/core/processors/webrtc_whip.rs` | `#[crate::processor("src/core/processors/webrtc_whip.yaml")]` | `#[crate::processor("com.streamlib.webrtc_whip")]` |
+| `libs/streamlib-engine/src/core/processors/webrtc_whep.rs` | `#[crate::processor("src/core/processors/webrtc_whep.yaml")]` | `#[crate::processor("com.streamlib.webrtc_whep")]` |
+| `libs/streamlib-engine/src/core/graph/graph_tests.rs` | `#[crate::processor("schemas/processors/test/mock_processor.yaml")]` | `#[crate::processor("com.streamlib.test.mock_processor")]` |
+| `libs/streamlib-engine/src/core/graph/graph_tests.rs` | `#[crate::processor("schemas/processors/test/mock_output_only_processor.yaml")]` | `#[crate::processor("com.streamlib.test.mock_output_only_processor")]` |
+| `libs/streamlib-engine/src/core/graph/graph_tests.rs` | `#[crate::processor("schemas/processors/test/mock_input_only_processor.yaml")]` | `#[crate::processor("com.streamlib.test.mock_input_only_processor")]` |
 | `examples/camera-python-display/src/crt_film_grain.rs` | `#[streamlib::processor("src/crt_film_grain.yaml")]` | `#[streamlib::processor("com.tatolab.crt_film_grain")]` |
 | `examples/camera-python-display/src/blending_compositor.rs` | `#[streamlib::processor("src/blending_compositor.yaml")]` | `#[streamlib::processor("com.tatolab.blending_compositor")]` |
 | `examples/camera-rust-plugin/plugin/src/lib.rs` | `#[streamlib::processor("schemas/processors/grayscale.yaml")]` | `#[streamlib::processor("com.tatolab.grayscale_rust")]` |
@@ -148,25 +148,25 @@ Every `#[crate::processor("path/to/file.yaml")]` and `#[streamlib::processor("pa
 
 | Path | Reason |
 |------|--------|
-| `libs/streamlib/src/apple/processors/camera.yaml` | Consolidated into `libs/streamlib/streamlib.yaml` |
-| `libs/streamlib/src/apple/processors/display.yaml` | Consolidated |
-| `libs/streamlib/src/apple/processors/audio_capture.yaml` | Consolidated |
-| `libs/streamlib/src/apple/processors/audio_output.yaml` | Consolidated |
-| `libs/streamlib/src/apple/processors/mp4_writer.yaml` | Consolidated |
-| `libs/streamlib/src/apple/processors/screen_capture.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/api_server.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/simple_passthrough.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/audio_channel_converter.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/audio_mixer.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/audio_resampler.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/buffer_rechunker.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/chord_generator.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/clap_effect.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/webrtc_whep.yaml` | Consolidated |
-| `libs/streamlib/src/core/processors/webrtc_whip.yaml` | Consolidated |
-| `libs/streamlib/schemas/processors/test/mock_processor.yaml` | Consolidated |
-| `libs/streamlib/schemas/processors/test/mock_input_only_processor.yaml` | Consolidated |
-| `libs/streamlib/schemas/processors/test/mock_output_only_processor.yaml` | Consolidated |
+| `libs/streamlib-engine/src/apple/processors/camera.yaml` | Consolidated into `libs/streamlib-engine/streamlib.yaml` |
+| `libs/streamlib-engine/src/apple/processors/display.yaml` | Consolidated |
+| `libs/streamlib-engine/src/apple/processors/audio_capture.yaml` | Consolidated |
+| `libs/streamlib-engine/src/apple/processors/audio_output.yaml` | Consolidated |
+| `libs/streamlib-engine/src/apple/processors/mp4_writer.yaml` | Consolidated |
+| `libs/streamlib-engine/src/apple/processors/screen_capture.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/api_server.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/simple_passthrough.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/audio_channel_converter.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/audio_mixer.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/audio_resampler.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/buffer_rechunker.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/chord_generator.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/clap_effect.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/webrtc_whep.yaml` | Consolidated |
+| `libs/streamlib-engine/src/core/processors/webrtc_whip.yaml` | Consolidated |
+| `libs/streamlib-engine/schemas/processors/test/mock_processor.yaml` | Consolidated |
+| `libs/streamlib-engine/schemas/processors/test/mock_input_only_processor.yaml` | Consolidated |
+| `libs/streamlib-engine/schemas/processors/test/mock_output_only_processor.yaml` | Consolidated |
 | `examples/camera-python-display/src/crt_film_grain.yaml` | Consolidated into `examples/camera-python-display/streamlib.yaml` |
 | `examples/camera-python-display/src/blending_compositor.yaml` | Consolidated |
 | `examples/camera-rust-plugin/plugin/schemas/` | Entire directory — processor already in `plugin/streamlib.yaml` |
@@ -180,7 +180,7 @@ Every `#[crate::processor("path/to/file.yaml")]` and `#[streamlib::processor("pa
 
 ### Already-broken test
 
-`libs/streamlib/tests/attribute_macro_test.rs` references non-existent `schemas/processors/test/test_processor.yaml` and `schemas/processors/test/configured_processor.yaml`. This test was already broken before this change. The migration will update it to use name-based lookup with entries added to `libs/streamlib/streamlib.yaml`.
+`libs/streamlib-engine/tests/attribute_macro_test.rs` references non-existent `schemas/processors/test/test_processor.yaml` and `schemas/processors/test/configured_processor.yaml`. This test was already broken before this change. The migration will update it to use name-based lookup with entries added to `libs/streamlib-engine/streamlib.yaml`.
 
 ---
 
@@ -209,16 +209,16 @@ error: streamlib.yaml not found at /path/to/plugin/streamlib.yaml
 
 1. Add `ProjectConfigMinimal` to `streamlib-processor-schema`
 2. Replace `load_processor_schema()` in the macro — name-based lookup only
-3. Create `libs/streamlib/streamlib.yaml` with all 19 processor entries
-4. Update all 19 `#[crate::processor(...)]` invocations in `libs/streamlib/`
-5. Delete 19 standalone YAML files from `libs/streamlib/`
+3. Create `libs/streamlib-engine/streamlib.yaml` with all 19 processor entries
+4. Update all 19 `#[crate::processor(...)]` invocations in `libs/streamlib-engine/`
+5. Delete 19 standalone YAML files from `libs/streamlib-engine/`
 6. Create `examples/camera-python-display/streamlib.yaml` with 2 processor entries
 7. Update 2 `#[streamlib::processor(...)]` invocations in `camera-python-display`
 8. Delete 2 YAML files from `examples/camera-python-display/src/`
 9. Update `camera-rust-plugin/plugin/src/lib.rs` macro invocation
 10. Delete `examples/camera-rust-plugin/plugin/schemas/` directory
 11. Fix `attribute_macro_test.rs` to use name-based lookup
-12. Delete empty `libs/streamlib/schemas/` directory tree
+12. Delete empty `libs/streamlib-engine/schemas/` directory tree
 13. Verify: `cargo check`, `cargo test`, `cargo clippy`
 
 ---

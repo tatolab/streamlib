@@ -99,12 +99,12 @@ serial-dispatch contract).
 ## Adding a new graphics kernel — the recipe
 
 1. **Write the GLSL** in
-   `libs/streamlib/src/vulkan/rhi/shaders/<name>.{vert,frag}`. Use
+   `libs/streamlib-engine/src/vulkan/rhi/shaders/<name>.{vert,frag}`. Use
    descriptor set 0; multi-set kernels are not supported. Keep
    binding indices in declaration order.
 
 2. **Wire the shaders into `build.rs`.** Append vertex + fragment
-   entries to the `shaders` array in `libs/streamlib/build.rs`. The
+   entries to the `shaders` array in `libs/streamlib-engine/build.rs`. The
    build script invokes `glslc -O` per-stage and writes SPIR-V into
    `OUT_DIR`. SPIR-V is read at compile time via
    `include_bytes!(concat!(env!("OUT_DIR"), "/<name>.<stage>.spv"))`.

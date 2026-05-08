@@ -481,7 +481,7 @@ subprocesses (which is the default for any new adapter), follow
   and the Deno wrapper at `libs/streamlib-deno/` mirror the trait
   shape using the language's idiomatic scope binding (`with` for
   Python, `using` for Deno). Schemas at
-  `libs/streamlib/schemas/` cover any new escalate ops.
+  `libs/streamlib-engine/schemas/` cover any new escalate ops.
 - Polyglot coverage is **both Python AND Deno together** (per
   `polyglot.md`). The only legitimate split is schema-only /
   language-specific by construction; document the reason in the

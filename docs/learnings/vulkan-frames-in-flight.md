@@ -81,4 +81,4 @@ no external holder. They stay sized to `MAX_FRAMES_IN_FLIGHT`.
 ## Reference
 - Refactor commit: `6816f54` `refactor(display): decouple frames-in-flight from swapchain image count`
 - Per-image render-finished semaphore fix: issue #296
-- Implementation: `libs/streamlib/src/linux/processors/display.rs` (search `MAX_FRAMES_IN_FLIGHT` and `render_finished_semaphores`)
+- Implementation: `libs/streamlib-engine/src/linux/processors/display.rs` (search `MAX_FRAMES_IN_FLIGHT` and `render_finished_semaphores`)

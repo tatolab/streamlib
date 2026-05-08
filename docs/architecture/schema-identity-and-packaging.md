@@ -28,7 +28,7 @@ three independent strands:
   describing the same set of facts.
 - **Incomplete distribution attempts** (`embedded_schemas.rs`'s
   hand-curated match statement, ad-hoc `.slpkg` archive experiments,
-  schemas that lived only in `libs/streamlib/schemas/` with no
+  schemas that lived only in `libs/streamlib-engine/schemas/` with no
   publication story).
 
 The fix is one cohesive architecture covering identifier grammar,
@@ -473,7 +473,7 @@ set into each language's codegen pipeline. A CI lint
 
 ### 5. Hand-curated `embedded_schemas.rs`-style match statements
 
-The embedded-schemas table at `libs/streamlib/src/core/embedded_schemas.rs`
+The embedded-schemas table at `libs/streamlib-engine/src/core/embedded_schemas.rs`
 is build-script-driven: `build.rs` walks the resolver's full dependency
 graph and emits the `(canonical_identifier, yaml_body)` pairs into
 `OUT_DIR/embedded_schemas_table.rs`. Adding a schema means declaring
@@ -580,7 +580,7 @@ follow-up to #704.
     drives `streamlib.yaml`-mode end-to-end; `generate_from_resolved`
     is the lower-level entry for callers that already ran the
     resolver.
-  - `libs/streamlib/build.rs` — generates `embedded_schemas_table.rs`
+  - `libs/streamlib-engine/build.rs` — generates `embedded_schemas_table.rs`
     in `OUT_DIR` from `streamlib.yaml`'s `schemas:` list.
   - `xtask/src/check_schema_versions.rs` — CI lint (no per-schema
     `version` keys in YAML).
@@ -615,7 +615,7 @@ follow-up to #704.
     — pre-pass / post-pass coverage for sentinel substitution,
     deterministic property ordering, and per-language restore
     (Rust / Python / TypeScript).
-  - `libs/streamlib/src/core/embedded_schemas.rs::tests` — table
+  - `libs/streamlib-engine/src/core/embedded_schemas.rs::tests` — table
     populated from `streamlib.yaml`, no duplicate names, sorted output.
   - `xtask/src/check_schema_versions.rs::tests` — schema-version
     lint fixtures.

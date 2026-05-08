@@ -42,7 +42,7 @@ content**.
 
 - Changes to `libs/vulkan-video/` (RHI coupling, session/DPB, NV12 conversion,
   rate control, etc.).
-- Changes to `libs/streamlib/src/linux/processors/{h264,h265}_{encoder,decoder}.rs`.
+- Changes to `libs/streamlib-engine/src/linux/processors/{h264,h265}_{encoder,decoder}.rs`.
 - Changes to any GPU code that the encoder or decoder reaches through
   `GpuContext`, `VulkanDevice`, or the RHI.
 - Changes to the H.264/H.265 validator, MP4 writer, or anything consuming
@@ -110,7 +110,7 @@ Read("/tmp/e2e-.../png_samples/display_001_frame_000060.png")
 #### PSNR — how to compute
 
 **Primary path: the fixture PSNR rig** (`e2e_fixture_psnr.sh`,
-[`libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh`](../libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh)).
+[`libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh`](../libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh)).
 Feeds checked-in reference PNGs (solid colors, gradients, a complex
 ffmpeg testsrc2 pattern) through `BgraFileSource → encoder → decoder →
 display` at a step-locked FPS, pairs each decoded PNG with its reference
@@ -119,14 +119,14 @@ PSNR via ffmpeg and classifies against the pass bar below:
 
 ```bash
 # encoder/decoder roundtrip vs. checked-in fixtures
-libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h264 h264
-libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h265 h265
+libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h264 h264
+libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h265 h265
 
 # Sanity check that the rig flags real regressions (swaps R↔B on every
 # decoded sample → Y PSNR drops below FAIL threshold on chroma-bearing
 # references):
 PSNR_INJECT_BUG=color-matrix \
-    libs/streamlib/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug h264
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug h264
 ```
 
 Exit codes: `0` — all references at or above the WARN threshold, `1` —
@@ -259,9 +259,9 @@ and runs faster.
 
 ### When to use
 
-- Changes to `libs/streamlib/src/linux/processors/camera.rs` (V4L2, MMAP,
+- Changes to `libs/streamlib-engine/src/linux/processors/camera.rs` (V4L2, MMAP,
   DMA-BUF import, NV12/YUYV compute shaders, ring textures).
-- Changes to `libs/streamlib/src/linux/processors/display.rs` (swapchain,
+- Changes to `libs/streamlib-engine/src/linux/processors/display.rs` (swapchain,
   acquire/present, descriptor layout, PNG sampler itself).
 - Changes to `GpuContext`, `PixelBufferPool`, `TextureCache`, or `VulkanTexture`
   that do **not** involve a codec.
@@ -274,7 +274,7 @@ Prefer the packaged fixture script — it loads vivid, sets the env vars,
 and handles cleanup:
 
 ```bash
-libs/streamlib/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
+libs/streamlib-engine/tests/fixtures/e2e_camera_display.sh /tmp/streamlib-e2e
 ```
 
 Or run the example directly (use this when you need to point at a specific
@@ -303,7 +303,7 @@ timeout --kill-after=3 20 cargo run -q -p camera-display \
 ### Reference
 
 - Full fixture script:
-  [`libs/streamlib/tests/fixtures/e2e_camera_display.sh`](../libs/streamlib/tests/fixtures/e2e_camera_display.sh).
+  [`libs/streamlib-engine/tests/fixtures/e2e_camera_display.sh`](../libs/streamlib-engine/tests/fixtures/e2e_camera_display.sh).
 - Prerequisites, troubleshooting, and PNG details:
   [`docs/learnings/camera-display-e2e-validation.md`](learnings/camera-display-e2e-validation.md).
 

@@ -201,5 +201,5 @@ Run with `VK_LOADER_LAYERS_ENABLE=*validation*` enabled and watch for:
   `libs/streamlib-consumer-rhi/src/consumer_vulkan_device.rs`
   (`ConsumerVulkanDevice::release_to_foreign`,
   `acquire_from_foreign`, `supports_qfot_acquire_unmodified`),
-  `libs/streamlib/src/vulkan/rhi/vulkan_device.rs` (host equivalents
+  `libs/streamlib-engine/src/vulkan/rhi/vulkan_device.rs` (host equivalents
   + the trait impl + the QFOT extension probe in `new()`).

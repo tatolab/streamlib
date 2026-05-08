@@ -55,9 +55,9 @@ their elements.
 
 Any file calling Vulkan commands with mixed empty/non-empty barrier arrays.
 Currently:
-- `libs/streamlib/src/linux/processors/camera.rs` — two `cmd_pipeline_barrier`
+- `libs/streamlib-engine/src/linux/processors/camera.rs` — two `cmd_pipeline_barrier`
   calls during image layout transitions (capture → transfer, transfer → present)
-- `libs/streamlib/src/vulkan/rhi/vulkan_format_converter.rs` — compute dispatch
+- `libs/streamlib-engine/src/vulkan/rhi/vulkan_format_converter.rs` — compute dispatch
   barriers
 
 ## Reference

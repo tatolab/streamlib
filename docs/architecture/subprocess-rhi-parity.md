@@ -21,7 +21,7 @@ Subprocess Vulkan code does **DMA-BUF FD import + bind + map**, nothing
 else. Every privileged primitive — allocation, modifier choice,
 compute kernel construction + dispatch, queue submit, fence management,
 swapchain — escalates via IPC to the host's `GpuContextFullAccess`.
-Bug-fix fan-out is exactly 1: a fix in `libs/streamlib/src/vulkan/rhi/`
+Bug-fix fan-out is exactly 1: a fix in `libs/streamlib-engine/src/vulkan/rhi/`
 reaches every consumer (host adapter, host pipeline, subprocess via
 escalate IPC).
 
@@ -162,7 +162,7 @@ three flow through the same `consumer-rhi` types.
 ┌──────────────────────────────────────────────────────────────────────┐
 │ HOST PROCESS                                                         │
 │  ╔══════════════════════════════════════════════════════════════╗    │
-│  ║  streamlib RHI  (libs/streamlib/src/vulkan/rhi/)             ║    │
+│  ║  streamlib RHI  (libs/streamlib-engine/src/vulkan/rhi/)             ║    │
 │  ║  Host-side wins live here — VulkanComputeKernel, VMA pools,  ║    │
 │  ║  queue mutex, modifier probe, frames-in-flight=2,            ║    │
 │  ║  HostVulkanDevice + Host* RHI types                          ║    │

@@ -211,7 +211,7 @@ Design choices and rationale.
 ### Sync, not async
 
 `process()` is sync today (see `ReactiveProcessor::process` in
-`libs/streamlib/src/core/processors/traits/reactive.rs`). `setup()` is
+`libs/streamlib-engine/src/core/processors/traits/reactive.rs`). `setup()` is
 async (returns `impl Future`). `escalate()` needs to be callable from
 both.
 
@@ -320,7 +320,7 @@ transparent form is optional and can be deferred or cut.
 
 ### Phase 4 rewrite
 
-Today (`libs/streamlib/src/core/compiler/compiler_ops/spawn_processor_op.rs:373–417`):
+Today (`libs/streamlib-engine/src/core/compiler/compiler_ops/spawn_processor_op.rs:373–417`):
 
 ```rust
 let _setup_guard = runtime_ctx_clone.gpu.lock_processor_setup();
@@ -377,7 +377,7 @@ propagation).
 
 ## 4. `RuntimeContext` changes
 
-Today (`libs/streamlib/src/core/context/runtime_context.rs:12–34`):
+Today (`libs/streamlib-engine/src/core/context/runtime_context.rs:12–34`):
 
 ```rust
 pub struct RuntimeContext {
@@ -411,7 +411,7 @@ impl RuntimeContext {
 
 ### `ReactiveProcessor` trait changes
 
-Today (`libs/streamlib/src/core/processors/traits/reactive.rs:14–37`):
+Today (`libs/streamlib-engine/src/core/processors/traits/reactive.rs:14–37`):
 
 ```rust
 fn setup(&mut self, _ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send { … }
@@ -475,7 +475,7 @@ full access; frame callbacks get sandbox only. Details deferred to
 
 Python and Deno subprocess hosts (`PythonNativeSubprocessHostProcessor`,
 `DenoSubprocessHostProcessor` — see
-`libs/streamlib/src/core/compiler/compiler_ops/spawn_python_native_subprocess_op.rs`
+`libs/streamlib-engine/src/core/compiler/compiler_ops/spawn_python_native_subprocess_op.rs`
 and `spawn_deno_subprocess_op.rs`) run in the parent's Manual mode
 with no input mailboxes / output writer. The subprocess manages its
 own iceoryx2 I/O via FFI to a native lib (`libstreamlib_python_native`,
@@ -499,7 +499,7 @@ process.
 
 ### Proposed IPC shape
 
-Control-channel schema (in `libs/streamlib/schemas/`, YAML → JTD →
+Control-channel schema (in `libs/streamlib-engine/schemas/`, YAML → JTD →
 codegen, matching existing conventions):
 
 ```yaml
