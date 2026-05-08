@@ -24,13 +24,6 @@ from .com_tatolab_display_config import DisplayConfig
 from .com_tatolab_mp4_writer_config import Mp4WriterConfig
 from .com_tatolab_screen_capture_config import ScreenCaptureConfig
 from .com_tatolab_simple_passthrough_config import SimplePassthroughConfig
-from .tatolab__audio import AudioCaptureConfig
-from .tatolab__audio import AudioChannelConverterConfig
-from .tatolab__audio import AudioMixerConfig
-from .tatolab__audio import AudioOutputConfig
-from .tatolab__audio import AudioResamplerConfig
-from .tatolab__audio import BufferRechunkerConfig
-from .tatolab__audio import ChordGeneratorConfig
 from .tatolab__core import AudioFrame
 from .tatolab__core import EncodedAudioFrame
 from .tatolab__core import EncodedVideoFrame
@@ -58,13 +51,6 @@ __all__ = [
     "Mp4WriterConfig",
     "ScreenCaptureConfig",
     "SimplePassthroughConfig",
-    "AudioCaptureConfig",
-    "AudioChannelConverterConfig",
-    "AudioMixerConfig",
-    "AudioOutputConfig",
-    "AudioResamplerConfig",
-    "BufferRechunkerConfig",
-    "ChordGeneratorConfig",
     "AudioFrame",
     "EncodedAudioFrame",
     "EncodedVideoFrame",

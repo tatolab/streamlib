@@ -25,8 +25,6 @@ pub mod com_tatolab_mp4_writer_config;
 pub mod com_tatolab_screen_capture_config;
 pub mod com_tatolab_simple_passthrough_config;
 #[allow(non_snake_case)]
-pub mod tatolab__audio;
-#[allow(non_snake_case)]
 pub mod tatolab__core;
 
 pub use com_streamlib_api_server_config::ApiServerConfig;
@@ -50,13 +48,6 @@ pub use com_tatolab_display_config::DisplayConfig;
 pub use com_tatolab_mp4_writer_config::Mp4WriterConfig;
 pub use com_tatolab_screen_capture_config::ScreenCaptureConfig;
 pub use com_tatolab_simple_passthrough_config::SimplePassthroughConfig;
-pub use tatolab__audio::AudioCaptureConfig;
-pub use tatolab__audio::AudioChannelConverterConfig;
-pub use tatolab__audio::AudioMixerConfig;
-pub use tatolab__audio::AudioOutputConfig;
-pub use tatolab__audio::AudioResamplerConfig;
-pub use tatolab__audio::BufferRechunkerConfig;
-pub use tatolab__audio::ChordGeneratorConfig;
 pub use tatolab__core::AudioFrame;
 pub use tatolab__core::EncodedAudioFrame;
 pub use tatolab__core::EncodedVideoFrame;

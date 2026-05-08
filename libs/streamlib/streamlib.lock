@@ -9,12 +9,6 @@
 # libraries (they inherit their consumer's lock).
 version: 1
 packages:
-  '@tatolab/audio':
-    version: 1.0.0
-    source:
-      kind: path
-      path: ../../packages/audio
-    content_hash: sha256:aab907a44b4d46d521722eaef0081a96d5cae6bac3015b980edd89bb7ff4d74d
   '@tatolab/core':
     version: 1.0.0
     source:

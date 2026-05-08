@@ -24,5 +24,4 @@ export * from "./com_tatolab_display_config.ts";
 export * from "./com_tatolab_mp4_writer_config.ts";
 export * from "./com_tatolab_screen_capture_config.ts";
 export * from "./com_tatolab_simple_passthrough_config.ts";
-export * from "./tatolab__audio/index.ts";
 export * from "./tatolab__core/index.ts";

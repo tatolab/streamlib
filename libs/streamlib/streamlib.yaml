@@ -13,14 +13,11 @@ package:
 
 dependencies:
   "@tatolab/core": "^1.0.0"
-  "@tatolab/audio": "^1.0.0"
 
-# Dev-time path overrides; `streamlib pack` rejects these (#717).
+# Dev-time path override; `streamlib pack` rejects this (#717).
 patch:
   "@tatolab/core":
     path: ../../packages/core
-  "@tatolab/audio":
-    path: ../../packages/audio
 
 # Schema YAML files this package owns. Drives the JTD-codegen pipeline
 # (`cargo xtask generate-schemas --project-dir libs/streamlib`) and the
