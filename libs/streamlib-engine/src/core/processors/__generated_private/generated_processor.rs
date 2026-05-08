@@ -14,7 +14,7 @@ use crate::core::ProcessorDescriptor;
 
 /// Internal trait implemented by the processor macro.
 ///
-/// **DO NOT IMPLEMENT DIRECTLY** - Use the `#[streamlib::processor]` macro instead.
+/// **DO NOT IMPLEMENT DIRECTLY** - Use the `#[streamlib::sdk::processor]` macro instead.
 /// For custom processor behavior, implement [`Processor`](super::super::Processor).
 pub trait GeneratedProcessor: Send + 'static {
     type Config: Config;

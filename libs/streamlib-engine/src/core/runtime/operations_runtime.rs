@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
-use super::StreamRuntime;
+use super::Runner;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
@@ -207,7 +207,7 @@ async fn disconnect_impl(compiler: Arc<Compiler>, link_id: LinkUniqueId) -> Resu
 // RuntimeOperations Implementation
 // =============================================================================
 
-impl RuntimeOperations for StreamRuntime {
+impl RuntimeOperations for Runner {
     // =========================================================================
     // Async Methods (delegate to _impl functions)
     // =========================================================================
@@ -237,7 +237,7 @@ impl RuntimeOperations for StreamRuntime {
     }
 
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
-        Box::pin(async move { StreamRuntime::to_json(self) })
+        Box::pin(async move { Runner::to_json(self) })
     }
 
     // =========================================================================
@@ -321,6 +321,6 @@ impl RuntimeOperations for StreamRuntime {
     // =========================================================================
 
     fn to_json(&self) -> Result<serde_json::Value> {
-        StreamRuntime::to_json(self)
+        Runner::to_json(self)
     }
 }

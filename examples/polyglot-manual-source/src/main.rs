@@ -40,9 +40,12 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::{ProcessorSpec, Result, StreamRuntime};
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::error::StreamError;
+use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 const INTERVAL_MS: u32 = 33;
@@ -169,7 +172,7 @@ fn run() -> Result<SinkReport> {
     println!("Tick rate:         {INTERVAL_MS}ms");
     println!("Run length:        {:?}", RUN_DURATION);
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 

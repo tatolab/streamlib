@@ -36,9 +36,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib::core::context::ComputeKernelBridge;
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{
+use streamlib::sdk::context::ComputeKernelBridge;
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::rhi::{
     derive_bindings_from_spirv,
     ComputeKernelDescriptor,
     StreamTexture,
@@ -46,14 +46,17 @@ use streamlib::core::rhi::{
     TextureReadbackDescriptor,
     TextureSourceLayout,
 };
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::error::StreamError;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice,
     HostVulkanTimelineSemaphore,
     VulkanComputeKernel,
     VulkanTextureReadback,
 };
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 /// Compiled SPIR-V for the Mandelbrot compute shader. Built by
 /// `build.rs` from `shaders/mandelbrot.comp`. Shipped to the polyglot
@@ -241,10 +244,10 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     let texture_slot: Arc<
-        Mutex<Option<streamlib::core::rhi::StreamTexture>>,
+        Mutex<Option<streamlib::sdk::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
@@ -294,7 +297,7 @@ fn main() -> Result<()> {
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
-                    streamlib::core::rhi::VulkanLayout::GENERAL,
+                    streamlib::sdk::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
                     StreamError::Configuration(format!(

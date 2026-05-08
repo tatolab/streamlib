@@ -13,7 +13,7 @@
 //!
 //! At runtime, `streamlib.yaml` is still parsed by narrower views
 //! (`streamlib_idents::Manifest` for the resolver,
-//! `streamlib::core::config::ProjectConfig` for the runtime,
+//! `streamlib::sdk::config::ProjectConfig` for the runtime,
 //! [`crate::ProjectConfigMinimal`] for the proc-macro). Those parsers
 //! tolerate fields outside their narrow view; the schema is the
 //! union — the editor's source of truth for what's allowed.

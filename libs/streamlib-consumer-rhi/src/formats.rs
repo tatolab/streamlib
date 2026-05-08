@@ -3,7 +3,7 @@
 
 //! RHI format primitives shared between host and consumer sides.
 //!
-//! `streamlib::core::rhi::{TextureFormat, TextureUsages}` re-export
+//! `streamlib::sdk::rhi::{TextureFormat, TextureUsages}` re-export
 //! these so existing host-side call sites compile unchanged.
 
 /// Texture pixel formats supported by the RHI.

@@ -5,7 +5,7 @@
 //! the Rust-side `SurfaceStore::check_out` path.
 //!
 //! This is the shim + Rust-importer exit-criterion test for the multi-FD
-//! SCM_RIGHTS widening (#423). A real `StreamRuntime` runs the
+//! SCM_RIGHTS widening (#423). A real `Runner` runs the
 //! surface-sharing service; the host side `check_in`s a 2-plane surface,
 //! then each language consumer (Python, Deno, Rust) resolves that
 //! surface and verifies both planes' bytes survived the wire.
@@ -33,7 +33,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 use std::path::PathBuf;
 
-use streamlib_engine::core::runtime::StreamRuntime;
+use streamlib_engine::core::runtime::Runner;
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
 fn locate_native_lib(basename: &str) -> Option<PathBuf> {
@@ -127,7 +127,7 @@ enum ConnectFlavor {
 /// `slpn_` or `sldn_`), and assert both plane contents round-trip through
 /// the shim intact.
 fn run_shim_test(lib_path: PathBuf, prefix: &str, flavor: ConnectFlavor) {
-    let runtime = StreamRuntime::new().expect("StreamRuntime::new");
+    let runtime = Runner::new().expect("Runner::new");
     let socket_path = runtime.surface_socket_path().to_path_buf();
     let runtime_id = runtime.runtime_id().to_string();
 
@@ -319,7 +319,7 @@ fn rust_surface_store_resolve_surface_multi_plane() {
         }
     };
 
-    let runtime = StreamRuntime::new().expect("StreamRuntime::new");
+    let runtime = Runner::new().expect("Runner::new");
     let socket_path = runtime.surface_socket_path().to_path_buf();
     let runtime_id = runtime.runtime_id().to_string();
 

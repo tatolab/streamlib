@@ -16,10 +16,13 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::{
-    input, output, request_audio_permission, ClapEffectProcessor, ClapScanner, Result,
-    StreamRuntime,
-};
+use streamlib::sdk::permissions::request_audio_permission;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib::sdk::processors::ClapEffectProcessor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib::sdk::ClapScanner;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib_audio::{AudioCaptureProcessor, AudioOutputProcessor};
 
@@ -29,7 +32,7 @@ fn main() -> Result<()> {
     println!("\n🎙️  Microphone → CLAP Reverb → Speaker Example\n");
 
     // Create runtime first
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Request microphone permission (must be on main thread before adding audio processors)
     println!("🔒 Requesting microphone permission...");

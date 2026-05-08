@@ -22,19 +22,21 @@
 //! ```
 
 use std::path::PathBuf;
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::{CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 fn main() -> Result<()> {
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // 1. Copy built dylib into plugin/lib/ so load_project() can find it
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let plugin_dir = manifest_dir.join("plugin");
     let lib_dir = plugin_dir.join("lib");
     std::fs::create_dir_all(&lib_dir).map_err(|e| {
-        streamlib::StreamError::Configuration(format!("Failed to create lib dir: {}", e))
+        streamlib::sdk::error::StreamError::Configuration(format!("Failed to create lib dir: {}", e))
     })?;
 
     // Derive workspace target dir: CARGO_MANIFEST_DIR is examples/camera-rust-plugin/,
@@ -75,7 +77,7 @@ fn main() -> Result<()> {
 
     let dest_dylib = lib_dir.join(dylib_name);
     std::fs::copy(source_dylib, &dest_dylib).map_err(|e| {
-        streamlib::StreamError::Configuration(format!(
+        streamlib::sdk::error::StreamError::Configuration(format!(
             "Failed to copy dylib from {} to {}: {}",
             source_dylib.display(),
             dest_dylib.display(),

@@ -3,7 +3,7 @@
 
 //! Per-runtime surface-sharing service (Linux).
 //!
-//! Each `StreamRuntime` owns one [`UnixSocketSurfaceService`] listening on a
+//! Each `Runner` owns one [`UnixSocketSurfaceService`] listening on a
 //! unique Unix socket under `$XDG_RUNTIME_DIR`. Polyglot subprocesses
 //! spawned by the runtime receive the socket path through
 //! `STREAMLIB_SURFACE_SOCKET` and exchange DMA-BUF fds via `SCM_RIGHTS`.

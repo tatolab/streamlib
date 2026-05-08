@@ -48,16 +48,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
-use streamlib::core::context::{CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext};
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::sdk::context::{CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext};
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::error::StreamError;
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
     HostVulkanPixelBuffer,
     HostVulkanTimelineSemaphore,
 };
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat, SurfaceId};
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
@@ -151,7 +154,7 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Slot the setup hook will populate with the cpu-readback adapter
     // it constructs — main.rs reuses this Arc post-stop to read the

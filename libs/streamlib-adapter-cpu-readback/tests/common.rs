@@ -24,9 +24,9 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanPixelBuffer,
     HostVulkanTimelineSemaphore,
 };
-use streamlib::core::context::GpuContext;
-use streamlib::core::error::StreamError;
-use streamlib::core::rhi::{PixelFormat, TextureFormat};
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::error::StreamError;
+use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,

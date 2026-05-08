@@ -62,7 +62,7 @@ pub struct ProcessorInstanceFactory {
 /// Auto-registers all processors collected via inventory on first access.
 pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> = LazyLock::new(|| {
     let factory = ProcessorInstanceFactory::new();
-    // Auto-register all processors; ignore errors here (StreamRuntime::new checks for empty registry)
+    // Auto-register all processors; ignore errors here (Runner::new checks for empty registry)
     for registration in inventory::iter::<macro_codegen::FactoryRegistration> {
         (registration.register_fn)(&factory);
     }
@@ -95,7 +95,7 @@ impl ProcessorInstanceFactory {
         let count = self.constructors.read().len();
         if count == 0 {
             return Err(crate::core::StreamError::RegistryFailed(
-                "No processors registered. Ensure processor crates are linked and use #[streamlib::processor]".into()
+                "No processors registered. Ensure processor crates are linked and use #[streamlib::sdk::processor]".into()
             ));
         }
         Ok(RegisterResult { count })

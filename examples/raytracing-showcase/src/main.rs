@@ -20,7 +20,7 @@ use std::sync::Arc;
 use streamlib::sdk::engine::HostStreamTextureExt;
 
 use anyhow::{Context, Result};
-use streamlib::core::rhi::{
+use streamlib::sdk::rhi::{
     RayTracingBindingSpec,
     RayTracingKernelDescriptor,
     RayTracingPushConstants,

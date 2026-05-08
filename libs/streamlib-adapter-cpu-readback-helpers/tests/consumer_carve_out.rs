@@ -25,8 +25,8 @@ use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use serial_test::serial;
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::{PixelFormat, TextureFormat};
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
     HostVulkanPixelBuffer,

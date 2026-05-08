@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::tatolab__audio::audio_resampler_config::Quality;
-use streamlib::_generated_::AudioFrame;
-use streamlib::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
-use streamlib::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::utils::audio_resample::{AudioResampler, ResamplingQuality};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 fn quality_to_resampling_quality(quality: &Quality) -> ResamplingQuality {
     match quality {
@@ -14,7 +15,7 @@ fn quality_to_resampling_quality(quality: &Quality) -> ResamplingQuality {
     }
 }
 
-#[streamlib::processor("AudioResampler")]
+#[streamlib::sdk::processor("AudioResampler")]
 pub struct AudioResamplerProcessor {
     resampler: Option<AudioResampler>,
     output_sample_rate: u32,
@@ -22,7 +23,7 @@ pub struct AudioResamplerProcessor {
     channels: u8,
 }
 
-impl streamlib::core::ReactiveProcessor for AudioResamplerProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for AudioResamplerProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,

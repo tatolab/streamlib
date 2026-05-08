@@ -42,7 +42,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
-use streamlib::core::context::{
+use streamlib::sdk::context::{
     BlasRegisterDecl,
     RayTracingBindingKindWire,
     RayTracingKernelBridge,
@@ -52,8 +52,8 @@ use streamlib::core::context::{
     RayTracingShaderStageWire,
     TlasRegisterDecl,
 };
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::rhi::{
     RayTracingBindingSpec,
     RayTracingKernelDescriptor,
     RayTracingPushConstants,
@@ -68,7 +68,8 @@ use streamlib::core::rhi::{
     TextureUsages,
     VulkanLayout,
 };
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::error::StreamError;
 use streamlib::sdk::engine::host_rhi::{
     GeometryInstanceFlagsKHR,
     HostVulkanDevice,
@@ -78,7 +79,9 @@ use streamlib::sdk::engine::host_rhi::{
     VulkanRayTracingKernel,
     VulkanTextureReadback,
 };
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 /// Compiled SPIR-V for the ray-generation shader.
 const SCENE_RGEN_SPV: &[u8] =
@@ -237,7 +240,7 @@ fn stage_byte(s: RayTracingShaderStageWire) -> u8 {
 }
 
 fn stage_to_descriptor(s: RayTracingShaderStageWire) -> impl Fn(&[u8]) -> RayTracingStage<'_> {
-    use streamlib::core::rhi::RayTracingShaderStage;
+    use streamlib::sdk::rhi::RayTracingShaderStage;
     move |spv| RayTracingStage {
         stage: match s {
             RayTracingShaderStageWire::RayGen => RayTracingShaderStage::RayGen,
@@ -380,19 +383,19 @@ impl RayTracingKernelBridge for SceneKernelBridge {
                     binding: b.binding,
                     kind: match b.kind {
                         RayTracingBindingKindWire::StorageBuffer => {
-                            streamlib::core::rhi::RayTracingBindingKind::StorageBuffer
+                            streamlib::sdk::rhi::RayTracingBindingKind::StorageBuffer
                         }
                         RayTracingBindingKindWire::UniformBuffer => {
-                            streamlib::core::rhi::RayTracingBindingKind::UniformBuffer
+                            streamlib::sdk::rhi::RayTracingBindingKind::UniformBuffer
                         }
                         RayTracingBindingKindWire::SampledTexture => {
-                            streamlib::core::rhi::RayTracingBindingKind::SampledTexture
+                            streamlib::sdk::rhi::RayTracingBindingKind::SampledTexture
                         }
                         RayTracingBindingKindWire::StorageImage => {
-                            streamlib::core::rhi::RayTracingBindingKind::StorageImage
+                            streamlib::sdk::rhi::RayTracingBindingKind::StorageImage
                         }
                         RayTracingBindingKindWire::AccelerationStructure => {
-                            streamlib::core::rhi::RayTracingBindingKind::AccelerationStructure
+                            streamlib::sdk::rhi::RayTracingBindingKind::AccelerationStructure
                         }
                     },
                     stages: flags_from_bits(b.stages),
@@ -548,7 +551,7 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     let texture_slot: Arc<Mutex<Option<StreamTexture>>> = Arc::new(Mutex::new(None));
     let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =

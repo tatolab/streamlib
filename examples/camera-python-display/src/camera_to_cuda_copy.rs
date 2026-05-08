@@ -19,14 +19,15 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
-use streamlib::VideoFrame;
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::_generated_::VideoFrame;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 #[cfg(target_os = "linux")]
-use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
+use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer};
 #[cfg(target_os = "linux")]
-use streamlib::core::GpuContextLimitedAccess;
+use streamlib::sdk::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 #[cfg(target_os = "linux")]
@@ -88,14 +89,14 @@ impl Default for CameraToCudaCopyConfig {
     }
 }
 
-#[streamlib::processor("CameraToCudaCopy")]
+#[streamlib::sdk::processor("CameraToCudaCopy")]
 pub struct CameraToCudaCopyProcessor {
     config: CameraToCudaCopyConfig,
     backend: GpuBackendStash,
     frame_count: AtomicU64,
 }
 
-impl streamlib::core::ReactiveProcessor for CameraToCudaCopyProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for CameraToCudaCopyProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,

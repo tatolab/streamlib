@@ -49,7 +49,7 @@ use streamlib::sdk::engine::HostStreamTextureExt;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use streamlib::core::rhi::{
+use streamlib::sdk::rhi::{
     AttachmentFormats,
     ColorBlendState,
     ColorWriteMask,
@@ -75,7 +75,7 @@ use streamlib::core::rhi::{
     Viewport,
     VulkanLayout,
 };
-use streamlib::core::{Result, StreamError};
+use streamlib::sdk::error::{Result, StreamError};
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, VulkanGraphicsKernel};
 
 /// Push-constants layout — must match `blending_compositor.frag`'s
@@ -587,7 +587,7 @@ fn output_barrier_to_color_attachment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib::core::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
+    use streamlib::sdk::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
     use streamlib::sdk::engine::host_rhi::VulkanTextureReadback;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {

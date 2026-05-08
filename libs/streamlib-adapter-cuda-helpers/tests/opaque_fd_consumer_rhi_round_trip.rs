@@ -46,7 +46,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
-use streamlib::core::rhi::PixelFormat;
+use streamlib::sdk::rhi::PixelFormat;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice,
     HostVulkanPixelBuffer,

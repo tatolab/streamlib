@@ -17,7 +17,7 @@
 //! beats convention".
 //!
 //! Post-#731 (SDK extraction), this module moves to `streamlib-engine`
-//! and consumer call sites flip `use streamlib::Host*Ext;` to
+//! and consumer call sites flip `use streamlib::sdk::engine::Host*Ext;` to
 //! `use streamlib_engine::Host*Ext;` — same shape, new path.
 //!
 //! # Boundary lock
@@ -28,8 +28,8 @@
 //!
 //! ```compile_fail
 //! # #[cfg(target_os = "linux")]
-//! # fn _check(stream_texture: &streamlib::core::rhi::StreamTexture) {
-//! // Without `use streamlib::HostStreamTextureExt;` the privileged
+//! # fn _check(stream_texture: &streamlib::sdk::rhi::StreamTexture) {
+//! // Without `use streamlib::sdk::engine::HostStreamTextureExt;` the privileged
 //! // `vulkan_inner` accessor is not visible — boundary held.
 //! let _ = stream_texture.vulkan_inner();
 //! # }
@@ -39,8 +39,8 @@
 //!
 //! ```no_run
 //! # #[cfg(target_os = "linux")]
-//! # fn _check(stream_texture: &streamlib::core::rhi::StreamTexture) {
-//! use streamlib::HostStreamTextureExt;
+//! # fn _check(stream_texture: &streamlib::sdk::rhi::StreamTexture) {
+//! use streamlib::sdk::engine::HostStreamTextureExt;
 //! let _ = stream_texture.vulkan_inner();
 //! # }
 //! ```
@@ -68,7 +68,7 @@ use crate::core::rhi::{GpuDevice, RhiPixelBufferRef, StreamTexture};
 /// Engine RHI helpers and in-tree adapters import this trait to wrap a
 /// freshly-allocated [`HostVulkanTexture`] as a [`StreamTexture`] and
 /// to reach the underlying handle for raw `VkImage` access. Customer
-/// code never imports this trait — `streamlib::core::rhi::StreamTexture`
+/// code never imports this trait — `streamlib::sdk::rhi::StreamTexture`
 /// is opaque on its public inherent impl.
 ///
 /// [`HostVulkanTexture`]: crate::vulkan::rhi::HostVulkanTexture

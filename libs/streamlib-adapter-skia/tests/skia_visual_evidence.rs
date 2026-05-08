@@ -33,8 +33,8 @@ use skia_safe::{
     gradient_shader, Color, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode,
 };
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::TextureFormat;
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
     SurfaceTransportHandle, SurfaceUsage,
@@ -248,7 +248,7 @@ fn host_readback_bgra(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    use streamlib::core::rhi::PixelFormat;
+    use streamlib::sdk::rhi::PixelFormat;
     use streamlib::sdk::engine::host_rhi::HostVulkanPixelBuffer;
 
     let staging = HostVulkanPixelBuffer::new(device, width, height, 4, PixelFormat::Bgra32)

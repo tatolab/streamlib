@@ -336,7 +336,7 @@ mod warn_capture {
 #[test]
 #[serial]
 fn consumer_device_drop_with_live_imports_emits_leak_warning() {
-    use streamlib::core::rhi::PixelFormat;
+    use streamlib::sdk::rhi::PixelFormat;
     use streamlib::sdk::engine::host_rhi::HostVulkanPixelBuffer;
     use tracing_subscriber::layer::SubscriberExt;
 

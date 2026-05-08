@@ -18,8 +18,8 @@ use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::TextureFormat;
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,

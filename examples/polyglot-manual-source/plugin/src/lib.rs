@@ -19,15 +19,14 @@
 #![cfg(target_os = "linux")]
 
 use std::path::PathBuf;
-use streamlib::_generated_::VideoFrame;
-use streamlib::core::{
-    Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError,
-};
+use streamlib::sdk::_generated_::VideoFrame;
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_abi::export_plugin;
 
 const OUTPUT_ENV_VAR: &str = "STREAMLIB_POLYGLOT_MANUAL_SOURCE_SINK_OUTPUT";
 
-#[streamlib::processor("PolyglotManualSourceCountingSink")]
+#[streamlib::sdk::processor("PolyglotManualSourceCountingSink")]
 pub struct PolyglotManualSourceCountingSink {
     output_file: Option<PathBuf>,
     frame_counter: u64,
@@ -35,7 +34,7 @@ pub struct PolyglotManualSourceCountingSink {
     last_ns: u64,
 }
 
-impl streamlib::core::ReactiveProcessor for PolyglotManualSourceCountingSink::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for PolyglotManualSourceCountingSink::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,

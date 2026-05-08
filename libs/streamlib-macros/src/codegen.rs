@@ -26,11 +26,11 @@ fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
     let minor = ident.version.minor;
     let patch = ident.version.patch;
     quote! {
-        ::streamlib::core::SchemaIdent::new(
-            ::streamlib::core::Org::new(#org).expect("validated by manifest parser"),
-            ::streamlib::core::Package::new(#pkg).expect("validated by manifest parser"),
-            ::streamlib::core::TypeName::new(#ty).expect("validated by manifest parser"),
-            ::streamlib::core::SemVer::new(#major, #minor, #patch),
+        ::streamlib::sdk::descriptors::SchemaIdent::new(
+            ::streamlib::sdk::descriptors::Org::new(#org).expect("validated by manifest parser"),
+            ::streamlib::sdk::descriptors::Package::new(#pkg).expect("validated by manifest parser"),
+            ::streamlib::sdk::descriptors::TypeName::new(#ty).expect("validated by manifest parser"),
+            ::streamlib::sdk::descriptors::SemVer::new(#major, #minor, #patch),
         )
     }
 }
@@ -38,10 +38,10 @@ fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
 /// Emit a `PortSchemaSpec` literal expression.
 fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
     match spec {
-        PortSchemaSpec::Any => quote! { ::streamlib::core::PortSchemaSpec::Any },
+        PortSchemaSpec::Any => quote! { ::streamlib::sdk::processors::PortSchemaSpec::Any },
         PortSchemaSpec::Specific(ident) => {
             let inner = schema_ident_tokens(ident);
-            quote! { ::streamlib::core::PortSchemaSpec::Specific(#inner) }
+            quote! { ::streamlib::sdk::processors::PortSchemaSpec::Specific(#inner) }
         }
     }
 }
@@ -65,7 +65,7 @@ pub fn generate_from_processor_schema(
         .config
         .as_ref()
         .map(|c| derive_config_type_from_schema(&c.schema))
-        .unwrap_or_else(|| quote! { ::streamlib::core::EmptyConfig });
+        .unwrap_or_else(|| quote! { ::streamlib::sdk::processors::EmptyConfig });
 
     let config_field_name = schema
         .config
@@ -93,7 +93,7 @@ pub fn generate_from_processor_schema(
         /// from sibling `streamlib.yaml`'s `package:` block plus
         /// the processor's PascalCase short name.
         #[allow(dead_code)]
-        pub fn schema_ident() -> ::streamlib::core::SchemaIdent {
+        pub fn schema_ident() -> ::streamlib::sdk::descriptors::SchemaIdent {
             Processor::schema_ident()
         }
     };
@@ -112,8 +112,8 @@ pub fn generate_from_processor_schema(
 
     // Auto-registration via inventory crate
     let inventory_submit = quote! {
-        ::streamlib::inventory::submit! {
-            ::streamlib::core::processors::macro_codegen::FactoryRegistration {
+        ::streamlib::sdk::inventory::submit! {
+            ::streamlib::sdk::processors::macro_codegen::FactoryRegistration {
                 register_fn: |factory| factory.register::<Processor>(),
             }
         }
@@ -132,7 +132,7 @@ pub fn generate_from_processor_schema(
             /// Create a [`ProcessorSpec`] for adding this processor to a runtime.
             ///
             /// Convenience wrapper around [`Processor::node`].
-            pub fn node(config: Config) -> ::streamlib::core::ProcessorSpec {
+            pub fn node(config: Config) -> ::streamlib::sdk::processors::ProcessorSpec {
                 Processor::node(config)
             }
 
@@ -352,13 +352,13 @@ fn generate_processor_struct_from_schema(
 
     // Generate iceoryx2-based IPC fields if ports are defined
     let ipc_input_field = if !schema.inputs.is_empty() {
-        quote! { pub inputs: ::streamlib::iceoryx2::InputMailboxes, }
+        quote! { pub inputs: ::streamlib::sdk::iceoryx2::InputMailboxes, }
     } else {
         quote! {}
     };
 
     let ipc_output_field = if !schema.outputs.is_empty() {
-        quote! { pub outputs: ::std::sync::Arc<::streamlib::iceoryx2::OutputWriter>, }
+        quote! { pub outputs: ::std::sync::Arc<::streamlib::sdk::iceoryx2::OutputWriter>, }
     } else {
         quote! {}
     };
@@ -379,7 +379,7 @@ fn generate_processor_struct_from_schema(
             #ipc_output_field
             #config_field
             #(#custom_field_defs)*
-            pub audio: ::streamlib::core::utils::ProcessorAudioConverter,
+            pub audio: ::streamlib::sdk::utils::ProcessorAudioConverter,
         }
     }
 }
@@ -393,7 +393,7 @@ fn generate_input_link_module_from_schema(schema: &ProcessorSchema) -> TokenStre
             let port_name = Ident::new(&port.name, proc_macro2::Span::call_site());
             quote! {
                 pub struct #port_name;
-                impl ::streamlib::core::InputPortMarker for #port_name {
+                impl ::streamlib::sdk::processors::InputPortMarker for #port_name {
                     const PORT_NAME: &'static str = stringify!(#port_name);
                     type Processor = super::Processor;
                 }
@@ -417,7 +417,7 @@ fn generate_output_link_module_from_schema(schema: &ProcessorSchema) -> TokenStr
             let port_name = Ident::new(&port.name, proc_macro2::Span::call_site());
             quote! {
                 pub struct #port_name;
-                impl ::streamlib::core::OutputPortMarker for #port_name {
+                impl ::streamlib::sdk::processors::OutputPortMarker for #port_name {
                     const PORT_NAME: &'static str = stringify!(#port_name);
                     type Processor = super::Processor;
                 }
@@ -457,56 +457,56 @@ fn generate_processor_impl_from_schema(
         stop_impl,
     ) = match &schema.execution {
         ProcessorSchemaExecution::Reactive => (
-            quote! { ::streamlib::core::ProcessExecution::Reactive },
+            quote! { ::streamlib::sdk::execution::ProcessExecution::Reactive },
             "Reactive",
-            quote! { ::streamlib::core::ReactiveProcessor },
+            quote! { ::streamlib::sdk::processors::ReactiveProcessor },
             quote! {
-                <Self as ::streamlib::core::ReactiveProcessor>::process(self, ctx)
+                <Self as ::streamlib::sdk::processors::ReactiveProcessor>::process(self, ctx)
             },
             quote! {
-                Err(::streamlib::core::StreamError::Runtime(
+                Err(::streamlib::sdk::error::StreamError::Runtime(
                     "start() is only valid for Manual execution mode.".into()
                 ))
             },
             quote! {
-                Err(::streamlib::core::StreamError::Runtime(
+                Err(::streamlib::sdk::error::StreamError::Runtime(
                     "stop() is only valid for Manual execution mode.".into()
                 ))
             },
         ),
         ProcessorSchemaExecution::Manual => (
-            quote! { ::streamlib::core::ProcessExecution::Manual },
+            quote! { ::streamlib::sdk::execution::ProcessExecution::Manual },
             "Manual",
-            quote! { ::streamlib::core::ManualProcessor },
+            quote! { ::streamlib::sdk::processors::ManualProcessor },
             quote! {
                 let _ = ctx;
-                Err(::streamlib::core::StreamError::Runtime(
+                Err(::streamlib::sdk::error::StreamError::Runtime(
                     "process() is only valid for Reactive/Continuous execution modes.".into()
                 ))
             },
             quote! {
-                <Self as ::streamlib::core::ManualProcessor>::start(self, ctx)
+                <Self as ::streamlib::sdk::processors::ManualProcessor>::start(self, ctx)
             },
             quote! {
-                <Self as ::streamlib::core::ManualProcessor>::stop(self, ctx)
+                <Self as ::streamlib::sdk::processors::ManualProcessor>::stop(self, ctx)
             },
         ),
         ProcessorSchemaExecution::Continuous { interval_ms } => {
             let interval = *interval_ms;
             (
-                quote! { ::streamlib::core::ProcessExecution::Continuous { interval_ms: #interval } },
+                quote! { ::streamlib::sdk::execution::ProcessExecution::Continuous { interval_ms: #interval } },
                 "Continuous",
-                quote! { ::streamlib::core::ContinuousProcessor },
+                quote! { ::streamlib::sdk::processors::ContinuousProcessor },
                 quote! {
-                    <Self as ::streamlib::core::ContinuousProcessor>::process(self, ctx)
+                    <Self as ::streamlib::sdk::processors::ContinuousProcessor>::process(self, ctx)
                 },
                 quote! {
-                    Err(::streamlib::core::StreamError::Runtime(
+                    Err(::streamlib::sdk::error::StreamError::Runtime(
                         "start() is only valid for Manual execution mode.".into()
                     ))
                 },
                 quote! {
-                    Err(::streamlib::core::StreamError::Runtime(
+                    Err(::streamlib::sdk::error::StreamError::Runtime(
                         "stop() is only valid for Manual execution mode.".into()
                     ))
                 },
@@ -521,7 +521,7 @@ fn generate_processor_impl_from_schema(
 
     let update_config = config_field_name.as_ref().map(|name| {
         quote! {
-            fn update_config(&mut self, config: Self::Config) -> ::streamlib::core::Result<()> {
+            fn update_config(&mut self, config: Self::Config) -> ::streamlib::sdk::error::Result<()> {
                 self.#name = config;
                 Ok(())
             }
@@ -531,7 +531,7 @@ fn generate_processor_impl_from_schema(
     quote! {
         impl Processor {
             /// Processor PascalCase short name (the `type` segment of the
-            /// structured [`SchemaIdent`](::streamlib::core::SchemaIdent)).
+            /// structured [`SchemaIdent`](::streamlib::sdk::descriptors::SchemaIdent)).
             /// Use [`Processor::schema_ident`] for the full structured identity.
             pub const NAME: &'static str = #processor_name;
 
@@ -539,23 +539,23 @@ fn generate_processor_impl_from_schema(
             /// `@<org>/<package>/<Type>@<version>` resolved at codegen
             /// time from the sibling `streamlib.yaml`'s `package:` block
             /// plus the processor's PascalCase short name.
-            pub fn schema_ident() -> ::streamlib::core::SchemaIdent {
+            pub fn schema_ident() -> ::streamlib::sdk::descriptors::SchemaIdent {
                 #schema_ident_literal
             }
 
-            /// Create a [`ProcessorSpec`](::streamlib::core::ProcessorSpec)
+            /// Create a [`ProcessorSpec`](::streamlib::sdk::processors::ProcessorSpec)
             /// for adding this processor to a runtime.
-            pub fn node(config: #config_type) -> ::streamlib::core::ProcessorSpec {
-                ::streamlib::core::ProcessorSpec {
+            pub fn node(config: #config_type) -> ::streamlib::sdk::processors::ProcessorSpec {
+                ::streamlib::sdk::processors::ProcessorSpec {
                     name: Self::schema_ident(),
-                    config: ::streamlib::serde_json::to_value(&config)
+                    config: ::streamlib::sdk::serde_json::to_value(&config)
                         .expect("Config serialization failed"),
                     display_name: None,
                 }
             }
 
             /// Returns the execution mode for this processor.
-            pub fn execution_mode(&self) -> ::streamlib::core::ProcessExecution {
+            pub fn execution_mode(&self) -> ::streamlib::sdk::execution::ProcessExecution {
                 #execution_variant
             }
 
@@ -565,7 +565,7 @@ fn generate_processor_impl_from_schema(
             }
         }
 
-        impl ::streamlib::core::__generated_private::GeneratedProcessor for Processor {
+        impl ::streamlib::sdk::processors::__generated_private::GeneratedProcessor for Processor {
             type Config = #config_type;
 
             fn name(&self) -> &str {
@@ -574,26 +574,26 @@ fn generate_processor_impl_from_schema(
 
             #from_config_body
 
-            fn process(&mut self, ctx: &::streamlib::core::RuntimeContextLimitedAccess<'_>) -> ::streamlib::core::Result<()> {
+            fn process(&mut self, ctx: &::streamlib::sdk::context::RuntimeContextLimitedAccess<'_>) -> ::streamlib::sdk::error::Result<()> {
                 #process_impl
             }
 
-            fn start(&mut self, ctx: &::streamlib::core::RuntimeContextFullAccess<'_>) -> ::streamlib::core::Result<()> {
+            fn start(&mut self, ctx: &::streamlib::sdk::context::RuntimeContextFullAccess<'_>) -> ::streamlib::sdk::error::Result<()> {
                 let _ = ctx;
                 #start_impl
             }
 
-            fn stop(&mut self, ctx: &::streamlib::core::RuntimeContextFullAccess<'_>) -> ::streamlib::core::Result<()> {
+            fn stop(&mut self, ctx: &::streamlib::sdk::context::RuntimeContextFullAccess<'_>) -> ::streamlib::sdk::error::Result<()> {
                 let _ = ctx;
                 #stop_impl
             }
 
             #update_config
 
-            fn execution_config(&self) -> ::streamlib::core::ExecutionConfig {
-                ::streamlib::core::ExecutionConfig {
+            fn execution_config(&self) -> ::streamlib::sdk::execution::ExecutionConfig {
+                ::streamlib::sdk::execution::ExecutionConfig {
                     execution: #execution_variant,
-                    priority: ::streamlib::core::ThreadPriority::Normal,
+                    priority: ::streamlib::sdk::execution::ThreadPriority::Normal,
                 }
             }
 
@@ -602,35 +602,35 @@ fn generate_processor_impl_from_schema(
 
             fn get_audio_converter_status_arc(
                 &self,
-            ) -> Option<std::sync::Arc<std::sync::Mutex<::streamlib::core::utils::ProcessorAudioConverterStatus>>> {
+            ) -> Option<std::sync::Arc<std::sync::Mutex<::streamlib::sdk::utils::ProcessorAudioConverterStatus>>> {
                 Some(self.audio.status_arc())
             }
 
             fn __generated_setup(
                 &mut self,
-                ctx: &::streamlib::core::RuntimeContextFullAccess<'_>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
+                ctx: &::streamlib::sdk::context::RuntimeContextFullAccess<'_>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::sdk::error::Result<()>> + Send {
                 <Self as #processor_trait>::setup(self, ctx)
             }
 
             fn __generated_teardown(
                 &mut self,
-                ctx: &::streamlib::core::RuntimeContextFullAccess<'_>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
+                ctx: &::streamlib::sdk::context::RuntimeContextFullAccess<'_>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::sdk::error::Result<()>> + Send {
                 <Self as #processor_trait>::teardown(self, ctx)
             }
 
             fn __generated_on_pause(
                 &mut self,
-                ctx: &::streamlib::core::RuntimeContextLimitedAccess<'_>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
+                ctx: &::streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::sdk::error::Result<()>> + Send {
                 <Self as #processor_trait>::on_pause(self, ctx)
             }
 
             fn __generated_on_resume(
                 &mut self,
-                ctx: &::streamlib::core::RuntimeContextLimitedAccess<'_>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::core::Result<()>> + Send {
+                ctx: &::streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
+            ) -> impl ::std::future::Future<Output = ::streamlib::sdk::error::Result<()>> + Send {
                 <Self as #processor_trait>::on_resume(self, ctx)
             }
         }
@@ -653,10 +653,10 @@ fn generate_from_config_from_schema(
                 let buffer_size = port.buffer_size.unwrap_or(1);
                 let read_mode_tokens = match port.read_mode.as_deref() {
                     Some("read_next_in_order") => {
-                        quote! { ::streamlib::iceoryx2::ReadMode::ReadNextInOrder }
+                        quote! { ::streamlib::sdk::iceoryx2::ReadMode::ReadNextInOrder }
                     }
                     Some("skip_to_latest") | None => {
-                        quote! { ::streamlib::iceoryx2::ReadMode::SkipToLatest }
+                        quote! { ::streamlib::sdk::iceoryx2::ReadMode::SkipToLatest }
                     }
                     Some(unknown) => {
                         let msg = format!(
@@ -671,7 +671,7 @@ fn generate_from_config_from_schema(
             .collect();
         quote! {
             inputs: {
-                let mut inputs = ::streamlib::iceoryx2::InputMailboxes::new();
+                let mut inputs = ::streamlib::sdk::iceoryx2::InputMailboxes::new();
                 #(#add_port_calls)*
                 inputs
             },
@@ -681,7 +681,7 @@ fn generate_from_config_from_schema(
     };
 
     let ipc_output_init = if !schema.outputs.is_empty() {
-        quote! { outputs: ::std::sync::Arc::new(::streamlib::iceoryx2::OutputWriter::new()), }
+        quote! { outputs: ::std::sync::Arc::new(::streamlib::sdk::iceoryx2::OutputWriter::new()), }
     } else {
         quote! {}
     };
@@ -701,13 +701,13 @@ fn generate_from_config_from_schema(
         .collect();
 
     quote! {
-        fn from_config(config: Self::Config) -> ::streamlib::core::Result<Self> {
+        fn from_config(config: Self::Config) -> ::streamlib::sdk::error::Result<Self> {
             Ok(Self {
                 #ipc_input_init
                 #ipc_output_init
                 #config_init
                 #(#custom_field_inits)*
-                audio: ::streamlib::core::utils::ProcessorAudioConverter::new(),
+                audio: ::streamlib::sdk::utils::ProcessorAudioConverter::new(),
             })
         }
     }
@@ -731,7 +731,7 @@ fn generate_descriptor_from_schema(
             let port_schema_tokens = port_schema_spec_tokens(&p.schema);
             let port_desc = p.description.as_deref().unwrap_or("");
             quote! {
-                .with_input(::streamlib::core::PortDescriptor {
+                .with_input(::streamlib::sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
                     schema: #port_schema_tokens,
@@ -751,7 +751,7 @@ fn generate_descriptor_from_schema(
             let port_schema_tokens = port_schema_spec_tokens(&p.schema);
             let port_desc = p.description.as_deref().unwrap_or("");
             quote! {
-                .with_output(::streamlib::core::PortDescriptor {
+                .with_output(::streamlib::sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
                     schema: #port_schema_tokens,
@@ -772,9 +772,9 @@ fn generate_descriptor_from_schema(
     });
 
     quote! {
-        fn descriptor() -> Option<::streamlib::core::ProcessorDescriptor> {
+        fn descriptor() -> Option<::streamlib::sdk::descriptors::ProcessorDescriptor> {
             Some(
-                ::streamlib::core::ProcessorDescriptor::new(Processor::schema_ident(), #description)
+                ::streamlib::sdk::descriptors::ProcessorDescriptor::new(Processor::schema_ident(), #description)
                     .with_version(#version)
                     .with_repository(#repository)
                     #config_schema
@@ -816,7 +816,7 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
 
     let get_output_writer_impl = if has_iceoryx2_outputs {
         quote! {
-            fn get_iceoryx2_output_writer(&self) -> Option<::std::sync::Arc<::streamlib::iceoryx2::OutputWriter>> {
+            fn get_iceoryx2_output_writer(&self) -> Option<::std::sync::Arc<::streamlib::sdk::iceoryx2::OutputWriter>> {
                 Some(self.outputs.clone())
             }
         }
@@ -826,7 +826,7 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
 
     let get_input_mailboxes_impl = if has_iceoryx2_inputs {
         quote! {
-            fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut ::streamlib::iceoryx2::InputMailboxes> {
+            fn get_iceoryx2_input_mailboxes(&mut self) -> Option<&mut ::streamlib::sdk::iceoryx2::InputMailboxes> {
                 Some(&mut self.inputs)
             }
         }

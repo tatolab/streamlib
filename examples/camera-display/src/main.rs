@@ -17,11 +17,12 @@
 //! cargo run -p camera-display -- --string-mode
 //! ```
 
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::{
-    input, output, ApiServerConfig, ApiServerProcessor, CameraProcessor, DisplayProcessor,
-    ProcessorSpec, Result, StreamRuntime,
-};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::_generated_::ApiServerConfig;
+use streamlib::sdk::processors::{ApiServerProcessor, CameraProcessor, DisplayProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::processors::{input, output};  // TODO: unmapped items
 
 fn main() -> Result<()> {
 
@@ -41,7 +42,7 @@ fn main() -> Result<()> {
 
 /// Typed mode - uses compile-time type safety with ::node() methods
 fn run_typed_mode() -> Result<()> {
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // =========================================================================
     // Add processors using typed API
@@ -93,7 +94,7 @@ fn run_typed_mode() -> Result<()> {
 
 /// String mode - simulates REST API with string-based processor names and JSON configs
 fn run_string_mode() -> Result<()> {
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // =========================================================================
     // Add processors using string-based API (REST API style)
@@ -154,7 +155,7 @@ fn run_string_mode() -> Result<()> {
     run_pipeline(runtime)
 }
 
-fn run_pipeline(runtime: std::sync::Arc<StreamRuntime>) -> Result<()> {
+fn run_pipeline(runtime: std::sync::Arc<Runner>) -> Result<()> {
     println!("▶️  Starting pipeline...");
     #[cfg(target_os = "macos")]
     println!("   Press Cmd+Q to stop\n");

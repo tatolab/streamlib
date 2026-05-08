@@ -20,7 +20,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use streamlib_engine::core::runtime::StreamRuntime;
+use streamlib_engine::core::runtime::Runner;
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
 #[path = "common/polyglot_dma_buf_producer.rs"]
@@ -171,9 +171,9 @@ fn deno_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         }
     };
 
-    // Stand up a real StreamRuntime — owns the per-runtime surface-sharing
+    // Stand up a real Runner — owns the per-runtime surface-sharing
     // socket. No external surface-share daemon, no manual fixture.
-    let runtime = StreamRuntime::new().expect("StreamRuntime::new");
+    let runtime = Runner::new().expect("Runner::new");
     let socket_path = runtime.surface_socket_path().to_path_buf();
     let runtime_id = runtime.runtime_id().to_string();
 

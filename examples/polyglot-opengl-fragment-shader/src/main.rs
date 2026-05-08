@@ -31,11 +31,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::error::StreamError;
 use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 /// UUID the host registers the render-target surface under. The
 /// polyglot processor reads it from its config and passes it to
@@ -112,14 +115,14 @@ fn main() -> Result<()> {
     println!("Output PNG:  {}", output_png.display());
     println!();
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Slots the setup hook populates so main.rs can read the surface
     // back post-stop and write the output PNG. We can't keep the
     // `&GpuContext` borrow past the hook, so we Arc-clone the bits we
     // need.
     let texture_slot: Arc<
-        Mutex<Option<streamlib::core::rhi::StreamTexture>>,
+        Mutex<Option<streamlib::sdk::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
@@ -188,7 +191,7 @@ fn main() -> Result<()> {
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
-                    streamlib::core::rhi::VulkanLayout::GENERAL,
+                    streamlib::sdk::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
                     StreamError::Configuration(format!(

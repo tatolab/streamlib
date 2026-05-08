@@ -6,7 +6,9 @@
 //! Demonstrates mixing multiple audio streams using AudioMixerProcessor.
 //! Creates three test tones at different frequencies and mixes them into a chord.
 
-use streamlib::{input, output, Result, StreamRuntime};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::processors::{input, output};  // TODO: unmapped items
 use streamlib_audio::{AudioOutputProcessor, ChordGeneratorProcessor};
 
 fn main() -> Result<()> {
@@ -15,7 +17,7 @@ fn main() -> Result<()> {
 
     // Step 1: Create runtime (event-driven, no FPS parameter!)
     println!("🎛️  Creating audio runtime...");
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Step 2: Add chord generator (now outputs pre-mixed stereo)
     println!("🎹 Adding chord generator (C major chord)...");

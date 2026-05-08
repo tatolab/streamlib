@@ -13,7 +13,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Unified interface for runtime graph operations.
 ///
-/// Implemented by `StreamRuntime` (direct) and `RuntimeProxy` (channel-based).
+/// Implemented by `Runner` (direct) and `RuntimeProxy` (channel-based).
 /// Callers use this trait and don't need to know the underlying implementation.
 ///
 /// # Thread Safety

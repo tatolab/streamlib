@@ -28,11 +28,11 @@
 
 use std::path::PathBuf;
 
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::{
-    CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
-};
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeKind {
@@ -90,7 +90,7 @@ fn main() -> Result<()> {
             negative = true;
         } else if let Some(value) = a.strip_prefix("--runtime=") {
             runtime_kind = RuntimeKind::parse(value).map_err(|e| {
-                streamlib::core::StreamError::Configuration(e)
+                streamlib::sdk::error::StreamError::Configuration(e)
             })?;
         } else {
             positional.push(a);
@@ -117,7 +117,7 @@ fn main() -> Result<()> {
     );
     println!();
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     match runtime_kind {
@@ -125,7 +125,7 @@ fn main() -> Result<()> {
             let slpkg_path =
                 manifest_dir.join("python/polyglot-dma-buf-consumer-0.1.0.slpkg");
             if !slpkg_path.exists() {
-                return Err(streamlib::core::StreamError::Configuration(format!(
+                return Err(streamlib::sdk::error::StreamError::Configuration(format!(
                     "Package not found: {}\nRun: cargo run -p streamlib-cli -- pack examples/polyglot-dma-buf-consumer/python",
                     slpkg_path.display()
                 )));
@@ -135,7 +135,7 @@ fn main() -> Result<()> {
         RuntimeKind::Deno => {
             let project_path = manifest_dir.join("deno");
             if !project_path.join("streamlib.yaml").exists() {
-                return Err(streamlib::core::StreamError::Configuration(format!(
+                return Err(streamlib::sdk::error::StreamError::Configuration(format!(
                     "Deno project not found: {}",
                     project_path.display()
                 )));

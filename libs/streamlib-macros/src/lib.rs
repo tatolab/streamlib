@@ -154,7 +154,7 @@ fn load_processor_schema(
 /// # Example
 ///
 /// ```ignore
-/// use streamlib::ConfigDescriptor;
+/// use streamlib::sdk::ConfigDescriptor;
 ///
 /// #[derive(ConfigDescriptor)]
 /// pub struct CameraConfig {

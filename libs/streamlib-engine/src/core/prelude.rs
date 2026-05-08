@@ -14,7 +14,7 @@ pub use crate::core::{
     processors::{ContinuousProcessor, ManualProcessor, ReactiveProcessor},
 
     // Runtime
-    runtime::StreamRuntime,
+    runtime::Runner,
 };
 
 // Re-export generated IPC types

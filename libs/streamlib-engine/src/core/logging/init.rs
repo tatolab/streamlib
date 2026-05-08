@@ -92,7 +92,7 @@ static GLOBAL_INSTALLED: AtomicBool = AtomicBool::new(false);
 /// Install the logging pathway as the **global** tracing subscriber.
 /// First-caller wins: subsequent calls return a no-op guard and the
 /// original subscriber stays live. Used by production entrypoints
-/// (`StreamRuntime::new`, `streamlib-cli`, `streamlib-runtime`).
+/// (`Runner::new`, `streamlib-cli`, `streamlib-runtime`).
 pub fn init(config: StreamlibLoggingConfig) -> Result<StreamlibLoggingGuard> {
     if GLOBAL_INSTALLED.swap(true, Ordering::SeqCst) {
         return Ok(StreamlibLoggingGuard::noop());

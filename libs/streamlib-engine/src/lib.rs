@@ -138,7 +138,7 @@ pub use linux::{
 
 /// Per-runtime surface-share service primitives. Exposed for adapter
 /// integration tests and 3rd-party tooling that needs to drive the
-/// service in isolation; production callers go through [`StreamRuntime`].
+/// service in isolation; production callers go through [`Runner`].
 #[cfg(target_os = "linux")]
 pub mod linux_surface_share {
     pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
@@ -223,7 +223,7 @@ pub use permissions::{
     request_audio_permission, request_camera_permission, request_display_permission,
 };
 
-pub use core::StreamRuntime;
+pub use core::Runner;
 
 pub mod platform {
     pub fn name() -> &'static str {
@@ -244,5 +244,103 @@ pub mod platform {
         return "Vulkan";
         #[cfg(target_os = "windows")]
         return "Direct3D 12";
+    }
+}
+
+// =============================================================================
+// SDK self-mirror — for macro path resolution inside the engine
+// =============================================================================
+//
+// Engine-internal processors use the same `#[streamlib::sdk::processor]`
+// attribute syntax as external consumers. With `extern crate self as
+// streamlib;` above, those macro paths (`::streamlib::sdk::*`) resolve
+// inside this crate via this self-mirror. Mirrors the public SDK's
+// `streamlib::sdk::*` structure (defined in `libs/streamlib-sdk/src/lib.rs`)
+// so the same emit-paths work in both compilation contexts.
+//
+// External consumers see this crate's items as `streamlib::engine_internal::*`
+// (passthrough re-export from the SDK). They never reach for `streamlib::sdk::*`
+// in this crate directly — that namespace exists only for in-engine macro
+// path resolution.
+
+pub mod sdk {
+    pub use crate::core::context;
+    pub use crate::core::descriptors;
+    pub use crate::core::display_info;
+    pub use crate::core::error;
+    pub use crate::core::execution;
+    pub use crate::core::graph;
+    pub use crate::core::graph_file;
+    pub use crate::core::json_schema;
+    pub use crate::core::media_clock;
+    pub use crate::core::prelude;
+    pub use crate::core::rhi;
+    pub use crate::core::runtime;
+    pub use crate::core::streaming;
+    pub use crate::core::sync;
+    pub use crate::core::texture;
+    pub use crate::core::utils;
+
+    /// Processors namespace: combines `core::processors::*` with
+    /// platform-aliased processor types from the engine root.
+    pub mod processors {
+        pub use crate::core::processors::*;
+
+        // Port markers + input/output helpers — semantically processor-
+        // related; live in `core::graph::edges::link_port_markers`.
+        pub use crate::core::graph::{
+            input, output, InputPortMarker, OutputPortMarker,
+        };
+
+        // Port schema spec — semantically processor-related; lives in
+        // `core::descriptors`.
+        pub use crate::core::descriptors::PortSchemaSpec;
+
+        pub use crate::{CameraProcessor, DisplayProcessor};
+
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        pub use crate::{ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor};
+
+        #[cfg(target_os = "linux")]
+        pub use crate::{
+            BgraFileSourceProcessor, H264DecoderProcessor, H264EncoderProcessor,
+            H265DecoderProcessor, H265EncoderProcessor, LinuxMp4WriterProcessor,
+        };
+
+        #[cfg(feature = "moq")]
+        pub use crate::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
+    }
+
+    pub use crate::iceoryx2;
+    pub use crate::logging;
+    pub use crate::inventory;
+    pub use crate::serde_json;
+    pub use crate::crossbeam_channel;
+    pub use crate::_generated_;
+
+    pub use streamlib_macros::{processor, ConfigDescriptor};
+
+    pub mod permissions {
+        pub use crate::{
+            request_audio_permission, request_camera_permission, request_display_permission,
+        };
+    }
+
+    pub use crate::platform;
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub use crate::{ClapPluginInfo, ClapScanner};
+
+    /// Engine-bridge surface mirror — same shape the SDK exposes via
+    /// [`streamlib::sdk::engine`](../../streamlib-sdk/src/lib.rs).
+    #[cfg(any(
+        feature = "backend-vulkan",
+        all(target_os = "linux", not(feature = "backend-metal"))
+    ))]
+    pub mod engine {
+        pub use crate::host_rhi;
+        pub use crate::{HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostStreamTextureExt};
+        #[cfg(target_os = "linux")]
+        pub use crate::linux_surface_share;
     }
 }

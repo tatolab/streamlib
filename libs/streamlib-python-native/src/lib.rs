@@ -50,7 +50,7 @@ fn init_subprocess_logging() {
 // ============================================================================
 
 /// How frames should be read from an input port's buffer.
-/// Mirrors the Rust-side `ReadMode` enum in `streamlib::iceoryx2::read_mode`.
+/// Mirrors the Rust-side `ReadMode` enum in `streamlib::sdk::iceoryx2::read_mode`.
 const READ_MODE_SKIP_TO_LATEST: i32 = 0;
 const READ_MODE_READ_NEXT_IN_ORDER: i32 = 1;
 
@@ -2652,7 +2652,7 @@ mod surface_client {
             Err(e) => {
                 tracing::error!(
                     "surface_resolve_surface: connect to '{}' failed: {}. \
-                     The parent StreamRuntime owns this socket; check the runtime logs \
+                     The parent Runner owns this socket; check the runtime logs \
                      and confirm STREAMLIB_SURFACE_SOCKET points at a live runtime.",
                     handle.socket_path, e
                 );

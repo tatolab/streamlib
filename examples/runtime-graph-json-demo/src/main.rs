@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::path::PathBuf;
-use streamlib::core::{CameraConfig, DisplayConfig, Mp4WriterConfig};
-use streamlib::{
-    input, output, CameraProcessor, DisplayProcessor, Mp4WriterProcessor, Result, StreamRuntime,
-};
+use streamlib::sdk::{CameraConfig, DisplayConfig, Mp4WriterConfig};
+use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, Mp4WriterProcessor};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::processors::{input, output};  // TODO: unmapped items
 
 fn main() -> Result<()> {
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Add a camera processor
     let camera = runtime.add_processor(CameraProcessor::Processor::node(CameraConfig {

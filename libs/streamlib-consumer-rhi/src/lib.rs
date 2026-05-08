@@ -28,11 +28,11 @@
 //!   machinery surface adapters (`streamlib-adapter-vulkan` etc.) use
 //!   to abstract over device flavor.
 //! - [`TextureFormat`], [`TextureUsages`], [`PixelFormat`] — RHI format
-//!   primitives shared with the host side. `streamlib::core::rhi` and
-//!   `streamlib::core::rhi::pixel_format` re-export these so existing
+//!   primitives shared with the host side. `streamlib::sdk::rhi` and
+//!   `streamlib::sdk::rhi::pixel_format` re-export these so existing
 //!   call sites compile unchanged.
 //! - [`ConsumerRhiError`] — thin error taxonomy for the carve-out.
-//!   `streamlib::core::StreamError` provides a `From` impl, so the
+//!   `streamlib::sdk::error::StreamError` provides a `From` impl, so the
 //!   host side can wrap consumer errors with `?`.
 //!
 //! What does NOT live here: anything that calls `vkAllocateMemory`
@@ -125,7 +125,7 @@ pub use device_capability::private;
 ///
 /// ```compile_fail
 /// // GpuContextFullAccess is the privileged capability typestate.
-/// use streamlib::core::context::GpuContextFullAccess;
+/// use streamlib::sdk::context::GpuContextFullAccess;
 /// fn _force(_: &GpuContextFullAccess) {}
 /// ```
 ///

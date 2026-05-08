@@ -1550,7 +1550,7 @@ pub struct GpuContextLimitedAccess {
 ///
 /// ```compile_fail
 /// fn assert_not_clone<T: Clone>() {}
-/// assert_not_clone::<streamlib::core::GpuContextFullAccess>();
+/// assert_not_clone::<streamlib::sdk::context::GpuContextFullAccess>();
 /// ```
 pub struct GpuContextFullAccess {
     inner: GpuContext,

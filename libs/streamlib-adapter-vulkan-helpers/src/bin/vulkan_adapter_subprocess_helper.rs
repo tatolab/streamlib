@@ -30,7 +30,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore};
-use streamlib::core::rhi::TextureFormat;
+use streamlib::sdk::rhi::TextureFormat;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -249,8 +249,8 @@ fn subprocess_clear_image(
     device: &Arc<HostVulkanDevice>,
     image: vk::Image,
     color: [f32; 4],
-) -> streamlib::core::Result<()> {
-    use streamlib::core::StreamError;
+) -> streamlib::sdk::error::Result<()> {
+    use streamlib::sdk::error::StreamError;
     let dev = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();
@@ -355,8 +355,8 @@ fn subprocess_readback_image(
     image: vk::Image,
     width: u32,
     height: u32,
-) -> streamlib::core::Result<Vec<u8>> {
-    use streamlib::core::StreamError;
+) -> streamlib::sdk::error::Result<Vec<u8>> {
+    use streamlib::sdk::error::StreamError;
     let dev = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();

@@ -903,7 +903,7 @@ impl HostVulkanTexture {
         // TRANSFER_DST is required by Skia's `check_image_info` gate
         // (and by symmetric host↔consumer parity); see the matching
         // comment in
-        // `streamlib::core::context::GpuContext::acquire_render_target_dma_buf_image`.
+        // `streamlib::sdk::context::GpuContext::acquire_render_target_dma_buf_image`.
         let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
             | vk::ImageUsageFlags::TRANSFER_DST
             | vk::ImageUsageFlags::SAMPLED

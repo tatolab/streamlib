@@ -50,14 +50,14 @@ struct PluginDeclaration {
     register: extern "C" fn(&'static crate::core::processors::ProcessorInstanceFactory),
 }
 
-/// Storage variant for tokio runtime in StreamRuntime.
+/// Storage variant for tokio runtime in Runner.
 ///
-/// Enables StreamRuntime to work both standalone (owning its runtime) and
+/// Enables Runner to work both standalone (owning its runtime) and
 /// integrated into existing tokio applications (using the current handle).
 pub(crate) enum TokioRuntimeVariant {
-    /// StreamRuntime owns the tokio Runtime (created when NOT in tokio context).
+    /// Runner owns the tokio Runtime (created when NOT in tokio context).
     OwnedTokioRuntime(tokio::runtime::Runtime),
-    /// StreamRuntime uses an external tokio Handle (auto-detected when called from tokio context).
+    /// Runner uses an external tokio Handle (auto-detected when called from tokio context).
     ExternalTokioHandle(tokio::runtime::Handle),
 }
 
@@ -75,9 +75,9 @@ impl TokioRuntimeVariant {
 ///
 /// # Thread Safety
 ///
-/// `StreamRuntime` is designed for concurrent access from multiple threads.
+/// `Runner` is designed for concurrent access from multiple threads.
 /// All public methods take `&self` (not `&mut self`), allowing the runtime
-/// to be shared via `Arc<StreamRuntime>` without external synchronization.
+/// to be shared via `Arc<Runner>` without external synchronization.
 ///
 /// Internal state uses fine-grained locking:
 /// - Graph operations: `RwLock` (multiple readers OR one writer)
@@ -87,7 +87,7 @@ impl TokioRuntimeVariant {
 ///
 /// This means multiple threads can concurrently call `add_processor()`,
 /// `connect()`, etc. without blocking each other on an outer lock.
-pub struct StreamRuntime {
+pub struct Runner {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
     /// Tokio runtime storage - either owned or external handle.
@@ -132,7 +132,7 @@ pub struct StreamRuntime {
     setup_hooks: Arc<Mutex<Vec<Box<dyn FnOnce(&GpuContext) -> Result<()> + Send>>>>,
 }
 
-impl StreamRuntime {
+impl Runner {
     pub fn new() -> Result<Arc<Self>> {
         // Auto-detect tokio context FIRST — telemetry exporters need a Tokio handle.
         // If inside tokio runtime: use current handle (external handle mode)
@@ -161,7 +161,7 @@ impl StreamRuntime {
         // stdout + batched JSONL file at
         // `$XDG_STATE_HOME/streamlib/logs/<runtime_id>-<started_at>.jsonl`.
         // See `docs/logging-schema.md` for the schema (the durable
-        // interface contract) and `streamlib::core::logging` for the
+        // interface contract) and `streamlib::sdk::logging` for the
         // implementation.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         let _logging_guard = crate::core::logging::init(
@@ -171,7 +171,7 @@ impl StreamRuntime {
             ),
         )
         .map_err(|e| StreamError::Runtime(format!("Failed to initialize logging: {}", e)))?;
-        tracing::info!("Creating StreamRuntime with ID: {}", runtime_id);
+        tracing::info!("Creating Runner with ID: {}", runtime_id);
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
         let streamlib_home = crate::core::get_streamlib_home();
@@ -254,7 +254,7 @@ impl StreamRuntime {
 
     /// Path of the per-runtime surface-sharing Unix socket.
     ///
-    /// Bound during [`StreamRuntime::new`] at
+    /// Bound during [`Runner::new`] at
     /// `$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`. Polyglot
     /// subprocesses spawned by this runtime inherit this path via the
     /// `STREAMLIB_SURFACE_SOCKET` env var so their `streamlib-surface-client`
@@ -1577,7 +1577,7 @@ fn bring_up_surface_service(
             Ok(_) => {
                 return Err(StreamError::Runtime(format!(
                     "Surface-sharing socket {} is already bound by a live process. \
-                     Each StreamRuntime requires a unique runtime_id; check for a \
+                     Each Runner requires a unique runtime_id; check for a \
                      duplicate STREAMLIB_RUNTIME_ID env var or another runtime in \
                      the same session.",
                     socket_path.display()
@@ -1622,17 +1622,17 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
-    // All StreamRuntime::new() tests are `#[serial]` because the runtime
+    // All Runner::new() tests are `#[serial]` because the runtime
     // reads/writes process-global env vars (XDG_RUNTIME_DIR,
     // STREAMLIB_RUNTIME_ID) and its PUBSUB/iceoryx2/telemetry plumbing
     // races when multiple runtimes construct concurrently. The test
     // module's `#[serial]` default group serializes every test that
-    // constructs a StreamRuntime so nobody reads env mid-mutation.
+    // constructs a Runner so nobody reads env mid-mutation.
 
     #[test]
     #[serial]
     fn test_runtime_creation() {
-        let _runtime = StreamRuntime::new();
+        let _runtime = Runner::new();
         // Runtime creates successfully
     }
 
@@ -1643,7 +1643,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_load_project_recurses_into_path_dep() {
-        let runtime = StreamRuntime::new().unwrap();
+        let runtime = Runner::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
 
         // Project A — empty processors, declares path dep to ../b
@@ -1689,7 +1689,7 @@ package:
     #[test]
     #[serial]
     fn test_load_project_path_dep_missing_manifest_propagates_error() {
-        let runtime = StreamRuntime::new().unwrap();
+        let runtime = Runner::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
 
         let a = tmp.path().join("a");
@@ -1726,7 +1726,7 @@ dependencies:
     #[test]
     #[serial]
     fn test_load_project_resolves_registry_dep_via_consumer_patch() {
-        let runtime = StreamRuntime::new().unwrap();
+        let runtime = Runner::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
 
         // Patched dep target.
@@ -1813,7 +1813,7 @@ patch:
         // test runs).
         let sandbox = tempfile::tempdir().unwrap();
         let prev_home = std::env::var_os("STREAMLIB_HOME");
-        // SAFETY: `#[serial]` serializes every StreamRuntime test in this
+        // SAFETY: `#[serial]` serializes every Runner test in this
         // module, so concurrent env-var mutation can't tear other tests.
         unsafe {
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
@@ -1844,7 +1844,7 @@ patch:
         )
         .unwrap();
 
-        let runtime = StreamRuntime::new().unwrap();
+        let runtime = Runner::new().unwrap();
         runtime
             .load_project(consumer.path())
             .expect("git patch must clone the local repo and recurse into it");
@@ -1861,7 +1861,7 @@ patch:
     #[test]
     #[serial]
     fn test_load_project_strict_errors_on_missing_patch_path() {
-        let runtime = StreamRuntime::new().unwrap();
+        let runtime = Runner::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("streamlib.yaml"),
@@ -1917,7 +1917,7 @@ patch:
         // with the real `~/.streamlib/packages.yaml`.
         let sandbox = tempfile::tempdir().unwrap();
         let prev_home = std::env::var_os("STREAMLIB_HOME");
-        // SAFETY: `#[serial]` serializes every StreamRuntime test in this
+        // SAFETY: `#[serial]` serializes every Runner test in this
         // module, so concurrent env-var mutation can't tear other tests.
         unsafe {
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
@@ -1969,7 +1969,7 @@ dependencies:
         )
         .unwrap();
 
-        let runtime = StreamRuntime::new().unwrap();
+        let runtime = Runner::new().unwrap();
         runtime
             .load_project(consumer.path())
             .expect("registry dep must resolve via installed-package cache");
@@ -1985,7 +1985,7 @@ dependencies:
     #[test]
     #[serial]
     fn test_load_project_unresolvable_registry_dep_errors_actionably() {
-        let runtime = StreamRuntime::new().unwrap();
+        let runtime = Runner::new().unwrap();
         let tmp = tempfile::tempdir().unwrap();
 
         let a = tmp.path().join("a");
@@ -2021,7 +2021,7 @@ dependencies:
     #[serial]
     fn test_new_outside_tokio_creates_owned_runtime() {
         // Outside tokio context - creates owned runtime
-        let runtime = StreamRuntime::new().unwrap();
+        let runtime = Runner::new().unwrap();
         assert!(matches!(
             runtime.tokio_runtime_variant,
             TokioRuntimeVariant::OwnedTokioRuntime(_)
@@ -2036,7 +2036,7 @@ dependencies:
             .enable_all()
             .build()
             .unwrap();
-        let result = temp_rt.block_on(async { StreamRuntime::new() });
+        let result = temp_rt.block_on(async { Runner::new() });
         assert!(result.is_ok());
         let runtime = result.unwrap();
         assert!(matches!(
@@ -2054,7 +2054,7 @@ dependencies:
             .build()
             .unwrap();
         temp_rt.block_on(async {
-            let runtime = StreamRuntime::new().unwrap();
+            let runtime = Runner::new().unwrap();
             // Sync methods should work (use spawn + channel internally)
             let json = runtime.to_json().unwrap();
             assert!(json["nodes"].is_array());
@@ -2095,7 +2095,7 @@ dependencies:
         #[serial]
         fn runtime_brings_up_internal_surface_share_service() {
             with_isolated_xdg_runtime_dir(|xdg| {
-                let runtime = StreamRuntime::new().expect("runtime should construct");
+                let runtime = Runner::new().expect("runtime should construct");
                 let socket_path = runtime.surface_socket_path();
                 assert!(
                     socket_path.exists(),
@@ -2138,7 +2138,7 @@ dependencies:
                 std::env::remove_var("XDG_RUNTIME_DIR");
             }
 
-            let result = StreamRuntime::new();
+            let result = Runner::new();
 
             // Restore env before asserting so a panic doesn't leak state.
             unsafe {
@@ -2162,8 +2162,8 @@ dependencies:
         #[serial]
         fn two_runtimes_coexist_without_collision() {
             with_isolated_xdg_runtime_dir(|_| {
-                let r1 = StreamRuntime::new().expect("first runtime");
-                let r2 = StreamRuntime::new().expect("second runtime");
+                let r1 = Runner::new().expect("first runtime");
+                let r2 = Runner::new().expect("second runtime");
 
                 let p1 = r1.surface_socket_path().to_path_buf();
                 let p2 = r2.surface_socket_path().to_path_buf();
@@ -2191,7 +2191,7 @@ dependencies:
         #[serial]
         fn polyglot_subprocess_inherits_socket_env() {
             with_isolated_xdg_runtime_dir(|_| {
-                let runtime = StreamRuntime::new().expect("runtime");
+                let runtime = Runner::new().expect("runtime");
                 let socket_path = runtime.surface_socket_path().to_path_buf();
 
                 // Mirror what the spawn ops do: build a Command with the env
@@ -2235,7 +2235,7 @@ dependencies:
                     .expect("write orphan");
                 assert!(stale_path.exists());
 
-                let runtime_result = StreamRuntime::new();
+                let runtime_result = Runner::new();
 
                 // Restore env before asserting.
                 unsafe {

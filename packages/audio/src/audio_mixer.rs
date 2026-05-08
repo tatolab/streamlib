@@ -2,17 +2,18 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::tatolab__audio::audio_mixer_config::Strategy;
-use streamlib::_generated_::AudioFrame;
-use streamlib::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[streamlib::processor("AudioMixer")]
+#[streamlib::sdk::processor("AudioMixer")]
 pub struct AudioMixerProcessor {
     sample_rate: u32,
     buffer_size: usize,
     frame_counter: u64,
 }
 
-impl streamlib::core::ReactiveProcessor for AudioMixerProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for AudioMixerProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,

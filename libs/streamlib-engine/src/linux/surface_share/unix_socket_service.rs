@@ -3,7 +3,7 @@
 
 //! Per-runtime Unix socket surface-sharing service.
 //!
-//! Each `StreamRuntime` owns one of these listening on a unique socket under
+//! Each `Runner` owns one of these listening on a unique socket under
 //! `$XDG_RUNTIME_DIR`. Polyglot subprocesses connect via `connect_to_surface_share_socket`
 //! / `send_request_with_fds` (from [`streamlib_surface_client`]) and exchange
 //! DMA-BUF fds over `SCM_RIGHTS`. Surfaces may carry up to

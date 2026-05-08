@@ -4,7 +4,7 @@
 //! Declarative graph file format for loading pipelines from JSON/YAML.
 //!
 //! This module defines the schema for graph files that can be loaded by
-//! `streamlib-cli` or programmatically via [`StreamRuntime::load_graph_file`].
+//! `streamlib-cli` or programmatically via [`Runner::load_graph_file`].
 //!
 //! # Example Graph File
 //!

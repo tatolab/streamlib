@@ -12,7 +12,7 @@ use thiserror::Error;
 /// Kept deliberately narrow: the carve-out is small (DMA-BUF FD import
 /// + bind + map, sync wait/signal, layout transitions on imported
 /// handles), so two variants cover everything that can go wrong.
-/// `streamlib::core::StreamError` provides a `From<ConsumerRhiError>`
+/// `streamlib::sdk::error::StreamError` provides a `From<ConsumerRhiError>`
 /// impl, so host-side code can wrap consumer errors with `?`.
 #[derive(Debug, Error)]
 pub enum ConsumerRhiError {

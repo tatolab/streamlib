@@ -217,7 +217,7 @@ impl RuntimeContext {
 
     /// Dispatch a closure to execute on the runtime thread asynchronously.
     ///
-    /// The "runtime thread" is the thread where StreamRuntime orchestration happens.
+    /// The "runtime thread" is the thread where Runner orchestration happens.
     /// On macOS, this is the main thread (NSApplication run loop) because Apple
     /// frameworks like AVFoundation, Metal, and CoreMedia require it.
     #[cfg(target_os = "macos")]
@@ -255,7 +255,7 @@ impl RuntimeContext {
 
     /// Dispatch a closure to execute on the runtime thread and wait for the result.
     ///
-    /// The "runtime thread" is the thread where StreamRuntime orchestration happens.
+    /// The "runtime thread" is the thread where Runner orchestration happens.
     /// On macOS, this is the main thread (NSApplication run loop) because Apple
     /// frameworks like AVFoundation, Metal, and CoreMedia require it.
     #[cfg(target_os = "macos")]
@@ -502,7 +502,7 @@ impl RuntimeContext {
     /// before processors can safely use platform APIs. On macOS, this sets up
     /// NSApplication and verifies the app has finished launching.
     ///
-    /// Call this from `StreamRuntime::start()` after GPU context is initialized
+    /// Call this from `Runner::start()` after GPU context is initialized
     /// but before starting any processors.
     #[cfg(target_os = "macos")]
     pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
@@ -602,7 +602,7 @@ impl RuntimeContext {
 ///
 /// ```compile_fail
 /// fn assert_not_clone<T: Clone>() {}
-/// assert_not_clone::<streamlib::core::RuntimeContextFullAccess<'static>>();
+/// assert_not_clone::<streamlib::sdk::context::RuntimeContextFullAccess<'static>>();
 /// ```
 pub struct RuntimeContextFullAccess<'a> {
     base: &'a RuntimeContext,
@@ -624,14 +624,14 @@ pub struct RuntimeContextFullAccess<'a> {
 ///
 /// ```compile_fail
 /// fn assert_not_clone<T: Clone>() {}
-/// assert_not_clone::<streamlib::core::RuntimeContextLimitedAccess<'static>>();
+/// assert_not_clone::<streamlib::sdk::context::RuntimeContextLimitedAccess<'static>>();
 /// ```
 ///
 /// `gpu_full_access()` is intentionally absent from this type — a `process()`
 /// body cannot reach privileged GPU operations:
 ///
 /// ```compile_fail
-/// fn reach_full(ctx: &streamlib::core::RuntimeContextLimitedAccess<'_>) {
+/// fn reach_full(ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>) {
 ///     let _ = ctx.gpu_full_access();
 /// }
 /// ```

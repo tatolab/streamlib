@@ -157,7 +157,7 @@ mod tests {
             source: Source::Rust,
             level: LogLevel::Info,
             message: "hi".into(),
-            target: "streamlib::core::logging::tests".into(),
+            target: "streamlib::sdk::logging::tests".into(),
             pipeline_id: None,
             processor_id: None,
             rhi_op: None,

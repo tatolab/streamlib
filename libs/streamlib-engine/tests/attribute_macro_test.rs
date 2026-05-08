@@ -10,7 +10,7 @@ use streamlib_engine::core::GeneratedProcessor;
 use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 // Define a simple processor using YAML schema
-#[streamlib::processor("TestProcessor")]
+#[streamlib::sdk::processor("TestProcessor")]
 pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
@@ -139,7 +139,7 @@ mod _generated_ {
     pub use super::ConfiguredProcessorConfig;
 }
 
-#[streamlib::processor("TestConfiguredProcessor")]
+#[streamlib::sdk::processor("TestConfiguredProcessor")]
 pub struct ConfiguredProcessor;
 
 impl streamlib_engine::ContinuousProcessor for ConfiguredProcessor::Processor {

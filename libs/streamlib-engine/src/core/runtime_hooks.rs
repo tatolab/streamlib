@@ -6,10 +6,10 @@ use std::sync::OnceLock;
 
 use crate::Result;
 
-/// Hook called synchronously when a StreamRuntime is created.
+/// Hook called synchronously when a Runner is created.
 ///
 /// External crates register implementations via `inventory::submit!`.
-/// The runtime calls all registered hooks during `StreamRuntime::new()`.
+/// The runtime calls all registered hooks during `Runner::new()`.
 ///
 /// Use for: warming caches, verifying toolchains.
 ///
@@ -63,7 +63,7 @@ inventory::collect!(RuntimeInitHookRegistration);
 
 /// Run all registered init hooks.
 ///
-/// Called from `StreamRuntime::new()`. Uses `OnceLock` to ensure hooks
+/// Called from `Runner::new()`. Uses `OnceLock` to ensure hooks
 /// only run once per process, even if multiple runtimes are created.
 pub fn run_init_hooks(streamlib_home: &Path) -> Result<()> {
     use std::sync::atomic::{AtomicBool, Ordering};

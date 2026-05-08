@@ -4,9 +4,10 @@
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::_generated_::AudioFrame;
-use streamlib::core::context::AudioTickContext;
-use streamlib::core::{Result, RuntimeContextFullAccess};
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::context::AudioTickContext;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::context::RuntimeContextFullAccess;
 
 struct SineOscillator {
     phase: f64,
@@ -52,7 +53,7 @@ struct OscillatorState {
     osc_g4: SineOscillator,
 }
 
-#[streamlib::processor("ChordGenerator")]
+#[streamlib::sdk::processor("ChordGenerator")]
 pub struct ChordGeneratorProcessor {
     oscillators: Arc<Mutex<Option<OscillatorState>>>,
     frame_counter: Arc<AtomicU64>,
@@ -66,7 +67,7 @@ impl ChordGeneratorProcessor::Processor {
     const FREQ_G4: f64 = 392.00;
 }
 
-impl streamlib::core::ManualProcessor for ChordGeneratorProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for ChordGeneratorProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,

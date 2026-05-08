@@ -50,16 +50,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib::core::context::GpuContext;
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::error::StreamError;
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
     HostVulkanPixelBuffer,
     HostVulkanTimelineSemaphore,
 };
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
@@ -147,7 +150,7 @@ fn main() -> Result<()> {
     println!("Timeout:     {timeout_secs}s");
     println!();
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Slot the setup hook will populate with the cuda adapter so it
     // (and the host-side `Arc`s it holds) outlives the runtime's start

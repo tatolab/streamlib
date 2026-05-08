@@ -5,8 +5,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::core::{Result, RuntimeContextFullAccess, StreamError};
-use streamlib::iceoryx2::OutputWriter;
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::context::RuntimeContextFullAccess;
+use streamlib::sdk::iceoryx2::OutputWriter;
 
 #[derive(Debug, Clone)]
 pub struct AppleAudioInputDevice {
@@ -17,7 +18,7 @@ pub struct AppleAudioInputDevice {
     pub is_default: bool,
 }
 
-#[streamlib::processor("AudioCapture")]
+#[streamlib::sdk::processor("AudioCapture")]
 pub struct AppleAudioCaptureProcessor {
     device_info: Option<AppleAudioInputDevice>,
     _device: Option<Device>,
@@ -27,7 +28,7 @@ pub struct AppleAudioCaptureProcessor {
     stream_setup_done: bool,
 }
 
-impl streamlib::core::ManualProcessor for AppleAudioCaptureProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for AppleAudioCaptureProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,
@@ -166,9 +167,9 @@ impl AppleAudioCaptureProcessor::Processor {
 
                     let frame_number = frame_counter_clone.fetch_add(1, Ordering::Relaxed);
                     let timestamp_ns =
-                        streamlib::core::media_clock::MediaClock::now().as_nanos() as i64;
+                        streamlib::sdk::media_clock::MediaClock::now().as_nanos() as i64;
 
-                    let ipc_frame = streamlib::_generated_::AudioFrame {
+                    let ipc_frame = streamlib::sdk::_generated_::AudioFrame {
                         samples: data.to_vec(),
                         channels: 1,
                         sample_rate: sample_rate_clone,

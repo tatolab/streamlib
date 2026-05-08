@@ -39,8 +39,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use streamlib::sdk::engine::HostStreamTextureExt;
 
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::TextureFormat;
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
 use streamlib_adapter_opengl::DRM_FORMAT_ARGB8888;
 

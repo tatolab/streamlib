@@ -35,11 +35,12 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib::core::display_info;
-use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
-use streamlib::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
-use streamlib::iceoryx2::{InputMailboxes, OutputWriter};
-use streamlib::VideoFrame;
+use streamlib::sdk::display_info;
+use streamlib::sdk::rhi::{StreamTexture, TextureFormat, VulkanLayout};
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
+use streamlib::sdk::_generated_::VideoFrame;
 
 // Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
 // the transitional rationale (this kernel previously lived in the
@@ -119,7 +120,7 @@ struct GpuBackend {
     output_ring: Vec<OutputSlot>,
 }
 
-#[streamlib::processor("BlendingCompositor")]
+#[streamlib::sdk::processor("BlendingCompositor")]
 pub struct BlendingCompositorProcessor {
     config: BlendingCompositorConfig,
 
@@ -136,7 +137,7 @@ pub struct BlendingCompositorProcessor {
     backend: Option<GpuBackend>,
 }
 
-impl streamlib::core::ManualProcessor for BlendingCompositorProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for BlendingCompositorProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -574,7 +575,7 @@ fn compose_one_frame(
 /// [`TextureRegistration::update_layout`]) after the render submit
 /// completes.
 struct ResolvedLayer {
-    registration: Arc<streamlib::core::context::TextureRegistration>,
+    registration: Arc<streamlib::sdk::context::TextureRegistration>,
     texture: StreamTexture,
 }
 
@@ -704,7 +705,7 @@ mod tests {
     /// consuming stale frames.
     #[test]
     fn iceoryx2_pop_latest_skips_stale_frames() {
-        use streamlib::iceoryx2::PortMailbox;
+        use streamlib::sdk::iceoryx2::PortMailbox;
 
         let mailbox = PortMailbox::new(8);
         for i in 0u8..5 {

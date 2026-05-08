@@ -51,7 +51,7 @@ use streamlib::sdk::engine::HostStreamTextureExt;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use streamlib::core::rhi::{
+use streamlib::sdk::rhi::{
     AttachmentFormats,
     ColorBlendState,
     ColorWriteMask,
@@ -74,7 +74,7 @@ use streamlib::core::rhi::{
     Viewport,
     VulkanLayout,
 };
-use streamlib::core::{Result, StreamError};
+use streamlib::sdk::error::{Result, StreamError};
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, VulkanGraphicsKernel};
 
 /// Push-constants layout — must match `crt_film_grain.frag`'s
@@ -478,7 +478,7 @@ fn output_barrier_to_color_attachment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib::core::rhi::{
+    use streamlib::sdk::rhi::{
         PixelFormat,
         TextureDescriptor,
         TextureReadbackDescriptor,

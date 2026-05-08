@@ -26,7 +26,7 @@ thread_local! {
 /// Global pub/sub instance for runtime events.
 ///
 /// Created as an empty shell via LazyLock. Must be initialized via `init()`
-/// during `StreamRuntime::new()` before iceoryx2 services are available.
+/// during `Runner::new()` before iceoryx2 services are available.
 /// Before init, publish is a no-op and subscribe is buffered.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
@@ -54,7 +54,7 @@ impl PubSub {
         }
     }
 
-    /// Initialize with iceoryx2 backend. Called once from StreamRuntime::new().
+    /// Initialize with iceoryx2 backend. Called once from Runner::new().
     ///
     /// Replays any subscriptions that were registered before initialization.
     pub fn init(&self, runtime_id: &str, node: Iceoryx2Node) {

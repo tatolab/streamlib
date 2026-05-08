@@ -83,6 +83,7 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_privileged_vk_calls(project_root, &mut violations, &mut files_scanned)?;
     check_vulkanalia_uses_workspace_fork(project_root, &mut violations, &mut files_scanned)?;
     check_streamlib_engine_confined(project_root, &mut violations, &mut files_scanned)?;
+    check_streamlib_top_level_shortcut(project_root, &mut violations, &mut files_scanned)?;
     Ok(CheckReport { violations, files_scanned })
 }
 
@@ -704,6 +705,120 @@ const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
         rationale: "SDK facade — pub uses items from engine to expose via streamlib::*",
     },
 ];
+
+// ---------------------------------------------------------------------------
+// Check 7 — `streamlib::*` top-level shortcuts forbidden
+// ---------------------------------------------------------------------------
+//
+// All consumer code must route through the SDK's three-tier path system:
+//
+//   - `streamlib::sdk::*`            (default — public SDK API)
+//   - `streamlib::sdk::engine::*`    (curated engine-bridge surface)
+//   - `streamlib::engine_internal::*`(direct passthrough — rare; signals
+//                                     "I'm reaching past the curated boundary")
+//
+// Top-level `streamlib::Foo` shortcuts (e.g., `use streamlib::StreamRuntime`)
+// are forbidden because they hide which boundary tier the consumer is in.
+// Path segments are the documentation: a future reader scans the import
+// and immediately knows which tier is being used.
+//
+// The engine itself uses `extern crate self as streamlib;` and references
+// items through that alias for proc-macro path resolution. Those uses
+// are exempt — the engine's lib.rs and its own internal modules legitimately
+// reach internal items through `streamlib::*`.
+
+const CHECK_TOP_LEVEL_SHORTCUT: &str = "streamlib-top-level-shortcut-forbidden";
+
+const TOP_LEVEL_SHORTCUT_RATIONALE: &str =
+    "use streamlib::sdk::* (or sdk::engine::* / engine_internal::* for engine-side access); top-level streamlib::Foo shortcuts hide the boundary tier";
+
+const TOP_LEVEL_SHORTCUT_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "libs/streamlib-engine/",
+        kind: AllowKind::PathPrefix,
+        rationale: "engine itself — `extern crate self as streamlib;` aliases the engine; internal modules reach items through this alias for proc-macro path resolution",
+    },
+    AllowEntry {
+        path: "libs/streamlib-sdk/src/lib.rs",
+        kind: AllowKind::ExactFile,
+        rationale: "SDK facade — defines the streamlib::sdk::* / engine_internal::* tree",
+    },
+    AllowEntry {
+        path: "libs/streamlib-macros/",
+        kind: AllowKind::PathPrefix,
+        rationale: "proc-macro emit-paths for downstream consumers; not consumer code",
+    },
+];
+
+// Path-prefix allowlist for the FIRST segment after `streamlib::`. A
+// `streamlib::FOO` reference is OK only if FOO is one of these segments.
+const TOP_LEVEL_ALLOWED_SEGMENTS: &[&str] = &["sdk", "engine_internal"];
+
+fn check_streamlib_top_level_shortcut(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    // Hand-rolled scanner — match `streamlib::FOO` where FOO starts at
+    // a word boundary and is an identifier.
+    for path in walk_rs(project_root) {
+        *files_scanned += 1;
+        let rel = rel_to_root(&path, project_root);
+        if matches_allow(rel, TOP_LEVEL_SHORTCUT_ALLOWLIST) {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("read {}", path.display()))?;
+        for (line_no, line) in content.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue; // skip comments (incl. `///` and `//!`)
+            }
+            // Walk every occurrence of "streamlib::" in the line, check the
+            // segment that follows.
+            let bytes = line.as_bytes();
+            let mut i = 0;
+            while let Some(found) = line[i..].find("streamlib::") {
+                let start = i + found;
+                // Boundary check: char before must NOT be ident/_ (avoid
+                // matching `streamlib_engine::...`, `streamlib_consumer_rhi::...` etc.)
+                if start > 0 {
+                    let prev = bytes[start - 1] as char;
+                    if prev.is_ascii_alphanumeric() || prev == '_' {
+                        i = start + "streamlib::".len();
+                        continue;
+                    }
+                }
+                let after = start + "streamlib::".len();
+                // Read the segment ident
+                let mut end = after;
+                while end < bytes.len() {
+                    let c = bytes[end] as char;
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if end > after {
+                    let segment = &line[after..end];
+                    if !TOP_LEVEL_ALLOWED_SEGMENTS.contains(&segment) {
+                        violations.push(Violation {
+                            path: rel.to_path_buf(),
+                            line_no: line_no + 1,
+                            line_text: line.to_string(),
+                            matched_pattern: format!("streamlib::{} (top-level)", segment),
+                            check: CHECK_TOP_LEVEL_SHORTCUT,
+                            rationale: TOP_LEVEL_SHORTCUT_RATIONALE,
+                        });
+                    }
+                }
+                i = end;
+            }
+        }
+    }
+    Ok(())
+}
 
 fn check_streamlib_engine_confined(
     project_root: &Path,

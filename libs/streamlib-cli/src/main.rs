@@ -208,8 +208,8 @@ fn main() -> Result<()> {
 
 async fn async_main(cli: Cli) -> Result<()> {
     // Short-lived CLI invocation: stdout-only tracing, no JSONL file.
-    let _logging_guard = streamlib::logging::init(
-        streamlib::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
+    let _logging_guard = streamlib::sdk::logging::init(
+        streamlib::sdk::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
     )?;
 
     match cli.command {

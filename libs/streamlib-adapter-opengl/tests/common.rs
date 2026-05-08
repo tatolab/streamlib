@@ -11,8 +11,8 @@
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
 use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,

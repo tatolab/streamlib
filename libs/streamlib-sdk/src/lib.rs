@@ -3,262 +3,237 @@
 
 //! streamlib — public authoring API surface.
 //!
-//! Customer apps depend on this crate (`streamlib`). Engine internals
-//! (RHI, IPC plumbing, surface-share, runtime executor) live in a
-//! private `streamlib-engine` dep that the SDK pulls in transitively
-//! but does NOT publicly re-export. The boundary is enforced by what
-//! this crate chooses to surface — items not listed here are
-//! unreachable from a `streamlib`-only dep graph.
+//! # Three-tier path system
 //!
-//! In particular this crate does NOT re-export `host_rhi`,
-//! `linux_surface_share`, the `vulkan` / `metal` / `linux` / `apple`
-//! backend modules, or the engine-internal `compiler` / runtime
-//! executor / embedded-schemas surface. Engine-side adapters and
-//! integration tests that need those reach for `streamlib-engine`
-//! directly.
+//! Every consumer import path falls into exactly one of three tiers,
+//! and the path itself tells the reader which tier they're in.
+//!
+//! **Tier 1 — `streamlib::sdk::*`** — public SDK API. Default for all
+//! consumer code. Examples / apps / domain packages should never need
+//! anything outside this tier.
+//!
+//! ```ignore
+//! use streamlib::sdk::runtime::Runner;
+//! use streamlib::sdk::processors::ProcessorSpec;
+//! use streamlib::sdk::rhi::StreamTexture;
+//! use streamlib::sdk::iceoryx2::OutputWriter;
+//! ```
+//!
+//! **Tier 2 — `streamlib::sdk::engine::*`** — the SDK's curated
+//! engine-bridge surface. Adapter crates and HOST-RHI examples that
+//! legitimately need raw GPU primitives reach through this namespace.
+//! It's part of the SDK's public API; the `engine` segment signals
+//! "you're touching engine-bridge primitives via the SDK's official
+//! extension surface."
+//!
+//! ```ignore
+//! use streamlib::sdk::engine::HostGpuDeviceExt;
+//! use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
+//! ```
+//!
+//! **Tier 3 — `streamlib::engine_internal::*`** — direct passthrough
+//! to the entire `streamlib-engine` crate. For very rare cases where
+//! the SDK's curated `sdk::engine` surface doesn't expose what's
+//! needed AND extending the SDK isn't right. Reads as "I'm reaching
+//! past the curated boundary; I know what I'm doing."
+//!
+//! ```ignore
+//! // Rare — should only be used in very specific circumstances.
+//! use streamlib::engine_internal::core::compiler::SomeInternalThing;
+//! ```
+//!
+//! If you find yourself importing from `engine_internal` for an item
+//! that would benefit other consumers, that's a signal: either extend
+//! the SDK's curated surface (`sdk::engine::*` or one of the topical
+//! sub-namespaces) or open an issue.
+//!
+//! Direct `streamlib_engine::*` imports outside the engine itself and
+//! this facade source are forbidden by `cargo xtask check-boundaries`
+//! Check 6.
 
-// Allow `::streamlib::` paths emitted by the procedural macro to
+// Allow `::streamlib::*` paths emitted by the procedural macro to
 // resolve back to this crate when invoked from external consumer
 // crates (e.g. domain packages, customer apps).
 extern crate self as streamlib;
 
-// Re-export crates the procedural macro emits paths into.
-pub use streamlib_engine::crossbeam_channel;
-pub use streamlib_engine::inventory;
-pub use streamlib_engine::serde_json;
+// =============================================================================
+// Tier 1 — public SDK API
+// =============================================================================
 
-// Public authoring API — re-exported from the engine. Each item below
-// is intentional; the engine has additional public items
-// (`host_rhi::*`, `linux_surface_share::*`, `vulkan::*`, etc.) that
-// customer apps must NOT see.
-pub use streamlib_engine::{
-    are_synchronized,
-    convert_audio_to_sample,
-    convert_video_to_samples,
-    gl_constants,
-    input,
-    output,
-    timestamp_delta_ms,
-    video_audio_delta_ms,
-    video_audio_synchronized,
-    video_audio_synchronized_with_tolerance,
-    ApiServerProcessor,
-    AudioCodec,
-    ConnectionDefinition,
-    ContinuousProcessor,
-    GlContext,
-    GlTextureBinding,
-    GpuContext,
-    GraphFileDefinition,
-    H264Profile,
-    InputPortMarker,
-    LfoWaveform,
-    ManualProcessor,
-    MediaClock,
-    Mp4Muxer,
-    Mp4MuxerConfig,
-    NativeTextureHandle,
-    OpusDecoderProcessor,
-    OpusEncoderProcessor,
-    OutputPortMarker,
-    ParameterAutomation,
-    ParameterInfo,
-    ParameterModulator,
-    PluginInfo,
-    PooledTextureHandle,
-    ProcessorDefinition,
-    ProcessorSpec,
-    ReactiveProcessor,
-    ResamplingQuality,
-    Result,
-    RtpTimestampCalculator,
-    RuntimeContext,
-    RuntimeContextFullAccess,
-    RuntimeContextLimitedAccess,
-    StreamError,
-    StreamRuntime,
-    StreamTexture,
-    TextureDescriptor,
-    TextureFormat,
-    TexturePool,
-    TexturePoolDescriptor,
-    TextureUsages,
-    TimeContext,
-    VideoCodec,
-    WebRtcSession,
-    WebRtcWhepProcessor,
-    WebRtcWhipProcessor,
-    WhepClient,
-    WhepConfig,
-    WhipClient,
-    WhipConfig,
-    DEFAULT_SYNC_TOLERANCE_MS,
-    FOURCC_H264,
-    PROCESSOR_REGISTRY,
-};
-
-// Re-export attribute macros for processor syntax:
-// - #[streamlib::processor("Name")]
-// - #[derive(ConfigDescriptor)]
-pub use streamlib_engine::{processor, ConfigDescriptor};
-
-// Generated config types from JTD schemas.
-pub use streamlib_engine::{
-    ApiServerConfig, EncodedAudioFrame, EncodedVideoFrame, OpusDecoderConfig, OpusEncoderConfig,
-    VideoFrame,
-};
-
-// Linux-only generated config types and processors.
-#[cfg(target_os = "linux")]
-pub use streamlib_engine::{
-    BgraFileSourceConfig, BgraFileSourceProcessor, H264DecoderConfig, H264DecoderProcessor,
-    H264EncoderConfig, H264EncoderProcessor, H265DecoderConfig, H265DecoderProcessor,
-    H265EncoderConfig, H265EncoderProcessor, LinuxMp4WriterConfig, LinuxMp4WriterProcessor,
-};
-
-// macOS / iOS — CLAP plugin support and Apple processors.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use streamlib_engine::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
-
-// Cross-platform processor re-exports use the engine's platform-aliased names.
-pub use streamlib_engine::{CameraProcessor, DisplayProcessor};
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use streamlib_engine::{Mp4WriterProcessor, ScreenCaptureProcessor};
-
-// MoQ streaming (cross-platform, behind `moq` feature).
-#[cfg(feature = "moq")]
-pub use streamlib_engine::{
-    MoqPublishTrackConfig, MoqPublishTrackProcessor, MoqSubscribeTrackConfig,
-    MoqSubscribeTrackProcessor,
-};
-
-// Permission helpers.
-pub use streamlib_engine::{
-    request_audio_permission, request_camera_permission, request_display_permission,
-};
-
-// `iceoryx2` Rust wrapper module — required by macro-emitted paths
-// (`::streamlib::iceoryx2::OutputWriter` / `InputMailboxes` / `ReadMode`).
-pub use streamlib_engine::iceoryx2;
-
-// `logging` module — re-exported at the SDK root because the engine
-// historically exposes it that way (`streamlib_engine::logging::*`).
-// Tooling (CLI, runtime) and customer apps that wire up the streamlib
-// log pipeline reach for it via `streamlib::logging::*`.
-pub use streamlib_engine::logging;
-
-// Generated schema types — required so macro-emitted code can resolve
-// `::streamlib::_generated_::FrameType` etc. when consumer crates
-// generate their own typed bindings.
-pub use streamlib_engine::_generated_;
-
-// Selectively re-export public items from the engine's `core` module
-// — the modules customer code is allowed to traverse. Engine internals
-// like `compiler`, `embedded_schemas`, `runtime_hooks`, `signals`,
-// `streamlib_home`, `pubsub`, `observability`, `streaming` (impls),
-// `clap` (engine-internal helpers), `codec` (engine-internal helpers)
-// stay engine-private.
-pub mod core {
-    // Broad re-export of the engine's `core` items so macro-emitted
-    // paths (`::streamlib::core::ProcessorSpec`, `::streamlib::core::SchemaIdent`,
-    // `::streamlib::core::context::*`, etc.) resolve transparently.
-    //
-    // TODO(#735): downgrade engine-internal `core::*` modules from
-    // `pub` to `pub(crate)` at the engine source-of-truth. Today this
-    // glob re-exports `compiler`, `embedded_schemas`, `runtime_hooks`,
-    // `observability`, `streamlib_home`, `pubsub`, `signals` — engine
-    // internals that customer code can reach as `streamlib::core::*`.
-    // The fix is type-system-enforced visibility at the engine, not
-    // SDK-side curation discipline. Soft-blocker for #681.
-    pub use streamlib_engine::core::*;
-}
-
-/// Engine-bridge surface for examples / apps that legitimately need
-/// direct GPU access (raw `VkImage` handles, custom compute kernels,
-/// host-side render targets). These items live in `streamlib-engine`
-/// and are re-exported here so consumers don't take a direct
-/// `streamlib-engine` Cargo dep.
-///
-/// **Importing through this path is a deliberate signal**: the
-/// consumer is reaching for engine internals via the SDK's official
-/// extension surface. A reviewer or future agent reading
-/// `use streamlib::sdk::engine::host_rhi::HostVulkanDevice;` knows
-/// the file is doing engine-side privileged work — versus
-/// `use streamlib::core::rhi::StreamTexture;` which is the SDK's
-/// regular customer-facing surface.
-///
-/// Customer apps that don't have a legitimate reason to touch raw
-/// GPU primitives must NOT import from this namespace. If a needed
-/// API is missing from the SDK's regular surface, that's a signal
-/// the SDK has a gap — fix by extending the SDK's `core::*` /
-/// `iceoryx2::*` / top-level re-exports, not by reaching here.
-///
-/// Direct `streamlib_engine::*` imports outside this namespace are
-/// reserved for crates that are themselves engine extensions (the
-/// engine itself, surface adapters, plugin ABI, runtime tooling).
-/// Application / example / domain-package code never imports
-/// `streamlib_engine::*` directly.
 pub mod sdk {
-    /// Engine-extension surface. See [`crate::sdk`] module docs.
+    //! Public SDK API surface. Default for all consumer code.
+
+    // ---- Engine `core::*` sub-modules that are SDK-public ----
+    //
+    // Engine internals (`compiler`, `embedded_schemas`, `runtime_hooks`,
+    // `observability`, `streamlib_home`, `pubsub`, `signals`, `display_info`)
+    // are deliberately NOT re-exported here. Consumers needing them
+    // reach via `streamlib::engine_internal::core::<name>::*` (rare).
+
+    pub use streamlib_engine::core::context;
+    pub use streamlib_engine::core::descriptors;
+    pub use streamlib_engine::core::display_info;
+    pub use streamlib_engine::core::error;
+    pub use streamlib_engine::core::execution;
+    pub use streamlib_engine::core::graph;
+    pub use streamlib_engine::core::graph_file;
+    pub use streamlib_engine::core::json_schema;
+    pub use streamlib_engine::core::media_clock;
+    pub use streamlib_engine::core::prelude;
+    pub use streamlib_engine::core::rhi;
+    pub use streamlib_engine::core::runtime;
+    pub use streamlib_engine::core::streaming;
+    pub use streamlib_engine::core::sync;
+    pub use streamlib_engine::core::texture;
+    pub use streamlib_engine::core::utils;
+
+    // ---- Processors namespace ----
+    //
+    // Combines engine's `core::processors::*` with the platform-
+    // aliased processor types that engine exposes at its crate root
+    // (e.g., `CameraProcessor` is `LinuxCameraProcessor` on Linux,
+    // `AppleCameraProcessor` on macOS).
+    pub mod processors {
+        pub use streamlib_engine::core::processors::*;
+
+        // Port markers + input/output helpers — semantically processor-
+        // related; physically live in `core::graph::edges::link_port_markers`
+        // in engine source.
+        pub use streamlib_engine::core::graph::{
+            input, output, InputPortMarker, OutputPortMarker,
+        };
+
+        // Port schema spec — semantically processor-related; lives in
+        // `core::descriptors` in engine source (re-exported from
+        // `streamlib-processor-schema`).
+        pub use streamlib_engine::core::descriptors::PortSchemaSpec;
+
+        // Platform-aliased camera + display processors.
+        pub use streamlib_engine::{CameraProcessor, DisplayProcessor};
+
+        // Apple-only processors.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        pub use streamlib_engine::{
+            ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor,
+        };
+
+        // Linux-only processors (codec + bgra + mp4 writer).
+        #[cfg(target_os = "linux")]
+        pub use streamlib_engine::{
+            BgraFileSourceProcessor, H264DecoderProcessor, H264EncoderProcessor,
+            H265DecoderProcessor, H265EncoderProcessor, LinuxMp4WriterProcessor,
+        };
+
+        // MoQ feature-gated processors.
+        #[cfg(feature = "moq")]
+        pub use streamlib_engine::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
+    }
+
+    // ---- Cross-cutting modules from engine top-level ----
+
+    /// `iceoryx2` Rust wrapper module — required by macro-emitted paths.
+    pub use streamlib_engine::iceoryx2;
+
+    /// Logging pipeline.
+    pub use streamlib_engine::logging;
+
+    /// `inventory` re-export — required by macro-emitted paths.
+    pub use streamlib_engine::inventory;
+
+    /// `serde_json` re-export — required by macro-emitted paths.
+    pub use streamlib_engine::serde_json;
+
+    /// `crossbeam_channel` re-export — required by macro-emitted paths.
+    pub use streamlib_engine::crossbeam_channel;
+
+    /// Generated schema types (config types, wire vocabulary types).
+    pub use streamlib_engine::_generated_;
+
+    // ---- Procedural macros ----
+
+    /// `#[streamlib::sdk::processor("...")]` attribute macro.
+    pub use streamlib_engine::processor;
+
+    /// `#[derive(ConfigDescriptor)]` derive macro.
+    pub use streamlib_engine::ConfigDescriptor;
+
+    // ---- Permission helpers ----
+
+    pub mod permissions {
+        pub use streamlib_engine::{
+            request_audio_permission, request_camera_permission, request_display_permission,
+        };
+    }
+
+    // ---- Platform info ----
+
+    pub use streamlib_engine::platform;
+
+    // ---- CLAP plugin support (Apple-only) ----
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub use streamlib_engine::{ClapPluginInfo, ClapScanner};
+
+    // =========================================================================
+    // Tier 2 — SDK's curated engine-bridge surface
+    // =========================================================================
+
+    /// Curated engine-bridge surface. Adapter crates and HOST-RHI
+    /// examples that legitimately need raw GPU primitives reach
+    /// through this namespace.
+    ///
+    /// The `engine` segment signals "you're touching engine-bridge
+    /// primitives via the SDK's official extension surface" — distinct
+    /// from `sdk::*` (regular SDK API) and `streamlib::engine_internal::*`
+    /// (direct passthrough).
+    #[cfg(any(
+        feature = "backend-vulkan",
+        all(target_os = "linux", not(feature = "backend-metal"))
+    ))]
     pub mod engine {
-        /// Host-side Vulkan RHI types: `HostVulkanDevice`,
-        /// `HostVulkanTexture`, `HostVulkanPixelBuffer`,
-        /// `HostVulkanTimelineSemaphore`, `VulkanComputeKernel`,
-        /// `VulkanGraphicsKernel`, `VulkanRayTracingKernel`,
-        /// `VulkanTextureReadback`, `VulkanAccelerationStructure`,
-        /// `OffscreenColorTarget`, `OffscreenDraw`,
-        /// `RayTracingPipelineProperties`, `TlasInstanceDesc`,
-        /// `HostMarker`, `IDENTITY_TRANSFORM`,
-        /// `AccelerationStructureKind`, `GeometryInstanceFlagsKHR`,
-        /// `drm_modifier_probe`.
-        #[cfg(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        ))]
+        /// Host-side Vulkan RHI types (HostVulkanDevice,
+        /// HostVulkanTexture, HostVulkanPixelBuffer,
+        /// HostVulkanTimelineSemaphore, VulkanComputeKernel,
+        /// VulkanGraphicsKernel, VulkanRayTracingKernel,
+        /// VulkanTextureReadback, VulkanAccelerationStructure, etc.).
         pub use streamlib_engine::host_rhi;
 
-        /// Privileged extension traits for the SDK-bucket types that
-        /// surface raw `Host*` handles. Importing one of these into
-        /// scope unlocks `vulkan_inner()` / `from_vulkan()` /
-        /// `vulkan_device()` on `StreamTexture` / `RhiPixelBufferRef` /
-        /// `GpuDevice`. See [`HostStreamTextureExt`] etc.
-        #[cfg(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        ))]
+        /// Privileged extension traits surfacing raw `Host*` handles
+        /// on SDK-bucket types. Importing one unlocks `vulkan_inner()`
+        /// / `from_vulkan()` / `vulkan_device()` on
+        /// `StreamTexture` / `RhiPixelBufferRef` / `GpuDevice`.
         pub use streamlib_engine::{
             HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostStreamTextureExt,
         };
 
-        /// Per-runtime surface-share service primitives. Re-exposed
-        /// here for adapter integration tests and 3rd-party tooling
-        /// that needs to drive the service in isolation. Production
-        /// callers go through [`crate::StreamRuntime`].
+        /// Per-runtime surface-share service primitives. For adapter
+        /// integration tests and 3rd-party tooling that needs to drive
+        /// the service in isolation; production callers go through
+        /// [`crate::sdk::runtime::Runner`].
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::linux_surface_share;
     }
 }
 
-// `platform` info — small, cross-platform, customer-visible.
-pub mod platform {
-    pub fn name() -> &'static str {
-        #[cfg(target_os = "macos")]
-        return "macOS";
-        #[cfg(target_os = "ios")]
-        return "iOS";
-        #[cfg(target_os = "linux")]
-        return "Linux";
-        #[cfg(target_os = "windows")]
-        return "Windows";
-    }
+// =============================================================================
+// Tier 3 — direct passthrough to streamlib-engine
+// =============================================================================
 
-    pub fn gpu_backend() -> &'static str {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        return "Metal";
-        #[cfg(target_os = "linux")]
-        return "Vulkan";
-        #[cfg(target_os = "windows")]
-        return "Direct3D 12";
-    }
+/// Direct passthrough to the entire `streamlib-engine` crate.
+///
+/// **Use sparingly.** This exists for the rare case where the SDK's
+/// curated [`sdk::engine`] surface doesn't expose what's needed AND
+/// extending the SDK isn't right. The path itself signals "I'm
+/// reaching past the curated boundary."
+///
+/// If you find yourself importing from this namespace for an item
+/// that would benefit other consumers, that's a signal: either extend
+/// the SDK's curated surface or open an issue.
+///
+/// Direct `streamlib_engine::*` imports outside the engine itself and
+/// this facade source are forbidden by
+/// `cargo xtask check-boundaries` Check 6 — `engine_internal` is the
+/// allowed escape hatch for the very rare cases that need it.
+pub mod engine_internal {
+    pub use streamlib_engine::*;
 }
