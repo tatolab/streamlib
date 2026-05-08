@@ -1654,7 +1654,7 @@ class EscalateRequestRunGraphicsDrawIndexBufferIndexType(Enum):
 class EscalateRequestRunGraphicsDrawIndexBuffer:
     """
     Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-    `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
+    `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
     into it.
     """
 
@@ -1819,7 +1819,7 @@ class EscalateRequestRunGraphicsDraw(EscalateRequest):
     index_buffer: 'Optional[EscalateRequestRunGraphicsDrawIndexBuffer]'
     """
     Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-    `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
+    `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
     into it.
     """
 

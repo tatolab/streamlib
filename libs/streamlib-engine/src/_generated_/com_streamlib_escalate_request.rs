@@ -1365,7 +1365,7 @@ pub enum EscalateRequestRunGraphicsDrawIndexBufferIndexType {
 }
 
 /// Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-/// `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
+/// `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
 /// into it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1491,7 +1491,7 @@ pub struct EscalateRequestRunGraphicsDraw {
     pub depth_target_uuid: Option<String>,
 
     /// Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-    /// `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
+    /// `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
     /// into it.
     #[serde(rename = "index_buffer")]
     #[serde(skip_serializing_if = "Option::is_none")]

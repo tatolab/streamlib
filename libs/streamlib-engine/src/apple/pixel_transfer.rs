@@ -118,7 +118,7 @@ impl PixelTransferSession {
         Ok(dest_nv12_buffer)
     }
 
-    /// Converts an PixelBuffer (containing CVPixelBuffer) to NV12 CVPixelBuffer.
+    /// Converts a PixelBuffer (containing CVPixelBuffer) to NV12 CVPixelBuffer.
     ///
     /// This is the buffer-centric path for VideoFrame encoding. The source buffer
     /// is typically BGRA from camera capture or BGRA from video decoder.

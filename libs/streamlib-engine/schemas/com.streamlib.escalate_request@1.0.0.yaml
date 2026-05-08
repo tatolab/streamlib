@@ -629,7 +629,7 @@ mapping:
         metadata:
           description: >
             Required when `draw.kind == "draw_indexed"`, must be
-            absent otherwise. `surface_uuid` resolves to an
+            absent otherwise. `surface_uuid` resolves to a
             `PixelBuffer`; `offset` is the byte offset into it.
         properties:
           surface_uuid:

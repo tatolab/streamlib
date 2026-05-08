@@ -126,7 +126,7 @@ impl PixelBufferRef {
         self.inner.as_ptr()
     }
 
-    /// Create an PixelBufferRef from a raw IOSurfaceRef (macOS only).
+    /// Create a PixelBufferRef from a raw IOSurfaceRef (macOS only).
     ///
     /// This is useful for cross-process frame sharing where the IOSurfaceRef
     /// is received from another process.

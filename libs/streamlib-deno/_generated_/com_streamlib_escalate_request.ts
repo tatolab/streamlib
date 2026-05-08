@@ -1015,8 +1015,8 @@ export enum EscalateRequestRunGraphicsDrawIndexBufferIndexType {
 
 /**
  * Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
- * `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
- * into it.
+ * `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset into
+ * it.
  */
 export interface EscalateRequestRunGraphicsDrawIndexBuffer {
   index_type: EscalateRequestRunGraphicsDrawIndexBufferIndexType;
@@ -1126,7 +1126,7 @@ export interface EscalateRequestRunGraphicsDraw {
 
   /**
    * Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-   * `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
+   * `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
    * into it.
    */
   index_buffer?: EscalateRequestRunGraphicsDrawIndexBuffer;

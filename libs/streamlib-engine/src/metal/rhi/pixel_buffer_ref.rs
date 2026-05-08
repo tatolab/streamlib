@@ -386,7 +386,7 @@ fn create_cv_buffer_from_iosurface(
         .ok_or_else(|| Error::Configuration("Failed to wrap CVPixelBuffer".into()))
 }
 
-/// Create an PixelBufferRef from a raw IOSurfaceRef.
+/// Create a PixelBufferRef from a raw IOSurfaceRef.
 ///
 /// This is the implementation called from core/rhi/pixel_buffer_ref.rs.
 ///
