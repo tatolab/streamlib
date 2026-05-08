@@ -14,7 +14,7 @@
 use streamlib::sdk::processors::{BgraFileSourceProcessor, DisplayProcessor, H264DecoderProcessor, H264EncoderProcessor, H265DecoderProcessor, H265EncoderProcessor};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output};  // TODO: unmapped items
+use streamlib::sdk::processors::{input, output};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();

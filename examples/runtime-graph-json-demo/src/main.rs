@@ -6,7 +6,7 @@ use streamlib::sdk::{CameraConfig, DisplayConfig, Mp4WriterConfig};
 use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, Mp4WriterProcessor};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output};  // TODO: unmapped items
+use streamlib::sdk::processors::{input, output};
 
 fn main() -> Result<()> {
     let runtime = Runner::new()?;

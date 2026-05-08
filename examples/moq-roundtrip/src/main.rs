@@ -28,7 +28,7 @@ use streamlib::sdk::processors::{input, output, // Sources
     H264EncoderProcessor, AudioResamplerProcessor, BufferRechunkerProcessor, // MoQ transport
     MoqPublishTrackConfig, // Sinks
     DisplayProcessor, AudioOutputProcessor, // Runtime
-    Result};  // TODO: unmapped items
+    Result};
 use streamlib::sdk::_generated_::{
     AudioResamplerConfig, BufferRechunkerConfig, ChordGeneratorConfig, DisplayConfig,
     H264EncoderConfig,

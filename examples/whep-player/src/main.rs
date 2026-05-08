@@ -14,7 +14,7 @@ use streamlib::sdk::DisplayConfig;
 
 #[cfg(target_os = "macos")]
 use streamlib::sdk::processors::DisplayProcessor;
-use streamlib::sdk::processors::{input, output, AudioOutputProcessor};  // TODO: unmapped items
+use streamlib::sdk::processors::{input, output, AudioOutputProcessor};
 
 fn main() -> Result<()> {
 

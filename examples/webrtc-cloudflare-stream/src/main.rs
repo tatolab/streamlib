@@ -24,7 +24,7 @@ use streamlib::sdk::processors::{CameraProcessor, H264EncoderProcessor, OpusEnco
 use streamlib::sdk::_generated_::{H264EncoderConfig, OpusEncoderConfig};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output};  // TODO: unmapped items
+use streamlib::sdk::processors::{input, output};
 #[cfg(target_os = "linux")]
 use streamlib_audio::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
 #[cfg(target_os = "linux")]

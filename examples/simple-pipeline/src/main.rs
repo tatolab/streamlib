@@ -17,7 +17,7 @@
 use streamlib::sdk::{AudioOutputConfig, ChordGeneratorConfig};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output, AudioOutputProcessor, ChordGeneratorProcessor};  // TODO: unmapped items
+use streamlib::sdk::processors::{input, output, AudioOutputProcessor, ChordGeneratorProcessor};
 
 fn main() -> Result<()> {
 
