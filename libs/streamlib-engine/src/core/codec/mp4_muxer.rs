@@ -54,28 +54,28 @@ impl Mp4Muxer {
 impl Mp4Muxer {
     /// Create a new MP4 muxer (unsupported platform).
     pub fn new(_config: Mp4MuxerConfig, _ctx: &RuntimeContext) -> Result<Self> {
-        Err(crate::core::StreamError::Configuration(
+        Err(crate::core::Error::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))
     }
 
     /// Write an encoded video frame (unsupported platform).
     pub fn write_video(&mut self, _frame: &EncodedVideoFrame) -> Result<()> {
-        Err(crate::core::StreamError::Configuration(
+        Err(crate::core::Error::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))
     }
 
     /// Write an encoded audio frame (unsupported platform).
     pub fn write_audio(&mut self, _frame: &EncodedAudioFrame) -> Result<()> {
-        Err(crate::core::StreamError::Configuration(
+        Err(crate::core::Error::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))
     }
 
     /// Finalize (unsupported platform).
     pub fn finalize(&mut self) -> Result<()> {
-        Err(crate::core::StreamError::Configuration(
+        Err(crate::core::Error::Configuration(
             "MP4 muxing not supported on this platform".into(),
         ))
     }

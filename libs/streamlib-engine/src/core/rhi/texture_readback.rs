@@ -66,7 +66,7 @@ pub struct ReadbackTicket {
 /// Error taxonomy for the texture-readback RHI primitive.
 ///
 /// Named variants — each carries enough context to diagnose without
-/// re-running. `From<TextureReadbackError> for StreamError` (in the
+/// re-running. `From<TextureReadbackError> for Error` (in the
 /// host-side impl module) keeps callers in the existing `Result<T>`
 /// channel.
 #[derive(Debug, thiserror::Error)]

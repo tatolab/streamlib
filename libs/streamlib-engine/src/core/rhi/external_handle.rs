@@ -117,10 +117,10 @@ pub trait RhiPixelBufferImport {
     {
         match handles {
             [only] => Self::from_external_handle(only.clone(), width, height, format),
-            [] => Err(crate::core::StreamError::Configuration(
+            [] => Err(crate::core::Error::Configuration(
                 "from_external_plane_handles: empty plane vec".into(),
             )),
-            _ => Err(crate::core::StreamError::NotSupported(
+            _ => Err(crate::core::Error::NotSupported(
                 "multi-plane import is only implemented on Linux today".into(),
             )),
         }
@@ -157,7 +157,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         format: super::PixelFormat,
     ) -> Result<Self> {
         if handles.is_empty() {
-            return Err(crate::core::StreamError::Configuration(
+            return Err(crate::core::Error::Configuration(
                 "DMA-BUF import: empty plane vec".into(),
             ));
         }
@@ -167,7 +167,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
         // is unit-testable without a live `HostVulkanDevice`.
         for h in handles {
             if let RhiExternalHandle::OpaqueFd { .. } = h {
-                return Err(crate::core::StreamError::NotSupported(
+                return Err(crate::core::Error::NotSupported(
                     "RhiPixelBufferImport::from_external_plane_handles: \
                      OPAQUE_FD handles must be imported via \
                      ConsumerVulkanPixelBuffer::from_opaque_fd, not \
@@ -181,7 +181,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
             crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
                 .get()
                 .ok_or_else(|| {
-                    crate::core::StreamError::NotSupported(
+                    crate::core::Error::NotSupported(
                         "DMA-BUF import: HostVulkanDevice not initialized (GpuDevice::new() not called)"
                             .into(),
                     )
@@ -189,7 +189,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
 
         let bytes_per_pixel = format.bits_per_pixel() / 8;
         if bytes_per_pixel == 0 {
-            return Err(crate::core::StreamError::Configuration(
+            return Err(crate::core::Error::Configuration(
                 "DMA-BUF import: unsupported pixel format (0 bits per pixel)".into(),
             ));
         }
@@ -216,7 +216,7 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
                 // legacy single-plane callers that don't pass a size).
                 (width as u64) * (height as u64) * (bytes_per_pixel as u64)
             } else {
-                return Err(crate::core::StreamError::Configuration(format!(
+                return Err(crate::core::Error::Configuration(format!(
                     "DMA-BUF import: plane {} has size=0 and cannot be derived",
                     idx
                 )));
@@ -283,7 +283,7 @@ mod tests {
                 super::super::PixelFormat::Bgra32,
             );
         match result {
-            Err(crate::core::StreamError::NotSupported(msg)) => {
+            Err(crate::core::Error::NotSupported(msg)) => {
                 assert!(
                     msg.contains("OPAQUE_FD"),
                     "error message must mention OPAQUE_FD: {msg}"

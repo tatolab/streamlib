@@ -7,7 +7,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLCommandQueue;
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::MetalCommandBuffer;
 
@@ -32,7 +32,7 @@ impl MetalCommandQueue {
         let cmd_buffer = self
             .queue
             .commandBuffer()
-            .ok_or_else(|| StreamError::GpuError("Failed to create Metal command buffer".into()))?;
+            .ok_or_else(|| Error::GpuError("Failed to create Metal command buffer".into()))?;
         Ok(MetalCommandBuffer::new(cmd_buffer))
     }
 

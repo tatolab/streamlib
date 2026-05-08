@@ -14,7 +14,7 @@
 
 use crate::apple::corevideo_ffi::CVPixelBufferRef;
 use crate::core::rhi::RhiPixelBuffer;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use std::ffi::c_void;
 
 // =============================================================================
@@ -128,7 +128,7 @@ impl MacOsGlContext {
                 CGLChoosePixelFormat(attributes.as_ptr(), &mut pixel_format, &mut num_formats);
 
             if err != 0 || pixel_format.is_null() {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "CGLChoosePixelFormat failed with error: {}",
                     err
                 )));
@@ -140,7 +140,7 @@ impl MacOsGlContext {
 
             if err != 0 || context.is_null() {
                 CGLDestroyPixelFormat(pixel_format);
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "CGLCreateContext failed with error: {}",
                     err
                 )));
@@ -160,7 +160,7 @@ impl MacOsGlContext {
         unsafe {
             let err = CGLSetCurrentContext(self.cgl_context);
             if err != 0 {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "CGLSetCurrentContext failed with error: {}",
                     err
                 )));
@@ -213,7 +213,7 @@ impl MacOsGlContext {
             // Ensure we have a current context
             let current = CGLGetCurrentContext();
             if current.is_null() {
-                return Err(StreamError::GpuError(
+                return Err(Error::GpuError(
                     "No current GL context. Call make_current() first.".into(),
                 ));
             }
@@ -223,7 +223,7 @@ impl MacOsGlContext {
             glGenTextures(1, &mut texture_id);
 
             if texture_id == 0 {
-                return Err(StreamError::GpuError(
+                return Err(Error::GpuError(
                     "glGenTextures failed to create texture".into(),
                 ));
             }
@@ -240,7 +240,7 @@ impl MacOsGlContext {
             let gl_error = glGetError();
             if gl_error != 0 {
                 glDeleteTextures(1, &texture_id);
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "GL error during texture creation: 0x{:X}",
                     gl_error
                 )));
@@ -276,7 +276,7 @@ impl MacOsGlContext {
             // Ensure we have a current context
             let current = CGLGetCurrentContext();
             if current != self.cgl_context {
-                return Err(StreamError::GpuError(
+                return Err(Error::GpuError(
                     "GL context must be current to rebind texture".into(),
                 ));
             }
@@ -300,7 +300,7 @@ impl MacOsGlContext {
             glBindTexture(GL_TEXTURE_RECTANGLE, 0);
 
             if result != 0 {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "CGLTexImageIOSurface2D failed with error: {}",
                     result
                 )));
@@ -407,7 +407,7 @@ impl GlTextureBinding {
             // Get IOSurface from CVPixelBuffer
             let iosurface = CVPixelBufferGetIOSurface(cv_buffer);
             if iosurface.is_null() {
-                return Err(StreamError::GpuError(
+                return Err(Error::GpuError(
                     "CVPixelBuffer has no IOSurface backing. \
                      Ensure buffer was created with kCVPixelBufferIOSurfacePropertiesKey."
                         .into(),

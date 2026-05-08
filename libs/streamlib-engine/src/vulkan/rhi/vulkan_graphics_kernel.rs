@@ -50,7 +50,7 @@ use crate::core::rhi::{
     PrimitiveTopology, RhiPixelBuffer, ScissorRect, StreamTexture, TextureFormat,
     VertexAttributeFormat, VertexInputRate, VertexInputState, Viewport,
 };
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::HostVulkanDevice;
 
@@ -166,13 +166,13 @@ impl VulkanGraphicsKernel {
         descriptor: &GraphicsKernelDescriptor<'_>,
     ) -> Result<Self> {
         if descriptor.descriptor_sets_in_flight == 0 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': descriptor_sets_in_flight must be ≥ 1",
                 descriptor.label
             )));
         }
         if descriptor.stages.is_empty() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': no shader stages provided",
                 descriptor.label
             )));
@@ -191,7 +191,7 @@ impl VulkanGraphicsKernel {
             .filter(|s| s.stage == GraphicsShaderStage::Vertex)
             .count();
         if vertex_count != 1 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': expected exactly 1 Vertex stage, got {vertex_count}",
                 descriptor.label
             )));
@@ -204,7 +204,7 @@ impl VulkanGraphicsKernel {
             .filter(|s| s.stage == GraphicsShaderStage::Fragment)
             .count();
         if fragment_count != 1 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': expected exactly 1 Fragment stage, got {fragment_count}",
                 descriptor.label
             )));
@@ -418,7 +418,7 @@ impl VulkanGraphicsKernel {
     /// declared `push_constants.size`.
     pub fn set_push_constants(&self, frame_index: u32, bytes: &[u8]) -> Result<()> {
         if bytes.len() as u32 != self.push_constant_size {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': push-constant size mismatch — got {} bytes, kernel declares {}",
                 self.label,
                 bytes.len(),
@@ -456,14 +456,14 @@ impl VulkanGraphicsKernel {
     ) -> Result<()> {
         match &self.pipeline_state.vertex_input {
             VertexInputState::None => {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Graphics kernel '{}': set_vertex_buffer called but pipeline has no vertex input bindings",
                     self.label
                 )));
             }
             VertexInputState::Buffers { bindings, .. } => {
                 if !bindings.iter().any(|b| b.binding == binding) {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Graphics kernel '{}': vertex binding {binding} not declared in pipeline",
                         self.label
                     )));
@@ -548,7 +548,7 @@ impl VulkanGraphicsKernel {
         draw: OffscreenDraw,
     ) -> Result<()> {
         if color_targets.is_empty() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': offscreen_render called with no color targets",
                 self.label
             )));
@@ -567,13 +567,13 @@ impl VulkanGraphicsKernel {
             self.device
                 .wait_for_fences(&[fence], true, u64::MAX)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel '{}': wait_for_fences failed: {e}",
                         self.label
                     ))
                 })?;
             self.device.reset_fences(&[fence]).map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "Graphics kernel '{}': reset_fences failed: {e}",
                     self.label
                 ))
@@ -582,7 +582,7 @@ impl VulkanGraphicsKernel {
             self.device
                 .reset_command_buffer(command_buffer, vk::CommandBufferResetFlags::empty())
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel '{}': reset_command_buffer failed: {e}",
                         self.label
                     ))
@@ -594,7 +594,7 @@ impl VulkanGraphicsKernel {
             self.device
                 .begin_command_buffer(command_buffer, &begin_info)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel '{}': begin_command_buffer failed: {e}",
                         self.label
                     ))
@@ -607,7 +607,7 @@ impl VulkanGraphicsKernel {
             let mut barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(color_targets.len());
             for target in color_targets {
                 let image = target.texture.inner.image().ok_or_else(|| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel '{}': offscreen color target has no VkImage",
                         self.label
                     ))
@@ -696,7 +696,7 @@ impl VulkanGraphicsKernel {
             self.device
                 .end_command_buffer(command_buffer)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel '{}': end_command_buffer failed: {e}",
                         self.label
                     ))
@@ -715,7 +715,7 @@ impl VulkanGraphicsKernel {
             self.device
                 .wait_for_fences(&[fence], true, u64::MAX)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel '{}': post-submit wait failed: {e}",
                         self.label
                     ))
@@ -731,7 +731,7 @@ impl VulkanGraphicsKernel {
         draw: DrawKind,
     ) -> Result<()> {
         if frame_index >= self.descriptor_sets_in_flight {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': frame_index {frame_index} out of range (ring depth {})",
                 self.label, self.descriptor_sets_in_flight
             )));
@@ -751,14 +751,14 @@ impl VulkanGraphicsKernel {
 
         for spec in &self.bindings {
             if !pending.bindings.contains_key(&spec.binding) {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Graphics kernel '{}': binding {} ({:?}) not set before draw",
                     self.label, spec.binding, spec.kind
                 )));
             }
         }
         if self.push_constant_size > 0 && pending.push_constants.is_empty() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': push constants not set before draw",
                 self.label
             )));
@@ -766,7 +766,7 @@ impl VulkanGraphicsKernel {
         if let VertexInputState::Buffers { bindings, .. } = &self.pipeline_state.vertex_input {
             for vb in bindings {
                 if !pending.vertex_buffers.contains_key(&vb.binding) {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Graphics kernel '{}': vertex buffer at binding {} not set before draw",
                         self.label, vb.binding
                     )));
@@ -774,7 +774,7 @@ impl VulkanGraphicsKernel {
             }
         }
         if matches!(draw, DrawKind::DrawIndexed(_)) && pending.index_buffer.is_none() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': indexed draw requested but no index buffer set",
                 self.label
             )));
@@ -797,13 +797,13 @@ impl VulkanGraphicsKernel {
                     DrawKind::DrawIndexed(d) => (d.viewport, d.scissor),
                 };
                 let viewport = viewport_opt.ok_or_else(|| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel '{}': pipeline has dynamic viewport but DrawCall has none",
                         self.label
                     ))
                 })?;
                 let scissor = scissor_opt.ok_or_else(|| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel '{}': pipeline has dynamic scissor but DrawCall has none",
                         self.label
                     ))
@@ -933,13 +933,13 @@ impl VulkanGraphicsKernel {
             .iter()
             .find(|b| b.binding == binding)
             .ok_or_else(|| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "Graphics kernel '{}': binding {binding} not declared",
                     self.label
                 ))
             })?;
         if spec.kind != expected {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': binding {binding} declared as {:?}, but {expected:?} was set",
                 self.label, spec.kind
             )));
@@ -953,7 +953,7 @@ impl VulkanGraphicsKernel {
         f: impl FnOnce(&mut PendingState) -> Result<R>,
     ) -> Result<R> {
         if frame_index >= self.descriptor_sets_in_flight {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': frame_index {frame_index} out of range (ring depth {})",
                 self.label, self.descriptor_sets_in_flight
             )));
@@ -980,7 +980,7 @@ impl VulkanGraphicsKernel {
             .unnormalized_coordinates(false)
             .build();
         let sampler = unsafe { self.device.create_sampler(&info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create default sampler: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create default sampler: {e}")))?;
         *guard = Some(sampler);
         Ok(sampler)
     }
@@ -1008,7 +1008,7 @@ impl VulkanGraphicsKernel {
             Ok(f) => f,
             Err(e) => {
                 unsafe { self.device.destroy_command_pool(command_pool, None) };
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Failed to create offscreen fence: {e}"
                 )));
             }
@@ -1113,7 +1113,7 @@ impl VulkanGraphicsKernel {
                     });
                 }
                 _ => {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Graphics kernel '{}': binding {} kind/resource mismatch (declared {:?})",
                         self.label, spec.binding, spec.kind
                     )));
@@ -1215,19 +1215,19 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
     for stage in descriptor.stages {
         let stage_flag = stage_to_flag(stage.stage);
         let reflection = Reflection::new_from_spirv(stage.spv).map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Graphics kernel '{}': failed to reflect SPIR-V for {:?} stage: {e:?}",
                 descriptor.label, stage.stage
             ))
         })?;
         let sets = reflection.get_descriptor_sets().map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Graphics kernel '{}': failed to extract descriptor sets for {:?} stage: {e:?}",
                 descriptor.label, stage.stage
             ))
         })?;
         if sets.len() > 1 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': only descriptor set 0 is supported; SPIR-V {:?} stage uses sets {:?}",
                 descriptor.label,
                 stage.stage,
@@ -1240,7 +1240,7 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
                     .entry(binding)
                     .or_insert((info.ty, GraphicsShaderStageFlags::NONE));
                 if entry.0 != info.ty {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Graphics kernel '{}': binding {binding} type conflict — {:?} vs {:?} (in {:?})",
                         descriptor.label, entry.0, info.ty, stage.stage
                     )));
@@ -1249,7 +1249,7 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
             }
         }
         if let Some(info) = reflection.get_push_constant_range().map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Graphics kernel '{}': failed to read push-constant range for {:?} stage: {e:?}",
                 descriptor.label, stage.stage
             ))
@@ -1262,14 +1262,14 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
     // Each declared binding must agree with merged shader declaration.
     for spec in descriptor.bindings {
         let merged_entry = merged.get(&spec.binding).ok_or_else(|| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Graphics kernel '{}': binding {} declared but missing in SPIR-V",
                 descriptor.label, spec.binding
             ))
         })?;
         let expected = expected_spirv_type(spec.kind);
         if merged_entry.0 != expected {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': binding {} declared {:?} ({:?}), but SPIR-V has {:?}",
                 descriptor.label, spec.binding, spec.kind, expected, merged_entry.0
             )));
@@ -1279,7 +1279,7 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
         // fragment but declared visible only to vertex would be a Vulkan
         // validation error at draw time; reject up front.
         if (merged_entry.1.bits() & !spec.stages.bits()) != 0 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': binding {} stage visibility mismatch — declared {:?}, SPIR-V uses bits {:#b}",
                 descriptor.label,
                 spec.binding,
@@ -1292,7 +1292,7 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
     // Conversely, every SPIR-V binding must be declared.
     for (&binding, (ty, stages)) in &merged {
         if !descriptor.bindings.iter().any(|s| s.binding == binding) {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': SPIR-V declares binding {} ({:?}, stages {:#b}) but it is missing from the descriptor",
                 descriptor.label, binding, ty, stages.bits()
             )));
@@ -1301,7 +1301,7 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
 
     // Push-constant size must match.
     if spirv_push_size != descriptor.push_constants.size {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Graphics kernel '{}': push-constant size mismatch — SPIR-V has {} bytes (stages {:#b}), descriptor declares {} bytes",
             descriptor.label,
             spirv_push_size,
@@ -1311,7 +1311,7 @@ fn validate_against_spirv(descriptor: &GraphicsKernelDescriptor<'_>) -> Result<(
     }
     if spirv_push_size > 0 && (spirv_push_stages.bits() & !descriptor.push_constants.stages.bits()) != 0
     {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Graphics kernel '{}': push-constant stage visibility mismatch — declared {:#b}, SPIR-V uses {:#b}",
             descriptor.label,
             descriptor.push_constants.stages.bits(),
@@ -1532,7 +1532,7 @@ fn create_shader_modules(
             Ok(m) => out.push((stage.stage, m)),
             Err(e) => {
                 destroy_shader_modules(device, &out);
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Graphics kernel '{}': failed to create {:?} shader module: {e}",
                     descriptor.label, stage.stage
                 )));
@@ -1570,7 +1570,7 @@ fn create_descriptor_set_layout(
         .bindings(&layout_bindings)
         .build();
     unsafe { device.create_descriptor_set_layout(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create descriptor set layout: {e}")))
+        .map_err(|e| Error::GpuError(format!("Failed to create descriptor set layout: {e}")))
 }
 
 fn create_pipeline_layout(
@@ -1593,7 +1593,7 @@ fn create_pipeline_layout(
         .push_constant_ranges(&push_ranges)
         .build();
     unsafe { device.create_pipeline_layout(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create pipeline layout: {e}")))
+        .map_err(|e| Error::GpuError(format!("Failed to create pipeline layout: {e}")))
 }
 
 fn create_descriptor_pool(
@@ -1619,7 +1619,7 @@ fn create_descriptor_pool(
         .pool_sizes(&pool_sizes)
         .build();
     unsafe { device.create_descriptor_pool(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create descriptor pool: {e}")))
+        .map_err(|e| Error::GpuError(format!("Failed to create descriptor pool: {e}")))
 }
 
 fn allocate_descriptor_sets(
@@ -1634,7 +1634,7 @@ fn allocate_descriptor_sets(
         .set_layouts(&layouts)
         .build();
     let sets = unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to allocate descriptor sets: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("Failed to allocate descriptor sets: {e}")))?;
     Ok(sets)
 }
 
@@ -1647,7 +1647,7 @@ fn create_command_pool(
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
         .build();
     unsafe { device.create_command_pool(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {e}")))
+        .map_err(|e| Error::GpuError(format!("Failed to create command pool: {e}")))
 }
 
 fn allocate_command_buffer(
@@ -1660,7 +1660,7 @@ fn allocate_command_buffer(
         .command_buffer_count(1)
         .build();
     let buffers = unsafe { device.allocate_command_buffers(&info) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to allocate command buffer: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("Failed to allocate command buffer: {e}")))?;
     Ok(buffers[0])
 }
 
@@ -1681,13 +1681,13 @@ fn create_graphics_pipeline_with_cache(
     // graphics-pipeline target).
     for (i, fmt) in state.attachment_formats.color.iter().enumerate() {
         if matches!(fmt, TextureFormat::Nv12) {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel '{label}': color attachment {i} format {fmt:?} is not a valid render target"
             )));
         }
     }
     if state.multisample.samples != 1 {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Graphics kernel '{label}': multisample.samples = {} is not supported (only 1)",
             state.multisample.samples
         )));
@@ -1847,7 +1847,7 @@ fn create_graphics_pipeline_with_cache(
     }
 
     let pipelines = pipelines_result.map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Graphics kernel '{label}': failed to create graphics pipeline: {e}"
         ))
     })?;

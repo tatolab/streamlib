@@ -74,7 +74,7 @@ use streamlib::sdk::rhi::{
     Viewport,
     VulkanLayout,
 };
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, VulkanGraphicsKernel};
 
 /// Push-constants layout — must match `crt_film_grain.frag`'s
@@ -209,7 +209,7 @@ impl SandboxedCrtFilmGrain {
         if inputs.input.texture.width() != width
             || inputs.input.texture.height() != height
         {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "{}: input is {}×{}, expected {width}×{height} (must match output)",
                 self.label,
                 inputs.input.texture.width(),
@@ -237,18 +237,18 @@ impl SandboxedCrtFilmGrain {
             self.device
                 .wait_for_fences(&[self.fence], true, u64::MAX)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "{}: wait_for_fences failed: {e}",
                         self.label
                     ))
                 })?;
             self.device.reset_fences(&[self.fence]).map_err(|e| {
-                StreamError::GpuError(format!("{}: reset_fences failed: {e}", self.label))
+                Error::GpuError(format!("{}: reset_fences failed: {e}", self.label))
             })?;
             self.device
                 .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "{}: reset_command_buffer failed: {e}",
                         self.label
                     ))
@@ -260,7 +260,7 @@ impl SandboxedCrtFilmGrain {
             self.device
                 .begin_command_buffer(self.command_buffer, &begin)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "{}: begin_command_buffer failed: {e}",
                         self.label
                     ))
@@ -271,7 +271,7 @@ impl SandboxedCrtFilmGrain {
             let mut barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(2);
             if inputs.input.current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
                 let input_image = inputs.input.texture.vulkan_inner().image().ok_or_else(|| {
-                    StreamError::GpuError(format!("{}: input texture has no VkImage", self.label))
+                    Error::GpuError(format!("{}: input texture has no VkImage", self.label))
                 })?;
                 barriers.push(input_barrier_to_shader_read_only(
                     input_image,
@@ -279,7 +279,7 @@ impl SandboxedCrtFilmGrain {
                 ));
             }
             let output_image = inputs.output.texture.vulkan_inner().image().ok_or_else(|| {
-                StreamError::GpuError(format!("{}: output texture has no VkImage", self.label))
+                Error::GpuError(format!("{}: output texture has no VkImage", self.label))
             })?;
             barriers.push(output_barrier_to_color_attachment(
                 output_image,
@@ -354,7 +354,7 @@ impl SandboxedCrtFilmGrain {
             self.device
                 .end_command_buffer(self.command_buffer)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "{}: end_command_buffer failed: {e}",
                         self.label
                     ))
@@ -373,7 +373,7 @@ impl SandboxedCrtFilmGrain {
             self.device
                 .wait_for_fences(&[self.fence], true, u64::MAX)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "{}: post-submit wait failed: {e}",
                         self.label
                     ))
@@ -404,7 +404,7 @@ fn create_command_pool(
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
         .build();
     unsafe { device.create_command_pool(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("create_command_pool: {e}")))
+        .map_err(|e| Error::GpuError(format!("create_command_pool: {e}")))
 }
 
 fn allocate_command_buffer(
@@ -417,7 +417,7 @@ fn allocate_command_buffer(
         .command_buffer_count(1)
         .build();
     let buffers = unsafe { device.allocate_command_buffers(&info) }
-        .map_err(|e| StreamError::GpuError(format!("allocate_command_buffers: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("allocate_command_buffers: {e}")))?;
     Ok(buffers[0])
 }
 
@@ -426,7 +426,7 @@ fn create_signaled_fence(device: &vulkanalia::Device) -> Result<vk::Fence> {
         .flags(vk::FenceCreateFlags::SIGNALED)
         .build();
     unsafe { device.create_fence(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("create_fence: {e}")))
+        .map_err(|e| Error::GpuError(format!("create_fence: {e}")))
 }
 
 fn color_subresource_range() -> vk::ImageSubresourceRange {
@@ -656,7 +656,7 @@ mod tests {
         let err = kernel
             .dispatch(default_inputs(&input, &output))
             .expect_err("size mismatch must error");
-        assert!(matches!(err, StreamError::GpuError(_)));
+        assert!(matches!(err, Error::GpuError(_)));
     }
 
     /// Runs the kernel against a uniform mid-grey input. The center of

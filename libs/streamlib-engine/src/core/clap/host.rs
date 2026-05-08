@@ -20,7 +20,7 @@ use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 use super::scanner::ClapScanner;
 use crate::_generated_::AudioFrame;
 use crate::core::clap::{ParameterInfo, PluginInfo};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use parking_lot::Mutex as ParkingLotMutex;
 use std::path::Path;
@@ -118,7 +118,7 @@ impl ClapPluginHost {
             descriptors
                 .nth(index)
                 .ok_or_else(|| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "Plugin index {} not found in bundle",
                         index
                     ))
@@ -172,7 +172,7 @@ impl ClapPluginHost {
                             all_names.join(", ")
                         };
 
-                        StreamError::Configuration(format!(
+                        Error::Configuration(format!(
                             "Plugin '{}' not found in bundle {}. Available plugins: [{}]",
                             name, path_str, available
                         ))
@@ -184,7 +184,7 @@ impl ClapPluginHost {
                 descriptors
                     .next()
                     .ok_or_else(|| {
-                        StreamError::Configuration("CLAP plugin bundle contains no plugins".into())
+                        Error::Configuration("CLAP plugin bundle contains no plugins".into())
                     })
                     .cloned()
             })
@@ -210,7 +210,7 @@ impl ClapPluginHost {
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
         let bundle = unsafe {
             PluginEntry::load(&binary_path).map_err(|e| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "Failed to load CLAP plugin from {:?}: {:?}",
                     path, e
                 ))
@@ -218,23 +218,23 @@ impl ClapPluginHost {
         };
 
         let factory = bundle.get_plugin_factory().ok_or_else(|| {
-            StreamError::Configuration("CLAP plugin has no plugin factory".into())
+            Error::Configuration("CLAP plugin has no plugin factory".into())
         })?;
 
         let descriptor = filter(factory.plugin_descriptors())?;
 
         let plugin_id = descriptor
             .id()
-            .ok_or_else(|| StreamError::Configuration("Plugin descriptor has no ID".into()))?;
+            .ok_or_else(|| Error::Configuration("Plugin descriptor has no ID".into()))?;
 
         let plugin_id_str = plugin_id
             .to_str()
             .ok()
-            .ok_or_else(|| StreamError::Configuration("Invalid plugin ID".into()))?
+            .ok_or_else(|| Error::Configuration("Invalid plugin ID".into()))?
             .to_string();
 
         let plugin_id_cstring = std::ffi::CString::new(plugin_id_str.clone()).map_err(|e| {
-            StreamError::Configuration(format!("Failed to create CString from plugin ID: {}", e))
+            Error::Configuration(format!("Failed to create CString from plugin ID: {}", e))
         })?;
 
         let plugin_info = PluginInfo {
@@ -298,7 +298,7 @@ impl ClapPluginHost {
             .parameters
             .get(&id)
             .copied()
-            .ok_or_else(|| StreamError::Configuration(format!("Parameter ID {} not found", id)))
+            .ok_or_else(|| Error::Configuration(format!("Parameter ID {} not found", id)))
     }
 
     pub fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
@@ -343,7 +343,7 @@ impl ClapPluginHost {
             "https://github.com/tatolab/streamlib",
             "0.1.0",
         )
-        .map_err(|e| StreamError::Configuration(format!("Failed to create host info: {:?}", e)))?;
+        .map_err(|e| Error::Configuration(format!("Failed to create host info: {:?}", e)))?;
 
         let shared_state_clone = Arc::clone(&self.shared_state);
 
@@ -357,7 +357,7 @@ impl ClapPluginHost {
             &host_info,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Failed to create plugin instance: {:?}", e))
+            Error::Configuration(format!("Failed to create plugin instance: {:?}", e))
         })?;
 
         {
@@ -453,11 +453,11 @@ impl ClapPluginHost {
         };
 
         let activated = instance.activate(|_, _| (), audio_config).map_err(|e| {
-            StreamError::Configuration(format!("Failed to activate plugin: {:?}", e))
+            Error::Configuration(format!("Failed to activate plugin: {:?}", e))
         })?;
 
         let audio_processor = activated.start_processing().map_err(|e| {
-            StreamError::Configuration(format!("Failed to start audio processing: {:?}", e))
+            Error::Configuration(format!("Failed to start audio processing: {:?}", e))
         })?;
 
         *self.instance.lock() = Some(instance);
@@ -531,7 +531,7 @@ impl ClapPluginHost {
         let mut processor_guard = self.audio_processor.lock();
         let processor = processor_guard
             .as_mut()
-            .ok_or_else(|| StreamError::Configuration("Audio processor not started".into()))?;
+            .ok_or_else(|| Error::Configuration("Audio processor not started".into()))?;
 
         let mut input_ports_base = AudioPorts::with_capacity(2, 1);
         let mut output_ports_base = AudioPorts::with_capacity(2, 1);
@@ -593,7 +593,7 @@ impl ClapPluginHost {
                 None,
                 None,
             )
-            .map_err(|e| StreamError::Runtime(format!("Plugin processing failed: {:?}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Plugin processing failed: {:?}", e)))?;
 
         Ok(())
     }

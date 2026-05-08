@@ -9,7 +9,7 @@ use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
 use crate::core::rhi::PixelFormat;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::HostVulkanDevice;
 
@@ -126,7 +126,7 @@ impl HostVulkanPixelBuffer {
             #[cfg(not(target_os = "linux"))]
             let result = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) };
             result.map_err(|e| {
-                StreamError::GpuError(format!("Failed to create exportable buffer: {e}"))
+                Error::GpuError(format!("Failed to create exportable buffer: {e}"))
             })?
         };
 
@@ -136,7 +136,7 @@ impl HostVulkanPixelBuffer {
 
         if mapped_ptr.is_null() {
             unsafe { allocator.destroy_buffer(buffer, allocation) };
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "VMA staging buffer mapped pointer is null — expected persistent mapping".into(),
             ));
         }
@@ -327,7 +327,7 @@ impl HostVulkanPixelBuffer {
         };
 
         let pool = vulkan_device.opaque_fd_buffer_pool().ok_or_else(|| {
-            StreamError::GpuError(
+            Error::GpuError(
                 "OPAQUE_FD buffer pool unavailable — external memory unsupported \
                  or pool construction failed; CUDA / OpenCL interop requires this pool"
                     .into(),
@@ -335,7 +335,7 @@ impl HostVulkanPixelBuffer {
         })?;
         let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
             .map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "Failed to create OPAQUE_FD exportable buffer: {e}"
                 ))
             })?;
@@ -345,7 +345,7 @@ impl HostVulkanPixelBuffer {
         let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
         if mapped_ptr.is_null() {
             unsafe { allocator.destroy_buffer(buffer, allocation) };
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "VMA OPAQUE_FD staging buffer mapped pointer is null — expected persistent mapping".into(),
             ));
         }
@@ -416,7 +416,7 @@ impl HostVulkanPixelBuffer {
         let pool = vulkan_device
             .opaque_fd_buffer_pool_device_local()
             .ok_or_else(|| {
-                StreamError::GpuError(
+                Error::GpuError(
                     "DEVICE_LOCAL OPAQUE_FD buffer pool unavailable — external memory \
                      unsupported or pool construction failed; GPU-resident CUDA interop \
                      requires this pool"
@@ -425,7 +425,7 @@ impl HostVulkanPixelBuffer {
             })?;
         let (buffer, allocation) = unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
             .map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "Failed to create DEVICE_LOCAL OPAQUE_FD exportable buffer: {e}"
                 ))
             })?;
@@ -458,7 +458,7 @@ impl HostVulkanPixelBuffer {
     /// `dup` again on receipt).
     pub fn export_opaque_fd_memory(&self) -> Result<std::os::unix::io::RawFd> {
         if !self.is_opaque_fd_export {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "HostVulkanPixelBuffer::export_opaque_fd_memory: buffer was not created \
                  with `new_opaque_fd_export`; the underlying memory carries DMA_BUF_EXT \
                  (or no) export flags and OPAQUE_FD export will fail at the driver"
@@ -466,7 +466,7 @@ impl HostVulkanPixelBuffer {
             ));
         }
         let allocation = self.allocation.as_ref().ok_or_else(|| {
-            StreamError::GpuError(
+            Error::GpuError(
                 "HostVulkanPixelBuffer::export_opaque_fd_memory: buffer has no VMA allocation"
                     .into(),
             )
@@ -482,7 +482,7 @@ impl HostVulkanPixelBuffer {
         use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
         let fd = unsafe { self.vulkan_device.device().get_memory_fd_khr(&get_fd_info) }
             .map_err(|e| {
-                StreamError::GpuError(format!("Failed to export OPAQUE_FD memory fd: {e}"))
+                Error::GpuError(format!("Failed to export OPAQUE_FD memory fd: {e}"))
             })?;
         Ok(fd)
     }
@@ -496,7 +496,7 @@ impl HostVulkanPixelBuffer {
         } else if let Some(memory) = self.imported_memory {
             memory
         } else {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "Cannot export DMA-BUF: buffer has no allocation or imported memory".into(),
             ));
         };
@@ -509,7 +509,7 @@ impl HostVulkanPixelBuffer {
         use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
         let fd = unsafe { self.vulkan_device.device().get_memory_fd_khr(&get_fd_info) }
             .map(|r| r)
-            .map_err(|e| StreamError::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
 
         Ok(fd)
     }
@@ -584,19 +584,19 @@ impl HostVulkanPixelBuffer {
         format: PixelFormat,
     ) -> Result<Self> {
         if fds.is_empty() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "DMA-BUF import: fd vec must be non-empty".into(),
             ));
         }
         if fds.len() != plane_sizes.len() {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "DMA-BUF import: plane_sizes length ({}) must match fds length ({})",
                 plane_sizes.len(),
                 fds.len()
             )));
         }
         if fds.len() > streamlib_surface_client::MAX_DMA_BUF_PLANES {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "DMA-BUF import: plane count {} exceeds MAX_DMA_BUF_PLANES ({})",
                 fds.len(),
                 streamlib_surface_client::MAX_DMA_BUF_PLANES
@@ -622,7 +622,7 @@ impl HostVulkanPixelBuffer {
                 for plane in imported.into_iter() {
                     teardown_imported_plane(vulkan_device, plane);
                 }
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "DMA-BUF import: plane {} has size=0 and cannot be derived from width*height",
                     idx
                 )));
@@ -687,7 +687,7 @@ fn import_single_plane(
         .build();
 
     let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
-        StreamError::GpuError(format!("Failed to create buffer for DMA-BUF import: {e}"))
+        Error::GpuError(format!("Failed to create buffer for DMA-BUF import: {e}"))
     })?;
 
     let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
@@ -708,7 +708,7 @@ fn import_single_plane(
     unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
         vulkan_device.free_imported_memory(memory);
         unsafe { device.destroy_buffer(buffer, None) };
-        StreamError::GpuError(format!("Failed to bind imported memory: {e}"))
+        Error::GpuError(format!("Failed to bind imported memory: {e}"))
     })?;
 
     let mapped_ptr = vulkan_device
@@ -903,7 +903,7 @@ mod tests {
         let dma_buf = HostVulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
             .expect("dma-buf buffer failed");
         match dma_buf.export_opaque_fd_memory() {
-            Err(crate::core::StreamError::GpuError(msg)) => {
+            Err(crate::core::Error::GpuError(msg)) => {
                 assert!(
                     msg.contains("not created with `new_opaque_fd_export`"),
                     "error must call out the cross-flavor mismatch, got: {msg}"

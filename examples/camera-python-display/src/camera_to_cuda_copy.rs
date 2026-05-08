@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::_generated_::VideoFrame;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
@@ -138,7 +138,7 @@ impl CameraToCudaCopyProcessor::Processor {
         let width = self.config.width;
         let height = self.config.height;
         if width == 0 || height == 0 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "CameraToCudaCopy: width/height must be non-zero, got {width}x{height}"
             )));
         }
@@ -160,7 +160,7 @@ impl CameraToCudaCopyProcessor::Processor {
             PixelFormat::Bgra32,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "CameraToCudaCopy: new_opaque_fd_export_device_local: {e}"
             ))
         })?;
@@ -173,7 +173,7 @@ impl CameraToCudaCopyProcessor::Processor {
         //    on the GPU signal this processor emits per frame.
         let timeline = Arc::new(
             HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0).map_err(|e| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "CameraToCudaCopy: HostVulkanTimelineSemaphore::new_exportable: {e}"
                 ))
             })?,
@@ -183,7 +183,7 @@ impl CameraToCudaCopyProcessor::Processor {
         //    `check_out` the OPAQUE_FD memory + timeline in one round
         //    trip.
         let surface_store = gpu_full.surface_store().ok_or_else(|| {
-            StreamError::Configuration(
+            Error::Configuration(
                 "CameraToCudaCopy: GpuContext has no surface_store (Linux runtime?)".into(),
             )
         })?;
@@ -195,7 +195,7 @@ impl CameraToCudaCopyProcessor::Processor {
                 Some(timeline.as_ref()),
             )
             .map_err(|e| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "CameraToCudaCopy: register_pixel_buffer_with_timeline: {e}"
                 ))
             })?;
@@ -216,7 +216,7 @@ impl CameraToCudaCopyProcessor::Processor {
                 },
             )
             .map_err(|e| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "CameraToCudaCopy: register_host_surface: {e:?}"
                 ))
             })?;
@@ -241,7 +241,7 @@ impl CameraToCudaCopyProcessor::Processor {
 
     #[cfg(not(target_os = "linux"))]
     fn setup_inner(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "CameraToCudaCopy: only supported on Linux (cuda is Linux-only)".into(),
         ))
     }
@@ -249,7 +249,7 @@ impl CameraToCudaCopyProcessor::Processor {
     #[cfg(target_os = "linux")]
     fn process_frame_inner(&mut self, frame: &VideoFrame) -> Result<()> {
         let backend = self.backend.as_ref().ok_or_else(|| {
-            StreamError::Configuration("CameraToCudaCopy: backend not initialized".into())
+            Error::Configuration("CameraToCudaCopy: backend not initialized".into())
         })?;
 
         // Resolve the camera ring texture. The camera processor
@@ -257,7 +257,7 @@ impl CameraToCudaCopyProcessor::Processor {
         // and rotates through them; `frame.surface_id` carries the
         // current ring slot's UUID.
         let texture = backend.gpu_ctx.resolve_video_frame_texture(frame).map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "CameraToCudaCopy: resolve_video_frame_texture('{}'): {e}",
                 frame.surface_id
             ))
@@ -266,7 +266,7 @@ impl CameraToCudaCopyProcessor::Processor {
         let cam_w = host_texture.width();
         let cam_h = host_texture.height();
         if cam_w != backend.width || cam_h != backend.height {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "CameraToCudaCopy: camera resolution {cam_w}x{cam_h} differs from \
                  cuda surface {}x{}; GPU-side resize is not implemented in this processor \
                  (the cuda buffer is a flat VkBuffer, not a VkImage, so vkCmdBlitImage \
@@ -304,7 +304,7 @@ impl CameraToCudaCopyProcessor::Processor {
                 }
             }
             Err(e) => {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "CameraToCudaCopy: submit_host_copy_image_to_buffer: {e:?}"
                 )));
             }
@@ -314,7 +314,7 @@ impl CameraToCudaCopyProcessor::Processor {
 
     #[cfg(not(target_os = "linux"))]
     fn process_frame_inner(&mut self, _frame: &VideoFrame) -> Result<()> {
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "CameraToCudaCopy: only supported on Linux".into(),
         ))
     }

@@ -5,7 +5,7 @@ use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
+use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, Error};
 use crate::iceoryx2::OutputWriter;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -368,7 +368,7 @@ impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
 
         // Get GPU context (set during setup)
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
-            StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
+            Error::Configuration("GPU context not initialized. Call setup() first.".into())
         })?;
 
         // Create callback context with pointer to OutputWriter and GPU context
@@ -466,7 +466,7 @@ impl AppleCameraProcessor::Processor {
                 let id_str = NSString::from_str(id);
                 let dev = AVCaptureDevice::deviceWithUniqueID(&id_str);
                 if dev.is_none() {
-                    return Err(StreamError::Configuration(format!(
+                    return Err(Error::Configuration(format!(
                         "Camera not found with ID: {}",
                         id
                     )));
@@ -474,18 +474,18 @@ impl AppleCameraProcessor::Processor {
                 dev.unwrap()
             } else {
                 let media_type = AVMediaTypeVideo.ok_or_else(|| {
-                    StreamError::Configuration("AVMediaTypeVideo not available".into())
+                    Error::Configuration("AVMediaTypeVideo not available".into())
                 })?;
 
                 AVCaptureDevice::defaultDeviceWithMediaType(media_type)
-                    .ok_or_else(|| StreamError::Configuration("No camera found".into()))?
+                    .ok_or_else(|| Error::Configuration("No camera found".into()))?
             }
         };
 
         // Configure frame rate based on config, display refresh rate, and camera capabilities
         unsafe {
             if let Err(e) = device.lockForConfiguration() {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Failed to lock camera device: {:?}",
                     e
                 )));
@@ -572,13 +572,13 @@ impl AppleCameraProcessor::Processor {
 
         let input = unsafe {
             AVCaptureDeviceInput::deviceInputWithDevice_error(&device).map_err(|e| {
-                StreamError::Configuration(format!("Failed to create camera input: {:?}", e))
+                Error::Configuration(format!("Failed to create camera input: {:?}", e))
             })?
         };
 
         let can_add = unsafe { session.canAddInput(&input) };
         if !can_add {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Session cannot add camera input. Camera may be in use.".into(),
             ));
         }
@@ -625,7 +625,7 @@ impl AppleCameraProcessor::Processor {
 
         let can_add_output = unsafe { session.canAddOutput(&output) };
         if !can_add_output {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Cannot add camera output".into(),
             ));
         }
@@ -658,7 +658,7 @@ impl AppleCameraProcessor::Processor {
             use objc2_foundation::NSArray;
 
             let media_type = AVMediaTypeVideo.ok_or_else(|| {
-                StreamError::Configuration("AVMediaTypeVideo not available".into())
+                Error::Configuration("AVMediaTypeVideo not available".into())
             })?;
 
             let builtin_wide =

@@ -10,7 +10,7 @@
 use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use crate::core::media_clock::MediaClock;
 use crate::core::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
 use crate::iceoryx2::OutputWriter;
 use std::future::Future;
 use std::sync::Arc;
@@ -95,14 +95,14 @@ impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
         let client = self
             .whep_client
             .as_mut()
-            .ok_or_else(|| StreamError::Runtime("WhepClient not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("WhepClient not initialized".into()))?;
 
         let video_rx = client
             .take_video_rx()
-            .ok_or_else(|| StreamError::Runtime("Video receiver not available".into()))?;
+            .ok_or_else(|| Error::Runtime("Video receiver not available".into()))?;
         let audio_rx = client
             .take_audio_rx()
-            .ok_or_else(|| StreamError::Runtime("Audio receiver not available".into()))?;
+            .ok_or_else(|| Error::Runtime("Audio receiver not available".into()))?;
 
         let outputs = self.outputs.clone();
         let audio_sample_rate = self.audio_sample_rate.unwrap_or(48000);

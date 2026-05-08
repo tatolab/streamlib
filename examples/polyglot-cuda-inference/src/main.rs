@@ -54,7 +54,7 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::StreamError;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
     HostVulkanPixelBuffer,
@@ -131,12 +131,12 @@ fn main() -> Result<()> {
     for a in args {
         if let Some(value) = a.strip_prefix("--runtime=") {
             runtime_kind =
-                RuntimeKind::parse(value).map_err(StreamError::Configuration)?;
+                RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--output=") {
             output_png = PathBuf::from(value);
         } else if let Some(value) = a.strip_prefix("--timeout-secs=") {
             timeout_secs = value.parse().map_err(|e| {
-                StreamError::Configuration(format!("invalid --timeout-secs: {e}"))
+                Error::Configuration(format!("invalid --timeout-secs: {e}"))
             })?;
         }
     }
@@ -170,7 +170,7 @@ fn main() -> Result<()> {
                 Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
 
             register_host_surface(&adapter, gpu).map_err(|e| {
-                StreamError::Configuration(format!("register_host_surface: {e}"))
+                Error::Configuration(format!("register_host_surface: {e}"))
             })?;
 
             *adapter_slot.lock().unwrap() = Some(adapter);
@@ -189,7 +189,7 @@ fn main() -> Result<()> {
             let slpkg_path =
                 manifest_dir.join("python/polyglot-cuda-inference-0.1.0.slpkg");
             if !slpkg_path.exists() {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Package not found: {}\nRun: cargo run -p streamlib-cli -- pack examples/polyglot-cuda-inference/python",
                     slpkg_path.display()
                 )));
@@ -199,7 +199,7 @@ fn main() -> Result<()> {
         RuntimeKind::Deno => {
             let project_path = manifest_dir.join("deno");
             if !project_path.join("streamlib.yaml").exists() {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Deno project not found: {}",
                     project_path.display()
                 )));
@@ -214,14 +214,14 @@ fn main() -> Result<()> {
     // on the pre-registered cuda OPAQUE_FD surface, not the trigger
     // frame's pixel buffer). Same shape as cpu-readback-blur.
     let fixture_path = write_trigger_fixture()
-        .map_err(StreamError::Configuration)?;
+        .map_err(Error::Configuration)?;
 
     let source = runtime.add_processor(BgraFileSourceProcessor::Processor::node(
         BgraFileSourceProcessor::Config {
             file_path: fixture_path
                 .to_str()
                 .ok_or_else(|| {
-                    StreamError::Configuration(
+                    Error::Configuration(
                         "fixture path has non-utf8 component".into(),
                     )
                 })?

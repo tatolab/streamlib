@@ -8,7 +8,7 @@ use crate::core::rhi::{
     RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool, StreamTexture, TextureDescriptor,
     TextureFormat, TextureUsages,
 };
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostStreamTextureExt;
 use std::collections::HashMap;
@@ -33,7 +33,7 @@ struct NoOpBlitter;
 #[cfg(not(target_os = "macos"))]
 impl RhiBlitter for NoOpBlitter {
     fn blit_copy(&self, _src: &RhiPixelBuffer, _dest: &RhiPixelBuffer) -> Result<()> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "Blitter not supported on this platform".into(),
         ))
     }
@@ -45,7 +45,7 @@ impl RhiBlitter for NoOpBlitter {
         _width: u32,
         _height: u32,
     ) -> Result<()> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "Blitter not supported on this platform".into(),
         ))
     }
@@ -150,7 +150,7 @@ impl PixelBufferPoolManager {
             let _ = desc;
             let underlying_pool = RhiPixelBufferPool {
                 #[cfg(target_os = "macos")]
-                inner: return Err(crate::core::StreamError::Configuration(
+                inner: return Err(crate::core::Error::Configuration(
                     "PixelBufferPool creation via descriptor not yet implemented".into(),
                 )),
                 #[cfg(target_os = "linux")]
@@ -158,7 +158,7 @@ impl PixelBufferPoolManager {
                     let vulkan_device = std::sync::Arc::clone(&self.device.inner);
                     let bytes_per_pixel = format.bits_per_pixel() / 8;
                     if bytes_per_pixel == 0 {
-                        return Err(crate::core::StreamError::Configuration(
+                        return Err(crate::core::Error::Configuration(
                             format!("Cannot create pixel buffer pool: PixelFormat {:?} has 0 bits per pixel", format),
                         ));
                     }
@@ -252,7 +252,7 @@ impl PixelBufferPoolManager {
         let buffer_count = ring_pool.buffers.len();
 
         if buffer_count == 0 {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "No buffers available in pool".into(),
             ));
         }
@@ -352,7 +352,7 @@ impl PixelBufferPoolManager {
             format,
             POOL_MAX_BUFFER_COUNT
         );
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "All pixel buffers are currently in use".into(),
         ))
     }
@@ -516,7 +516,7 @@ impl GpuContext {
         {
             use vulkanalia::vk::DeviceV1_0;
             unsafe { self.device.inner.device().device_wait_idle() }.map_err(|e| {
-                StreamError::GpuError(format!("device_wait_idle failed: {e}"))
+                Error::GpuError(format!("device_wait_idle failed: {e}"))
             })?;
         }
         Ok(())
@@ -600,7 +600,7 @@ impl GpuContext {
 
         let surface_store = self.surface_store.lock().unwrap();
         let store = surface_store.as_ref().ok_or_else(|| {
-            StreamError::Configuration(
+            Error::Configuration(
                 "SurfaceStore not initialized. Call runtime.start() first.".into(),
             )
         })?;
@@ -767,7 +767,7 @@ impl GpuContext {
             }
         }
 
-        Err(StreamError::GpuError(format!(
+        Err(Error::GpuError(format!(
             "No texture or pixel buffer found for surface_id '{}'",
             frame.surface_id
         )))
@@ -847,7 +847,7 @@ impl GpuContext {
 
         unsafe {
             let image = texture.inner.image().ok_or_else(|| {
-                StreamError::GpuError("Texture has no VkImage".into())
+                Error::GpuError("Texture has no VkImage".into())
             })?;
             self.device.inner.upload_buffer_to_image(
                 pixel_buffer.buffer_ref().inner.buffer(),
@@ -884,7 +884,7 @@ impl GpuContext {
 
         unsafe {
             let image = texture.inner.image().ok_or_else(|| {
-                crate::core::StreamError::GpuError("Texture has no VkImage".into())
+                crate::core::Error::GpuError("Texture has no VkImage".into())
             })?;
             self.device.inner.upload_buffer_to_image(
                 pixel_buffer.buffer_ref().inner.buffer(),
@@ -1008,7 +1008,7 @@ impl GpuContext {
             }
             TextureFormat::Nv12 => fourcc::DRM_FORMAT_NV12,
             other => {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "acquire_render_target_dma_buf_image: format {other:?} has no DRM FOURCC mapping"
                 )));
             }
@@ -1021,7 +1021,7 @@ impl GpuContext {
             .to_vec();
 
         if modifiers.is_empty() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "acquire_render_target_dma_buf_image: no RT-capable DRM modifier for {format:?} (fourcc=0x{fourcc:08x}); EGL probe returned empty list"
             )));
         }
@@ -1227,7 +1227,7 @@ impl GpuContext {
                 .vulkan_inner()
                 .image()
                 .ok_or_else(|| {
-                    crate::core::StreamError::GpuError(
+                    crate::core::Error::GpuError(
                         "transition_storage_image_to_general: texture missing VkImage".to_string(),
                     )
                 })?,
@@ -1287,7 +1287,7 @@ impl GpuContext {
 
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
-            Err(StreamError::GpuError(
+            Err(Error::GpuError(
                 "Unsupported platform for GPU initialization".into(),
             ))
         }
@@ -1460,7 +1460,7 @@ impl GpuContext {
     pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
         let store = self.surface_store.lock().unwrap();
         let store = store.as_ref().ok_or_else(|| {
-            crate::core::StreamError::Configuration(
+            crate::core::Error::Configuration(
                 "SurfaceStore not initialized. Call runtime.start() first.".into(),
             )
         })?;
@@ -1476,7 +1476,7 @@ impl GpuContext {
     pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
         let store = self.surface_store.lock().unwrap();
         let store = store.as_ref().ok_or_else(|| {
-            crate::core::StreamError::Configuration(
+            crate::core::Error::Configuration(
                 "SurfaceStore not initialized. Call runtime.start() first.".into(),
             )
         })?;
@@ -1486,7 +1486,7 @@ impl GpuContext {
     /// Check in a pixel buffer (non-macOS stub).
     #[cfg(not(target_os = "macos"))]
     pub fn check_in_surface(&self, _pixel_buffer: &RhiPixelBuffer) -> Result<String> {
-        Err(crate::core::StreamError::NotSupported(
+        Err(crate::core::Error::NotSupported(
             "Surface store is only supported on macOS".into(),
         ))
     }
@@ -1494,7 +1494,7 @@ impl GpuContext {
     /// Check out a surface (non-macOS stub).
     #[cfg(not(target_os = "macos"))]
     pub fn check_out_surface(&self, _surface_id: &str) -> Result<RhiPixelBuffer> {
-        Err(crate::core::StreamError::NotSupported(
+        Err(crate::core::Error::NotSupported(
             "Surface store is only supported on macOS".into(),
         ))
     }
@@ -2440,10 +2440,10 @@ mod tests {
 
         let limited = GpuContextLimitedAccess::new(gpu);
         let result: Result<()> = limited.escalate(|_full| {
-            Err(StreamError::Runtime("synthetic failure".to_string()))
+            Err(Error::Runtime("synthetic failure".to_string()))
         });
         match result {
-            Err(StreamError::Runtime(msg)) if msg == "synthetic failure" => {}
+            Err(Error::Runtime(msg)) if msg == "synthetic failure" => {}
             other => panic!("expected synthetic Runtime error, got {other:?}"),
         }
 

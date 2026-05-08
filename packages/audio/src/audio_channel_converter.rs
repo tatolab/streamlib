@@ -3,7 +3,7 @@
 
 use crate::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
 use streamlib::sdk::_generated_::AudioFrame;
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 #[streamlib::sdk::processor("AudioChannelConverter")]
@@ -42,7 +42,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for AudioChannelConverterProc
         let input_frame: AudioFrame = self.inputs.read("audio_in")?;
 
         if input_frame.channels != 1 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "AudioChannelConverter expects mono input (1 channel), got {} channels",
                 input_frame.channels
             )));

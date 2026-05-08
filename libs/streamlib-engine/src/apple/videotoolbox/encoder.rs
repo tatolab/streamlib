@@ -9,7 +9,7 @@
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::apple::PixelTransferSession;
 use crate::core::rhi::{PixelBufferPoolId, RhiPixelBuffer};
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoEncoderConfig};
+use crate::core::{GpuContext, Result, RuntimeContext, Error, VideoEncoderConfig};
 use objc2_core_video::CVPixelBuffer;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -102,7 +102,7 @@ impl VideoToolboxEncoder {
                         let _ = Arc::from_raw(
                             callback_context as *const Mutex<VecDeque<EncodedVideoFrame>>,
                         );
-                        return Err(StreamError::Runtime(format!(
+                        return Err(Error::Runtime(format!(
                             "VTCompressionSessionCreate failed: {}",
                             status
                         )));
@@ -235,7 +235,7 @@ impl VideoToolboxEncoder {
     ) -> Result<*mut CVPixelBuffer> {
         // GPU-accelerated conversion using VTPixelTransferSession
         let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
-            StreamError::Configuration("PixelTransferSession not initialized".into())
+            Error::Configuration("PixelTransferSession not initialized".into())
         })?;
 
         pixel_transfer.convert_buffer_to_nv12(buffer)
@@ -244,7 +244,7 @@ impl VideoToolboxEncoder {
     /// Encode a video frame.
     pub fn encode(&mut self, frame: &VideoFrame, gpu: &GpuContext) -> Result<EncodedVideoFrame> {
         let session = self.compression_session.ok_or_else(|| {
-            StreamError::Configuration("Compression session not initialized".into())
+            Error::Configuration("Compression session not initialized".into())
         })?;
 
         // Resolve buffer from surface_id
@@ -310,7 +310,7 @@ impl VideoToolboxEncoder {
             });
 
             if status != ffi::NO_ERR {
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "VTCompressionSessionEncodeFrame failed: {}",
                     status
                 )));
@@ -337,11 +337,11 @@ impl VideoToolboxEncoder {
             .encoded_frames
             .lock()
             .map_err(|e| {
-                StreamError::Runtime(format!("Failed to lock encoded frames queue: {}", e))
+                Error::Runtime(format!("Failed to lock encoded frames queue: {}", e))
             })?
             .pop_front()
             .ok_or_else(|| {
-                StreamError::Runtime("No encoded frame available after encoding".into())
+                Error::Runtime("No encoded frame available after encoding".into())
             })?;
 
         // Step 7: Update frame metadata
@@ -393,7 +393,7 @@ impl VideoToolboxEncoder {
                 );
                 ffi::CFRelease(avg_bitrate_num as *const _);
                 if status != ffi::NO_ERR {
-                    return Err(StreamError::Runtime(format!(
+                    return Err(Error::Runtime(format!(
                         "Failed to update encoder bitrate: {}",
                         status
                     )));

@@ -6,7 +6,7 @@
 // Provides Opus encoding for real-time audio streaming.
 
 use crate::_generated_::{AudioFrame, EncodedAudioFrame};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -76,13 +76,13 @@ impl OpusEncoder {
     pub fn new(config: AudioEncoderConfig) -> Result<Self> {
         // Validate config
         if config.sample_rate != 48000 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Opus encoder only supports 48kHz sample rate, got {}Hz",
                 config.sample_rate
             )));
         }
         if config.channels != 2 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Opus encoder only supports stereo (2 channels), got {}",
                 config.channels
             )));
@@ -98,22 +98,22 @@ impl OpusEncoder {
             opus::Application::Audio, // Use Audio for best quality (music/broadcast)
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Failed to create Opus encoder: {:?}", e))
+            Error::Configuration(format!("Failed to create Opus encoder: {:?}", e))
         })?;
 
         // Configure encoder
         encoder
             .set_bitrate(opus::Bitrate::Bits(config.bitrate_bps as i32))
-            .map_err(|e| StreamError::Configuration(format!("Failed to set bitrate: {:?}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to set bitrate: {:?}", e)))?;
 
         encoder
             .set_vbr(config.vbr)
-            .map_err(|e| StreamError::Configuration(format!("Failed to set VBR: {:?}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to set VBR: {:?}", e)))?;
 
         // Enable FEC (Forward Error Correction) for better packet loss resilience
         encoder
             .set_inband_fec(true)
-            .map_err(|e| StreamError::Configuration(format!("Failed to set FEC: {:?}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to set FEC: {:?}", e)))?;
 
         tracing::info!(
             "OpusEncoder initialized: {}Hz, {} channels, {} kbps, {}ms frames, VBR={}",
@@ -136,7 +136,7 @@ impl AudioEncoderOpus for OpusEncoder {
     fn encode(&mut self, frame: &AudioFrame) -> Result<EncodedAudioFrame> {
         // Validate sample rate
         if frame.sample_rate != 48000 {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 format!(
                     "Expected 48kHz, got {}Hz. Use AudioResamplerProcessor upstream to convert to 48kHz.",
                     frame.sample_rate
@@ -149,7 +149,7 @@ impl AudioEncoderOpus for OpusEncoder {
         let actual_samples = frame.samples.len() / frame.channels as usize;
 
         if actual_samples != expected_samples {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 format!(
                     "Expected {} samples (20ms @ 48kHz), got {}. Use BufferRechunkerProcessor(960) upstream.",
                     expected_samples, actual_samples
@@ -162,7 +162,7 @@ impl AudioEncoderOpus for OpusEncoder {
         let encoded_data = self
             .encoder
             .encode_vec_float(&frame.samples, 4000)
-            .map_err(|e| StreamError::Runtime(format!("Opus encoding failed: {:?}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Opus encoding failed: {:?}", e)))?;
 
         tracing::trace!(
             "Encoded audio frame: {} samples → {} bytes (compression: {:.2}x)",
@@ -185,7 +185,7 @@ impl AudioEncoderOpus for OpusEncoder {
     fn set_bitrate(&mut self, bitrate_bps: u32) -> Result<()> {
         self.encoder
             .set_bitrate(opus::Bitrate::Bits(bitrate_bps as i32))
-            .map_err(|e| StreamError::Configuration(format!("Failed to set bitrate: {:?}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to set bitrate: {:?}", e)))?;
 
         self.config.bitrate_bps = bitrate_bps;
 

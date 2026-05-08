@@ -17,7 +17,7 @@ use std::ffi::c_void;
 use parking_lot::Mutex;
 
 use crate::core::rhi::RhiPixelBuffer;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostStreamTextureExt;
 
@@ -163,7 +163,7 @@ impl SurfaceStore {
     #[cfg(target_os = "macos")]
     pub fn connect(&self) -> Result<()> {
         let service_name = CString::new(self.inner.service_name.as_str())
-            .map_err(|e| StreamError::Configuration(format!("Invalid XPC service name: {}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Invalid XPC service name: {}", e)))?;
 
         let connection = unsafe {
             xpc_connection_create_mach_service(
@@ -174,7 +174,7 @@ impl SurfaceStore {
         };
 
         if connection.is_null() {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Failed to create XPC connection to '{}'",
                 self.inner.service_name
             )));
@@ -241,7 +241,7 @@ impl SurfaceStore {
         // Get the IOSurface ID for deduplication
         let pixel_buffer_ref = pixel_buffer.buffer_ref();
         let iosurface = pixel_buffer_ref.iosurface_ref().ok_or_else(|| {
-            StreamError::Configuration("Pixel buffer is not backed by an IOSurface".into())
+            Error::Configuration("Pixel buffer is not backed by an IOSurface".into())
         })?;
         let iosurface_id = unsafe { IOSurfaceGetID(iosurface) };
 
@@ -352,13 +352,13 @@ impl SurfaceStore {
     fn check_in_to_surface_share(&self, mach_port: u32) -> Result<String> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
         let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
         if request.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Failed to create XPC request dictionary".into(),
             ));
         }
@@ -392,7 +392,7 @@ impl SurfaceStore {
         }
 
         if reply.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "XPC check_in: null reply from the surface-share service".into(),
             ));
         }
@@ -402,7 +402,7 @@ impl SurfaceStore {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "XPC check_in: surface-share service returned error".into(),
             ));
         }
@@ -415,7 +415,7 @@ impl SurfaceStore {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "XPC check_in: missing surface_id in reply".into(),
             ));
         }
@@ -436,13 +436,13 @@ impl SurfaceStore {
     fn check_out_from_surface_share(&self, surface_id: &str) -> Result<u32> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
         let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
         if request.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Failed to create XPC request dictionary".into(),
             ));
         }
@@ -470,7 +470,7 @@ impl SurfaceStore {
         }
 
         if reply.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "XPC check_out: null reply from the surface-share service".into(),
             ));
         }
@@ -480,7 +480,7 @@ impl SurfaceStore {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "XPC check_out: surface-share service returned error for surface '{}'",
                 surface_id
             )));
@@ -495,7 +495,7 @@ impl SurfaceStore {
         }
 
         if mach_port == 0 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "XPC check_out: invalid mach port for surface '{}'",
                 surface_id
             )));
@@ -538,13 +538,13 @@ impl SurfaceStore {
     fn register_with_surface_share(&self, pool_id: &str, mach_port: u32) -> Result<()> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
         let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
         if request.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Failed to create XPC request dictionary".into(),
             ));
         }
@@ -585,7 +585,7 @@ impl SurfaceStore {
         }
 
         if reply.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "XPC register: null reply from the surface-share service".into(),
             ));
         }
@@ -595,7 +595,7 @@ impl SurfaceStore {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "XPC register: surface-share service returned error".into(),
             ));
         }
@@ -610,7 +610,7 @@ impl SurfaceStore {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "XPC register: {}",
                 error_msg
             )));
@@ -647,13 +647,13 @@ impl SurfaceStore {
     fn lookup_from_surface_share(&self, pool_id: &str) -> Result<u32> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
         let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
         if request.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Failed to create XPC request dictionary".into(),
             ));
         }
@@ -681,7 +681,7 @@ impl SurfaceStore {
         }
 
         if reply.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "XPC lookup: null reply from the surface-share service".into(),
             ));
         }
@@ -691,7 +691,7 @@ impl SurfaceStore {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "XPC lookup: surface-share service returned error for '{}'",
                 pool_id
             )));
@@ -707,7 +707,7 @@ impl SurfaceStore {
             unsafe {
                 xpc_release(reply);
             }
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "XPC lookup: {}",
                 error_msg
             )));
@@ -722,7 +722,7 @@ impl SurfaceStore {
         }
 
         if mach_port == 0 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "XPC lookup: invalid mach port for '{}'",
                 pool_id
             )));
@@ -749,7 +749,7 @@ impl SurfaceStore {
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = surface_id;
-            Err(StreamError::NotSupported(
+            Err(Error::NotSupported(
                 "SurfaceStore::release is only supported on macOS and Linux".into(),
             ))
         }
@@ -760,13 +760,13 @@ impl SurfaceStore {
     fn release_from_surface_share(&self, surface_id: &str) -> Result<()> {
         let connection = self.inner.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         // Create request dictionary
         let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
         if request.is_null() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Failed to create XPC request dictionary".into(),
             ));
         }
@@ -810,7 +810,7 @@ impl SurfaceStore {
     pub fn connect(&self) -> Result<()> {
         let stream = std::os::unix::net::UnixStream::connect(&self.inner.service_name)
             .map_err(|e| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "Failed to connect to surface-share socket '{}': {}",
                     self.inner.service_name, e
                 ))
@@ -893,7 +893,7 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let send_result =
@@ -907,7 +907,7 @@ impl SurfaceStore {
         }
 
         let (response, response_fds) = send_result.map_err(|e| {
-            StreamError::Configuration(format!("Unix socket check_in failed: {}", e))
+            Error::Configuration(format!("Unix socket check_in failed: {}", e))
         })?;
         // check_in never returns fds; close any the surface-share service may have attached
         // defensively so a future protocol drift doesn't leak them.
@@ -919,7 +919,7 @@ impl SurfaceStore {
             .get("surface_id")
             .and_then(|v: &serde_json::Value| v.as_str())
             .ok_or_else(|| {
-                StreamError::Configuration("check_in: missing surface_id in response".into())
+                Error::Configuration("check_in: missing surface_id in response".into())
             })?
             .to_string();
 
@@ -963,7 +963,7 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let (response, received_fds) = streamlib_surface_client::send_request_with_fds(
@@ -973,21 +973,21 @@ impl SurfaceStore {
             streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Unix socket check_out failed: {}", e))
+            Error::Configuration(format!("Unix socket check_out failed: {}", e))
         })?;
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
             }
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "check_out: {}",
                 error
             )));
         }
 
         if received_fds.is_empty() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "check_out: no DMA-BUF fd in response".into(),
             ));
         }
@@ -1051,21 +1051,21 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let send_result =
             streamlib_surface_client::send_request_with_fds(stream, &request, &[fd], 0);
         unsafe { libc::close(fd) };
         let (response, response_fds) = send_result.map_err(|e| {
-            StreamError::Configuration(format!("Unix socket register failed: {}", e))
+            Error::Configuration(format!("Unix socket register failed: {}", e))
         })?;
         for f in &response_fds {
             unsafe { libc::close(*f) };
         }
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "register: {}",
                 error
             )));
@@ -1104,7 +1104,7 @@ impl SurfaceStore {
                 Ok(f) => Some(f),
                 Err(e) => {
                     unsafe { libc::close(fd) };
-                    return Err(StreamError::Configuration(format!(
+                    return Err(Error::Configuration(format!(
                         "register_texture: failed to export timeline opaque fd: {}",
                         e
                     )));
@@ -1149,7 +1149,7 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let mut fds: Vec<std::os::unix::io::RawFd> = vec![fd];
@@ -1162,14 +1162,14 @@ impl SurfaceStore {
             unsafe { libc::close(*f) };
         }
         let (response, response_fds) = send_result.map_err(|e| {
-            StreamError::Configuration(format!("Unix socket register_texture failed: {}", e))
+            Error::Configuration(format!("Unix socket register_texture failed: {}", e))
         })?;
         for f in &response_fds {
             unsafe { libc::close(*f) };
         }
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "register_texture: {}",
                 error
             )));
@@ -1243,7 +1243,7 @@ impl SurfaceStore {
                     for fd in &plane_fds {
                         unsafe { libc::close(*fd) };
                     }
-                    return Err(StreamError::Configuration(format!(
+                    return Err(Error::Configuration(format!(
                         "register_pixel_buffer_with_timeline: failed to export timeline opaque fd: {}",
                         e
                     )));
@@ -1268,7 +1268,7 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let mut fds: Vec<std::os::unix::io::RawFd> = plane_fds.clone();
@@ -1281,7 +1281,7 @@ impl SurfaceStore {
             unsafe { libc::close(*f) };
         }
         let (response, response_fds) = send_result.map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "Unix socket register_pixel_buffer_with_timeline failed: {}",
                 e
             ))
@@ -1291,7 +1291,7 @@ impl SurfaceStore {
         }
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "register_pixel_buffer_with_timeline: {}",
                 error
             )));
@@ -1327,7 +1327,7 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let (response, received_fds) = streamlib_surface_client::send_request_with_fds(
@@ -1337,21 +1337,21 @@ impl SurfaceStore {
             streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Unix socket lookup failed: {}", e))
+            Error::Configuration(format!("Unix socket lookup failed: {}", e))
         })?;
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
             }
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "lookup: {}",
                 error
             )));
         }
 
         if received_fds.is_empty() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "lookup: no memory fd in response".into(),
             ));
         }
@@ -1370,7 +1370,7 @@ impl SurfaceStore {
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
             }
-            return Err(StreamError::NotSupported(
+            return Err(Error::NotSupported(
                 "SurfaceStore::lookup_buffer: surface registered with \
                  handle_type=\"opaque_fd\"; the host-side RhiPixelBuffer \
                  import path is DMA-BUF-only. Subprocess consumers should \
@@ -1421,7 +1421,7 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration(
+            Error::Configuration(
                 "SurfaceStore not connected to surface-share service".into(),
             )
         })?;
@@ -1429,7 +1429,7 @@ impl SurfaceStore {
         let (response, response_fds) =
             streamlib_surface_client::send_request_with_fds(stream, &request, &[], 0)
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "Unix socket update_layout failed: {}",
                         e
                     ))
@@ -1439,7 +1439,7 @@ impl SurfaceStore {
         }
 
         if let Some(error) = response.get("error").and_then(|v| v.as_str()) {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "update_layout: {}",
                 error
             )));
@@ -1447,11 +1447,11 @@ impl SurfaceStore {
 
         match response.get("success").and_then(|v| v.as_bool()) {
             Some(true) => Ok(()),
-            Some(false) => Err(StreamError::Configuration(format!(
+            Some(false) => Err(Error::Configuration(format!(
                 "update_layout: surface_id '{}' not registered",
                 surface_id
             ))),
-            None => Err(StreamError::Configuration(
+            None => Err(Error::Configuration(
                 "update_layout: malformed response (missing `success`)".into(),
             )),
         }
@@ -1474,7 +1474,7 @@ impl SurfaceStore {
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
-            StreamError::Configuration("SurfaceStore not connected to surface-share service".into())
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
         let (response, received_fds) = streamlib_surface_client::send_request_with_fds(
@@ -1484,21 +1484,21 @@ impl SurfaceStore {
             streamlib_surface_client::MAX_DMA_BUF_PLANES,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Unix socket lookup_texture failed: {}", e))
+            Error::Configuration(format!("Unix socket lookup_texture failed: {}", e))
         })?;
 
         if let Some(error) = response.get("error").and_then(|v: &serde_json::Value| v.as_str()) {
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
             }
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "lookup_texture: {}",
                 error
             )));
         }
 
         if received_fds.is_empty() {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "lookup_texture: no DMA-BUF fd in response".into(),
             ));
         }
@@ -1512,21 +1512,21 @@ impl SurfaceStore {
             .get("width")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| {
-                StreamError::Configuration("lookup_texture: missing width in response".into())
+                Error::Configuration("lookup_texture: missing width in response".into())
             })? as u32;
 
         let height = response
             .get("height")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| {
-                StreamError::Configuration("lookup_texture: missing height in response".into())
+                Error::Configuration("lookup_texture: missing height in response".into())
             })? as u32;
 
         let format_str = response
             .get("format")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                StreamError::Configuration("lookup_texture: missing format in response".into())
+                Error::Configuration("lookup_texture: missing format in response".into())
             })?;
 
         use crate::core::rhi::TextureFormat;
@@ -1540,7 +1540,7 @@ impl SurfaceStore {
             "Rgba32Float" => TextureFormat::Rgba32Float,
             "Nv12" => TextureFormat::Nv12,
             _ => {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "lookup_texture: unknown format '{}'",
                     format_str
                 )));
@@ -1553,7 +1553,7 @@ impl SurfaceStore {
             crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
                 .get()
                 .ok_or_else(|| {
-                    StreamError::NotSupported(
+                    Error::NotSupported(
                         "lookup_texture: HostVulkanDevice not initialized for import".into(),
                     )
                 })?;
@@ -1608,7 +1608,7 @@ impl SurfaceStore {
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn connect(&self) -> Result<()> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
@@ -1620,28 +1620,28 @@ impl SurfaceStore {
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn check_in(&self, _pixel_buffer: &RhiPixelBuffer) -> Result<String> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn check_out(&self, _surface_id: &str) -> Result<RhiPixelBuffer> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn register_buffer(&self, _pool_id: &str, _pixel_buffer: &RhiPixelBuffer) -> Result<()> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub fn lookup_buffer(&self, _pool_id: &str) -> Result<RhiPixelBuffer> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
@@ -1660,7 +1660,7 @@ impl SurfaceStore {
         _timeline: Option<&()>,
         _current_image_layout: i32,
     ) -> Result<()> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "Texture registration not supported on this platform".into(),
         ))
     }
@@ -1670,7 +1670,7 @@ impl SurfaceStore {
         &self,
         _surface_id: &str,
     ) -> Result<(crate::core::rhi::StreamTexture, i32)> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "Texture lookup not supported on this platform".into(),
         ))
     }
@@ -1681,7 +1681,7 @@ impl SurfaceStore {
         _surface_id: &str,
         _layout: i32,
     ) -> Result<()> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "update_image_layout not supported on this platform".into(),
         ))
     }

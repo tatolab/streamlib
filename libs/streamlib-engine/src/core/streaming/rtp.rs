@@ -3,7 +3,7 @@
 
 use crate::_generated_::EncodedVideoFrame;
 use crate::_generated_::EncodedAudioFrame;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use bytes::Bytes;
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ pub fn convert_video_to_samples(
     let nal_units = parse_nal_units(&frame.data);
 
     if nal_units.is_empty() {
-        return Err(StreamError::Runtime(
+        return Err(Error::Runtime(
             "No NAL units found in H.264 frame".into(),
         ));
     }

@@ -9,7 +9,7 @@
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::rhi::PixelFormat;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
 
 use vulkan_video::{Codec, SimpleDecoder, SimpleDecoderConfig};
 
@@ -44,10 +44,10 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         let vulkan_device = &ctx.gpu_full_access().device().inner;
 
         let decode_queue = vulkan_device.video_decode_queue().ok_or_else(|| {
-            StreamError::Runtime("GPU does not support Vulkan Video decode".into())
+            Error::Runtime("GPU does not support Vulkan Video decode".into())
         })?;
         let decode_queue_family = vulkan_device.video_decode_queue_family_index().ok_or_else(|| {
-            StreamError::Runtime("No video decode queue family".into())
+            Error::Runtime("No video decode queue family".into())
         })?;
 
         let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
@@ -65,13 +65,13 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             vulkan_device.queue(),
             vulkan_device.queue_family_index(),
         ).map_err(|e| {
-            StreamError::Runtime(format!("Failed to create H.265 decoder: {e}"))
+            Error::Runtime(format!("Failed to create H.265 decoder: {e}"))
         })?;
 
         // Pre-create the video session BEFORE the display swapchain.
         // NVIDIA limits video session creation after swapchain exists.
         decoder.pre_initialize_session().map_err(|e| {
-            StreamError::Runtime(format!("Failed to pre-initialize H.265 decoder session: {e}"))
+            Error::Runtime(format!("Failed to pre-initialize H.265 decoder session: {e}"))
         })?;
 
         // Eagerly allocate the NV12→RGBA converter. Decode-side resources
@@ -79,7 +79,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         // exportable VMA pools at `HostVulkanDevice` construction so this
         // no longer races NVIDIA's post-swapchain exportable cap.
         decoder.prepare_gpu_decode_resources().map_err(|e| {
-            StreamError::Runtime(format!("Failed to pre-allocate H.265 decode resources: {e}"))
+            Error::Runtime(format!("Failed to pre-allocate H.265 decode resources: {e}"))
         })?;
 
         tracing::info!("[H265Decoder] Initialized (shared RHI device, Vulkan Video hardware)");
@@ -107,15 +107,15 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
         let gpu_ctx = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| StreamError::Runtime("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
 
         let decoder = self
             .decoder
             .as_mut()
-            .ok_or_else(|| StreamError::Runtime("H.265 decoder not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("H.265 decoder not initialized".into()))?;
 
         let decoded_frames = decoder.feed(&encoded.data).map_err(|e| {
-            StreamError::Runtime(format!("H.265 decode failed: {e}"))
+            Error::Runtime(format!("H.265 decode failed: {e}"))
         })?;
 
         for decoded in decoded_frames {

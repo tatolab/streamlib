@@ -6,7 +6,7 @@
 // Unified client that owns both HTTP signaling and WebRTC session management.
 // Implements IETF WHEP specification for WebRTC playback/egress.
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -108,7 +108,7 @@ impl WhepClient {
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .map_err(|e| {
-                    StreamError::Runtime(format!(
+                    Error::Runtime(format!(
                         "Failed to install rustls crypto provider: {:?}",
                         e
                     ))
@@ -123,7 +123,7 @@ impl WhepClient {
         // Build HTTPS connector
         let https = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
-            .map_err(|e| StreamError::Configuration(format!("Failed to load CA roots: {}", e)))?
+            .map_err(|e| Error::Configuration(format!("Failed to load CA roots: {}", e)))?
             .https_or_http()
             .enable_http1()
             .enable_http2()
@@ -252,7 +252,7 @@ impl WhepClient {
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to register H.264 codec: {}", e))
+                Error::Configuration(format!("Failed to register H.264 codec: {}", e))
             })?;
 
         // Register Opus audio codec
@@ -272,7 +272,7 @@ impl WhepClient {
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to register Opus codec: {}", e))
+                Error::Configuration(format!("Failed to register Opus codec: {}", e))
             })?;
 
         tracing::info!("[WhepClient] Registered H.264 (PT=102) and Opus (PT=111) codecs");
@@ -284,7 +284,7 @@ impl WhepClient {
             &mut media_engine,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Failed to register interceptors: {}", e))
+            Error::Configuration(format!("Failed to register interceptors: {}", e))
         })?;
 
         // Create API
@@ -296,7 +296,7 @@ impl WhepClient {
         // Create peer connection
         let config = webrtc::peer_connection::configuration::RTCConfiguration::default();
         let peer_connection = Arc::new(api.new_peer_connection(config).await.map_err(|e| {
-            StreamError::Configuration(format!("Failed to create PeerConnection: {}", e))
+            Error::Configuration(format!("Failed to create PeerConnection: {}", e))
         })?);
 
         // Create channels for ICE candidates and media samples
@@ -395,7 +395,7 @@ impl WhepClient {
             )
             .await
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to add video transceiver: {}", e))
+                Error::Configuration(format!("Failed to add video transceiver: {}", e))
             })?;
 
         peer_connection
@@ -408,7 +408,7 @@ impl WhepClient {
             )
             .await
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to add audio transceiver: {}", e))
+                Error::Configuration(format!("Failed to add audio transceiver: {}", e))
             })?;
 
         Ok((peer_connection, ice_rx, video_rx, audio_rx))
@@ -422,12 +422,12 @@ impl WhepClient {
         let offer = peer_connection
             .create_offer(None)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to create offer: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to create offer: {}", e)))?;
 
         peer_connection
             .set_local_description(offer)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to set local description: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to set local description: {}", e)))?;
 
         // Wait for ICE gathering to complete
         let mut done_rx = peer_connection.gathering_complete_promise().await;
@@ -436,7 +436,7 @@ impl WhepClient {
         let local_desc = peer_connection
             .local_description()
             .await
-            .ok_or_else(|| StreamError::Runtime("No local description".into()))?;
+            .ok_or_else(|| Error::Runtime("No local description".into()))?;
 
         Ok(local_desc.sdp)
     }
@@ -451,13 +451,13 @@ impl WhepClient {
             webrtc::peer_connection::sdp::session_description::RTCSessionDescription::answer(
                 sdp.to_owned(),
             )
-            .map_err(|e| StreamError::Runtime(format!("Failed to parse SDP answer: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to parse SDP answer: {}", e)))?;
 
         peer_connection
             .set_remote_description(answer)
             .await
             .map_err(|e| {
-                StreamError::Runtime(format!("Failed to set remote description: {}", e))
+                Error::Runtime(format!("Failed to set remote description: {}", e))
             })?;
 
         Ok(())
@@ -515,7 +515,7 @@ impl WhepClient {
 
         let req = req_builder
             .body(boxed_body)
-            .map_err(|e| StreamError::Runtime(format!("Failed to build request: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to build request: {}", e)))?;
 
         tracing::debug!("[WhepClient] POST to {}", self.config.endpoint_url);
 
@@ -525,19 +525,19 @@ impl WhepClient {
         )
         .await
         .map_err(|_| {
-            StreamError::Runtime(format!(
+            Error::Runtime(format!(
                 "WHEP POST timed out after {}ms",
                 self.config.timeout_ms
             ))
         })?
-        .map_err(|e| StreamError::Runtime(format!("WHEP POST failed: {}", e)))?;
+        .map_err(|e| Error::Runtime(format!("WHEP POST failed: {}", e)))?;
 
         let status = response.status();
         let headers = response.headers().clone();
 
         let body_bytes = BodyExt::collect(response.into_body())
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to read response: {}", e)))?
+            .map_err(|e| Error::Runtime(format!("Failed to read response: {}", e)))?
             .to_bytes();
 
         match status {
@@ -547,7 +547,7 @@ impl WhepClient {
                     .get(header::LOCATION)
                     .and_then(|v| v.to_str().ok())
                     .ok_or_else(|| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "WHEP {} without Location header",
                             status.as_u16()
                         ))
@@ -573,14 +573,14 @@ impl WhepClient {
                 );
 
                 let sdp_answer = String::from_utf8(body_bytes.to_vec())
-                    .map_err(|e| StreamError::Runtime(format!("Invalid UTF-8 in SDP: {}", e)))?;
+                    .map_err(|e| Error::Runtime(format!("Invalid UTF-8 in SDP: {}", e)))?;
 
                 Ok(sdp_answer)
             }
             _ => {
                 let error_body = String::from_utf8(body_bytes.to_vec())
                     .unwrap_or_else(|_| format!("HTTP {}", status));
-                Err(StreamError::Runtime(format!(
+                Err(Error::Runtime(format!(
                     "WHEP POST failed ({}): {}",
                     status, error_body
                 )))
@@ -628,15 +628,15 @@ impl WhepClient {
 
         let req = req_builder
             .body(boxed_body)
-            .map_err(|e| StreamError::Runtime(format!("Failed to build PATCH request: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to build PATCH request: {}", e)))?;
 
         let response = tokio::time::timeout(
             std::time::Duration::from_millis(self.config.timeout_ms),
             self.http_client.request(req),
         )
         .await
-        .map_err(|_| StreamError::Runtime("WHEP PATCH timed out".into()))?
-        .map_err(|e| StreamError::Runtime(format!("WHEP PATCH failed: {}", e)))?;
+        .map_err(|_| Error::Runtime("WHEP PATCH timed out".into()))?
+        .map_err(|e| Error::Runtime(format!("WHEP PATCH failed: {}", e)))?;
 
         match response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => {
@@ -649,7 +649,7 @@ impl WhepClient {
                     .ok()
                     .and_then(|b| String::from_utf8(b.to_bytes().to_vec()).ok())
                     .unwrap_or_else(|| format!("HTTP {}", status));
-                Err(StreamError::Runtime(format!(
+                Err(Error::Runtime(format!(
                     "WHEP PATCH failed: {}",
                     body_bytes
                 )))
@@ -723,7 +723,7 @@ impl WhepClient {
 
         let req = req_builder
             .body(boxed_body)
-            .map_err(|e| StreamError::Runtime(format!("Failed to build DELETE request: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to build DELETE request: {}", e)))?;
 
         tracing::debug!("[WhepClient] DELETE to {}", session_url);
 
@@ -732,8 +732,8 @@ impl WhepClient {
             self.http_client.request(req),
         )
         .await
-        .map_err(|_| StreamError::Runtime("WHEP DELETE timed out".into()))?
-        .map_err(|e| StreamError::Runtime(format!("WHEP DELETE failed: {}", e)))?;
+        .map_err(|_| Error::Runtime("WHEP DELETE timed out".into()))?
+        .map_err(|e| Error::Runtime(format!("WHEP DELETE failed: {}", e)))?;
 
         if response.status().is_success() {
             tracing::info!("[WhepClient] WHEP session deleted: {}", session_url);

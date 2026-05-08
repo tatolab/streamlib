@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 
 // ============================================================================
 // Venv management
@@ -37,9 +37,9 @@ pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<
     // Compute hash for cache key
     let hash_hex = if let Some(ref pyproject) = pyproject_path {
         let contents = std::fs::read_to_string(pyproject)
-            .map_err(|e| StreamError::Runtime(format!("Failed to read pyproject.toml: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to read pyproject.toml: {}", e)))?;
         let canonical = project_path.canonicalize().map_err(|e| {
-            StreamError::Runtime(format!(
+            Error::Runtime(format!(
                 "Failed to canonicalize project_path '{}': {}",
                 project_path.display(),
                 e
@@ -79,7 +79,7 @@ pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<
     static VENV_CREATION_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _lock = VENV_CREATION_LOCK
         .lock()
-        .map_err(|e| StreamError::Runtime(format!("Venv creation lock poisoned: {}", e)))?;
+        .map_err(|e| Error::Runtime(format!("Venv creation lock poisoned: {}", e)))?;
 
     // Re-check after acquiring lock — another thread may have created it
     if venv_python.exists() {
@@ -101,7 +101,7 @@ pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<
     );
 
     std::fs::create_dir_all(venv_dir.parent().unwrap_or(&venv_dir)).map_err(|e| {
-        StreamError::Runtime(format!("Failed to create venv parent directory: {}", e))
+        Error::Runtime(format!("Failed to create venv parent directory: {}", e))
     })?;
 
     let output = run_uv(
@@ -112,7 +112,7 @@ pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let _ = std::fs::remove_dir_all(&venv_dir);
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "Failed to create venv for processor '{}': {}",
             processor_id, stderr
         )));
@@ -146,7 +146,7 @@ pub fn ensure_processor_venv(processor_id: &str, project_path: &Path) -> Result<
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let _ = std::fs::remove_dir_all(&venv_dir);
-            return Err(StreamError::Runtime(format!(
+            return Err(Error::Runtime(format!(
                 "Failed to install project deps for processor '{}': {}",
                 processor_id, stderr
             )));
@@ -163,7 +163,7 @@ fn run_uv(args: &[&str], uv_cache_dir: &Path) -> Result<std::process::Output> {
         .env("UV_CACHE_DIR", uv_cache_dir.to_str().unwrap_or(""))
         .output()
         .map_err(|e| {
-            StreamError::Runtime(format!(
+            Error::Runtime(format!(
                 "Failed to run uv (is uv installed?): {}. Install with: curl -LsSf https://astral.sh/uv/install.sh | sh",
                 e
             ))

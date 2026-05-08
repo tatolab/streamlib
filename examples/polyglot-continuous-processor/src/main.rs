@@ -43,7 +43,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::sdk::error::StreamError;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
@@ -149,7 +149,7 @@ fn run() -> Result<TickReport> {
     for a in std::env::args().skip(1) {
         if let Some(value) = a.strip_prefix("--runtime=") {
             runtime_kind =
-                RuntimeKind::parse(value).map_err(StreamError::Configuration)?;
+                RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--output-file=") {
             output_file = Some(PathBuf::from(value));
         }
@@ -201,7 +201,7 @@ fn run() -> Result<TickReport> {
     let report = read_tick_report(&output_file)?;
 
     if report.count < MIN_TICK_COUNT || report.count > MAX_TICK_COUNT {
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "tick count {} outside expected [{MIN_TICK_COUNT}, {MAX_TICK_COUNT}]",
             report.count,
         )));
@@ -210,7 +210,7 @@ fn run() -> Result<TickReport> {
         let nominal_ns = (NOMINAL_INTERVAL_MS as f64) * 1_000_000.0;
         let slack_ns = INTERVAL_SLACK_MS * 1_000_000.0;
         if (avg_ns - nominal_ns).abs() > slack_ns {
-            return Err(StreamError::Runtime(format!(
+            return Err(Error::Runtime(format!(
                 "average inter-tick interval {:.3}ms outside nominal {NOMINAL_INTERVAL_MS}ms ± {INTERVAL_SLACK_MS}ms",
                 avg_ns / 1_000_000.0,
             )));
@@ -221,18 +221,18 @@ fn run() -> Result<TickReport> {
 
 fn read_tick_report(path: &std::path::Path) -> Result<TickReport> {
     let raw = std::fs::read_to_string(path).map_err(|e| {
-        StreamError::Runtime(format!(
+        Error::Runtime(format!(
             "polyglot continuous processor did not write {} — teardown may have failed: {e}",
             path.display()
         ))
     })?;
     let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        StreamError::Runtime(format!("output file is not valid JSON: {e}"))
+        Error::Runtime(format!("output file is not valid JSON: {e}"))
     })?;
     let count = v
         .get("tick_count")
         .and_then(|x| x.as_u64())
-        .ok_or_else(|| StreamError::Runtime("missing tick_count".into()))? as u32;
+        .ok_or_else(|| Error::Runtime("missing tick_count".into()))? as u32;
     // The Python side writes integers, the Deno side writes BigInts as
     // strings (JSON has no native u64). Accept both shapes.
     let first_ns = parse_u64_or_string(&v, "first_tick_ns")?;
@@ -242,17 +242,17 @@ fn read_tick_report(path: &std::path::Path) -> Result<TickReport> {
 
 fn parse_u64_or_string(v: &serde_json::Value, key: &str) -> Result<u64> {
     let field = v.get(key).ok_or_else(|| {
-        StreamError::Runtime(format!("missing {key}"))
+        Error::Runtime(format!("missing {key}"))
     })?;
     if let Some(n) = field.as_u64() {
         return Ok(n);
     }
     if let Some(s) = field.as_str() {
         return s.parse::<u64>().map_err(|e| {
-            StreamError::Runtime(format!("{key} not a u64 string: {e}"))
+            Error::Runtime(format!("{key} not a u64 string: {e}"))
         });
     }
-    Err(StreamError::Runtime(format!(
+    Err(Error::Runtime(format!(
         "{key} has unexpected JSON shape: {field:?}"
     )))
 }

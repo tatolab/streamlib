@@ -47,14 +47,14 @@ impl RhiFormatConverter {
         #[cfg(target_os = "linux")]
         {
             let _ = (source_format, dest_format);
-            Err(crate::core::StreamError::NotSupported(
+            Err(crate::core::Error::NotSupported(
                 "RhiFormatConverter::new requires Vulkan device/queue — use VulkanFormatConverter directly".into(),
             ))
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = (source_format, dest_format);
-            Err(crate::core::StreamError::Configuration(
+            Err(crate::core::Error::Configuration(
                 "RhiFormatConverter not implemented for this platform".into(),
             ))
         }
@@ -108,14 +108,14 @@ impl RhiFormatConverter {
         #[cfg(target_os = "linux")]
         {
             let _ = (source, dest);
-            Err(crate::core::StreamError::NotSupported(
+            Err(crate::core::Error::NotSupported(
                 "Vulkan format conversion not yet implemented".into(),
             ))
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = (source, dest);
-            Err(crate::core::StreamError::Configuration(
+            Err(crate::core::Error::Configuration(
                 "RhiFormatConverter not implemented for this platform".into(),
             ))
         }

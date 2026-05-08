@@ -42,7 +42,7 @@ use std::time::Duration;
 
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::StreamError;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
@@ -139,7 +139,7 @@ fn run() -> Result<SinkReport> {
     for a in std::env::args().skip(1) {
         if let Some(value) = a.strip_prefix("--runtime=") {
             runtime_kind =
-                RuntimeKind::parse(value).map_err(StreamError::Configuration)?;
+                RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--sink-stats-file=") {
             sink_stats_file = Some(PathBuf::from(value));
         }
@@ -235,7 +235,7 @@ fn run() -> Result<SinkReport> {
 
     let report = read_sink_report(&sink_stats_file)?;
     if report.frames_received < MIN_FRAMES_RECEIVED {
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "counting sink received only {} frames; expected >= {MIN_FRAMES_RECEIVED}",
             report.frames_received,
         )));
@@ -249,7 +249,7 @@ fn run() -> Result<SinkReport> {
 fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
     let lib_dir = plugin_dir.join("lib");
     std::fs::create_dir_all(&lib_dir).map_err(|e| {
-        StreamError::Configuration(format!(
+        Error::Configuration(format!(
             "failed to create plugin lib dir {}: {e}",
             lib_dir.display(),
         ))
@@ -259,7 +259,7 @@ fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
     let workspace_root = manifest_dir
         .parent()
         .and_then(|p| p.parent())
-        .ok_or_else(|| StreamError::Configuration("workspace root not found".into()))?;
+        .ok_or_else(|| Error::Configuration("workspace root not found".into()))?;
 
     let target_dir = workspace_root.join("target");
     let candidates = [
@@ -267,7 +267,7 @@ fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
         target_dir.join("release").join(COUNTING_SINK_PLUGIN_DYLIB),
     ];
     let source = candidates.iter().find(|p| p.exists()).ok_or_else(|| {
-        StreamError::Configuration(format!(
+        Error::Configuration(format!(
             "counting-sink plugin dylib not found. Build it first:\n  \
              cargo build -p polyglot-manual-source-counting-sink-plugin\n\
              Looked in:\n  {}\n  {}",
@@ -277,7 +277,7 @@ fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
     })?;
     let dest = lib_dir.join(COUNTING_SINK_PLUGIN_DYLIB);
     std::fs::copy(source, &dest).map_err(|e| {
-        StreamError::Configuration(format!(
+        Error::Configuration(format!(
             "failed to copy {} → {}: {e}",
             source.display(),
             dest.display(),
@@ -288,18 +288,18 @@ fn stage_plugin_dylib(plugin_dir: &std::path::Path) -> Result<()> {
 
 fn read_sink_report(path: &std::path::Path) -> Result<SinkReport> {
     let raw = std::fs::read_to_string(path).map_err(|e| {
-        StreamError::Runtime(format!(
+        Error::Runtime(format!(
             "counting sink did not write {} — sink processor may not have received any frames: {e}",
             path.display()
         ))
     })?;
     let v: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
-        StreamError::Runtime(format!("sink stats file is not valid JSON: {e}"))
+        Error::Runtime(format!("sink stats file is not valid JSON: {e}"))
     })?;
     let frames_received = v
         .get("frames_received")
         .and_then(|x| x.as_u64())
-        .ok_or_else(|| StreamError::Runtime("missing frames_received".into()))?
+        .ok_or_else(|| Error::Runtime("missing frames_received".into()))?
         as u32;
     Ok(SinkReport { frames_received })
 }

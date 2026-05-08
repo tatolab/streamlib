@@ -5,7 +5,7 @@ use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
+use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, Error};
 use crate::iceoryx2::OutputWriter;
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -299,7 +299,7 @@ impl crate::core::ManualProcessor for AppleScreenCaptureProcessor::Processor {
         validate_config(&self.config)?;
 
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
-            StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
+            Error::Configuration("GPU context not initialized. Call setup() first.".into())
         })?;
 
         // Create callback context
@@ -402,7 +402,7 @@ impl AppleScreenCaptureProcessor::Processor {
             TargetType::Display => {
                 let display_index = config.display_index.unwrap_or(0) as usize;
                 if display_index >= displays.len() {
-                    return Err(StreamError::Configuration(format!(
+                    return Err(Error::Configuration(format!(
                         "Display {} not found (available: {})",
                         display_index,
                         displays.len()
@@ -483,7 +483,7 @@ impl AppleScreenCaptureProcessor::Processor {
             );
 
         if let Err(e) = add_result {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Failed to add stream output: {}",
                 e.localizedDescription()
             )));
@@ -538,7 +538,7 @@ impl AppleScreenCaptureProcessor::Processor {
         }
 
         let window = found_window.ok_or_else(|| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "Window not found (id: {:?}, title: {:?})",
                 config.window_id, config.window_title
             ))
@@ -558,7 +558,7 @@ impl AppleScreenCaptureProcessor::Processor {
         applications: &NSArray<SCRunningApplication>,
     ) -> Result<Retained<SCContentFilter>> {
         let bundle_id = config.app_bundle_id.as_ref().ok_or_else(|| {
-            StreamError::Configuration("Application mode requires app_bundle_id".into())
+            Error::Configuration("Application mode requires app_bundle_id".into())
         })?;
 
         let mut found_app: Option<Retained<SCRunningApplication>> = None;
@@ -573,12 +573,12 @@ impl AppleScreenCaptureProcessor::Processor {
         }
 
         let app = found_app.ok_or_else(|| {
-            StreamError::Configuration(format!("Application not found: {}", bundle_id))
+            Error::Configuration(format!("Application not found: {}", bundle_id))
         })?;
 
         let display_index = config.app_display_index.unwrap_or(0) as usize;
         if display_index >= displays.len() {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Display {} not found for application capture",
                 display_index
             )));
@@ -606,7 +606,7 @@ fn validate_config(config: &ScreenCaptureConfig) -> Result<()> {
         TargetType::Display => Ok(()),
         TargetType::Window => {
             if config.window_title.is_none() && config.window_id.is_none() {
-                return Err(StreamError::Configuration(
+                return Err(Error::Configuration(
                     "Window mode requires window_title or window_id".into(),
                 ));
             }
@@ -614,7 +614,7 @@ fn validate_config(config: &ScreenCaptureConfig) -> Result<()> {
         }
         TargetType::Application => {
             if config.app_bundle_id.is_none() {
-                return Err(StreamError::Configuration(
+                return Err(Error::Configuration(
                     "Application mode requires app_bundle_id".into(),
                 ));
             }

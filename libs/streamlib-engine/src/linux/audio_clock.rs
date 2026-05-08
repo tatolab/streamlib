@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -77,7 +77,7 @@ impl AudioClock for LinuxTimerFdAudioClock {
                 tracing::info!("[LinuxTimerFdAudioClock] Stopped");
             })
             .map_err(|e| {
-                StreamError::Runtime(format!(
+                Error::Runtime(format!(
                     "Failed to spawn audio clock timerfd thread: {}",
                     e
                 ))
@@ -139,7 +139,7 @@ fn run_timerfd_loop(
     let timer_fd = unsafe { libc::timerfd_create(libc::CLOCK_MONOTONIC, libc::TFD_NONBLOCK) };
 
     if timer_fd < 0 {
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "timerfd_create failed: errno {}",
             std::io::Error::last_os_error()
         )));
@@ -153,7 +153,7 @@ fn run_timerfd_loop(
     let clock_ret = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
     if clock_ret < 0 {
         unsafe { libc::close(timer_fd) };
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "clock_gettime failed: errno {}",
             std::io::Error::last_os_error()
         )));
@@ -194,7 +194,7 @@ fn run_timerfd_loop(
     };
     if set_ret < 0 {
         unsafe { libc::close(timer_fd) };
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "timerfd_settime failed: errno {}",
             std::io::Error::last_os_error()
         )));
@@ -204,7 +204,7 @@ fn run_timerfd_loop(
     let epoll_fd = unsafe { libc::epoll_create1(0) };
     if epoll_fd < 0 {
         unsafe { libc::close(timer_fd) };
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "epoll_create1 failed: errno {}",
             std::io::Error::last_os_error()
         )));
@@ -222,7 +222,7 @@ fn run_timerfd_loop(
             libc::close(epoll_fd);
             libc::close(timer_fd);
         }
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "epoll_ctl failed: errno {}",
             std::io::Error::last_os_error()
         )));
@@ -249,7 +249,7 @@ fn run_timerfd_loop(
                 libc::close(epoll_fd);
                 libc::close(timer_fd);
             }
-            return Err(StreamError::Runtime(format!(
+            return Err(Error::Runtime(format!(
                 "epoll_wait failed: {}",
                 err
             )));
@@ -279,7 +279,7 @@ fn run_timerfd_loop(
                 libc::close(epoll_fd);
                 libc::close(timer_fd);
             }
-            return Err(StreamError::Runtime(format!(
+            return Err(Error::Runtime(format!(
                 "timerfd read failed: {}",
                 err
             )));

@@ -6,7 +6,7 @@
 // Manages WebRTC PeerConnection, tracks, and RTP packetization using webrtc-rs.
 // Supports both send (WHIP) and receive (WHEP) modes.
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use std::sync::Arc;
 use webrtc::track::track_local::TrackLocalWriter;
 
@@ -92,7 +92,7 @@ impl WebRtcSession {
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to register H.264 codec: {}", e))
+                Error::Configuration(format!("Failed to register H.264 codec: {}", e))
             })?;
 
         // Register Opus audio codec
@@ -112,7 +112,7 @@ impl WebRtcSession {
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to register Opus codec: {}", e))
+                Error::Configuration(format!("Failed to register Opus codec: {}", e))
             })?;
 
         tracing::info!("[WebRTC] Registered ONLY H.264 (PT=102) and Opus (PT=111) codecs");
@@ -126,7 +126,7 @@ impl WebRtcSession {
             &mut media_engine,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Failed to register interceptors: {}", e))
+            Error::Configuration(format!("Failed to register interceptors: {}", e))
         })?;
 
         tracing::debug!("[WebRTC] Creating WebRTC API...");
@@ -142,7 +142,7 @@ impl WebRtcSession {
         // Create RTCPeerConnection
         let config = webrtc::peer_connection::configuration::RTCConfiguration::default();
         let peer_connection = Arc::new(api.new_peer_connection(config).await.map_err(|e| {
-            StreamError::Configuration(format!("Failed to create PeerConnection: {}", e))
+            Error::Configuration(format!("Failed to create PeerConnection: {}", e))
         })?);
 
         tracing::debug!("[WebRTC] RTCPeerConnection created successfully");
@@ -275,7 +275,7 @@ impl WebRtcSession {
             .add_track(Arc::clone(&video_track)
                 as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
             .await
-            .map_err(|e| StreamError::Configuration(format!("Failed to add video track: {}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to add video track: {}", e)))?;
 
         let video_params = video_rtp_sender.get_parameters().await;
 
@@ -322,7 +322,7 @@ impl WebRtcSession {
             .add_track(Arc::clone(&audio_track)
                 as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
             .await
-            .map_err(|e| StreamError::Configuration(format!("Failed to add audio track: {}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to add audio track: {}", e)))?;
 
         let audio_params = audio_rtp_sender.get_parameters().await;
 
@@ -413,7 +413,7 @@ impl WebRtcSession {
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to register H.264 codec: {}", e))
+                Error::Configuration(format!("Failed to register H.264 codec: {}", e))
             })?;
 
         // Register Opus audio codec (same as WHIP)
@@ -433,7 +433,7 @@ impl WebRtcSession {
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to register Opus codec: {}", e))
+                Error::Configuration(format!("Failed to register Opus codec: {}", e))
             })?;
 
         tracing::info!(
@@ -447,7 +447,7 @@ impl WebRtcSession {
             &mut media_engine,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Failed to register interceptors: {}", e))
+            Error::Configuration(format!("Failed to register interceptors: {}", e))
         })?;
 
         // Create API with MediaEngine and InterceptorRegistry
@@ -459,7 +459,7 @@ impl WebRtcSession {
         // Create RTCPeerConnection
         let config = webrtc::peer_connection::configuration::RTCConfiguration::default();
         let peer_connection = Arc::new(api.new_peer_connection(config).await.map_err(|e| {
-            StreamError::Configuration(format!("Failed to create PeerConnection: {}", e))
+            Error::Configuration(format!("Failed to create PeerConnection: {}", e))
         })?);
 
         tracing::debug!("[WebRTC WHEP] RTCPeerConnection created successfully");
@@ -584,7 +584,7 @@ impl WebRtcSession {
                 direction: webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Recvonly,
                 send_encodings: vec![],
             })
-        ).await.map_err(|e| StreamError::Configuration(format!("Failed to add video transceiver: {}", e)))?;
+        ).await.map_err(|e| Error::Configuration(format!("Failed to add video transceiver: {}", e)))?;
 
         peer_connection.add_transceiver_from_kind(
             webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
@@ -592,7 +592,7 @@ impl WebRtcSession {
                 direction: webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Recvonly,
                 send_encodings: vec![],
             })
-        ).await.map_err(|e| StreamError::Configuration(format!("Failed to add audio transceiver: {}", e)))?;
+        ).await.map_err(|e| Error::Configuration(format!("Failed to add audio transceiver: {}", e)))?;
 
         tracing::info!("[WebRTC WHEP] Added recvonly transceivers for video and audio");
 
@@ -665,7 +665,7 @@ impl WebRtcSession {
             .peer_connection
             .create_offer(None)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to create offer: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to create offer: {}", e)))?;
 
         tracing::debug!("[WebRTC] Setting local description (starts ICE gathering)...");
 
@@ -673,7 +673,7 @@ impl WebRtcSession {
         self.peer_connection
             .set_local_description(offer)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to set local description: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to set local description: {}", e)))?;
 
         // Wait for ICE gathering to complete
         tracing::debug!("[WebRTC] Waiting for ICE gathering to complete...");
@@ -688,7 +688,7 @@ impl WebRtcSession {
             .peer_connection
             .local_description()
             .await
-            .ok_or_else(|| StreamError::Runtime("No local description".into()))?;
+            .ok_or_else(|| Error::Runtime("No local description".into()))?;
 
         let candidate_count = local_desc.sdp.matches("a=candidate:").count();
         tracing::debug!(
@@ -711,13 +711,13 @@ impl WebRtcSession {
             webrtc::peer_connection::sdp::session_description::RTCSessionDescription::answer(
                 sdp.to_owned(),
             )
-            .map_err(|e| StreamError::Runtime(format!("Failed to parse SDP answer: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to parse SDP answer: {}", e)))?;
 
         self.peer_connection
             .set_remote_description(answer)
             .await
             .map_err(|e| {
-                StreamError::Runtime(format!("Failed to set remote description: {}", e))
+                Error::Runtime(format!("Failed to set remote description: {}", e))
             })?;
 
         tracing::debug!("[WebRTC {}] Remote SDP answer set successfully", mode_str);
@@ -900,7 +900,7 @@ impl WebRtcSession {
         let track = self
             .video_track
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Video track not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("Video track not initialized".into()))?;
 
         // Track first write and periodic telemetry
         static VIDEO_SAMPLE_COUNTER: std::sync::atomic::AtomicU64 =
@@ -983,7 +983,7 @@ impl WebRtcSession {
 
                 tokio_handle.block_on(async {
                     track.write_rtp(&rtp_packet).await.map_err(|e| {
-                        StreamError::Runtime(format!("Failed to write video RTP: {}", e))
+                        Error::Runtime(format!("Failed to write video RTP: {}", e))
                     })
                 })?;
 
@@ -1049,7 +1049,7 @@ impl WebRtcSession {
 
                     tokio_handle.block_on(async {
                         track.write_rtp(&rtp_packet).await.map_err(|e| {
-                            StreamError::Runtime(format!("Failed to write video RTP: {}", e))
+                            Error::Runtime(format!("Failed to write video RTP: {}", e))
                         })
                     })?;
 
@@ -1087,7 +1087,7 @@ impl WebRtcSession {
         let track = self
             .audio_track
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Audio track not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("Audio track not initialized".into()))?;
 
         // Track first write and periodic telemetry
         static AUDIO_SAMPLE_COUNTER: std::sync::atomic::AtomicU64 =
@@ -1139,7 +1139,7 @@ impl WebRtcSession {
             track
                 .write_rtp(&rtp_packet)
                 .await
-                .map_err(|e| StreamError::Runtime(format!("Failed to write audio RTP: {}", e)))
+                .map_err(|e| Error::Runtime(format!("Failed to write audio RTP: {}", e)))
         });
 
         if let Err(ref e) = result {
@@ -1167,6 +1167,6 @@ impl WebRtcSession {
         self.peer_connection
             .close()
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to close peer connection: {}", e)))
+            .map_err(|e| Error::Runtime(format!("Failed to close peer connection: {}", e)))
     }
 }

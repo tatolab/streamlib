@@ -250,7 +250,7 @@ fn subprocess_clear_image(
     image: vk::Image,
     color: [f32; 4],
 ) -> streamlib::sdk::error::Result<()> {
-    use streamlib::sdk::error::StreamError;
+    use streamlib::sdk::error::Error;
     let dev = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();
@@ -264,7 +264,7 @@ fn subprocess_clear_image(
             None,
         )
     }
-    .map_err(|e| StreamError::GpuError(format!("create_command_pool: {e}")))?;
+    .map_err(|e| Error::GpuError(format!("create_command_pool: {e}")))?;
 
     let cmd = unsafe {
         dev.allocate_command_buffers(
@@ -275,7 +275,7 @@ fn subprocess_clear_image(
                 .build(),
         )
     }
-    .map_err(|e| StreamError::GpuError(format!("allocate_command_buffers: {e}")))?[0];
+    .map_err(|e| Error::GpuError(format!("allocate_command_buffers: {e}")))?[0];
 
     unsafe {
         dev.begin_command_buffer(
@@ -285,7 +285,7 @@ fn subprocess_clear_image(
                 .build(),
         )
     }
-    .map_err(|e| StreamError::GpuError(format!("begin_command_buffer: {e}")))?;
+    .map_err(|e| Error::GpuError(format!("begin_command_buffer: {e}")))?;
 
     // UNDEFINED → TRANSFER_DST_OPTIMAL barrier so vkCmdClearColorImage
     // sees a known layout.
@@ -333,7 +333,7 @@ fn subprocess_clear_image(
     };
 
     unsafe { dev.end_command_buffer(cmd) }
-        .map_err(|e| StreamError::GpuError(format!("end_command_buffer: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("end_command_buffer: {e}")))?;
 
     let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
         .command_buffer(cmd)
@@ -343,7 +343,7 @@ fn subprocess_clear_image(
         .build()];
     unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }?;
     unsafe { dev.queue_wait_idle(queue) }
-        .map_err(|e| StreamError::GpuError(format!("queue_wait_idle: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("queue_wait_idle: {e}")))?;
     unsafe { dev.destroy_command_pool(pool, None) };
     Ok(())
 }
@@ -356,7 +356,7 @@ fn subprocess_readback_image(
     width: u32,
     height: u32,
 ) -> streamlib::sdk::error::Result<Vec<u8>> {
-    use streamlib::sdk::error::StreamError;
+    use streamlib::sdk::error::Error;
     let dev = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();
@@ -370,7 +370,7 @@ fn subprocess_readback_image(
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .build();
     let buffer = unsafe { dev.create_buffer(&buffer_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("create_buffer: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("create_buffer: {e}")))?;
     let mem_req = unsafe { dev.get_buffer_memory_requirements(buffer) };
 
     // Find a host-visible memory type from the device's physical
@@ -385,7 +385,7 @@ fn subprocess_readback_image(
             (mem_req.memory_type_bits & bit) != 0
                 && mem_props.memory_types[*i as usize].property_flags.contains(needed)
         })
-        .ok_or_else(|| StreamError::GpuError("no host-visible memory type".into()))?;
+        .ok_or_else(|| Error::GpuError("no host-visible memory type".into()))?;
 
     let alloc_info = vk::MemoryAllocateInfo::builder()
         .allocation_size(mem_req.size)
@@ -394,13 +394,13 @@ fn subprocess_readback_image(
     let mem = unsafe { dev.allocate_memory(&alloc_info, None) }
         .map_err(|e| {
             unsafe { dev.destroy_buffer(buffer, None) };
-            StreamError::GpuError(format!("allocate_memory: {e}"))
+            Error::GpuError(format!("allocate_memory: {e}"))
         })?;
     unsafe { dev.bind_buffer_memory(buffer, mem, 0) }
         .map_err(|e| {
             unsafe { dev.free_memory(mem, None) };
             unsafe { dev.destroy_buffer(buffer, None) };
-            StreamError::GpuError(format!("bind_buffer_memory: {e}"))
+            Error::GpuError(format!("bind_buffer_memory: {e}"))
         })?;
 
     // Command buffer: transition image to TRANSFER_SRC, copy to buffer.
@@ -413,7 +413,7 @@ fn subprocess_readback_image(
             None,
         )
     }
-    .map_err(|e| StreamError::GpuError(format!("create_command_pool: {e}")))?;
+    .map_err(|e| Error::GpuError(format!("create_command_pool: {e}")))?;
     let cmd = unsafe {
         dev.allocate_command_buffers(
             &vk::CommandBufferAllocateInfo::builder()
@@ -423,7 +423,7 @@ fn subprocess_readback_image(
                 .build(),
         )
     }
-    .map_err(|e| StreamError::GpuError(format!("allocate_command_buffers: {e}")))?[0];
+    .map_err(|e| Error::GpuError(format!("allocate_command_buffers: {e}")))?[0];
 
     unsafe {
         dev.begin_command_buffer(
@@ -433,7 +433,7 @@ fn subprocess_readback_image(
                 .build(),
         )
     }
-    .map_err(|e| StreamError::GpuError(format!("begin_command_buffer: {e}")))?;
+    .map_err(|e| Error::GpuError(format!("begin_command_buffer: {e}")))?;
 
     // GENERAL is what the parent's adapter left it in; transition to
     // TRANSFER_SRC_OPTIMAL.
@@ -486,7 +486,7 @@ fn subprocess_readback_image(
     };
 
     unsafe { dev.end_command_buffer(cmd) }
-        .map_err(|e| StreamError::GpuError(format!("end_command_buffer: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("end_command_buffer: {e}")))?;
 
     let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
         .command_buffer(cmd)
@@ -496,10 +496,10 @@ fn subprocess_readback_image(
         .build()];
     unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }?;
     unsafe { dev.queue_wait_idle(queue) }
-        .map_err(|e| StreamError::GpuError(format!("queue_wait_idle: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("queue_wait_idle: {e}")))?;
 
     let mapped = unsafe { dev.map_memory(mem, 0, bytes, vk::MemoryMapFlags::empty()) }
-        .map_err(|e| StreamError::GpuError(format!("map_memory: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("map_memory: {e}")))?;
     let slice = unsafe { std::slice::from_raw_parts(mapped as *const u8, bytes as usize) };
     let out = slice.to_vec();
     unsafe { dev.unmap_memory(mem) };

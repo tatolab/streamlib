@@ -13,7 +13,7 @@
 //! declarations, and from that point on the caller binds resources by
 //! slot via simple typed setters.
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Shader stages that contribute to a ray-tracing pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -278,7 +278,7 @@ pub fn validate_shader_groups(
     groups: &[RayTracingShaderGroup],
 ) -> Result<()> {
     if groups.is_empty() {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Ray-tracing kernel '{label}': at least one shader group is required"
         )));
     }
@@ -291,7 +291,7 @@ pub fn validate_shader_groups(
                     | RayTracingShaderStage::Miss
                     | RayTracingShaderStage::Callable => {}
                     other => {
-                        return Err(StreamError::GpuError(format!(
+                        return Err(Error::GpuError(format!(
                             "Ray-tracing kernel '{label}': group {group_idx} declares General with stage index pointing to {other:?}; must be RayGen / Miss / Callable"
                         )));
                     }
@@ -302,7 +302,7 @@ pub fn validate_shader_groups(
                 any_hit,
             } => {
                 if closest_hit.is_none() && any_hit.is_none() {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Ray-tracing kernel '{label}': group {group_idx} TrianglesHit must set at least one of closest_hit / any_hit"
                     )));
                 }
@@ -377,7 +377,7 @@ fn stage_at(
         .get(stage_idx as usize)
         .map(|s| s.stage)
         .ok_or_else(|| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{label}': group {group_idx} field {field} references stage {stage_idx}, but only {} stages were declared",
                 stages.len()
             ))
@@ -394,7 +394,7 @@ fn expect_stage(
 ) -> Result<()> {
     let actual = stage_at(label, stages, field, group_idx, stage_idx)?;
     if actual != expected {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Ray-tracing kernel '{label}': group {group_idx} field {field} references stage {stage_idx} ({actual:?}); expected {expected:?}"
         )));
     }

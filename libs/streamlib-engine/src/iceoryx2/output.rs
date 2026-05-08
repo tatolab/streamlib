@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use super::{FrameHeader, SchemaIdentWire, FRAME_HEADER_SIZE};
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 use crate::core::media_clock::MediaClock;
 
 /// One downstream connection: structured schema identifier, destination
@@ -100,12 +100,12 @@ impl OutputWriter {
         timestamp_ns: i64,
     ) -> Result<()> {
         let data = rmp_serde::to_vec_named(value)
-            .map_err(|e| StreamError::Link(format!("Failed to serialize frame: {}", e)))?;
+            .map_err(|e| Error::Link(format!("Failed to serialize frame: {}", e)))?;
 
         let connections = self.connections.lock();
         let port_connections = connections
             .get(port)
-            .ok_or_else(|| StreamError::Link(format!("Unknown output port: {}", port)))?;
+            .ok_or_else(|| Error::Link(format!("Unknown output port: {}", port)))?;
 
         for conn in port_connections {
             let total_len = FRAME_HEADER_SIZE + data.len();
@@ -117,12 +117,12 @@ impl OutputWriter {
             let sample = conn
                 .publisher
                 .loan_slice_uninit(total_len)
-                .map_err(|e| StreamError::Link(format!("Failed to loan slice: {:?}", e)))?;
+                .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
 
             let sample = sample.write_from_slice(&frame);
             sample
                 .send()
-                .map_err(|e| StreamError::Link(format!("Failed to send sample: {:?}", e)))?;
+                .map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
 
             // Wake the downstream listener fd. notify() may transiently fail
             // (e.g. listener not yet created) — log and continue rather than
@@ -148,7 +148,7 @@ impl OutputWriter {
         let connections = self.connections.lock();
         let port_connections = connections
             .get(port)
-            .ok_or_else(|| StreamError::Link(format!("Unknown output port: {}", port)))?;
+            .ok_or_else(|| Error::Link(format!("Unknown output port: {}", port)))?;
 
         for conn in port_connections {
             let total_len = FRAME_HEADER_SIZE + data.len();
@@ -160,12 +160,12 @@ impl OutputWriter {
             let sample = conn
                 .publisher
                 .loan_slice_uninit(total_len)
-                .map_err(|e| StreamError::Link(format!("Failed to loan slice: {:?}", e)))?;
+                .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
 
             let sample = sample.write_from_slice(&frame);
             sample
                 .send()
-                .map_err(|e| StreamError::Link(format!("Failed to send sample: {:?}", e)))?;
+                .map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
 
             if let Err(e) = conn.notifier.notify() {
                 tracing::trace!(

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::rhi::{PixelFormat, RhiTextureCache};
-use crate::core::{Result, RuntimeContextFullAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, Error};
 use crossbeam_channel::{Receiver, Sender};
 use metal;
 use objc2::{rc::Retained, MainThreadMarker};
@@ -94,14 +94,14 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             let library = metal_device_ref
                 .new_library_with_source(shader_source, &metal::CompileOptions::new())
                 .map_err(|e| {
-                    StreamError::Configuration(format!("Failed to compile Metal shader: {}", e))
+                    Error::Configuration(format!("Failed to compile Metal shader: {}", e))
                 })?;
 
             let vertex_function = library.get_function("vertex_main", None).map_err(|e| {
-                StreamError::Configuration(format!("vertex_main function not found: {}", e))
+                Error::Configuration(format!("vertex_main function not found: {}", e))
             })?;
             let fragment_function = library.get_function("fragment_main", None).map_err(|e| {
-                StreamError::Configuration(format!("fragment_main function not found: {}", e))
+                Error::Configuration(format!("fragment_main function not found: {}", e))
             })?;
 
             // Create render pipeline descriptor
@@ -119,7 +119,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             let pipeline_state = metal_device_ref
                 .new_render_pipeline_state(&pipeline_descriptor)
                 .map_err(|e| {
-                    StreamError::Configuration(format!("Failed to create render pipeline: {}", e))
+                    Error::Configuration(format!("Failed to create render pipeline: {}", e))
                 })?;
 
             // Create sampler for texture sampling with linear filtering
@@ -196,7 +196,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
         let gpu_context = self
             .gpu_context
             .clone()
-            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
 
         // Clone shared command queue from GpuContext for render thread
         let command_queue = gpu_context.command_queue().clone();
@@ -205,26 +205,26 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             .metal_render_pipeline
             .as_ref()
             .ok_or_else(|| {
-                StreamError::Configuration("Metal render pipeline not initialized".into())
+                Error::Configuration("Metal render pipeline not initialized".into())
             })?
             .clone();
 
         let sampler = self
             .metal_sampler
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Metal sampler not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Metal sampler not initialized".into()))?
             .clone();
 
         let format_buffer_rgba = self
             .format_buffer_rgba
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Format buffer RGBA not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Format buffer RGBA not initialized".into()))?
             .clone();
 
         let format_buffer_bgra = self
             .format_buffer_bgra
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Format buffer BGRA not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Format buffer BGRA not initialized".into()))?
             .clone();
 
         // Signal that the render thread should run
@@ -381,7 +381,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
 
                 tracing::debug!("Display {}: Render thread exiting", window_id);
             })
-            .map_err(|e| StreamError::Runtime(format!("Failed to spawn render thread: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to spawn render thread: {}", e)))?;
 
         self.render_thread = Some(render_thread);
 
@@ -400,7 +400,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
         if let Some(handle) = self.render_thread.take() {
             handle
                 .join()
-                .map_err(|_| StreamError::Runtime("Render thread panicked".into()))?;
+                .map_err(|_| Error::Runtime("Render thread panicked".into()))?;
         }
 
         tracing::info!("Display {}: Stopped", self.window_id.0);
@@ -536,7 +536,7 @@ impl AppleDisplayProcessor::Processor {
         let gpu_ctx = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
         let metal_device = gpu_ctx.metal_device().clone_device();
         let window_id = self.window_id;
         let layer_addr = Arc::clone(&self.layer_addr);

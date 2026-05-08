@@ -7,7 +7,7 @@ use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
 use crate::core::rhi::{PixelFormat, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
-use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
+use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, Error};
 use crate::host_rhi::HostStreamTextureExt;
 use crate::iceoryx2::OutputWriter;
 use crate::vulkan::rhi::HostVulkanTexture;
@@ -73,7 +73,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
-            StreamError::Configuration("GPU context not initialized. Call setup() first.".into())
+            Error::Configuration("GPU context not initialized. Call setup() first.".into())
         })?;
 
         // Extract the device handle from the FullAccess lifecycle ctx so the
@@ -88,7 +88,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
             None => {
                 let devices = Self::list_devices()?;
                 devices.first().map(|d| d.id.clone()).ok_or_else(|| {
-                    StreamError::Configuration(
+                    Error::Configuration(
                         "No V4L2 capture devices found. Check that a camera is connected.".into(),
                     )
                 })?
@@ -97,12 +97,12 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
 
         // Open the V4L2 device
         let mut dev = v4l::Device::with_path(&device_path).map_err(|e| {
-            StreamError::Configuration(format!("Failed to open V4L2 device '{}': {}", device_path, e))
+            Error::Configuration(format!("Failed to open V4L2 device '{}': {}", device_path, e))
         })?;
 
         // Query device capabilities
         let caps = dev.query_caps().map_err(|e| {
-            StreamError::Configuration(format!("Failed to query device capabilities: {}", e))
+            Error::Configuration(format!("Failed to query device capabilities: {}", e))
         })?;
         self.camera_name = caps.card.clone();
         tracing::info!(
@@ -114,7 +114,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
 
         // Read the device's current format as a fallback baseline
         let current_fmt = dev.format().map_err(|e| {
-            StreamError::Configuration(format!("Failed to read current format: {}", e))
+            Error::Configuration(format!("Failed to read current format: {}", e))
         })?;
 
         // Negotiate format + resolution: enumerate frame sizes for NV12 (preferred) or
@@ -211,13 +211,13 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
                 try_fmt.width = best_w;
                 try_fmt.height = best_h;
                 let f = dev.set_format(&try_fmt).map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "Failed to set camera format (tried NV12, YUYV): {}",
                         e
                     ))
                 })?;
                 if f.fourcc != yuyv_fourcc {
-                    return Err(StreamError::Configuration(format!(
+                    return Err(Error::Configuration(format!(
                         "Camera does not support NV12 or YUYV (driver negotiated {:?})",
                         f.fourcc
                     )));
@@ -269,7 +269,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
         let mut stream =
             v4l::io::mmap::Stream::with_buffers(&mut dev, Type::VideoCapture, V4L2_BUFFER_COUNT)
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "Failed to create V4L2 mmap stream: {}",
                         e
                     ))
@@ -333,7 +333,7 @@ impl crate::core::ManualProcessor for LinuxCameraProcessor::Processor {
                 );
             })
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to spawn capture thread: {}", e))
+                Error::Configuration(format!("Failed to spawn capture thread: {}", e))
             })?;
 
         self.capture_thread_handle = Some(handle);
@@ -1808,7 +1808,7 @@ impl LinuxCameraProcessor::Processor {
 
         // Scan /dev/video* devices
         for entry in std::fs::read_dir("/dev").map_err(|e| {
-            StreamError::Configuration(format!("Failed to read /dev: {}", e))
+            Error::Configuration(format!("Failed to read /dev: {}", e))
         })? {
             let entry = match entry {
                 Ok(e) => e,

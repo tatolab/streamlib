@@ -10,7 +10,7 @@
 
 use crate::apple::time::mach_now_ns;
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -203,7 +203,7 @@ impl AudioClock for CoreAudioClock {
             unsafe { dispatch_source_create(dispatch_source_type_timer(), 0, 0, self.queue) };
 
         if timer_source.is_null() {
-            return Err(StreamError::Runtime(
+            return Err(Error::Runtime(
                 "Failed to create GCD timer source".into(),
             ));
         }

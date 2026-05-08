@@ -18,7 +18,7 @@
 use super::{ffi, format};
 use crate::_generated_::VideoFrame;
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{GpuContext, Result, RuntimeContext, StreamError, VideoDecoderConfig};
+use crate::core::{GpuContext, Result, RuntimeContext, Error, VideoDecoderConfig};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -116,7 +116,7 @@ impl VideoToolboxDecoder {
                     );
 
                     if status != ffi::NO_ERR {
-                        return Err(StreamError::Runtime(format!(
+                        return Err(Error::Runtime(format!(
                             "CMVideoFormatDescriptionCreateFromH264ParameterSets failed: {}",
                             status
                         )));
@@ -179,7 +179,7 @@ impl VideoToolboxDecoder {
                         let _ = Arc::from_raw(
                             callback_context_arc as *const Mutex<VecDeque<DecodedFrame>>,
                         );
-                        return Err(StreamError::Runtime(format!(
+                        return Err(Error::Runtime(format!(
                             "VTDecompressionSessionCreate failed: {}",
                             status
                         )));
@@ -213,7 +213,7 @@ impl VideoToolboxDecoder {
     ) -> Result<Option<VideoFrame>> {
         // Check if we have a decompression session
         let session = self.decompression_session.ok_or_else(|| {
-            StreamError::Configuration(
+            Error::Configuration(
                 "Decompression session not initialized - call update_format() with SPS/PPS first"
                     .into(),
             )
@@ -221,7 +221,7 @@ impl VideoToolboxDecoder {
 
         let format_desc = self
             .format_description
-            .ok_or_else(|| StreamError::Configuration("Format description not available".into()))?;
+            .ok_or_else(|| Error::Configuration("Format description not available".into()))?;
 
         // Step 1: Convert Annex B → AVCC format (required by VideoToolbox)
         let avcc_data = format::annex_b_to_avcc(nal_units_annex_b)?;
@@ -260,7 +260,7 @@ impl VideoToolboxDecoder {
                             avcc_ptr as *mut u8,
                             avcc_len,
                         ));
-                        return Err(StreamError::Runtime(format!(
+                        return Err(Error::Runtime(format!(
                             "CMBlockBufferCreateWithMemoryBlock failed: {}",
                             status
                         )));
@@ -287,7 +287,7 @@ impl VideoToolboxDecoder {
 
                     if status != ffi::NO_ERR {
                         ffi::CFRelease(block_buffer as *const _);
-                        return Err(StreamError::Runtime(format!(
+                        return Err(Error::Runtime(format!(
                             "CMSampleBufferCreate failed: {}",
                             status
                         )));
@@ -323,7 +323,7 @@ impl VideoToolboxDecoder {
             ffi::CFRelease(sample_buffer as *const _);
 
             if status != ffi::NO_ERR {
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "VTDecompressionSessionDecodeFrame failed: {}",
                     status
                 )));
@@ -344,7 +344,7 @@ impl VideoToolboxDecoder {
         // Step 6: Retrieve decoded frame from queue
         let decoded_frame = {
             let mut queue = self.decoded_frames.lock().map_err(|e| {
-                StreamError::Runtime(format!("Failed to lock decoded frames: {}", e))
+                Error::Runtime(format!("Failed to lock decoded frames: {}", e))
             })?;
             queue.pop_front()
         };
@@ -387,7 +387,7 @@ impl VideoToolboxDecoder {
                 decoded_frame.pixel_buffer as ffi::CVPixelBufferRef,
             )
         }
-        .ok_or_else(|| StreamError::GpuError("Decoded frame has null pixel buffer".into()))?;
+        .ok_or_else(|| Error::GpuError("Decoded frame has null pixel buffer".into()))?;
 
         let source_buffer = RhiPixelBuffer::new(buffer_ref);
 

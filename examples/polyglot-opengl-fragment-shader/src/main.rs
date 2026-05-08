@@ -34,7 +34,7 @@ use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::StreamError;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
 use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
 use streamlib::sdk::error::Result;
@@ -101,7 +101,7 @@ fn main() -> Result<()> {
     for a in args {
         if let Some(value) = a.strip_prefix("--runtime=") {
             runtime_kind =
-                RuntimeKind::parse(value).map_err(StreamError::Configuration)?;
+                RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--output=") {
             output_png = PathBuf::from(value);
         }
@@ -144,7 +144,7 @@ fn main() -> Result<()> {
             // adapter's `OpenGlSurfaceAdapter` then imports the
             // resulting DMA-BUF FD as an EGLImage + GL_TEXTURE_2D.
             let store = gpu.surface_store().ok_or_else(|| {
-                StreamError::Configuration(
+                Error::Configuration(
                     "surface_store unavailable — host runtime built without \
                      a surface-share service (Linux subprocess flow requires it)"
                         .into(),
@@ -169,7 +169,7 @@ fn main() -> Result<()> {
                     0,
                 )
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "HostVulkanTimelineSemaphore::new_exportable: {e}"
                     ))
                 })?,
@@ -194,7 +194,7 @@ fn main() -> Result<()> {
                     streamlib::sdk::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "register_texture: {e}"
                     ))
                 })?;
@@ -227,7 +227,7 @@ fn main() -> Result<()> {
             let slpkg_path = manifest_dir
                 .join("python/polyglot-opengl-fragment-shader-0.1.0.slpkg");
             if !slpkg_path.exists() {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Package not found: {}\nRun: cargo run -p streamlib-cli -- pack examples/polyglot-opengl-fragment-shader/python",
                     slpkg_path.display()
                 )));
@@ -237,7 +237,7 @@ fn main() -> Result<()> {
         RuntimeKind::Deno => {
             let project_path = manifest_dir.join("deno");
             if !project_path.join("streamlib.yaml").exists() {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Deno project not found: {}",
                     project_path.display()
                 )));
@@ -251,14 +251,14 @@ fn main() -> Result<()> {
     // ignores frame contents — it works on the pre-registered host
     // surface, not the trigger frame's pixel buffer.
     let fixture_path = write_trigger_fixture()
-        .map_err(StreamError::Configuration)?;
+        .map_err(Error::Configuration)?;
 
     let source = runtime.add_processor(BgraFileSourceProcessor::Processor::node(
         BgraFileSourceProcessor::Config {
             file_path: fixture_path
                 .to_str()
                 .ok_or_else(|| {
-                    StreamError::Configuration(
+                    Error::Configuration(
                         "fixture path has non-utf8 component".into(),
                     )
                 })?
@@ -310,7 +310,7 @@ fn main() -> Result<()> {
         .unwrap()
         .clone()
         .ok_or_else(|| {
-            StreamError::Runtime(
+            Error::Runtime(
                 "host texture slot is empty — setup hook never ran".into(),
             )
         })?;
@@ -318,14 +318,14 @@ fn main() -> Result<()> {
         .lock()
         .unwrap()
         .clone()
-        .ok_or_else(|| StreamError::Runtime("readback slot is empty".into()))?;
+        .ok_or_else(|| Error::Runtime("readback slot is empty".into()))?;
     // OpenGL adapter leaves the image in GENERAL.
     let ticket = readback
         .submit(&texture, TextureSourceLayout::General)
-        .map_err(|e| StreamError::Runtime(format!("readback submit: {e}")))?;
+        .map_err(|e| Error::Runtime(format!("readback submit: {e}")))?;
     let bgra = readback
         .wait_and_read(ticket, u64::MAX)
-        .map_err(|e| StreamError::Runtime(format!("readback wait: {e}")))?
+        .map_err(|e| Error::Runtime(format!("readback wait: {e}")))?
         .to_vec();
     write_png(&bgra, SURFACE_SIZE, SURFACE_SIZE, &output_png)?;
     println!("✓ Output PNG written: {}", output_png.display());
@@ -367,7 +367,7 @@ fn write_png(
     }
 
     let file = File::create(output).map_err(|e| {
-        StreamError::Configuration(format!(
+        Error::Configuration(format!(
             "create output PNG {}: {e}",
             output.display()
         ))
@@ -377,9 +377,9 @@ fn write_png(
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder
         .write_header()
-        .map_err(|e| StreamError::Configuration(format!("PNG header: {e}")))?;
+        .map_err(|e| Error::Configuration(format!("PNG header: {e}")))?;
     writer
         .write_image_data(&rgba)
-        .map_err(|e| StreamError::Configuration(format!("PNG body: {e}")))?;
+        .map_err(|e| Error::Configuration(format!("PNG body: {e}")))?;
     Ok(())
 }

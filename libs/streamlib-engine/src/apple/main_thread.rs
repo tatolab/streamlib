@@ -23,7 +23,7 @@ where
     });
 
     rx.recv().map_err(|e| {
-        crate::core::StreamError::Runtime(format!("Main thread dispatch failed: {}", e))
+        crate::core::Error::Runtime(format!("Main thread dispatch failed: {}", e))
     })?
 }
 
@@ -34,5 +34,5 @@ where
 {
     tokio::task::spawn_blocking(move || execute_on_main_thread(f))
         .await
-        .map_err(|e| crate::core::StreamError::Runtime(format!("Task join error: {}", e)))?
+        .map_err(|e| crate::core::Error::Runtime(format!("Task join error: {}", e)))?
 }

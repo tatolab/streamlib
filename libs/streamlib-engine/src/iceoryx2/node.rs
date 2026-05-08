@@ -12,7 +12,7 @@ use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
 use super::{EventPayload, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION};
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
@@ -27,7 +27,7 @@ impl Iceoryx2Node {
     /// Create a new iceoryx2 Node.
     pub fn new() -> Result<Self> {
         let node = NodeBuilder::new().create::<ipc::Service>().map_err(|e| {
-            StreamError::Runtime(format!("Failed to create iceoryx2 node: {:?}", e))
+            Error::Runtime(format!("Failed to create iceoryx2 node: {:?}", e))
         })?;
 
         Ok(Self {
@@ -41,7 +41,7 @@ impl Iceoryx2Node {
     pub fn open_or_create_event_service(&self, service_name: &str) -> Result<Iceoryx2EventService> {
         let node = self.inner.lock();
         let service_name: ServiceName = service_name.try_into().map_err(|e| {
-            StreamError::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
+            Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
         })?;
 
         let service = node
@@ -51,7 +51,7 @@ impl Iceoryx2Node {
             .subscriber_max_buffer_size(64)
             .open_or_create()
             .map_err(|e| {
-                StreamError::Runtime(format!("Failed to open/create event service: {:?}", e))
+                Error::Runtime(format!("Failed to open/create event service: {:?}", e))
             })?;
 
         Ok(Iceoryx2EventService { inner: service })
@@ -69,7 +69,7 @@ impl Iceoryx2Node {
     ) -> Result<Iceoryx2NotifyService> {
         let node = self.inner.lock();
         let service_name: ServiceName = service_name.try_into().map_err(|e| {
-            StreamError::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
+            Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
         })?;
 
         let service = node
@@ -79,7 +79,7 @@ impl Iceoryx2Node {
             .max_listeners(1)
             .open_or_create()
             .map_err(|e| {
-                StreamError::Runtime(format!("Failed to open/create notify service: {:?}", e))
+                Error::Runtime(format!("Failed to open/create notify service: {:?}", e))
             })?;
 
         Ok(Iceoryx2NotifyService { inner: service })
@@ -91,7 +91,7 @@ impl Iceoryx2Node {
     pub fn open_or_create_service(&self, service_name: &str) -> Result<Iceoryx2Service> {
         let node = self.inner.lock();
         let service_name: ServiceName = service_name.try_into().map_err(|e| {
-            StreamError::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
+            Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
         })?;
 
         let service = node
@@ -100,7 +100,7 @@ impl Iceoryx2Node {
             .max_publishers(MAX_FANIN_PER_DESTINATION)
             .subscriber_max_buffer_size(16)
             .open_or_create()
-            .map_err(|e| StreamError::Runtime(format!("Failed to open/create service: {:?}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to open/create service: {:?}", e)))?;
 
         Ok(Iceoryx2Service { inner: service })
     }
@@ -129,7 +129,7 @@ impl Iceoryx2Service {
             .publisher_builder()
             .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
             .create()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create publisher: {:?}", e)))
+            .map_err(|e| Error::Runtime(format!("Failed to create publisher: {:?}", e)))
     }
 
     /// Create a subscriber for this service.
@@ -140,7 +140,7 @@ impl Iceoryx2Service {
             .subscriber_builder()
             .buffer_size(16)
             .create()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create subscriber: {:?}", e)))
+            .map_err(|e| Error::Runtime(format!("Failed to create subscriber: {:?}", e)))
     }
 }
 
@@ -159,7 +159,7 @@ impl Iceoryx2NotifyService {
         self.inner
             .notifier_builder()
             .create()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create notifier: {:?}", e)))
+            .map_err(|e| Error::Runtime(format!("Failed to create notifier: {:?}", e)))
     }
 
     /// Create a listener for this service.
@@ -167,7 +167,7 @@ impl Iceoryx2NotifyService {
         self.inner
             .listener_builder()
             .create()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create listener: {:?}", e)))
+            .map_err(|e| Error::Runtime(format!("Failed to create listener: {:?}", e)))
     }
 }
 
@@ -188,7 +188,7 @@ impl Iceoryx2EventService {
         self.inner
             .publisher_builder()
             .create()
-            .map_err(|e| StreamError::Runtime(format!("Failed to create event publisher: {:?}", e)))
+            .map_err(|e| Error::Runtime(format!("Failed to create event publisher: {:?}", e)))
     }
 
     /// Create a subscriber for this event service.
@@ -200,7 +200,7 @@ impl Iceoryx2EventService {
             .buffer_size(64)
             .create()
             .map_err(|e| {
-                StreamError::Runtime(format!("Failed to create event subscriber: {:?}", e))
+                Error::Runtime(format!("Failed to create event subscriber: {:?}", e))
             })
     }
 }

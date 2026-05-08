@@ -38,14 +38,14 @@ impl RhiTextureCache {
             // but RhiPixelBuffer on Linux wraps a VkBuffer (not VkImage).
             // For now, return NotSupported until pixel buffer -> texture path is wired.
             let _ = buffer;
-            Err(crate::core::StreamError::NotSupported(
+            Err(crate::core::Error::NotSupported(
                 "Vulkan texture cache create_view not yet implemented".into(),
             ))
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = buffer;
-            Err(crate::core::StreamError::Configuration(
+            Err(crate::core::Error::Configuration(
                 "RhiTextureCache not implemented for this platform".into(),
             ))
         }

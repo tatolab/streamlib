@@ -27,7 +27,7 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 use crate::core::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, RhiPixelBuffer, StreamTexture,
 };
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Env var that overrides the default pipeline-cache directory. Used by tests
 /// and headless / CI scenarios that need a writable, isolated cache root.
@@ -229,7 +229,7 @@ impl VulkanComputeKernel {
                     device.destroy_descriptor_set_layout(descriptor_set_layout, None);
                     device.destroy_shader_module(shader_module, None);
                 }
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Failed to create compute fence: {e}"
                 )));
             }
@@ -318,7 +318,7 @@ impl VulkanComputeKernel {
     /// declared `push_constant_size` (and be 4-byte aligned per Vulkan).
     pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
         if bytes.len() as u32 != self.push_constant_size {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Compute kernel '{}': push-constant size mismatch — got {} bytes, kernel declares {}",
                 self.label,
                 bytes.len(),
@@ -357,14 +357,14 @@ impl VulkanComputeKernel {
 
         for spec in &self.bindings {
             if !pending.bindings.contains_key(&spec.binding) {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Compute kernel '{}': binding {} ({:?}) not set before dispatch",
                     self.label, spec.binding, spec.kind
                 )));
             }
         }
         if self.push_constant_size > 0 && pending.push_constants.is_empty() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Compute kernel '{}': push constants not set before dispatch",
                 self.label
             )));
@@ -376,12 +376,12 @@ impl VulkanComputeKernel {
             self.device
                 .wait_for_fences(&[self.fence], true, u64::MAX)
                 .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to wait for compute fence: {e}"))
+                    Error::GpuError(format!("Failed to wait for compute fence: {e}"))
                 })?;
             self.device
                 .reset_fences(&[self.fence])
                 .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to reset compute fence: {e}"))
+                    Error::GpuError(format!("Failed to reset compute fence: {e}"))
                 })?;
         }
 
@@ -391,7 +391,7 @@ impl VulkanComputeKernel {
             self.device
                 .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
                 .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to reset command buffer: {e}"))
+                    Error::GpuError(format!("Failed to reset command buffer: {e}"))
                 })?;
 
             let begin_info = vk::CommandBufferBeginInfo::builder()
@@ -401,7 +401,7 @@ impl VulkanComputeKernel {
             self.device
                 .begin_command_buffer(self.command_buffer, &begin_info)
                 .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to begin command buffer: {e}"))
+                    Error::GpuError(format!("Failed to begin command buffer: {e}"))
                 })?;
 
             self.device.cmd_bind_pipeline(
@@ -439,7 +439,7 @@ impl VulkanComputeKernel {
             self.device
                 .end_command_buffer(self.command_buffer)
                 .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to end command buffer: {e}"))
+                    Error::GpuError(format!("Failed to end command buffer: {e}"))
                 })?;
 
             let cmd_info = vk::CommandBufferSubmitInfo::builder()
@@ -456,7 +456,7 @@ impl VulkanComputeKernel {
             self.device
                 .wait_for_fences(&[self.fence], true, u64::MAX)
                 .map_err(|e| {
-                    StreamError::GpuError(format!("Failed to wait for compute fence: {e}"))
+                    Error::GpuError(format!("Failed to wait for compute fence: {e}"))
                 })?;
         }
 
@@ -475,13 +475,13 @@ impl VulkanComputeKernel {
 
     fn expect_kind(&self, binding: u32, expected: ComputeBindingKind) -> Result<()> {
         let spec = self.bindings.iter().find(|b| b.binding == binding).ok_or_else(|| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Compute kernel '{}': binding {} not declared",
                 self.label, binding
             ))
         })?;
         if spec.kind != expected {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Compute kernel '{}': binding {} declared as {:?}, but {:?} was set",
                 self.label, binding, spec.kind, expected
             )));
@@ -507,7 +507,7 @@ impl VulkanComputeKernel {
             .unnormalized_coordinates(false)
             .build();
         let sampler = unsafe { self.device.create_sampler(&info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create default sampler: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create default sampler: {e}")))?;
         *guard = Some(sampler);
         Ok(sampler)
     }
@@ -597,7 +597,7 @@ impl VulkanComputeKernel {
                     });
                 }
                 _ => {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Compute kernel '{}': binding {} kind/resource mismatch (declared {:?})",
                         self.label, spec.binding, spec.kind
                     )));
@@ -669,14 +669,14 @@ impl std::fmt::Debug for VulkanComputeKernel {
 
 fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()> {
     let reflection = Reflection::new_from_spirv(descriptor.spv).map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Compute kernel '{}': failed to reflect SPIR-V: {e:?}",
             descriptor.label
         ))
     })?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Compute kernel '{}': failed to extract descriptor sets: {e:?}",
             descriptor.label
         ))
@@ -684,7 +684,7 @@ fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()
 
     // Reject multi-set kernels — out of scope.
     if sets.len() > 1 {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Compute kernel '{}': only descriptor set 0 is supported; SPIR-V uses sets {:?}",
             descriptor.label,
             sets.keys().collect::<Vec<_>>()
@@ -698,14 +698,14 @@ fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()
         let info = set0
             .and_then(|m| m.get(&spec.binding))
             .ok_or_else(|| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "Compute kernel '{}': binding {} declared but missing in SPIR-V",
                     descriptor.label, spec.binding
                 ))
             })?;
         let expected = expected_spirv_type(spec.kind);
         if info.ty != expected {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Compute kernel '{}': binding {} declared {:?} ({:?}), but SPIR-V has {:?}",
                 descriptor.label, spec.binding, spec.kind, expected, info.ty
             )));
@@ -717,7 +717,7 @@ fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()
     if let Some(set0) = set0 {
         for (&binding, info) in set0 {
             if !descriptor.bindings.iter().any(|s| s.binding == binding) {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Compute kernel '{}': SPIR-V declares binding {} ({:?}, name `{}`) but it is missing from the descriptor",
                     descriptor.label, binding, info.ty, info.name
                 )));
@@ -727,20 +727,20 @@ fn validate_against_spirv(descriptor: &ComputeKernelDescriptor<'_>) -> Result<()
 
     // Push-constant size must match if the shader uses any.
     let push = reflection.get_push_constant_range().map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Compute kernel '{}': failed to read push-constant range: {e:?}",
             descriptor.label
         ))
     })?;
     match (push, descriptor.push_constant_size) {
         (Some(info), declared) if info.size != declared => {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Compute kernel '{}': push-constant size mismatch — SPIR-V says {}, descriptor declares {}",
                 descriptor.label, info.size, declared
             )));
         }
         (None, declared) if declared > 0 => {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Compute kernel '{}': descriptor declares {} push-constant bytes but SPIR-V has none",
                 descriptor.label, declared
             )));
@@ -776,7 +776,7 @@ fn create_shader_module(
 ) -> Result<vk::ShaderModule> {
     let info = vk::ShaderModuleCreateInfo::builder().code(spirv).build();
     unsafe { device.create_shader_module(&info, None) }.map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Compute kernel '{label}': failed to create shader module: {e}"
         ))
     })
@@ -802,7 +802,7 @@ fn create_descriptor_set_layout(
         .bindings(&layout_bindings)
         .build();
     unsafe { device.create_descriptor_set_layout(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create descriptor set layout: {e}")))
+        .map_err(|e| Error::GpuError(format!("Failed to create descriptor set layout: {e}")))
 }
 
 fn create_pipeline_layout(
@@ -827,7 +827,7 @@ fn create_pipeline_layout(
         .build();
 
     unsafe { device.create_pipeline_layout(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create pipeline layout: {e}")))
+        .map_err(|e| Error::GpuError(format!("Failed to create pipeline layout: {e}")))
 }
 
 /// Build a compute pipeline, transparently using an on-disk pipeline cache
@@ -878,7 +878,7 @@ fn create_compute_pipeline_with_cache(
     }
 
     let pipelines = pipelines_result.map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Compute kernel '{label}': failed to create compute pipeline: {e}"
         ))
     })?;
@@ -1040,7 +1040,7 @@ fn create_descriptor_pool(
         .pool_sizes(&pool_sizes)
         .build();
     unsafe { device.create_descriptor_pool(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create descriptor pool: {e}")))
+        .map_err(|e| Error::GpuError(format!("Failed to create descriptor pool: {e}")))
 }
 
 fn allocate_descriptor_set(
@@ -1054,7 +1054,7 @@ fn allocate_descriptor_set(
         .set_layouts(&set_layouts)
         .build();
     let sets = unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to allocate descriptor set: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("Failed to allocate descriptor set: {e}")))?;
     Ok(sets[0])
 }
 
@@ -1067,7 +1067,7 @@ fn create_command_pool(
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
         .build();
     unsafe { device.create_command_pool(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {e}")))
+        .map_err(|e| Error::GpuError(format!("Failed to create command pool: {e}")))
 }
 
 fn allocate_command_buffer(
@@ -1080,7 +1080,7 @@ fn allocate_command_buffer(
         .command_buffer_count(1)
         .build();
     let buffers = unsafe { device.allocate_command_buffers(&info) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to allocate command buffer: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("Failed to allocate command buffer: {e}")))?;
     Ok(buffers[0])
 }
 

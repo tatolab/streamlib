@@ -10,7 +10,7 @@
 use crate::_generated_::VideoFrame;
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::rhi::PixelFormat;
-use crate::core::{Result, RuntimeContextFullAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, Error};
 use crate::iceoryx2::OutputWriter;
 
 use std::io::Read;
@@ -61,7 +61,7 @@ impl crate::core::ManualProcessor for BgraFileSourceProcessor::Processor {
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
-            StreamError::Configuration("GPU context not initialized".into())
+            Error::Configuration("GPU context not initialized".into())
         })?;
 
         self.is_running.store(true, Ordering::Release);
@@ -91,7 +91,7 @@ impl crate::core::ManualProcessor for BgraFileSourceProcessor::Processor {
                 );
             })
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to spawn source thread: {e}"))
+                Error::Configuration(format!("Failed to spawn source thread: {e}"))
             })?;
 
         self.source_thread_handle = Some(handle);

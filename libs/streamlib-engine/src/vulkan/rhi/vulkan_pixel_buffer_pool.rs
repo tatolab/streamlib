@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::core::rhi::{PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::{HostVulkanDevice, HostVulkanPixelBuffer};
 
@@ -39,7 +39,7 @@ impl VulkanPixelBufferPool {
     ) -> Result<Self> {
         let mut buffers = Vec::with_capacity(pre_allocate);
         let mut buffer_to_pool_id = HashMap::with_capacity(pre_allocate);
-        let mut last_err: Option<StreamError> = None;
+        let mut last_err: Option<Error> = None;
 
         for i in 0..pre_allocate {
             match HostVulkanPixelBuffer::new(&device, width, height, bytes_per_pixel, format) {
@@ -61,7 +61,7 @@ impl VulkanPixelBufferPool {
 
         if buffers.is_empty() {
             return Err(last_err.unwrap_or_else(|| {
-                StreamError::BufferError(
+                Error::BufferError(
                     "VulkanPixelBufferPool: failed to allocate any buffers".into(),
                 )
             }));
@@ -103,7 +103,7 @@ impl VulkanPixelBufferPool {
     pub fn acquire(&self) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
         let len = self.buffers.len();
         if len == 0 {
-            return Err(StreamError::BufferError(
+            return Err(Error::BufferError(
                 "VulkanPixelBufferPool has no buffers".into(),
             ));
         }
@@ -133,7 +133,7 @@ impl VulkanPixelBufferPool {
             }
         }
 
-        Err(StreamError::BufferError(
+        Err(Error::BufferError(
             "All VulkanPixelBufferPool buffers are in use".into(),
         ))
     }

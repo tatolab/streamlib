@@ -7,7 +7,7 @@ use std::sync::LazyLock;
 use parking_lot::RwLock;
 
 use crate::core::descriptors::SchemaIdent;
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{DynGeneratedProcessor, GeneratedProcessor};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
@@ -94,7 +94,7 @@ impl ProcessorInstanceFactory {
         }
         let count = self.constructors.read().len();
         if count == 0 {
-            return Err(crate::core::StreamError::RegistryFailed(
+            return Err(crate::core::Error::RegistryFailed(
                 "No processors registered. Ensure processor crates are linked and use #[streamlib::sdk::processor]".into()
             ));
         }
@@ -158,7 +158,7 @@ impl ProcessorInstanceFactory {
         let constructor: private::ConstructorFn = Box::new(move |node: &ProcessorNode| {
             let config: P::Config = match &node.config {
                 Some(json) => serde_json::from_value(json.clone()).map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "Failed to deserialize config for '{}': {}",
                         node.id, e
                     ))
@@ -212,7 +212,7 @@ impl ProcessorInstanceFactory {
 
         // Check for duplicate registration
         if self.constructors.read().contains_key(&type_name) {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Processor '{}' already registered",
                 type_name
             )));
@@ -282,7 +282,7 @@ impl ProcessorInstanceFactory {
         let type_name = descriptor.name.clone();
 
         if self.descriptors.read().contains_key(&type_name) {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Processor '{}' already registered",
                 type_name
             )));
@@ -348,7 +348,7 @@ impl ProcessorInstanceFactory {
     pub fn create(&self, node: &ProcessorNode) -> Result<ProcessorInstance> {
         let constructors = self.constructors.read();
         let constructor = constructors.get(&node.processor_type).ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!(
+            Error::ProcessorNotFound(format!(
                 "No factory registered for processor type '{}'",
                 node.processor_type
             ))
@@ -454,7 +454,7 @@ mod tests {
             .expect_err("duplicate 4-tuple must be rejected");
 
         match err {
-            StreamError::Configuration(msg) => {
+            Error::Configuration(msg) => {
                 assert!(
                     msg.contains("already registered"),
                     "error must name the collision; got: {msg}"

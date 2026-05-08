@@ -84,7 +84,7 @@ pub use core::{
     RuntimeContext,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
-    StreamError,
+    Error,
     StreamTexture,
     TextureDescriptor,
     TextureFormat,

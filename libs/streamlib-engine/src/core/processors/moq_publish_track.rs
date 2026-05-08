@@ -8,7 +8,7 @@
 // and publishes the bytes as-is to the shared MoQ relay session.
 
 use crate::core::streaming::MoqPublishSession;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -78,7 +78,7 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
         let mut session = self
             .shared_publish_session
             .as_ref()
-            .ok_or_else(|| StreamError::Runtime("MoQ session not connected".into()))?
+            .ok_or_else(|| Error::Runtime("MoQ session not connected".into()))?
             .lock();
 
         // Detect keyframe by checking the is_keyframe field in the serialized EncodedVideoFrame.

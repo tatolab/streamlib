@@ -11,7 +11,7 @@
 
 use crate::core::media_clock::MediaClock;
 use crate::core::streaming::{MoqSubscribeSession, MoqTrackReader};
-use crate::core::{Result, RuntimeContextFullAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, Error};
 use crate::iceoryx2::OutputWriter;
 use std::future::Future;
 use std::sync::Arc;
@@ -77,7 +77,7 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
         let ctx = self
             .runtime_context
             .as_ref()
-            .ok_or_else(|| StreamError::Runtime("RuntimeContext not available".into()))?
+            .ok_or_else(|| Error::Runtime("RuntimeContext not available".into()))?
             .clone();
 
         let outputs = self.outputs.clone();

@@ -3,7 +3,7 @@
 
 use crate::_generated_::tatolab__audio::audio_mixer_config::Strategy;
 use streamlib::sdk::_generated_::AudioFrame;
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 #[streamlib::sdk::processor("AudioMixer")]
@@ -49,13 +49,13 @@ impl streamlib::sdk::processors::ReactiveProcessor for AudioMixerProcessor::Proc
         let right_frame: AudioFrame = self.inputs.read("right")?;
 
         if left_frame.channels != 1 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "AudioMixer expects mono left input (1 channel), got {} channels",
                 left_frame.channels
             )));
         }
         if right_frame.channels != 1 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "AudioMixer expects mono right input (1 channel), got {} channels",
                 right_frame.channels
             )));

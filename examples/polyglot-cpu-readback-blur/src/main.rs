@@ -52,7 +52,7 @@ use streamlib::sdk::context::{CpuReadbackBridge, CpuReadbackCopyDirection, GpuCo
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::StreamError;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
     HostVulkanPixelBuffer,
@@ -131,16 +131,16 @@ fn main() -> Result<()> {
     for a in args {
         if let Some(value) = a.strip_prefix("--runtime=") {
             runtime_kind =
-                RuntimeKind::parse(value).map_err(StreamError::Configuration)?;
+                RuntimeKind::parse(value).map_err(Error::Configuration)?;
         } else if let Some(value) = a.strip_prefix("--output=") {
             output_png = PathBuf::from(value);
         } else if let Some(value) = a.strip_prefix("--kernel-size=") {
             kernel_size = value.parse().map_err(|e| {
-                StreamError::Configuration(format!("invalid --kernel-size: {e}"))
+                Error::Configuration(format!("invalid --kernel-size: {e}"))
             })?;
         } else if let Some(value) = a.strip_prefix("--sigma=") {
             sigma = value.parse().map_err(|e| {
-                StreamError::Configuration(format!("invalid --sigma: {e}"))
+                Error::Configuration(format!("invalid --sigma: {e}"))
             })?;
         }
     }
@@ -175,7 +175,7 @@ fn main() -> Result<()> {
             );
 
             register_host_surface(&adapter, gpu).map_err(|e| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "register_host_surface: {e}"
                 ))
             })?;
@@ -202,7 +202,7 @@ fn main() -> Result<()> {
             let slpkg_path =
                 manifest_dir.join("python/polyglot-cpu-readback-blur-0.1.0.slpkg");
             if !slpkg_path.exists() {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Package not found: {}\nRun: cargo run -p streamlib-cli -- pack examples/polyglot-cpu-readback-blur/python",
                     slpkg_path.display()
                 )));
@@ -212,7 +212,7 @@ fn main() -> Result<()> {
         RuntimeKind::Deno => {
             let project_path = manifest_dir.join("deno");
             if !project_path.join("streamlib.yaml").exists() {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Deno project not found: {}",
                     project_path.display()
                 )));
@@ -227,14 +227,14 @@ fn main() -> Result<()> {
     // on the pre-registered cpu-readback surface, not the trigger
     // frame's pixel buffer).
     let fixture_path = write_trigger_fixture()
-        .map_err(StreamError::Configuration)?;
+        .map_err(Error::Configuration)?;
 
     let source = runtime.add_processor(BgraFileSourceProcessor::Processor::node(
         BgraFileSourceProcessor::Config {
             file_path: fixture_path
                 .to_str()
                 .ok_or_else(|| {
-                    StreamError::Configuration(
+                    Error::Configuration(
                         "fixture path has non-utf8 component".into(),
                     )
                 })?
@@ -282,7 +282,7 @@ fn main() -> Result<()> {
         .unwrap()
         .clone()
         .ok_or_else(|| {
-            StreamError::Runtime(
+            Error::Runtime(
                 "cpu-readback adapter slot is empty — setup hook never ran"
                     .into(),
             )
@@ -426,7 +426,7 @@ fn upload_input_pattern(adapter: &Arc<HostAdapter>) -> Result<()> {
     );
 
     let mut guard = adapter.acquire_write(&surface).map_err(|e| {
-        StreamError::Configuration(format!("upload_input_pattern acquire: {e:?}"))
+        Error::Configuration(format!("upload_input_pattern acquire: {e:?}"))
     })?;
 
     {
@@ -497,7 +497,7 @@ fn write_output_png(
     );
 
     let guard = adapter.acquire_read(&surface).map_err(|e| {
-        StreamError::Configuration(format!(
+        Error::Configuration(format!(
             "acquire_read for output PNG: {e:?}"
         ))
     })?;
@@ -514,7 +514,7 @@ fn write_output_png(
     }
 
     let file = File::create(output).map_err(|e| {
-        StreamError::Configuration(format!(
+        Error::Configuration(format!(
             "create output PNG {}: {e}",
             output.display()
         ))
@@ -524,9 +524,9 @@ fn write_output_png(
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder
         .write_header()
-        .map_err(|e| StreamError::Configuration(format!("PNG header: {e}")))?;
+        .map_err(|e| Error::Configuration(format!("PNG header: {e}")))?;
     writer
         .write_image_data(&rgba)
-        .map_err(|e| StreamError::Configuration(format!("PNG body: {e}")))?;
+        .map_err(|e| Error::Configuration(format!("PNG body: {e}")))?;
     Ok(())
 }

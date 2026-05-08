@@ -12,7 +12,7 @@
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::core::context::GpuContextLimitedAccess;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
 
 use vulkan_video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
 
@@ -61,10 +61,10 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         let vulkan_device = &ctx.gpu_full_access().device().inner;
 
         let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
-            StreamError::Runtime("GPU does not support Vulkan Video encode".into())
+            Error::Runtime("GPU does not support Vulkan Video encode".into())
         })?;
         let encode_queue_family = vulkan_device.video_encode_queue_family_index().ok_or_else(|| {
-            StreamError::Runtime("No video encode queue family".into())
+            Error::Runtime("No video encode queue family".into())
         })?;
 
         let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
@@ -84,7 +84,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
             vulkan_device.compute_queue().unwrap_or_else(|| vulkan_device.queue()),
             vulkan_device.compute_queue_family_index().unwrap_or_else(|| vulkan_device.queue_family_index()),
         ).map_err(|e| {
-            StreamError::Runtime(format!("Failed to create H.265 encoder: {e}"))
+            Error::Runtime(format!("Failed to create H.265 encoder: {e}"))
         })?;
 
         // Allocate the RGB→NV12 converter (NV12 DEVICE_LOCAL VkImage +
@@ -93,7 +93,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         // already materialized the underlying VMA blocks so this no longer
         // races NVIDIA's post-swapchain export cap.
         encoder.prepare_gpu_encode_resources().map_err(|e| {
-            StreamError::Runtime(format!("Failed to pre-allocate H.265 encode resources: {e}"))
+            Error::Runtime(format!("Failed to pre-allocate H.265 encode resources: {e}"))
         })?;
 
         tracing::info!(
@@ -124,23 +124,23 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         let gpu_ctx = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| StreamError::Runtime("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
 
         let encoder = self
             .encoder
             .as_mut()
-            .ok_or_else(|| StreamError::Runtime("H.265 encoder not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("H.265 encoder not initialized".into()))?;
 
         let texture = gpu_ctx.resolve_video_frame_texture(&frame)?;
         let image_view = texture.inner.image_view().map_err(|e| {
-            StreamError::GpuError(format!("Failed to get image view: {e}"))
+            Error::GpuError(format!("Failed to get image view: {e}"))
         })?;
 
         let timestamp_ns: Option<i64> = frame.timestamp_ns.parse().ok();
         let frame_fps = frame.fps;
 
         let packets = encoder.encode_image(image_view, timestamp_ns).map_err(|e| {
-            StreamError::Runtime(format!("H.265 encode failed: {e}"))
+            Error::Runtime(format!("H.265 encode failed: {e}"))
         })?;
 
         for packet in packets {

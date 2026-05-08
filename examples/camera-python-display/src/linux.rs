@@ -64,7 +64,7 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::rhi::TextureFormat;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::StreamError;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, ProcessorSpec};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
@@ -143,7 +143,7 @@ pub fn main() -> Result<()> {
             "avatar mesh-render output",
         )
         .map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "register avatar surface: {e}"
             ))
         })?;
@@ -156,7 +156,7 @@ pub fn main() -> Result<()> {
             "lower-third Skia output (#485)",
         )
         .map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "register lower-third surface: {e}"
             ))
         })?;
@@ -169,7 +169,7 @@ pub fn main() -> Result<()> {
             "watermark Skia output (#485)",
         )
         .map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "register watermark surface: {e}"
             ))
         })?;
@@ -182,7 +182,7 @@ pub fn main() -> Result<()> {
             "glitch OpenGL output (#486)",
         )
         .map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "register glitch surface: {e}"
             ))
         })?;

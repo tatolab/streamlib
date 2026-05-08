@@ -6,7 +6,7 @@
 use crate::_generated_::EncodedVideoFrame;
 use crate::core::codec::Mp4MuxerConfig;
 use crate::_generated_::EncodedAudioFrame;
-use crate::core::{Result, RuntimeContext, StreamError};
+use crate::core::{Result, RuntimeContext, Error};
 
 /// Apple MP4 muxer using AVAssetWriter.
 ///
@@ -28,7 +28,7 @@ impl AppleMp4Muxer {
         // - Create video input with passthrough format description
         // - Create audio input (if audio configured)
         // - Start writing session
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "Apple MP4 muxer not yet implemented".into(),
         ))
     }
@@ -39,7 +39,7 @@ impl AppleMp4Muxer {
         // - Create CMBlockBuffer from frame.data
         // - Create CMSampleBuffer with format description
         // - Append to video input
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "Apple MP4 muxer not yet implemented".into(),
         ))
     }
@@ -50,7 +50,7 @@ impl AppleMp4Muxer {
         // - Create CMBlockBuffer from frame.data
         // - Create CMSampleBuffer with audio format description
         // - Append to audio input
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "Apple MP4 muxer not yet implemented".into(),
         ))
     }
@@ -61,7 +61,7 @@ impl AppleMp4Muxer {
         // - Mark inputs as finished
         // - Finish writing session
         // - Wait for completion
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "Apple MP4 muxer not yet implemented".into(),
         ))
     }

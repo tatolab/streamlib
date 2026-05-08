@@ -100,7 +100,7 @@ impl RhiPixelBufferPool {
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
-            Err(crate::core::StreamError::Configuration(
+            Err(crate::core::Error::Configuration(
                 "RhiPixelBufferPool not implemented for this platform".into(),
             ))
         }

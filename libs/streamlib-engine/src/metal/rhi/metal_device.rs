@@ -8,7 +8,7 @@ use objc2::runtime::ProtocolObject;
 use objc2_metal::{MTLCommandQueue, MTLCreateSystemDefaultDevice, MTLDevice};
 
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::{MetalCommandQueue, MetalTexture};
 
@@ -22,7 +22,7 @@ impl MetalDevice {
     /// Create a new Metal device.
     pub fn new() -> Result<Self> {
         let device = MTLCreateSystemDefaultDevice().ok_or_else(|| {
-            StreamError::GpuError(
+            Error::GpuError(
                 "No Metal device available on this system. Metal requires macOS 10.11+ or iOS 8+."
                     .into(),
             )
@@ -30,7 +30,7 @@ impl MetalDevice {
 
         let command_queue = device
             .newCommandQueue()
-            .ok_or_else(|| StreamError::GpuError("Failed to create Metal command queue".into()))?;
+            .ok_or_else(|| Error::GpuError("Failed to create Metal command queue".into()))?;
 
         Ok(Self {
             device,
@@ -57,7 +57,7 @@ impl MetalDevice {
             .device
             .newTextureWithDescriptor(&texture_desc)
             .ok_or_else(|| {
-                StreamError::TextureError(format!(
+                Error::TextureError(format!(
                     "Failed to create Metal texture {}x{} format={:?}",
                     desc.width, desc.height, desc.format
                 ))

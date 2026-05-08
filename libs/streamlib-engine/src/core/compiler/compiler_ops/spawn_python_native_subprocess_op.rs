@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::{DynamicProcessorConstructorFn, ProcessorInstance};
@@ -148,7 +148,7 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
 
             let mut child = command.spawn()
                 .map_err(|e| {
-                    StreamError::Runtime(format!(
+                    Error::Runtime(format!(
                         "Failed to spawn Python native subprocess for '{}': {}. Python: '{}'",
                         self.processor_id, e, python_executable
                     ))
@@ -228,7 +228,7 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                     .get("error")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "Python native subprocess '{}' setup failed: {}",
                     self.processor_id, error
                 )));
@@ -521,25 +521,25 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
 impl PythonNativeSubprocessHostProcessor {
     fn bridge_send(&mut self, msg: &serde_json::Value) -> Result<()> {
         let bridge = self.bridge.as_ref().ok_or_else(|| {
-            StreamError::Runtime("Subprocess bridge not initialized".to_string())
+            Error::Runtime("Subprocess bridge not initialized".to_string())
         })?;
         bridge.send(msg)
     }
 
     fn bridge_recv(&mut self) -> Result<serde_json::Value> {
         let bridge = self.bridge.as_ref().ok_or_else(|| {
-            StreamError::Runtime("Subprocess bridge not initialized".to_string())
+            Error::Runtime("Subprocess bridge not initialized".to_string())
         })?;
         bridge.recv_lifecycle()
     }
 
     fn bridge_recv_timeout(&mut self, timeout: Duration) -> Result<serde_json::Value> {
         let bridge = self.bridge.as_ref().ok_or_else(|| {
-            StreamError::Runtime("Subprocess bridge not initialized".to_string())
+            Error::Runtime("Subprocess bridge not initialized".to_string())
         })?;
         bridge
             .recv_lifecycle_timeout(timeout)
-            .map_err(|e| StreamError::Runtime(format!("bridge recv timed out: {e}")))
+            .map_err(|e| Error::Runtime(format!("bridge recv timed out: {e}")))
     }
 }
 
@@ -623,7 +623,7 @@ pub(crate) fn resolve_python_native_lib_path() -> Result<String> {
         }
     }
 
-    Err(StreamError::Runtime(format!(
+    Err(Error::Runtime(format!(
         "Python native FFI library not found. Expected at '{}' or '{}'. Build with: cargo build -p streamlib-python-native",
         default_path.display(),
         release_path.display()

@@ -11,7 +11,7 @@ use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::PendingOperation;
 use crate::core::context::RuntimeContext;
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkStateComponent,
     ProcessorReadyBarrierHandle, ProcessorUniqueId,
@@ -239,7 +239,7 @@ impl Compiler {
                 // Clean up graph after unwiring
                 let mut graph = graph_arc.write();
                 if graph.traversal_mut().e(link_id).drop().exists() {
-                    return Err(StreamError::GraphError("value was not dropped".into()));
+                    return Err(Error::GraphError("value was not dropped".into()));
                 }
             }
 
@@ -352,7 +352,7 @@ impl Compiler {
                     }
                     // Remove from graph
                     if graph.traversal_mut().v(proc_id).drop().exists() {
-                        return Err(StreamError::GraphError("value was not dropped".into()));
+                        return Err(Error::GraphError("value was not dropped".into()));
                     }
                 }
 
@@ -377,7 +377,7 @@ impl Compiler {
             for proc_id in &plan.processors_to_add {
                 let mut graph = graph_arc.write();
                 let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
-                    StreamError::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
+                    Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
                 })?;
 
                 let processor_type = node.processor_type.clone();
@@ -444,7 +444,7 @@ impl Compiler {
                 let mut graph = graph_arc.write();
                 let (from_port, to_port) = {
                     let link = graph.traversal().e(link_id).first().ok_or_else(|| {
-                        StreamError::LinkNotFound(format!("Link '{}' not found", link_id))
+                        Error::LinkNotFound(format!("Link '{}' not found", link_id))
                     })?;
                     (link.from_port().to_string(), link.to_port().to_string())
                 };
@@ -514,7 +514,7 @@ impl Compiler {
                         .map(|i| i.0.clone())
                 })
                 .ok_or_else(|| {
-                    StreamError::ProcessorNotFound(format!(
+                    Error::ProcessorNotFound(format!(
                         "Processor '{}' not found for config update",
                         proc_id
                     ))

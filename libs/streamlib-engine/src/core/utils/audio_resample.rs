@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
@@ -81,7 +81,7 @@ impl AudioResampler {
             1 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 1)
                     .map_err(|e| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "Failed to create 1-channel resampler: {:?}",
                             e
                         ))
@@ -91,7 +91,7 @@ impl AudioResampler {
             2 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 2)
                     .map_err(|e| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "Failed to create 2-channel resampler: {:?}",
                             e
                         ))
@@ -101,7 +101,7 @@ impl AudioResampler {
             3 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 3)
                     .map_err(|e| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "Failed to create 3-channel resampler: {:?}",
                             e
                         ))
@@ -111,7 +111,7 @@ impl AudioResampler {
             4 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 4)
                     .map_err(|e| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "Failed to create 4-channel resampler: {:?}",
                             e
                         ))
@@ -121,7 +121,7 @@ impl AudioResampler {
             5 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 5)
                     .map_err(|e| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "Failed to create 5-channel resampler: {:?}",
                             e
                         ))
@@ -131,7 +131,7 @@ impl AudioResampler {
             6 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 6)
                     .map_err(|e| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "Failed to create 6-channel resampler: {:?}",
                             e
                         ))
@@ -141,7 +141,7 @@ impl AudioResampler {
             7 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 7)
                     .map_err(|e| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "Failed to create 7-channel resampler: {:?}",
                             e
                         ))
@@ -151,7 +151,7 @@ impl AudioResampler {
             8 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 8)
                     .map_err(|e| {
-                        StreamError::Runtime(format!(
+                        Error::Runtime(format!(
                             "Failed to create 8-channel resampler: {:?}",
                             e
                         ))
@@ -159,7 +159,7 @@ impl AudioResampler {
                 ResamplerInner::Eight(resampler)
             }
             _ => {
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Unsupported channel count: {}. Must be 1-8.",
                     channels
                 )))
@@ -200,7 +200,7 @@ impl AudioResampler {
             ResamplerInner::Seven(r) => r.process(&planar_input, None),
             ResamplerInner::Eight(r) => r.process(&planar_input, None),
         }
-        .map_err(|e| StreamError::Runtime(format!("Resampling failed: {:?}", e)))?;
+        .map_err(|e| Error::Runtime(format!("Resampling failed: {:?}", e)))?;
 
         // Convert back to interleaved
         let output_samples_per_channel = planar_output[0].len();

@@ -37,7 +37,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::core::context::GpuContextLimitedAccess;
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 
 use super::subprocess_escalate::{process_bridge_message, EscalateHandleRegistry};
 
@@ -65,7 +65,7 @@ impl EscalateTransport {
     /// the subprocess retains the child-side fd.
     pub(crate) fn attach(command: &mut Command) -> Result<Self> {
         let (parent_end, child_end) = UnixStream::pair().map_err(|e| {
-            StreamError::Runtime(format!("failed to create escalate socketpair: {e}"))
+            Error::Runtime(format!("failed to create escalate socketpair: {e}"))
         })?;
 
         let child_fd: RawFd = child_end.as_raw_fd();
@@ -136,7 +136,7 @@ impl SubprocessBridge {
         processor_id: String,
     ) -> Result<Self> {
         let read_half = stream.try_clone().map_err(|e| {
-            StreamError::Runtime(format!(
+            Error::Runtime(format!(
                 "failed to clone escalate socketpair for reader: {e}"
             ))
         })?;
@@ -179,7 +179,7 @@ impl SubprocessBridge {
     /// Write a length-prefixed JSON message to the subprocess.
     pub(crate) fn send(&self, msg: &serde_json::Value) -> Result<()> {
         if self.is_dead() {
-            return Err(StreamError::Runtime(format!(
+            return Err(Error::Runtime(format!(
                 "[{}] bridge marked dead, cannot send",
                 self.processor_id
             )));
@@ -187,7 +187,7 @@ impl SubprocessBridge {
         let mut writer = self
             .writer
             .lock()
-            .map_err(|_| StreamError::Runtime("subprocess writer mutex poisoned".to_string()))?;
+            .map_err(|_| Error::Runtime("subprocess writer mutex poisoned".to_string()))?;
         write_frame(&mut *writer, msg).map_err(|e| {
             self.mark_dead();
             e
@@ -198,7 +198,7 @@ impl SubprocessBridge {
     pub(crate) fn recv_lifecycle(&self) -> Result<serde_json::Value> {
         self.lifecycle_rx.recv().map_err(|_| {
             self.mark_dead();
-            StreamError::Runtime(format!(
+            Error::Runtime(format!(
                 "[{}] subprocess escalate socket closed before reply",
                 self.processor_id
             ))
@@ -421,17 +421,17 @@ fn thread_name(processor_id: &str) -> String {
 
 fn write_frame<W: Write>(writer: &mut W, msg: &serde_json::Value) -> Result<()> {
     let bytes = serde_json::to_vec(msg)
-        .map_err(|e| StreamError::Runtime(format!("failed to serialize bridge message: {e}")))?;
+        .map_err(|e| Error::Runtime(format!("failed to serialize bridge message: {e}")))?;
     let len = bytes.len() as u32;
     writer
         .write_all(&len.to_be_bytes())
-        .map_err(|e| StreamError::Runtime(format!("failed to write bridge frame: {e}")))?;
+        .map_err(|e| Error::Runtime(format!("failed to write bridge frame: {e}")))?;
     writer
         .write_all(&bytes)
-        .map_err(|e| StreamError::Runtime(format!("failed to write bridge frame: {e}")))?;
+        .map_err(|e| Error::Runtime(format!("failed to write bridge frame: {e}")))?;
     writer
         .flush()
-        .map_err(|e| StreamError::Runtime(format!("failed to flush bridge frame: {e}")))?;
+        .map_err(|e| Error::Runtime(format!("failed to flush bridge frame: {e}")))?;
     Ok(())
 }
 
@@ -439,14 +439,14 @@ fn read_frame<R: Read>(reader: &mut R) -> Result<serde_json::Value> {
     let mut len_buf = [0u8; 4];
     reader
         .read_exact(&mut len_buf)
-        .map_err(|e| StreamError::Runtime(format!("bridge read failed: {e}")))?;
+        .map_err(|e| Error::Runtime(format!("bridge read failed: {e}")))?;
     let len = u32::from_be_bytes(len_buf) as usize;
     let mut buf = vec![0u8; len];
     reader
         .read_exact(&mut buf)
-        .map_err(|e| StreamError::Runtime(format!("bridge read failed: {e}")))?;
+        .map_err(|e| Error::Runtime(format!("bridge read failed: {e}")))?;
     serde_json::from_slice(&buf)
-        .map_err(|e| StreamError::Runtime(format!("bridge frame decode failed: {e}")))
+        .map_err(|e| Error::Runtime(format!("bridge frame decode failed: {e}")))
 }
 
 #[cfg(test)]

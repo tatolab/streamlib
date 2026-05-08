@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::max_payload_bytes_for_port_spec;
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
     LinkUniqueId, ProcessorInstanceComponent, SubprocessHandleComponent,
@@ -124,7 +124,7 @@ pub fn open_iceoryx2_service(
 ) -> Result<()> {
     let (from_port, to_port) = {
         let link = graph.traversal_mut().e(link_id).first().ok_or_else(|| {
-            StreamError::LinkNotFound(format!("Link '{}' not found in graph", link_id))
+            Error::LinkNotFound(format!("Link '{}' not found in graph", link_id))
         })?;
         (link.from_port().clone(), link.to_port().clone())
     };
@@ -253,7 +253,7 @@ fn reject_overcap_destination_fanin(
         .iter()
         .count();
     if fanin > MAX_FANIN_PER_DESTINATION {
-        return Err(StreamError::Configuration(format!(
+        return Err(Error::Configuration(format!(
             "destination processor '{}' would have {} upstream sources, \
              exceeding the per-destination iceoryx2 fan-in cap of {} \
              (max_publishers / max_notifiers).",
@@ -285,7 +285,7 @@ fn get_single_processor(
             node.get::<ProcessorInstanceComponent>()
                 .map(|i| i.0.clone())
         })
-        .ok_or_else(|| StreamError::Configuration(format!("Processor '{}' not found", proc_id)))
+        .ok_or_else(|| Error::Configuration(format!("Processor '{}' not found", proc_id)))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -419,7 +419,7 @@ fn open_iceoryx2_pubsub(
         .traversal_mut()
         .e(link_id)
         .first_mut()
-        .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
     link.insert(LinkStateComponent(LinkState::Wired));
 
     tracing::info!(
@@ -543,7 +543,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
         .traversal_mut()
         .e(link_id)
         .first_mut()
-        .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
     link.insert(LinkStateComponent(LinkState::Wired));
 
     tracing::info!(
@@ -677,7 +677,7 @@ fn open_iceoryx2_subprocess_to_rust(
         .traversal_mut()
         .e(link_id)
         .first_mut()
-        .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
     link.insert(LinkStateComponent(LinkState::Wired));
 
     tracing::info!(
@@ -807,7 +807,7 @@ fn open_iceoryx2_rust_to_subprocess(
         .traversal_mut()
         .e(link_id)
         .first_mut()
-        .ok_or_else(|| StreamError::LinkNotFound(link_id.to_string()))?;
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
     link.insert(LinkStateComponent(LinkState::Wired));
 
     tracing::info!(

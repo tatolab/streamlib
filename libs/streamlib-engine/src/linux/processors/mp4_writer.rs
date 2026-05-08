@@ -9,7 +9,7 @@
 
 use crate::_generated_::VideoFrame;
 use crate::core::context::GpuContextLimitedAccess;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
@@ -47,12 +47,12 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             drop(child.stdin.take());
 
             let output = child.wait_with_output().map_err(|e| {
-                StreamError::Runtime(format!("Failed to wait for ffmpeg: {e}"))
+                Error::Runtime(format!("Failed to wait for ffmpeg: {e}"))
             })?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "ffmpeg exited with status {}: {stderr}", output.status
                 )));
             }
@@ -79,7 +79,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         let gpu_ctx = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| StreamError::Runtime("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
 
         // Resolve VideoFrame to pixel buffer for decoded NV12 data.
         // Decoder outputs NV12 (Y + UV = W*H*3/2). ffmpeg converts to display RGB
@@ -139,7 +139,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()
-                .map_err(|e| StreamError::Runtime(format!("Failed to spawn ffmpeg: {e}")))?;
+                .map_err(|e| Error::Runtime(format!("Failed to spawn ffmpeg: {e}")))?;
 
             self.ffmpeg_process = Some(child);
         }
@@ -147,11 +147,11 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         // Write raw RGBA frame to ffmpeg's stdin.
         let child = self.ffmpeg_process.as_mut().unwrap();
         let stdin = child.stdin.as_mut().ok_or_else(|| {
-            StreamError::Runtime("ffmpeg stdin not available".into())
+            Error::Runtime("ffmpeg stdin not available".into())
         })?;
 
         stdin.write_all(raw_data).map_err(|e| {
-            StreamError::Runtime(format!("Failed to write frame to ffmpeg: {e}"))
+            Error::Runtime(format!("Failed to write frame to ffmpeg: {e}"))
         })?;
 
         self.frames_received += 1;

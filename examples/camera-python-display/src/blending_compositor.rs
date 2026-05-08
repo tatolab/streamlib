@@ -38,7 +38,7 @@ use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::display_info;
 use streamlib::sdk::rhi::{StreamTexture, TextureFormat, VulkanLayout};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
 use streamlib::sdk::_generated_::VideoFrame;
 
@@ -169,12 +169,12 @@ impl streamlib::sdk::processors::ManualProcessor for BlendingCompositorProcessor
         let running = Arc::clone(&self.running);
         let frame_count = Arc::clone(&self.frame_count);
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
-            StreamError::Configuration(
+            Error::Configuration(
                 "BlendingCompositor::start: gpu_context unset (setup() not run)".into(),
             )
         })?;
         let backend = self.backend.take().ok_or_else(|| {
-            StreamError::Configuration(
+            Error::Configuration(
                 "BlendingCompositor::start: backend unset (setup() not run)".into(),
             )
         })?;
@@ -204,7 +204,7 @@ impl streamlib::sdk::processors::ManualProcessor for BlendingCompositorProcessor
                 );
             })
             .map_err(|e| {
-                StreamError::Configuration(format!("spawn render thread: {e}"))
+                Error::Configuration(format!("spawn render thread: {e}"))
             })?;
         self.render_thread = Some(handle);
         Ok(())
@@ -309,7 +309,7 @@ impl BlendingCompositorProcessor::Processor {
             // SHADER_READ_ONLY_OPTIMAL (the steady-state post-render
             // layout) is honest.
             let surface_store = gpu_full.surface_store().ok_or_else(|| {
-                StreamError::Configuration(
+                Error::Configuration(
                     "BlendingCompositor: GpuContext has no surface_store \
                      — cross-process output (Glitch consumer, #486) \
                      unavailable"
@@ -324,7 +324,7 @@ impl BlendingCompositorProcessor::Processor {
                     VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
                 )
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "BlendingCompositor: surface_store.register_texture \
                          slot {slot_idx}: {e}"
                     ))

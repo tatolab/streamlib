@@ -68,66 +68,66 @@ pub struct ClapEffectProcessor {
 
 impl ClapEffectProcessor::Processor {
     pub fn plugin_info(&self) -> Result<&PluginInfo> {
-        use crate::core::StreamError;
+        use crate::core::Error;
         self.host
             .as_ref()
             .map(|h| h.plugin_info())
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))
+            .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))
     }
 
     pub fn list_parameters(&self) -> Result<Vec<ParameterInfo>> {
-        use crate::core::StreamError;
+        use crate::core::Error;
         self.host
             .as_ref()
             .map(|h| h.list_parameters())
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))
+            .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))
     }
 
     pub fn get_parameter(&self, id: u32) -> Result<f64> {
-        use crate::core::StreamError;
+        use crate::core::Error;
         self.host
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
             .get_parameter(id)
     }
 
     pub fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
-        use crate::core::StreamError;
+        use crate::core::Error;
         self.host
             .as_mut()
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
             .set_parameter(id, value)
     }
 
     pub fn begin_edit(&mut self, id: u32) -> Result<()> {
-        use crate::core::StreamError;
+        use crate::core::Error;
         self.host
             .as_mut()
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
             .begin_edit(id)
     }
 
     pub fn end_edit(&mut self, id: u32) -> Result<()> {
-        use crate::core::StreamError;
+        use crate::core::Error;
         self.host
             .as_mut()
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
             .end_edit(id)
     }
 
     pub fn activate(&mut self, sample_rate: u32, max_frames: usize) -> Result<()> {
-        use crate::core::StreamError;
+        use crate::core::Error;
         self.host
             .as_mut()
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
             .activate(sample_rate, max_frames)
     }
 
     pub fn deactivate(&mut self) -> Result<()> {
-        use crate::core::StreamError;
+        use crate::core::Error;
         self.host
             .as_mut()
-            .ok_or_else(|| StreamError::Configuration("Plugin not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
             .deactivate()
     }
 }

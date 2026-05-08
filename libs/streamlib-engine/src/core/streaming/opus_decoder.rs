@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::AudioFrame;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Opus audio decoder for real-time WebRTC streaming.
 #[derive(Debug)]
@@ -19,14 +19,14 @@ impl OpusDecoder {
         // Opus supports: 8000, 12000, 16000, 24000, 48000 Hz
         // WebRTC typically uses 48000 Hz
         if ![8000, 12000, 16000, 24000, 48000].contains(&sample_rate) {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Opus decoder requires sample rate of 8/12/16/24/48 kHz, got {}Hz",
                 sample_rate
             )));
         }
 
         if input_channels != 1 && input_channels != 2 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Opus decoder supports 1 (mono) or 2 (stereo) channels, got {}",
                 input_channels
             )));
@@ -40,7 +40,7 @@ impl OpusDecoder {
         };
 
         let decoder = opus::Decoder::new(sample_rate, channels)
-            .map_err(|e| StreamError::Runtime(format!("Failed to create Opus decoder: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to create Opus decoder: {}", e)))?;
 
         // Calculate frame size based on sample rate
         // WebRTC typically uses 20ms frames: (sample_rate * 20) / 1000
@@ -92,7 +92,7 @@ impl OpusDecoder {
                     packet.len(),
                     self.input_channels
                 );
-                StreamError::Runtime(format!("Opus decode failed: {}", e))
+                Error::Runtime(format!("Opus decode failed: {}", e))
             })?;
 
         if decode_num == 0 {
