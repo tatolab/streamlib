@@ -40,6 +40,7 @@ tracing-subscriber.workspace = true
 # same reason — see that crate's Cargo.toml for the rationale.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 streamlib-engine = { path = "../streamlib-engine" }
+streamlib = { path = "../streamlib-sdk" }
 streamlib-adapter-vulkan-helpers = { path = "../streamlib-adapter-vulkan-helpers" }
 serde = { workspace = true }
 

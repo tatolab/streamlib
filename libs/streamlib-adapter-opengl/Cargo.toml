@@ -39,6 +39,7 @@ tracing-subscriber.workspace = true
 # `streamlib`.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 streamlib-engine = { path = "../streamlib-engine" }
+streamlib = { path = "../streamlib-sdk" }
 streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
 vulkanalia.workspace = true
 

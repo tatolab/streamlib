@@ -22,13 +22,15 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::Arc;
-use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use serial_test::serial;
-use streamlib_engine::core::context::GpuContext;
-use streamlib_engine::core::rhi::{PixelFormat, TextureFormat};
-use streamlib_engine::host_rhi::{
-    HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
+use streamlib::core::context::GpuContext;
+use streamlib::core::rhi::{PixelFormat, TextureFormat};
+use streamlib::sdk::engine::host_rhi::{
+    HostMarker,
+    HostVulkanPixelBuffer,
+    HostVulkanTimelineSemaphore,
 };
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,

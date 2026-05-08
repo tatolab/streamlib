@@ -16,14 +16,17 @@
 #![allow(dead_code)] // each test file uses a different subset
 
 use std::sync::{Arc, OnceLock};
-use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
-use streamlib_engine::host_rhi::{
-    HostMarker, HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
+use streamlib::sdk::engine::host_rhi::{
+    HostMarker,
+    HostVulkanDevice,
+    HostVulkanPixelBuffer,
+    HostVulkanTimelineSemaphore,
 };
-use streamlib_engine::core::context::GpuContext;
-use streamlib_engine::core::error::StreamError;
-use streamlib_engine::core::rhi::{PixelFormat, TextureFormat};
+use streamlib::core::context::GpuContext;
+use streamlib::core::error::StreamError;
+use streamlib::core::rhi::{PixelFormat, TextureFormat};
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,

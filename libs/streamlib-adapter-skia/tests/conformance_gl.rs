@@ -17,10 +17,10 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::{Arc, Mutex};
-use streamlib_engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
-use streamlib_engine::core::context::GpuContext;
-use streamlib_engine::core::rhi::{StreamTexture, TextureFormat};
+use streamlib::core::context::GpuContext;
+use streamlib::core::rhi::{StreamTexture, TextureFormat};
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,

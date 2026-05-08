@@ -46,7 +46,7 @@
 //! ready for the next consumer to sample without re-barriering.
 
 use std::sync::Arc;
-use streamlib_engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -75,7 +75,7 @@ use streamlib::core::rhi::{
     VulkanLayout,
 };
 use streamlib::core::{Result, StreamError};
-use streamlib_engine::host_rhi::{HostVulkanDevice, VulkanGraphicsKernel};
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, VulkanGraphicsKernel};
 
 /// Push-constants layout — must match `crt_film_grain.frag`'s
 /// `layout(push_constant)` block byte-for-byte.
@@ -485,7 +485,7 @@ mod tests {
         TextureSourceLayout,
         TextureUsages,
     };
-    use streamlib_engine::host_rhi::{HostVulkanPixelBuffer, VulkanTextureReadback};
+    use streamlib::sdk::engine::host_rhi::{HostVulkanPixelBuffer, VulkanTextureReadback};
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {

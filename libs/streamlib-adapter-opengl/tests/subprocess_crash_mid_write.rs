@@ -28,7 +28,7 @@ use std::os::fd::IntoRawFd;
 use std::os::unix::net::UnixStream;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use streamlib_engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
 use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
 

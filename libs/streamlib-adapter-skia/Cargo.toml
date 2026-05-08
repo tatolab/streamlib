@@ -49,6 +49,7 @@ libc.workspace = true
 # check-boundaries`).
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 streamlib-engine = { path = "../streamlib-engine" }
+streamlib = { path = "../streamlib-sdk" }
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
 streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
 tracing-subscriber.workspace = true

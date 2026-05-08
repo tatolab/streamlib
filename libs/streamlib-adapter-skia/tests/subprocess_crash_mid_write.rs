@@ -37,10 +37,10 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use streamlib_engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
-use streamlib_engine::core::context::GpuContext;
-use streamlib_engine::core::rhi::TextureFormat;
+use streamlib::core::context::GpuContext;
+use streamlib::core::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
 use streamlib_adapter_opengl::DRM_FORMAT_ARGB8888;
 

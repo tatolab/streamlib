@@ -82,6 +82,7 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_cdylib_and_adapter_runtime_deps(project_root, &mut violations, &mut files_scanned)?;
     check_privileged_vk_calls(project_root, &mut violations, &mut files_scanned)?;
     check_vulkanalia_uses_workspace_fork(project_root, &mut violations, &mut files_scanned)?;
+    check_streamlib_engine_confined(project_root, &mut violations, &mut files_scanned)?;
     Ok(CheckReport { violations, files_scanned })
 }
 
@@ -663,6 +664,86 @@ fn check_vulkanalia_uses_workspace_fork(
 
 fn is_vulkanalia_dep(name: &str) -> bool {
     name == "vulkanalia" || name == "vulkanalia-sys" || name == "vulkanalia-vma"
+}
+
+// ---------------------------------------------------------------------------
+// Check 6 — `streamlib_engine` direct imports confined to the engine + SDK
+// ---------------------------------------------------------------------------
+//
+// The SDK / engine split (#731) makes `streamlib` the universal facade for
+// all consumer code — apps, examples, domain packages, adapter crates,
+// adapter helpers, engine tooling. The only places that legitimately import
+// `streamlib_engine::*` directly are:
+//
+// 1. The engine itself (`libs/streamlib-engine/`) — its own bins, tests,
+//    benches link to its lib by the engine's published Cargo name.
+// 2. The SDK's facade source (`libs/streamlib-sdk/src/lib.rs`) — the one
+//    file that pub-uses items from engine to expose them through
+//    `streamlib::*`.
+//
+// Anywhere else, `use streamlib_engine` or `streamlib_engine::PATH`
+// references mean someone is bypassing the SDK boundary visually — even if
+// the Cargo dep graph is correct, a future reader can't tell whether the
+// SDK is doing anything. Engine-bridge access (host_rhi, Host*Ext, etc.)
+// goes through `streamlib::sdk::engine::*` instead.
+
+const CHECK_STREAMLIB_ENGINE: &str = "streamlib-engine-only-in-sdk-or-engine";
+
+const STREAMLIB_ENGINE_RATIONALE: &str =
+    "direct streamlib_engine::* imports must stay in the engine itself or in libs/streamlib-sdk/src/lib.rs (the SDK facade); consumer code routes through streamlib::* (with engine extensions via streamlib::sdk::engine::*)";
+
+const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "libs/streamlib-engine/",
+        kind: AllowKind::PathPrefix,
+        rationale: "engine itself — its own bins/tests/benches link to its lib by name",
+    },
+    AllowEntry {
+        path: "libs/streamlib-sdk/src/lib.rs",
+        kind: AllowKind::ExactFile,
+        rationale: "SDK facade — pub uses items from engine to expose via streamlib::*",
+    },
+];
+
+fn check_streamlib_engine_confined(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    for path in walk_rs(project_root) {
+        *files_scanned += 1;
+        let rel = rel_to_root(&path, project_root);
+        if matches_allow(rel, STREAMLIB_ENGINE_ALLOWLIST) {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("read {}", path.display()))?;
+        for (line_no, line) in content.lines().enumerate() {
+            // Skip comment-only lines (doc-comment intra-doc links are not
+            // type-checked but still encourage future authors to reach for
+            // the engine path; flag them too).
+            if !line.contains("streamlib_engine") {
+                continue;
+            }
+            // Trim leading whitespace to detect the line-shape.
+            let trimmed = line.trim_start();
+            // We flag any non-comment line that mentions `streamlib_engine`.
+            // Comment lines (//, ///, //!) we skip — doc-link rewriting is
+            // handled by docs sweep and not boundary-relevant.
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            violations.push(Violation {
+                path: rel.to_path_buf(),
+                line_no: line_no + 1,
+                line_text: line.to_string(),
+                matched_pattern: "streamlib_engine".to_string(),
+                check: CHECK_STREAMLIB_ENGINE,
+                rationale: STREAMLIB_ENGINE_RATIONALE,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn dep_is_workspace_inherited(value: &toml::Value) -> bool {

@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use streamlib::core::context::{
     BlasRegisterDecl,
@@ -69,9 +69,14 @@ use streamlib::core::rhi::{
     VulkanLayout,
 };
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib_engine::host_rhi::{
-    GeometryInstanceFlagsKHR, HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc,
-    VulkanAccelerationStructure, VulkanRayTracingKernel, VulkanTextureReadback,
+use streamlib::sdk::engine::host_rhi::{
+    GeometryInstanceFlagsKHR,
+    HostVulkanDevice,
+    HostVulkanTexture,
+    TlasInstanceDesc,
+    VulkanAccelerationStructure,
+    VulkanRayTracingKernel,
+    VulkanTextureReadback,
 };
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 

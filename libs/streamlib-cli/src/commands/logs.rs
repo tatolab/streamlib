@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use streamlib_engine::logging::{format_event_pretty, log_dir, LogLevel, RuntimeLogEvent, Source};
+use streamlib::logging::{format_event_pretty, log_dir, LogLevel, RuntimeLogEvent, Source};
 
 /// Arguments for the `logs` subcommand.
 pub struct LogsArgs<'a> {
@@ -401,7 +401,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::time::Duration;
-    use streamlib_engine::logging::SCHEMA_VERSION;
+    use streamlib::logging::SCHEMA_VERSION;
 
     fn empty_args() -> LogsArgs<'static> {
         LogsArgs {

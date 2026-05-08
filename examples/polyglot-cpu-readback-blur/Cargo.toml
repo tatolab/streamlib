@@ -8,7 +8,6 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib-engine = { path = "../../libs/streamlib-engine" }
 streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-adapter-abi = { path = "../../libs/streamlib-adapter-abi" }
 streamlib-adapter-cpu-readback = { path = "../../libs/streamlib-adapter-cpu-readback" }

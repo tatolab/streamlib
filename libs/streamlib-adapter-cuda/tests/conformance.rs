@@ -19,11 +19,11 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::Arc;
-use streamlib_engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib_engine::core::context::GpuContext;
-use streamlib_engine::core::rhi::PixelFormat;
-use streamlib_engine::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
+use streamlib::core::context::GpuContext;
+use streamlib::core::rhi::PixelFormat;
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,

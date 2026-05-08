@@ -46,7 +46,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use streamlib_engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{
@@ -56,7 +56,7 @@ use streamlib::core::rhi::{
     VulkanLayout,
 };
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib_engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
+use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000005c1a";

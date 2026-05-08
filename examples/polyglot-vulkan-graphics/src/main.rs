@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib_engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::core::context::{
     BlendFactorWire,
@@ -76,9 +76,13 @@ use streamlib::core::rhi::{
     VertexInputState,
 };
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib_engine::host_rhi::{
-    HostVulkanDevice, HostVulkanTimelineSemaphore, OffscreenColorTarget, OffscreenDraw,
-    VulkanGraphicsKernel, VulkanTextureReadback,
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice,
+    HostVulkanTimelineSemaphore,
+    OffscreenColorTarget,
+    OffscreenDraw,
+    VulkanGraphicsKernel,
+    VulkanTextureReadback,
 };
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
@@ -506,7 +510,7 @@ impl GraphicsKernelBridge for TriangleKernelBridge {
         // and call `set_vertex_buffer`, and forward `draw.index_buffer`
         // to `set_index_buffer` for indexed draws.
         let offscreen_draw = match draw.draw {
-            streamlib_engine::core::context::GraphicsDrawSpec::Draw {
+            streamlib::core::context::GraphicsDrawSpec::Draw {
                 vertex_count,
                 instance_count,
                 first_vertex,
@@ -519,7 +523,7 @@ impl GraphicsKernelBridge for TriangleKernelBridge {
                 viewport: None,
                 scissor: None,
             }),
-            streamlib_engine::core::context::GraphicsDrawSpec::DrawIndexed {
+            streamlib::core::context::GraphicsDrawSpec::DrawIndexed {
                 index_count,
                 instance_count,
                 first_index,

@@ -142,6 +142,12 @@ pub use streamlib_engine::{
 // (`::streamlib::iceoryx2::OutputWriter` / `InputMailboxes` / `ReadMode`).
 pub use streamlib_engine::iceoryx2;
 
+// `logging` module — re-exported at the SDK root because the engine
+// historically exposes it that way (`streamlib_engine::logging::*`).
+// Tooling (CLI, runtime) and customer apps that wire up the streamlib
+// log pipeline reach for it via `streamlib::logging::*`.
+pub use streamlib_engine::logging;
+
 // Generated schema types — required so macro-emitted code can resolve
 // `::streamlib::_generated_::FrameType` etc. when consumer crates
 // generate their own typed bindings.
@@ -166,6 +172,72 @@ pub mod core {
     // The fix is type-system-enforced visibility at the engine, not
     // SDK-side curation discipline. Soft-blocker for #681.
     pub use streamlib_engine::core::*;
+}
+
+/// Engine-bridge surface for examples / apps that legitimately need
+/// direct GPU access (raw `VkImage` handles, custom compute kernels,
+/// host-side render targets). These items live in `streamlib-engine`
+/// and are re-exported here so consumers don't take a direct
+/// `streamlib-engine` Cargo dep.
+///
+/// **Importing through this path is a deliberate signal**: the
+/// consumer is reaching for engine internals via the SDK's official
+/// extension surface. A reviewer or future agent reading
+/// `use streamlib::sdk::engine::host_rhi::HostVulkanDevice;` knows
+/// the file is doing engine-side privileged work — versus
+/// `use streamlib::core::rhi::StreamTexture;` which is the SDK's
+/// regular customer-facing surface.
+///
+/// Customer apps that don't have a legitimate reason to touch raw
+/// GPU primitives must NOT import from this namespace. If a needed
+/// API is missing from the SDK's regular surface, that's a signal
+/// the SDK has a gap — fix by extending the SDK's `core::*` /
+/// `iceoryx2::*` / top-level re-exports, not by reaching here.
+///
+/// Direct `streamlib_engine::*` imports outside this namespace are
+/// reserved for crates that are themselves engine extensions (the
+/// engine itself, surface adapters, plugin ABI, runtime tooling).
+/// Application / example / domain-package code never imports
+/// `streamlib_engine::*` directly.
+pub mod sdk {
+    /// Engine-extension surface. See [`crate::sdk`] module docs.
+    pub mod engine {
+        /// Host-side Vulkan RHI types: `HostVulkanDevice`,
+        /// `HostVulkanTexture`, `HostVulkanPixelBuffer`,
+        /// `HostVulkanTimelineSemaphore`, `VulkanComputeKernel`,
+        /// `VulkanGraphicsKernel`, `VulkanRayTracingKernel`,
+        /// `VulkanTextureReadback`, `VulkanAccelerationStructure`,
+        /// `OffscreenColorTarget`, `OffscreenDraw`,
+        /// `RayTracingPipelineProperties`, `TlasInstanceDesc`,
+        /// `HostMarker`, `IDENTITY_TRANSFORM`,
+        /// `AccelerationStructureKind`, `GeometryInstanceFlagsKHR`,
+        /// `drm_modifier_probe`.
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
+        pub use streamlib_engine::host_rhi;
+
+        /// Privileged extension traits for the SDK-bucket types that
+        /// surface raw `Host*` handles. Importing one of these into
+        /// scope unlocks `vulkan_inner()` / `from_vulkan()` /
+        /// `vulkan_device()` on `StreamTexture` / `RhiPixelBufferRef` /
+        /// `GpuDevice`. See [`HostStreamTextureExt`] etc.
+        #[cfg(any(
+            feature = "backend-vulkan",
+            all(target_os = "linux", not(feature = "backend-metal"))
+        ))]
+        pub use streamlib_engine::{
+            HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostStreamTextureExt,
+        };
+
+        /// Per-runtime surface-share service primitives. Re-exposed
+        /// here for adapter integration tests and 3rd-party tooling
+        /// that needs to drive the service in isolation. Production
+        /// callers go through [`crate::StreamRuntime`].
+        #[cfg(target_os = "linux")]
+        pub use streamlib_engine::linux_surface_share;
+    }
 }
 
 // `platform` info — small, cross-platform, customer-visible.

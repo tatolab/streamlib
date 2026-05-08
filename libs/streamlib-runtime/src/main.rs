@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use libloading::Library;
-use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
-use streamlib_engine::{ApiServerConfig, ApiServerProcessor, StreamRuntime};
+use streamlib::core::processors::PROCESSOR_REGISTRY;
+use streamlib::{ApiServerConfig, ApiServerProcessor, StreamRuntime};
 use streamlib_plugin_abi::{PluginDeclaration, STREAMLIB_ABI_VERSION};
 
 // ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@
 #[path = "common.rs"]
 mod common;
 
-use streamlib_engine::core::rhi::TextureFormat;
+use streamlib::core::rhi::TextureFormat;
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat};
 
 use crate::common::HostFixture;

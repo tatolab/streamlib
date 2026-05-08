@@ -4,6 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-streamlib-engine = { path = "../../libs/streamlib-engine" }
 streamlib = { path = "../../libs/streamlib-sdk" }
 anyhow = "1.0.100"

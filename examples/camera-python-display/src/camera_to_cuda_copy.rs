@@ -21,14 +21,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use streamlib::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
 use streamlib::VideoFrame;
-use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 #[cfg(target_os = "linux")]
 use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
 #[cfg(target_os = "linux")]
 use streamlib::core::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
-use streamlib_engine::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
+use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 #[cfg(target_os = "linux")]
 use streamlib_adapter_abi::{AdapterError, SurfaceId};
 #[cfg(target_os = "linux")]
@@ -61,7 +61,7 @@ struct LinuxState {
     /// Owns the cuda OPAQUE_FD `VkBuffer` + exportable timeline; lives
     /// for the processor's runtime window so surface-share's daemon-
     /// duped fds stay valid.
-    adapter: Arc<CudaSurfaceAdapter<streamlib_engine::host_rhi::HostVulkanDevice>>,
+    adapter: Arc<CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>>,
     surface_id: SurfaceId,
     /// Hot-path-cached so `process()` doesn't go through `Arc::clone`
     /// on the limited-access GpuContext every frame.
@@ -202,7 +202,7 @@ impl CameraToCudaCopyProcessor::Processor {
         // 4. Cuda adapter — owns the registration's `Arc`s and runs
         //    the timeline-wait protocol on per-acquire from the
         //    cdylib customer.
-        let adapter: Arc<CudaSurfaceAdapter<streamlib_engine::host_rhi::HostVulkanDevice>> = Arc::new(
+        let adapter: Arc<CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>> = Arc::new(
             CudaSurfaceAdapter::new(Arc::clone(&host_device)),
         );
         adapter

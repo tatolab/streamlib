@@ -4,21 +4,21 @@
 //! ABI-stable plugin interface for StreamLib dynamic processor loading.
 //!
 //! This crate provides the minimal interface for plugins to register their
-//! processors with the StreamLib runtime. Plugins use the same `#[streamlib_engine::processor]`
+//! processors with the StreamLib runtime. Plugins use the same `#[streamlib::processor]`
 //! macro as built-in processors - the only difference is how they're registered.
 //!
 //! # Example Plugin
 //!
 //! ```ignore
-//! use streamlib_engine::prelude::*;
+//! use streamlib::prelude::*;
 //! use streamlib_plugin_abi::export_plugin;
 //!
-//! #[streamlib_engine::processor(execution = Continuous)]
+//! #[streamlib::processor(execution = Continuous)]
 //! pub struct MyProcessor {
-//!     #[streamlib_engine::input(description = "Video input")]
+//!     #[streamlib::input(description = "Video input")]
 //!     video_in: LinkInput<VideoFrame>,
 //!
-//!     #[streamlib_engine::output(description = "Video output")]
+//!     #[streamlib::output(description = "Video output")]
 //!     video_out: Arc<LinkOutput<VideoFrame>>,
 //! }
 //!
@@ -47,7 +47,7 @@
 //! streamlib-plugin-abi = "0.2"
 //! ```
 
-use streamlib_engine::core::processors::ProcessorInstanceFactory;
+use streamlib::core::processors::ProcessorInstanceFactory;
 
 /// Current ABI version. Plugins must match this exactly.
 ///
@@ -102,7 +102,7 @@ unsafe impl Sync for PluginDeclaration {}
 ///
 /// # Requirements
 ///
-/// - Each processor must be defined using `#[streamlib_engine::processor]`
+/// - Each processor must be defined using `#[streamlib::processor]`
 /// - The processor's `Processor` type must implement the appropriate trait
 ///   (`ContinuousProcessor`, `ReactiveProcessor`, or `ManualProcessor`)
 #[macro_export]

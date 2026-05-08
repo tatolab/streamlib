@@ -11,7 +11,7 @@
 mod common;
 
 use std::sync::Arc;
-use streamlib_engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -84,7 +84,7 @@ fn subprocess_writes_host_reads_round_trip() {
 }
 
 fn host_readback(
-    device: &Arc<streamlib_engine::host_rhi::HostVulkanDevice>,
+    device: &Arc<streamlib::sdk::engine::host_rhi::HostVulkanDevice>,
     image: vk::Image,
     width: u32,
     height: u32,

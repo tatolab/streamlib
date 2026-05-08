@@ -44,7 +44,7 @@
 //! ready for the next consumer to sample without re-barriering.
 
 use std::sync::Arc;
-use streamlib_engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -76,7 +76,7 @@ use streamlib::core::rhi::{
     VulkanLayout,
 };
 use streamlib::core::{Result, StreamError};
-use streamlib_engine::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, VulkanGraphicsKernel};
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, VulkanGraphicsKernel};
 
 /// Push-constants layout — must match `blending_compositor.frag`'s
 /// `layout(push_constant)` block byte-for-byte.
@@ -588,7 +588,7 @@ fn output_barrier_to_color_attachment(
 mod tests {
     use super::*;
     use streamlib::core::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
-    use streamlib_engine::host_rhi::VulkanTextureReadback;
+    use streamlib::sdk::engine::host_rhi::VulkanTextureReadback;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {

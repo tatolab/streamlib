@@ -11,10 +11,9 @@ publish = false
 
 [features]
 default = []
-backend-vulkan = ["streamlib-engine/backend-vulkan"]
+backend-vulkan = ["streamlib/backend-vulkan"]
 
 [dependencies]
-streamlib-engine = { path = "../../libs/streamlib-engine" }
 streamlib = { path = "../../libs/streamlib-sdk" }
 tracing = { workspace = true }
 serde = { workspace = true }

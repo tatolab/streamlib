@@ -33,9 +33,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use streamlib_engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib_engine::core::display_info;
+use streamlib::core::display_info;
 use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
 use streamlib::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
 use streamlib::iceoryx2::{InputMailboxes, OutputWriter};
@@ -574,7 +574,7 @@ fn compose_one_frame(
 /// [`TextureRegistration::update_layout`]) after the render submit
 /// completes.
 struct ResolvedLayer {
-    registration: Arc<streamlib_engine::core::context::TextureRegistration>,
+    registration: Arc<streamlib::core::context::TextureRegistration>,
     texture: StreamTexture,
 }
 

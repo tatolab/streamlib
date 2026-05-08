@@ -34,9 +34,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib_engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib_engine::core::context::ComputeKernelBridge;
+use streamlib::core::context::ComputeKernelBridge;
 use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{
     derive_bindings_from_spirv,
@@ -47,8 +47,11 @@ use streamlib::core::rhi::{
     TextureSourceLayout,
 };
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib_engine::host_rhi::{
-    HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanComputeKernel, VulkanTextureReadback,
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice,
+    HostVulkanTimelineSemaphore,
+    VulkanComputeKernel,
+    VulkanTextureReadback,
 };
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 

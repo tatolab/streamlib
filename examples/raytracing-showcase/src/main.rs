@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use streamlib_engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
 use anyhow::{Context, Result};
 use streamlib::core::rhi::{
@@ -34,9 +34,13 @@ use streamlib::core::rhi::{
     TextureSourceLayout,
     TextureUsages,
 };
-use streamlib_engine::host_rhi::{
-    HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc, VulkanAccelerationStructure,
-    VulkanRayTracingKernel, VulkanTextureReadback,
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice,
+    HostVulkanTexture,
+    TlasInstanceDesc,
+    VulkanAccelerationStructure,
+    VulkanRayTracingKernel,
+    VulkanTextureReadback,
 };
 
 const SHOWCASE_RGEN: &[u8] = include_bytes!(concat!(

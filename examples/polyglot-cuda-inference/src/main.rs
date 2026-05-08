@@ -48,14 +48,16 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib_engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::core::context::GpuContext;
 use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib_engine::host_rhi::{
-    HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
+use streamlib::sdk::engine::host_rhi::{
+    HostMarker,
+    HostVulkanPixelBuffer,
+    HostVulkanTimelineSemaphore,
 };
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 use streamlib_adapter_abi::SurfaceId;
@@ -72,7 +74,7 @@ const SURFACE_WIDTH: u32 = 640;
 const SURFACE_HEIGHT: u32 = 640;
 const BYTES_PER_PIXEL: u32 = 4;
 
-type HostAdapter = CudaSurfaceAdapter<streamlib_engine::host_rhi::HostVulkanDevice>;
+type HostAdapter = CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeKind {

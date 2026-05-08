@@ -46,11 +46,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serial_test::serial;
-use streamlib_engine::core::rhi::PixelFormat;
-use streamlib_engine::host_rhi::{
-    HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
+use streamlib::core::rhi::PixelFormat;
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice,
+    HostVulkanPixelBuffer,
+    HostVulkanTimelineSemaphore,
 };
-use streamlib_engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+use streamlib::sdk::engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,

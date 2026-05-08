@@ -46,14 +46,16 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use streamlib::core::context::{CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext};
 use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
 use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib_engine::host_rhi::{
-    HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
+use streamlib::sdk::engine::host_rhi::{
+    HostMarker,
+    HostVulkanPixelBuffer,
+    HostVulkanTimelineSemaphore,
 };
 use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat, SurfaceId};
@@ -71,7 +73,7 @@ const SCENARIO_SURFACE_ID: SurfaceId = 1;
 /// obvious in the output PNG.
 const SURFACE_SIZE: u32 = 256;
 
-type HostAdapter = CpuReadbackSurfaceAdapter<streamlib_engine::host_rhi::HostVulkanDevice>;
+type HostAdapter = CpuReadbackSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeKind {
