@@ -58,7 +58,7 @@ binding declaration, the kernel:
 3. **Stages bindings as data** through `set_storage_buffer`,
    `set_uniform_buffer`, `set_sampled_texture`, `set_storage_image`,
    `set_acceleration_structure`, `set_push_constants`. Each setter
-   takes RHI-level types (`RhiPixelBuffer`, `Texture`,
+   takes RHI-level types (`PixelBuffer`, `Texture`,
    `Arc<VulkanAccelerationStructure>`, `&[u8]`).
 
 4. **Records bind + push + trace + waits** in `trace_rays(width,

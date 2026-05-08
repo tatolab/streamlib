@@ -4,7 +4,7 @@
 use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
-use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::rhi::{PixelFormat, PixelBuffer, PixelBufferRef};
 use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, Error};
 use crate::iceoryx2::OutputWriter;
 use objc2::rc::Retained;
@@ -293,7 +293,7 @@ impl CameraDelegate {
 unsafe fn blit_iosurface_to_pooled_buffer(
     ctx: &CameraCallbackContext,
     camera_iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
-    pooled_buffer: &RhiPixelBuffer,
+    pooled_buffer: &PixelBuffer,
     width: u32,
     height: u32,
 ) -> crate::core::Result<()> {
@@ -308,9 +308,9 @@ unsafe fn forward_camera_iosurface_directly(
     ctx: &CameraCallbackContext,
     camera_iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
 ) -> String {
-    match RhiPixelBufferRef::from_iosurface_ref(camera_iosurface) {
+    match PixelBufferRef::from_iosurface_ref(camera_iosurface) {
         Ok(pixel_buffer_ref) => {
-            let pixel_buffer = RhiPixelBuffer::new(pixel_buffer_ref);
+            let pixel_buffer = PixelBuffer::new(pixel_buffer_ref);
             match ctx.gpu_context.check_in_surface(&pixel_buffer) {
                 Ok(id) => id,
                 Err(_) => {

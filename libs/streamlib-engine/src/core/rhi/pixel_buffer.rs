@@ -5,11 +5,11 @@
 
 use std::sync::Arc;
 
-use super::{PixelFormat, RhiPixelBufferRef};
+use super::{PixelFormat, PixelBufferRef};
 
 /// Pixel buffer with cached dimensions.
 ///
-/// Wraps [`RhiPixelBufferRef`] in an Arc for cheap cloning. Clone only increments
+/// Wraps [`PixelBufferRef`] in an Arc for cheap cloning. Clone only increments
 /// the Arc refcount - it does NOT increment the platform buffer refcount (e.g.,
 /// CVPixelBufferRetain on macOS). This is critical for avoiding memory leaks
 /// when sharing buffers between Rust and Python.
@@ -17,22 +17,22 @@ use super::{PixelFormat, RhiPixelBufferRef};
 /// The platform buffer is retained exactly once (when created) and released
 /// exactly once (when the last Arc reference is dropped).
 #[derive(Clone)]
-pub struct RhiPixelBuffer {
+pub struct PixelBuffer {
     /// The underlying platform buffer reference, shared via Arc.
     /// Clone increments Arc refcount, NOT platform refcount.
-    pub(crate) ref_: Arc<RhiPixelBufferRef>,
+    pub(crate) ref_: Arc<PixelBufferRef>,
     /// Cached width (queried once at construction).
     pub width: u32,
     /// Cached height (queried once at construction).
     pub height: u32,
 }
 
-impl RhiPixelBuffer {
+impl PixelBuffer {
     /// Create from a platform buffer reference.
     ///
     /// Queries width and height from the platform once and caches them.
-    /// The RhiPixelBufferRef is wrapped in Arc for cheap cloning.
-    pub fn new(ref_: RhiPixelBufferRef) -> Self {
+    /// The PixelBufferRef is wrapped in Arc for cheap cloning.
+    pub fn new(ref_: PixelBufferRef) -> Self {
         let width = ref_.width();
         let height = ref_.height();
         Self {
@@ -43,7 +43,7 @@ impl RhiPixelBuffer {
     }
 
     /// Wrap an externally-allocated `Arc<HostVulkanPixelBuffer>` so it can
-    /// be passed to host-side APIs that take `&RhiPixelBuffer` (e.g.
+    /// be passed to host-side APIs that take `&PixelBuffer` (e.g.
     /// [`crate::core::context::SurfaceStore::register_pixel_buffer_with_timeline`])
     /// without going through the [`crate::core::context::PixelBufferPoolManager`].
     /// Used by application setup code that wants to allocate a staging
@@ -56,7 +56,7 @@ impl RhiPixelBuffer {
         let width = buffer.width();
         let height = buffer.height();
         Self {
-            ref_: Arc::new(RhiPixelBufferRef { inner: buffer }),
+            ref_: Arc::new(PixelBufferRef { inner: buffer }),
             width,
             height,
         }
@@ -68,7 +68,7 @@ impl RhiPixelBuffer {
     }
 
     /// Get the underlying buffer reference.
-    pub fn buffer_ref(&self) -> &RhiPixelBufferRef {
+    pub fn buffer_ref(&self) -> &PixelBufferRef {
         &self.ref_
     }
 
@@ -80,7 +80,7 @@ impl RhiPixelBuffer {
 
     /// Mapped base address for the given plane, or null if out of range.
     /// Plane 0 on a VMA-allocated or single-plane-imported buffer points
-    /// at the same bytes as [`mapped_ptr`](RhiPixelBufferRef::plane_base_address)
+    /// at the same bytes as [`mapped_ptr`](PixelBufferRef::plane_base_address)
     /// with index 0.
     pub fn plane_base_address(&self, plane_index: u32) -> *mut u8 {
         self.ref_.plane_base_address(plane_index)
@@ -98,9 +98,9 @@ impl RhiPixelBuffer {
     }
 }
 
-impl std::fmt::Debug for RhiPixelBuffer {
+impl std::fmt::Debug for PixelBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RhiPixelBuffer")
+        f.debug_struct("PixelBuffer")
             .field("width", &self.width)
             .field("height", &self.height)
             .field("format", &self.format())
@@ -108,4 +108,4 @@ impl std::fmt::Debug for RhiPixelBuffer {
     }
 }
 
-// Send + Sync inherited from Arc<RhiPixelBufferRef>
+// Send + Sync inherited from Arc<PixelBufferRef>

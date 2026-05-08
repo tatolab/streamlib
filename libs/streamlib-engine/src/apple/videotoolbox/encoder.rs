@@ -8,7 +8,7 @@
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::apple::PixelTransferSession;
-use crate::core::rhi::{PixelBufferPoolId, RhiPixelBuffer};
+use crate::core::rhi::{PixelBufferPoolId, PixelBuffer};
 use crate::core::{GpuContext, Result, RuntimeContext, Error, VideoEncoderConfig};
 use objc2_core_video::CVPixelBuffer;
 use std::collections::VecDeque;
@@ -228,10 +228,10 @@ impl VideoToolboxEncoder {
         Ok(())
     }
 
-    /// Convert RhiPixelBuffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
+    /// Convert PixelBuffer to NV12 CVPixelBuffer using GPU-accelerated VTPixelTransferSession
     fn convert_buffer_to_pixel_buffer(
         &self,
-        buffer: &RhiPixelBuffer,
+        buffer: &PixelBuffer,
     ) -> Result<*mut CVPixelBuffer> {
         // GPU-accelerated conversion using VTPixelTransferSession
         let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {

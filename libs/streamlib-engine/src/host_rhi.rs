@@ -5,7 +5,7 @@
 //!
 //! In-tree surface adapters and engine-internal RHI code reach for
 //! raw Vulkan handles through this module. The SDK-bucket types
-//! ([`Texture`], [`RhiPixelBufferRef`], [`GpuDevice`]) have no
+//! ([`Texture`], [`PixelBufferRef`], [`GpuDevice`]) have no
 //! inherent `vulkan_*` accessors — the only way to the privileged
 //! surface is through the extension traits defined here. Importing
 //! one of these traits is an explicit acknowledgment that the caller
@@ -46,7 +46,7 @@
 //! ```
 //!
 //! [`Texture`]: crate::core::rhi::Texture
-//! [`RhiPixelBufferRef`]: crate::core::rhi::RhiPixelBufferRef
+//! [`PixelBufferRef`]: crate::core::rhi::PixelBufferRef
 //! [`GpuDevice`]: crate::core::rhi::GpuDevice
 
 use std::sync::Arc;
@@ -61,7 +61,7 @@ pub use crate::vulkan::rhi::{
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 
-use crate::core::rhi::{GpuDevice, RhiPixelBufferRef, Texture};
+use crate::core::rhi::{GpuDevice, PixelBufferRef, Texture};
 
 /// Privileged engine-side accessors for [`Texture`].
 ///
@@ -97,19 +97,19 @@ impl HostTextureExt for Texture {
     }
 }
 
-/// Privileged engine-side accessor for [`RhiPixelBufferRef`].
+/// Privileged engine-side accessor for [`PixelBufferRef`].
 ///
 /// In-tree adapters that issue `vkCmdCopyImageToBuffer` or
 /// `vkCmdCopyBufferToImage` against a HOST_VISIBLE staging buffer
 /// reach the underlying [`HostVulkanPixelBuffer`] through this trait.
 ///
 /// [`HostVulkanPixelBuffer`]: crate::vulkan::rhi::HostVulkanPixelBuffer
-pub trait HostRhiPixelBufferRefExt {
+pub trait HostPixelBufferRefExt {
     /// Borrow the underlying [`HostVulkanPixelBuffer`].
     fn vulkan_inner(&self) -> &Arc<HostVulkanPixelBuffer>;
 }
 
-impl HostRhiPixelBufferRefExt for RhiPixelBufferRef {
+impl HostPixelBufferRefExt for PixelBufferRef {
     fn vulkan_inner(&self) -> &Arc<HostVulkanPixelBuffer> {
         &self.inner
     }

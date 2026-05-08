@@ -11,7 +11,7 @@ use crate::apple::vimage_ffi::{
     vimage_error_description, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
     CVPixelBufferLockBaseAddress, CVPixelBufferUnlockBaseAddress,
 };
-use crate::core::rhi::{PixelFormat, RhiPixelBuffer};
+use crate::core::rhi::{PixelFormat, PixelBuffer};
 use crate::core::{Result, Error};
 use std::ptr;
 
@@ -111,7 +111,7 @@ impl FormatConverterMacOS {
     ///
     /// Thread-safe: vImageConvert_AnyToAny is safe for concurrent use with
     /// the same converter as long as source/dest buffers are distinct.
-    pub fn convert(&self, source: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+    pub fn convert(&self, source: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         // Verify dimensions match
         if source.width != dest.width || source.height != dest.height {
             return Err(Error::Configuration(format!(

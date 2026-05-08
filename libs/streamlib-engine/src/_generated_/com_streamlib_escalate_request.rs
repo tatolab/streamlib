@@ -1365,7 +1365,7 @@ pub enum EscalateRequestRunGraphicsDrawIndexBufferIndexType {
 }
 
 /// Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-/// `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
+/// `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
 /// into it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1477,9 +1477,9 @@ pub struct EscalateRequestRunGraphicsDraw {
     pub request_id: String,
 
     /// Per-draw vertex buffer bindings. Each entry's `surface_uuid` must
-    /// resolve to a host-side `RhiPixelBuffer`. `offset` is the byte offset
-    /// into the buffer where vertex data starts (decimal-encoded u64 — JTD has
-    /// no native u64). Empty for vertex-fabricating shaders (`gl_VertexIndex`
+    /// resolve to a host-side `PixelBuffer`. `offset` is the byte offset into
+    /// the buffer where vertex data starts (decimal-encoded u64 — JTD has no
+    /// native u64). Empty for vertex-fabricating shaders (`gl_VertexIndex`
     /// patterns).
     #[serde(rename = "vertex_buffers")]
     pub vertex_buffers: Vec<EscalateRequestRunGraphicsDrawVertexBuffer>,
@@ -1491,8 +1491,8 @@ pub struct EscalateRequestRunGraphicsDraw {
     pub depth_target_uuid: Option<String>,
 
     /// Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-    /// `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte
-    /// offset into it.
+    /// `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
+    /// into it.
     #[serde(rename = "index_buffer")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub index_buffer: Option<EscalateRequestRunGraphicsDrawIndexBuffer>,
@@ -1550,7 +1550,7 @@ pub struct EscalateRequestRunRayTracingKernel {
     /// `acceleration_structure`: `target_id` is an `as_id`
     ///   from a prior `register_acceleration_structure_tlas`.
     /// - all other kinds: `target_id` is the surface-share UUID
-    ///   of a host-side `RhiPixelBuffer` / `Texture`
+    ///   of a host-side `PixelBuffer` / `Texture`
     ///   (same convention compute and graphics use).
     #[serde(rename = "bindings")]
     pub bindings: Vec<EscalateRequestRunRayTracingKernelBinding>,

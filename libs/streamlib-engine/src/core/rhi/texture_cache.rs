@@ -3,7 +3,7 @@
 
 //! Texture cache for creating texture views from pixel buffers.
 
-use super::{PixelFormat, RhiPixelBuffer};
+use super::{PixelFormat, PixelBuffer};
 use crate::core::Result;
 
 /// Creates texture views from pixel buffers.
@@ -27,7 +27,7 @@ impl RhiTextureCache {
     ///
     /// The view is ephemeral - create it each frame and let it drop after use.
     /// The platform manages GPU synchronization internally.
-    pub fn create_view(&self, buffer: &RhiPixelBuffer) -> Result<RhiTextureView> {
+    pub fn create_view(&self, buffer: &PixelBuffer) -> Result<RhiTextureView> {
         #[cfg(target_os = "macos")]
         {
             self.inner.create_view(buffer)
@@ -35,7 +35,7 @@ impl RhiTextureCache {
         #[cfg(target_os = "linux")]
         {
             // VulkanTextureCache needs a VkImage to create a view from,
-            // but RhiPixelBuffer on Linux wraps a VkBuffer (not VkImage).
+            // but PixelBuffer on Linux wraps a VkBuffer (not VkImage).
             // For now, return NotSupported until pixel buffer -> texture path is wired.
             let _ = buffer;
             Err(crate::core::Error::NotSupported(
@@ -88,7 +88,7 @@ pub struct RhiTextureView {
 
     /// Keep the source buffer alive while this view exists.
     #[allow(dead_code)]
-    pub(crate) source_buffer: RhiPixelBuffer,
+    pub(crate) source_buffer: PixelBuffer,
 }
 
 impl RhiTextureView {

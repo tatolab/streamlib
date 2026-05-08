@@ -102,7 +102,7 @@ handles.
   multi-plane host-side readback callsite arrives.
 - **Caller-supplied staging buffers.** The handle owns its staging
   buffer. If a future caller has reason to read into someone else's
-  buffer (e.g. into a pre-mapped `RhiPixelBuffer`), extend the
+  buffer (e.g. into a pre-mapped `PixelBuffer`), extend the
   abstraction with an `into_buffer` variant.
 - **Asynchronous-with-callback API** (`submit(then: impl FnOnce)`).
   The current `try_read` / `wait_and_read` shape is sufficient for

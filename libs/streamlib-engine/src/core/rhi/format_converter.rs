@@ -10,7 +10,7 @@
 //! The converter is thread-safe and can be used concurrently from multiple
 //! processors without any locking.
 
-use super::{PixelFormat, RhiPixelBuffer};
+use super::{PixelFormat, PixelBuffer};
 use crate::core::Result;
 
 /// Stateless format converter - a "recipe" for pixel format conversion.
@@ -100,7 +100,7 @@ impl RhiFormatConverter {
     ///
     /// This is thread-safe and can be called concurrently from multiple
     /// processors - no internal locking is performed.
-    pub fn convert(&self, source: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+    pub fn convert(&self, source: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         #[cfg(target_os = "macos")]
         {
             self.inner.convert(source, dest)

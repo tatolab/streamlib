@@ -287,7 +287,7 @@ mod polyglot_dma_buf_producer;
 /// Rust analogue of the Python / Deno shim tests: the host check_ins a
 /// 2-plane surface backed by real Vulkan-exported DMA-BUFs, then the
 /// Rust consumer calls `SurfaceStore::check_out` and confirms the
-/// returned `RhiPixelBuffer` carries two mapped planes whose bytes match
+/// returned `PixelBuffer` carries two mapped planes whose bytes match
 /// the source patterns. This is the symmetry gate — if the Rust
 /// importer silently dropped a plane, this test fails.
 #[test]

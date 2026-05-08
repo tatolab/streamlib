@@ -39,11 +39,11 @@ below for the shape callers take.
 ```rust
 // libs/streamlib-engine/src/core/rhi/blitter.rs
 pub trait RhiBlitter: Send + Sync {
-    fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()>;
+    fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()>;
     unsafe fn blit_copy_iosurface_raw(
         &self,
         src: *const std::ffi::c_void,
-        dest: &RhiPixelBuffer,
+        dest: &PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<()>;
@@ -169,7 +169,7 @@ capture, videotoolbox decoder) pre-warm in `setup()` by:
    `acquire_pixel_buffer` growth path).
 2. Running a zero-cost warming blit per slot (e.g., blit from a
    throwaway source IOSurface of matching size — or, simpler, a
-   dedicated Metal `fn warm_blitter_cache(&self, dest: &RhiPixelBuffer)`
+   dedicated Metal `fn warm_blitter_cache(&self, dest: &PixelBuffer)`
    helper on `MetalBlitter` that runs `get_or_create_texture(dest)`
    without issuing the actual blit).
 

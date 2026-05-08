@@ -160,7 +160,7 @@ pub mod host_rhi;
     feature = "backend-vulkan",
     all(target_os = "linux", not(feature = "backend-metal"))
 ))]
-pub use host_rhi::{HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostTextureExt};
+pub use host_rhi::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
 
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
@@ -345,7 +345,7 @@ pub mod sdk {
     ))]
     pub mod engine {
         pub use crate::host_rhi;
-        pub use crate::{HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostTextureExt};
+        pub use crate::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
         #[cfg(target_os = "linux")]
         pub use crate::linux_surface_share;
     }

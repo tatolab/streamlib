@@ -3,13 +3,13 @@
 
 //! GPU blit operations with texture caching.
 
-use super::RhiPixelBuffer;
+use super::PixelBuffer;
 use crate::core::Result;
 
 /// Trait for GPU blit operations with texture caching.
 pub trait RhiBlitter: Send + Sync {
     /// Copy pixels between same-format, same-size buffers.
-    fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()>;
+    fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()>;
 
     /// Copy from raw IOSurface (platform-specific, unsafe).
     ///
@@ -19,7 +19,7 @@ pub trait RhiBlitter: Send + Sync {
     unsafe fn blit_copy_iosurface_raw(
         &self,
         src: *const std::ffi::c_void,
-        dest: &RhiPixelBuffer,
+        dest: &PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<()>;

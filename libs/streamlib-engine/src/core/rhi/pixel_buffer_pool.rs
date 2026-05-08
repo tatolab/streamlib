@@ -3,7 +3,7 @@
 
 //! Pixel buffer pool for efficient buffer allocation.
 
-use super::{PixelFormat, RhiPixelBuffer};
+use super::{PixelFormat, PixelBuffer};
 use crate::core::Result;
 
 /// Platform-agnostic identifier for a pooled pixel buffer.
@@ -89,7 +89,7 @@ impl RhiPixelBufferPool {
     ///
     /// Returns (id, buffer) where id is the platform-agnostic identifier.
     /// Returns a recycled buffer if available, or allocates a new one.
-    pub fn acquire(&self) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+    pub fn acquire(&self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         #[cfg(target_os = "macos")]
         {
             self.inner.acquire()

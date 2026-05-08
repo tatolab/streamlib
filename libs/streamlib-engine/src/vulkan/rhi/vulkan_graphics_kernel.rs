@@ -47,7 +47,7 @@ use crate::core::rhi::{
     DepthStencilState, DrawCall, DrawIndexedCall, FrontFace, GraphicsBindingKind,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, IndexType, PolygonMode,
-    PrimitiveTopology, RhiPixelBuffer, ScissorRect, Texture, TextureFormat,
+    PrimitiveTopology, PixelBuffer, ScissorRect, Texture, TextureFormat,
     VertexAttributeFormat, VertexInputRate, VertexInputState, Viewport,
 };
 use crate::core::{Result, Error};
@@ -367,7 +367,7 @@ impl VulkanGraphicsKernel {
         &self,
         frame_index: u32,
         binding: u32,
-        buffer: &RhiPixelBuffer,
+        buffer: &PixelBuffer,
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::StorageBuffer)?;
         let (vk_buf, size) = vk_buffer_for(buffer);
@@ -385,7 +385,7 @@ impl VulkanGraphicsKernel {
         &self,
         frame_index: u32,
         binding: u32,
-        buffer: &RhiPixelBuffer,
+        buffer: &PixelBuffer,
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::UniformBuffer)?;
         let (vk_buf, size) = vk_buffer_for(buffer);
@@ -451,7 +451,7 @@ impl VulkanGraphicsKernel {
         &self,
         frame_index: u32,
         binding: u32,
-        buffer: &RhiPixelBuffer,
+        buffer: &PixelBuffer,
         offset: u64,
     ) -> Result<()> {
         match &self.pipeline_state.vertex_input {
@@ -487,7 +487,7 @@ impl VulkanGraphicsKernel {
     pub fn set_index_buffer(
         &self,
         frame_index: u32,
-        buffer: &RhiPixelBuffer,
+        buffer: &PixelBuffer,
         offset: u64,
         index_type: IndexType,
     ) -> Result<()> {
@@ -1664,7 +1664,7 @@ fn allocate_command_buffer(
     Ok(buffers[0])
 }
 
-fn vk_buffer_for(buffer: &RhiPixelBuffer) -> (vk::Buffer, vk::DeviceSize) {
+fn vk_buffer_for(buffer: &PixelBuffer) -> (vk::Buffer, vk::DeviceSize) {
     let inner = &buffer.buffer_ref().inner;
     (inner.buffer(), inner.size())
 }

@@ -39,7 +39,7 @@ declaration, the kernel:
 3. **Stages bindings as data** through `set_sampled_texture`,
    `set_storage_buffer`, `set_uniform_buffer`, `set_storage_image`,
    `set_push_constants`, `set_vertex_buffer`, `set_index_buffer`. Each
-   setter takes RHI-level types (`Texture`, `RhiPixelBuffer`,
+   setter takes RHI-level types (`Texture`, `PixelBuffer`,
    `&[u8]`).
 
 4. **Records bind + push + draw into the caller's command buffer.**

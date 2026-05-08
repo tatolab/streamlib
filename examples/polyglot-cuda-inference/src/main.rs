@@ -52,7 +52,7 @@ use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer};
+use streamlib::sdk::rhi::{PixelFormat, PixelBuffer};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
@@ -309,7 +309,7 @@ fn register_host_surface(
     .map_err(|e| format!("HostVulkanPixelBuffer::new_opaque_fd_export: {e}"))?;
     let pixel_buffer_arc = Arc::new(pixel_buffer);
     let pixel_buffer_rhi =
-        RhiPixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&pixel_buffer_arc));
+        PixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&pixel_buffer_arc));
 
     // 2. Allocate the exportable timeline semaphore (initial value 0).
     //    First subprocess `acquire_*` will wait on 0 → satisfied

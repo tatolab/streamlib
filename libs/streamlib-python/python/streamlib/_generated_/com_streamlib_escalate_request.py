@@ -1654,7 +1654,7 @@ class EscalateRequestRunGraphicsDrawIndexBufferIndexType(Enum):
 class EscalateRequestRunGraphicsDrawIndexBuffer:
     """
     Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-    `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
+    `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
     into it.
     """
 
@@ -1804,10 +1804,10 @@ class EscalateRequestRunGraphicsDraw(EscalateRequest):
 
     vertex_buffers: 'List[EscalateRequestRunGraphicsDrawVertexBuffer]'
     """
-    Per-draw vertex buffer bindings. Each entry's `surface_uuid` must resolve
-    to a host-side `RhiPixelBuffer`. `offset` is the byte offset into the buffer
-    where vertex data starts (decimal-encoded u64 — JTD has no native u64).
-    Empty for vertex-fabricating shaders (`gl_VertexIndex` patterns).
+    Per-draw vertex buffer bindings. Each entry's `surface_uuid` must resolve to
+    a host-side `PixelBuffer`. `offset` is the byte offset into the buffer where
+    vertex data starts (decimal-encoded u64 — JTD has no native u64). Empty for
+    vertex-fabricating shaders (`gl_VertexIndex` patterns).
     """
 
     depth_target_uuid: 'Optional[str]'
@@ -1819,7 +1819,7 @@ class EscalateRequestRunGraphicsDraw(EscalateRequest):
     index_buffer: 'Optional[EscalateRequestRunGraphicsDrawIndexBuffer]'
     """
     Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-    `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
+    `surface_uuid` resolves to an `PixelBuffer`; `offset` is the byte offset
     into it.
     """
 
@@ -1921,7 +1921,7 @@ class EscalateRequestRunRayTracingKernel(EscalateRequest):
     `acceleration_structure`: `target_id` is an `as_id`
       from a prior `register_acceleration_structure_tlas`.
     - all other kinds: `target_id` is the surface-share UUID
-      of a host-side `RhiPixelBuffer` / `Texture`
+      of a host-side `PixelBuffer` / `Texture`
       (same convention compute and graphics use).
     """
 
