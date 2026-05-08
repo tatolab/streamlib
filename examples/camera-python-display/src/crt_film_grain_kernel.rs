@@ -51,14 +51,30 @@ use streamlib_engine::HostStreamTextureExt;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use streamlib_engine::core::rhi::{
-    AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, DrawCall,
-    GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
-    GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage, MultisampleState,
-    PrimitiveTopology, RasterizationState, ScissorRect, StreamTexture, TextureFormat,
-    VertexInputState, Viewport, VulkanLayout,
+use streamlib::core::rhi::{
+    AttachmentFormats,
+    ColorBlendState,
+    ColorWriteMask,
+    DepthStencilState,
+    DrawCall,
+    GraphicsBindingSpec,
+    GraphicsDynamicState,
+    GraphicsKernelDescriptor,
+    GraphicsPipelineState,
+    GraphicsPushConstants,
+    GraphicsShaderStageFlags,
+    GraphicsStage,
+    MultisampleState,
+    PrimitiveTopology,
+    RasterizationState,
+    ScissorRect,
+    StreamTexture,
+    TextureFormat,
+    VertexInputState,
+    Viewport,
+    VulkanLayout,
 };
-use streamlib_engine::core::{Result, StreamError};
+use streamlib::core::{Result, StreamError};
 use streamlib_engine::host_rhi::{HostVulkanDevice, VulkanGraphicsKernel};
 
 /// Push-constants layout — must match `crt_film_grain.frag`'s
@@ -462,8 +478,11 @@ fn output_barrier_to_color_attachment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib_engine::core::rhi::{
-        PixelFormat, TextureDescriptor, TextureReadbackDescriptor, TextureSourceLayout,
+    use streamlib::core::rhi::{
+        PixelFormat,
+        TextureDescriptor,
+        TextureReadbackDescriptor,
+        TextureSourceLayout,
         TextureUsages,
     };
     use streamlib_engine::host_rhi::{HostVulkanPixelBuffer, VulkanTextureReadback};

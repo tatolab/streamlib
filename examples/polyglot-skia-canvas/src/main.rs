@@ -48,13 +48,16 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib_engine::core::rhi::{
-    TextureFormat, TextureReadbackDescriptor, TextureSourceLayout, VulkanLayout,
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::core::rhi::{
+    TextureFormat,
+    TextureReadbackDescriptor,
+    TextureSourceLayout,
+    VulkanLayout,
 };
-use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib_engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
-use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 const SCENARIO_SURFACE_UUID: &str = "00000000-0000-0000-0000-000000005c1a";
 const SURFACE_SIZE: u32 = 512;
@@ -92,7 +95,7 @@ fn main() -> Result<()> {
     let runtime = StreamRuntime::new()?;
 
     let texture_slot: Arc<
-        Mutex<Option<streamlib_engine::core::rhi::StreamTexture>>,
+        Mutex<Option<streamlib::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));

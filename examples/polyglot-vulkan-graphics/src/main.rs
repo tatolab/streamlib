@@ -38,27 +38,49 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib_engine::core::context::{
-    BlendFactorWire, BlendOpWire, CullModeWire, DynamicStateWire, FrontFaceWire,
-    GraphicsBindingDecl, GraphicsKernelBridge, GraphicsKernelRegisterDecl,
-    GraphicsKernelRunDraw, GraphicsPipelineStateWire, PolygonModeWire,
+use streamlib::core::context::{
+    BlendFactorWire,
+    BlendOpWire,
+    CullModeWire,
+    DynamicStateWire,
+    FrontFaceWire,
+    GraphicsBindingDecl,
+    GraphicsKernelBridge,
+    GraphicsKernelRegisterDecl,
+    GraphicsKernelRunDraw,
+    GraphicsPipelineStateWire,
+    PolygonModeWire,
     PrimitiveTopologyWire,
 };
-use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib_engine::core::rhi::{
-    AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState,
-    GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor,
-    GraphicsPipelineState, GraphicsPushConstants, GraphicsShaderStage,
-    GraphicsShaderStageFlags, GraphicsStage, MultisampleState, PrimitiveTopology,
-    RasterizationState, StreamTexture, TextureFormat, TextureReadbackDescriptor,
-    TextureSourceLayout, VertexInputState,
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::core::rhi::{
+    AttachmentFormats,
+    ColorBlendState,
+    ColorWriteMask,
+    DepthStencilState,
+    GraphicsBindingSpec,
+    GraphicsDynamicState,
+    GraphicsKernelDescriptor,
+    GraphicsPipelineState,
+    GraphicsPushConstants,
+    GraphicsShaderStage,
+    GraphicsShaderStageFlags,
+    GraphicsStage,
+    MultisampleState,
+    PrimitiveTopology,
+    RasterizationState,
+    StreamTexture,
+    TextureFormat,
+    TextureReadbackDescriptor,
+    TextureSourceLayout,
+    VertexInputState,
 };
-use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib_engine::host_rhi::{
     HostVulkanDevice, HostVulkanTimelineSemaphore, OffscreenColorTarget, OffscreenDraw,
     VulkanGraphicsKernel, VulkanTextureReadback,
 };
-use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 /// Compiled SPIR-V for the triangle vertex shader.
 const TRIANGLE_VERT_SPV: &[u8] =
@@ -195,8 +217,8 @@ fn map_topology(t: PrimitiveTopologyWire) -> PrimitiveTopology {
     }
 }
 
-fn map_polygon_mode(m: PolygonModeWire) -> streamlib_engine::core::rhi::PolygonMode {
-    use streamlib_engine::core::rhi::PolygonMode;
+fn map_polygon_mode(m: PolygonModeWire) -> streamlib::core::rhi::PolygonMode {
+    use streamlib::core::rhi::PolygonMode;
     match m {
         PolygonModeWire::Fill => PolygonMode::Fill,
         PolygonModeWire::Line => PolygonMode::Line,
@@ -204,8 +226,8 @@ fn map_polygon_mode(m: PolygonModeWire) -> streamlib_engine::core::rhi::PolygonM
     }
 }
 
-fn map_cull(m: CullModeWire) -> streamlib_engine::core::rhi::CullMode {
-    use streamlib_engine::core::rhi::CullMode;
+fn map_cull(m: CullModeWire) -> streamlib::core::rhi::CullMode {
+    use streamlib::core::rhi::CullMode;
     match m {
         CullModeWire::None => CullMode::None,
         CullModeWire::Front => CullMode::Front,
@@ -214,16 +236,16 @@ fn map_cull(m: CullModeWire) -> streamlib_engine::core::rhi::CullMode {
     }
 }
 
-fn map_front_face(m: FrontFaceWire) -> streamlib_engine::core::rhi::FrontFace {
-    use streamlib_engine::core::rhi::FrontFace;
+fn map_front_face(m: FrontFaceWire) -> streamlib::core::rhi::FrontFace {
+    use streamlib::core::rhi::FrontFace;
     match m {
         FrontFaceWire::CounterClockwise => FrontFace::CounterClockwise,
         FrontFaceWire::Clockwise => FrontFace::Clockwise,
     }
 }
 
-fn map_blend_factor(f: BlendFactorWire) -> streamlib_engine::core::rhi::BlendFactor {
-    use streamlib_engine::core::rhi::BlendFactor;
+fn map_blend_factor(f: BlendFactorWire) -> streamlib::core::rhi::BlendFactor {
+    use streamlib::core::rhi::BlendFactor;
     match f {
         BlendFactorWire::Zero => BlendFactor::Zero,
         BlendFactorWire::One => BlendFactor::One,
@@ -243,8 +265,8 @@ fn map_blend_factor(f: BlendFactorWire) -> streamlib_engine::core::rhi::BlendFac
     }
 }
 
-fn map_blend_op(o: BlendOpWire) -> streamlib_engine::core::rhi::BlendOp {
-    use streamlib_engine::core::rhi::BlendOp;
+fn map_blend_op(o: BlendOpWire) -> streamlib::core::rhi::BlendOp {
+    use streamlib::core::rhi::BlendOp;
     match o {
         BlendOpWire::Add => BlendOp::Add,
         BlendOpWire::Subtract => BlendOp::Subtract,
@@ -267,7 +289,7 @@ fn parse_texture_format(s: &str) -> std::result::Result<TextureFormat, String> {
 fn build_pipeline_state(
     p: &GraphicsPipelineStateWire,
 ) -> std::result::Result<GraphicsPipelineState, String> {
-    use streamlib_engine::core::rhi::ColorBlendAttachment;
+    use streamlib::core::rhi::ColorBlendAttachment;
 
     if p.multisample_samples != 1 {
         return Err(format!(
@@ -347,8 +369,8 @@ fn build_pipeline_state(
 }
 
 fn build_bindings(decls: &[GraphicsBindingDecl]) -> Vec<GraphicsBindingSpec> {
-    use streamlib_engine::core::context::GraphicsBindingKindWire as W;
-    use streamlib_engine::core::rhi::GraphicsBindingKind;
+    use streamlib::core::context::GraphicsBindingKindWire as W;
+    use streamlib::core::rhi::GraphicsBindingKind;
     decls
         .iter()
         .map(|d| GraphicsBindingSpec {
@@ -489,7 +511,7 @@ impl GraphicsKernelBridge for TriangleKernelBridge {
                 instance_count,
                 first_vertex,
                 first_instance,
-            } => OffscreenDraw::Draw(streamlib_engine::core::rhi::DrawCall {
+            } => OffscreenDraw::Draw(streamlib::core::rhi::DrawCall {
                 vertex_count,
                 instance_count,
                 first_vertex,
@@ -504,7 +526,7 @@ impl GraphicsKernelBridge for TriangleKernelBridge {
                 vertex_offset,
                 first_instance,
             } => OffscreenDraw::DrawIndexed(
-                streamlib_engine::core::rhi::DrawIndexedCall {
+                streamlib::core::rhi::DrawIndexedCall {
                     index_count,
                     instance_count,
                     first_index,
@@ -599,7 +621,7 @@ fn main() -> Result<()> {
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
-                    streamlib_engine::core::rhi::VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
+                    streamlib::core::rhi::VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
                 )
                 .map_err(|e| {
                     StreamError::Configuration(format!("register_texture: {e}"))

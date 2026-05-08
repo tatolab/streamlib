@@ -42,24 +42,38 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
-use streamlib_engine::core::context::{
-    BlasRegisterDecl, RayTracingBindingKindWire, RayTracingKernelBridge,
-    RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
-    RayTracingShaderStageWire, TlasRegisterDecl,
+use streamlib::core::context::{
+    BlasRegisterDecl,
+    RayTracingBindingKindWire,
+    RayTracingKernelBridge,
+    RayTracingKernelRegisterDecl,
+    RayTracingKernelRunDispatch,
+    RayTracingShaderGroupWire,
+    RayTracingShaderStageWire,
+    TlasRegisterDecl,
 };
-use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib_engine::core::rhi::{
-    RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
-    RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, StreamTexture,
-    TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
-    TextureUsages, VulkanLayout,
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::core::rhi::{
+    RayTracingBindingSpec,
+    RayTracingKernelDescriptor,
+    RayTracingPushConstants,
+    RayTracingShaderGroup,
+    RayTracingShaderStageFlags,
+    RayTracingStage,
+    StreamTexture,
+    TextureDescriptor,
+    TextureFormat,
+    TextureReadbackDescriptor,
+    TextureSourceLayout,
+    TextureUsages,
+    VulkanLayout,
 };
-use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib_engine::host_rhi::{
     GeometryInstanceFlagsKHR, HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc,
     VulkanAccelerationStructure, VulkanRayTracingKernel, VulkanTextureReadback,
 };
-use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 /// Compiled SPIR-V for the ray-generation shader.
 const SCENE_RGEN_SPV: &[u8] =
@@ -218,7 +232,7 @@ fn stage_byte(s: RayTracingShaderStageWire) -> u8 {
 }
 
 fn stage_to_descriptor(s: RayTracingShaderStageWire) -> impl Fn(&[u8]) -> RayTracingStage<'_> {
-    use streamlib_engine::core::rhi::RayTracingShaderStage;
+    use streamlib::core::rhi::RayTracingShaderStage;
     move |spv| RayTracingStage {
         stage: match s {
             RayTracingShaderStageWire::RayGen => RayTracingShaderStage::RayGen,
@@ -361,19 +375,19 @@ impl RayTracingKernelBridge for SceneKernelBridge {
                     binding: b.binding,
                     kind: match b.kind {
                         RayTracingBindingKindWire::StorageBuffer => {
-                            streamlib_engine::core::rhi::RayTracingBindingKind::StorageBuffer
+                            streamlib::core::rhi::RayTracingBindingKind::StorageBuffer
                         }
                         RayTracingBindingKindWire::UniformBuffer => {
-                            streamlib_engine::core::rhi::RayTracingBindingKind::UniformBuffer
+                            streamlib::core::rhi::RayTracingBindingKind::UniformBuffer
                         }
                         RayTracingBindingKindWire::SampledTexture => {
-                            streamlib_engine::core::rhi::RayTracingBindingKind::SampledTexture
+                            streamlib::core::rhi::RayTracingBindingKind::SampledTexture
                         }
                         RayTracingBindingKindWire::StorageImage => {
-                            streamlib_engine::core::rhi::RayTracingBindingKind::StorageImage
+                            streamlib::core::rhi::RayTracingBindingKind::StorageImage
                         }
                         RayTracingBindingKindWire::AccelerationStructure => {
-                            streamlib_engine::core::rhi::RayTracingBindingKind::AccelerationStructure
+                            streamlib::core::rhi::RayTracingBindingKind::AccelerationStructure
                         }
                     },
                     stages: flags_from_bits(b.stages),

@@ -28,12 +28,15 @@ use std::sync::Arc;
 use std::time::Instant;
 use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib_engine::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
-use streamlib_engine::core::{
-    GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
+use streamlib::core::{
+    GpuContextLimitedAccess,
+    Result,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
     StreamError,
 };
-use streamlib_engine::VideoFrame;
+use streamlib::VideoFrame;
 
 use crate::crt_film_grain_kernel::{
     CrtFilmGrainInput, CrtFilmGrainInputs, CrtFilmGrainOutput, SandboxedCrtFilmGrain,
@@ -114,7 +117,7 @@ pub struct CrtFilmGrainProcessor {
     backend: Option<LinuxBackend>,
 }
 
-impl streamlib_engine::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
+impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,

@@ -36,12 +36,10 @@ use std::time::{Duration, Instant};
 use streamlib_engine::HostGpuDeviceExt;
 
 use streamlib_engine::core::display_info;
-use streamlib_engine::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
-use streamlib_engine::core::{
-    GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError,
-};
-use streamlib_engine::iceoryx2::{InputMailboxes, OutputWriter};
-use streamlib_engine::VideoFrame;
+use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
+use streamlib::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
+use streamlib::iceoryx2::{InputMailboxes, OutputWriter};
+use streamlib::VideoFrame;
 
 // Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
 // the transitional rationale (this kernel previously lived in the
@@ -138,7 +136,7 @@ pub struct BlendingCompositorProcessor {
     backend: Option<GpuBackend>,
 }
 
-impl streamlib_engine::core::ManualProcessor for BlendingCompositorProcessor::Processor {
+impl streamlib::core::ManualProcessor for BlendingCompositorProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -706,7 +704,7 @@ mod tests {
     /// consuming stale frames.
     #[test]
     fn iceoryx2_pop_latest_skips_stale_frames() {
-        use streamlib_engine::iceoryx2::PortMailbox;
+        use streamlib::iceoryx2::PortMailbox;
 
         let mailbox = PortMailbox::new(8);
         for i in 0u8..5 {

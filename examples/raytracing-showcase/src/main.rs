@@ -20,10 +20,18 @@ use std::sync::Arc;
 use streamlib_engine::HostStreamTextureExt;
 
 use anyhow::{Context, Result};
-use streamlib_engine::core::rhi::{
-    RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
-    RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, StreamTexture,
-    TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
+use streamlib::core::rhi::{
+    RayTracingBindingSpec,
+    RayTracingKernelDescriptor,
+    RayTracingPushConstants,
+    RayTracingShaderGroup,
+    RayTracingShaderStageFlags,
+    RayTracingStage,
+    StreamTexture,
+    TextureDescriptor,
+    TextureFormat,
+    TextureReadbackDescriptor,
+    TextureSourceLayout,
     TextureUsages,
 };
 use streamlib_engine::host_rhi::{

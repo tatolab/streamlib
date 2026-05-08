@@ -60,13 +60,11 @@
 
 use std::path::PathBuf;
 
-use streamlib_engine::core::context::GpuContext;
-use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib_engine::core::rhi::TextureFormat;
-use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib_engine::{
-    CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
-};
+use streamlib::core::context::GpuContext;
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::core::rhi::TextureFormat;
+use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::{CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime};
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
 
@@ -449,7 +447,7 @@ fn register_render_target_surface(
             uuid,
             &texture,
             None,
-            streamlib_engine::core::rhi::VulkanLayout::GENERAL,
+            streamlib::core::rhi::VulkanLayout::GENERAL,
         )
         .map_err(|e| format!("{label}: surface_store.register_texture: {e}"))?;
 

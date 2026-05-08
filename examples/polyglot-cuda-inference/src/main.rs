@@ -50,14 +50,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib_engine::core::context::GpuContext;
-use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib_engine::core::rhi::{PixelFormat, RhiPixelBuffer};
-use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::core::context::GpuContext;
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
+use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib_engine::host_rhi::{
     HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
 };
-use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 

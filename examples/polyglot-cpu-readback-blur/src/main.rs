@@ -48,16 +48,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
-use streamlib_engine::core::context::{
-    CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext,
-};
-use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib_engine::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
-use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib::core::context::{CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext};
+use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
+use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
 use streamlib_engine::host_rhi::{
     HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
 };
-use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat, SurfaceId};
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
