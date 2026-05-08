@@ -158,11 +158,13 @@ pub mod core {
     // paths (`::streamlib::core::ProcessorSpec`, `::streamlib::core::SchemaIdent`,
     // `::streamlib::core::context::*`, etc.) resolve transparently.
     //
-    // TODO(#731 follow-up): curate this surface — engine-internal modules
-    // like `compiler`, `embedded_schemas`, `runtime_hooks`,
-    // `observability`, `streamlib_home` leak through this glob today.
-    // Address by either marking those `pub(crate)` in the engine or by
-    // listing each customer-facing item explicitly here.
+    // TODO(#735): downgrade engine-internal `core::*` modules from
+    // `pub` to `pub(crate)` at the engine source-of-truth. Today this
+    // glob re-exports `compiler`, `embedded_schemas`, `runtime_hooks`,
+    // `observability`, `streamlib_home`, `pubsub`, `signals` — engine
+    // internals that customer code can reach as `streamlib::core::*`.
+    // The fix is type-system-enforced visibility at the engine, not
+    // SDK-side curation discipline. Soft-blocker for #681.
     pub use streamlib_engine::core::*;
 }
 
