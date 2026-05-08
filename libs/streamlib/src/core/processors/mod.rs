@@ -34,23 +34,10 @@ pub use processor_spec::ProcessorSpec;
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EmptyConfig;
 
-// Sources
-// TODO: Migrate to iceoryx2 API
-// pub mod audio_capture;
-// pub mod camera;
-pub mod chord_generator;
-
-// Sinks
-// TODO: Migrate to iceoryx2 API
-// pub mod audio_output;
-// pub mod display;
-// pub mod mp4_writer;
+// Audio processors (capture, output, mixer, channel converter, resampler,
+// buffer rechunker, chord generator) live in `@tatolab/audio` (#672).
 
 // Transformers
-pub mod audio_channel_converter;
-pub mod audio_mixer;
-pub mod audio_resampler;
-pub mod buffer_rechunker;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod clap_effect;
 pub mod simple_passthrough;
@@ -69,21 +56,7 @@ pub mod moq_publish_track;
 #[cfg(feature = "moq")]
 pub mod moq_subscribe_track;
 
-// TODO: Migrate to iceoryx2 API
-// pub use audio_capture::{AudioCaptureConfig, AudioCaptureProcessor, AudioInputDevice};
-// pub use camera::{CameraConfig, CameraDevice, CameraProcessor};
-pub use chord_generator::ChordGeneratorProcessor;
-
-// TODO: Migrate to iceoryx2 API
-// pub use audio_output::{AudioDevice, AudioOutputConfig, AudioOutputProcessor};
-// pub use display::{DisplayConfig, DisplayProcessor, WindowId};
-// pub use mp4_writer::{Mp4WriterConfig, Mp4WriterProcessor};
-
 pub use api_server::*;
-pub use audio_channel_converter::AudioChannelConverterProcessor;
-pub use audio_mixer::AudioMixerProcessor;
-pub use audio_resampler::AudioResamplerProcessor;
-pub use buffer_rechunker::BufferRechunkerProcessor;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;

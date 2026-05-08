@@ -11,14 +11,17 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::_generated_::com_tatolab_audio_channel_converter_config::Mode;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::_generated_::com_tatolab_audio_resampler_config::Quality;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::{
-    input, output, request_audio_permission, request_camera_permission, AudioCaptureProcessor,
-    AudioChannelConverterProcessor, AudioResamplerProcessor, CameraProcessor, Mp4WriterProcessor,
-    Result, StreamRuntime,
+    input, output, request_audio_permission, request_camera_permission, CameraProcessor,
+    Mp4WriterProcessor, Result, StreamRuntime,
+};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib_audio::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib_audio::_generated_::tatolab__audio::audio_resampler_config::Quality;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib_audio::{
+    AudioCaptureProcessor, AudioChannelConverterProcessor, AudioResamplerProcessor,
 };
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]

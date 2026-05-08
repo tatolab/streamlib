@@ -1,0 +1,14 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for AudioOutput config.
+
+metadata:
+  type: AudioOutputConfig
+  description: "Configuration for audio output (CoreAudio on macOS, ALSA on Linux)"
+
+optionalProperties:
+  device_id:
+    metadata:
+      description: "Audio output device ID. If None, uses default device"
+    type: string

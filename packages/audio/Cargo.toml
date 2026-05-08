@@ -1,0 +1,41 @@
+[package]
+name = "streamlib-audio"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Audio processors carved out of the streamlib engine — capture, output, mixer, channel converter, resampler, buffer rechunker, chord generator"
+keywords = ["audio", "streaming", "real-time"]
+categories = ["multimedia::audio", "multimedia"]
+
+[lib]
+name = "streamlib_audio"
+crate-type = ["rlib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated config
+# types under `streamlib::_generated_::tatolab__audio::*`, AudioFrame
+# wire type, audio utilities (resample, channel/format conversion).
+streamlib = { path = "../../libs/streamlib" }
+
+# Procedural macros — `#[streamlib::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Cross-platform deps used by every audio processor.
+parking_lot = "0.12"
+rtrb = "0.3.2"
+tracing.workspace = true
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = "0.15"  # ALSA backend on Linux
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+cpal = "0.15"  # CoreAudio backend on macOS
+
+[lints]
+workspace = true

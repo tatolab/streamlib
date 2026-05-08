@@ -151,39 +151,152 @@ pub fn generate_from_processor_schema(
     }
 }
 
-/// Derive a Rust config type from a schema reference.
+/// Derive the path to a Rust config type from a schema reference.
 ///
-/// For "com.tatolab.buffer_rechunker.config@1.0.0", derives "BufferRechunkerConfig".
-/// For "com.streamlib.api_server.config@1.0.0", derives "ApiServerConfig".
-/// The actual type must be defined by the user and match this name.
+/// Two grammars are supported, and the emitted path differs between them
+/// **on purpose**:
+///
+/// - New-shape `@<org>/<package>/<TypeName>@<version>` (e.g.
+///   `@tatolab/audio/AudioMixerConfig@1.0.0`) emits the package-qualified
+///   path `crate::_generated_::<org>__<package>::<TypeName>` (e.g.
+///   `crate::_generated_::tatolab__audio::AudioMixerConfig`). The qualifier
+///   prevents two carve-out packages from colliding when they declare
+///   same-named types: `crate::_generated_::tatolab__audio::Strategy` and
+///   `crate::_generated_::tatolab__camera::Strategy` are distinct paths,
+///   not a Rust E0252 ambiguity.
+/// - Legacy reverse-DNS `com.<org>.<processor>.config@<version>` (e.g.
+///   `com.tatolab.buffer_rechunker.config@1.0.0`) emits the unqualified
+///   path `crate::_generated_::<TypeName>Config`. Legacy schemas land at
+///   the `_generated_/` root by codegen convention (the reverse-DNS
+///   filename already encodes org/processor — `com_streamlib_h264_*` vs
+///   `com_tatolab_camera_*` — so collisions are filename-prevented at the
+///   codegen layer).
+///
+/// Defensive shape, not future-proofing: the qualified path makes
+/// cross-package type collisions a compile error rather than a
+/// codegen-time `pub use` ambiguity dependent on no two packages happening
+/// to choose the same short type name. CLAUDE.md "type-system enforcement
+/// beats convention" — this is the engine-grade variant of that rule.
+///
+/// The actual type must be defined by codegen at the emitted path; the
+/// `_generated_/` tree's `pub mod tatolab__<package>;` declaration plus the
+/// per-package `pub use <snake_case>::<TypeName>;` inside that submodule
+/// resolves the path.
 fn derive_config_type_from_schema(schema_ref: &str) -> TokenStream {
-    // Extract the name part before @ (e.g., "com.tatolab.buffer_rechunker.config")
-    let name_part = schema_ref.split('@').next().unwrap_or(schema_ref);
+    if let Some(rest) = schema_ref.strip_prefix('@') {
+        // New-shape grammar: <org>/<package>/<TypeName>[@<version>].
+        let ident_part = rest.split('@').next().unwrap_or(rest);
+        let segments: Vec<&str> = ident_part.split('/').collect();
 
-    // Split by dots and collect segments
-    let segments: Vec<&str> = name_part.split('.').collect();
-
-    // Find the segment before "config" (the processor name)
-    // e.g., ["com", "tatolab", "buffer_rechunker", "config"] -> "buffer_rechunker"
-    // e.g., ["com", "streamlib", "api_server", "config"] -> "api_server"
-    let processor_segment = if segments.len() >= 2 {
-        let last = segments[segments.len() - 1];
-        if last == "config" && segments.len() >= 2 {
-            segments[segments.len() - 2]
+        // A well-formed new-shape schema has exactly three `/`-separated
+        // segments: org, package, TypeName. Anything shorter is a bug in
+        // the manifest parser (which validates the grammar before this
+        // macro runs); fall back to the unqualified path so the user sees
+        // a clear "type not found" error rather than a confusing path
+        // emission failure.
+        if segments.len() == 3 {
+            let org = segments[0];
+            let package = segments[1];
+            let type_name = segments[2];
+            let module_ident =
+                Ident::new(&format!("{}__{}", org, package), Span::call_site());
+            let type_ident = Ident::new(type_name, Span::call_site());
+            quote! { crate::_generated_::#module_ident::#type_ident }
         } else {
-            last
+            let fallback = segments.last().copied().unwrap_or("Unknown");
+            let ident = Ident::new(fallback, Span::call_site());
+            quote! { crate::_generated_::#ident }
         }
     } else {
-        segments.last().copied().unwrap_or("Unknown")
-    };
+        // Legacy reverse-DNS grammar: <segments>.config[@<version>].
+        // Filename convention encodes org/processor; collisions are
+        // prevented at the codegen-output layer. Emit unqualified path
+        // for backward compatibility with the legacy `_generated_/mod.rs`
+        // top-level re-export shape.
+        let name_part = schema_ref.split('@').next().unwrap_or(schema_ref);
+        let segments: Vec<&str> = name_part.split('.').collect();
 
-    // Convert to PascalCase and append "Config"
-    // e.g., "buffer_rechunker" -> "BufferRechunkerConfig"
-    let pascal_name = format!("{}Config", to_pascal_case(processor_segment));
-    let ident = Ident::new(&pascal_name, Span::call_site());
+        let processor_segment = if segments.len() >= 2 {
+            let last = segments[segments.len() - 1];
+            if last == "config" {
+                segments[segments.len() - 2]
+            } else {
+                last
+            }
+        } else {
+            segments.last().copied().unwrap_or("Unknown")
+        };
 
-    // Use full path to the generated type in _generated_ module
-    quote! { crate::_generated_::#ident }
+        // e.g. "buffer_rechunker" -> "BufferRechunkerConfig"
+        let pascal_name = format!("{}Config", to_pascal_case(processor_segment));
+        let ident = Ident::new(&pascal_name, Span::call_site());
+        quote! { crate::_generated_::#ident }
+    }
+}
+
+#[cfg(test)]
+mod derive_config_type_tests {
+    use super::*;
+
+    fn render(schema_ref: &str) -> String {
+        derive_config_type_from_schema(schema_ref).to_string()
+    }
+
+    #[test]
+    fn new_shape_emits_package_qualified_path() {
+        // The defensive shape: package-qualified path means two carve-outs
+        // declaring the same short type name compile to distinct types.
+        assert_eq!(
+            render("@tatolab/audio/AudioMixerConfig@1.0.0"),
+            "crate :: _generated_ :: tatolab__audio :: AudioMixerConfig",
+        );
+        assert_eq!(
+            render("@tatolab/camera/CameraConfig@1.0.0"),
+            "crate :: _generated_ :: tatolab__camera :: CameraConfig",
+        );
+    }
+
+    #[test]
+    fn new_shape_qualifier_disambiguates_same_named_types() {
+        // Hypothetical collision: two packages each ship a `Strategy` enum.
+        // Without the package qualifier, the macro would emit
+        // `crate::_generated_::Strategy` for both — `_generated_/mod.rs`
+        // would `pub use ... ::Strategy;` twice and the codegen output
+        // would fail with E0252. With the qualifier each path is distinct.
+        let audio = render("@tatolab/audio/Strategy@1.0.0");
+        let camera = render("@tatolab/camera/Strategy@1.0.0");
+        assert_ne!(audio, camera);
+        assert!(audio.ends_with("tatolab__audio :: Strategy"));
+        assert!(camera.ends_with("tatolab__camera :: Strategy"));
+    }
+
+    #[test]
+    fn legacy_reverse_dns_emits_unqualified_path() {
+        // Legacy filenames already encode org/processor (com_tatolab_*,
+        // com_streamlib_*); the unqualified path is the established shape
+        // and the legacy schemas live at the `_generated_/` root.
+        assert_eq!(
+            render("com.tatolab.buffer_rechunker.config@1.0.0"),
+            "crate :: _generated_ :: BufferRechunkerConfig",
+        );
+        assert_eq!(
+            render("com.streamlib.h264_encoder.config@1.0.0"),
+            "crate :: _generated_ :: H264EncoderConfig",
+        );
+        assert_eq!(
+            render("com.streamlib.api_server.config@1.0.0"),
+            "crate :: _generated_ :: ApiServerConfig",
+        );
+    }
+
+    #[test]
+    fn malformed_new_shape_falls_back_without_panicking() {
+        // A new-shape string missing org or package doesn't panic; it
+        // falls back to the unqualified path so the user gets a clear
+        // "type not found" compile error instead of a macro panic.
+        let result = render("@tatolab/AudioMixerConfig@1.0.0");
+        assert!(result.contains("AudioMixerConfig"));
+    }
 }
 
 /// Convert a string to PascalCase.

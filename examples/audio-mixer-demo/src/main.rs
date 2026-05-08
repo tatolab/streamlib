@@ -6,9 +6,8 @@
 //! Demonstrates mixing multiple audio streams using AudioMixerProcessor.
 //! Creates three test tones at different frequencies and mixes them into a chord.
 
-use streamlib::{
-    input, output, AudioOutputProcessor, ChordGeneratorProcessor, Result, StreamRuntime,
-};
+use streamlib::{input, output, Result, StreamRuntime};
+use streamlib_audio::{AudioOutputProcessor, ChordGeneratorProcessor};
 
 fn main() -> Result<()> {
 

@@ -11,8 +11,6 @@ pub mod thread_priority;
 pub use audio_clock::LinuxTimerFdAudioClock;
 
 pub use processors::{
-    LinuxAudioCaptureProcessor,
-    LinuxAudioOutputProcessor,
     LinuxCameraProcessor,
     LinuxDisplayProcessor,
 };

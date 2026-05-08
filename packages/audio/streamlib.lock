@@ -13,5 +13,5 @@ packages:
     version: 1.0.0
     source:
       kind: path
-      path: ../../packages/core
+      path: ../core
     content_hash: sha256:2f2723b519777976a052f85d09659c4532e1329014d16bb7f55b2f51d4c07a36

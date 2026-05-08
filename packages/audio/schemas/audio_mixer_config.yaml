@@ -1,0 +1,17 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for AudioMixer config.
+
+metadata:
+  type: AudioMixerConfig
+  description: "Configuration for mixing two mono signals into stereo"
+
+properties:
+  strategy:
+    metadata:
+      description: "Mixing strategy for combining signals"
+    enum:
+      - Sum
+      - SumNormalized
+      - SumClipped
