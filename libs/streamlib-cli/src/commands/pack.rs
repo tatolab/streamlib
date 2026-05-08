@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use zip::write::FileOptions;
 use zip::ZipWriter;
 
-use streamlib::engine_internal::core::config::ProjectConfig;
+use streamlib::engine_internal::core::ProjectConfig;
 use streamlib_idents::Manifest;
 
 /// Pack a processor package into a .slpkg bundle.

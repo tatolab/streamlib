@@ -22,8 +22,14 @@ pub use serde_json;
 pub mod core;
 pub mod iceoryx2;
 
-/// Unified logging pathway — public re-export of [`core::logging`].
-pub use core::logging;
+/// Unified logging pathway. Wraps the engine-internal
+/// [`core::logging`] module so customer code can reach the
+/// pathway via `streamlib_engine::logging::*` while the
+/// `streamlib_engine::core::logging` module path stays
+/// engine-private.
+pub mod logging {
+    pub use crate::core::logging::*;
+}
 
 /// Generated types from JTD schemas.
 /// Run `cargo xtask generate-schemas` to regenerate.

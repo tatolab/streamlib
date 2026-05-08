@@ -6,7 +6,5 @@
 mod installed_packages_manifest;
 mod project_config;
 
-pub use installed_packages_manifest::{
-    get_installed_packages_manifest_path, InstalledPackageEntry, InstalledPackageManifest,
-};
+pub use installed_packages_manifest::{InstalledPackageEntry, InstalledPackageManifest};
 pub use project_config::ProjectConfig;

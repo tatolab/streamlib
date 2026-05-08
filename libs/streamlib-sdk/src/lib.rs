@@ -32,20 +32,21 @@
 //! ```
 //!
 //! **Tier 3 — `streamlib::engine_internal::*`** — direct passthrough
-//! to the entire `streamlib-engine` crate. For very rare cases where
-//! the SDK's curated `sdk::engine` surface doesn't expose what's
-//! needed AND extending the SDK isn't right. Reads as "I'm reaching
-//! past the curated boundary; I know what I'm doing."
+//! to the `pub` surface of the `streamlib-engine` crate. For very
+//! rare cases where the SDK's curated `sdk::engine` surface doesn't
+//! expose what's needed AND extending the SDK isn't right. Reads as
+//! "I'm reaching past the curated boundary; I know what I'm doing."
 //!
-//! ```ignore
-//! // Rare — should only be used in very specific circumstances.
-//! use streamlib::engine_internal::core::compiler::SomeInternalThing;
-//! ```
-//!
-//! If you find yourself importing from `engine_internal` for an item
-//! that would benefit other consumers, that's a signal: either extend
-//! the SDK's curated surface (`sdk::engine::*` or one of the topical
-//! sub-namespaces) or open an issue.
+//! Engine-internal `core::*` modules (`compiler`, `embedded_schemas`,
+//! `pubsub`, `runtime_hooks`, etc.) are `pub(crate)` in the engine,
+//! so `streamlib::engine_internal::core::<internal>` does not
+//! compile by construction — even Tier 3 cannot reach module paths
+//! the engine has marked private. Items inside those modules that
+//! genuinely need cross-crate access are explicitly re-exported
+//! item-by-item at `streamlib_engine::core::*` or at the engine
+//! crate root. The set of those re-exports IS the engine's external
+//! surface; if one is missing, file an issue rather than reaching
+//! around the boundary.
 //!
 //! Direct `streamlib_engine::*` imports outside the engine itself and
 //! this facade source are forbidden by `cargo xtask check-boundaries`
@@ -65,10 +66,16 @@ pub mod sdk {
 
     // ---- Engine `core::*` sub-modules that are SDK-public ----
     //
-    // Engine internals (`compiler`, `embedded_schemas`, `runtime_hooks`,
-    // `observability`, `streamlib_home`, `pubsub`, `signals`, `display_info`)
-    // are deliberately NOT re-exported here. Consumers needing them
-    // reach via `streamlib::engine_internal::core::<name>::*` (rare).
+    // Engine internals (`clap`, `codec`, `compiler`, `config`,
+    // `embedded_schemas`, `logging`, `observability`, `pubsub`,
+    // `runtime_hooks`, `signals`, `streamlib_home`) are
+    // `pub(crate)` in the engine crate (see `core/mod.rs`) — those
+    // module paths are not reachable here OR via `engine_internal::*`
+    // (Tier 3) by construction. Items inside that ARE customer-facing
+    // (e.g. `H264Profile` from `codec`, `LfoWaveform` from `clap`) are
+    // re-exported by the engine at its crate root and travel into the
+    // SDK via the top-level `pub use streamlib_engine::*` items below
+    // and the Tier-3 `engine_internal` namespace.
 
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;
@@ -219,12 +226,45 @@ pub mod sdk {
 // Tier 3 — direct passthrough to streamlib-engine
 // =============================================================================
 
-/// Direct passthrough to the entire `streamlib-engine` crate.
+/// Direct passthrough to the `pub` surface of the `streamlib-engine`
+/// crate.
 ///
 /// **Use sparingly.** This exists for the rare case where the SDK's
 /// curated [`sdk::engine`] surface doesn't expose what's needed AND
 /// extending the SDK isn't right. The path itself signals "I'm
 /// reaching past the curated boundary."
+///
+/// Engine-internal `core::*` modules are `pub(crate)` in the engine
+/// — those module paths cannot be reached from here:
+///
+/// ```compile_fail
+/// // `core::compiler` is `pub(crate)` in streamlib-engine.
+/// use streamlib::engine_internal::core::compiler::Compiler;
+/// ```
+///
+/// ```compile_fail
+/// // `core::pubsub` is `pub(crate)` in streamlib-engine.
+/// use streamlib::engine_internal::core::pubsub::PUBSUB;
+/// ```
+///
+/// ```compile_fail
+/// // `core::observability` is `pub(crate)` in streamlib-engine.
+/// // Importing the module path itself fails because the module is
+/// // crate-private — locks the visibility downgrade independent of
+/// // which items the module currently re-exports.
+/// use streamlib::engine_internal::core::observability;
+/// ```
+///
+/// ```compile_fail
+/// // `core::runtime_hooks` is `pub(crate)` in streamlib-engine.
+/// use streamlib::engine_internal::core::runtime_hooks::RuntimeInitHook;
+/// ```
+///
+/// Items inside engine-internal modules that genuinely need
+/// cross-crate access are explicitly re-exported item-by-item at
+/// `streamlib_engine::core::*` (e.g. `ensure_processor_venv`,
+/// `ProjectConfig`) or at the engine crate root. The set of those
+/// re-exports IS the engine's external surface.
 ///
 /// If you find yourself importing from this namespace for an item
 /// that would benefit other consumers, that's a signal: either extend

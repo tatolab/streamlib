@@ -12,6 +12,9 @@
 //! Lookups tolerate either the unversioned form or the versioned suffix
 //! `@MAJOR.MINOR.PATCH`; the version is stripped before comparing.
 
+#[cfg(test)]
+mod integration_tests;
+
 include!(concat!(env!("OUT_DIR"), "/embedded_schemas_table.rs"));
 
 /// Get the embedded JTD YAML definition for a built-in schema.
