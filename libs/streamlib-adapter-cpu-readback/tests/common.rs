@@ -16,6 +16,7 @@
 #![allow(dead_code)] // each test file uses a different subset
 
 use std::sync::{Arc, OnceLock};
+use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use streamlib::host_rhi::{
     HostMarker, HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,

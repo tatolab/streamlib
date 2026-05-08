@@ -32,6 +32,7 @@ use crate::core::rhi::{
     TextureSourceLayout,
 };
 use crate::core::{Result, StreamError};
+use crate::host_rhi::HostStreamTextureExt;
 
 use super::HostVulkanDevice;
 

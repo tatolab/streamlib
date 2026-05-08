@@ -46,6 +46,7 @@
 //! ready for the next consumer to sample without re-barriering.
 
 use std::sync::Arc;
+use streamlib::HostStreamTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;

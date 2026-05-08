@@ -12,6 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
 
 /// Locate the `vulkan_adapter_subprocess_helper` binary built by the
 /// `streamlib-adapter-vulkan-helpers` dev-dependency. Cargo doesn't

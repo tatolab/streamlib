@@ -23,6 +23,7 @@ use streamlib::core::{
     Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError,
 };
 use streamlib::VideoFrame;
+use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
 
 #[cfg(target_os = "linux")]
 use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};

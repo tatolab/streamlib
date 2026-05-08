@@ -9,6 +9,8 @@ use crate::core::rhi::{
     TextureFormat, TextureUsages,
 };
 use crate::core::{Result, StreamError};
+#[cfg(target_os = "linux")]
+use crate::host_rhi::HostStreamTextureExt;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};

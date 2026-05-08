@@ -1609,6 +1609,7 @@ mod tests {
         TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
         TextureUsages,
     };
+    use crate::host_rhi::HostStreamTextureExt;
     use crate::vulkan::rhi::{
         HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc, VulkanAccelerationStructure,
         VulkanTextureReadback,

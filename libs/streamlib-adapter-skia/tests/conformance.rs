@@ -16,6 +16,7 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::Arc;
+use streamlib::HostGpuDeviceExt;
 
 use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore};
 use streamlib::core::context::GpuContext;

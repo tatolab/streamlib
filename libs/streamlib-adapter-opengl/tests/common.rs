@@ -9,6 +9,7 @@
 #![allow(dead_code)] // each test file uses a different subset
 
 use std::sync::Arc;
+use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};

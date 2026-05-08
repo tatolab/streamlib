@@ -8,6 +8,7 @@ use vma::Alloc as _;
 
 use crate::core::rhi::{PixelFormat, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
+use crate::host_rhi::HostStreamTextureExt;
 use crate::iceoryx2::OutputWriter;
 use crate::vulkan::rhi::HostVulkanTexture;
 use streamlib_consumer_rhi::VulkanLayout;

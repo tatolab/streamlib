@@ -17,6 +17,7 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::{Arc, Mutex};
+use streamlib::HostStreamTextureExt;
 
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::{StreamTexture, TextureFormat};

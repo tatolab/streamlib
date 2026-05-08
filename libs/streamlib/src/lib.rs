@@ -144,47 +144,11 @@ pub mod linux_surface_share {
     pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 }
 
-/// Public surface for the host-side Vulkan RHI types that
-/// `streamlib-adapter-cpu-readback` (legitimately host-side per
-/// `docs/architecture/adapter-runtime-integration.md`), the in-tree
-/// surface adapter tests, and host-side application code need to
-/// name. The module is intentionally narrow: it exposes the `Host*`
-/// flavor of each RHI primitive plus [`HostMarker`], nothing more.
-///
-/// Subprocess cdylibs MUST NOT depend on `streamlib` at runtime —
-/// they get the trait machinery + `Consumer*` flavor from
-/// `streamlib-consumer-rhi`, and the FullAccess capability boundary
-/// is enforced by Cargo (this module is unreachable from a dep graph
-/// that excludes `streamlib`).
-///
-/// The previous `streamlib::adapter_support` module which re-exported
-/// both `Host*` and `Consumer*` was deleted as part of #560 — its
-/// transitional shape collapsed both flavors into one place; the
-/// type-system-enforced boundary needs the consumer flavor in a
-/// separate crate.
 #[cfg(target_os = "linux")]
-pub mod host_rhi {
-    pub use crate::vulkan::rhi::{
-        AccelerationStructureKind, HostMarker, HostVulkanDevice, HostVulkanPixelBuffer,
-        HostVulkanTexture, HostVulkanTimelineSemaphore, OffscreenColorTarget, OffscreenDraw,
-        RayTracingPipelineProperties, TlasInstanceDesc, VulkanAccelerationStructure,
-        VulkanComputeKernel, VulkanGraphicsKernel, VulkanRayTracingKernel,
-        VulkanTextureReadback, IDENTITY_TRANSFORM,
-    };
+pub mod host_rhi;
 
-    /// `vk::GeometryInstanceFlagsKHR` re-export — needed by callers
-    /// (e.g. polyglot-vulkan-ray-tracing's bridge) that construct
-    /// [`TlasInstanceDesc`] values from u32 wire bitmasks. Lives here
-    /// so example / adapter code doesn't need a direct vulkanalia
-    /// dep (the Vulkan RHI boundary doesn't permit one).
-    pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
-
-    /// EGL DRM-modifier probe — exposed so adapter conformance tests
-    /// can pick a sampler-only modifier (`external_only=TRUE`) that
-    /// would otherwise be discarded by the higher-level
-    /// `acquire_render_target_dma_buf_image` path.
-    pub use crate::vulkan::rhi::drm_modifier_probe;
-}
+#[cfg(target_os = "linux")]
+pub use host_rhi::{HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostStreamTextureExt};
 
 // WebRTC streaming (cross-platform)
 pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};

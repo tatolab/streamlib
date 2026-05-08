@@ -37,6 +37,7 @@ use std::os::unix::net::UnixStream;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use streamlib::HostStreamTextureExt;
 
 use streamlib::core::context::GpuContext;
 use streamlib::core::rhi::TextureFormat;

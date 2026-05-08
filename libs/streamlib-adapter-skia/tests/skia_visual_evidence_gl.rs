@@ -22,6 +22,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use skia_safe::{
     gradient_shader, Color, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode,

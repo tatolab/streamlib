@@ -22,6 +22,7 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::Arc;
+use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use serial_test::serial;
 use streamlib::core::context::GpuContext;
