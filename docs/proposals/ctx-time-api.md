@@ -116,7 +116,7 @@ def process(self, ctx):
 ### Rust Core
 
 ```rust
-// libs/streamlib/src/core/context/time_context.rs
+// libs/streamlib-engine/src/core/context/time_context.rs
 
 use crate::core::clock::MediaClock;
 

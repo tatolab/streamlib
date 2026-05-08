@@ -22,12 +22,14 @@
 //! ```
 
 use std::path::PathBuf;
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::{CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 fn main() -> Result<()> {
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // 1. Load processors from .slpkg package bundle
     let slpkg_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

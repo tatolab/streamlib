@@ -14,7 +14,7 @@ default = []
 backend-vulkan = ["streamlib/backend-vulkan"]
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib" }
+streamlib = { path = "../../libs/streamlib-sdk" }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

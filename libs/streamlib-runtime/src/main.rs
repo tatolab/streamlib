@@ -11,8 +11,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use libloading::Library;
-use streamlib::core::processors::PROCESSOR_REGISTRY;
-use streamlib::{ApiServerConfig, ApiServerProcessor, StreamRuntime};
+use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+use streamlib::sdk::_generated_::ApiServerConfig;
+use streamlib::sdk::processors::ApiServerProcessor;
+use streamlib::sdk::runtime::Runner;
 use streamlib_plugin_abi::{PluginDeclaration, STREAMLIB_ABI_VERSION};
 
 // ---------------------------------------------------------------------------
@@ -282,7 +284,7 @@ async fn run(args: Args) -> Result<()> {
         args.name.unwrap_or_else(generate_runtime_name)
     };
 
-    // Set runtime ID env var BEFORE creating runtime. StreamRuntime::new
+    // Set runtime ID env var BEFORE creating runtime. Runner::new
     // picks it up via RuntimeUniqueId::from_env_or_generate and owns the
     // JSONL log file going forward.
     let runtime_id = format!("R{}", cuid2::create_id());
@@ -312,7 +314,7 @@ async fn run(args: Args) -> Result<()> {
         println!("  Registered {} processor(s) total", count);
     }
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     let log_path = runtime
         .jsonl_log_path()

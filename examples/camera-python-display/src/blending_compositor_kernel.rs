@@ -44,20 +44,39 @@
 //! ready for the next consumer to sample without re-barriering.
 
 use std::sync::Arc;
-use streamlib::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use streamlib::core::rhi::{
-    AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, DrawCall,
-    GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
-    GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage, MultisampleState, PixelFormat,
-    PrimitiveTopology, RasterizationState, ScissorRect, StreamTexture, TextureDescriptor,
-    TextureFormat, TextureUsages, VertexInputState, Viewport, VulkanLayout,
+use streamlib::sdk::rhi::{
+    AttachmentFormats,
+    ColorBlendState,
+    ColorWriteMask,
+    DepthStencilState,
+    DrawCall,
+    GraphicsBindingSpec,
+    GraphicsDynamicState,
+    GraphicsKernelDescriptor,
+    GraphicsPipelineState,
+    GraphicsPushConstants,
+    GraphicsShaderStageFlags,
+    GraphicsStage,
+    MultisampleState,
+    PixelFormat,
+    PrimitiveTopology,
+    RasterizationState,
+    ScissorRect,
+    StreamTexture,
+    TextureDescriptor,
+    TextureFormat,
+    TextureUsages,
+    VertexInputState,
+    Viewport,
+    VulkanLayout,
 };
-use streamlib::core::{Result, StreamError};
-use streamlib::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, VulkanGraphicsKernel};
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, VulkanGraphicsKernel};
 
 /// Push-constants layout — must match `blending_compositor.frag`'s
 /// `layout(push_constant)` block byte-for-byte.
@@ -568,8 +587,8 @@ fn output_barrier_to_color_attachment(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib::core::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
-    use streamlib::host_rhi::VulkanTextureReadback;
+    use streamlib::sdk::rhi::{TextureReadbackDescriptor, TextureSourceLayout};
+    use streamlib::sdk::engine::host_rhi::VulkanTextureReadback;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {

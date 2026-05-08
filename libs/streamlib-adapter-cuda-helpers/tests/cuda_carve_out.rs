@@ -44,13 +44,15 @@
 
 use std::mem::MaybeUninit;
 use std::sync::Arc;
-use streamlib::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use serial_test::serial;
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::PixelFormat;
-use streamlib::host_rhi::{
-    HostVulkanDevice, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::rhi::PixelFormat;
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice,
+    HostVulkanPixelBuffer,
+    HostVulkanTimelineSemaphore,
 };
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,

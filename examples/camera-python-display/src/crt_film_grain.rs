@@ -26,14 +26,12 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use streamlib::HostGpuDeviceExt;
+use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
-use streamlib::core::{
-    GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-    StreamError,
-};
-use streamlib::VideoFrame;
+use streamlib::sdk::rhi::{StreamTexture, TextureFormat, VulkanLayout};
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::_generated_::VideoFrame;
 
 use crate::crt_film_grain_kernel::{
     CrtFilmGrainInput, CrtFilmGrainInputs, CrtFilmGrainOutput, SandboxedCrtFilmGrain,
@@ -105,7 +103,7 @@ impl Default for CrtFilmGrainConfig {
     }
 }
 
-#[streamlib::processor("CrtFilmGrain")]
+#[streamlib::sdk::processor("CrtFilmGrain")]
 pub struct CrtFilmGrainProcessor {
     config: CrtFilmGrainConfig,
     gpu_context: Option<GpuContextLimitedAccess>,
@@ -114,7 +112,7 @@ pub struct CrtFilmGrainProcessor {
     backend: Option<LinuxBackend>,
 }
 
-impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,

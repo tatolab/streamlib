@@ -16,7 +16,7 @@
 //!   python tests/iceoryx2-cross-language/python/echo_test.py
 
 use iceoryx2::prelude::*;
-use streamlib::iceoryx2::{FramePayload, PortKey, SchemaIdentWire};
+use streamlib::sdk::iceoryx2::{FramePayload, PortKey, SchemaIdentWire};
 
 fn main() {
     println!("=== iceoryx2 Cross-Language Validation Test (Rust) ===");

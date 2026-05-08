@@ -14,20 +14,20 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use streamlib::core::frames::DataFrame;
-use streamlib::core::graph::{
+use streamlib::sdk::frames::DataFrame;
+use streamlib::sdk::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, OutputLinkPortRef,
 };
-use streamlib::core::links::{LinkInput, LinkOutput};
-use streamlib::core::processors::ProcessorState;
-use streamlib::core::JsonSerializableComponent;
-use streamlib::Result;
+use streamlib::sdk::links::{LinkInput, LinkOutput};
+use streamlib::sdk::processors::ProcessorState;
+use streamlib::sdk::JsonSerializableComponent;
+use streamlib::sdk::error::Result;
 
 // =============================================================================
 // Mock Processor Configuration
 // =============================================================================
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, streamlib::ConfigDescriptor)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, streamlib::sdk::ConfigDescriptor)]
 pub struct MockConfig {
     pub label: String,
 }
@@ -37,57 +37,57 @@ pub struct MockConfig {
 // =============================================================================
 
 /// Source processor with output ports only.
-#[streamlib::processor(execution = Manual, description = "Generates data for downstream processors")]
+#[streamlib::sdk::processor(execution = Manual, description = "Generates data for downstream processors")]
 struct SourceProcessor {
-    #[streamlib::output(description = "Video output")]
+    #[streamlib::sdk::processors::output(description = "Video output")]
     video_out: LinkOutput<DataFrame>,
 
-    #[streamlib::output(description = "Audio output")]
+    #[streamlib::sdk::processors::output(description = "Audio output")]
     audio_out: LinkOutput<DataFrame>,
 
-    #[streamlib::config]
+    #[streamlib::sdk::config]
     config: MockConfig,
 }
 
-impl streamlib::ManualProcessor for SourceProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for SourceProcessor::Processor {
     fn start(&mut self) -> Result<()> {
         Ok(())
     }
 }
 
 /// Transform processor with both input and output ports.
-#[streamlib::processor(execution = Manual, description = "Transforms data from input to output")]
+#[streamlib::sdk::processor(execution = Manual, description = "Transforms data from input to output")]
 struct TransformProcessor {
-    #[streamlib::input(description = "Data input")]
+    #[streamlib::sdk::processors::input(description = "Data input")]
     input: LinkInput<DataFrame>,
 
-    #[streamlib::output(description = "Transformed output")]
+    #[streamlib::sdk::processors::output(description = "Transformed output")]
     output: LinkOutput<DataFrame>,
 
-    #[streamlib::config]
+    #[streamlib::sdk::config]
     config: MockConfig,
 }
 
-impl streamlib::ManualProcessor for TransformProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for TransformProcessor::Processor {
     fn start(&mut self) -> Result<()> {
         Ok(())
     }
 }
 
 /// Sink processor with input ports only.
-#[streamlib::processor(execution = Manual, description = "Consumes data from upstream processors")]
+#[streamlib::sdk::processor(execution = Manual, description = "Consumes data from upstream processors")]
 struct SinkProcessor {
-    #[streamlib::input(description = "Video input")]
+    #[streamlib::sdk::processors::input(description = "Video input")]
     video_in: LinkInput<DataFrame>,
 
-    #[streamlib::input(description = "Audio input")]
+    #[streamlib::sdk::processors::input(description = "Audio input")]
     audio_in: LinkInput<DataFrame>,
 
-    #[streamlib::config]
+    #[streamlib::sdk::config]
     config: MockConfig,
 }
 
-impl streamlib::ManualProcessor for SinkProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for SinkProcessor::Processor {
     fn start(&mut self) -> Result<()> {
         Ok(())
     }

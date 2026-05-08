@@ -25,7 +25,7 @@ use streamlib_jtd_codegen::RuntimeTarget;
 use tempfile::TempDir;
 
 const REPRESENTATIVE_SCHEMA_REL: &str =
-    "libs/streamlib/schemas/com.streamlib.h264_encoder.config@1.0.0.yaml";
+    "libs/streamlib-engine/schemas/com.streamlib.h264_encoder.config@1.0.0.yaml";
 
 const EXPECTED_FIELDS: &[&str] = &[
     "bitrate_bps",

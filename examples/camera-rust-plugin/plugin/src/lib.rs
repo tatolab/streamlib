@@ -11,9 +11,11 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use streamlib::_generated_::VideoFrame;
-use streamlib::core::rhi::PixelFormat;
-use streamlib::core::{GpuContextLimitedAccess, ManualProcessor, Result, RuntimeContextFullAccess, StreamError};
+use streamlib::sdk::_generated_::VideoFrame;
+use streamlib::sdk::rhi::PixelFormat;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::processors::ManualProcessor;
+use streamlib::sdk::error::{Result, StreamError};
 use streamlib_plugin_abi::export_plugin;
 
 #[link(name = "CoreVideo", kind = "framework")]
@@ -24,7 +26,7 @@ unsafe extern "C" {
     fn CVPixelBufferGetBytesPerRow(pixel_buffer: *mut c_void) -> usize;
 }
 
-#[streamlib::processor("GrayscaleRust")]
+#[streamlib::sdk::processor("GrayscaleRust")]
 pub struct GrayscaleProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     running: Arc<AtomicBool>,

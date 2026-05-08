@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Core library (bundles all Rust processors)
-streamlib = { path = "../streamlib" }
+streamlib = { path = "../streamlib-sdk" }
 
 # Schema types (processor YAML parsing)
 streamlib-processor-schema = { path = "../streamlib-processor-schema" }

@@ -1,0 +1,252 @@
+[package]
+name = "streamlib-engine"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Engine internals for streamlib (RHI, IPC, surface-share, runtime executor). Customer apps depend on `streamlib` (the SDK), not on this crate directly."
+keywords = ["video", "streaming", "gpu", "real-time", "ai"]
+categories = ["multimedia::video", "multimedia", "api-bindings"]
+
+[lib]
+name = "streamlib_engine"
+crate-type = ["rlib"]
+
+[features]
+default = []
+# GPU backend selection (feature overrides default platform backend)
+backend-metal = []
+backend-vulkan = ["dep:vulkanalia"]
+# MoQ (Media over QUIC) transport layer for network-transparent IPC
+moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url", "dep:rustls-native-certs"]
+# Strip `debug!` (and `trace!`) from release builds. Opt-in per deployment
+# image. `warn!` / `error!` / `info!` are never stripped. See docs/logging.md.
+strip_debug_logging = ["tracing/release_max_level_info"]
+# Tier 2 — hardware-integration tests (`#[cfg_attr(not(feature =
+# "hardware-tests"), ignore)]` on tests that construct a real
+# `HostVulkanDevice`). Default `cargo test` is the tier-1 unit gate
+# (parallel-safe, mocked). To run hardware tests:
+#   cargo test --features streamlib/hardware-tests --workspace -- --test-threads=1
+# See `docs/testing-hardware.md`.
+hardware-tests = []
+
+[dependencies]
+# Processor schema types (shared with macros for code generation)
+streamlib-processor-schema = { path = "../streamlib-processor-schema" }
+
+# Schema identity + manifest types (one source of truth for the
+# structured `dependencies:` shape consumed at runtime).
+streamlib-idents = { path = "../streamlib-idents" }
+
+# Procedural macros
+streamlib-macros = { path = "../streamlib-macros" }
+
+# Shared iceoryx2 payload types (for cross-process IPC)
+streamlib-ipc-types = { path = "../streamlib-ipc-types" }
+
+# Consumer-side carve-out — owns the format primitives
+# (TextureFormat / TextureUsages / PixelFormat), the trait machinery
+# (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
+# Consumer* RHI types (Linux), and a slim ConsumerRhiError. streamlib
+# re-exports the primitives so existing in-tree call sites (e.g.
+# `crate::core::rhi::TextureFormat`) keep working unchanged.
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+
+# Core dependencies (always included)
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync"] }
+crossbeam-channel = "0.5"
+inventory = "0.3"
+parking_lot = "0.12"  # Fast mutexes for all synchronization
+rtrb = "0.3.2"  # Lock-free SPSC ring buffer for real-time audio/video
+crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
+iceoryx2 = "0.8.1"  # Zero-copy IPC pub/sub for cross-process communication
+rmp-serde = "1.3"  # MessagePack serialization for frame payloads
+signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus
+ctrlc = "3.4"  # Cross-platform Ctrl+C handler (works with GUI apps)
+petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
+ahash = "0.8"  # Fast hashing for graph checksum computation
+anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
+cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
+uuid = { version = "1.11", features = ["v4"] }  # UUID generation for PixelBufferPoolId
+dirs = "6.0"   # Cross-platform home directory resolution
+zip = "2.2"    # ZIP archive extraction for .slpkg packages
+libloading = "0.8"  # Dynamic library loading for Rust dylib plugins
+sha2.workspace = true  # SHA-256 hashing for venv cache keys
+dotenvy = "0.15"  # Load .env files for development environment
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+schemars = "0.8"  # JSON Schema generation from Rust types
+
+# CLAP audio plugin hosting
+clack-host = { git = "https://github.com/prokopyl/clack", rev = "f53f8fc132c001a332c0a7221267812dfb654e92" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f53f8fc132c001a332c0a7221267812dfb654e92", features = ["clack-host", "params"] }
+
+# Audio resampling for real-time safe sample rate conversion
+rubato = "0.16"
+
+# Vulkan backend (optional, enabled via backend-vulkan feature)
+vulkanalia = { workspace = true, optional = true }
+
+dasp = { version = "0.11", features = ["signal", "slice"] }
+dasp_signal = { version = "0.11", features = ["bus"] }
+
+# WebRTC streaming dependencies (using webrtc-rs)
+webrtc = "0.14.0"  # Full-featured WebRTC implementation
+bytes = "1.5"      # Zero-copy byte buffers for RTP samples
+fastrand = "2.0"   # Fast PRNG for RTP timestamp base
+local-ip-address = "0.6"  # Network interface enumeration for ICE candidates
+
+# MoQ (Media over QUIC) transport layer (optional, enabled via moq feature)
+moq-transport = { workspace = true, optional = true }
+web-transport = { workspace = true, optional = true }
+quinn = { workspace = true, optional = true }
+url = { version = "2", optional = true }
+rustls-native-certs = { workspace = true, optional = true }
+
+# HTTP client for WHIP signaling (reuses existing hyper from workspace)
+hyper = { workspace = true }  # HTTP client core
+hyper-rustls = { version = "0.27", features = ["http2", "native-tokio", "ring"] }  # TLS support (ring for crypto)
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }  # HTTP client utilities
+http-body-util = "0.1"  # Body handling utilities
+rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring crypto provider
+
+axum.workspace = true
+tower-http = { version = "0.6", features = ["trace"] }  # HTTP request/response logging middleware
+futures-util = "0.3"  # For StreamExt/SinkExt on WebSocket
+
+# OpenAPI documentation generation
+utoipa = { version = "5.3", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+
+# Platform-specific: macOS/iOS
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2.workspace = true
+objc2-metal.workspace = true
+objc2-io-surface.workspace = true
+objc2-core-foundation.workspace = true
+objc2-core-video.workspace = true
+objc2-foundation.workspace = true
+objc2-av-foundation = { workspace = true, features = ["objc2-core-media", "objc2-core-video"] }
+objc2-core-media.workspace = true
+objc2-app-kit.workspace = true
+objc2-quartz-core.workspace = true
+objc2-core-text.workspace = true
+objc2-core-graphics.workspace = true
+objc2-screen-capture-kit = "0.3.2"
+block2 = "0.6"
+libc.workspace = true
+
+# Apple-specific crates
+metal = "0.31"  # Metal crate for native RHI backend
+dispatch2 = "0.3"  # GCD dispatch queues
+# yuv.workspace = true  # REMOVED - now using GPU-accelerated VTPixelTransferSession
+pollster = "0.3"  # For blocking on async
+cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
+mach2 = "0.4"  # Mach kernel API for thread priorities and timing
+opus = "0.3"  # Opus audio codec encoder/decoder
+
+[target.'cfg(target_os = "linux")'.dependencies]
+vulkanalia = { workspace = true }
+vulkanalia-vma = { workspace = true }
+vulkan-video = { path = "../vulkan-video" }
+rspirv-reflect = { workspace = true }
+libc.workspace = true
+v4l = "0.14"  # V4L2 camera capture (Video for Linux 2)
+opus = "0.3"  # Opus audio codec encoder/decoder
+cpal = "0.15"  # Cross-platform audio I/O (uses ALSA on Linux)
+winit = "0.30"  # Window creation and event loop for display processor
+raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
+# Wire-format helpers for the per-runtime surface-sharing socket
+streamlib-surface-client = { path = "../streamlib-surface-client" }
+# Surface adapter ABI types referenced by the host-side CpuReadbackBridge
+# trait (linux-only; the cpu-readback adapter is linux-only).
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+# Consumer-side carve-out — defines the trait machinery
+# (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
+# Consumer* RHI types, and the format/error primitives shared with the
+# host side. streamlib re-exports for in-tree consumers; subprocess
+# cdylibs depend on it directly so the FullAccess capability boundary
+# is enforced by the type system.
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+core-graphics = "0.24"
+
+[dev-dependencies]
+# Self-alias via the SDK so engine tests / benches that use
+# `#[streamlib::processor(...)]` resolve macro-emitted `::streamlib::*`
+# paths through the SDK (which transitively re-exports engine items).
+# Dev-dep cycles are permitted by Cargo because they don't propagate.
+streamlib = { path = "../streamlib-sdk" }
+tokio = { workspace = true, features = ["full"] }
+hound = "3.5"  # WAV file writing for examples
+rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider
+serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
+tempfile = "3.14"  # Temporary directories for config tests
+criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
+png = "0.17"  # PNG decoding for shader-output fixture comparisons
+
+[[bench]]
+name = "logging"
+harness = false
+
+[[bin]]
+name = "log_emit_1000"
+path = "tests/bin/log_emit_1000.rs"
+# Strace-backed no-syscalls test child. Built under `cargo test` via
+# the path dep; not needed for normal builds.
+
+[[bin]]
+name = "surface_share_crash_helper"
+path = "tests/bin/surface_share_crash_helper.rs"
+# Subprocess fixture for the EPOLLHUP watchdog integration test
+# (libs/streamlib-engine/tests/surface_share_subprocess_crash.rs). Linux only.
+required-features = []
+
+# Build dependencies for protobuf compilation (surface-share service gRPC)
+[target.'cfg(target_os = "macos")'.build-dependencies]
+tonic-build = "0.12"
+prost-build = "0.13"
+
+# Build script reads `streamlib.yaml` to generate the embedded-schemas
+# lookup table (#402). Replaces the hand-curated match in
+# `src/core/embedded_schemas.rs` with a build-time-generated table.
+# streamlib-idents resolves the package's `dependencies:` block at build
+# time so build.rs picks up wire-type schemas from @tatolab/core (#401).
+[build-dependencies]
+serde_yaml = { workspace = true }
+streamlib-idents = { path = "../streamlib-idents" }
+
+[package.metadata.docs.rs]
+# Generate docs for all platforms and features
+all-features = true
+targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
+
+# [package.metadata.streamlib] removed in #402.
+# Schema list moved to `streamlib.yaml` (the single source of truth for
+# this package's schemas + dependencies). The `processors` array that
+# previously lived here referenced YAML files that did not exist on disk
+# — dead config, removed without replacement. Inline processor definitions
+# remain in `streamlib.yaml`'s `processors:` block.
+#
+# CI lint (`cargo xtask check-no-streamlib-metadata`, #402) rejects
+# re-introduction of this block.
+
+# MCP Server Binary removed - needs redesign for Phase 1
+# [[bin]]
+# name = "streamlib-mcp"
+# path = "src/bin/streamlib-mcp.rs"
+# required-features = ["mcp"]
+
+[lints]
+workspace = true

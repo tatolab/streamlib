@@ -16,11 +16,14 @@
 //! - DELETE /api/connections/:id - Remove a connection
 //! - WS /ws/events - WebSocket event stream
 
-use streamlib::{ApiServerConfig, ApiServerProcessor, Result, StreamRuntime};
+use streamlib::sdk::_generated_::ApiServerConfig;
+use streamlib::sdk::processors::ApiServerProcessor;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     let config = ApiServerConfig {
         host: "127.0.0.1".to_string(),

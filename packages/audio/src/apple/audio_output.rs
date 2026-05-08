@@ -7,25 +7,26 @@ use rtrb::{Producer, RingBuffer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use streamlib::_generated_::AudioFrame;
-use streamlib::core::utils::ProcessorAudioConverterTargetFormat;
-use streamlib::core::{Result, RuntimeContextFullAccess, StreamError};
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::utils::ProcessorAudioConverterTargetFormat;
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::context::RuntimeContextFullAccess;
 
 /// Wrapper for InputMailboxes pointer that is Send.
-struct SendableInputsPtr(*const streamlib::iceoryx2::InputMailboxes);
+struct SendableInputsPtr(*const streamlib::sdk::iceoryx2::InputMailboxes);
 
 // SAFETY: InputMailboxes is Send, and we control the lifetime
 unsafe impl Send for SendableInputsPtr {}
 
 impl SendableInputsPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid.
-    unsafe fn get(&self) -> &streamlib::iceoryx2::InputMailboxes {
+    unsafe fn get(&self) -> &streamlib::sdk::iceoryx2::InputMailboxes {
         &*self.0
     }
 }
 
 /// Wrapper for ProcessorAudioConverter pointer that is Send.
-struct SendableAudioConverterPtr(*mut streamlib::core::utils::ProcessorAudioConverter);
+struct SendableAudioConverterPtr(*mut streamlib::sdk::utils::ProcessorAudioConverter);
 
 // SAFETY: Only one thread accesses it, and we join before drop
 unsafe impl Send for SendableAudioConverterPtr {}
@@ -34,7 +35,7 @@ unsafe impl Send for SendableAudioConverterPtr {}
 impl SendableAudioConverterPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid
     /// and no other thread is accessing it.
-    unsafe fn get_mut(&self) -> &mut streamlib::core::utils::ProcessorAudioConverter {
+    unsafe fn get_mut(&self) -> &mut streamlib::sdk::utils::ProcessorAudioConverter {
         &mut *self.0
     }
 }
@@ -48,7 +49,7 @@ pub struct AppleAudioDevice {
     pub is_default: bool,
 }
 
-#[streamlib::processor("AudioOutput")]
+#[streamlib::sdk::processor("AudioOutput")]
 pub struct AppleAudioOutputProcessor {
     device_id: Option<usize>,
     device_name: String,
@@ -63,7 +64,7 @@ pub struct AppleAudioOutputProcessor {
     stop_polling: Arc<AtomicBool>,
 }
 
-impl streamlib::core::ManualProcessor for AppleAudioOutputProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,

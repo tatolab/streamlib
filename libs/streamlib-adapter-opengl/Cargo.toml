@@ -38,7 +38,8 @@ tracing-subscriber.workspace = true
 # on `streamlib-adapter-opengl` at runtime do NOT transitively pull
 # `streamlib`.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-streamlib = { path = "../streamlib" }
+streamlib-engine = { path = "../streamlib-engine" }
+streamlib = { path = "../streamlib-sdk" }
 streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan" }
 vulkanalia.workspace = true
 

@@ -1,10 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use streamlib::_generated_::AudioFrame;
-use streamlib::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[streamlib::processor("BufferRechunker")]
+#[streamlib::sdk::processor("BufferRechunker")]
 pub struct BufferRechunkerProcessor {
     buffer: Vec<f32>,
     sample_rate: u32,
@@ -12,7 +13,7 @@ pub struct BufferRechunkerProcessor {
     channels: u8,
 }
 
-impl streamlib::core::ReactiveProcessor for BufferRechunkerProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for BufferRechunkerProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,

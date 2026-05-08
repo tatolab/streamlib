@@ -13,15 +13,10 @@
 //!   cargo run -p vulkan-video-roundtrip -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip -- h265 /dev/video2 10
 
-use streamlib::{
-    input, output,
-    CameraProcessor,
-    H264EncoderProcessor, H265EncoderProcessor,
-    H264DecoderProcessor, H265DecoderProcessor,
-    DisplayProcessor,
-    // LinuxMp4WriterProcessor,
-    Result, StreamRuntime,
-};
+use streamlib::sdk::processors::{CameraProcessor, H264EncoderProcessor, H265EncoderProcessor, H264DecoderProcessor, H265DecoderProcessor, DisplayProcessor};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::processors::{input, output};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -34,7 +29,7 @@ fn main() -> Result<()> {
     println!("Camera:   {device}");
     println!("Duration: {duration_secs}s\n");
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // --- Camera ---
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {

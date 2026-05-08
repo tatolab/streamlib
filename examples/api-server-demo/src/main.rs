@@ -4,11 +4,14 @@
 //! API Server Processor Demo
 //!
 //! Tests all API endpoints of the ApiServerProcessor, including WebSocket event streaming.
-//! Demonstrates StreamRuntime integration with #[tokio::main] async context.
+//! Demonstrates Runner integration with #[tokio::main] async context.
 
 use futures_util::StreamExt;
 use std::sync::Arc;
-use streamlib::{ApiServerConfig, ApiServerProcessor, Result, StreamRuntime};
+use streamlib::sdk::_generated_::ApiServerConfig;
+use streamlib::sdk::processors::ApiServerProcessor;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -19,8 +22,8 @@ const WS_URL: &str = "ws://127.0.0.1:9000/ws/events";
 async fn main() -> Result<()> {
     println!("=== API Server Processor Demo ===\n");
 
-    // StreamRuntime::new() auto-detects tokio context and uses the current handle
-    let runtime = StreamRuntime::new()?;
+    // Runner::new() auto-detects tokio context and uses the current handle
+    let runtime = Runner::new()?;
 
     // Add the API server processor
     println!("Adding API server processor...");

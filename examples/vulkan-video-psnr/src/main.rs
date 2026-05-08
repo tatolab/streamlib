@@ -11,10 +11,10 @@
 //! Usage:
 //!   vulkan-video-psnr <h264|h265> <bgra-path> <width> <height> <fps> <frame-count>
 
-use streamlib::{
-    input, output, BgraFileSourceProcessor, DisplayProcessor, H264DecoderProcessor,
-    H264EncoderProcessor, H265DecoderProcessor, H265EncoderProcessor, Result, StreamRuntime,
-};
+use streamlib::sdk::processors::{BgraFileSourceProcessor, DisplayProcessor, H264DecoderProcessor, H264EncoderProcessor, H265DecoderProcessor, H265EncoderProcessor};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::processors::{input, output};
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
     println!("Fixture: {bgra_path}");
     println!("Format:  {width}x{height} @ {fps}fps, {frame_count} frames\n");
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     let source = runtime.add_processor(BgraFileSourceProcessor::node(
         BgraFileSourceProcessor::Config {

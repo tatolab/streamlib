@@ -42,7 +42,8 @@ default = []
 cuda = ["dep:cudarc"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib" }
+streamlib = { path = "../streamlib-sdk" }
+streamlib-engine = { path = "../streamlib-engine" }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 streamlib-adapter-cuda = { path = "../streamlib-adapter-cuda" }
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }

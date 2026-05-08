@@ -20,23 +20,16 @@
 //! Usage:
 //!   cargo run -p moq-roundtrip
 
-use streamlib::{
-    input, output,
-    // Sources
-    CameraProcessor, AudioCaptureProcessor, ChordGeneratorProcessor,
-    // Codecs + audio processing
-    H264EncoderProcessor, H264DecoderProcessor,
-    OpusEncoderProcessor, OpusDecoderProcessor,
-    AudioResamplerProcessor, BufferRechunkerProcessor,
-    // MoQ transport
-    MoqPublishTrackConfig, MoqPublishTrackProcessor,
-    MoqSubscribeTrackConfig, MoqSubscribeTrackProcessor,
-    // Sinks
-    DisplayProcessor, AudioOutputProcessor,
-    // Runtime
-    Result, StreamRuntime,
-};
-use streamlib::_generated_::{
+use streamlib::sdk::processors::{H264DecoderProcessor, OpusEncoderProcessor, OpusDecoderProcessor, MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
+use streamlib::sdk::_generated_::MoqSubscribeTrackConfig;
+use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::processors::{input, output, // Sources
+    CameraProcessor, AudioCaptureProcessor, ChordGeneratorProcessor, // Codecs + audio processing
+    H264EncoderProcessor, AudioResamplerProcessor, BufferRechunkerProcessor, // MoQ transport
+    MoqPublishTrackConfig, // Sinks
+    DisplayProcessor, AudioOutputProcessor, // Runtime
+    Result};
+use streamlib::sdk::_generated_::{
     AudioResamplerConfig, BufferRechunkerConfig, ChordGeneratorConfig, DisplayConfig,
     H264EncoderConfig,
 };
@@ -50,7 +43,7 @@ fn main() -> Result<()> {
     tracing::info!("Publishing: camera (H.264) + audio (Opus) + sensor data");
     tracing::info!("Subscribing: video → display, audio → speaker, sensor → log");
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // =========================================================================
     // PUBLISH SIDE

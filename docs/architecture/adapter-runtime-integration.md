@@ -27,7 +27,7 @@ a usable `VulkanContext` / `OpenGlContext` / `SkiaContext` /
 `CpuReadbackContext` instance against StreamLib's host-side surface
 adapters, without re-implementing host RHI patterns and without
 breaking the [`LimitedAccess` / `FullAccess` capability
-typestate](../../libs/streamlib/src/core/context/)?
+typestate](../../libs/streamlib-engine/src/core/context/)?
 
 ## Context
 
@@ -62,7 +62,7 @@ Two IPC seams already exist in tree, both wired through
 
 ### Seam 1 — surface-share registry
 
-`libs/streamlib/src/linux/surface_share/` plus client at
+`libs/streamlib-engine/src/linux/surface_share/` plus client at
 `libs/streamlib-surface-client/src/linux.rs`. One-shot
 length-prefixed JSON request/response over Unix socket with
 `SCM_RIGHTS` ancillary FD passing. Operations:
@@ -86,9 +86,9 @@ the subprocess can `lock` / read / `unlock` / `release`.
 
 ### Seam 2 — escalate IPC
 
-`libs/streamlib/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
+`libs/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
 typed by JTD schemas at
-`libs/streamlib/schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`.
+`libs/streamlib-engine/schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`.
 Length-prefixed JSON request/response over the subprocess's
 stdin/stdout pipes, with discriminator-tagged op enum:
 
@@ -360,7 +360,7 @@ created the live `GpuContext` but before any processor's `setup()`
 runs — the window where adapter bridges and pre-allocated host
 surfaces have to be in place.
 
-[hook]: ../../libs/streamlib/src/core/runtime/runtime.rs
+[hook]: ../../libs/streamlib-engine/src/core/runtime/runtime.rs
 
 The shape of what the hook does varies by seam:
 
@@ -468,7 +468,7 @@ the other by Path 1 (in-process, via the registry held in
 that don't match registration](texture-registration.md#anti-patterns).
 
 The reference in-tree producer is `LinuxCameraProcessor` —
-`libs/streamlib/src/linux/processors/camera.rs` calls both
+`libs/streamlib-engine/src/linux/processors/camera.rs` calls both
 `store.register_texture(...)` (around line 833) and
 `gpu_context.register_texture_with_layout(...)` (around line 862)
 for every ring texture it allocates, with the same

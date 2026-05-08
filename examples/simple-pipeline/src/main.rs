@@ -14,10 +14,10 @@
 //!
 //! You should hear a C major chord (C4, E4, G4) for 2 seconds.
 
-use streamlib::core::{AudioOutputConfig, ChordGeneratorConfig};
-use streamlib::{
-    input, output, AudioOutputProcessor, ChordGeneratorProcessor, Result, StreamRuntime,
-};
+use streamlib::sdk::{AudioOutputConfig, ChordGeneratorConfig};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::processors::{input, output, AudioOutputProcessor, ChordGeneratorProcessor};
 
 fn main() -> Result<()> {
 
@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     println!("  • Handle-based type-safe connections\n");
 
     // Create runtime (no FPS parameter - event-driven!)
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Audio configuration
     let sample_rate = 48000;

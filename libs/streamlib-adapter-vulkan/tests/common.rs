@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 /// Locate the `vulkan_adapter_subprocess_helper` binary built by the
 /// `streamlib-adapter-vulkan-helpers` dev-dependency. Cargo doesn't
@@ -36,9 +36,9 @@ pub fn vulkan_adapter_subprocess_helper_path() -> PathBuf {
     helper
 }
 
-use streamlib::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::{StreamTexture, TextureFormat};
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::rhi::{StreamTexture, TextureFormat};
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,

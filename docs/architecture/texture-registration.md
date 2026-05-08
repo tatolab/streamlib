@@ -561,16 +561,16 @@ When a new field lands on `TextureRegistration`:
 
 ## Reference
 
-- **Implementation**: `libs/streamlib/src/core/context/texture_registration.rs`,
+- **Implementation**: `libs/streamlib-engine/src/core/context/texture_registration.rs`,
   `GpuContext::register_texture_with_layout` /
   `GpuContext::resolve_videoframe_registration` in
-  `libs/streamlib/src/core/context/gpu_context.rs`.
+  `libs/streamlib-engine/src/core/context/gpu_context.rs`.
 - **First consumer**: `LinuxDisplayProcessor::render_frame` in
-  `libs/streamlib/src/linux/processors/display.rs`.
+  `libs/streamlib-engine/src/linux/processors/display.rs`.
 - **First adapter-output producer**: `register_opengl_output_surface`
   in `examples/camera-python-display/src/linux.rs`.
 - **First in-tree producer**: `LinuxCameraProcessor` in
-  `libs/streamlib/src/linux/processors/camera.rs`.
+  `libs/streamlib-engine/src/linux/processors/camera.rs`.
 - **Adapter-scope sibling**: `streamlib-adapter-vulkan::SurfaceState`
   in `libs/streamlib-adapter-vulkan/src/state.rs:48` (and the
   same-shape cuda + cpu-readback adapter state structs). These are

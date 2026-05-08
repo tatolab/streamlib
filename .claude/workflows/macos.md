@@ -6,7 +6,7 @@ code, IOSurface, Metal RHI, AVFoundation, or CoreAudio paths.
 ## What the agent needs to know first
 
 - macOS and Linux code live in separate directories under
-  `libs/streamlib/src/` — `apple/` and `linux/`. Platform `cfg` gates
+  `libs/streamlib-engine/src/` — `apple/` and `linux/`. Platform `cfg` gates
   inside those directories are redundant; don't add them.
 - The `surface_store.rs`, `gl_interop.rs`, and IOSurface-related code
   are slated for removal as part of the *Polyglot SDK Realignment*

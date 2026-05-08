@@ -11,7 +11,7 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-streamlib = { path = "../../../libs/streamlib" }
+streamlib = { path = "../../../libs/streamlib-sdk" }
 streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi" }
 serde = { workspace = true }
 serde_json = { workspace = true }

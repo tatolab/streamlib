@@ -60,13 +60,14 @@
 
 use std::path::PathBuf;
 
-use streamlib::core::context::GpuContext;
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::TextureFormat;
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::{
-    CameraProcessor, DisplayProcessor, ProcessorSpec, Result, StreamRuntime,
-};
+use streamlib::sdk::context::GpuContext;
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::rhi::TextureFormat;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::error::StreamError;
+use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, ProcessorSpec};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_consumer_rhi::VulkanLayout;
 
@@ -115,7 +116,7 @@ const BYTES_PER_PIXEL: u32 = 4;
 pub fn main() -> Result<()> {
     println!("=== AvatarCharacter (Linux, #484 cuda + opengl adapters) ===\n");
 
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
     let project_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python");
 
     // Load processor package from streamlib.yaml. The Python processors
@@ -449,7 +450,7 @@ fn register_render_target_surface(
             uuid,
             &texture,
             None,
-            streamlib::core::rhi::VulkanLayout::GENERAL,
+            streamlib::sdk::rhi::VulkanLayout::GENERAL,
         )
         .map_err(|e| format!("{label}: surface_store.register_texture: {e}"))?;
 

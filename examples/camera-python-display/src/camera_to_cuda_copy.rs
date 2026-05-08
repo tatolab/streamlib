@@ -19,18 +19,17 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::core::{
-    Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError,
-};
-use streamlib::VideoFrame;
-use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::_generated_::VideoFrame;
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 #[cfg(target_os = "linux")]
-use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
+use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer};
 #[cfg(target_os = "linux")]
-use streamlib::core::GpuContextLimitedAccess;
+use streamlib::sdk::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
-use streamlib::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
+use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 #[cfg(target_os = "linux")]
 use streamlib_adapter_abi::{AdapterError, SurfaceId};
 #[cfg(target_os = "linux")]
@@ -63,7 +62,7 @@ struct LinuxState {
     /// Owns the cuda OPAQUE_FD `VkBuffer` + exportable timeline; lives
     /// for the processor's runtime window so surface-share's daemon-
     /// duped fds stay valid.
-    adapter: Arc<CudaSurfaceAdapter<streamlib::host_rhi::HostVulkanDevice>>,
+    adapter: Arc<CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>>,
     surface_id: SurfaceId,
     /// Hot-path-cached so `process()` doesn't go through `Arc::clone`
     /// on the limited-access GpuContext every frame.
@@ -90,14 +89,14 @@ impl Default for CameraToCudaCopyConfig {
     }
 }
 
-#[streamlib::processor("CameraToCudaCopy")]
+#[streamlib::sdk::processor("CameraToCudaCopy")]
 pub struct CameraToCudaCopyProcessor {
     config: CameraToCudaCopyConfig,
     backend: GpuBackendStash,
     frame_count: AtomicU64,
 }
 
-impl streamlib::core::ReactiveProcessor for CameraToCudaCopyProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for CameraToCudaCopyProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -204,7 +203,7 @@ impl CameraToCudaCopyProcessor::Processor {
         // 4. Cuda adapter — owns the registration's `Arc`s and runs
         //    the timeline-wait protocol on per-acquire from the
         //    cdylib customer.
-        let adapter: Arc<CudaSurfaceAdapter<streamlib::host_rhi::HostVulkanDevice>> = Arc::new(
+        let adapter: Arc<CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>> = Arc::new(
             CudaSurfaceAdapter::new(Arc::clone(&host_device)),
         );
         adapter

@@ -53,10 +53,10 @@ pub fn workspace_root() -> PathBuf {
         .expect("workspace root canonicalize")
 }
 
-/// `libs/streamlib` — directory holding the in-tree `streamlib.yaml`
-/// manifest and `schemas/` directory.
+/// `libs/streamlib-engine` — directory holding the in-tree
+/// `streamlib.yaml` manifest and `schemas/` directory.
 pub fn streamlib_yaml_dir() -> PathBuf {
-    workspace_root().join("libs/streamlib")
+    workspace_root().join("libs/streamlib-engine")
 }
 
 /// Run the full project codegen against the in-tree `streamlib.yaml`.

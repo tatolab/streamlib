@@ -17,18 +17,30 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use streamlib::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
 use anyhow::{Context, Result};
-use streamlib::core::rhi::{
-    RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
-    RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, StreamTexture,
-    TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
+use streamlib::sdk::rhi::{
+    RayTracingBindingSpec,
+    RayTracingKernelDescriptor,
+    RayTracingPushConstants,
+    RayTracingShaderGroup,
+    RayTracingShaderStageFlags,
+    RayTracingStage,
+    StreamTexture,
+    TextureDescriptor,
+    TextureFormat,
+    TextureReadbackDescriptor,
+    TextureSourceLayout,
     TextureUsages,
 };
-use streamlib::host_rhi::{
-    HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc, VulkanAccelerationStructure,
-    VulkanRayTracingKernel, VulkanTextureReadback,
+use streamlib::sdk::engine::host_rhi::{
+    HostVulkanDevice,
+    HostVulkanTexture,
+    TlasInstanceDesc,
+    VulkanAccelerationStructure,
+    VulkanRayTracingKernel,
+    VulkanTextureReadback,
 };
 
 const SHOWCASE_RGEN: &[u8] = include_bytes!(concat!(

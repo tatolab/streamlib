@@ -82,6 +82,8 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_cdylib_and_adapter_runtime_deps(project_root, &mut violations, &mut files_scanned)?;
     check_privileged_vk_calls(project_root, &mut violations, &mut files_scanned)?;
     check_vulkanalia_uses_workspace_fork(project_root, &mut violations, &mut files_scanned)?;
+    check_streamlib_engine_confined(project_root, &mut violations, &mut files_scanned)?;
+    check_streamlib_top_level_shortcut(project_root, &mut violations, &mut files_scanned)?;
     Ok(CheckReport { violations, files_scanned })
 }
 
@@ -254,7 +256,7 @@ const VULKANALIA_RATIONALE: &str =
 const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // Core RHI host side — owns every privileged Vulkan primitive.
     AllowEntry {
-        path: "libs/streamlib/src/vulkan/",
+        path: "libs/streamlib-engine/src/vulkan/",
         kind: AllowKind::PathPrefix,
         rationale: "host RHI lives here",
     },
@@ -283,21 +285,21 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // vulkanalia for the swapchain and rendering pipeline (mirrors how
     // Metal rendering is platform-specific on macOS).
     AllowEntry {
-        path: "libs/streamlib/src/linux/processors/display.rs",
+        path: "libs/streamlib-engine/src/linux/processors/display.rs",
         kind: AllowKind::ExactFile,
         rationale: "platform display: swapchain + rendering pipeline (CLAUDE.md exception)",
     },
     // Camera processor — historical use of cmd_pipeline_barrier per
     // docs/learnings/vulkanalia-empty-slice-cast.md.
     AllowEntry {
-        path: "libs/streamlib/src/linux/processors/camera.rs",
+        path: "libs/streamlib-engine/src/linux/processors/camera.rs",
         kind: AllowKind::ExactFile,
         rationale: "cmd_pipeline_barrier for layout transitions (vulkanalia-empty-slice-cast learning)",
     },
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
     AllowEntry {
-        path: "libs/streamlib/src/core/context/gpu_context.rs",
+        path: "libs/streamlib-engine/src/core/context/gpu_context.rs",
         kind: AllowKind::ExactFile,
         rationale: "RHI wrapper layer; bridges processors to the RHI",
     },
@@ -316,7 +318,7 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // camera-python-display (#487) — TRANSITIONAL exception. The
     // example owns its `BlendingCompositor` + `CrtFilmGrain` graphics-
     // kernel wrappers as sandboxed scenario content rather than
-    // engine code (the prior placement in `libs/streamlib/` encoded
+    // engine code (the prior placement in `libs/streamlib-engine/` encoded
     // demo-specific app content into the engine). The wrappers
     // hand-roll synchronous fence-blocked dispatch with internal
     // layout-barrier management — a pattern the engine deliberately
@@ -378,7 +380,7 @@ fn check_vulkanalia_confined(
     // crate roots (one entry per crate that owns at least one
     // vulkanalia-allowlisted source file). Matching is against the full
     // Cargo.toml file path so trailing-slash directory boundaries hit
-    // (`libs/streamlib/Cargo.toml` matches `libs/streamlib/`, but
+    // (`libs/streamlib-engine/Cargo.toml` matches `libs/streamlib-engine/`, but
     // `libs/streamlib-runtime/Cargo.toml` does not).
     for path in walk_cargo_toml(project_root) {
         *files_scanned += 1;
@@ -414,7 +416,7 @@ fn check_vulkanalia_confined(
 /// the dep elsewhere is a regression.
 const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
-        path: "libs/streamlib/",
+        path: "libs/streamlib-engine/",
         kind: AllowKind::PathPrefix,
         rationale: "host crate: src/vulkan/ owns the RHI; processors/display.rs and processors/camera.rs are documented exceptions",
     },
@@ -528,7 +530,7 @@ const PRIVILEGED_METHODS: &[&str] = &[
 const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // Host RHI — defines and owns the privileged calls.
     AllowEntry {
-        path: "libs/streamlib/src/vulkan/",
+        path: "libs/streamlib-engine/src/vulkan/",
         kind: AllowKind::PathPrefix,
         rationale: "host RHI owns privileged primitives",
     },
@@ -552,7 +554,7 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // Camera processor compiles a compute pipeline locally (NV12 → BGRA).
     // Tracked separately for migration to VulkanComputeKernel.
     AllowEntry {
-        path: "libs/streamlib/src/linux/processors/camera.rs",
+        path: "libs/streamlib-engine/src/linux/processors/camera.rs",
         kind: AllowKind::ExactFile,
         rationale: "compute pipeline for NV12→BGRA; migration to VulkanComputeKernel tracked separately",
     },
@@ -663,6 +665,200 @@ fn check_vulkanalia_uses_workspace_fork(
 
 fn is_vulkanalia_dep(name: &str) -> bool {
     name == "vulkanalia" || name == "vulkanalia-sys" || name == "vulkanalia-vma"
+}
+
+// ---------------------------------------------------------------------------
+// Check 6 — `streamlib_engine` direct imports confined to the engine + SDK
+// ---------------------------------------------------------------------------
+//
+// The SDK / engine split (#731) makes `streamlib` the universal facade for
+// all consumer code — apps, examples, domain packages, adapter crates,
+// adapter helpers, engine tooling. The only places that legitimately import
+// `streamlib_engine::*` directly are:
+//
+// 1. The engine itself (`libs/streamlib-engine/`) — its own bins, tests,
+//    benches link to its lib by the engine's published Cargo name.
+// 2. The SDK's facade source (`libs/streamlib-sdk/src/lib.rs`) — the one
+//    file that pub-uses items from engine to expose them through
+//    `streamlib::*`.
+//
+// Anywhere else, `use streamlib_engine` or `streamlib_engine::PATH`
+// references mean someone is bypassing the SDK boundary visually — even if
+// the Cargo dep graph is correct, a future reader can't tell whether the
+// SDK is doing anything. Engine-bridge access (host_rhi, Host*Ext, etc.)
+// goes through `streamlib::sdk::engine::*` instead.
+
+const CHECK_STREAMLIB_ENGINE: &str = "streamlib-engine-only-in-sdk-or-engine";
+
+const STREAMLIB_ENGINE_RATIONALE: &str =
+    "direct streamlib_engine::* imports must stay in the engine itself or in libs/streamlib-sdk/src/lib.rs (the SDK facade); consumer code routes through streamlib::* (with engine extensions via streamlib::sdk::engine::*)";
+
+const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "libs/streamlib-engine/",
+        kind: AllowKind::PathPrefix,
+        rationale: "engine itself — its own bins/tests/benches link to its lib by name",
+    },
+    AllowEntry {
+        path: "libs/streamlib-sdk/src/lib.rs",
+        kind: AllowKind::ExactFile,
+        rationale: "SDK facade — pub uses items from engine to expose via streamlib::*",
+    },
+];
+
+// ---------------------------------------------------------------------------
+// Check 7 — `streamlib::*` top-level shortcuts forbidden
+// ---------------------------------------------------------------------------
+//
+// All consumer code must route through the SDK's three-tier path system:
+//
+//   - `streamlib::sdk::*`            (default — public SDK API)
+//   - `streamlib::sdk::engine::*`    (curated engine-bridge surface)
+//   - `streamlib::engine_internal::*`(direct passthrough — rare; signals
+//                                     "I'm reaching past the curated boundary")
+//
+// Top-level `streamlib::Foo` shortcuts (e.g., `use streamlib::StreamRuntime`)
+// are forbidden because they hide which boundary tier the consumer is in.
+// Path segments are the documentation: a future reader scans the import
+// and immediately knows which tier is being used.
+//
+// The engine itself uses `extern crate self as streamlib;` and references
+// items through that alias for proc-macro path resolution. Those uses
+// are exempt — the engine's lib.rs and its own internal modules legitimately
+// reach internal items through `streamlib::*`.
+
+const CHECK_TOP_LEVEL_SHORTCUT: &str = "streamlib-top-level-shortcut-forbidden";
+
+const TOP_LEVEL_SHORTCUT_RATIONALE: &str =
+    "use streamlib::sdk::* (or sdk::engine::* / engine_internal::* for engine-side access); top-level streamlib::Foo shortcuts hide the boundary tier";
+
+const TOP_LEVEL_SHORTCUT_ALLOWLIST: &[AllowEntry] = &[
+    AllowEntry {
+        path: "libs/streamlib-engine/",
+        kind: AllowKind::PathPrefix,
+        rationale: "engine itself — `extern crate self as streamlib;` aliases the engine; internal modules reach items through this alias for proc-macro path resolution",
+    },
+    AllowEntry {
+        path: "libs/streamlib-sdk/src/lib.rs",
+        kind: AllowKind::ExactFile,
+        rationale: "SDK facade — defines the streamlib::sdk::* / engine_internal::* tree",
+    },
+    AllowEntry {
+        path: "libs/streamlib-macros/",
+        kind: AllowKind::PathPrefix,
+        rationale: "proc-macro emit-paths for downstream consumers; not consumer code",
+    },
+];
+
+// Path-prefix allowlist for the FIRST segment after `streamlib::`. A
+// `streamlib::FOO` reference is OK only if FOO is one of these segments.
+const TOP_LEVEL_ALLOWED_SEGMENTS: &[&str] = &["sdk", "engine_internal"];
+
+fn check_streamlib_top_level_shortcut(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    // Hand-rolled scanner — match `streamlib::FOO` where FOO starts at
+    // a word boundary and is an identifier.
+    for path in walk_rs(project_root) {
+        *files_scanned += 1;
+        let rel = rel_to_root(&path, project_root);
+        if matches_allow(rel, TOP_LEVEL_SHORTCUT_ALLOWLIST) {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("read {}", path.display()))?;
+        for (line_no, line) in content.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue; // skip comments (incl. `///` and `//!`)
+            }
+            // Walk every occurrence of "streamlib::" in the line, check the
+            // segment that follows.
+            let bytes = line.as_bytes();
+            let mut i = 0;
+            while let Some(found) = line[i..].find("streamlib::") {
+                let start = i + found;
+                // Boundary check: char before must NOT be ident/_ (avoid
+                // matching `streamlib_engine::...`, `streamlib_consumer_rhi::...` etc.)
+                if start > 0 {
+                    let prev = bytes[start - 1] as char;
+                    if prev.is_ascii_alphanumeric() || prev == '_' {
+                        i = start + "streamlib::".len();
+                        continue;
+                    }
+                }
+                let after = start + "streamlib::".len();
+                // Read the segment ident
+                let mut end = after;
+                while end < bytes.len() {
+                    let c = bytes[end] as char;
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if end > after {
+                    let segment = &line[after..end];
+                    if !TOP_LEVEL_ALLOWED_SEGMENTS.contains(&segment) {
+                        violations.push(Violation {
+                            path: rel.to_path_buf(),
+                            line_no: line_no + 1,
+                            line_text: line.to_string(),
+                            matched_pattern: format!("streamlib::{} (top-level)", segment),
+                            check: CHECK_TOP_LEVEL_SHORTCUT,
+                            rationale: TOP_LEVEL_SHORTCUT_RATIONALE,
+                        });
+                    }
+                }
+                i = end;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_streamlib_engine_confined(
+    project_root: &Path,
+    violations: &mut Vec<Violation>,
+    files_scanned: &mut usize,
+) -> Result<()> {
+    for path in walk_rs(project_root) {
+        *files_scanned += 1;
+        let rel = rel_to_root(&path, project_root);
+        if matches_allow(rel, STREAMLIB_ENGINE_ALLOWLIST) {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("read {}", path.display()))?;
+        for (line_no, line) in content.lines().enumerate() {
+            // Skip comment-only lines (doc-comment intra-doc links are not
+            // type-checked but still encourage future authors to reach for
+            // the engine path; flag them too).
+            if !line.contains("streamlib_engine") {
+                continue;
+            }
+            // Trim leading whitespace to detect the line-shape.
+            let trimmed = line.trim_start();
+            // We flag any non-comment line that mentions `streamlib_engine`.
+            // Comment lines (//, ///, //!) we skip — doc-link rewriting is
+            // handled by docs sweep and not boundary-relevant.
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            violations.push(Violation {
+                path: rel.to_path_buf(),
+                line_no: line_no + 1,
+                line_text: line.to_string(),
+                matched_pattern: "streamlib_engine".to_string(),
+                check: CHECK_STREAMLIB_ENGINE,
+                rationale: STREAMLIB_ENGINE_RATIONALE,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn dep_is_workspace_inherited(value: &toml::Value) -> bool {
@@ -797,7 +993,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/lib.rs",
+            "libs/streamlib-engine/src/lib.rs",
             "use ash::vk;\nfn main() {}\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -813,7 +1009,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/lib.rs",
+            "libs/streamlib-engine/src/lib.rs",
             "extern crate ash;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -825,7 +1021,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/Cargo.toml",
+            "libs/streamlib-engine/Cargo.toml",
             "[package]\nname = \"streamlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nash = \"0.38\"\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -842,13 +1038,13 @@ mod tests {
         // Lookalike substring should NOT trip the check.
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/lib.rs",
+            "libs/streamlib-engine/src/lib.rs",
             "use ahash::AHashMap;\nlet h: Hash = todo!();\n",
         );
         // Cargo.toml with ahash dep.
         write_fixture(
             dir.path(),
-            "libs/streamlib/Cargo.toml",
+            "libs/streamlib-engine/Cargo.toml",
             "[package]\nname = \"streamlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nahash = \"0.8\"\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -863,7 +1059,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/core/some_unrelated.rs",
+            "libs/streamlib-engine/src/core/some_unrelated.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -879,7 +1075,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/vulkan/rhi/example.rs",
+            "libs/streamlib-engine/src/vulkan/rhi/example.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1198,7 +1394,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/core/some_other.rs",
+            "libs/streamlib-engine/src/core/some_other.rs",
             "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1230,7 +1426,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/vulkan/rhi/vulkan_device.rs",
+            "libs/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
             "fn f() { unsafe { self.device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1380,7 +1576,7 @@ vulkanalia = { workspace = true }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/lib.rs",
+            "libs/streamlib-engine/src/lib.rs",
             "// use ash::vk; — kept for historical reference only\n",
         );
         let report = scan_all(dir.path()).unwrap();

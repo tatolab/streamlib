@@ -181,7 +181,7 @@ AdapterDeclaration` shape (mirroring `streamlib-plugin-abi`'s
 - `libs/streamlib-python/python/streamlib/surface_adapter.py` —
   Python mirror.
 - `libs/streamlib-deno/surface_adapter.ts` — Deno mirror.
-- `libs/streamlib/src/linux/surface_share/` — host-side backing
+- `libs/streamlib-engine/src/linux/surface_share/` — host-side backing
   store and the Unix-socket service that hands DMA-BUF fds to
   subprocesses.
 

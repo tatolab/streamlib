@@ -17,7 +17,7 @@ crate-type = ["rlib"]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `streamlib::_generated_::tatolab__audio::*`, AudioFrame
 # wire type, audio utilities (resample, channel/format conversion).
-streamlib = { path = "../../libs/streamlib" }
+streamlib = { path = "../../libs/streamlib-sdk" }
 
 # Procedural macros — `#[streamlib::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.

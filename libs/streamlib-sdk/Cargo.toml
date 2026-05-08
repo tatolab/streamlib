@@ -1,0 +1,31 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "streamlib — public authoring API surface (StreamRuntime, ProcessorSpec, port markers, processor traits, error types, descriptors). Engine internals live in a private streamlib-engine dep."
+keywords = ["video", "streaming", "gpu", "real-time", "ai"]
+categories = ["multimedia::video", "multimedia", "api-bindings"]
+
+[lib]
+name = "streamlib"
+crate-type = ["rlib"]
+
+[features]
+default = []
+# Forwarded engine features. Customer apps that need a non-default engine
+# configuration enable the matching SDK feature; the SDK forwards it to
+# the engine dep.
+backend-metal = ["streamlib-engine/backend-metal"]
+backend-vulkan = ["streamlib-engine/backend-vulkan"]
+moq = ["streamlib-engine/moq"]
+strip_debug_logging = ["streamlib-engine/strip_debug_logging"]
+hardware-tests = ["streamlib-engine/hardware-tests"]
+
+[dependencies]
+streamlib-engine = { path = "../streamlib-engine" }

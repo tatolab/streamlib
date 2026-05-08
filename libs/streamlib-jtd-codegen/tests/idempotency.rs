@@ -7,7 +7,7 @@
 //! in a row, diff is empty").
 //!
 //! For each runtime (Rust, Python, TypeScript), runs the full project
-//! codegen against the in-tree `libs/streamlib/streamlib.yaml` manifest
+//! codegen against the in-tree `libs/streamlib-engine/streamlib.yaml` manifest
 //! into two separate temp dirs and asserts the trees are byte-identical.
 //! The sibling unit tests in `ordering.rs` lock the sort function in
 //! isolation; this file locks the end-to-end pipeline.

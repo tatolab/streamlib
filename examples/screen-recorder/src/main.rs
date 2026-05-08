@@ -11,12 +11,13 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::_generated_::com_tatolab_screen_capture_config::TargetType;
+use streamlib::sdk::_generated_::com_tatolab_screen_capture_config::TargetType;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::{
-    input, output, request_display_permission, Mp4WriterProcessor, Result, ScreenCaptureProcessor,
-    StreamRuntime,
-};
+use streamlib::sdk::permissions::request_display_permission;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib::sdk::processors::{Mp4WriterProcessor, ScreenCaptureProcessor};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn main() -> Result<()> {
@@ -24,7 +25,7 @@ fn main() -> Result<()> {
     println!("=== Screen Recorder Pipeline ===\n");
 
     // Create runtime first
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Request screen recording permission
     println!("Requesting screen recording permission...");

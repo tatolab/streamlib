@@ -72,7 +72,7 @@ binding declaration, the kernel:
 
 ## Adding a new ray-tracing kernel — the recipe
 
-1. **Write the GLSL** in `libs/streamlib/src/vulkan/rhi/shaders/<name>.{rgen,rmiss,rchit,rahit,rint,rcall}`.
+1. **Write the GLSL** in `libs/streamlib-engine/src/vulkan/rhi/shaders/<name>.{rgen,rmiss,rchit,rahit,rint,rcall}`.
    Use descriptor set 0; multi-set kernels are not supported. Each
    shader needs `#version 460` and `#extension GL_EXT_ray_tracing :
    require`. Acceleration-structure bindings declare as
@@ -80,7 +80,7 @@ binding declaration, the kernel:
    format qualifier (`rgba8`, etc.).
 
 2. **Wire the shaders into `build.rs`.** Add an entry per stage to
-   the `rt_shaders` array in `libs/streamlib/build.rs`. RT shaders
+   the `rt_shaders` array in `libs/streamlib-engine/build.rs`. RT shaders
    are compiled with `--target-env=vulkan1.2 --target-spv=spv1.4`
    so `SPV_KHR_ray_tracing` opcodes are available; the helper
    handles the per-stage `-fshader-stage=rgen|rmiss|rchit|...`

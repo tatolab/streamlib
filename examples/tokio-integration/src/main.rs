@@ -3,14 +3,15 @@
 
 //! Tokio Integration Example
 //!
-//! Demonstrates StreamRuntime integration with existing tokio applications.
-//! StreamRuntime::new() auto-detects the tokio context and works seamlessly.
+//! Demonstrates Runner integration with existing tokio applications.
+//! Runner::new() auto-detects the tokio context and works seamlessly.
 //!
-//! Previously, calling StreamRuntime::new() from within #[tokio::main] would panic.
+//! Previously, calling Runner::new() from within #[tokio::main] would panic.
 //! With issue #92 implemented, it now auto-detects the tokio runtime and uses
 //! the current handle instead of trying to create a new runtime.
 
-use streamlib::{Result, StreamRuntime};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -18,14 +19,14 @@ async fn main() -> Result<()> {
 
     // Just call new() - it auto-detects the tokio context!
     // No special constructor needed. This used to panic, now it works.
-    let runtime = StreamRuntime::new()?;
-    println!("StreamRuntime created (auto-detected tokio context)");
+    let runtime = Runner::new()?;
+    println!("Runner created (auto-detected tokio context)");
 
     // Start the runtime
     runtime.start()?;
     println!("Runtime started");
 
-    // Demonstrate that async tokio operations work alongside StreamRuntime
+    // Demonstrate that async tokio operations work alongside Runner
     println!("Running async operations...");
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 

@@ -155,10 +155,10 @@ violation message points back here.
 
 ## Reference
 
-- Implementation: `libs/streamlib/src/vulkan/rhi/vulkan_texture_readback.rs`
-- Public types: `libs/streamlib/src/core/rhi/texture_readback.rs`
+- Implementation: `libs/streamlib-engine/src/vulkan/rhi/vulkan_texture_readback.rs`
+- Public types: `libs/streamlib-engine/src/core/rhi/texture_readback.rs`
 - GpuContext factory: `GpuContext::create_texture_readback`
-  (`libs/streamlib/src/core/context/gpu_context.rs`)
+  (`libs/streamlib-engine/src/core/context/gpu_context.rs`)
 - Engine precedent: `compute-kernel.md` and
-  `libs/streamlib/src/vulkan/rhi/vulkan_compute_kernel.rs`
+  `libs/streamlib-engine/src/vulkan/rhi/vulkan_compute_kernel.rs`
 - Trade-off discussion: issue #583

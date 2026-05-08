@@ -62,6 +62,6 @@ mod crt_film_grain_kernel;
 mod linux;
 
 #[cfg(target_os = "linux")]
-fn main() -> streamlib::Result<()> {
+fn main() -> streamlib::sdk::error::Result<()> {
     linux::main()
 }

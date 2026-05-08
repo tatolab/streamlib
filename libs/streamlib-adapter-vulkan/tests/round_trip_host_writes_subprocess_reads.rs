@@ -12,7 +12,7 @@
 mod common;
 
 use std::sync::Arc;
-use streamlib::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -100,7 +100,7 @@ fn host_writes_subprocess_reads_round_trip() {
 }
 
 fn host_clear_image(
-    device: &Arc<streamlib::host_rhi::HostVulkanDevice>,
+    device: &Arc<streamlib::sdk::engine::host_rhi::HostVulkanDevice>,
     image: vk::Image,
     color: [f32; 4],
 ) {

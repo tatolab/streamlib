@@ -18,10 +18,10 @@
 mod common;
 
 use std::sync::Arc;
-use streamlib::HostStreamTextureExt;
+use streamlib::sdk::engine::HostStreamTextureExt;
 
-use streamlib::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
-use streamlib::core::rhi::{PixelFormat, TextureFormat};
+use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
+use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,

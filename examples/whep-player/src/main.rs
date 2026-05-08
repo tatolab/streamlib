@@ -6,13 +6,15 @@
 //! This example demonstrates receiving H.264 video and Opus audio from a WHEP endpoint
 //! using StreamLib's integrated WHEP processor with VideoToolbox hardware decoding.
 
-use streamlib::{Result, StreamRuntime};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 
 #[cfg(target_os = "macos")]
-use streamlib::core::DisplayConfig;
+use streamlib::sdk::DisplayConfig;
 
 #[cfg(target_os = "macos")]
-use streamlib::{input, output, AudioOutputProcessor, DisplayProcessor};
+use streamlib::sdk::processors::DisplayProcessor;
+use streamlib::sdk::processors::{input, output, AudioOutputProcessor};
 
 fn main() -> Result<()> {
 
@@ -32,7 +34,11 @@ fn main() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn run_whep_player() -> Result<()> {
-    use streamlib::{WebRtcWhepConfig, WebRtcWhepProcessor, WhepConfig};
+    use streamlib::sdk::processors::WebRtcWhepProcessor;
+    use streamlib::sdk::streaming::WhepConfig;
+    // Note: WebRtcWhepConfig type is not currently defined anywhere in the
+    // engine — this example is excluded from the workspace and predates the
+    // current WebRTC config shape. Left as-is until the example is revived.
 
     // Get WHEP endpoint URL from environment or use Cloudflare Stream default
     let whep_url = std::env::var("WHEP_URL").unwrap_or_else(|_| {
@@ -42,8 +48,8 @@ fn run_whep_player() -> Result<()> {
     tracing::info!("📡 Connecting to WHEP endpoint:");
     tracing::info!("   {}\n", whep_url);
 
-    // Create StreamRuntime
-    let runtime = StreamRuntime::new()?;
+    // Create Runner
+    let runtime = Runner::new()?;
 
     // Configure WHEP processor
     let whep_config = WebRtcWhepConfig {

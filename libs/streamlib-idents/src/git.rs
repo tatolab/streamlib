@@ -5,7 +5,7 @@
 //!
 //! Shared between the build-time resolver (`streamlib_idents::resolve`)
 //! and the runtime's consumer-patch resolution path
-//! (`streamlib::core::runtime::runtime`). Single source of truth for
+//! (`streamlib::sdk::runtime::runtime`). Single source of truth for
 //! "clone a pinned-rev git URL into a content-addressed cache dir";
 //! both contexts go through this so they share the same checkout
 //! locations and errors.

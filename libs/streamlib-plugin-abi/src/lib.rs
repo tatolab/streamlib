@@ -4,7 +4,7 @@
 //! ABI-stable plugin interface for StreamLib dynamic processor loading.
 //!
 //! This crate provides the minimal interface for plugins to register their
-//! processors with the StreamLib runtime. Plugins use the same `#[streamlib::processor]`
+//! processors with the StreamLib runtime. Plugins use the same `#[streamlib::sdk::processor]`
 //! macro as built-in processors - the only difference is how they're registered.
 //!
 //! # Example Plugin
@@ -13,12 +13,12 @@
 //! use streamlib::prelude::*;
 //! use streamlib_plugin_abi::export_plugin;
 //!
-//! #[streamlib::processor(execution = Continuous)]
+//! #[streamlib::sdk::processor(execution = Continuous)]
 //! pub struct MyProcessor {
-//!     #[streamlib::input(description = "Video input")]
+//!     #[streamlib::sdk::processors::input(description = "Video input")]
 //!     video_in: LinkInput<VideoFrame>,
 //!
-//!     #[streamlib::output(description = "Video output")]
+//!     #[streamlib::sdk::processors::output(description = "Video output")]
 //!     video_out: Arc<LinkOutput<VideoFrame>>,
 //! }
 //!
@@ -47,7 +47,7 @@
 //! streamlib-plugin-abi = "0.2"
 //! ```
 
-use streamlib::core::processors::ProcessorInstanceFactory;
+use streamlib::sdk::processors::ProcessorInstanceFactory;
 
 /// Current ABI version. Plugins must match this exactly.
 ///
@@ -102,7 +102,7 @@ unsafe impl Sync for PluginDeclaration {}
 ///
 /// # Requirements
 ///
-/// - Each processor must be defined using `#[streamlib::processor]`
+/// - Each processor must be defined using `#[streamlib::sdk::processor]`
 /// - The processor's `Processor` type must implement the appropriate trait
 ///   (`ContinuousProcessor`, `ReactiveProcessor`, or `ManualProcessor`)
 #[macro_export]
@@ -110,7 +110,7 @@ macro_rules! export_plugin {
     ($($processor:ty),* $(,)?) => {
         #[allow(non_snake_case)]
         extern "C" fn __streamlib_plugin_register(
-            registry: &'static ::streamlib::core::processors::ProcessorInstanceFactory
+            registry: &'static ::streamlib::sdk::processors::ProcessorInstanceFactory
         ) {
             $(
                 registry.register::<$processor>();

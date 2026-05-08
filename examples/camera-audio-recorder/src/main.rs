@@ -11,10 +11,11 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::{
-    input, output, request_audio_permission, request_camera_permission, CameraProcessor,
-    Mp4WriterProcessor, Result, StreamRuntime,
-};
+use streamlib::sdk::permissions::{request_audio_permission, request_camera_permission};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib::sdk::processors::{CameraProcessor, Mp4WriterProcessor};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::runtime::Runner;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib_audio::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -30,7 +31,7 @@ fn main() -> Result<()> {
     println!("=== Camera + Audio → MP4 Recorder Pipeline ===\n");
 
     // Create runtime first
-    let runtime = StreamRuntime::new()?;
+    let runtime = Runner::new()?;
 
     // Request camera and microphone permissions (must be on main thread)
     println!("🔒 Requesting camera permission...");
