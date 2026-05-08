@@ -249,7 +249,10 @@ pub mod sdk {
 ///
 /// ```compile_fail
 /// // `core::observability` is `pub(crate)` in streamlib-engine.
-/// use streamlib::engine_internal::core::observability::GraphInspector;
+/// // Importing the module path itself fails because the module is
+/// // crate-private — locks the visibility downgrade independent of
+/// // which items the module currently re-exports.
+/// use streamlib::engine_internal::core::observability;
 /// ```
 ///
 /// ```compile_fail
