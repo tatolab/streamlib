@@ -1042,7 +1042,7 @@ impl DisplayEventLoopHandler {
     /// are skipped with a warning rather than rebuilding the handle.
     fn sample_texture_to_png(
         &mut self,
-        texture: &crate::core::rhi::StreamTexture,
+        texture: &crate::core::rhi::Texture,
         path: &std::path::Path,
         frame_idx: u64,
         input_frame_index: u64,

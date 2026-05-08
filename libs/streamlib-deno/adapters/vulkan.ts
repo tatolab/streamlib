@@ -461,7 +461,7 @@ export class VulkanContext {
     }
     // Send the surface-share UUID, not the cdylib's local u64
     // surfaceId — the host bridge resolves UUID → host
-    // `StreamTexture` via an application-provided map.
+    // `Texture` via an application-provided map.
     void cached;
     await ch.runComputeKernel(
       kernelId,

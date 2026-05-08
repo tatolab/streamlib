@@ -6,9 +6,9 @@ use vulkanalia::vk;
 use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
-use crate::core::rhi::{PixelFormat, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
+use crate::core::rhi::{PixelFormat, Texture, TextureDescriptor, TextureFormat, TextureUsages};
 use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, Error};
-use crate::host_rhi::HostStreamTextureExt;
+use crate::host_rhi::HostTextureExt;
 use crate::iceoryx2::OutputWriter;
 use crate::vulkan::rhi::HostVulkanTexture;
 use streamlib_consumer_rhi::VulkanLayout;
@@ -780,7 +780,7 @@ fn capture_thread_loop(
                 | TextureUsages::COPY_SRC,
         );
 
-    let mut ring_textures: Vec<StreamTexture> = Vec::with_capacity(RING_TEXTURE_COUNT);
+    let mut ring_textures: Vec<Texture> = Vec::with_capacity(RING_TEXTURE_COUNT);
     let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
 
     for i in 0..RING_TEXTURE_COUNT {
@@ -837,7 +837,7 @@ fn capture_thread_loop(
         }
 
         let texture_id = uuid::Uuid::new_v4().to_string();
-        let stream_texture = StreamTexture::from_vulkan(vk_texture);
+        let stream_texture = Texture::from_vulkan(vk_texture);
 
         // Register with SurfaceStore for cross-process GPU-to-GPU sharing
         {
@@ -1780,7 +1780,7 @@ fn capture_thread_loop(
             }
         }
 
-        // Ring textures are owned by StreamTexture (Arc<HostVulkanTexture>) — they
+        // Ring textures are owned by Texture (Arc<HostVulkanTexture>) — they
         // clean up via Drop when ring_textures goes out of scope. Clear the
         // texture cache references so display doesn't try to use stale textures.
         gpu_context.set_camera_timeline_semaphore(0);

@@ -98,7 +98,7 @@ fn main() -> Result<()> {
     let runtime = Runner::new()?;
 
     let texture_slot: Arc<
-        Mutex<Option<streamlib::sdk::rhi::StreamTexture>>,
+        Mutex<Option<streamlib::sdk::rhi::Texture>>,
     > = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));

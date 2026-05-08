@@ -122,7 +122,7 @@ fn main() -> Result<()> {
     // `&GpuContext` borrow past the hook, so we Arc-clone the bits we
     // need.
     let texture_slot: Arc<
-        Mutex<Option<streamlib::sdk::rhi::StreamTexture>>,
+        Mutex<Option<streamlib::sdk::rhi::Texture>>,
     > = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));

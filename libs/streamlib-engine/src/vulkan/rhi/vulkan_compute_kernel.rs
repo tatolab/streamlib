@@ -25,7 +25,7 @@ use vulkanalia::vk;
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use crate::core::rhi::{
-    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, RhiPixelBuffer, StreamTexture,
+    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, RhiPixelBuffer, Texture,
 };
 use crate::core::{Result, Error};
 
@@ -291,7 +291,7 @@ impl VulkanComputeKernel {
 
     /// Bind a sampled texture at `binding`, using the kernel's default
     /// linear-clamp sampler.
-    pub fn set_sampled_texture(&self, binding: u32, texture: &StreamTexture) -> Result<()> {
+    pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledTexture)?;
         let view = vk_image_view_for(texture)?;
         let sampler = self.default_sampler()?;
@@ -304,7 +304,7 @@ impl VulkanComputeKernel {
 
     /// Bind a storage image at `binding`. Caller is responsible for ensuring
     /// the texture's `STORAGE_BINDING` usage was set when it was created.
-    pub fn set_storage_image(&self, binding: u32, texture: &StreamTexture) -> Result<()> {
+    pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageImage)?;
         let view = vk_image_view_for(texture)?;
         self.pending
@@ -1089,7 +1089,7 @@ fn vk_buffer_for(buffer: &RhiPixelBuffer) -> Result<(vk::Buffer, vk::DeviceSize)
     Ok((inner.buffer(), inner.size()))
 }
 
-fn vk_image_view_for(texture: &StreamTexture) -> Result<vk::ImageView> {
+fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
     texture.inner.image_view()
 }
 

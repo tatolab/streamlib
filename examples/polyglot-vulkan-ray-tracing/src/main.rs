@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use streamlib::sdk::context::{
     BlasRegisterDecl,
@@ -60,7 +60,7 @@ use streamlib::sdk::rhi::{
     RayTracingShaderGroup,
     RayTracingShaderStageFlags,
     RayTracingStage,
-    StreamTexture,
+    Texture,
     TextureDescriptor,
     TextureFormat,
     TextureReadbackDescriptor,
@@ -152,7 +152,7 @@ impl RuntimeKind {
 /// boundary forbids it).
 ///
 /// Holds three caches:
-/// - UUID → `StreamTexture` for resolving non-AS run-time bindings to
+/// - UUID → `Texture` for resolving non-AS run-time bindings to
 ///   host-side images (storage_image, sampled_texture).
 /// - `as_id` → `Arc<VulkanAccelerationStructure>` for resolving AS
 ///   bindings AND for chaining BLAS → TLAS construction (TLAS instance
@@ -162,13 +162,13 @@ impl RuntimeKind {
 ///   cache hit.
 struct SceneKernelBridge {
     device: Arc<HostVulkanDevice>,
-    surfaces: HashMap<String, StreamTexture>,
+    surfaces: HashMap<String, Texture>,
     as_handles: parking_lot::Mutex<HashMap<String, Arc<VulkanAccelerationStructure>>>,
     kernels: parking_lot::Mutex<HashMap<String, Arc<VulkanRayTracingKernel>>>,
 }
 
 impl SceneKernelBridge {
-    fn new(device: Arc<HostVulkanDevice>, surfaces: Vec<(String, StreamTexture)>) -> Self {
+    fn new(device: Arc<HostVulkanDevice>, surfaces: Vec<(String, Texture)>) -> Self {
         Self {
             device,
             surfaces: surfaces.into_iter().collect(),
@@ -553,7 +553,7 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    let texture_slot: Arc<Mutex<Option<StreamTexture>>> = Arc::new(Mutex::new(None));
+    let texture_slot: Arc<Mutex<Option<Texture>>> = Arc::new(Mutex::new(None));
     let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =
         Arc::new(Mutex::new(None));
 
@@ -589,7 +589,7 @@ fn main() -> Result<()> {
                     "HostVulkanTexture::new_device_local: {e}"
                 ))
             })?;
-            let stream_texture = StreamTexture::from_vulkan(texture);
+            let stream_texture = Texture::from_vulkan(texture);
             // Storage-image binding requires `VK_IMAGE_LAYOUT_GENERAL`.
             let image = stream_texture
                 .vulkan_inner()

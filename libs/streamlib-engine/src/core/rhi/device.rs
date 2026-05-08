@@ -8,10 +8,10 @@ use crate::core::Result;
     feature = "backend-vulkan",
     all(target_os = "linux", not(feature = "backend-metal"))
 ))]
-use crate::host_rhi::HostStreamTextureExt;
+use crate::host_rhi::HostTextureExt;
 
 use super::command_queue::RhiCommandQueue;
-use super::texture::{StreamTexture, TextureDescriptor};
+use super::texture::{Texture, TextureDescriptor};
 
 /// Platform-agnostic GPU device wrapper.
 ///
@@ -145,7 +145,7 @@ impl GpuDevice {
     }
 
     /// Create a texture on this device.
-    pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<StreamTexture> {
+    pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<Texture> {
         // Metal backend
         #[cfg(all(
             not(feature = "backend-vulkan"),
@@ -153,7 +153,7 @@ impl GpuDevice {
         ))]
         {
             let metal_texture = self.inner.create_texture(desc)?;
-            Ok(StreamTexture::from_metal(metal_texture))
+            Ok(Texture::from_metal(metal_texture))
         }
 
         // Vulkan backend
@@ -163,13 +163,13 @@ impl GpuDevice {
         ))]
         {
             let vulkan_texture = self.inner.create_texture(desc)?;
-            Ok(StreamTexture::from_vulkan(vulkan_texture))
+            Ok(Texture::from_vulkan(vulkan_texture))
         }
 
         #[cfg(target_os = "windows")]
         {
             let dx12_texture = self.inner.create_texture(desc)?;
-            Ok(StreamTexture::from_dx12(dx12_texture))
+            Ok(Texture::from_dx12(dx12_texture))
         }
     }
 
@@ -179,9 +179,9 @@ impl GpuDevice {
     /// never cross process boundaries; reduces pressure on NVIDIA Linux's
     /// DMA-BUF allocation cap.
     #[cfg(target_os = "linux")]
-    pub fn create_texture_local(&self, desc: &TextureDescriptor) -> Result<StreamTexture> {
+    pub fn create_texture_local(&self, desc: &TextureDescriptor) -> Result<Texture> {
         let vulkan_texture = self.inner.create_texture_local(desc)?;
-        Ok(StreamTexture::from_vulkan(vulkan_texture))
+        Ok(Texture::from_vulkan(vulkan_texture))
     }
 
     /// Get the shared command queue.

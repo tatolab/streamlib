@@ -36,7 +36,7 @@ Given a SPIR-V blob and a small typed declaration, the kernel:
 3. **Stages bindings as data** through `set_storage_buffer`,
    `set_uniform_buffer`, `set_sampled_texture`, `set_storage_image`,
    and `set_push_constants`. Each setter takes RHI-level types
-   (`RhiPixelBuffer`, `StreamTexture`, `&[u8]`).
+   (`RhiPixelBuffer`, `Texture`, `&[u8]`).
 4. **Flushes + dispatches + waits** in `dispatch(x, y, z)`. The fence is
    pre-signaled so the first dispatch doesn't block, and consecutive
    dispatches against the same kernel are serial (one in flight at a time).

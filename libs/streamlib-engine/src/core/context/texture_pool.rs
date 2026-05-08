@@ -10,7 +10,7 @@ use std::sync::Arc;
 use parking_lot::{Condvar, Mutex};
 
 use crate::core::rhi::{
-    GpuDevice, NativeTextureHandle, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages,
+    GpuDevice, NativeTextureHandle, Texture, TextureDescriptor, TextureFormat, TextureUsages,
 };
 use crate::core::{Result, Error};
 
@@ -123,7 +123,7 @@ pub struct TexturePoolStats {
 /// A slot in the texture pool.
 pub(crate) struct PoolSlot {
     pub(crate) id: PoolSlotId,
-    pub(crate) texture: StreamTexture,
+    pub(crate) texture: Texture,
     pub(crate) key: TexturePoolKey,
     pub(crate) in_use: AtomicBool,
 }
@@ -218,7 +218,7 @@ impl TexturePoolInner {
 
 /// Handle to a pooled texture. Returns texture to pool on Drop.
 pub struct PooledTextureHandle {
-    texture: StreamTexture,
+    texture: Texture,
     pool_inner: Arc<TexturePoolInner>,
     slot_id: PoolSlotId,
     width: u32,
@@ -232,7 +232,7 @@ impl PooledTextureHandle {
     #[allow(dead_code)]
     #[cfg(not(target_os = "macos"))]
     pub(crate) fn new(
-        texture: StreamTexture,
+        texture: Texture,
         pool_inner: Arc<TexturePoolInner>,
         slot_id: PoolSlotId,
         width: u32,
@@ -250,12 +250,12 @@ impl PooledTextureHandle {
     }
 
     /// Get a reference to the underlying texture.
-    pub fn texture(&self) -> &StreamTexture {
+    pub fn texture(&self) -> &Texture {
         &self.texture
     }
 
     /// Get a cloneable reference to the underlying texture.
-    pub fn texture_clone(&self) -> StreamTexture {
+    pub fn texture_clone(&self) -> Texture {
         self.texture.clone()
     }
 

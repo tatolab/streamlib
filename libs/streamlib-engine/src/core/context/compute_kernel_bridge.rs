@@ -56,7 +56,7 @@ pub trait ComputeKernelBridge: Send + Sync {
     /// `surface_uuid` is the UUID string used for surface-share
     /// registration (`SurfaceStore::register_texture`); the bridge
     /// implementation maintains an application-provided UUID →
-    /// host-side `StreamTexture` map so it can look up the `VkImage`
+    /// host-side `Texture` map so it can look up the `VkImage`
     /// to bind. Bound as a `storage_image` at slot 0 (the
     /// single-output convention enforced for v1).
     ///

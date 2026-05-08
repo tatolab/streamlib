@@ -39,7 +39,7 @@ declaration, the kernel:
 3. **Stages bindings as data** through `set_sampled_texture`,
    `set_storage_buffer`, `set_uniform_buffer`, `set_storage_image`,
    `set_push_constants`, `set_vertex_buffer`, `set_index_buffer`. Each
-   setter takes RHI-level types (`StreamTexture`, `RhiPixelBuffer`,
+   setter takes RHI-level types (`Texture`, `RhiPixelBuffer`,
    `&[u8]`).
 
 4. **Records bind + push + draw into the caller's command buffer.**
@@ -190,7 +190,7 @@ follow-ups under the **Graphics Kernel Buildout** milestone:
   public API is shaped so the backend can migrate later without
   breaking callers; the descriptor pool is an internal detail today.
 - **Depth attachment allocation.** Depth `TextureFormat` variants
-  and `StreamTexture` allocation for depth attachments are not yet
+  and `Texture` allocation for depth attachments are not yet
   in `streamlib-consumer-rhi` — depth-stencil pipeline-creation is
   validated by unit test, but depth-correctness rendering tests are
   pending depth-format support.

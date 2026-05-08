@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use crate::core::rhi::StreamTexture;
+use crate::core::rhi::Texture;
 
 #[cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -29,7 +29,7 @@ use streamlib_consumer_rhi::VulkanLayout;
 /// Per-surface registration record held by [`crate::core::context::GpuContext`]'s
 /// texture cache.
 pub struct TextureRegistration {
-    texture: StreamTexture,
+    texture: Texture,
     /// Last-known Vulkan image layout. Producers update after their
     /// final layout transition; consumers read before issuing their
     /// own barrier and update after.
@@ -46,7 +46,7 @@ pub struct TextureRegistration {
 impl TextureRegistration {
     /// Construct a registration with an initial layout.
     #[cfg(target_os = "linux")]
-    pub fn new(texture: StreamTexture, initial_layout: VulkanLayout) -> Arc<Self> {
+    pub fn new(texture: Texture, initial_layout: VulkanLayout) -> Arc<Self> {
         Arc::new(Self {
             texture,
             current_layout: AtomicI32::new(initial_layout.0),
@@ -55,12 +55,12 @@ impl TextureRegistration {
 
     /// Construct a registration on platforms without Vulkan layout tracking.
     #[cfg(not(target_os = "linux"))]
-    pub fn new(texture: StreamTexture) -> Arc<Self> {
+    pub fn new(texture: Texture) -> Arc<Self> {
         Arc::new(Self { texture })
     }
 
     /// Borrow the underlying texture.
-    pub fn texture(&self) -> &StreamTexture {
+    pub fn texture(&self) -> &Texture {
         &self.texture
     }
 
@@ -85,7 +85,7 @@ mod tests {
     use crate::core::context::GpuContext;
     use std::thread;
 
-    fn fresh_texture() -> Option<StreamTexture> {
+    fn fresh_texture() -> Option<Texture> {
         let gpu = GpuContext::init_for_platform().ok()?;
         let desc = TextureDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
             .with_usage(TextureUsages::TEXTURE_BINDING);

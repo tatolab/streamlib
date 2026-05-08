@@ -12,7 +12,7 @@ use super::iosurface::{create_iosurface, create_metal_texture_from_iosurface, Pi
 use crate::core::context::texture_pool::{
     PoolSlot, TexturePoolDescriptor, TexturePoolInner, TexturePoolKey,
 };
-use crate::core::rhi::{StreamTexture, TextureFormat};
+use crate::core::rhi::{Texture, TextureFormat};
 use crate::core::{Result, Error};
 use crate::metal::rhi::MetalTexture;
 
@@ -71,8 +71,8 @@ pub fn allocate_iosurface_slot(
         desc.format,
     );
 
-    // Wrap in StreamTexture
-    let stream_texture = StreamTexture::from_metal(metal_texture);
+    // Wrap in Texture
+    let stream_texture = Texture::from_metal(metal_texture);
 
     let slot = PoolSlot {
         id: pool_inner.next_slot_id(),

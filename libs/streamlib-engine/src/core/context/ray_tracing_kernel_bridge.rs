@@ -164,7 +164,7 @@ pub struct TlasRegisterDecl {
 /// - [`RayTracingBindingKindWire::AccelerationStructure`]: an `as_id`
 ///   from a prior [`RayTracingKernelBridge::register_tlas`].
 /// - all other kinds: the surface-share UUID of a host-side
-///   `RhiPixelBuffer` / `StreamTexture` (same convention compute and
+///   `RhiPixelBuffer` / `Texture` (same convention compute and
 ///   graphics use).
 #[derive(Debug, Clone)]
 pub struct RayTracingBindingValue {
@@ -234,7 +234,7 @@ pub trait RayTracingKernelBridge: Send + Sync {
     /// Run one trace against a previously-registered kernel.
     ///
     /// Resolves binding `target_id`s through the application-provided
-    /// resolver (UUID → `RhiPixelBuffer` / `StreamTexture` for non-AS
+    /// resolver (UUID → `RhiPixelBuffer` / `Texture` for non-AS
     /// kinds; `as_id` → `Arc<VulkanAccelerationStructure>` for the AS
     /// kind), then submits + waits on the kernel's own command
     /// buffer + fence. Errors include unrecognized `kernel_id`,

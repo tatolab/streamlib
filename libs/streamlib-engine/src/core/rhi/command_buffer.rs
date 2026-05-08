@@ -3,7 +3,7 @@
 
 //! RHI command buffer abstraction.
 
-use super::texture::StreamTexture;
+use super::texture::Texture;
 
 /// Platform-agnostic command buffer wrapper.
 ///
@@ -32,7 +32,7 @@ pub struct CommandBuffer {
 
 impl CommandBuffer {
     /// Copy one texture to another.
-    pub fn copy_texture(&mut self, src: &StreamTexture, dst: &StreamTexture) {
+    pub fn copy_texture(&mut self, src: &Texture, dst: &Texture) {
         // Metal backend
         #[cfg(all(
             not(feature = "backend-vulkan"),

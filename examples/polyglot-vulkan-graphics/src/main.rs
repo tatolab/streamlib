@@ -69,7 +69,7 @@ use streamlib::sdk::rhi::{
     MultisampleState,
     PrimitiveTopology,
     RasterizationState,
-    StreamTexture,
+    Texture,
     TextureFormat,
     TextureReadbackDescriptor,
     TextureSourceLayout,
@@ -152,21 +152,21 @@ impl RuntimeKind {
 /// `streamlib-adapter-vulkan` crate cannot depend on the full
 /// `streamlib` (the consumer-rhi capability boundary forbids it).
 ///
-/// Holds a UUID → `StreamTexture` map populated at setup time so
+/// Holds a UUID → `Texture` map populated at setup time so
 /// `run_graphics_draw(color_target_uuids[…], ...)` can resolve to the
 /// host's `VkImage` for the offscreen color target. The kernel cache
 /// is keyed by SHA-256 over a canonical byte representation of the
 /// register-time descriptor.
 struct TriangleKernelBridge {
     device: Arc<HostVulkanDevice>,
-    surfaces: HashMap<String, StreamTexture>,
+    surfaces: HashMap<String, Texture>,
     kernels: parking_lot::Mutex<HashMap<String, Arc<VulkanGraphicsKernel>>>,
 }
 
 impl TriangleKernelBridge {
     fn new(
         device: Arc<HostVulkanDevice>,
-        surfaces: Vec<(String, StreamTexture)>,
+        surfaces: Vec<(String, Texture)>,
     ) -> Self {
         Self {
             device,
@@ -586,7 +586,7 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
-    let texture_slot: Arc<Mutex<Option<StreamTexture>>> = Arc::new(Mutex::new(None));
+    let texture_slot: Arc<Mutex<Option<Texture>>> = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
     let readback_slot: Arc<Mutex<Option<Arc<VulkanTextureReadback>>>> =

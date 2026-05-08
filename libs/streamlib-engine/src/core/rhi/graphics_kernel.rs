@@ -398,7 +398,7 @@ impl Default for ColorBlendState {
 /// Lives next to the graphics-kernel API (rather than in the public
 /// `TextureFormat` enum) because depth/stencil formats only show up at
 /// graphics-pipeline boundaries — `streamlib-consumer-rhi`'s
-/// `TextureFormat` covers color-only formats, and depth `StreamTexture`
+/// `TextureFormat` covers color-only formats, and depth `Texture`
 /// allocation is a separate concern tracked as a follow-up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DepthFormat {

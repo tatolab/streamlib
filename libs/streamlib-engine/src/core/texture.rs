@@ -3,8 +3,8 @@
 
 //! Re-exports RHI texture types for convenience.
 
-pub use super::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
+pub use super::rhi::{Texture, TextureDescriptor, TextureFormat, TextureUsages};
 
 pub mod prelude {
-    pub use super::super::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
+    pub use super::super::rhi::{Texture, TextureDescriptor, TextureFormat, TextureUsages};
 }

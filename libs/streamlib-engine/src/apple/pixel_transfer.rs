@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::apple::iosurface;
-use crate::core::rhi::{GpuDevice, RhiCommandQueue, RhiPixelBuffer, StreamTexture};
+use crate::core::rhi::{GpuDevice, RhiCommandQueue, RhiPixelBuffer, Texture};
 use crate::core::{Result, Error};
 use metal::foreign_types::ForeignTypeRef;
 use objc2_core_video::CVPixelBuffer;
@@ -100,7 +100,7 @@ impl PixelTransferSession {
     #[allow(dead_code)]
     pub fn convert_to_nv12(
         &self,
-        texture: &StreamTexture,
+        texture: &Texture,
         width: u32,
         height: u32,
     ) -> Result<*mut CVPixelBuffer> {
@@ -131,11 +131,11 @@ impl PixelTransferSession {
     #[allow(dead_code)]
     fn blit_to_rgba_pixel_buffer(
         &self,
-        texture: &StreamTexture,
+        texture: &Texture,
         width: u32,
         height: u32,
     ) -> Result<*mut CVPixelBuffer> {
-        // Get Metal texture directly from StreamTexture
+        // Get Metal texture directly from Texture
         let source_metal = texture.as_metal_texture();
 
         // Create destination CVPixelBuffer in BGRA format (32BGRA is standard for Metal/CoreVideo interop)
