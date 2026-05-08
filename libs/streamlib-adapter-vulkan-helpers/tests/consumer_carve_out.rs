@@ -34,7 +34,7 @@
 use std::sync::{Arc, Mutex};
 
 use serial_test::serial;
-use streamlib::host_rhi::HostVulkanDevice;
+use streamlib_engine::host_rhi::HostVulkanDevice;
 use streamlib_consumer_rhi::{ConsumerVulkanDevice, VulkanRhiDevice};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -336,8 +336,8 @@ mod warn_capture {
 #[test]
 #[serial]
 fn consumer_device_drop_with_live_imports_emits_leak_warning() {
-    use streamlib::core::rhi::PixelFormat;
-    use streamlib::host_rhi::HostVulkanPixelBuffer;
+    use streamlib_engine::core::rhi::PixelFormat;
+    use streamlib_engine::host_rhi::HostVulkanPixelBuffer;
     use tracing_subscriber::layer::SubscriberExt;
 
     // Both devices required for the round-trip.

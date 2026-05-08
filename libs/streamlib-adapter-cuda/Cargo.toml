@@ -55,7 +55,7 @@ dlpark.workspace = true
 # lives in `streamlib-adapter-cuda-helpers` for the same reason —
 # see that crate's Cargo.toml for the full rationale.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-streamlib = { path = "../streamlib" }
+streamlib-engine = { path = "../streamlib-engine" }
 streamlib-adapter-cuda-helpers = { path = "../streamlib-adapter-cuda-helpers" }
 tracing-subscriber.workspace = true
 

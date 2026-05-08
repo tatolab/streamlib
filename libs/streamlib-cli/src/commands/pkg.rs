@@ -4,8 +4,8 @@
 //! Package management commands.
 
 use anyhow::{Context, Result};
-use streamlib::core::config::{InstalledPackageEntry, InstalledPackageManifest, ProjectConfig};
-use streamlib::core::runtime::extract_slpkg_to_cache;
+use streamlib_engine::core::config::{InstalledPackageEntry, InstalledPackageManifest, ProjectConfig};
+use streamlib_engine::core::runtime::extract_slpkg_to_cache;
 
 /// Install a .slpkg package from a local path or HTTP URL.
 pub async fn install(source: &str) -> Result<()> {
@@ -60,7 +60,7 @@ pub async fn install(source: &str) -> Result<()> {
             streamlib_processor_schema::ProcessorLanguage::Python
         ) {
             println!("  Setting up Python venv for {}...", processor.name);
-            streamlib::core::compiler::compiler_ops::ensure_processor_venv(
+            streamlib_engine::core::compiler::compiler_ops::ensure_processor_venv(
                 &processor.name,
                 &cache_dir,
             )
@@ -132,7 +132,7 @@ pub fn inspect(path: &std::path::Path) -> Result<()> {
         buf
     };
 
-    let config: streamlib::core::config::ProjectConfig =
+    let config: streamlib_engine::core::config::ProjectConfig =
         serde_yaml::from_str(&yaml_content).with_context(|| "Failed to parse streamlib.yaml")?;
 
     let package = config
@@ -234,7 +234,7 @@ pub fn remove(name: &str) -> Result<()> {
     };
 
     // Delete cache directory
-    let cache_dir = streamlib::core::streamlib_home::get_cached_package_dir(&entry.cache_dir);
+    let cache_dir = streamlib_engine::core::streamlib_home::get_cached_package_dir(&entry.cache_dir);
     if cache_dir.exists() {
         std::fs::remove_dir_all(&cache_dir)
             .with_context(|| format!("Failed to remove cache dir {}", cache_dir.display()))?;

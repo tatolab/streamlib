@@ -11,7 +11,7 @@ repository.workspace = true
 
 # Depends on streamlib for ProcessorInstanceFactory type in the registration function signature
 [dependencies]
-streamlib = { path = "../streamlib" }
+streamlib-engine = { path = "../streamlib-engine" }
 
 [lints]
 workspace = true

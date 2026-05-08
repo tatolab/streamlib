@@ -33,15 +33,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use streamlib::HostGpuDeviceExt;
+use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib::core::display_info;
-use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
-use streamlib::core::{
+use streamlib_engine::core::display_info;
+use streamlib_engine::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
+use streamlib_engine::core::{
     GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError,
 };
-use streamlib::iceoryx2::{InputMailboxes, OutputWriter};
-use streamlib::VideoFrame;
+use streamlib_engine::iceoryx2::{InputMailboxes, OutputWriter};
+use streamlib_engine::VideoFrame;
 
 // Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
 // the transitional rationale (this kernel previously lived in the
@@ -138,7 +138,7 @@ pub struct BlendingCompositorProcessor {
     backend: Option<GpuBackend>,
 }
 
-impl streamlib::core::ManualProcessor for BlendingCompositorProcessor::Processor {
+impl streamlib_engine::core::ManualProcessor for BlendingCompositorProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -576,7 +576,7 @@ fn compose_one_frame(
 /// [`TextureRegistration::update_layout`]) after the render submit
 /// completes.
 struct ResolvedLayer {
-    registration: Arc<streamlib::core::context::TextureRegistration>,
+    registration: Arc<streamlib_engine::core::context::TextureRegistration>,
     texture: StreamTexture,
 }
 
@@ -706,7 +706,7 @@ mod tests {
     /// consuming stale frames.
     #[test]
     fn iceoryx2_pop_latest_skips_stale_frames() {
-        use streamlib::iceoryx2::PortMailbox;
+        use streamlib_engine::iceoryx2::PortMailbox;
 
         let mailbox = PortMailbox::new(8);
         for i in 0u8..5 {

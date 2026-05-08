@@ -171,7 +171,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
     /// side) or its own `acquire_from_foreign` (subprocess side) then
     /// pairs with this release.
     ///
-    /// [`Path 2`]: streamlib::core::context::GpuContext::resolve_videoframe_registration
+    /// [`Path 2`]: streamlib_engine::core::context::GpuContext::resolve_videoframe_registration
     ///
     /// **Concurrency invariant.** Snapshots `current_layout` under
     /// the registry lock, releases the lock for the GPU submit, then

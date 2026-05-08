@@ -1,16 +1,16 @@
 [package]
-name = "streamlib"
+name = "streamlib-engine"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
-description = "Real-time streaming infrastructure for AI agents - unified crate"
+description = "Engine internals for streamlib (RHI, IPC, surface-share, runtime executor). Customer apps depend on `streamlib` (the SDK), not on this crate directly."
 keywords = ["video", "streaming", "gpu", "real-time", "ai"]
 categories = ["multimedia::video", "multimedia", "api-bindings"]
 
 [lib]
-name = "streamlib"
+name = "streamlib_engine"
 crate-type = ["rlib"]
 
 [features]
@@ -183,6 +183,11 @@ core-foundation = "0.9"
 core-graphics = "0.24"
 
 [dev-dependencies]
+# Self-alias via the SDK so engine tests / benches that use
+# `#[streamlib::processor(...)]` resolve macro-emitted `::streamlib::*`
+# paths through the SDK (which transitively re-exports engine items).
+# Dev-dep cycles are permitted by Cargo because they don't propagate.
+streamlib = { path = "../streamlib-sdk" }
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider

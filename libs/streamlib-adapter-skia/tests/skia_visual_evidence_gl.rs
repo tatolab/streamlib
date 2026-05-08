@@ -22,14 +22,14 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use skia_safe::{
     gradient_shader, Color, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode,
 };
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::TextureFormat;
-use streamlib::host_rhi::HostVulkanDevice;
+use streamlib_engine::core::context::GpuContext;
+use streamlib_engine::core::rhi::TextureFormat;
+use streamlib_engine::host_rhi::HostVulkanDevice;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState,
     SurfaceTransportHandle, SurfaceUsage,
@@ -246,8 +246,8 @@ fn host_readback_bgra(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    use streamlib::core::rhi::PixelFormat;
-    use streamlib::host_rhi::HostVulkanPixelBuffer;
+    use streamlib_engine::core::rhi::PixelFormat;
+    use streamlib_engine::host_rhi::HostVulkanPixelBuffer;
 
     let staging = HostVulkanPixelBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
         .expect("staging pixel buffer");

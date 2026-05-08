@@ -33,7 +33,7 @@ use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::io::{FromRawFd, IntoRawFd, RawFd};
 use std::path::PathBuf;
 
-use streamlib::core::runtime::StreamRuntime;
+use streamlib_engine::core::runtime::StreamRuntime;
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
 fn locate_native_lib(basename: &str) -> Option<PathBuf> {
@@ -293,8 +293,8 @@ mod polyglot_dma_buf_producer;
 #[test]
 fn rust_surface_store_resolve_surface_multi_plane() {
     use polyglot_dma_buf_producer::TestDmaBufProducer;
-    use streamlib::core::context::GpuContext;
-    use streamlib::core::context::SurfaceStore;
+    use streamlib_engine::core::context::GpuContext;
+    use streamlib_engine::core::context::SurfaceStore;
 
     // Initialize the process-global `HostVulkanDevice` — `SurfaceStore::check_out`
     // needs it for DMA-BUF import. `GpuContext::init_for_platform` wires up

@@ -17,16 +17,16 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use streamlib::HostStreamTextureExt;
+use streamlib_engine::HostStreamTextureExt;
 
 use anyhow::{Context, Result};
-use streamlib::core::rhi::{
+use streamlib_engine::core::rhi::{
     RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
     RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, StreamTexture,
     TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
     TextureUsages,
 };
-use streamlib::host_rhi::{
+use streamlib_engine::host_rhi::{
     HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc, VulkanAccelerationStructure,
     VulkanRayTracingKernel, VulkanTextureReadback,
 };

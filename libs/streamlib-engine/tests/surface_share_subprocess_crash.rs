@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use streamlib::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+use streamlib_engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 

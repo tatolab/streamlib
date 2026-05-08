@@ -2,7 +2,8 @@
 resolver = "2"
 members = [
     "xtask",                    # Development tasks (cargo xtask <command>)
-    "libs/streamlib",           # All-in-one: core, apple (feature-gated)
+    "libs/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
+    "libs/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
     "libs/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
     "libs/streamlib-cli",       # Command-line interface for StreamLib runtime
     "libs/streamlib-runtime",   # Standalone runtime binary (spawned by CLI)

@@ -26,14 +26,14 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use streamlib::HostGpuDeviceExt;
+use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
-use streamlib::core::{
+use streamlib_engine::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
+use streamlib_engine::core::{
     GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
     StreamError,
 };
-use streamlib::VideoFrame;
+use streamlib_engine::VideoFrame;
 
 use crate::crt_film_grain_kernel::{
     CrtFilmGrainInput, CrtFilmGrainInputs, CrtFilmGrainOutput, SandboxedCrtFilmGrain,
@@ -114,7 +114,7 @@ pub struct CrtFilmGrainProcessor {
     backend: Option<LinuxBackend>,
 }
 
-impl streamlib::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
+impl streamlib_engine::core::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,

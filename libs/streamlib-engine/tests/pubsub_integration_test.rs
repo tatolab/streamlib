@@ -20,11 +20,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use streamlib::core::pubsub::{
+use streamlib_engine::core::pubsub::{
     topics, Event, EventListener, KeyCode, KeyState, Modifiers, MouseButton, MouseState,
     ProcessorEvent, PubSub, RuntimeEvent,
 };
-use streamlib::iceoryx2::{Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
+use streamlib_engine::iceoryx2::{Iceoryx2Node, MAX_EVENT_PAYLOAD_SIZE};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -47,7 +47,7 @@ impl CountingListener {
 }
 
 impl EventListener for CountingListener {
-    fn on_event(&mut self, _event: &Event) -> streamlib::core::error::Result<()> {
+    fn on_event(&mut self, _event: &Event) -> streamlib_engine::core::error::Result<()> {
         self.count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -59,7 +59,7 @@ struct ChannelListener {
 }
 
 impl EventListener for ChannelListener {
-    fn on_event(&mut self, event: &Event) -> streamlib::core::error::Result<()> {
+    fn on_event(&mut self, event: &Event) -> streamlib_engine::core::error::Result<()> {
         let _ = self.sender.send(event.clone());
         Ok(())
     }
@@ -187,7 +187,7 @@ fn test_iceoryx2_direct_delivery() {
     // Publish
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     let bytes = rmp_serde::to_vec_named(&event).unwrap();
-    let payload = streamlib::iceoryx2::EventPayload::new("test", 12345, &bytes);
+    let payload = streamlib_engine::iceoryx2::EventPayload::new("test", 12345, &bytes);
 
     let sample = publisher.loan_uninit().expect("loan");
     let sample = sample.write_payload(payload);
@@ -196,7 +196,7 @@ fn test_iceoryx2_direct_delivery() {
     // Receive
     match subscriber.receive() {
         Ok(Some(sample)) => {
-            let p: &streamlib::iceoryx2::EventPayload = &*sample;
+            let p: &streamlib_engine::iceoryx2::EventPayload = &*sample;
             let received: Event = rmp_serde::from_slice(p.data()).unwrap();
             assert_eq!(received.topic(), event.topic());
         }
@@ -253,7 +253,7 @@ fn test_iceoryx2_cross_thread_delivery() {
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        let payload = streamlib::iceoryx2::EventPayload::new("test", 12345, b"hello");
+        let payload = streamlib_engine::iceoryx2::EventPayload::new("test", 12345, b"hello");
         let sample = publisher.loan_uninit().expect("loan");
         let sample = sample.write_payload(payload);
         sample.send().expect("send");
@@ -314,7 +314,7 @@ fn test_iceoryx2_pubsub_pattern_mimic() {
 
         let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
         let bytes = rmp_serde::to_vec_named(&event).unwrap();
-        let payload = streamlib::iceoryx2::EventPayload::new(topic, 12345, &bytes);
+        let payload = streamlib_engine::iceoryx2::EventPayload::new(topic, 12345, &bytes);
 
         let sample = publisher.loan_uninit().expect("loan");
         let sample = sample.write_payload(payload);
@@ -435,7 +435,7 @@ fn test_pubsub_publish_sends_to_iceoryx2() {
         .expect("c-pub service");
     let c_publisher = c_pub_service.create_publisher().expect("c-publisher");
     let bytes = rmp_serde::to_vec_named(&event).unwrap();
-    let c_payload = streamlib::iceoryx2::EventPayload::new("input:window", 12345, &bytes);
+    let c_payload = streamlib_engine::iceoryx2::EventPayload::new("input:window", 12345, &bytes);
     let c_sample = c_publisher.loan_uninit().expect("loan");
     let c_sample = c_sample.write_payload(c_payload);
     c_sample.send().expect("send");
@@ -485,7 +485,7 @@ fn test_oncelock_node_delivery() {
 
     let event = Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed);
     let bytes = rmp_serde::to_vec_named(&event).unwrap();
-    let payload = streamlib::iceoryx2::EventPayload::new("input:keyboard", 12345, &bytes);
+    let payload = streamlib_engine::iceoryx2::EventPayload::new("input:keyboard", 12345, &bytes);
 
     // Use *&payload to mimic PubSub's `write_payload(*payload)` (copy from reference)
     let sample = publisher.loan_uninit().expect("loan");

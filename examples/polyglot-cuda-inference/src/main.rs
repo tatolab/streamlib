@@ -48,16 +48,16 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib::HostGpuDeviceExt;
+use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib::core::context::GpuContext;
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::host_rhi::{
+use streamlib_engine::core::context::GpuContext;
+use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib_engine::core::rhi::{PixelFormat, RhiPixelBuffer};
+use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib_engine::host_rhi::{
     HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
 };
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 use streamlib_adapter_abi::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
@@ -72,7 +72,7 @@ const SURFACE_WIDTH: u32 = 640;
 const SURFACE_HEIGHT: u32 = 640;
 const BYTES_PER_PIXEL: u32 = 4;
 
-type HostAdapter = CudaSurfaceAdapter<streamlib::host_rhi::HostVulkanDevice>;
+type HostAdapter = CudaSurfaceAdapter<streamlib_engine::host_rhi::HostVulkanDevice>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeKind {

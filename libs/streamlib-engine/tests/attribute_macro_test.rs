@@ -1,20 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Test for YAML-based #[streamlib::processor] attribute macro syntax
+//! Test for YAML-based #[streamlib_engine::processor] attribute macro syntax
 //!
 //! This test verifies the module-based processor generation works correctly
 //! with YAML schema definitions.
 
-use streamlib::core::GeneratedProcessor;
-use streamlib::core::{EmptyConfig, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_engine::core::GeneratedProcessor;
+use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 // Define a simple processor using YAML schema
 #[streamlib::processor("TestProcessor")]
 pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
-impl streamlib::ManualProcessor for TestProcessor::Processor {
+impl streamlib_engine::ManualProcessor for TestProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,
@@ -41,28 +41,28 @@ impl streamlib::ManualProcessor for TestProcessor::Processor {
 fn test_module_structure_generated() {
     // Verify the module structure was generated correctly
     // TestProcessor::Processor should exist
-    fn assert_processor_type<T: streamlib::core::ManualProcessor>() {}
+    fn assert_processor_type<T: streamlib_engine::core::ManualProcessor>() {}
     assert_processor_type::<TestProcessor::Processor>();
 }
 
 #[test]
 fn test_input_link_module_exists() {
     // Verify InputLink module has the expected port marker
-    fn assert_input_marker<T: streamlib::core::InputPortMarker>() {}
+    fn assert_input_marker<T: streamlib_engine::core::InputPortMarker>() {}
     assert_input_marker::<TestProcessor::InputLink::video_in>();
 }
 
 #[test]
 fn test_output_link_module_exists() {
     // Verify OutputLink module has the expected port marker
-    fn assert_output_marker<T: streamlib::core::OutputPortMarker>() {}
+    fn assert_output_marker<T: streamlib_engine::core::OutputPortMarker>() {}
     assert_output_marker::<TestProcessor::OutputLink::video_out>();
 }
 
 #[test]
 fn test_port_marker_names() {
     // Verify port names are correct
-    use streamlib::core::{InputPortMarker, OutputPortMarker};
+    use streamlib_engine::core::{InputPortMarker, OutputPortMarker};
 
     assert_eq!(
         <TestProcessor::InputLink::video_in as InputPortMarker>::PORT_NAME,
@@ -122,7 +122,7 @@ fn test_processor_schema_ident_renders_canonical_joined_form() {
     PartialEq,
     serde::Serialize,
     serde::Deserialize,
-    streamlib::ConfigDescriptor,
+    streamlib_engine::ConfigDescriptor,
 )]
 pub struct ConfiguredProcessorConfig {
     pub threshold: f32,
@@ -137,7 +137,7 @@ mod _generated_ {
 #[streamlib::processor("TestConfiguredProcessor")]
 pub struct ConfiguredProcessor;
 
-impl streamlib::ContinuousProcessor for ConfiguredProcessor::Processor {
+impl streamlib_engine::ContinuousProcessor for ConfiguredProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,

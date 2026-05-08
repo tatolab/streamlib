@@ -27,7 +27,7 @@ publish = false
 path = "src/lib.rs"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../streamlib" }
+streamlib-engine = { path = "../streamlib-engine" }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
 streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback" }
 streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi" }

@@ -21,7 +21,7 @@ use utoipa::OpenApi;
 // We need to duplicate this because the original is private to the processor module
 
 use serde::{Deserialize, Serialize};
-use streamlib::core::json_schema::{GraphResponse, RegistryResponse, SchemaIdentOutput};
+use streamlib_engine::core::json_schema::{GraphResponse, RegistryResponse, SchemaIdentOutput};
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct CreateProcessorRequest {

@@ -7,9 +7,9 @@
 # are pulled in via this dependency rather than declared inline.
 package:
   org: tatolab
-  name: streamlib
+  name: streamlib-engine
   version: 0.4.28
-  description: "Cross-platform real-time media framework"
+  description: "Engine internals for streamlib (RHI, IPC, surface-share, runtime executor). Customer apps depend on `streamlib` (the SDK), not on this manifest directly."
 
 dependencies:
   "@tatolab/core": "^1.0.0"

@@ -29,15 +29,15 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib::HostGpuDeviceExt;
+use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{
+use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib_engine::core::rhi::{
     TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
 };
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib_engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
+use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 /// UUID the host registers the render-target surface under. The
 /// polyglot processor reads it from its config and passes it to
@@ -121,7 +121,7 @@ fn main() -> Result<()> {
     // `&GpuContext` borrow past the hook, so we Arc-clone the bits we
     // need.
     let texture_slot: Arc<
-        Mutex<Option<streamlib::core::rhi::StreamTexture>>,
+        Mutex<Option<streamlib_engine::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
@@ -190,7 +190,7 @@ fn main() -> Result<()> {
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
-                    streamlib::core::rhi::VulkanLayout::GENERAL,
+                    streamlib_engine::core::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
                     StreamError::Configuration(format!(

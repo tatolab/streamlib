@@ -20,7 +20,7 @@
 #[cfg(target_os = "macos")]
 #[cfg(test)]
 mod whip_client_tests {
-    use streamlib::core::error::Result;
+    use streamlib_engine::core::error::Result;
 
     /// Type alias for boxed body used by hyper client
     type BoxBody = http_body_util::combinators::BoxBody<

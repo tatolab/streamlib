@@ -46,18 +46,18 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
-use streamlib::core::context::{
+use streamlib_engine::core::context::{
     CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext,
 };
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::host_rhi::{
+use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib_engine::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
+use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib_engine::host_rhi::{
     HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore,
 };
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 use streamlib_adapter_abi::{StreamlibSurface, SurfaceFormat, SurfaceId};
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
@@ -73,7 +73,7 @@ const SCENARIO_SURFACE_ID: SurfaceId = 1;
 /// obvious in the output PNG.
 const SURFACE_SIZE: u32 = 256;
 
-type HostAdapter = CpuReadbackSurfaceAdapter<streamlib::host_rhi::HostVulkanDevice>;
+type HostAdapter = CpuReadbackSurfaceAdapter<streamlib_engine::host_rhi::HostVulkanDevice>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeKind {

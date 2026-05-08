@@ -254,7 +254,7 @@ const VULKANALIA_RATIONALE: &str =
 const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // Core RHI host side — owns every privileged Vulkan primitive.
     AllowEntry {
-        path: "libs/streamlib/src/vulkan/",
+        path: "libs/streamlib-engine/src/vulkan/",
         kind: AllowKind::PathPrefix,
         rationale: "host RHI lives here",
     },
@@ -283,21 +283,21 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // vulkanalia for the swapchain and rendering pipeline (mirrors how
     // Metal rendering is platform-specific on macOS).
     AllowEntry {
-        path: "libs/streamlib/src/linux/processors/display.rs",
+        path: "libs/streamlib-engine/src/linux/processors/display.rs",
         kind: AllowKind::ExactFile,
         rationale: "platform display: swapchain + rendering pipeline (CLAUDE.md exception)",
     },
     // Camera processor — historical use of cmd_pipeline_barrier per
     // docs/learnings/vulkanalia-empty-slice-cast.md.
     AllowEntry {
-        path: "libs/streamlib/src/linux/processors/camera.rs",
+        path: "libs/streamlib-engine/src/linux/processors/camera.rs",
         kind: AllowKind::ExactFile,
         rationale: "cmd_pipeline_barrier for layout transitions (vulkanalia-empty-slice-cast learning)",
     },
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
     AllowEntry {
-        path: "libs/streamlib/src/core/context/gpu_context.rs",
+        path: "libs/streamlib-engine/src/core/context/gpu_context.rs",
         kind: AllowKind::ExactFile,
         rationale: "RHI wrapper layer; bridges processors to the RHI",
     },
@@ -316,7 +316,7 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // camera-python-display (#487) — TRANSITIONAL exception. The
     // example owns its `BlendingCompositor` + `CrtFilmGrain` graphics-
     // kernel wrappers as sandboxed scenario content rather than
-    // engine code (the prior placement in `libs/streamlib/` encoded
+    // engine code (the prior placement in `libs/streamlib-engine/` encoded
     // demo-specific app content into the engine). The wrappers
     // hand-roll synchronous fence-blocked dispatch with internal
     // layout-barrier management — a pattern the engine deliberately
@@ -378,7 +378,7 @@ fn check_vulkanalia_confined(
     // crate roots (one entry per crate that owns at least one
     // vulkanalia-allowlisted source file). Matching is against the full
     // Cargo.toml file path so trailing-slash directory boundaries hit
-    // (`libs/streamlib/Cargo.toml` matches `libs/streamlib/`, but
+    // (`libs/streamlib-engine/Cargo.toml` matches `libs/streamlib-engine/`, but
     // `libs/streamlib-runtime/Cargo.toml` does not).
     for path in walk_cargo_toml(project_root) {
         *files_scanned += 1;
@@ -414,7 +414,7 @@ fn check_vulkanalia_confined(
 /// the dep elsewhere is a regression.
 const VULKANALIA_CARGO_DEP_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
-        path: "libs/streamlib/",
+        path: "libs/streamlib-engine/",
         kind: AllowKind::PathPrefix,
         rationale: "host crate: src/vulkan/ owns the RHI; processors/display.rs and processors/camera.rs are documented exceptions",
     },
@@ -528,7 +528,7 @@ const PRIVILEGED_METHODS: &[&str] = &[
 const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // Host RHI — defines and owns the privileged calls.
     AllowEntry {
-        path: "libs/streamlib/src/vulkan/",
+        path: "libs/streamlib-engine/src/vulkan/",
         kind: AllowKind::PathPrefix,
         rationale: "host RHI owns privileged primitives",
     },
@@ -552,7 +552,7 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // Camera processor compiles a compute pipeline locally (NV12 → BGRA).
     // Tracked separately for migration to VulkanComputeKernel.
     AllowEntry {
-        path: "libs/streamlib/src/linux/processors/camera.rs",
+        path: "libs/streamlib-engine/src/linux/processors/camera.rs",
         kind: AllowKind::ExactFile,
         rationale: "compute pipeline for NV12→BGRA; migration to VulkanComputeKernel tracked separately",
     },
@@ -797,7 +797,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/lib.rs",
+            "libs/streamlib-engine/src/lib.rs",
             "use ash::vk;\nfn main() {}\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -813,7 +813,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/lib.rs",
+            "libs/streamlib-engine/src/lib.rs",
             "extern crate ash;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -825,7 +825,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/Cargo.toml",
+            "libs/streamlib-engine/Cargo.toml",
             "[package]\nname = \"streamlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nash = \"0.38\"\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -842,13 +842,13 @@ mod tests {
         // Lookalike substring should NOT trip the check.
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/lib.rs",
+            "libs/streamlib-engine/src/lib.rs",
             "use ahash::AHashMap;\nlet h: Hash = todo!();\n",
         );
         // Cargo.toml with ahash dep.
         write_fixture(
             dir.path(),
-            "libs/streamlib/Cargo.toml",
+            "libs/streamlib-engine/Cargo.toml",
             "[package]\nname = \"streamlib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nahash = \"0.8\"\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -863,7 +863,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/core/some_unrelated.rs",
+            "libs/streamlib-engine/src/core/some_unrelated.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -879,7 +879,7 @@ mod tests {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/vulkan/rhi/example.rs",
+            "libs/streamlib-engine/src/vulkan/rhi/example.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1198,7 +1198,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/core/some_other.rs",
+            "libs/streamlib-engine/src/core/some_other.rs",
             "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1230,7 +1230,7 @@ streamlib = { path = "../streamlib" }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/vulkan/rhi/vulkan_device.rs",
+            "libs/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
             "fn f() { unsafe { self.device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -1380,7 +1380,7 @@ vulkanalia = { workspace = true }
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "libs/streamlib/src/lib.rs",
+            "libs/streamlib-engine/src/lib.rs",
             "// use ash::vk; — kept for historical reference only\n",
         );
         let report = scan_all(dir.path()).unwrap();

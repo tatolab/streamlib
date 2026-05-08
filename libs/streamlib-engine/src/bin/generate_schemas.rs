@@ -17,7 +17,7 @@ use schemars::schema_for;
 use std::fs;
 use std::path::Path;
 
-use streamlib::core::json_schema::{GraphResponse, RegistryResponse};
+use streamlib_engine::core::json_schema::{GraphResponse, RegistryResponse};
 
 fn main() {
     let schema_dir = Path::new("dist/schemas");

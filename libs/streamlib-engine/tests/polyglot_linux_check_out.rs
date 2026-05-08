@@ -36,7 +36,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use streamlib::core::runtime::StreamRuntime;
+use streamlib_engine::core::runtime::StreamRuntime;
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
 #[path = "common/polyglot_dma_buf_producer.rs"]

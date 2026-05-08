@@ -11,7 +11,7 @@
 mod common;
 
 use std::sync::Arc;
-use streamlib::HostStreamTextureExt;
+use streamlib_engine::HostStreamTextureExt;
 
 #[test]
 fn two_subprocesses_concurrently_read_same_surface() {

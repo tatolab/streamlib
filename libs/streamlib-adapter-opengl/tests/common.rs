@@ -9,11 +9,11 @@
 #![allow(dead_code)] // each test file uses a different subset
 
 use std::sync::Arc;
-use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib_engine::{HostGpuDeviceExt, HostStreamTextureExt};
 
-use streamlib::core::context::GpuContext;
-use streamlib::core::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
-use streamlib::host_rhi::HostVulkanTexture;
+use streamlib_engine::core::context::GpuContext;
+use streamlib_engine::core::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
+use streamlib_engine::host_rhi::HostVulkanTexture;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
@@ -81,7 +81,7 @@ impl HostFixture {
 
     /// Allocate a host VkImage with an explicit DRM modifier (typically a
     /// sampler-only `external_only=TRUE` modifier discovered via
-    /// [`streamlib::host_rhi::drm_modifier_probe`]) and register it via
+    /// [`streamlib_engine::host_rhi::drm_modifier_probe`]) and register it via
     /// [`OpenGlSurfaceAdapter::register_external_oes_host_surface`].
     ///
     /// Unlike [`Self::register_external_oes_surface`] (which goes through

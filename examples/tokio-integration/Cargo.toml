@@ -5,5 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-streamlib = { path = "../../libs/streamlib" }
+streamlib = { path = "../../libs/streamlib-sdk" }
 tokio = { version = "1", features = ["full"] }

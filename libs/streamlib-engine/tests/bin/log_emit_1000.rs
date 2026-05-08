@@ -17,8 +17,8 @@
 
 use std::sync::Arc;
 
-use streamlib::core::logging::{init_for_tests, LoggingTunables, StreamlibLoggingConfig};
-use streamlib::core::runtime::RuntimeUniqueId;
+use streamlib_engine::core::logging::{init_for_tests, LoggingTunables, StreamlibLoggingConfig};
+use streamlib_engine::core::runtime::RuntimeUniqueId;
 
 fn raw_write_stdout(bytes: &[u8]) {
     unsafe {

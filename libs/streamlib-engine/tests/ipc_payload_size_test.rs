@@ -19,8 +19,8 @@
 use std::time::{Duration, Instant};
 
 use iceoryx2::prelude::*;
-use streamlib::core::embedded_schemas::max_payload_bytes_for_schema;
-use streamlib::iceoryx2::{
+use streamlib_engine::core::embedded_schemas::max_payload_bytes_for_schema;
+use streamlib_engine::iceoryx2::{
     FrameHeader, Iceoryx2Node, SchemaIdentWire, FRAME_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
 

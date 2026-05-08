@@ -27,10 +27,10 @@
 #[path = "common.rs"]
 mod common;
 
-use streamlib::host_rhi::drm_modifier_probe;
+use streamlib_engine::host_rhi::drm_modifier_probe;
 use streamlib_adapter_abi::{AdapterError, SurfaceAdapter};
 use streamlib_adapter_opengl::GL_TEXTURE_EXTERNAL_OES;
-use streamlib::HostGpuDeviceExt;
+use streamlib_engine::HostGpuDeviceExt;
 
 use common::{host_write_clear_color, HostFixture, RegisteredSurface};
 

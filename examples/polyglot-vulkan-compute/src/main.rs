@@ -34,19 +34,19 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use streamlib::HostGpuDeviceExt;
+use streamlib_engine::HostGpuDeviceExt;
 
-use streamlib::core::context::ComputeKernelBridge;
-use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::core::rhi::{
+use streamlib_engine::core::context::ComputeKernelBridge;
+use streamlib_engine::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib_engine::core::rhi::{
     derive_bindings_from_spirv, ComputeKernelDescriptor, StreamTexture, TextureFormat,
     TextureReadbackDescriptor, TextureSourceLayout,
 };
-use streamlib::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
-use streamlib::host_rhi::{
+use streamlib_engine::core::{InputLinkPortRef, OutputLinkPortRef, StreamError};
+use streamlib_engine::host_rhi::{
     HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanComputeKernel, VulkanTextureReadback,
 };
-use streamlib::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
+use streamlib_engine::{BgraFileSourceProcessor, ProcessorSpec, Result, StreamRuntime};
 
 /// Compiled SPIR-V for the Mandelbrot compute shader. Built by
 /// `build.rs` from `shaders/mandelbrot.comp`. Shipped to the polyglot
@@ -237,7 +237,7 @@ fn main() -> Result<()> {
     let runtime = StreamRuntime::new()?;
 
     let texture_slot: Arc<
-        Mutex<Option<streamlib::core::rhi::StreamTexture>>,
+        Mutex<Option<streamlib_engine::core::rhi::StreamTexture>>,
     > = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
@@ -287,7 +287,7 @@ fn main() -> Result<()> {
                     SCENARIO_SURFACE_UUID,
                     &texture,
                     Some(timeline.as_ref()),
-                    streamlib::core::rhi::VulkanLayout::GENERAL,
+                    streamlib_engine::core::rhi::VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
                     StreamError::Configuration(format!(
