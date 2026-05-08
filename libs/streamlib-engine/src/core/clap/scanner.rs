@@ -3,7 +3,7 @@
 
 use clack_host::entry::PluginEntry;
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
@@ -85,10 +85,10 @@ impl ClapScanner {
         let mut plugins = Vec::new();
 
         for entry in std::fs::read_dir(path).map_err(|e| {
-            StreamError::Configuration(format!("Failed to read directory {:?}: {}", path, e))
+            Error::Configuration(format!("Failed to read directory {:?}: {}", path, e))
         })? {
             let entry = entry
-                .map_err(|e| StreamError::Configuration(format!("Failed to read entry: {}", e)))?;
+                .map_err(|e| Error::Configuration(format!("Failed to read entry: {}", e)))?;
             let entry_path = entry.path();
 
             if Self::is_clap_bundle(&entry_path) {
@@ -114,13 +114,13 @@ impl ClapScanner {
         // SAFETY: Loading CLAP plugins is inherently unsafe as it loads dynamic libraries
         let bundle = unsafe {
             PluginEntry::load(&binary_path).map_err(|e| {
-                StreamError::Configuration(format!("Failed to load bundle {:?}: {:?}", path, e))
+                Error::Configuration(format!("Failed to load bundle {:?}: {:?}", path, e))
             })?
         };
 
         let factory = bundle
             .get_plugin_factory()
-            .ok_or_else(|| StreamError::Configuration("Plugin has no factory".into()))?;
+            .ok_or_else(|| Error::Configuration("Plugin has no factory".into()))?;
 
         let mut plugins = Vec::new();
 
@@ -175,14 +175,14 @@ impl ClapScanner {
 
             let binary_name = bundle_path
                 .file_stem()
-                .ok_or_else(|| StreamError::Configuration("Invalid bundle path".into()))?;
+                .ok_or_else(|| Error::Configuration("Invalid bundle path".into()))?;
 
             let binary_path = bundle_path.join("Contents").join("MacOS").join(binary_name);
 
             if binary_path.exists() {
                 Ok(binary_path)
             } else {
-                Err(StreamError::Configuration(format!(
+                Err(Error::Configuration(format!(
                     "Binary not found in bundle: {:?}",
                     binary_path
                 )))

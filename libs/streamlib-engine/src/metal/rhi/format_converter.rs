@@ -12,7 +12,7 @@ use crate::apple::vimage_ffi::{
     CVPixelBufferLockBaseAddress, CVPixelBufferUnlockBaseAddress,
 };
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use std::ptr;
 
 /// macOS format converter wrapping vImageConverter.
@@ -37,7 +37,7 @@ impl FormatConverterMacOS {
         };
 
         if src_cv_format.is_null() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to create vImageCVImageFormat for source format {:?}",
                 source_format
             )));
@@ -55,7 +55,7 @@ impl FormatConverterMacOS {
 
         if dst_cv_format.is_null() {
             unsafe { vImageCVImageFormat_Release(src_cv_format) };
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to create vImageCVImageFormat for dest format {:?}",
                 dest_format
             )));
@@ -82,7 +82,7 @@ impl FormatConverterMacOS {
         }
 
         if converter.is_null() || error != kvImageNoError {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to create vImageConverter: {} ({:?} -> {:?})",
                 vimage_error_description(error),
                 source_format,
@@ -114,7 +114,7 @@ impl FormatConverterMacOS {
     pub fn convert(&self, source: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
         // Verify dimensions match
         if source.width != dest.width || source.height != dest.height {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Buffer dimension mismatch: source {}x{}, dest {}x{}",
                 source.width, source.height, dest.width, dest.height
             )));
@@ -129,7 +129,7 @@ impl FormatConverterMacOS {
         let src_lock_result =
             unsafe { CVPixelBufferLockBaseAddress(src_ptr, kCVPixelBufferLock_ReadOnly) };
         if src_lock_result != kCVReturnSuccess {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to lock source pixel buffer: {}",
                 src_lock_result
             )));
@@ -139,7 +139,7 @@ impl FormatConverterMacOS {
         let dst_lock_result = unsafe { CVPixelBufferLockBaseAddress(dst_ptr, 0) };
         if dst_lock_result != kCVReturnSuccess {
             unsafe { CVPixelBufferUnlockBaseAddress(src_ptr, kCVPixelBufferLock_ReadOnly) };
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to lock destination pixel buffer: {}",
                 dst_lock_result
             )));
@@ -181,7 +181,7 @@ impl FormatConverterMacOS {
         }
 
         if result != kvImageNoError {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "vImageConvert_AnyToAny failed: {}",
                 vimage_error_description(result)
             )));

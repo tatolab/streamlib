@@ -7,7 +7,7 @@
 
 use crate::_generated_::{AudioFrame, EncodedAudioFrame};
 use crate::core::streaming::OpusDecoder;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
 
 // ============================================================================
 // PROCESSOR
@@ -57,7 +57,7 @@ impl crate::core::ReactiveProcessor for OpusDecoderProcessor::Processor {
         let decoder = self
             .opus_decoder
             .as_mut()
-            .ok_or_else(|| StreamError::Runtime("Opus decoder not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("Opus decoder not initialized".into()))?;
 
         let timestamp_ns: i64 = encoded.timestamp_ns.parse().unwrap_or(0);
         let frame: AudioFrame = decoder.decode_to_audio_frame(&encoded.data, timestamp_ns)?;

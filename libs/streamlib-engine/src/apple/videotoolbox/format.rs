@@ -187,7 +187,7 @@ pub fn avcc_to_annex_b(avcc_data: &[u8]) -> Vec<u8> {
 
 /// Convert Annex B format to AVCC format.
 pub fn annex_b_to_avcc(annex_b_data: &[u8]) -> crate::core::Result<Vec<u8>> {
-    use crate::core::StreamError;
+    use crate::core::Error;
 
     let mut avcc = Vec::with_capacity(annex_b_data.len());
     let mut pos = 0;
@@ -206,7 +206,7 @@ pub fn annex_b_to_avcc(annex_b_data: &[u8]) -> crate::core::Result<Vec<u8>> {
             tracing::warn!(
                 "[Annex B → AVCC] No start code found at position 0, data may already be AVCC"
             );
-            return Err(StreamError::Runtime(
+            return Err(Error::Runtime(
                 "Invalid Annex B data: no start code at beginning".to_string(),
             ));
         } else {

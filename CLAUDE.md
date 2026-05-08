@@ -314,7 +314,7 @@ Run `cargo doc -p streamlib --no-deps` - fix any unresolved link warnings.
 ## Conventions
 
 ### Error Handling
-- Use `StreamError` enum from `streamlib::core::error`
+- Use `Error` enum from `streamlib::core::error`
 - Return `Result<T>` from all fallible operations
 - Prefer `?` operator over `.unwrap()` in library code
 - `.unwrap()` acceptable in examples and tests

@@ -13,7 +13,7 @@ use crate::core::graph::{
 };
 use crate::core::processors::ProcessorSpec;
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
+use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, Error};
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -51,7 +51,7 @@ async fn add_processor_impl(
             .inspect(|node| emit_did_add(&node.id))
             .first()
             .map(|node| node.id.clone())
-            .ok_or_else(|| StreamError::GraphError("Could not create node".into()))
+            .ok_or_else(|| Error::GraphError("Could not create node".into()))
     })?;
 
     PUBSUB.publish(
@@ -69,7 +69,7 @@ async fn remove_processor_impl(
 ) -> Result<()> {
     compiler.scope(|graph, tx| {
         if !graph.traversal().v(&processor_id).exists() {
-            return Err(StreamError::ProcessorNotFound(processor_id.to_string()));
+            return Err(Error::ProcessorNotFound(processor_id.to_string()));
         }
 
         if let Some(node) = graph.traversal_mut().v(&processor_id).first_mut() {
@@ -131,9 +131,9 @@ async fn connect_impl(
             .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
             .first()
             .map(|link| link.id.clone())
-            .ok_or_else(|| StreamError::GraphError("failed to create link".into()))?;
+            .ok_or_else(|| Error::GraphError("failed to create link".into()))?;
 
-        Ok::<_, StreamError>(id)
+        Ok::<_, Error>(id)
     })?;
 
     PUBSUB.publish(
@@ -161,7 +161,7 @@ async fn disconnect_impl(compiler: Arc<Compiler>, link_id: LinkUniqueId) -> Resu
             .e(&link_id)
             .first()
             .map(|l| (l.from_port(), l.to_port()))
-            .ok_or_else(|| StreamError::NotFound(format!("Link '{}' not found", link_id)))?;
+            .ok_or_else(|| Error::NotFound(format!("Link '{}' not found", link_id)))?;
 
         let info = (
             OutputLinkPortRef::new(from_value.processor_id.clone(), to_value.port_name.clone()),
@@ -174,7 +174,7 @@ async fn disconnect_impl(compiler: Arc<Compiler>, link_id: LinkUniqueId) -> Resu
 
         tx.log(PendingOperation::RemoveLink(link_id.clone()));
 
-        Ok::<_, StreamError>(info)
+        Ok::<_, Error>(info)
     })?;
 
     PUBSUB.publish(
@@ -257,7 +257,7 @@ impl RuntimeOperations for Runner {
                     let _ = tx.send(result);
                 });
                 rx.recv()
-                    .map_err(|_| StreamError::Runtime("Task channel closed".into()))?
+                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
             }
         }
     }
@@ -276,7 +276,7 @@ impl RuntimeOperations for Runner {
                     let _ = tx.send(result);
                 });
                 rx.recv()
-                    .map_err(|_| StreamError::Runtime("Task channel closed".into()))?
+                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
             }
         }
     }
@@ -292,7 +292,7 @@ impl RuntimeOperations for Runner {
                     let _ = tx.send(result);
                 });
                 rx.recv()
-                    .map_err(|_| StreamError::Runtime("Task channel closed".into()))?
+                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
             }
         }
     }
@@ -311,7 +311,7 @@ impl RuntimeOperations for Runner {
                     let _ = tx.send(result);
                 });
                 rx.recv()
-                    .map_err(|_| StreamError::Runtime("Task channel closed".into()))?
+                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
             }
         }
     }

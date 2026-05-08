@@ -78,7 +78,7 @@ pub fn run_init_hooks(streamlib_home: &Path) -> Result<()> {
 
     // If previously failed, return the cached error
     if let Some(err_msg) = INIT_FAILED.get() {
-        return Err(crate::StreamError::Runtime(err_msg.clone()));
+        return Err(crate::Error::Runtime(err_msg.clone()));
     }
 
     // Run hooks (first caller wins due to OnceLock semantics)

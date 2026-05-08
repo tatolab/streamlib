@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use streamlib_idents::{PackageRef, SemVer};
 
 use crate::core::streamlib_home::get_streamlib_home;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Format-version of the on-disk installed-package manifest. Bumped when the
 /// shape changes; mismatched files are reset on load with a warning. Pre-#717
@@ -58,7 +58,7 @@ impl InstalledPackageManifest {
         }
 
         let content = std::fs::read_to_string(&path).map_err(|e| {
-            StreamError::Configuration(format!("Failed to read {}: {}", path.display(), e))
+            Error::Configuration(format!("Failed to read {}: {}", path.display(), e))
         })?;
 
         match serde_yaml::from_str::<Self>(&content) {
@@ -97,7 +97,7 @@ impl InstalledPackageManifest {
 
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "Failed to create directory {}: {}",
                     parent.display(),
                     e
@@ -106,11 +106,11 @@ impl InstalledPackageManifest {
         }
 
         let content = serde_yaml::to_string(self).map_err(|e| {
-            StreamError::Configuration(format!("Failed to serialize packages manifest: {}", e))
+            Error::Configuration(format!("Failed to serialize packages manifest: {}", e))
         })?;
 
         std::fs::write(&path, content).map_err(|e| {
-            StreamError::Configuration(format!("Failed to write {}: {}", path.display(), e))
+            Error::Configuration(format!("Failed to write {}: {}", path.display(), e))
         })?;
 
         Ok(())

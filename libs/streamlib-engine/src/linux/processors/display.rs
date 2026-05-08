@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::com_tatolab_display_config::ScalingMode;
-use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, StreamError};
+use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, Error};
 use streamlib_consumer_rhi::VulkanLayout;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -115,7 +115,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
         let gpu_context = self
             .gpu_context
             .clone()
-            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
 
         // Pull the Vulkan device handle from the FullAccess lifecycle ctx.
         // The render thread uses it to build its swapchain and rendering
@@ -236,7 +236,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
 
                 tracing::debug!("Display {}: Render thread exiting", window_id);
             })
-            .map_err(|e| StreamError::Runtime(format!("Failed to spawn render thread: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to spawn render thread: {}", e)))?;
 
         self.render_thread = Some(render_thread);
 
@@ -269,7 +269,7 @@ impl crate::core::ManualProcessor for LinuxDisplayProcessor::Processor {
             if handle.is_finished() {
                 handle
                     .join()
-                    .map_err(|_| StreamError::Runtime("Render thread panicked".into()))?;
+                    .map_err(|_| Error::Runtime("Render thread panicked".into()))?;
             } else {
                 tracing::warn!(
                     "Display {}: Render thread did not exit within 2s, detaching",
@@ -1304,7 +1304,7 @@ fn create_swapchain_state(
     let surface = unsafe {
         vulkanalia::window::create_surface(instance, window, window)
     }
-    .map_err(|e| StreamError::GpuError(format!("Failed to create Vulkan surface: {}", e)))?;
+    .map_err(|e| Error::GpuError(format!("Failed to create Vulkan surface: {}", e)))?;
 
     // Check surface support for this queue family
     let surface_supported = unsafe {
@@ -1314,11 +1314,11 @@ fn create_swapchain_state(
             surface,
         )
     }
-    .map_err(|e| StreamError::GpuError(format!("Failed to check surface support: {}", e)))?;
+    .map_err(|e| Error::GpuError(format!("Failed to check surface support: {}", e)))?;
 
     if !surface_supported {
         unsafe { instance.destroy_surface_khr(surface, None) };
-        return Err(StreamError::GpuError(
+        return Err(Error::GpuError(
             "Graphics queue family does not support presentation to this surface".into(),
         ));
     }
@@ -1328,21 +1328,21 @@ fn create_swapchain_state(
         instance.get_physical_device_surface_capabilities_khr(physical_device, surface)
     }
     .map_err(|e| {
-        StreamError::GpuError(format!("Failed to query surface capabilities: {}", e))
+        Error::GpuError(format!("Failed to query surface capabilities: {}", e))
     })?;
 
     let surface_formats = unsafe {
         instance.get_physical_device_surface_formats_khr(physical_device, surface)
     }
     .map_err(|e| {
-        StreamError::GpuError(format!("Failed to query surface formats: {}", e))
+        Error::GpuError(format!("Failed to query surface formats: {}", e))
     })?;
 
     let present_modes = unsafe {
         instance.get_physical_device_surface_present_modes_khr(physical_device, surface)
     }
     .map_err(|e| {
-        StreamError::GpuError(format!("Failed to query present modes: {}", e))
+        Error::GpuError(format!("Failed to query present modes: {}", e))
     })?;
 
     // Choose surface format — prefer B8G8R8A8_UNORM + SRGB_NONLINEAR
@@ -1402,11 +1402,11 @@ fn create_swapchain_state(
         .build();
 
     let swapchain = unsafe { device.create_swapchain_khr(&swapchain_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create swapchain: {}", e)))?;
+        .map_err(|e| Error::GpuError(format!("Failed to create swapchain: {}", e)))?;
 
     let swapchain_images = unsafe { device.get_swapchain_images_khr(swapchain) }
         .map_err(|e| {
-            StreamError::GpuError(format!("Failed to get swapchain images: {}", e))
+            Error::GpuError(format!("Failed to get swapchain images: {}", e))
         })?;
 
     // Create command pool for this thread
@@ -1416,7 +1416,7 @@ fn create_swapchain_state(
         .build();
 
     let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {}", e)))?;
+        .map_err(|e| Error::GpuError(format!("Failed to create command pool: {}", e)))?;
 
     // image_available: per-frame-in-flight (CPU↔GPU pipelining).
     // render_finished: per-swapchain-image — the present engine keeps a hold
@@ -1429,14 +1429,14 @@ fn create_swapchain_state(
     let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
     for _ in 0..MAX_FRAMES_IN_FLIGHT {
         let image_available = unsafe { device.create_semaphore(&semaphore_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create semaphore: {}", e)))?;
         image_available_semaphores.push(image_available);
     }
 
     let mut render_finished_semaphores = Vec::with_capacity(image_count);
     for _ in 0..image_count {
         let render_finished = unsafe { device.create_semaphore(&semaphore_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create semaphore: {}", e)))?;
         render_finished_semaphores.push(render_finished);
     }
 
@@ -1453,7 +1453,7 @@ fn create_swapchain_state(
     let frame_timeline_semaphore =
         unsafe { device.create_semaphore(&timeline_semaphore_info, None) }
             .map_err(|e| {
-                StreamError::GpuError(format!("Failed to create timeline semaphore: {}", e))
+                Error::GpuError(format!("Failed to create timeline semaphore: {}", e))
             })?;
 
     // Pre-allocate command buffers (one per in-flight frame).
@@ -1465,7 +1465,7 @@ fn create_swapchain_state(
 
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
         .map_err(|e| {
-            StreamError::GpuError(format!("Failed to allocate command buffers: {}", e))
+            Error::GpuError(format!("Failed to allocate command buffers: {}", e))
         })?;
 
     // Create swapchain image views for dynamic rendering color attachments
@@ -1493,7 +1493,7 @@ fn create_swapchain_state(
             .build();
         let view = unsafe { device.create_image_view(&view_info, None) }
             .map_err(|e| {
-                StreamError::GpuError(format!("Failed to create swapchain image view: {}", e))
+                Error::GpuError(format!("Failed to create swapchain image view: {}", e))
             })?;
         swapchain_image_views.push(view);
     }
@@ -1508,7 +1508,7 @@ fn create_swapchain_state(
         vk::Format::R8G8B8A8_UNORM => crate::core::rhi::TextureFormat::Rgba8Unorm,
         vk::Format::R8G8B8A8_SRGB => crate::core::rhi::TextureFormat::Rgba8UnormSrgb,
         other => {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Display swapchain surface format {other:?} not mapped to TextureFormat"
             )));
         }
@@ -1610,7 +1610,7 @@ fn recreate_swapchain(
         instance.get_physical_device_surface_capabilities_khr(physical_device, surface)
     }
     .map_err(|e| {
-        StreamError::GpuError(format!("Failed to query surface capabilities: {}", e))
+        Error::GpuError(format!("Failed to query surface capabilities: {}", e))
     })?;
 
     let extent = if capabilities.current_extent.width != u32::MAX {
@@ -1632,7 +1632,7 @@ fn recreate_swapchain(
         instance.get_physical_device_surface_present_modes_khr(physical_device, surface)
     }
     .map_err(|e| {
-        StreamError::GpuError(format!("Failed to query present modes: {}", e))
+        Error::GpuError(format!("Failed to query present modes: {}", e))
     })?;
 
     let present_mode = if vsync {
@@ -1665,11 +1665,11 @@ fn recreate_swapchain(
         .build();
 
     let swapchain = unsafe { device.create_swapchain_khr(&swapchain_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to recreate swapchain: {}", e)))?;
+        .map_err(|e| Error::GpuError(format!("Failed to recreate swapchain: {}", e)))?;
 
     let swapchain_images = unsafe { device.get_swapchain_images_khr(swapchain) }
         .map_err(|e| {
-            StreamError::GpuError(format!("Failed to get swapchain images: {}", e))
+            Error::GpuError(format!("Failed to get swapchain images: {}", e))
         })?;
 
     // Create new command pool
@@ -1679,7 +1679,7 @@ fn recreate_swapchain(
         .build();
 
     let command_pool = unsafe { device.create_command_pool(&pool_info, None) }
-        .map_err(|e| StreamError::GpuError(format!("Failed to create command pool: {}", e)))?;
+        .map_err(|e| Error::GpuError(format!("Failed to create command pool: {}", e)))?;
 
     // image_available: per-frame-in-flight. render_finished: per-swapchain-image
     // (see create path for rationale).
@@ -1689,14 +1689,14 @@ fn recreate_swapchain(
     let mut image_available_semaphores = Vec::with_capacity(MAX_FRAMES_IN_FLIGHT);
     for _ in 0..MAX_FRAMES_IN_FLIGHT {
         let image_available = unsafe { device.create_semaphore(&semaphore_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create semaphore: {}", e)))?;
         image_available_semaphores.push(image_available);
     }
 
     let mut render_finished_semaphores = Vec::with_capacity(new_image_count);
     for _ in 0..new_image_count {
         let render_finished = unsafe { device.create_semaphore(&semaphore_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {}", e)))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create semaphore: {}", e)))?;
         render_finished_semaphores.push(render_finished);
     }
 
@@ -1711,7 +1711,7 @@ fn recreate_swapchain(
     let frame_timeline_semaphore =
         unsafe { device.create_semaphore(&timeline_semaphore_info, None) }
             .map_err(|e| {
-                StreamError::GpuError(format!("Failed to create timeline semaphore: {}", e))
+                Error::GpuError(format!("Failed to create timeline semaphore: {}", e))
             })?;
 
     // Pre-allocate command buffers (one per in-flight frame).
@@ -1723,7 +1723,7 @@ fn recreate_swapchain(
 
     let command_buffers = unsafe { device.allocate_command_buffers(&alloc_info) }
         .map_err(|e| {
-            StreamError::GpuError(format!("Failed to allocate command buffers: {}", e))
+            Error::GpuError(format!("Failed to allocate command buffers: {}", e))
         })?;
 
     // Create swapchain image views for dynamic rendering color attachments
@@ -1751,7 +1751,7 @@ fn recreate_swapchain(
             .build();
         let view = unsafe { device.create_image_view(&view_info, None) }
             .map_err(|e| {
-                StreamError::GpuError(format!("Failed to create swapchain image view: {}", e))
+                Error::GpuError(format!("Failed to create swapchain image view: {}", e))
             })?;
         swapchain_image_views.push(view);
     }

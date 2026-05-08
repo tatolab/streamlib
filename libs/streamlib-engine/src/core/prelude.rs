@@ -5,7 +5,7 @@
 
 pub use crate::core::{
     // Errors
-    error::{Result, StreamError},
+    error::{Result, Error},
 
     // Graph
     graph::{LinkUniqueId, ProcessorUniqueId},

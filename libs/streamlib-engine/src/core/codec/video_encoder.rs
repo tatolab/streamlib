@@ -5,7 +5,7 @@
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-use crate::core::StreamError;
+use crate::core::Error;
 use crate::core::{GpuContext, Result, RuntimeContext};
 
 use super::VideoEncoderConfig;
@@ -60,7 +60,7 @@ impl VideoEncoder {
     /// Encode a video frame (unsupported platform).
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub fn encode(&mut self, _frame: &VideoFrame, _gpu: &GpuContext) -> Result<EncodedVideoFrame> {
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "Video encoding not supported on this platform".into(),
         ))
     }
@@ -74,7 +74,7 @@ impl VideoEncoder {
     /// Set the target bitrate (unsupported platform).
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub fn set_bitrate(&mut self, _bitrate_bps: u32) -> Result<()> {
-        Err(StreamError::Configuration(
+        Err(Error::Configuration(
             "Video encoding not supported on this platform".into(),
         ))
     }

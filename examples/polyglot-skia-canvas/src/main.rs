@@ -56,7 +56,7 @@ use streamlib::sdk::rhi::{
     VulkanLayout,
 };
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::error::StreamError;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
 use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
 use streamlib::sdk::error::Result;
@@ -78,7 +78,7 @@ fn main() -> Result<()> {
         }
     }
     std::fs::create_dir_all(&output_dir).map_err(|e| {
-        StreamError::Configuration(format!(
+        Error::Configuration(format!(
             "create output dir {}: {e}",
             output_dir.display()
         ))
@@ -127,13 +127,13 @@ fn main() -> Result<()> {
                     0,
                 )
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "HostVulkanTimelineSemaphore::new_exportable: {e}"
                     ))
                 })?,
             );
             let store = gpu.surface_store().ok_or_else(|| {
-                StreamError::Configuration(
+                Error::Configuration(
                     "surface_store unavailable — host runtime built without \
                      a surface-share service (Linux subprocess flow requires it)"
                         .into(),
@@ -152,7 +152,7 @@ fn main() -> Result<()> {
                     VulkanLayout::GENERAL,
                 )
                 .map_err(|e| {
-                    StreamError::Configuration(format!("register_texture: {e}"))
+                    Error::Configuration(format!("register_texture: {e}"))
                 })?;
             // No bridge wiring: Skia composes on the OpenGL adapter,
             // which has no per-acquire host work — every line of GPU
@@ -184,7 +184,7 @@ fn main() -> Result<()> {
     let slpkg_path =
         manifest_dir.join("python/polyglot-skia-canvas-0.1.0.slpkg");
     if !slpkg_path.exists() {
-        return Err(StreamError::Configuration(format!(
+        return Err(Error::Configuration(format!(
             "Package not found: {}\n\
              Run: cargo run -p streamlib-cli -- pack examples/polyglot-skia-canvas/python",
             slpkg_path.display()
@@ -193,13 +193,13 @@ fn main() -> Result<()> {
     runtime.load_package(&slpkg_path)?;
 
     let fixture_path =
-        write_trigger_fixture().map_err(StreamError::Configuration)?;
+        write_trigger_fixture().map_err(Error::Configuration)?;
     let source = runtime.add_processor(BgraFileSourceProcessor::Processor::node(
         BgraFileSourceProcessor::Config {
             file_path: fixture_path
                 .to_str()
                 .ok_or_else(|| {
-                    StreamError::Configuration(
+                    Error::Configuration(
                         "fixture path has non-utf8 component".into(),
                     )
                 })?
@@ -274,7 +274,7 @@ fn main() -> Result<()> {
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "ffmpeg spawn (install ffmpeg if missing): {e}"
             ))
         })?;
@@ -288,7 +288,7 @@ fn main() -> Result<()> {
         .unwrap()
         .clone()
         .ok_or_else(|| {
-            StreamError::Runtime(
+            Error::Runtime(
                 "host texture slot is empty — setup hook never ran".into(),
             )
         })?;
@@ -296,7 +296,7 @@ fn main() -> Result<()> {
         .lock()
         .unwrap()
         .clone()
-        .ok_or_else(|| StreamError::Runtime("readback slot is empty".into()))?;
+        .ok_or_else(|| Error::Runtime("readback slot is empty".into()))?;
 
     // 60Hz readback loop. The Python subprocess draws as fast as it
     // gets trigger frames from BgraFileSource (also 60fps); host
@@ -323,7 +323,7 @@ fn main() -> Result<()> {
         let rb_start = Instant::now();
         let ticket = readback
             .submit(&texture, TextureSourceLayout::General)
-            .map_err(|e| StreamError::Runtime(format!("readback submit: {e}")))?;
+            .map_err(|e| Error::Runtime(format!("readback submit: {e}")))?;
         let capture_hero = f == HERO_FRAME_INDEX;
         let mut hero_capture: Option<Vec<u8>> = None;
         readback
@@ -333,9 +333,9 @@ fn main() -> Result<()> {
                 }
                 ffmpeg_stdin.write_all(bgra)
             })
-            .map_err(|e| StreamError::Runtime(format!("readback wait: {e}")))?
+            .map_err(|e| Error::Runtime(format!("readback wait: {e}")))?
             .map_err(|e| {
-                StreamError::Runtime(format!("ffmpeg stdin write: {e}"))
+                Error::Runtime(format!("ffmpeg stdin write: {e}"))
             })?;
         readback_times.push(rb_start.elapsed());
         if let Some(pixels) = hero_capture {
@@ -360,10 +360,10 @@ fn main() -> Result<()> {
 
     drop(ffmpeg_stdin);
     let ffmpeg_status = ffmpeg.wait().map_err(|e| {
-        StreamError::Runtime(format!("ffmpeg wait: {e}"))
+        Error::Runtime(format!("ffmpeg wait: {e}"))
     })?;
     if !ffmpeg_status.success() {
-        return Err(StreamError::Runtime(format!(
+        return Err(Error::Runtime(format!(
             "ffmpeg encode failed: {ffmpeg_status:?}"
         )));
     }
@@ -376,7 +376,7 @@ fn main() -> Result<()> {
             hero_path.display()
         );
     } else {
-        return Err(StreamError::Runtime(
+        return Err(Error::Runtime(
             "hero frame was never captured — readback loop exited early".into(),
         ));
     }
@@ -418,7 +418,7 @@ fn write_png(
     }
 
     let file = File::create(output).map_err(|e| {
-        StreamError::Configuration(format!(
+        Error::Configuration(format!(
             "create output PNG {}: {e}",
             output.display()
         ))
@@ -428,9 +428,9 @@ fn write_png(
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder
         .write_header()
-        .map_err(|e| StreamError::Configuration(format!("PNG header: {e}")))?;
+        .map_err(|e| Error::Configuration(format!("PNG header: {e}")))?;
     writer
         .write_image_data(&rgba)
-        .map_err(|e| StreamError::Configuration(format!("PNG body: {e}")))?;
+        .map_err(|e| Error::Configuration(format!("PNG body: {e}")))?;
     Ok(())
 }

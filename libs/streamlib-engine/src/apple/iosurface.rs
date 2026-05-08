@@ -5,7 +5,7 @@
 // Review if these are needed for future texture format support or can be removed
 #![allow(dead_code)]
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -55,7 +55,7 @@ pub fn create_metal_texture_from_iosurface(
     };
 
     texture.ok_or_else(|| {
-        StreamError::TextureError(format!(
+        Error::TextureError(format!(
             "Failed to create Metal texture from IOSurface (width={}, height={}, format={})",
             width, height, pixel_format
         ))
@@ -113,7 +113,7 @@ pub fn create_iosurface(
         unsafe { msg_send![allocated_ptr, initWithProperties: &*properties] };
 
     let surface = unsafe { Retained::from_raw(surface_ptr) }.ok_or_else(|| {
-        StreamError::TextureError(format!(
+        Error::TextureError(format!(
             "Failed to create IOSurface with dimensions {}x{}, format={:?}",
             width, height, pixel_format
         ))
@@ -123,7 +123,7 @@ pub fn create_iosurface(
     let actual_height = surface.height() as usize;
 
     if actual_width != width || actual_height != height {
-        return Err(StreamError::TextureError(format!(
+        return Err(Error::TextureError(format!(
             "IOSurface created with wrong dimensions: expected {}x{}, got {}x{}",
             width, height, actual_width, actual_height
         )));
@@ -136,7 +136,7 @@ fn iosurface_format_to_metal(ios_format: u32) -> Result<MTLPixelFormat> {
     match ios_format {
         0x42475241 => Ok(MTLPixelFormat::BGRA8Unorm), // 'BGRA' - most common on macOS
         0x52474241 => Ok(MTLPixelFormat::RGBA8Unorm), // 'RGBA'
-        _ => Err(StreamError::NotSupported(format!(
+        _ => Err(Error::NotSupported(format!(
             "IOSurface pixel format 0x{:08X} not supported",
             ios_format
         ))),

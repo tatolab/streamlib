@@ -13,7 +13,7 @@ use crate::core::context::texture_pool::{
     PoolSlot, TexturePoolDescriptor, TexturePoolInner, TexturePoolKey,
 };
 use crate::core::rhi::{StreamTexture, TextureFormat};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use crate::metal::rhi::MetalTexture;
 
 // FFI binding to get IOSurface ID for cross-process sharing
@@ -33,7 +33,7 @@ fn rhi_format_to_pixel_format(format: TextureFormat) -> Result<PixelFormat> {
     match format {
         TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok(PixelFormat::Bgra32),
         TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(PixelFormat::Rgba32),
-        _ => Err(StreamError::TextureError(format!(
+        _ => Err(Error::TextureError(format!(
             "Unsupported texture format for IOSurface: {:?}",
             format
         ))),

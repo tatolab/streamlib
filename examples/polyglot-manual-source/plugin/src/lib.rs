@@ -20,7 +20,7 @@
 
 use std::path::PathBuf;
 use streamlib::sdk::_generated_::VideoFrame;
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_abi::export_plugin;
 
@@ -89,7 +89,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for PolyglotManualSourceCount
                     "last_timestamp_ns": self.last_ns.to_string(),
                 });
                 std::fs::write(path, stats.to_string()).map_err(|e| {
-                    StreamError::Runtime(format!(
+                    Error::Runtime(format!(
                         "[CountingSink] failed to write stats to {}: {}",
                         path.display(),
                         e

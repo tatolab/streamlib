@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
 use super::{FrameHeader, FRAME_HEADER_SIZE};
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 
 /// Thread-local subscriber wrapper.
 ///
@@ -238,18 +238,18 @@ impl InputMailboxes {
         let port_config = self
             .ports
             .get(port)
-            .ok_or_else(|| StreamError::Link(format!("Unknown input port: {}", port)))?;
+            .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
 
         let raw = match port_config.read_mode {
             ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
             ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
         }
-        .ok_or_else(|| StreamError::Link(format!("No data available on port: {}", port)))?;
+        .ok_or_else(|| Error::Link(format!("No data available on port: {}", port)))?;
 
         let header = FrameHeader::read_from_slice(&raw);
         let data = &raw[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.len as usize];
         rmp_serde::from_slice(data)
-            .map_err(|e| StreamError::Link(format!("Failed to deserialize frame: {}", e)))
+            .map_err(|e| Error::Link(format!("Failed to deserialize frame: {}", e)))
     }
 
     /// Read raw bytes and timestamp from the given port without deserialization.
@@ -262,7 +262,7 @@ impl InputMailboxes {
         let port_config = self
             .ports
             .get(port)
-            .ok_or_else(|| StreamError::Link(format!("Unknown input port: {}", port)))?;
+            .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
 
         let raw = match port_config.read_mode {
             ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),

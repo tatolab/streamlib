@@ -464,12 +464,12 @@ fn generate_processor_impl_from_schema(
                 <Self as ::streamlib::sdk::processors::ReactiveProcessor>::process(self, ctx)
             },
             quote! {
-                Err(::streamlib::sdk::error::StreamError::Runtime(
+                Err(::streamlib::sdk::error::Error::Runtime(
                     "start() is only valid for Manual execution mode.".into()
                 ))
             },
             quote! {
-                Err(::streamlib::sdk::error::StreamError::Runtime(
+                Err(::streamlib::sdk::error::Error::Runtime(
                     "stop() is only valid for Manual execution mode.".into()
                 ))
             },
@@ -480,7 +480,7 @@ fn generate_processor_impl_from_schema(
             quote! { ::streamlib::sdk::processors::ManualProcessor },
             quote! {
                 let _ = ctx;
-                Err(::streamlib::sdk::error::StreamError::Runtime(
+                Err(::streamlib::sdk::error::Error::Runtime(
                     "process() is only valid for Reactive/Continuous execution modes.".into()
                 ))
             },
@@ -501,12 +501,12 @@ fn generate_processor_impl_from_schema(
                     <Self as ::streamlib::sdk::processors::ContinuousProcessor>::process(self, ctx)
                 },
                 quote! {
-                    Err(::streamlib::sdk::error::StreamError::Runtime(
+                    Err(::streamlib::sdk::error::Error::Runtime(
                         "start() is only valid for Manual execution mode.".into()
                     ))
                 },
                 quote! {
-                    Err(::streamlib::sdk::error::StreamError::Runtime(
+                    Err(::streamlib::sdk::error::Error::Runtime(
                         "stop() is only valid for Manual execution mode.".into()
                     ))
                 },

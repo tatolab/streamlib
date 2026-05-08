@@ -11,7 +11,7 @@ use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
 use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::HostVulkanDevice;
 
@@ -208,7 +208,7 @@ impl HostVulkanTexture {
                 unsafe { allocator.create_image(image_info, &alloc_opts) }
             };
             result.map_err(|e| {
-                StreamError::GpuError(format!("Failed to create exportable image: {e}"))
+                Error::GpuError(format!("Failed to create exportable image: {e}"))
             })?
         };
 
@@ -274,7 +274,7 @@ impl HostVulkanTexture {
         let allocator = vulkan_device.allocator();
         let (image, allocation) =
             unsafe { allocator.create_image(image_info, &alloc_opts) }.map_err(|e| {
-                StreamError::GpuError(format!("Failed to create device-local image: {e}"))
+                Error::GpuError(format!("Failed to create device-local image: {e}"))
             })?;
 
         Ok(Self {
@@ -327,7 +327,7 @@ impl HostVulkanTexture {
         modifier_candidates: &[u64],
     ) -> Result<Self> {
         if modifier_candidates.is_empty() {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "new_render_target_dma_buf: empty modifier list — EGL did not advertise an external_only=FALSE modifier for this format. Linear DMA-BUF is sampler-only on NVIDIA; refusing to allocate.".into(),
             ));
         }
@@ -384,7 +384,7 @@ impl HostVulkanTexture {
             unsafe { allocator.create_image(image_info, &alloc_opts) }
         }
         .map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Failed to create render-target DMA-BUF image (modifiers={:?}): {e}",
                 modifier_candidates
             ))
@@ -400,7 +400,7 @@ impl HostVulkanTexture {
                     // Image leaks on this branch — the allocator owns it. We
                     // destroy it explicitly so the caller doesn't need to.
                     unsafe { vulkan_device.allocator().destroy_image(image, allocation) };
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "vkGetImageDrmFormatModifierPropertiesEXT failed: {e}"
                     ))
                 })?;
@@ -409,7 +409,7 @@ impl HostVulkanTexture {
 
         if !modifier_candidates.contains(&chosen) {
             unsafe { vulkan_device.allocator().destroy_image(image, allocation) };
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Driver picked modifier 0x{:016x} that wasn't in our candidate list {:?} — VUID violation",
                 chosen, modifier_candidates
             )));
@@ -464,7 +464,7 @@ impl HostVulkanTexture {
         format: TextureFormat,
     ) -> Result<Self> {
         if iosurface_ref.is_null() {
-            return Err(StreamError::TextureError(
+            return Err(Error::TextureError(
                 "Cannot import null IOSurface".into(),
             ));
         }
@@ -502,7 +502,7 @@ impl HostVulkanTexture {
         let image = unsafe { device.create_image(&image_info, None) }
             .map(|r| r)
             .map_err(|e| {
-                StreamError::GpuError(format!("Failed to create image from IOSurface: {e}"))
+                Error::GpuError(format!("Failed to create image from IOSurface: {e}"))
             })?;
 
         tracing::debug!(
@@ -586,10 +586,10 @@ impl HostVulkanTexture {
         }
 
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
-            StreamError::GpuError("Cannot create image view: no HostVulkanDevice stored".into())
+            Error::GpuError("Cannot create image view: no HostVulkanDevice stored".into())
         })?;
         let image = self.image.ok_or_else(|| {
-            StreamError::GpuError("Cannot create image view: no image".into())
+            Error::GpuError("Cannot create image view: no image".into())
         })?;
 
         let vk_format = texture_format_to_vk(self.format);
@@ -609,7 +609,7 @@ impl HostVulkanTexture {
             .build();
 
         let view = unsafe { vk_dev.device().create_image_view(&view_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create image view: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create image view: {e}")))?;
 
         let _ = self.cached_image_view.set(view);
         Ok(*self.cached_image_view.get().unwrap())
@@ -636,7 +636,7 @@ impl HostVulkanTexture {
             .flags(vk::CommandPoolCreateFlags::TRANSIENT)
             .build();
         let pool = unsafe { device.create_command_pool(&pool_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("transition_to_general: create_command_pool: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("transition_to_general: create_command_pool: {e}")))?;
         let cb_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(pool)
             .level(vk::CommandBufferLevel::PRIMARY)
@@ -646,7 +646,7 @@ impl HostVulkanTexture {
             Ok(c) => c[0],
             Err(e) => {
                 unsafe { device.destroy_command_pool(pool, None) };
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "transition_to_general: allocate_command_buffers: {e}"
                 )));
             }
@@ -655,7 +655,7 @@ impl HostVulkanTexture {
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
             .build();
         unsafe { device.begin_command_buffer(cmd, &begin) }.map_err(|e| {
-            StreamError::GpuError(format!("transition_to_general: begin_command_buffer: {e}"))
+            Error::GpuError(format!("transition_to_general: begin_command_buffer: {e}"))
         })?;
         let barrier = vk::ImageMemoryBarrier2::builder()
             .src_stage_mask(vk::PipelineStageFlags2::NONE)
@@ -683,7 +683,7 @@ impl HostVulkanTexture {
             .build();
         unsafe { device.cmd_pipeline_barrier2(cmd, &dep) };
         unsafe { device.end_command_buffer(cmd) }.map_err(|e| {
-            StreamError::GpuError(format!("transition_to_general: end_command_buffer: {e}"))
+            Error::GpuError(format!("transition_to_general: end_command_buffer: {e}"))
         })?;
 
         let cmd_info = vk::CommandBufferSubmitInfo::builder()
@@ -695,7 +695,7 @@ impl HostVulkanTexture {
             .build();
         let fence_info = vk::FenceCreateInfo::default();
         let fence = unsafe { device.create_fence(&fence_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!("transition_to_general: create_fence: {e}"))
+            Error::GpuError(format!("transition_to_general: create_fence: {e}"))
         })?;
         let submits = [submit];
         let submit_result = unsafe {
@@ -716,7 +716,7 @@ impl HostVulkanTexture {
         let wait_result = unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .map(|_| ())
             .map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "transition_to_general: wait_for_fences: {e}"
                 ))
             });
@@ -754,10 +754,10 @@ impl HostVulkanTexture {
     /// build.
     pub fn dma_buf_plane_layout(&self) -> Result<Vec<(u64, u64)>> {
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
-            StreamError::GpuError("dma_buf_plane_layout: no HostVulkanDevice".into())
+            Error::GpuError("dma_buf_plane_layout: no HostVulkanDevice".into())
         })?;
         let image = self.image.ok_or_else(|| {
-            StreamError::GpuError("dma_buf_plane_layout: no image".into())
+            Error::GpuError("dma_buf_plane_layout: no image".into())
         })?;
 
         let plane_count = match self.format {
@@ -775,7 +775,7 @@ impl HostVulkanTexture {
                     1 => vk::ImageAspectFlags::MEMORY_PLANE_1_EXT,
                     2 => vk::ImageAspectFlags::MEMORY_PLANE_2_EXT,
                     3 => vk::ImageAspectFlags::MEMORY_PLANE_3_EXT,
-                    _ => return Err(StreamError::GpuError(format!(
+                    _ => return Err(Error::GpuError(format!(
                         "dma_buf_plane_layout: plane index {plane_idx} out of range"
                     ))),
                 }
@@ -783,7 +783,7 @@ impl HostVulkanTexture {
                 match plane_idx {
                     0 => vk::ImageAspectFlags::PLANE_0,
                     1 => vk::ImageAspectFlags::PLANE_1,
-                    _ => return Err(StreamError::GpuError(format!(
+                    _ => return Err(Error::GpuError(format!(
                         "dma_buf_plane_layout: NV12 plane {plane_idx} out of range"
                     ))),
                 }
@@ -814,7 +814,7 @@ impl HostVulkanTexture {
         }
 
         let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
-            StreamError::GpuError("Cannot export DMA-BUF: no HostVulkanDevice stored".into())
+            Error::GpuError("Cannot export DMA-BUF: no HostVulkanDevice stored".into())
         })?;
 
         // Get DeviceMemory from raw allocation (export/import path) or VMA allocation
@@ -824,7 +824,7 @@ impl HostVulkanTexture {
             let alloc_info = vk_dev.allocator().get_allocation_info(*allocation);
             alloc_info.deviceMemory
         } else {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "Cannot export DMA-BUF from texture without memory".into(),
             ));
         };
@@ -837,7 +837,7 @@ impl HostVulkanTexture {
         use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
         let fd = unsafe { vk_dev.device().get_memory_fd_khr(&get_fd_info) }
             .map(|r| r)
-            .map_err(|e| StreamError::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to export DMA-BUF fd: {e}")))?;
 
         let _ = self.cached_dma_buf_fd.set(fd);
         Ok(fd)
@@ -876,12 +876,12 @@ impl HostVulkanTexture {
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
         if fds.is_empty() {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "import_render_target_dma_buf: empty fd vec".into(),
             ));
         }
         if plane_offsets.len() != fds.len() || plane_strides.len() != fds.len() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "import_render_target_dma_buf: plane arrays length mismatch — fds={} offsets={} strides={}",
                 fds.len(),
                 plane_offsets.len(),
@@ -889,7 +889,7 @@ impl HostVulkanTexture {
             )));
         }
         if drm_format_modifier == 0 {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "import_render_target_dma_buf: zero (LINEAR) modifier — host should have allocated a tiled modifier; LINEAR DMA-BUFs are sampler-only on NVIDIA"
                     .into(),
             ));
@@ -949,7 +949,7 @@ impl HostVulkanTexture {
             .push_next(&mut external_image_info);
 
         let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "import_render_target_dma_buf: create_image failed (modifier=0x{:016x}): {e}",
                 drm_format_modifier
             ))
@@ -979,7 +979,7 @@ impl HostVulkanTexture {
             .map_err(|e| {
                 vulkan_device.free_imported_memory(memory);
                 unsafe { device.destroy_image(image, None) };
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "import_render_target_dma_buf: bind_image_memory failed: {e}"
                 ))
             })?;
@@ -1040,7 +1040,7 @@ impl HostVulkanTexture {
         let image = unsafe { device.create_image(&image_info, None) }
             .map(|r| r)
             .map_err(|e| {
-                StreamError::GpuError(format!("Failed to create image for DMA-BUF import: {e}"))
+                Error::GpuError(format!("Failed to create image for DMA-BUF import: {e}"))
             })?;
 
         let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
@@ -1064,7 +1064,7 @@ impl HostVulkanTexture {
             .map_err(|e| {
                 vulkan_device.free_imported_memory(memory);
                 unsafe { device.destroy_image(image, None) };
-                StreamError::GpuError(format!("Failed to bind imported memory: {e}"))
+                Error::GpuError(format!("Failed to bind imported memory: {e}"))
             })?;
 
         Ok(Self {

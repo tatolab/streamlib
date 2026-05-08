@@ -7,7 +7,7 @@
 
 use crate::_generated_::{AudioFrame, EncodedAudioFrame};
 use crate::core::streaming::{AudioEncoderConfig, AudioEncoderOpus, OpusEncoder};
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
 
 // ============================================================================
 // PROCESSOR
@@ -59,7 +59,7 @@ impl crate::core::ReactiveProcessor for OpusEncoderProcessor::Processor {
         let encoder = self
             .opus_encoder
             .as_mut()
-            .ok_or_else(|| StreamError::Runtime("Opus encoder not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("Opus encoder not initialized".into()))?;
 
         let encoded: EncodedAudioFrame = encoder.encode(&frame)?;
         self.outputs.write("encoded_audio_out", &encoded)?;

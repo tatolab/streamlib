@@ -106,7 +106,7 @@ use crate::apple::corevideo_ffi::{
     IOSurfaceLookupFromMachPort,
 };
 use crate::core::rhi::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 impl RhiPixelBufferExport for RhiPixelBufferRef {
     /// Export the CVPixelBuffer's IOSurface for cross-process sharing.
@@ -128,7 +128,7 @@ impl RhiPixelBufferExport for RhiPixelBufferRef {
                 cv_buffer,
                 std::process::id()
             );
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "CVPixelBuffer is not backed by an IOSurface".into(),
             ));
         }
@@ -145,7 +145,7 @@ impl RhiPixelBufferExport for RhiPixelBufferRef {
                 iosurface,
                 std::process::id()
             );
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "IOSurface has invalid ID 0".into(),
             ));
         }
@@ -186,7 +186,7 @@ impl RhiPixelBufferRef {
                 cv_buffer,
                 std::process::id()
             );
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "CVPixelBuffer is not backed by an IOSurface".into(),
             ));
         }
@@ -206,7 +206,7 @@ impl RhiPixelBufferRef {
                 id,
                 std::process::id()
             );
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "IOSurfaceCreateMachPort failed".into(),
             ));
         }
@@ -261,7 +261,7 @@ impl RhiPixelBufferImport for RhiPixelBufferRef {
                         id,
                         std::process::id()
                     );
-                    return Err(StreamError::Configuration(format!(
+                    return Err(Error::Configuration(format!(
                         "IOSurface with ID {} not found",
                         id
                     )));
@@ -297,7 +297,7 @@ impl RhiPixelBufferImport for RhiPixelBufferRef {
                         port,
                         std::process::id()
                     );
-                    return Err(StreamError::Configuration(format!(
+                    return Err(Error::Configuration(format!(
                         "IOSurface mach port {} lookup failed",
                         port
                     )));
@@ -330,7 +330,7 @@ impl RhiPixelBufferImport for RhiPixelBufferRef {
             }
 
             #[allow(unreachable_patterns)]
-            _ => Err(StreamError::NotSupported(
+            _ => Err(Error::NotSupported(
                 "External handle type not supported on macOS".into(),
             )),
         }
@@ -358,7 +358,7 @@ fn create_cv_buffer_from_iosurface(
             result,
             std::process::id()
         );
-        return Err(StreamError::Configuration(format!(
+        return Err(Error::Configuration(format!(
             "Failed to create CVPixelBuffer from IOSurface: error {}",
             result
         )));
@@ -369,7 +369,7 @@ fn create_cv_buffer_from_iosurface(
             "CVPixelBufferCreateWithIOSurface returned null (pid={})",
             std::process::id()
         );
-        return Err(StreamError::Configuration(
+        return Err(Error::Configuration(
             "CVPixelBufferCreateWithIOSurface returned null".into(),
         ));
     }
@@ -383,7 +383,7 @@ fn create_cv_buffer_from_iosurface(
     // The CVPixelBuffer is already retained by CreateWithIOSurface,
     // so use from_cv_pixel_buffer_no_retain
     unsafe { RhiPixelBufferRef::from_cv_pixel_buffer_no_retain(cv_buffer) }
-        .ok_or_else(|| StreamError::Configuration("Failed to wrap CVPixelBuffer".into()))
+        .ok_or_else(|| Error::Configuration("Failed to wrap CVPixelBuffer".into()))
 }
 
 /// Create an RhiPixelBufferRef from a raw IOSurfaceRef.
@@ -396,7 +396,7 @@ pub unsafe fn from_iosurface_ref_impl(
     iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
 ) -> Result<RhiPixelBufferRef> {
     if iosurface.is_null() {
-        return Err(StreamError::Configuration("IOSurfaceRef is null".into()));
+        return Err(Error::Configuration("IOSurfaceRef is null".into()));
     }
 
     let id = IOSurfaceGetID(iosurface);

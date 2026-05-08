@@ -12,7 +12,7 @@ use parking_lot::{Condvar, Mutex};
 use crate::core::rhi::{
     GpuDevice, NativeTextureHandle, StreamTexture, TextureDescriptor, TextureFormat, TextureUsages,
 };
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Request descriptor for acquiring a pooled texture.
 #[derive(Clone, Debug)]
@@ -378,12 +378,12 @@ impl TexturePool {
                     self.inner.add_slot(Arc::clone(&slot));
                     Ok(self.create_handle_from_slot(&slot))
                 } else {
-                    Err(StreamError::TextureError(
+                    Err(Error::TextureError(
                         "Texture pool exhausted (max size reached)".into(),
                     ))
                 }
             }
-            TexturePoolExhaustionPolicy::ReturnError => Err(StreamError::TextureError(
+            TexturePoolExhaustionPolicy::ReturnError => Err(Error::TextureError(
                 "Texture pool exhausted (no available slots)".into(),
             )),
         }
@@ -406,7 +406,7 @@ impl TexturePool {
             // Check timeout
             let now = std::time::Instant::now();
             if now >= deadline {
-                return Err(StreamError::TextureError(format!(
+                return Err(Error::TextureError(format!(
                     "Texture pool exhausted (timeout after {}ms)",
                     timeout_ms
                 )));
@@ -422,7 +422,7 @@ impl TexturePool {
                 if let Some(slot) = self.inner.find_available_slot(key) {
                     return Ok(self.create_handle_from_slot(&slot));
                 }
-                return Err(StreamError::TextureError(format!(
+                return Err(Error::TextureError(format!(
                     "Texture pool exhausted (timeout after {}ms)",
                     timeout_ms
                 )));

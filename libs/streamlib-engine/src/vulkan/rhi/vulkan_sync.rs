@@ -8,7 +8,7 @@ use vulkanalia::vk;
 #[cfg(target_os = "linux")]
 use vulkanalia::vk::KhrExternalSemaphoreFdExtensionDeviceCommands;
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Vulkan semaphore wrapper for synchronization.
 ///
@@ -30,7 +30,7 @@ impl VulkanSemaphore {
         let semaphore_info = vk::SemaphoreCreateInfo::builder().build();
 
         let semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create semaphore: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create semaphore: {e}")))?;
 
         Ok(Self {
             device: device.clone(),
@@ -53,7 +53,7 @@ impl VulkanSemaphore {
         mtl_shared_event: *const std::ffi::c_void,
     ) -> Result<Self> {
         if mtl_shared_event.is_null() {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "Cannot import null MTLSharedEvent".into(),
             ));
         }
@@ -71,7 +71,7 @@ impl VulkanSemaphore {
         };
 
         let semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Failed to create semaphore from MTLSharedEvent: {e}"
             ))
         })?;
@@ -127,7 +127,7 @@ impl VulkanFence {
         let fence_info = vk::FenceCreateInfo::builder().flags(flags).build();
 
         let fence = unsafe { device.create_fence(&fence_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create fence: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create fence: {e}")))?;
 
         Ok(Self {
             device: device.clone(),
@@ -142,14 +142,14 @@ impl VulkanFence {
     pub fn wait(&self, timeout_ns: u64) -> Result<()> {
         unsafe { self.device.wait_for_fences(&[self.fence], true, timeout_ns) }
             .map(|_| ())
-            .map_err(|e| StreamError::GpuError(format!("Failed to wait for fence: {e}")))
+            .map_err(|e| Error::GpuError(format!("Failed to wait for fence: {e}")))
     }
 
     /// Reset the fence to unsignaled state.
     pub fn reset(&self) -> Result<()> {
         unsafe { self.device.reset_fences(&[self.fence]) }
             .map(|_| ())
-            .map_err(|e| StreamError::GpuError(format!("Failed to reset fence: {e}")))
+            .map_err(|e| Error::GpuError(format!("Failed to reset fence: {e}")))
     }
 
     /// Get the underlying Vulkan fence handle.
@@ -244,7 +244,7 @@ impl HostVulkanTimelineSemaphore {
         };
 
         let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Failed to create timeline semaphore (exportable={exportable}): {e}"
             ))
         })?;
@@ -281,7 +281,7 @@ impl HostVulkanTimelineSemaphore {
             .push_next(&mut type_info)
             .build();
         let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Failed to create receiving timeline semaphore for import: {e}"
             ))
         })?;
@@ -296,7 +296,7 @@ impl HostVulkanTimelineSemaphore {
         let import_result = unsafe { device.import_semaphore_fd_khr(&import_info) };
         if let Err(e) = import_result {
             unsafe { device.destroy_semaphore(semaphore, None) };
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "vkImportSemaphoreFdKHR failed: {e}"
             )));
         }
@@ -314,7 +314,7 @@ impl HostVulkanTimelineSemaphore {
     /// subprocess has imported its own copy).
     pub fn export_opaque_fd(&self) -> Result<std::os::unix::io::RawFd> {
         if !self.exportable {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "HostVulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
             ));
         }
@@ -323,7 +323,7 @@ impl HostVulkanTimelineSemaphore {
             .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .build();
         let fd = unsafe { self.device.get_semaphore_fd_khr(&info) }.map_err(|e| {
-            StreamError::GpuError(format!("vkGetSemaphoreFdKHR failed: {e}"))
+            Error::GpuError(format!("vkGetSemaphoreFdKHR failed: {e}"))
         })?;
         Ok(fd)
     }
@@ -332,7 +332,7 @@ impl HostVulkanTimelineSemaphore {
     ///
     /// `timeout_ns` is the per-call timeout; pass `u64::MAX` for "no
     /// timeout". Returns `Ok(())` on success and
-    /// [`StreamError::GpuError`] (containing the underlying VkResult) on
+    /// [`Error::GpuError`] (containing the underlying VkResult) on
     /// timeout or driver failure.
     pub fn wait(&self, value: u64, timeout_ns: u64) -> Result<()> {
         let semaphores = [self.semaphore];
@@ -345,7 +345,7 @@ impl HostVulkanTimelineSemaphore {
         unsafe { self.device.wait_semaphores(&info, timeout_ns) }
             .map(|_| ())
             .map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "vkWaitSemaphores(value={value}, timeout_ns={timeout_ns}): {e}"
                 ))
             })
@@ -363,7 +363,7 @@ impl HostVulkanTimelineSemaphore {
             .value(value)
             .build();
         unsafe { self.device.signal_semaphore(&info) }.map_err(|e| {
-            StreamError::GpuError(format!("vkSignalSemaphore(value={value}): {e}"))
+            Error::GpuError(format!("vkSignalSemaphore(value={value}): {e}"))
         })
     }
 
@@ -371,7 +371,7 @@ impl HostVulkanTimelineSemaphore {
     /// `vkGetSemaphoreCounterValue`. Used by tests and progress reporting.
     pub fn current_value(&self) -> Result<u64> {
         unsafe { self.device.get_semaphore_counter_value(self.semaphore) }.map_err(|e| {
-            StreamError::GpuError(format!("vkGetSemaphoreCounterValue: {e}"))
+            Error::GpuError(format!("vkGetSemaphoreCounterValue: {e}"))
         })
     }
 

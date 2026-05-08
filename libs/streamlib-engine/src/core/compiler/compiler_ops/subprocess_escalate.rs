@@ -78,7 +78,7 @@ use crate::core::logging::{push_polyglot_record, LogLevel, LogRecord, Source};
 use crate::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat, TextureUsages};
 
 #[cfg(test)]
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 
 /// Wire tag marking a message as an escalate request. Bridges demux on this
 /// before falling through to lifecycle dispatch.
@@ -813,7 +813,7 @@ where
 
     let bridge: Arc<dyn CpuReadbackBridge> = match sandbox.escalate(|full| {
         full.cpu_readback_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(format!(
+            crate::core::error::Error::Configuration(format!(
                 "{op_label}: no CpuReadbackBridge registered on GpuContext"
             ))
         })
@@ -896,7 +896,7 @@ fn handle_register_compute_kernel(
 
     let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
         full.compute_kernel_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
+            crate::core::error::Error::Configuration(
                 "register_compute_kernel: no ComputeKernelBridge registered on GpuContext"
                     .to_string(),
             )
@@ -969,7 +969,7 @@ fn handle_run_compute_kernel(
 
     let bridge: Arc<dyn ComputeKernelBridge> = match sandbox.escalate(|full| {
         full.compute_kernel_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
+            crate::core::error::Error::Configuration(
                 "run_compute_kernel: no ComputeKernelBridge registered on GpuContext"
                     .to_string(),
             )
@@ -1056,7 +1056,7 @@ fn handle_register_graphics_kernel(
 
     let bridge: Arc<dyn GraphicsKernelBridge> = match sandbox.escalate(|full| {
         full.graphics_kernel_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
+            crate::core::error::Error::Configuration(
                 "register_graphics_kernel: no GraphicsKernelBridge registered on GpuContext"
                     .to_string(),
             )
@@ -1261,7 +1261,7 @@ fn handle_run_graphics_draw(
 
     let bridge: Arc<dyn GraphicsKernelBridge> = match sandbox.escalate(|full| {
         full.graphics_kernel_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
+            crate::core::error::Error::Configuration(
                 "run_graphics_draw: no GraphicsKernelBridge registered on GpuContext".to_string(),
             )
         })
@@ -1372,7 +1372,7 @@ fn handle_register_acceleration_structure_blas(
 
     let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
         full.ray_tracing_kernel_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
+            crate::core::error::Error::Configuration(
                 "register_acceleration_structure_blas: no RayTracingKernelBridge \
                  registered on GpuContext"
                     .to_string(),
@@ -1484,7 +1484,7 @@ fn handle_register_acceleration_structure_tlas(
 
     let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
         full.ray_tracing_kernel_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
+            crate::core::error::Error::Configuration(
                 "register_acceleration_structure_tlas: no RayTracingKernelBridge \
                  registered on GpuContext"
                     .to_string(),
@@ -1615,7 +1615,7 @@ fn handle_register_ray_tracing_kernel(
 
     let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
         full.ray_tracing_kernel_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
+            crate::core::error::Error::Configuration(
                 "register_ray_tracing_kernel: no RayTracingKernelBridge registered on \
                  GpuContext"
                     .to_string(),
@@ -1705,7 +1705,7 @@ fn handle_run_ray_tracing_kernel(
 
     let bridge: Arc<dyn RayTracingKernelBridge> = match sandbox.escalate(|full| {
         full.ray_tracing_kernel_bridge().ok_or_else(|| {
-            crate::core::error::StreamError::Configuration(
+            crate::core::error::Error::Configuration(
                 "run_ray_tracing_kernel: no RayTracingKernelBridge registered on \
                  GpuContext"
                     .to_string(),
@@ -2351,8 +2351,8 @@ pub(crate) fn process_bridge_message(
 #[cfg(test)]
 pub(crate) fn parse_op_for_tests(value: &serde_json::Value) -> Result<EscalateRequest> {
     try_parse_escalate_request(value)
-        .ok_or_else(|| StreamError::Runtime("not an escalate_request".to_string()))?
-        .map_err(|e| StreamError::Runtime(e.message))
+        .ok_or_else(|| Error::Runtime("not an escalate_request".to_string()))?
+        .map_err(|e| Error::Runtime(e.message))
 }
 
 #[cfg(test)]

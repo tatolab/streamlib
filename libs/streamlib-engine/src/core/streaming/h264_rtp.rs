@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use bytes::Bytes;
 use std::collections::HashMap;
 
@@ -48,7 +48,7 @@ impl H264RtpDepacketizer {
         seq_num: u16,
     ) -> Result<Vec<Bytes>> {
         if payload.is_empty() {
-            return Err(StreamError::Runtime("Empty RTP payload".into()));
+            return Err(Error::Runtime("Empty RTP payload".into()));
         }
 
         // First byte is NAL header (forbidden_zero_bit | nal_ref_idc | nal_unit_type)
@@ -78,7 +78,7 @@ impl H264RtpDepacketizer {
 
     fn process_fu_a(&mut self, payload: Bytes, timestamp: u32, seq_num: u16) -> Result<Vec<Bytes>> {
         if payload.len() < 2 {
-            return Err(StreamError::Runtime("FU-A packet too small".into()));
+            return Err(Error::Runtime("FU-A packet too small".into()));
         }
 
         let fu_indicator = payload[0];
@@ -213,7 +213,7 @@ impl H264RtpDepacketizer {
             offset += 2;
 
             if offset + nal_size > payload.len() {
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "STAP-A NAL size exceeds packet bounds: {} > {}",
                     offset + nal_size,
                     payload.len()

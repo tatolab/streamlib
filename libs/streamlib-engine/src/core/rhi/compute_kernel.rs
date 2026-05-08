@@ -10,7 +10,7 @@
 
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Kind of resource bound at a particular slot in a compute kernel's
 /// descriptor set.
@@ -96,17 +96,17 @@ pub fn derive_bindings_from_spirv(
     spv: &[u8],
 ) -> Result<(Vec<ComputeBindingSpec>, u32)> {
     let reflection = Reflection::new_from_spirv(spv).map_err(|e| {
-        StreamError::GpuError(format!("Failed to reflect SPIR-V: {e:?}"))
+        Error::GpuError(format!("Failed to reflect SPIR-V: {e:?}"))
     })?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Failed to extract descriptor sets from SPIR-V: {e:?}"
         ))
     })?;
 
     if sets.len() > 1 {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Only descriptor set 0 is supported; SPIR-V uses sets {:?}",
             sets.keys().collect::<Vec<_>>()
         )));
@@ -122,7 +122,7 @@ pub fn derive_bindings_from_spirv(
         entries.sort_by_key(|(b, _)| *b);
         for (binding, ty) in entries {
             let kind = spirv_type_to_kind(ty).ok_or_else(|| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "SPIR-V binding {binding} has unsupported descriptor type {ty:?}"
                 ))
             })?;
@@ -133,7 +133,7 @@ pub fn derive_bindings_from_spirv(
     let push_size = reflection
         .get_push_constant_range()
         .map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Failed to read push-constant range from SPIR-V: {e:?}"
             ))
         })?

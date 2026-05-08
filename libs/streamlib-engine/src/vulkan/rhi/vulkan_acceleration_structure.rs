@@ -21,7 +21,7 @@ use vulkanalia::vk::KhrAccelerationStructureExtensionDeviceCommands as _;
 use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::HostVulkanDevice;
 
@@ -119,25 +119,25 @@ impl VulkanAccelerationStructure {
         indices: &[u32],
     ) -> Result<Arc<Self>> {
         if !vulkan_device.supports_ray_tracing_pipeline() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': ray-tracing extensions not supported by device"
             )));
         }
         if vertices.is_empty() || indices.is_empty() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': empty geometry (vertices={}, indices={})",
                 vertices.len(),
                 indices.len()
             )));
         }
         if vertices.len() % 3 != 0 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': vertex slice length {} is not a multiple of 3 (must be flat [x,y,z,...] layout)",
                 vertices.len()
             )));
         }
         if indices.len() % 3 != 0 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': index slice length {} is not a multiple of 3 (must be three indices per triangle)",
                 indices.len()
             )));
@@ -163,7 +163,7 @@ impl VulkanAccelerationStructure {
         )?;
         let vptr = vertex_buffer.mapped_ptr();
         if vptr.is_null() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': vertex buffer mapping returned null"
             )));
         }
@@ -185,7 +185,7 @@ impl VulkanAccelerationStructure {
         )?;
         let iptr = index_buffer.mapped_ptr();
         if iptr.is_null() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': index buffer mapping returned null"
             )));
         }
@@ -274,18 +274,18 @@ impl VulkanAccelerationStructure {
         instances: &[TlasInstanceDesc],
     ) -> Result<Arc<Self>> {
         if !vulkan_device.supports_ray_tracing_pipeline() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': ray-tracing extensions not supported by device"
             )));
         }
         if instances.is_empty() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': TLAS must have at least one instance"
             )));
         }
         for (i, inst) in instances.iter().enumerate() {
             if inst.blas.kind != AccelerationStructureKind::BottomLevel {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Acceleration structure '{label}': instance {i} references a TLAS as its BLAS"
                 )));
             }
@@ -313,7 +313,7 @@ impl VulkanAccelerationStructure {
         )?;
         let inst_ptr = instance_buffer.mapped_ptr();
         if inst_ptr.is_null() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': instance buffer mapping returned null"
             )));
         }
@@ -421,7 +421,7 @@ impl VulkanAccelerationStructure {
             device.create_acceleration_structure_khr(&as_create_info, None)
         }
         .map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Acceleration structure '{label}': vkCreateAccelerationStructureKHR failed: {e}"
             ))
         })?;
@@ -469,7 +469,7 @@ impl VulkanAccelerationStructure {
             if let Err(e) = unsafe { device.begin_command_buffer(cmd, &begin_info) } {
                 unsafe { device.destroy_command_pool(command_pool, None) };
                 drop(scratch);
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Acceleration structure '{label}': begin_command_buffer failed: {e}"
                 )));
             }
@@ -497,7 +497,7 @@ impl VulkanAccelerationStructure {
             if let Err(e) = unsafe { device.end_command_buffer(cmd) } {
                 unsafe { device.destroy_command_pool(command_pool, None) };
                 drop(scratch);
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Acceleration structure '{label}': end_command_buffer failed: {e}"
                 )));
             }
@@ -508,7 +508,7 @@ impl VulkanAccelerationStructure {
                 Err(e) => {
                     unsafe { device.destroy_command_pool(command_pool, None) };
                     drop(scratch);
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Acceleration structure '{label}': fence creation failed: {e}"
                     )));
                 }
@@ -529,7 +529,7 @@ impl VulkanAccelerationStructure {
                 unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
                     .map(|_| ())
                     .map_err(|e| {
-                        StreamError::GpuError(format!(
+                        Error::GpuError(format!(
                             "Acceleration structure '{label}': wait_for_fences failed: {e}"
                         ))
                     })
@@ -672,7 +672,7 @@ impl AsBuffer {
         };
         let (buffer, allocation) =
             unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "AS buffer '{label}': vmaCreateBuffer (size={size}) failed: {e}"
                 ))
             })?;
@@ -725,7 +725,7 @@ impl AsBuffer {
         };
         let (buffer, allocation) =
             unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "AS buffer (host-visible) '{label}': vmaCreateBuffer (size={size}) failed: {e}"
                 ))
             })?;
@@ -794,7 +794,7 @@ fn create_one_shot_pool(
         .flags(vk::CommandPoolCreateFlags::TRANSIENT)
         .build();
     unsafe { device.create_command_pool(&info, None) }.map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "AS one-shot pool '{label}': create_command_pool failed: {e}"
         ))
     })
@@ -810,7 +810,7 @@ fn allocate_one_shot_cmd(
         .command_buffer_count(1)
         .build();
     let buffers = unsafe { device.allocate_command_buffers(&info) }.map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "AS one-shot cmd: allocate_command_buffers failed: {e}"
         ))
     })?;

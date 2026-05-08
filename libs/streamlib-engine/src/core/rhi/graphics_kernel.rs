@@ -14,7 +14,7 @@
 
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::TextureFormat;
 
@@ -573,19 +573,19 @@ pub fn derive_bindings_from_spirv_multistage(
     for stage in stages {
         let stage_flag = stage_to_flag(stage.stage);
         let reflection = Reflection::new_from_spirv(stage.spv).map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Graphics kernel: failed to reflect SPIR-V for {:?} stage: {e:?}",
                 stage.stage
             ))
         })?;
         let sets = reflection.get_descriptor_sets().map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Graphics kernel: failed to extract descriptor sets for {:?} stage: {e:?}",
                 stage.stage
             ))
         })?;
         if sets.len() > 1 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Graphics kernel: only descriptor set 0 is supported; SPIR-V {:?} stage uses sets {:?}",
                 stage.stage,
                 sets.keys().collect::<Vec<_>>()
@@ -594,14 +594,14 @@ pub fn derive_bindings_from_spirv_multistage(
         if let Some(set0) = sets.get(&0) {
             for (&binding, info) in set0 {
                 let kind = spirv_type_to_kind(info.ty).ok_or_else(|| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Graphics kernel: SPIR-V {:?} stage binding {binding} has unsupported descriptor type {:?}",
                         stage.stage, info.ty
                     ))
                 })?;
                 let entry = merged.entry(binding).or_insert((kind, GraphicsShaderStageFlags::NONE));
                 if entry.0 != kind {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Graphics kernel: binding {binding} kind conflict — {:?} vs {:?} (introduced by {:?})",
                         entry.0, kind, stage.stage
                     )));
@@ -610,7 +610,7 @@ pub fn derive_bindings_from_spirv_multistage(
             }
         }
         if let Some(info) = reflection.get_push_constant_range().map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Graphics kernel: failed to read push-constant range for {:?} stage: {e:?}",
                 stage.stage
             ))

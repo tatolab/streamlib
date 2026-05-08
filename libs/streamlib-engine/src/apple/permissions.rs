@@ -8,7 +8,7 @@ pub fn request_camera_permission() -> Result<bool> {
     use objc2_av_foundation::{AVCaptureDevice, AVMediaTypeVideo};
 
     let _mtm = MainThreadMarker::new().ok_or_else(|| {
-        crate::core::StreamError::Configuration(
+        crate::core::Error::Configuration(
             "request_camera_permission must be called on main thread".into(),
         )
     })?;
@@ -17,7 +17,7 @@ pub fn request_camera_permission() -> Result<bool> {
 
     let media_type = unsafe {
         AVMediaTypeVideo.ok_or_else(|| {
-            crate::core::StreamError::Configuration("AVMediaTypeVideo not available".into())
+            crate::core::Error::Configuration("AVMediaTypeVideo not available".into())
         })?
     };
 
@@ -55,7 +55,7 @@ pub fn request_audio_permission() -> Result<bool> {
     use objc2_av_foundation::{AVCaptureDevice, AVMediaTypeAudio};
 
     let _mtm = MainThreadMarker::new().ok_or_else(|| {
-        crate::core::StreamError::Configuration(
+        crate::core::Error::Configuration(
             "request_audio_permission must be called on main thread".into(),
         )
     })?;
@@ -64,7 +64,7 @@ pub fn request_audio_permission() -> Result<bool> {
 
     let media_type = unsafe {
         AVMediaTypeAudio.ok_or_else(|| {
-            crate::core::StreamError::Configuration("AVMediaTypeAudio not available".into())
+            crate::core::Error::Configuration("AVMediaTypeAudio not available".into())
         })?
     };
 

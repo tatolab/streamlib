@@ -5,7 +5,7 @@
 // Review if this texture creation utility is needed or can be removed
 #![allow(dead_code)]
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2_metal::MTLTextureType;
@@ -31,7 +31,7 @@ pub fn create_metal_texture(
     let texture = device
         .newTextureWithDescriptor(&descriptor)
         .ok_or_else(|| {
-            StreamError::TextureError(format!(
+            Error::TextureError(format!(
                 "Failed to create Metal texture ({}x{}, format={:?})",
                 width, height, format
             ))

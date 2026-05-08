@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::{DynamicProcessorConstructorFn, ProcessorInstance};
@@ -165,7 +165,7 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
 
             let mut child = command.spawn()
                 .map_err(|e| {
-                    StreamError::Runtime(format!(
+                    Error::Runtime(format!(
                         "Failed to spawn Deno subprocess for '{}': {}. Deno: '{}'",
                         self.processor_id, e, deno_binary
                     ))
@@ -243,7 +243,7 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                     .get("error")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "Deno subprocess '{}' setup failed: {}",
                     self.processor_id, error
                 )));
@@ -530,7 +530,7 @@ impl DenoSubprocessHostProcessor {
     /// Send a length-prefixed JSON message to the subprocess stdin.
     fn bridge_send(&mut self, msg: &serde_json::Value) -> Result<()> {
         let bridge = self.bridge.as_ref().ok_or_else(|| {
-            StreamError::Runtime("Subprocess bridge not initialized".to_string())
+            Error::Runtime("Subprocess bridge not initialized".to_string())
         })?;
         bridge.send(msg)
     }
@@ -538,18 +538,18 @@ impl DenoSubprocessHostProcessor {
     /// Read a length-prefixed JSON message from the subprocess stdout.
     fn bridge_recv(&mut self) -> Result<serde_json::Value> {
         let bridge = self.bridge.as_ref().ok_or_else(|| {
-            StreamError::Runtime("Subprocess bridge not initialized".to_string())
+            Error::Runtime("Subprocess bridge not initialized".to_string())
         })?;
         bridge.recv_lifecycle()
     }
 
     fn bridge_recv_timeout(&mut self, timeout: Duration) -> Result<serde_json::Value> {
         let bridge = self.bridge.as_ref().ok_or_else(|| {
-            StreamError::Runtime("Subprocess bridge not initialized".to_string())
+            Error::Runtime("Subprocess bridge not initialized".to_string())
         })?;
         bridge
             .recv_lifecycle_timeout(timeout)
-            .map_err(|e| StreamError::Runtime(format!("bridge recv timed out: {e}")))
+            .map_err(|e| Error::Runtime(format!("bridge recv timed out: {e}")))
     }
 }
 
@@ -607,7 +607,7 @@ fn which_deno() -> Result<String> {
         .arg("deno")
         .output()
         .map_err(|e| {
-            StreamError::Runtime(format!(
+            Error::Runtime(format!(
                 "Failed to locate deno binary: {}. Install with: curl -fsSL https://deno.land/install.sh | sh",
                 e
             ))
@@ -620,7 +620,7 @@ fn which_deno() -> Result<String> {
         }
     }
 
-    Err(StreamError::Runtime(
+    Err(Error::Runtime(
         "deno binary not found on PATH. Install with: curl -fsSL https://deno.land/install.sh | sh"
             .to_string(),
     ))
@@ -641,10 +641,10 @@ fn resolve_deno_sdk_path() -> Result<PathBuf> {
     if dev_path.exists() {
         return dev_path
             .canonicalize()
-            .map_err(|e| StreamError::Runtime(format!("Failed to canonicalize SDK path: {}", e)));
+            .map_err(|e| Error::Runtime(format!("Failed to canonicalize SDK path: {}", e)));
     }
 
-    Err(StreamError::Runtime(
+    Err(Error::Runtime(
         "StreamLib Deno SDK not found. Set STREAMLIB_DENO_SDK_PATH or build from workspace."
             .to_string(),
     ))

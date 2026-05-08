@@ -307,7 +307,7 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
                         continue;
                     }
                     Err(e) => {
-                        return Err(crate::core::StreamError::Other(anyhow::anyhow!(
+                        return Err(crate::core::Error::Other(anyhow::anyhow!(
                             "Failed to bind to {}: {}",
                             addr,
                             e
@@ -315,7 +315,7 @@ impl crate::core::ManualProcessor for ApiServerProcessor::Processor {
                     }
                 }
             }
-            Err(crate::core::StreamError::Other(anyhow::anyhow!(
+            Err(crate::core::Error::Other(anyhow::anyhow!(
                 "Could not find available port in range {}-{}",
                 base_port,
                 base_port + 9

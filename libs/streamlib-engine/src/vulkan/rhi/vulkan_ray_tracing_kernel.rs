@@ -34,7 +34,7 @@ use crate::core::rhi::{
     RayTracingKernelDescriptor, RayTracingShaderGroup, RayTracingShaderStage,
     RayTracingShaderStageFlags, RayTracingStage, RhiPixelBuffer, StreamTexture,
 };
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::{HostVulkanDevice, VulkanAccelerationStructure};
 
@@ -107,19 +107,19 @@ impl VulkanRayTracingKernel {
         descriptor: &RayTracingKernelDescriptor<'_>,
     ) -> Result<Self> {
         if !vulkan_device.supports_ray_tracing_pipeline() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': ray-tracing extensions not supported by device",
                 descriptor.label
             )));
         }
         let rt_props = vulkan_device.ray_tracing_pipeline_properties().ok_or_else(|| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{}': device reports RT supported but properties unavailable",
                 descriptor.label
             ))
         })?;
         if descriptor.max_recursion_depth > rt_props.max_ray_recursion_depth {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': declared max_recursion_depth={} exceeds device max ({})",
                 descriptor.label,
                 descriptor.max_recursion_depth,
@@ -150,7 +150,7 @@ impl VulkanRayTracingKernel {
                     for m in shader_modules.drain(..) {
                         unsafe { device.destroy_shader_module(m, None) };
                     }
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Ray-tracing kernel '{}': failed to create shader module for stage {:?}: {e}",
                         descriptor.label, stage.stage
                     )));
@@ -240,7 +240,7 @@ impl VulkanRayTracingKernel {
                 for m in shader_modules.drain(..) {
                     unsafe { device.destroy_shader_module(m, None) };
                 }
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Ray-tracing kernel '{}': vkCreateRayTracingPipelinesKHR failed: {e}",
                     descriptor.label
                 )));
@@ -358,7 +358,7 @@ impl VulkanRayTracingKernel {
                 for m in shader_modules.drain(..) {
                     unsafe { device.destroy_shader_module(m, None) };
                 }
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Ray-tracing kernel '{}': fence creation failed: {e}",
                     descriptor.label
                 )));
@@ -400,7 +400,7 @@ impl VulkanRayTracingKernel {
     ) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::AccelerationStructure)?;
         if tlas.kind() != super::AccelerationStructureKind::TopLevel {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': binding {} expects a top-level AS, got {:?}",
                 self.label, binding, tlas.kind()
             )));
@@ -464,7 +464,7 @@ impl VulkanRayTracingKernel {
 
     pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
         if bytes.len() as u32 != self.push_constant_size {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': push-constant size mismatch — got {} bytes, kernel declares {}",
                 self.label,
                 bytes.len(),
@@ -495,14 +495,14 @@ impl VulkanRayTracingKernel {
 
         for spec in &self.bindings {
             if !pending.bindings.contains_key(&spec.binding) {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "Ray-tracing kernel '{}': binding {} ({:?}) not set before trace_rays",
                     self.label, spec.binding, spec.kind
                 )));
             }
         }
         if self.push_constant_size > 0 && pending.push_constants.is_empty() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': push constants not set before trace_rays",
                 self.label
             )));
@@ -512,13 +512,13 @@ impl VulkanRayTracingKernel {
             self.device
                 .wait_for_fences(&[self.fence], true, u64::MAX)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Ray-tracing kernel '{}': wait_for_fences failed: {e}",
                         self.label
                     ))
                 })?;
             self.device.reset_fences(&[self.fence]).map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "Ray-tracing kernel '{}': reset_fences failed: {e}",
                     self.label
                 ))
@@ -531,7 +531,7 @@ impl VulkanRayTracingKernel {
             self.device
                 .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Ray-tracing kernel '{}': reset_command_buffer failed: {e}",
                         self.label
                     ))
@@ -542,7 +542,7 @@ impl VulkanRayTracingKernel {
             self.device
                 .begin_command_buffer(self.command_buffer, &begin_info)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Ray-tracing kernel '{}': begin_command_buffer failed: {e}",
                         self.label
                     ))
@@ -585,7 +585,7 @@ impl VulkanRayTracingKernel {
             self.device
                 .end_command_buffer(self.command_buffer)
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Ray-tracing kernel '{}': end_command_buffer failed: {e}",
                         self.label
                     ))
@@ -610,7 +610,7 @@ impl VulkanRayTracingKernel {
                 .wait_for_fences(&[self.fence], true, u64::MAX)
                 .map(|_| ())
                 .map_err(|e| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Ray-tracing kernel '{}': wait_for_fences (post-submit) failed: {e}",
                         self.label
                     ))
@@ -634,13 +634,13 @@ impl VulkanRayTracingKernel {
             .iter()
             .find(|b| b.binding == binding)
             .ok_or_else(|| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "Ray-tracing kernel '{}': binding {} not declared",
                     self.label, binding
                 ))
             })?;
         if spec.kind != expected {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': binding {} declared as {:?}, but {:?} was set",
                 self.label, binding, spec.kind, expected
             )));
@@ -666,7 +666,7 @@ impl VulkanRayTracingKernel {
             .unnormalized_coordinates(false)
             .build();
         let sampler = unsafe { self.device.create_sampler(&info, None) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{}': failed to create default sampler: {e}",
                 self.label
             ))
@@ -779,7 +779,7 @@ impl VulkanRayTracingKernel {
                     });
                 }
                 _ => {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Ray-tracing kernel '{}': binding {} kind/resource mismatch (declared {:?})",
                         self.label, spec.binding, spec.kind
                     )));
@@ -893,19 +893,19 @@ fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) 
 
     for stage in descriptor.stages {
         let reflection = Reflection::new_from_spirv(stage.spv).map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{}': failed to reflect SPIR-V for stage {:?}: {e:?}",
                 descriptor.label, stage.stage
             ))
         })?;
         let sets = reflection.get_descriptor_sets().map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{}': failed to extract descriptor sets for stage {:?}: {e:?}",
                 descriptor.label, stage.stage
             ))
         })?;
         if sets.len() > 1 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': only descriptor set 0 supported; stage {:?} uses sets {:?}",
                 descriptor.label,
                 stage.stage,
@@ -916,7 +916,7 @@ fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) 
         if let Some(set0) = sets.get(&0) {
             for (&binding, info) in set0 {
                 let kind = spirv_type_to_kind(info.ty).ok_or_else(|| {
-                    StreamError::GpuError(format!(
+                    Error::GpuError(format!(
                         "Ray-tracing kernel '{}': SPIR-V binding {} in stage {:?} has unsupported descriptor type {:?}",
                         descriptor.label, binding, stage.stage, info.ty
                     ))
@@ -925,7 +925,7 @@ fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) 
                     .entry(binding)
                     .or_insert((kind, RayTracingShaderStageFlags::NONE));
                 if entry.0 != kind {
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Ray-tracing kernel '{}': SPIR-V binding {} declared as {:?} in one stage and {:?} in another",
                         descriptor.label, binding, entry.0, kind
                     )));
@@ -938,19 +938,19 @@ fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) 
     // Every declared binding must exist in the merged SPIR-V map.
     for spec in descriptor.bindings {
         let (spirv_kind, spirv_stages) = merged.get(&spec.binding).ok_or_else(|| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{}': binding {} declared but missing in SPIR-V",
                 descriptor.label, spec.binding
             ))
         })?;
         if *spirv_kind != spec.kind {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': binding {} declared {:?}, but SPIR-V has {:?}",
                 descriptor.label, spec.binding, spec.kind, spirv_kind
             )));
         }
         if !spec.stages.contains(*spirv_stages) {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': binding {} stages {:?} miss SPIR-V usage in {:?}",
                 descriptor.label, spec.binding, spec.stages, spirv_stages
             )));
@@ -960,7 +960,7 @@ fn validate_bindings_against_spirv(descriptor: &RayTracingKernelDescriptor<'_>) 
     // Conversely, every SPIR-V binding must be declared.
     for (&binding, &(kind, _)) in &merged {
         if !descriptor.bindings.iter().any(|s| s.binding == binding) {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': SPIR-V declares binding {} ({:?}) but it is missing from the descriptor",
                 descriptor.label, binding, kind
             )));
@@ -976,13 +976,13 @@ fn validate_push_constants_against_spirv(
     let mut max_size = 0u32;
     for stage in descriptor.stages {
         let reflection = Reflection::new_from_spirv(stage.spv).map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{}': failed to reflect SPIR-V (push) for stage {:?}: {e:?}",
                 descriptor.label, stage.stage
             ))
         })?;
         if let Some(info) = reflection.get_push_constant_range().map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{}': failed to read push-constant range for stage {:?}: {e:?}",
                 descriptor.label, stage.stage
             ))
@@ -991,7 +991,7 @@ fn validate_push_constants_against_spirv(
         }
     }
     if max_size != descriptor.push_constants.size {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Ray-tracing kernel '{}': push-constant size mismatch — SPIR-V says {}, descriptor declares {}",
             descriptor.label, max_size, descriptor.push_constants.size
         )));
@@ -1033,7 +1033,7 @@ fn create_descriptor_set_layout(
         .bindings(&layout_bindings)
         .build();
     unsafe { device.create_descriptor_set_layout(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("RT descriptor-set-layout creation failed: {e}")))
+        .map_err(|e| Error::GpuError(format!("RT descriptor-set-layout creation failed: {e}")))
 }
 
 fn create_pipeline_layout(
@@ -1057,7 +1057,7 @@ fn create_pipeline_layout(
         .push_constant_ranges(&push_constant_ranges)
         .build();
     unsafe { device.create_pipeline_layout(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("RT pipeline-layout creation failed: {e}")))
+        .map_err(|e| Error::GpuError(format!("RT pipeline-layout creation failed: {e}")))
 }
 
 fn create_descriptor_pool(
@@ -1082,7 +1082,7 @@ fn create_descriptor_pool(
         .pool_sizes(&pool_sizes)
         .build();
     unsafe { device.create_descriptor_pool(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("RT descriptor-pool creation failed: {e}")))
+        .map_err(|e| Error::GpuError(format!("RT descriptor-pool creation failed: {e}")))
 }
 
 fn allocate_descriptor_set(
@@ -1096,7 +1096,7 @@ fn allocate_descriptor_set(
         .set_layouts(&set_layouts)
         .build();
     let sets = unsafe { device.allocate_descriptor_sets(&info) }
-        .map_err(|e| StreamError::GpuError(format!("RT descriptor-set allocation failed: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("RT descriptor-set allocation failed: {e}")))?;
     Ok(sets[0])
 }
 
@@ -1109,7 +1109,7 @@ fn create_command_pool(
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
         .build();
     unsafe { device.create_command_pool(&info, None) }
-        .map_err(|e| StreamError::GpuError(format!("RT command-pool creation failed: {e}")))
+        .map_err(|e| Error::GpuError(format!("RT command-pool creation failed: {e}")))
 }
 
 fn allocate_command_buffer(
@@ -1122,7 +1122,7 @@ fn allocate_command_buffer(
         .command_buffer_count(1)
         .build();
     let buffers = unsafe { device.allocate_command_buffers(&info) }
-        .map_err(|e| StreamError::GpuError(format!("RT command-buffer allocation failed: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("RT command-buffer allocation failed: {e}")))?;
     Ok(buffers[0])
 }
 
@@ -1284,7 +1284,7 @@ fn build_sbt(
         }
     }
     if raygen_indices.is_empty() {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Ray-tracing kernel '{}': pipeline must have at least one RayGen group",
             descriptor.label
         )));
@@ -1324,7 +1324,7 @@ fn build_sbt(
         )
     }
     .map_err(|e| {
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Ray-tracing kernel '{}': vkGetRayTracingShaderGroupHandlesKHR failed: {e}",
             descriptor.label
         ))
@@ -1386,7 +1386,7 @@ fn build_sbt(
     };
     let (sbt_buffer, sbt_allocation) =
         unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{}': SBT vmaCreateBuffer (size={total_size}) failed: {e}",
                 descriptor.label
             ))
@@ -1488,7 +1488,7 @@ fn upload_bytes_to_buffer(
     };
     let (staging_buffer, staging_allocation) =
         unsafe { allocator.create_buffer(staging_info, &staging_opts) }.map_err(|e| {
-            StreamError::GpuError(format!(
+            Error::GpuError(format!(
                 "Ray-tracing kernel '{label}': SBT staging vmaCreateBuffer ({size}) failed: {e}"
             ))
         })?;
@@ -1496,7 +1496,7 @@ fn upload_bytes_to_buffer(
     let dst_ptr = info.pMappedData as *mut u8;
     if dst_ptr.is_null() {
         unsafe { allocator.destroy_buffer(staging_buffer, staging_allocation) };
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Ray-tracing kernel '{label}': SBT staging mapping returned null"
         )));
     }
@@ -1526,7 +1526,7 @@ fn upload_bytes_to_buffer(
             device.destroy_command_pool(command_pool, None);
             allocator.destroy_buffer(staging_buffer, staging_allocation);
         }
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Ray-tracing kernel '{label}': SBT begin_command_buffer failed: {e}"
         ))
     })?;
@@ -1541,7 +1541,7 @@ fn upload_bytes_to_buffer(
             device.destroy_command_pool(command_pool, None);
             allocator.destroy_buffer(staging_buffer, staging_allocation);
         }
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Ray-tracing kernel '{label}': SBT end_command_buffer failed: {e}"
         ))
     })?;
@@ -1552,7 +1552,7 @@ fn upload_bytes_to_buffer(
             device.destroy_command_pool(command_pool, None);
             allocator.destroy_buffer(staging_buffer, staging_allocation);
         }
-        StreamError::GpuError(format!(
+        Error::GpuError(format!(
             "Ray-tracing kernel '{label}': SBT fence creation failed: {e}"
         ))
     })?;
@@ -1572,7 +1572,7 @@ fn upload_bytes_to_buffer(
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .map(|_| ())
             .map_err(|e| {
-                StreamError::GpuError(format!(
+                Error::GpuError(format!(
                     "Ray-tracing kernel '{label}': SBT wait_for_fences failed: {e}"
                 ))
             })

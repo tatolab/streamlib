@@ -5,7 +5,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::iceoryx2::OutputWriter;
 
@@ -83,7 +83,7 @@ impl LinuxAudioCaptureProcessor::Processor {
             let devices: Vec<Device> = host
                 .input_devices()
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "Failed to enumerate audio input devices: {}",
                         e
                     ))
@@ -100,14 +100,14 @@ impl LinuxAudioCaptureProcessor::Processor {
                     }
                 })
                 .ok_or_else(|| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "Audio input device '{}' not found",
                         device_name_str
                     ))
                 })?
         } else {
             host.default_input_device()
-                .ok_or_else(|| StreamError::Configuration("No default audio input device".into()))?
+                .ok_or_else(|| Error::Configuration("No default audio input device".into()))?
         };
 
         let device_name = device
@@ -115,7 +115,7 @@ impl LinuxAudioCaptureProcessor::Processor {
             .unwrap_or_else(|_| "Unknown Device".to_string());
 
         let default_config = device.default_input_config().map_err(|e| {
-            StreamError::Configuration(format!("Failed to get audio config: {}", e))
+            Error::Configuration(format!("Failed to get audio config: {}", e))
         })?;
 
         let device_sample_rate = default_config.sample_rate().0;
@@ -179,13 +179,13 @@ impl LinuxAudioCaptureProcessor::Processor {
                 None,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to build audio stream: {}", e))
+                Error::Configuration(format!("Failed to build audio stream: {}", e))
             })?;
 
         tracing::info!("[AudioCapture] Starting stream...");
 
         stream.play().map_err(|e| {
-            StreamError::Configuration(format!("Failed to start audio stream: {}", e))
+            Error::Configuration(format!("Failed to start audio stream: {}", e))
         })?;
 
         self.is_capturing.store(true, Ordering::Relaxed);
@@ -210,7 +210,7 @@ impl LinuxAudioCaptureProcessor::Processor {
         let devices: Result<Vec<LinuxAudioInputDevice>> = host
             .input_devices()
             .map_err(|e| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "Failed to enumerate audio input devices: {}",
                     e
                 ))

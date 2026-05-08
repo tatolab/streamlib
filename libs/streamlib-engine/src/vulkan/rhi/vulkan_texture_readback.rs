@@ -31,7 +31,7 @@ use crate::core::rhi::{
     ReadbackTicket, StreamTexture, TextureFormat, TextureReadbackDescriptor, TextureReadbackError,
     TextureSourceLayout,
 };
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use crate::host_rhi::HostStreamTextureExt;
 
 use super::HostVulkanDevice;
@@ -680,19 +680,19 @@ impl std::fmt::Debug for VulkanTextureReadback {
     }
 }
 
-impl From<TextureReadbackError> for StreamError {
+impl From<TextureReadbackError> for Error {
     fn from(e: TextureReadbackError) -> Self {
-        StreamError::GpuError(e.to_string())
+        Error::GpuError(e.to_string())
     }
 }
 
-/// Convenience for callers that already work in `Result<T, StreamError>`.
+/// Convenience for callers that already work in `Result<T, Error>`.
 impl VulkanTextureReadback {
     pub fn new_into_stream_error(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &TextureReadbackDescriptor<'_>,
     ) -> Result<Self> {
-        Self::new(vulkan_device, descriptor).map_err(StreamError::from)
+        Self::new(vulkan_device, descriptor).map_err(Error::from)
     }
 }
 

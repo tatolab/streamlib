@@ -24,7 +24,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::SchemaIdent;
-use crate::core::{ProcessorSpec, Result, StreamError};
+use crate::core::{ProcessorSpec, Result, Error};
 
 /// Declarative graph definition loaded from JSON/YAML files.
 ///
@@ -100,7 +100,7 @@ impl ConnectionDefinition {
 fn parse_port_ref(s: &str) -> Result<ParsedPortRef<'_>> {
     let parts: Vec<&str> = s.splitn(2, '.').collect();
     if parts.len() != 2 {
-        return Err(StreamError::GraphError(format!(
+        return Err(Error::GraphError(format!(
             "Invalid port reference '{}', expected 'alias.port_name'",
             s
         )));
@@ -122,7 +122,7 @@ impl GraphFileDefinition {
     /// Load from a JSON file path.
     pub fn from_json_file(path: &std::path::Path) -> Result<Self> {
         let file = std::fs::File::open(path).map_err(|e| {
-            StreamError::GraphError(format!(
+            Error::GraphError(format!(
                 "Failed to open graph file '{}': {}",
                 path.display(),
                 e
@@ -130,7 +130,7 @@ impl GraphFileDefinition {
         })?;
 
         serde_json::from_reader(file).map_err(|e| {
-            StreamError::GraphError(format!(
+            Error::GraphError(format!(
                 "Failed to parse graph file '{}': {}",
                 path.display(),
                 e
@@ -141,7 +141,7 @@ impl GraphFileDefinition {
     /// Load from a JSON string.
     pub fn from_json_str(json: &str) -> Result<Self> {
         serde_json::from_str(json)
-            .map_err(|e| StreamError::GraphError(format!("Failed to parse graph JSON: {}", e)))
+            .map_err(|e| Error::GraphError(format!("Failed to parse graph JSON: {}", e)))
     }
 
     /// Validate the graph definition without loading it.
@@ -157,7 +157,7 @@ impl GraphFileDefinition {
         let mut aliases: HashSet<&str> = HashSet::new();
         for proc in &self.processors {
             if !aliases.insert(proc.alias.as_str()) {
-                return Err(StreamError::GraphError(format!(
+                return Err(Error::GraphError(format!(
                     "Duplicate processor alias: '{}'",
                     proc.alias
                 )));
@@ -170,13 +170,13 @@ impl GraphFileDefinition {
             let to = conn.parse_to()?;
 
             if !aliases.contains(&from.alias) {
-                return Err(StreamError::GraphError(format!(
+                return Err(Error::GraphError(format!(
                     "Connection references unknown processor alias: '{}'",
                     from.alias
                 )));
             }
             if !aliases.contains(&to.alias) {
-                return Err(StreamError::GraphError(format!(
+                return Err(Error::GraphError(format!(
                     "Connection references unknown processor alias: '{}'",
                     to.alias
                 )));

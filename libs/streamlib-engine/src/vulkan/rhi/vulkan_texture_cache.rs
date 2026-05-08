@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Vulkan texture cache — creates and caches VkImageView from VkImage.
 ///
@@ -39,7 +39,7 @@ impl VulkanTextureCache {
         let mut cache = self
             .view_cache
             .lock()
-            .map_err(|e| StreamError::GpuError(format!("Failed to lock texture cache: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to lock texture cache: {e}")))?;
 
         if let Some(&existing_view) = cache.get(&key) {
             return Ok(existing_view);
@@ -68,7 +68,7 @@ impl VulkanTextureCache {
         let _ = height;
 
         let view = unsafe { self.device.create_image_view(&view_info, None) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to create VkImageView: {e}")))?;
+            .map_err(|e| Error::GpuError(format!("Failed to create VkImageView: {e}")))?;
 
         cache.insert(key, view);
         Ok(view)

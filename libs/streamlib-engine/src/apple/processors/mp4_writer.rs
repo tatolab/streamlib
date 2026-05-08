@@ -3,7 +3,7 @@
 
 use crate::_generated_::{AudioFrame, VideoFrame};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError,
+    sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
@@ -153,7 +153,7 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
 
             // Start the writing session (all inputs configured)
             let writer = self.writer.as_ref().ok_or_else(|| {
-                StreamError::Configuration("AVAssetWriter not initialized".into())
+                Error::Configuration("AVAssetWriter not initialized".into())
             })?;
 
             info!("🎬 STARTING AVAssetWriter session...");
@@ -166,7 +166,7 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
                         .map(|e| e.localizedDescription().to_string())
                         .unwrap_or_else(|| "Unknown error".to_string())
                 };
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Failed to start AVAssetWriter: {}",
                     error_msg
                 )));
@@ -369,7 +369,7 @@ impl AppleMp4WriterProcessor::Processor {
         let ctx = self
             .ctx
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("RuntimeContext not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("RuntimeContext not initialized".into()))?;
 
         let path_str = self.config.output_path.clone();
         let video_codec = self
@@ -405,7 +405,7 @@ impl AppleMp4WriterProcessor::Processor {
         // SAFETY: We just created this pointer on the main thread
         let writer = unsafe {
             Retained::retain(writer_ptr as *mut AVAssetWriter).ok_or_else(|| {
-                StreamError::Configuration("Failed to retain AVAssetWriter".into())
+                Error::Configuration("Failed to retain AVAssetWriter".into())
             })?
         };
 
@@ -425,7 +425,7 @@ impl AppleMp4WriterProcessor::Processor {
         if std::path::Path::new(path_str).exists() {
             info!("Deleting existing file: {}", path_str);
             std::fs::remove_file(path_str).map_err(|e| {
-                StreamError::Configuration(format!("Failed to delete existing file: {}", e))
+                Error::Configuration(format!("Failed to delete existing file: {}", e))
             })?;
         }
 
@@ -440,7 +440,7 @@ impl AppleMp4WriterProcessor::Processor {
                 Ok(w) => w,
                 Err(e) => {
                     error!("Failed to create AVAssetWriter: {:?}", e);
-                    return Err(StreamError::GpuError(format!(
+                    return Err(Error::GpuError(format!(
                         "Failed to create AVAssetWriter: {:?}",
                         e
                     )));
@@ -467,12 +467,12 @@ impl AppleMp4WriterProcessor::Processor {
         let ctx = self
             .ctx
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("RuntimeContext not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("RuntimeContext not initialized".into()))?;
 
         let writer = self
             .writer
             .take()
-            .ok_or_else(|| StreamError::Configuration("AVAssetWriter not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("AVAssetWriter not initialized".into()))?;
         let writer_ptr = Retained::into_raw(writer) as usize;
 
         let video_bitrate = self.config.video_bitrate.unwrap_or(5_000_000);
@@ -596,7 +596,7 @@ impl AppleMp4WriterProcessor::Processor {
         // Add input to writer
         let can_add = unsafe { writer.canAddInput(&video_input) };
         if !can_add {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Cannot add video input to AVAssetWriter".into(),
             ));
         }
@@ -626,12 +626,12 @@ impl AppleMp4WriterProcessor::Processor {
         let ctx = self
             .ctx
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("RuntimeContext not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("RuntimeContext not initialized".into()))?;
 
         let writer = self
             .writer
             .take()
-            .ok_or_else(|| StreamError::Configuration("AVAssetWriter not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("AVAssetWriter not initialized".into()))?;
         let writer_ptr = Retained::into_raw(writer) as usize;
 
         // Dispatch to main thread to configure audio input
@@ -749,7 +749,7 @@ impl AppleMp4WriterProcessor::Processor {
         // Add input to writer
         let can_add = unsafe { writer.canAddInput(&audio_input) };
         if !can_add {
-            return Err(StreamError::Configuration(
+            return Err(Error::Configuration(
                 "Cannot add audio input to AVAssetWriter".into(),
             ));
         }
@@ -788,7 +788,7 @@ impl AppleMp4WriterProcessor::Processor {
             && !self.writer_failed
         {
             let writer = self.writer.as_ref().ok_or_else(|| {
-                StreamError::Configuration("AVAssetWriter not initialized".into())
+                Error::Configuration("AVAssetWriter not initialized".into())
             })?;
 
             info!("Both audio and video inputs configured, starting AVAssetWriter session...");
@@ -802,7 +802,7 @@ impl AppleMp4WriterProcessor::Processor {
                         .map(|e| e.localizedDescription().to_string())
                         .unwrap_or_else(|| "Unknown error".to_string())
                 };
-                return Err(StreamError::Configuration(format!(
+                return Err(Error::Configuration(format!(
                     "Failed to start AVAssetWriter: {}",
                     error_msg
                 )));
@@ -860,13 +860,13 @@ impl AppleMp4WriterProcessor::Processor {
 
     fn write_video_frame(&self, frame: &VideoFrame) -> Result<()> {
         let pixel_buffer_adaptor = self.pixel_buffer_adaptor.as_ref().ok_or_else(|| {
-            StreamError::Configuration("Pixel buffer adaptor not initialized".into())
+            Error::Configuration("Pixel buffer adaptor not initialized".into())
         })?;
 
         let video_input = self
             .video_input
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Video input not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("Video input not initialized".into()))?;
 
         // Check if video input is ready for more data
         let is_ready = unsafe { video_input.isReadyForMoreMediaData() };
@@ -876,13 +876,13 @@ impl AppleMp4WriterProcessor::Processor {
         }
 
         let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
-            StreamError::Configuration("PixelTransferSession not initialized".into())
+            Error::Configuration("PixelTransferSession not initialized".into())
         })?;
 
         let gpu_context = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
 
         // Resolve buffer from surface_id
         let buffer = gpu_context.resolve_video_frame_buffer(frame)?;
@@ -912,7 +912,7 @@ impl AppleMp4WriterProcessor::Processor {
         };
 
         if !success {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "Failed to append pixel buffer to adaptor".into(),
             ));
         }
@@ -925,7 +925,7 @@ impl AppleMp4WriterProcessor::Processor {
         let audio_input = self
             .audio_input
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("Audio input not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("Audio input not initialized".into()))?;
 
         // Check if audio input is ready for more data
         let is_ready = unsafe { audio_input.isReadyForMoreMediaData() };
@@ -960,7 +960,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         let mut block_buffer_ptr: *mut CMBlockBuffer = std::ptr::null_mut();
         let block_buffer_out = NonNull::new(&mut block_buffer_ptr as *mut _).ok_or_else(|| {
-            StreamError::GpuError("Failed to create NonNull for block buffer".into())
+            Error::GpuError("Failed to create NonNull for block buffer".into())
         })?;
 
         // Create CMBlockBuffer that allocates its own memory and copies our data
@@ -979,7 +979,7 @@ impl AppleMp4WriterProcessor::Processor {
         };
 
         if status != 0 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to create CMBlockBuffer: status {}",
                 status
             )));
@@ -987,7 +987,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         let block_buffer = unsafe {
             objc2::rc::Retained::retain(block_buffer_ptr)
-                .ok_or_else(|| StreamError::GpuError("CMBlockBuffer is null".into()))?
+                .ok_or_else(|| Error::GpuError("CMBlockBuffer is null".into()))?
         };
 
         // Copy PCM data into the CMBlockBuffer
@@ -1011,7 +1011,7 @@ impl AppleMp4WriterProcessor::Processor {
         };
 
         if copy_status != 0 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to copy PCM data to CMBlockBuffer: status {}",
                 copy_status
             )));
@@ -1035,7 +1035,7 @@ impl AppleMp4WriterProcessor::Processor {
         let mut sample_buffer_ptr: *mut CMSampleBuffer = std::ptr::null_mut();
         let _sample_buffer_out =
             NonNull::new(&mut sample_buffer_ptr as *mut _).ok_or_else(|| {
-                StreamError::GpuError("Failed to create NonNull for sample buffer".into())
+                Error::GpuError("Failed to create NonNull for sample buffer".into())
             })?;
 
         // We need to use CMAudioSampleBufferCreateWithPacketDescriptions
@@ -1105,7 +1105,7 @@ impl AppleMp4WriterProcessor::Processor {
         };
 
         if status != 0 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to create CMAudioFormatDescription: status {}",
                 status
             )));
@@ -1113,7 +1113,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         let _format_desc = unsafe {
             objc2::rc::Retained::retain(format_desc_ptr as *mut CMFormatDescription)
-                .ok_or_else(|| StreamError::GpuError("Format description is null".into()))?
+                .ok_or_else(|| Error::GpuError("Format description is null".into()))?
         };
 
         // Use CMAudioSampleBufferCreateWithPacketDescriptions which is designed for audio
@@ -1156,7 +1156,7 @@ impl AppleMp4WriterProcessor::Processor {
         };
 
         if status != 0 {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to create audio CMSampleBuffer: status {}",
                 status
             )));
@@ -1164,7 +1164,7 @@ impl AppleMp4WriterProcessor::Processor {
 
         let sample_buffer = unsafe {
             objc2::rc::Retained::retain(sample_buffer_ptr)
-                .ok_or_else(|| StreamError::GpuError("Sample buffer is null".into()))?
+                .ok_or_else(|| Error::GpuError("Sample buffer is null".into()))?
         };
 
         trace!("Appending audio to AVAssetWriter: timestamp={}ns ({:.6}s), samples={}, channels={}, rate={}Hz",
@@ -1175,7 +1175,7 @@ impl AppleMp4WriterProcessor::Processor {
         let success = unsafe { audio_input.appendSampleBuffer(&sample_buffer) };
 
         if !success {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "Failed to append audio sample buffer".into(),
             ));
         }

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use streamlib::sdk::_generated_::AudioFrame;
 use streamlib::sdk::utils::ProcessorAudioConverterTargetFormat;
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 
 /// Wrapper for InputMailboxes pointer that is Send.
@@ -109,23 +109,23 @@ impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::
             let devices: Vec<_> = host
                 .output_devices()
                 .map_err(|e| {
-                    StreamError::Configuration(format!("Failed to enumerate audio devices: {}", e))
+                    Error::Configuration(format!("Failed to enumerate audio devices: {}", e))
                 })?
                 .collect();
             devices
                 .get(id)
                 .ok_or_else(|| {
-                    StreamError::Configuration(format!("Audio device {} not found", id))
+                    Error::Configuration(format!("Audio device {} not found", id))
                 })?
                 .clone()
         } else {
             host.default_output_device().ok_or_else(|| {
-                StreamError::Configuration("No default audio output device".into())
+                Error::Configuration("No default audio output device".into())
             })?
         };
 
         let device_config = device.default_output_config().map_err(|e| {
-            StreamError::Configuration(format!("Failed to get audio config: {}", e))
+            Error::Configuration(format!("Failed to get audio config: {}", e))
         })?;
 
         let device_sample_rate = device_config.sample_rate().0;
@@ -190,13 +190,13 @@ impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::
                 None,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to build audio stream: {}", e))
+                Error::Configuration(format!("Failed to build audio stream: {}", e))
             })?;
 
         tracing::info!("AudioOutput: Starting cpal stream playback");
         stream
             .play()
-            .map_err(|e| StreamError::Configuration(format!("Failed to start stream: {}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to start stream: {}", e)))?;
 
         tracing::info!("AudioOutput: cpal stream.play() succeeded");
 

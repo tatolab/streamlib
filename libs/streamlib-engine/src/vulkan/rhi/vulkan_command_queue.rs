@@ -8,7 +8,7 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::{VulkanCommandBuffer, HostVulkanDevice};
 
@@ -54,7 +54,7 @@ impl VulkanCommandQueue {
 
         let command_buffers = unsafe { self.device.allocate_command_buffers(&alloc_info) }
             .map_err(|e| {
-                StreamError::GpuError(format!("Failed to allocate command buffer: {e}"))
+                Error::GpuError(format!("Failed to allocate command buffer: {e}"))
             })?;
 
         let command_buffer = command_buffers[0];
@@ -68,7 +68,7 @@ impl VulkanCommandQueue {
             self.device
                 .begin_command_buffer(command_buffer, &begin_info)
         }
-        .map_err(|e| StreamError::GpuError(format!("Failed to begin command buffer: {e}")))?;
+        .map_err(|e| Error::GpuError(format!("Failed to begin command buffer: {e}")))?;
 
         Ok(VulkanCommandBuffer::new(
             Arc::clone(&self.vulkan_device),

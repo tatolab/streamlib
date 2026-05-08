@@ -32,7 +32,7 @@
 //!   `streamlib::sdk::rhi::pixel_format` re-export these so existing
 //!   call sites compile unchanged.
 //! - [`ConsumerRhiError`] — thin error taxonomy for the carve-out.
-//!   `streamlib::sdk::error::StreamError` provides a `From` impl, so the
+//!   `streamlib::sdk::error::Error` provides a `From` impl, so the
 //!   host side can wrap consumer errors with `?`.
 //!
 //! What does NOT live here: anything that calls `vkAllocateMemory`

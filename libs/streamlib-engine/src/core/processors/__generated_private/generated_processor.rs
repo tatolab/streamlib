@@ -39,7 +39,7 @@ pub trait GeneratedProcessor: Send + 'static {
         Self: Sized,
     {
         let config: Self::Config = serde_json::from_value(config_json.clone())
-            .map_err(|e| crate::core::StreamError::Config(e.to_string()))?;
+            .map_err(|e| crate::core::Error::Config(e.to_string()))?;
         self.update_config(config)
     }
 
@@ -121,7 +121,7 @@ pub trait GeneratedProcessor: Send + 'static {
     ///
     /// Only valid for Manual execution mode. Returns an error for other modes.
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Err(crate::core::StreamError::Runtime(
+        Err(crate::core::Error::Runtime(
             "start() is only valid for Manual execution mode".into(),
         ))
     }
@@ -130,7 +130,7 @@ pub trait GeneratedProcessor: Send + 'static {
     ///
     /// Only valid for Manual execution mode. Returns an error for other modes.
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        Err(crate::core::StreamError::Runtime(
+        Err(crate::core::Error::Runtime(
             "stop() is only valid for Manual execution mode".into(),
         ))
     }

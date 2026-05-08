@@ -12,7 +12,7 @@
 //! - Windows: DXGI → GL texture via `WGL_NV_DX_interop` (future)
 
 use crate::core::rhi::RhiPixelBuffer;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use std::ffi::c_void;
 
 /// OpenGL texture target constants.
@@ -150,7 +150,7 @@ impl GlTextureBinding {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (gl_ctx, buffer);
-            Err(StreamError::NotSupported(
+            Err(Error::NotSupported(
                 "GL texture binding not supported on this platform".into(),
             ))
         }
@@ -182,19 +182,19 @@ impl GlContext {
         }
         #[cfg(target_os = "linux")]
         {
-            Err(StreamError::NotSupported(
+            Err(Error::NotSupported(
                 "GL interop not yet implemented for Linux".into(),
             ))
         }
         #[cfg(target_os = "windows")]
         {
-            Err(StreamError::NotSupported(
+            Err(Error::NotSupported(
                 "GL interop not yet implemented for Windows".into(),
             ))
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
         {
-            Err(StreamError::NotSupported(
+            Err(Error::NotSupported(
                 "GL interop not supported on this platform".into(),
             ))
         }
@@ -213,7 +213,7 @@ impl GlContext {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            Err(StreamError::NotSupported(
+            Err(Error::NotSupported(
                 "GL interop not supported on this platform".into(),
             ))
         }
@@ -277,7 +277,7 @@ impl GlContext {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            Err(StreamError::NotSupported(
+            Err(Error::NotSupported(
                 "GL texture binding not supported on this platform".into(),
             ))
         }

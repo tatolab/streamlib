@@ -8,7 +8,7 @@ use vulkanalia::vk;
 
 use crate::core::rhi::blitter::RhiBlitter;
 use crate::core::rhi::RhiPixelBuffer;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::HostVulkanDevice;
 
@@ -33,7 +33,7 @@ impl VulkanBlitter {
 
         let command_pool =
             unsafe { device.create_command_pool(&pool_info, None) }.map_err(|e| {
-                StreamError::GpuError(format!("Failed to create blitter command pool: {e}"))
+                Error::GpuError(format!("Failed to create blitter command pool: {e}"))
             })?;
 
         Ok(Self {
@@ -54,7 +54,7 @@ impl RhiBlitter for VulkanBlitter {
         let dest_size = dest.buffer_ref().inner.size();
 
         if src_size != dest_size {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "blit_copy requires same-size buffers: src={} bytes, dest={} bytes",
                 src_size, dest_size
             )));
@@ -69,7 +69,7 @@ impl RhiBlitter for VulkanBlitter {
             .build();
 
         let command_buffer = unsafe { self.device.allocate_command_buffers(&alloc_info) }
-            .map_err(|e| StreamError::GpuError(format!("Failed to allocate blit command buffer: {e}")))?[0];
+            .map_err(|e| Error::GpuError(format!("Failed to allocate blit command buffer: {e}")))?[0];
 
         let begin_info = vk::CommandBufferBeginInfo::builder()
             .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
@@ -79,7 +79,7 @@ impl RhiBlitter for VulkanBlitter {
             self.device
                 .begin_command_buffer(command_buffer, &begin_info)
                 .map(|_| ())
-                .map_err(|e| StreamError::GpuError(format!("Failed to begin blit command buffer: {e}")))?;
+                .map_err(|e| Error::GpuError(format!("Failed to begin blit command buffer: {e}")))?;
 
             let region = vk::BufferCopy2::builder()
                 .src_offset(0)
@@ -97,7 +97,7 @@ impl RhiBlitter for VulkanBlitter {
             self.device
                 .end_command_buffer(command_buffer)
                 .map(|_| ())
-                .map_err(|e| StreamError::GpuError(format!("Failed to end blit command buffer: {e}")))?;
+                .map_err(|e| Error::GpuError(format!("Failed to end blit command buffer: {e}")))?;
 
             // Timeline semaphore (Vulkan 1.2 core) for targeted blit synchronization.
             // More efficient than fences for GPU-GPU ordering.
@@ -111,7 +111,7 @@ impl RhiBlitter for VulkanBlitter {
             let timeline_semaphore = self
                 .device
                 .create_semaphore(&timeline_semaphore_info, None)
-                .map_err(|e| StreamError::GpuError(format!("Failed to create blit timeline semaphore: {e}")))?;
+                .map_err(|e| Error::GpuError(format!("Failed to create blit timeline semaphore: {e}")))?;
 
             let signal_semaphore = vk::SemaphoreSubmitInfo::builder()
                 .semaphore(timeline_semaphore)
@@ -145,7 +145,7 @@ impl RhiBlitter for VulkanBlitter {
                 .wait_semaphores(&wait_info, u64::MAX)
                 .map_err(|e| {
                     self.device.destroy_semaphore(timeline_semaphore, None);
-                    StreamError::GpuError(format!("Failed to wait for blit timeline semaphore: {e}"))
+                    Error::GpuError(format!("Failed to wait for blit timeline semaphore: {e}"))
                 })
                 .map(|_| ())?;
 
@@ -164,7 +164,7 @@ impl RhiBlitter for VulkanBlitter {
         _width: u32,
         _height: u32,
     ) -> Result<()> {
-        Err(StreamError::NotSupported(
+        Err(Error::NotSupported(
             "IOSurface not available on Linux".into(),
         ))
     }

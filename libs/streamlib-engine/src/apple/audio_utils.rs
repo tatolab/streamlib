@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{AudioDevice, Result, StreamError};
+use crate::core::{AudioDevice, Result, Error};
 use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{Device, Stream, StreamConfig};
 
@@ -30,16 +30,16 @@ where
         let devices: Vec<_> = host
             .output_devices()
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to enumerate audio devices: {}", e))
+                Error::Configuration(format!("Failed to enumerate audio devices: {}", e))
             })?
             .collect();
         devices
             .get(id)
-            .ok_or_else(|| StreamError::Configuration(format!("Audio device {} not found", id)))?
+            .ok_or_else(|| Error::Configuration(format!("Audio device {} not found", id)))?
             .clone()
     } else {
         host.default_output_device()
-            .ok_or_else(|| StreamError::Configuration("No default audio output device".into()))?
+            .ok_or_else(|| Error::Configuration("No default audio output device".into()))?
     };
 
     let device_name = device
@@ -48,7 +48,7 @@ where
 
     let config = device
         .default_output_config()
-        .map_err(|e| StreamError::Configuration(format!("Failed to get audio config: {}", e)))?;
+        .map_err(|e| Error::Configuration(format!("Failed to get audio config: {}", e)))?;
 
     let sample_rate = config.sample_rate().0;
     let channels = config.channels() as u32;
@@ -92,7 +92,7 @@ where
             },
             None,
         )
-        .map_err(|e| StreamError::Configuration(format!("Failed to build audio stream: {}", e)))?;
+        .map_err(|e| Error::Configuration(format!("Failed to build audio stream: {}", e)))?;
 
     Ok(AudioOutputSetup {
         stream,

@@ -6,7 +6,7 @@
 // Unified client that owns both HTTP signaling and WebRTC session management.
 // Implements RFC 9725 WHIP signaling for WebRTC streaming.
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -98,7 +98,7 @@ impl WhipClient {
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .map_err(|e| {
-                    StreamError::Runtime(format!(
+                    Error::Runtime(format!(
                         "Failed to install rustls crypto provider: {:?}",
                         e
                     ))
@@ -113,7 +113,7 @@ impl WhipClient {
         // Build HTTPS connector
         let https = hyper_rustls::HttpsConnectorBuilder::new()
             .with_native_roots()
-            .map_err(|e| StreamError::Configuration(format!("Failed to load CA roots: {}", e)))?
+            .map_err(|e| Error::Configuration(format!("Failed to load CA roots: {}", e)))?
             .https_or_http()
             .enable_http1()
             .enable_http2()
@@ -239,7 +239,7 @@ impl WhipClient {
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to register H.264 codec: {}", e))
+                Error::Configuration(format!("Failed to register H.264 codec: {}", e))
             })?;
 
         // Register Opus audio codec
@@ -259,7 +259,7 @@ impl WhipClient {
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
             )
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to register Opus codec: {}", e))
+                Error::Configuration(format!("Failed to register Opus codec: {}", e))
             })?;
 
         tracing::info!("[WhipClient] Registered H.264 (PT=102) and Opus (PT=111) codecs");
@@ -271,7 +271,7 @@ impl WhipClient {
             &mut media_engine,
         )
         .map_err(|e| {
-            StreamError::Configuration(format!("Failed to register interceptors: {}", e))
+            Error::Configuration(format!("Failed to register interceptors: {}", e))
         })?;
 
         // Create API
@@ -283,7 +283,7 @@ impl WhipClient {
         // Create peer connection
         let config = webrtc::peer_connection::configuration::RTCConfiguration::default();
         let peer_connection = Arc::new(api.new_peer_connection(config).await.map_err(|e| {
-            StreamError::Configuration(format!("Failed to create PeerConnection: {}", e))
+            Error::Configuration(format!("Failed to create PeerConnection: {}", e))
         })?);
 
         // Create ICE candidate channel
@@ -345,7 +345,7 @@ impl WhipClient {
             .add_track(Arc::clone(&video_track)
                 as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
             .await
-            .map_err(|e| StreamError::Configuration(format!("Failed to add video track: {}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to add video track: {}", e)))?;
 
         // Drain incoming RTCP on the video sender. Required by webrtc-rs —
         // without this, the interceptor pipeline stalls and RTCP Sender Reports
@@ -381,7 +381,7 @@ impl WhipClient {
             .add_track(Arc::clone(&audio_track)
                 as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
             .await
-            .map_err(|e| StreamError::Configuration(format!("Failed to add audio track: {}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to add audio track: {}", e)))?;
 
         // Drain incoming RTCP on the audio sender (same reason as video above).
         tokio::spawn(async move {
@@ -417,12 +417,12 @@ impl WhipClient {
         let offer = peer_connection
             .create_offer(None)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to create offer: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to create offer: {}", e)))?;
 
         peer_connection
             .set_local_description(offer)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to set local description: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to set local description: {}", e)))?;
 
         // Wait for ICE gathering to complete
         let mut done_rx = peer_connection.gathering_complete_promise().await;
@@ -431,7 +431,7 @@ impl WhipClient {
         let local_desc = peer_connection
             .local_description()
             .await
-            .ok_or_else(|| StreamError::Runtime("No local description".into()))?;
+            .ok_or_else(|| Error::Runtime("No local description".into()))?;
 
         Ok(local_desc.sdp)
     }
@@ -446,13 +446,13 @@ impl WhipClient {
             webrtc::peer_connection::sdp::session_description::RTCSessionDescription::answer(
                 sdp.to_owned(),
             )
-            .map_err(|e| StreamError::Runtime(format!("Failed to parse SDP answer: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to parse SDP answer: {}", e)))?;
 
         peer_connection
             .set_remote_description(answer)
             .await
             .map_err(|e| {
-                StreamError::Runtime(format!("Failed to set remote description: {}", e))
+                Error::Runtime(format!("Failed to set remote description: {}", e))
             })?;
 
         Ok(())
@@ -499,7 +499,7 @@ impl WhipClient {
 
         let req = req_builder
             .body(boxed_body)
-            .map_err(|e| StreamError::Runtime(format!("Failed to build request: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to build request: {}", e)))?;
 
         tracing::debug!("[WhipClient] POST to {}", self.config.endpoint_url);
 
@@ -509,19 +509,19 @@ impl WhipClient {
         )
         .await
         .map_err(|_| {
-            StreamError::Runtime(format!(
+            Error::Runtime(format!(
                 "WHIP POST timed out after {}ms",
                 self.config.timeout_ms
             ))
         })?
-        .map_err(|e| StreamError::Runtime(format!("WHIP POST failed: {}", e)))?;
+        .map_err(|e| Error::Runtime(format!("WHIP POST failed: {}", e)))?;
 
         let status = response.status();
         let headers = response.headers().clone();
 
         let body_bytes = BodyExt::collect(response.into_body())
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to read response: {}", e)))?
+            .map_err(|e| Error::Runtime(format!("Failed to read response: {}", e)))?
             .to_bytes();
 
         match status {
@@ -531,7 +531,7 @@ impl WhipClient {
                     .get(header::LOCATION)
                     .and_then(|v| v.to_str().ok())
                     .ok_or_else(|| {
-                        StreamError::Runtime("WHIP 201 without Location header".into())
+                        Error::Runtime("WHIP 201 without Location header".into())
                     })?;
 
                 // Convert relative to absolute URL
@@ -554,7 +554,7 @@ impl WhipClient {
                 );
 
                 let sdp_answer = String::from_utf8(body_bytes.to_vec())
-                    .map_err(|e| StreamError::Runtime(format!("Invalid UTF-8 in SDP: {}", e)))?;
+                    .map_err(|e| Error::Runtime(format!("Invalid UTF-8 in SDP: {}", e)))?;
 
                 Ok(sdp_answer)
             }
@@ -562,7 +562,7 @@ impl WhipClient {
                 let location = headers
                     .get(header::LOCATION)
                     .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| StreamError::Runtime("307 without Location header".into()))?;
+                    .ok_or_else(|| Error::Runtime("307 without Location header".into()))?;
 
                 tracing::info!("[WhipClient] Redirecting to: {}", location);
                 self.config.endpoint_url = location.to_owned();
@@ -571,7 +571,7 @@ impl WhipClient {
             _ => {
                 let error_body = String::from_utf8(body_bytes.to_vec())
                     .unwrap_or_else(|_| format!("HTTP {}", status));
-                Err(StreamError::Runtime(format!(
+                Err(Error::Runtime(format!(
                     "WHIP POST failed ({}): {}",
                     status, error_body
                 )))
@@ -617,15 +617,15 @@ impl WhipClient {
 
         let req = req_builder
             .body(boxed_body)
-            .map_err(|e| StreamError::Runtime(format!("Failed to build PATCH request: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to build PATCH request: {}", e)))?;
 
         let response = tokio::time::timeout(
             std::time::Duration::from_millis(self.config.timeout_ms),
             self.http_client.request(req),
         )
         .await
-        .map_err(|_| StreamError::Runtime("WHIP PATCH timed out".into()))?
-        .map_err(|e| StreamError::Runtime(format!("WHIP PATCH failed: {}", e)))?;
+        .map_err(|_| Error::Runtime("WHIP PATCH timed out".into()))?
+        .map_err(|e| Error::Runtime(format!("WHIP PATCH failed: {}", e)))?;
 
         match response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => {
@@ -638,7 +638,7 @@ impl WhipClient {
                     .ok()
                     .and_then(|b| String::from_utf8(b.to_bytes().to_vec()).ok())
                     .unwrap_or_else(|| format!("HTTP {}", status));
-                Err(StreamError::Runtime(format!(
+                Err(Error::Runtime(format!(
                     "WHIP PATCH failed: {}",
                     body_bytes
                 )))
@@ -655,7 +655,7 @@ impl WhipClient {
         let track = self
             .video_track
             .clone()
-            .ok_or_else(|| StreamError::Runtime("Video track not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("Video track not initialized".into()))?;
 
         // Log first frame and keyframes at startup to confirm encoding pipeline works
         if self.video_frame_count < 5 {
@@ -669,7 +669,7 @@ impl WhipClient {
         track
             .write_sample(&sample)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to write video sample: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to write video sample: {}", e)))?;
 
         self.video_frame_count += 1;
 
@@ -684,7 +684,7 @@ impl WhipClient {
         let track = self
             .audio_track
             .as_ref()
-            .ok_or_else(|| StreamError::Runtime("Audio track not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("Audio track not initialized".into()))?;
 
         const TIMESTAMP_INCREMENT: u32 = 960; // 20ms @ 48kHz
 
@@ -717,7 +717,7 @@ impl WhipClient {
         track
             .write_rtp(&rtp_packet)
             .await
-            .map_err(|e| StreamError::Runtime(format!("Failed to write audio RTP: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to write audio RTP: {}", e)))?;
 
         Ok(())
     }
@@ -771,7 +771,7 @@ impl WhipClient {
 
         let req = req_builder
             .body(boxed_body)
-            .map_err(|e| StreamError::Runtime(format!("Failed to build DELETE request: {}", e)))?;
+            .map_err(|e| Error::Runtime(format!("Failed to build DELETE request: {}", e)))?;
 
         tracing::debug!("[WhipClient] DELETE to {}", session_url);
 
@@ -780,8 +780,8 @@ impl WhipClient {
             self.http_client.request(req),
         )
         .await
-        .map_err(|_| StreamError::Runtime("WHIP DELETE timed out".into()))?
-        .map_err(|e| StreamError::Runtime(format!("WHIP DELETE failed: {}", e)))?;
+        .map_err(|_| Error::Runtime("WHIP DELETE timed out".into()))?
+        .map_err(|e| Error::Runtime(format!("WHIP DELETE failed: {}", e)))?;
 
         if response.status().is_success() {
             tracing::info!("[WhipClient] WHIP session deleted: {}", session_url);

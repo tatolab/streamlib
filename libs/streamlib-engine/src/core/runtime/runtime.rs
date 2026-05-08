@@ -25,7 +25,7 @@ use crate::core::graph::{
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent, PUBSUB};
-use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, StreamError};
+use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, Error};
 use crate::iceoryx2::Iceoryx2Node;
 
 /// Keeps loaded dylib plugin libraries alive for the process lifetime.
@@ -144,7 +144,7 @@ impl Runner {
                     .enable_all()
                     .build()
                     .map_err(|e| {
-                        StreamError::Runtime(format!("Failed to create tokio runtime: {}", e))
+                        Error::Runtime(format!("Failed to create tokio runtime: {}", e))
                     })?;
                 TokioRuntimeVariant::OwnedTokioRuntime(rt)
             }
@@ -170,7 +170,7 @@ impl Runner {
                 Arc::clone(&runtime_id),
             ),
         )
-        .map_err(|e| StreamError::Runtime(format!("Failed to initialize logging: {}", e)))?;
+        .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
         tracing::info!("Creating Runner with ID: {}", runtime_id);
 
         // Get STREAMLIB_HOME and run init hooks (once per process)
@@ -284,7 +284,7 @@ impl Runner {
         config: C,
     ) -> Result<()> {
         let config_json = serde_json::to_value(&config)
-            .map_err(|e| crate::core::StreamError::Config(e.to_string()))?;
+            .map_err(|e| crate::core::Error::Config(e.to_string()))?;
 
         // Update config in graph and queue operation
         self.compiler.scope(|graph, tx| {
@@ -415,7 +415,7 @@ impl Runner {
         // registered processor in this manifest uses these typed segments
         // to compose its full structured `SchemaIdent`.
         let package_metadata = config.package.as_ref().ok_or_else(|| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 "{} at {} declares processors but is missing a `package:` block. \
                  The structured-everywhere processor identity rule requires \
                  `package: {{ org, name, version }}` to compose each processor's \
@@ -430,7 +430,7 @@ impl Runner {
             // package metadata + the processor's PascalCase short name.
             let proc_type_name = streamlib_processor_schema::TypeName::new(&proc_schema.name)
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "processor short name `{}` in {} is not valid PascalCase: {}",
                         proc_schema.name,
                         project_path.display(),
@@ -467,7 +467,7 @@ impl Runner {
 
                         let dylib_path = std::fs::read_dir(&lib_dir)
                             .map_err(|e| {
-                                StreamError::Configuration(format!(
+                                Error::Configuration(format!(
                                     "Failed to read lib/ directory at {}: {}",
                                     lib_dir.display(),
                                     e
@@ -477,7 +477,7 @@ impl Runner {
                             .map(|entry| entry.path())
                             .find(|path| path.extension().is_some_and(|ext| ext == dylib_ext))
                             .ok_or_else(|| {
-                                StreamError::Configuration(format!(
+                                Error::Configuration(format!(
                                     "No .{} file found in {}",
                                     dylib_ext,
                                     lib_dir.display()
@@ -491,7 +491,7 @@ impl Runner {
                         // a compatible streamlib-plugin-abi version.
                         let lib = unsafe {
                             libloading::Library::new(&dylib_path).map_err(|e| {
-                                StreamError::Configuration(format!(
+                                Error::Configuration(format!(
                                     "Failed to load dylib {}: {}",
                                     dylib_path.display(),
                                     e
@@ -503,7 +503,7 @@ impl Runner {
                             let symbol = lib
                                 .get::<*const PluginDeclaration>(b"STREAMLIB_PLUGIN\0")
                                 .map_err(|e| {
-                                    StreamError::Configuration(format!(
+                                    Error::Configuration(format!(
                                         "Plugin '{}' missing STREAMLIB_PLUGIN symbol. \
                                          Ensure the plugin uses the export_plugin! macro: {}",
                                         dylib_path.display(),
@@ -514,7 +514,7 @@ impl Runner {
                         };
 
                         if decl.abi_version != PLUGIN_ABI_VERSION {
-                            return Err(StreamError::Configuration(format!(
+                            return Err(Error::Configuration(format!(
                                 "ABI version mismatch for '{}': plugin has v{}, \
                                  runtime expects v{}. Rebuild the plugin with a \
                                  compatible streamlib-plugin-abi version.",
@@ -544,7 +544,7 @@ impl Runner {
                         .iter()
                         .any(|desc| desc.name == proc_schema_ident);
                     if !registered {
-                        return Err(StreamError::Configuration(format!(
+                        return Err(Error::Configuration(format!(
                             "Processor '{}' declared in streamlib.yaml but not \
                              registered by the dylib. Ensure export_plugin!() \
                              includes this processor.",
@@ -729,7 +729,7 @@ impl Runner {
             let surface_store =
                 SurfaceStore::new(socket_path.clone(), self.runtime_id.to_string());
             surface_store.connect().map_err(|e| {
-                StreamError::Runtime(format!(
+                Error::Runtime(format!(
                     "Failed to connect to runtime-internal surface-sharing service at {}: {}",
                     socket_path, e
                 ))
@@ -925,10 +925,10 @@ impl Runner {
                 .traversal()
                 .v(processor_id)
                 .first()
-                .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.to_string()))?;
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
 
             let pause_gate = node.get::<ProcessorPauseGateComponent>().ok_or_else(|| {
-                StreamError::Runtime(format!(
+                Error::Runtime(format!(
                     "Processor '{}' has no ProcessorPauseGate",
                     processor_id
                 ))
@@ -966,10 +966,10 @@ impl Runner {
                 .traversal()
                 .v(processor_id)
                 .first()
-                .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.to_string()))?;
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
 
             let pause_gate = node.get::<ProcessorPauseGateComponent>().ok_or_else(|| {
-                StreamError::Runtime(format!(
+                Error::Runtime(format!(
                     "Processor '{}' has no ProcessorPauseGate",
                     processor_id
                 ))
@@ -1006,11 +1006,11 @@ impl Runner {
                 .traversal()
                 .v(processor_id)
                 .first()
-                .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.to_string()))?;
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
 
             let pause_gate = node
                 .get::<ProcessorPauseGateComponent>()
-                .ok_or_else(|| StreamError::ProcessorNotFound(processor_id.to_string()))?;
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
 
             Ok(pause_gate.is_paused())
         })
@@ -1122,7 +1122,7 @@ impl Runner {
     {
         // Install signal handlers
         crate::core::signals::install_signal_handlers().map_err(|e| {
-            crate::core::StreamError::Configuration(format!(
+            crate::core::Error::Configuration(format!(
                 "Failed to install signal handlers: {}",
                 e
             ))
@@ -1229,7 +1229,7 @@ impl Runner {
     pub fn to_json(&self) -> Result<serde_json::Value> {
         self.compiler.scope(|graph, _tx| {
             serde_json::to_value(&*graph)
-                .map_err(|_| StreamError::GraphError("Unable to serialize graph".into()))
+                .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }
 
@@ -1273,10 +1273,10 @@ impl Runner {
             let to = conn_def.parse_to()?;
 
             let from_id = alias_to_id.get(from.alias).ok_or_else(|| {
-                StreamError::GraphError(format!("Unknown processor alias: '{}'", from.alias))
+                Error::GraphError(format!("Unknown processor alias: '{}'", from.alias))
             })?;
             let to_id = alias_to_id.get(to.alias).ok_or_else(|| {
-                StreamError::GraphError(format!("Unknown processor alias: '{}'", to.alias))
+                Error::GraphError(format!("Unknown processor alias: '{}'", to.alias))
             })?;
 
             self.connect(
@@ -1357,7 +1357,7 @@ impl Runner {
                 if let Some(installed) = self.lookup_installed_package(dep_ref)? {
                     return Ok(installed);
                 }
-                Err(StreamError::Configuration(format!(
+                Err(Error::Configuration(format!(
                     "Dependency '{dep_ref}' could not be resolved. \
                      No matching `patch:` entry was found in {}/{}, and no matching \
                      package is installed (run `streamlib pkg list` to see \
@@ -1401,7 +1401,7 @@ impl Runner {
                     consumer_dir.join(&p.path)
                 };
                 if !abs.exists() {
-                    return Err(StreamError::Configuration(format!(
+                    return Err(Error::Configuration(format!(
                         "patch entry for '{dep_ref}' in {}/{} points at \
                          `{}` which does not exist. Path patches are \
                          dev-time overrides — they must resolve to a \
@@ -1423,9 +1423,9 @@ impl Runner {
                     &g.rev,
                     &cache_dir,
                 )
-                .map_err(|e| StreamError::Configuration(e.to_string()))
+                .map_err(|e| Error::Configuration(e.to_string()))
             }
-            DependencySpec::Registry(_) => Err(StreamError::Configuration(format!(
+            DependencySpec::Registry(_) => Err(Error::Configuration(format!(
                 "patch entry for '{dep_ref}' in {}/{} is registry-flavored. \
                  The v1 resolver doesn't ship a registry — declare a \
                  `path:` or `git:` patch entry, or remove the patch and \
@@ -1461,17 +1461,17 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
     use crate::core::config::ProjectConfig;
 
     let slpkg_bytes = std::fs::read(slpkg_path).map_err(|e| {
-        StreamError::Configuration(format!("Failed to read {}: {}", slpkg_path.display(), e))
+        Error::Configuration(format!("Failed to read {}: {}", slpkg_path.display(), e))
     })?;
 
     let cursor = std::io::Cursor::new(&slpkg_bytes);
     let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| StreamError::Configuration(format!("Failed to open .slpkg archive: {}", e)))?;
+        .map_err(|e| Error::Configuration(format!("Failed to open .slpkg archive: {}", e)))?;
 
     // Read streamlib.yaml from archive to get name + version
     let manifest_yaml = {
         let mut manifest_file = archive.by_name(ProjectConfig::FILE_NAME).map_err(|e| {
-            StreamError::Configuration(format!(
+            Error::Configuration(format!(
                 ".slpkg archive missing {}: {}",
                 ProjectConfig::FILE_NAME,
                 e
@@ -1479,15 +1479,15 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
         })?;
         let mut contents = String::new();
         std::io::Read::read_to_string(&mut manifest_file, &mut contents)
-            .map_err(|e| StreamError::Configuration(format!("Failed to read manifest: {}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to read manifest: {}", e)))?;
         contents
     };
 
     let config: ProjectConfig = serde_yaml::from_str(&manifest_yaml)
-        .map_err(|e| StreamError::Configuration(format!("Failed to parse manifest: {}", e)))?;
+        .map_err(|e| Error::Configuration(format!("Failed to parse manifest: {}", e)))?;
 
     let package = config.package.as_ref().ok_or_else(|| {
-        StreamError::Configuration("streamlib.yaml missing [package] section".to_string())
+        Error::Configuration("streamlib.yaml missing [package] section".to_string())
     })?;
 
     let cache_key = format!("{}-{}", package.name, package.version);
@@ -1496,7 +1496,7 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
     // Always overwrite
     if cache_dir.exists() {
         std::fs::remove_dir_all(&cache_dir)
-            .map_err(|e| StreamError::Configuration(format!("Failed to clear cache dir: {}", e)))?;
+            .map_err(|e| Error::Configuration(format!("Failed to clear cache dir: {}", e)))?;
     }
 
     tracing::info!(
@@ -1505,24 +1505,24 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
         cache_dir.display()
     );
     std::fs::create_dir_all(&cache_dir)
-        .map_err(|e| StreamError::Configuration(format!("Failed to create cache dir: {}", e)))?;
+        .map_err(|e| Error::Configuration(format!("Failed to create cache dir: {}", e)))?;
 
     // Re-open archive (cursor consumed by manifest read)
     let cursor = std::io::Cursor::new(&slpkg_bytes);
     let mut archive = zip::ZipArchive::new(cursor).map_err(|e| {
-        StreamError::Configuration(format!("Failed to re-open .slpkg archive: {}", e))
+        Error::Configuration(format!("Failed to re-open .slpkg archive: {}", e))
     })?;
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(|e| {
-            StreamError::Configuration(format!("Failed to read archive entry: {}", e))
+            Error::Configuration(format!("Failed to read archive entry: {}", e))
         })?;
 
         let file_name = file.name().to_string();
 
         // Security: reject path traversal
         if file_name.contains("..") || file_name.starts_with('/') {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Invalid path in .slpkg archive: {}",
                 file_name
             )));
@@ -1532,16 +1532,16 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
 
         if let Some(parent) = output_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
-                StreamError::Configuration(format!("Failed to create directory: {}", e))
+                Error::Configuration(format!("Failed to create directory: {}", e))
             })?;
         }
 
         let mut output_file = std::fs::File::create(&output_path).map_err(|e| {
-            StreamError::Configuration(format!("Failed to create {}: {}", output_path.display(), e))
+            Error::Configuration(format!("Failed to create {}: {}", output_path.display(), e))
         })?;
 
         std::io::copy(&mut file, &mut output_file).map_err(|e| {
-            StreamError::Configuration(format!("Failed to extract {}: {}", file_name, e))
+            Error::Configuration(format!("Failed to extract {}: {}", file_name, e))
         })?;
     }
 
@@ -1561,7 +1561,7 @@ fn bring_up_surface_service(
     use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
     let xdg_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
-        StreamError::Runtime(
+        Error::Runtime(
             "XDG_RUNTIME_DIR is not set. The runtime needs a writable directory \
              for its per-runtime surface-sharing socket — typically /run/user/<uid>. \
              Set XDG_RUNTIME_DIR or run under a session manager that provides it."
@@ -1575,7 +1575,7 @@ fn bring_up_surface_service(
     if socket_path.exists() {
         match std::os::unix::net::UnixStream::connect(&socket_path) {
             Ok(_) => {
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "Surface-sharing socket {} is already bound by a live process. \
                      Each Runner requires a unique runtime_id; check for a \
                      duplicate STREAMLIB_RUNTIME_ID env var or another runtime in \
@@ -1585,7 +1585,7 @@ fn bring_up_surface_service(
             }
             Err(_) => {
                 std::fs::remove_file(&socket_path).map_err(|e| {
-                    StreamError::Runtime(format!(
+                    Error::Runtime(format!(
                         "Found stale surface-sharing socket {} from a prior crashed \
                          runtime but failed to remove it: {}",
                         socket_path.display(),
@@ -1602,7 +1602,7 @@ fn bring_up_surface_service(
 
     let mut service = UnixSocketSurfaceService::new(SurfaceShareState::new(), socket_path.clone());
     service.start().map_err(|e| {
-        StreamError::Runtime(format!(
+        Error::Runtime(format!(
             "Failed to start runtime-internal surface-sharing service at {}: {}",
             socket_path.display(),
             e

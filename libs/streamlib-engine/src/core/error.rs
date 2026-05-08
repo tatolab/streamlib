@@ -1,10 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum StreamError {
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
     #[error("GPU operation failed: {0}")]
     GpuError(String),
 
@@ -78,15 +76,15 @@ pub enum StreamError {
     Other(#[from] anyhow::Error),
 }
 
-pub type Result<T> = std::result::Result<T, StreamError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[cfg(target_os = "linux")]
-impl From<streamlib_consumer_rhi::ConsumerRhiError> for StreamError {
+impl From<streamlib_consumer_rhi::ConsumerRhiError> for Error {
     fn from(e: streamlib_consumer_rhi::ConsumerRhiError) -> Self {
         match e {
-            streamlib_consumer_rhi::ConsumerRhiError::Gpu(s) => StreamError::GpuError(s),
+            streamlib_consumer_rhi::ConsumerRhiError::Gpu(s) => Error::GpuError(s),
             streamlib_consumer_rhi::ConsumerRhiError::Configuration(s) => {
-                StreamError::Configuration(s)
+                Error::Configuration(s)
             }
         }
     }

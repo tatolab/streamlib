@@ -11,7 +11,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::core::compiler::scheduling::{scheduling_strategy_for_processor, SchedulingStrategy};
 use crate::core::context::{GpuContextLimitedAccess, RuntimeContext, RuntimeContextFullAccess};
 use crate::core::descriptors::ProcessorRuntime;
-use crate::core::error::{Result, StreamError};
+use crate::core::error::{Result, Error};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, ProcessorAudioConverterComponent, ProcessorInstanceComponent,
@@ -75,13 +75,13 @@ pub(crate) fn spawn_processor(
             .v(processor_id)
             .first_mut()
             .ok_or_else(|| {
-                StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
+                Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
             })?;
 
         let barrier = node_mut
             .remove::<ProcessorReadyBarrierComponent>()
             .ok_or_else(|| {
-                StreamError::Runtime(format!(
+                Error::Runtime(format!(
                     "Processor '{}' has no ProcessorReadyBarrierComponent",
                     processor_id
                 ))
@@ -96,7 +96,7 @@ pub(crate) fn spawn_processor(
             let strategy = {
                 let graph = graph_arc.read();
                 let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
-                    StreamError::ProcessorNotFound(format!(
+                    Error::ProcessorNotFound(format!(
                         "Processor '{}' not found",
                         proc_id_clone
                     ))
@@ -131,7 +131,7 @@ pub(crate) fn spawn_processor(
             let strategy = {
                 let graph = graph_arc.read();
                 let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
-                    StreamError::ProcessorNotFound(format!(
+                    Error::ProcessorNotFound(format!(
                         "Processor '{}' not found",
                         proc_id_clone
                     ))
@@ -166,7 +166,7 @@ pub(crate) fn spawn_processor(
             let strategy = {
                 let graph = graph_arc.read();
                 let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
-                    StreamError::ProcessorNotFound(format!(
+                    Error::ProcessorNotFound(format!(
                         "Processor '{}' not found",
                         proc_id_clone
                     ))
@@ -215,7 +215,7 @@ fn spawn_dedicated_thread(
     let (processor_arc, audio_converter_status_arc) = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
-            StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
+            Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
         let processor = factory.create(node)?;
         let audio_status = processor.get_audio_converter_status_arc();
@@ -447,7 +447,7 @@ fn spawn_dedicated_thread(
                 processor_context,
             );
         })
-        .map_err(|e| StreamError::Runtime(format!("Failed to spawn thread: {}", e)))?;
+        .map_err(|e| Error::Runtime(format!("Failed to spawn thread: {}", e)))?;
 
     // Attach thread handle
     {
@@ -457,7 +457,7 @@ fn spawn_dedicated_thread(
             .v(&processor_id)
             .first_mut()
             .ok_or_else(|| {
-                StreamError::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
+                Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
             })?;
         node.insert(ThreadHandleComponent(thread));
     }

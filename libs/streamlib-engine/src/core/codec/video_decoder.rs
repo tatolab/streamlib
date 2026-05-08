@@ -59,14 +59,14 @@ impl VideoDecoder {
 impl VideoDecoder {
     /// Create a new video decoder (unsupported platform).
     pub fn new(_config: VideoDecoderConfig, _ctx: &RuntimeContext) -> Result<Self> {
-        Err(crate::core::StreamError::Configuration(
+        Err(crate::core::Error::Configuration(
             "Video decoding not supported on this platform".into(),
         ))
     }
 
     /// Update decoder format (unsupported platform).
     pub fn update_format(&mut self, _sps: &[u8], _pps: &[u8]) -> Result<()> {
-        Err(crate::core::StreamError::Configuration(
+        Err(crate::core::Error::Configuration(
             "Video decoding not supported on this platform".into(),
         ))
     }
@@ -78,7 +78,7 @@ impl VideoDecoder {
         _timestamp_ns: i64,
         _gpu: &GpuContext,
     ) -> Result<Option<VideoFrame>> {
-        Err(crate::core::StreamError::Configuration(
+        Err(crate::core::Error::Configuration(
             "Video decoding not supported on this platform".into(),
         ))
     }

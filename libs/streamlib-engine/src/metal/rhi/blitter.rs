@@ -7,7 +7,7 @@ use crate::apple::iosurface::create_metal_texture_from_iosurface;
 use crate::apple::texture_pool_macos::get_iosurface_id;
 use crate::core::rhi::blitter::RhiBlitter;
 use crate::core::rhi::{RhiCommandQueue, RhiPixelBuffer};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use metal::foreign_types::ForeignTypeRef;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -80,12 +80,12 @@ impl RhiBlitter for MetalBlitter {
         let src_iosurface = src
             .buffer_ref()
             .iosurface_ref()
-            .ok_or_else(|| StreamError::GpuError("Source buffer not backed by IOSurface".into()))?;
+            .ok_or_else(|| Error::GpuError("Source buffer not backed by IOSurface".into()))?;
 
         let dest_iosurface = dest
             .buffer_ref()
             .iosurface_ref()
-            .ok_or_else(|| StreamError::GpuError("Dest buffer not backed by IOSurface".into()))?;
+            .ok_or_else(|| Error::GpuError("Dest buffer not backed by IOSurface".into()))?;
 
         // Cast to objc2 IOSurface references
         let src_iosurface_ref = unsafe { &*(src_iosurface as *const IOSurface) };
@@ -152,7 +152,7 @@ impl RhiBlitter for MetalBlitter {
         let dest_iosurface = dest
             .buffer_ref()
             .iosurface_ref()
-            .ok_or_else(|| StreamError::GpuError("Dest buffer not backed by IOSurface".into()))?;
+            .ok_or_else(|| Error::GpuError("Dest buffer not backed by IOSurface".into()))?;
 
         // Cast pointers to objc2 IOSurface references
         let src_iosurface_ref = &*(src as *const IOSurface);

@@ -10,7 +10,7 @@
 use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use crate::core::streaming::{convert_audio_to_sample, convert_video_to_samples};
 use crate::core::streaming::{WhipClient, WhipConfig};
-use crate::core::{media_clock::MediaClock, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, StreamError};
+use crate::core::{media_clock::MediaClock, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
 use std::sync::Arc;
 use tokio::sync::mpsc as tokio_mpsc;
 
@@ -132,7 +132,7 @@ impl WebRtcWhipProcessor::Processor {
         let client = self
             .whip_client
             .as_mut()
-            .ok_or_else(|| StreamError::Runtime("WhipClient not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("WhipClient not initialized".into()))?;
 
         tokio_handle.block_on(
             client.connect(self.config.video.bitrate_bps, self.config.audio.bitrate_bps),
@@ -145,7 +145,7 @@ impl WebRtcWhipProcessor::Processor {
         let mut client = self
             .whip_client
             .take()
-            .ok_or_else(|| StreamError::Runtime("WhipClient not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("WhipClient not initialized".into()))?;
 
         let (sender, mut receiver) = tokio_mpsc::channel::<WhipClientMessage>(8);
 
@@ -188,7 +188,7 @@ impl WebRtcWhipProcessor::Processor {
         let samples = convert_video_to_samples(encoded, fps)?;
 
         let sender = self.whip_client_message_sender.as_ref().ok_or_else(|| {
-            StreamError::Runtime("WHIP client channel not initialized".into())
+            Error::Runtime("WHIP client channel not initialized".into())
         })?;
 
         for sample in samples {
@@ -198,7 +198,7 @@ impl WebRtcWhipProcessor::Processor {
                     tracing::warn!("[WebRtcWhip] Video channel full, dropping frame");
                 }
                 Err(tokio_mpsc::error::TrySendError::Closed(_)) => {
-                    return Err(StreamError::Runtime("WHIP client channel closed".into()));
+                    return Err(Error::Runtime("WHIP client channel closed".into()));
                 }
             }
         }
@@ -215,7 +215,7 @@ impl WebRtcWhipProcessor::Processor {
         let sample = convert_audio_to_sample(encoded, self.config.audio.sample_rate)?;
 
         let sender = self.whip_client_message_sender.as_ref().ok_or_else(|| {
-            StreamError::Runtime("WHIP client channel not initialized".into())
+            Error::Runtime("WHIP client channel not initialized".into())
         })?;
 
         match sender.try_send(WhipClientMessage::AudioSample(sample)) {
@@ -224,7 +224,7 @@ impl WebRtcWhipProcessor::Processor {
                 tracing::warn!("[WebRtcWhip] Audio channel full, dropping frame");
             }
             Err(tokio_mpsc::error::TrySendError::Closed(_)) => {
-                return Err(StreamError::Runtime("WHIP client channel closed".into()));
+                return Err(Error::Runtime("WHIP client channel closed".into()));
             }
         }
 

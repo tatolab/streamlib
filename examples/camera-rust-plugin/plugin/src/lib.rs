@@ -15,7 +15,7 @@ use streamlib::sdk::_generated_::VideoFrame;
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib_plugin_abi::export_plugin;
 
 #[link(name = "CoreVideo", kind = "framework")]
@@ -50,7 +50,7 @@ impl ManualProcessor for GrayscaleProcessor::Processor {
         let gpu = self
             .gpu_context
             .clone()
-            .ok_or_else(|| StreamError::Configuration("GpuContext not initialized".into()))?;
+            .ok_or_else(|| Error::Configuration("GpuContext not initialized".into()))?;
         let running = Arc::clone(&self.running);
 
         running.store(true, Ordering::Release);
@@ -168,7 +168,7 @@ impl ManualProcessor for GrayscaleProcessor::Processor {
                 tracing::info!("GrayscaleProcessor: processing thread stopped");
             })
             .map_err(|e| {
-                StreamError::Configuration(format!("Failed to spawn processing thread: {}", e))
+                Error::Configuration(format!("Failed to spawn processing thread: {}", e))
             })?;
 
         self.processing_thread = Some(handle);
@@ -182,7 +182,7 @@ impl ManualProcessor for GrayscaleProcessor::Processor {
         if let Some(handle) = self.processing_thread.take() {
             handle
                 .join()
-                .map_err(|_| StreamError::Runtime("Processing thread panicked".into()))?;
+                .map_err(|_| Error::Runtime("Processing thread panicked".into()))?;
         }
 
         tracing::info!("GrayscaleProcessor: stopped");

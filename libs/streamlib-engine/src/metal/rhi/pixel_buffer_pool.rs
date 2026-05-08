@@ -28,7 +28,7 @@ use crate::core::rhi::{
     PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiPixelBufferPool,
     RhiPixelBufferRef,
 };
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// macOS pixel buffer pool wrapping CVPixelBufferPool.
 pub struct PixelBufferPoolMacOS {
@@ -52,7 +52,7 @@ impl PixelBufferPoolMacOS {
 
         // Reject Unknown format - CV doesn't support format value 0
         if pixel_format == PixelFormat::Unknown {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "Cannot create pixel buffer pool with Unknown format".into(),
             ));
         }
@@ -101,7 +101,7 @@ impl PixelBufferPoolMacOS {
         );
 
         if status != kCVReturnSuccess || pixel_buffer.is_null() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to acquire pixel buffer from pool: status {}",
                 status
             )));
@@ -110,7 +110,7 @@ impl PixelBufferPoolMacOS {
         // The pool gives us a retained buffer, so use no_retain
         let buffer_ref = unsafe {
             RhiPixelBufferRef::from_cv_pixel_buffer_no_retain(pixel_buffer)
-                .ok_or_else(|| StreamError::GpuError("Null pixel buffer from pool".into()))?
+                .ok_or_else(|| Error::GpuError("Null pixel buffer from pool".into()))?
         };
 
         // Get IOSurfaceID to check if this is a recycled buffer
@@ -321,7 +321,7 @@ fn create_pool_on_main_thread(
     };
 
     if status != kCVReturnSuccess || pool.is_null() {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Failed to create CVPixelBufferPool: status {}",
             status
         )));

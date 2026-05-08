@@ -3,7 +3,7 @@
 
 //! Project-level configuration via `streamlib.yaml`.
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -72,11 +72,11 @@ impl ProjectConfig {
         let config_path = project_path.join(Self::FILE_NAME);
 
         let content = std::fs::read_to_string(&config_path).map_err(|e| {
-            StreamError::Configuration(format!("Failed to read {}: {}", config_path.display(), e))
+            Error::Configuration(format!("Failed to read {}: {}", config_path.display(), e))
         })?;
 
         let config: Self = serde_yaml::from_str(&content).map_err(|e| {
-            StreamError::Configuration(format!("Failed to parse {}: {}", config_path.display(), e))
+            Error::Configuration(format!("Failed to parse {}: {}", config_path.display(), e))
         })?;
 
         tracing::info!("Loaded project config from {}", config_path.display());
@@ -147,7 +147,7 @@ impl ProjectConfig {
         let min_version = constraint
             .strip_prefix(">=")
             .ok_or_else(|| {
-                StreamError::Configuration(format!(
+                Error::Configuration(format!(
                     "Unsupported streamlib_version constraint '{}' (only >=X.Y.Z is supported)",
                     constraint
                 ))
@@ -155,7 +155,7 @@ impl ProjectConfig {
             .trim();
 
         if compare_semver(runtime_version, min_version) < 0 {
-            return Err(StreamError::Configuration(format!(
+            return Err(Error::Configuration(format!(
                 "Package requires streamlib {} but running version is {}",
                 constraint, runtime_version
             )));

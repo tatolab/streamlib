@@ -7,7 +7,7 @@
 // Uses moq-transport (cloudflare/moq-rs) for the MoQ protocol and
 // web-transport-quinn for the underlying QUIC/WebTransport connection.
 
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -99,7 +99,7 @@ impl MoqRelayConfig {
             self.broadcast_path.trim_start_matches('/')
         );
         url::Url::parse(&raw)
-            .map_err(|e| StreamError::Configuration(format!("Invalid MoQ relay URL '{raw}': {e}")))
+            .map_err(|e| Error::Configuration(format!("Invalid MoQ relay URL '{raw}': {e}")))
     }
 }
 
@@ -116,7 +116,7 @@ fn create_webtransport_client(
         rustls::ClientConfig::builder_with_provider(provider.clone())
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|e| {
-                StreamError::Runtime(format!("TLS config failed: {e}"))
+                Error::Runtime(format!("TLS config failed: {e}"))
             })?
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(
@@ -128,13 +128,13 @@ fn create_webtransport_client(
         let native_certs = rustls_native_certs::load_native_certs();
         for cert in native_certs.certs {
             roots.add(cert).map_err(|e| {
-                StreamError::Runtime(format!("Failed to add root cert: {e}"))
+                Error::Runtime(format!("Failed to add root cert: {e}"))
             })?;
         }
         rustls::ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(|e| {
-                StreamError::Runtime(format!("TLS config failed: {e}"))
+                Error::Runtime(format!("TLS config failed: {e}"))
             })?
             .with_root_certificates(roots)
             .with_no_client_auth()
@@ -145,7 +145,7 @@ fn create_webtransport_client(
 
     let quic_client_config =
         quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(|e| {
-            StreamError::Runtime(format!("QUIC client config failed: {e}"))
+            Error::Runtime(format!("QUIC client config failed: {e}"))
         })?;
 
     let mut client_config = quinn::ClientConfig::new(Arc::new(quic_client_config));
@@ -155,7 +155,7 @@ fn create_webtransport_client(
     client_config.transport_config(Arc::new(transport));
 
     let endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap()).map_err(|e| {
-        StreamError::Runtime(format!("QUIC endpoint creation failed: {e}"))
+        Error::Runtime(format!("QUIC endpoint creation failed: {e}"))
     })?;
 
     tracing::info!(keep_alive_secs = 4, "QUIC transport configured with keep-alive");
@@ -193,7 +193,7 @@ impl MoqPublishSession {
         let client = create_webtransport_client(config.tls_disable_verify)?;
 
         let wt_session = client.connect(url).await.map_err(|e| {
-            StreamError::Runtime(format!("MoQ WebTransport connect failed: {e}"))
+            Error::Runtime(format!("MoQ WebTransport connect failed: {e}"))
         })?;
 
         // Convert web_transport_quinn::Session → web_transport::Session for moq-transport
@@ -207,7 +207,7 @@ impl MoqPublishSession {
             )
             .await
             .map_err(|e| {
-                StreamError::Runtime(format!("MoQ session connect failed: {e}"))
+                Error::Runtime(format!("MoQ session connect failed: {e}"))
             })?;
 
         // Run session event loop in background
@@ -281,7 +281,7 @@ impl MoqPublishSession {
         if needs_new_subgroup {
             let subgroups_writer = self.ensure_track_subgroups_writer(track_name)?;
             let subgroup = subgroups_writer.append(0).map_err(|e| {
-                StreamError::Runtime(format!("Failed to create MoQ subgroup: {e}"))
+                Error::Runtime(format!("Failed to create MoQ subgroup: {e}"))
             })?;
             self.active_subgroup_writers
                 .insert(track_name.to_string(), subgroup);
@@ -292,7 +292,7 @@ impl MoqPublishSession {
         if let Err(e) = write_result {
             // Remove the stale writer so next call creates a new one
             self.active_subgroup_writers.remove(track_name);
-            return Err(StreamError::Runtime(format!(
+            return Err(Error::Runtime(format!(
                 "Failed to write MoQ frame: {e}"
             )));
         }
@@ -306,14 +306,14 @@ impl MoqPublishSession {
     ) -> Result<&mut moq_transport::serve::SubgroupsWriter> {
         if !self.track_subgroup_writers.contains_key(track_name) {
             let track_writer = self.tracks_writer.create(track_name).ok_or_else(|| {
-                StreamError::Runtime(format!(
+                Error::Runtime(format!(
                     "Failed to create MoQ track '{track_name}' (all readers dropped)"
                 ))
             })?;
 
             let subgroups_writer =
                 track_writer.subgroups().map_err(|e| {
-                    StreamError::Runtime(format!(
+                    Error::Runtime(format!(
                         "Failed to enter subgroups mode for track '{track_name}': {e}"
                     ))
                 })?;
@@ -351,7 +351,7 @@ impl MoqSubscribeSession {
         let client = create_webtransport_client(config.tls_disable_verify)?;
 
         let wt_session = client.connect(url).await.map_err(|e| {
-            StreamError::Runtime(format!("MoQ WebTransport connect failed: {e}"))
+            Error::Runtime(format!("MoQ WebTransport connect failed: {e}"))
         })?;
 
         let wt_session: web_transport::Session = wt_session.into();
@@ -364,7 +364,7 @@ impl MoqSubscribeSession {
             )
             .await
             .map_err(|e| {
-                StreamError::Runtime(format!("MoQ session connect failed: {e}"))
+                Error::Runtime(format!("MoQ session connect failed: {e}"))
             })?;
 
         // Run session event loop in background
@@ -460,7 +460,7 @@ impl MoqTrackReader {
         // Lazily initialize the subgroups reader on first call
         if self.subgroups_reader.is_none() {
             let mode = self.track_reader.mode().await.map_err(|e| {
-                StreamError::Runtime(format!("MoQ track mode error: {e}"))
+                Error::Runtime(format!("MoQ track mode error: {e}"))
             })?;
 
             match mode {
@@ -468,7 +468,7 @@ impl MoqTrackReader {
                     self.subgroups_reader = Some(reader);
                 }
                 _ => {
-                    return Err(StreamError::Runtime(
+                    return Err(Error::Runtime(
                         "Unexpected MoQ track mode (expected subgroups)".into(),
                     ));
                 }
@@ -479,7 +479,7 @@ impl MoqTrackReader {
         match reader.next().await {
             Ok(Some(subgroup)) => Ok(Some(MoqSubgroupReader { inner: subgroup })),
             Ok(None) => Ok(None),
-            Err(e) => Err(StreamError::Runtime(format!(
+            Err(e) => Err(Error::Runtime(format!(
                 "MoQ subgroup read error: {e}"
             ))),
         }
@@ -495,7 +495,7 @@ impl MoqSubgroupReader {
     /// Read the next frame from this subgroup. Returns `None` when the subgroup ends.
     pub async fn read_frame(&mut self) -> Result<Option<bytes::Bytes>> {
         self.inner.read_next().await.map_err(|e| {
-            StreamError::Runtime(format!("MoQ frame read error: {e}"))
+            Error::Runtime(format!("MoQ frame read error: {e}"))
         })
     }
 }
@@ -544,7 +544,7 @@ impl SharedMoqSessions {
                 timeout_ms: 10000,
             };
             let session = MoqPublishSession::connect(config).await?;
-            Ok::<_, StreamError>(Arc::new(Mutex::new(session)))
+            Ok::<_, Error>(Arc::new(Mutex::new(session)))
         }).await?;
         Ok(Arc::clone(session))
     }
@@ -559,7 +559,7 @@ impl SharedMoqSessions {
                 timeout_ms: 10000,
             };
             let session = MoqSubscribeSession::connect(config).await?;
-            Ok::<_, StreamError>(Arc::new(session))
+            Ok::<_, Error>(Arc::new(session))
         }).await?;
         Ok(Arc::clone(session))
     }

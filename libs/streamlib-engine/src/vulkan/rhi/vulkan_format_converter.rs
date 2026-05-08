@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::core::rhi::{
     ComputeBindingSpec, ComputeKernelDescriptor, PixelFormat, RhiPixelBuffer,
 };
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 use super::{VulkanComputeKernel, HostVulkanDevice};
 
@@ -65,7 +65,7 @@ impl VulkanFormatConverter {
         let width = source.width;
         let height = source.height;
         if width != dest.width || height != dest.height {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "Source and destination buffers must have the same dimensions".into(),
             ));
         }
@@ -82,7 +82,7 @@ impl VulkanFormatConverter {
                 (is_bgra as u32) | ((full_range as u32) << 1)
             }
             _ => {
-                return Err(StreamError::NotSupported(format!(
+                return Err(Error::NotSupported(format!(
                     "Unsupported format conversion: {:?} → {:?}",
                     src_format, dst_format
                 )));
@@ -112,7 +112,7 @@ impl VulkanFormatConverter {
 mod tests {
     use super::*;
     use crate::core::rhi::RhiPixelBufferRef;
-    use crate::core::StreamError;
+    use crate::core::Error;
     use crate::vulkan::rhi::HostVulkanPixelBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
@@ -248,7 +248,7 @@ mod tests {
         let converter =
             VulkanFormatConverter::new(&device, 2, 4).expect("converter creation");
         let err = converter.convert(&nv12, &bgra).err().expect("expected error");
-        assert!(matches!(err, StreamError::GpuError(_)));
+        assert!(matches!(err, Error::GpuError(_)));
     }
 
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
@@ -260,7 +260,7 @@ mod tests {
         let converter =
             VulkanFormatConverter::new(&device, 4, 4).expect("converter creation");
         let err = converter.convert(&src, &dst).err().expect("expected error");
-        assert!(matches!(err, StreamError::NotSupported(_)));
+        assert!(matches!(err, Error::NotSupported(_)));
     }
 
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]

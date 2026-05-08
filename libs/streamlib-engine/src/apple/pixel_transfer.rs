@@ -3,7 +3,7 @@
 
 use crate::apple::iosurface;
 use crate::core::rhi::{GpuDevice, RhiCommandQueue, RhiPixelBuffer, StreamTexture};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 use metal::foreign_types::ForeignTypeRef;
 use objc2_core_video::CVPixelBuffer;
 use objc2_io_surface::IOSurface;
@@ -72,7 +72,7 @@ impl PixelTransferSession {
             );
 
             if status != ffi::NO_ERR {
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "VTPixelTransferSessionCreate failed: {}",
                     status
                 )));
@@ -179,7 +179,7 @@ impl PixelTransferSession {
             );
 
             if status != 0 {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "CVPixelBufferCreate (BGRA) failed: {}",
                     status
                 )));
@@ -190,7 +190,7 @@ impl PixelTransferSession {
         let iosurface_ptr = unsafe { ffi::CVPixelBufferGetIOSurface(pixel_buffer) };
 
         if iosurface_ptr.is_null() {
-            return Err(StreamError::GpuError(
+            return Err(Error::GpuError(
                 "Failed to get IOSurface from CVPixelBuffer".into(),
             ));
         }
@@ -260,7 +260,7 @@ impl PixelTransferSession {
             );
 
             if status != 0 {
-                return Err(StreamError::GpuError(format!(
+                return Err(Error::GpuError(format!(
                     "CVPixelBufferCreate (NV12) failed: {}",
                     status
                 )));
@@ -278,7 +278,7 @@ impl PixelTransferSession {
             if status != ffi::NO_ERR {
                 // Clean up destination buffer on error
                 ffi::CFRelease(dest_buffer as *const _);
-                return Err(StreamError::Runtime(format!(
+                return Err(Error::Runtime(format!(
                     "VTPixelTransferSessionTransferImage failed: {}",
                     status
                 )));

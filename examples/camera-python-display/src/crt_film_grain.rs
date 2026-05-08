@@ -30,7 +30,7 @@ use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::sdk::rhi::{StreamTexture, TextureFormat, VulkanLayout};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Result, StreamError};
+use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::_generated_::VideoFrame;
 
 use crate::crt_film_grain_kernel::{
@@ -146,11 +146,11 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
         let gpu_ctx = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| StreamError::Configuration("GPU context not initialized".into()))?
+            .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?
             .clone();
 
         let backend = self.backend.as_mut().ok_or_else(|| {
-            StreamError::Configuration("CrtFilmGrain: backend not initialized".into())
+            Error::Configuration("CrtFilmGrain: backend not initialized".into())
         })?;
 
         // Resolve input texture + its current_layout via Path 1 / Path 2
@@ -243,7 +243,7 @@ impl CrtFilmGrainProcessor::Processor {
         // keep both registrations honest.
         let mut output_ring: Vec<OutputSlot> = Vec::with_capacity(OUTPUT_RING_DEPTH);
         let surface_store = gpu_full.surface_store().ok_or_else(|| {
-            StreamError::Configuration(
+            Error::Configuration(
                 "CrtFilmGrain: GpuContext has no surface_store \
                  — cross-process output (Glitch consumer, #486) unavailable"
                     .into(),
@@ -285,7 +285,7 @@ impl CrtFilmGrainProcessor::Processor {
                     VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
                 )
                 .map_err(|e| {
-                    StreamError::Configuration(format!(
+                    Error::Configuration(format!(
                         "CrtFilmGrain: surface_store.register_texture slot {slot_idx}: {e}"
                     ))
                 })?;

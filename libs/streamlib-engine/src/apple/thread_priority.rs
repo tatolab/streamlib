@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::execution::ThreadPriority;
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// Apply thread priority to the current thread based on the specified priority level.
 ///
@@ -68,7 +68,7 @@ fn set_realtime_priority() -> Result<()> {
         );
 
         if result != KERN_SUCCESS {
-            return Err(StreamError::Runtime(format!(
+            return Err(Error::Runtime(format!(
                 "Failed to set real-time thread priority: mach error {}",
                 result
             )));
@@ -128,7 +128,7 @@ fn set_realtime_priority() -> Result<()> {
         );
 
         if result != KERN_SUCCESS {
-            return Err(StreamError::Runtime(format!(
+            return Err(Error::Runtime(format!(
                 "Failed to set real-time thread priority: mach error {}",
                 result
             )));

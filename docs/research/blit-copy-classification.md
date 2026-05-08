@@ -181,12 +181,12 @@ warmer.
 
 Per #320 §8.Q3 (already decided), no `acquire_*_or_escalate` helpers.
 Pool-miss / cold-key paths in Sandbox should return a distinct error
-(`StreamError::SandboxColdKey` or similar), so the compiler-visible
+(`Error::SandboxColdKey` or similar), so the compiler-visible
 shape of an un-pre-warmed call site is an `?` that will propagate a
 clear error at runtime — not a silent escalation.
 
 For the blitter specifically: if callers miss a pre-warm, the first
-`blit_copy` hits a `StreamError::SandboxColdKey`. The caller either
+`blit_copy` hits a `Error::SandboxColdKey`. The caller either
 (a) pre-warms more thoroughly in `setup()` or (b) wraps the blit in
 `escalate(|full| full.blit_copy(…))` at the offending call site. The
 latter is fine as a bridge while pre-warm coverage is completed, so

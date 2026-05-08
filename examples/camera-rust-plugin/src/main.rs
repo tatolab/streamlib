@@ -36,7 +36,7 @@ fn main() -> Result<()> {
     let plugin_dir = manifest_dir.join("plugin");
     let lib_dir = plugin_dir.join("lib");
     std::fs::create_dir_all(&lib_dir).map_err(|e| {
-        streamlib::sdk::error::StreamError::Configuration(format!("Failed to create lib dir: {}", e))
+        streamlib::sdk::error::Error::Configuration(format!("Failed to create lib dir: {}", e))
     })?;
 
     // Derive workspace target dir: CARGO_MANIFEST_DIR is examples/camera-rust-plugin/,
@@ -77,7 +77,7 @@ fn main() -> Result<()> {
 
     let dest_dylib = lib_dir.join(dylib_name);
     std::fs::copy(source_dylib, &dest_dylib).map_err(|e| {
-        streamlib::sdk::error::StreamError::Configuration(format!(
+        streamlib::sdk::error::Error::Configuration(format!(
             "Failed to copy dylib from {} to {}: {}",
             source_dylib.display(),
             dest_dylib.display(),

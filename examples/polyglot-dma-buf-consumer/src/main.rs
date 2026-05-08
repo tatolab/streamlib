@@ -90,7 +90,7 @@ fn main() -> Result<()> {
             negative = true;
         } else if let Some(value) = a.strip_prefix("--runtime=") {
             runtime_kind = RuntimeKind::parse(value).map_err(|e| {
-                streamlib::sdk::error::StreamError::Configuration(e)
+                streamlib::sdk::error::Error::Configuration(e)
             })?;
         } else {
             positional.push(a);
@@ -125,7 +125,7 @@ fn main() -> Result<()> {
             let slpkg_path =
                 manifest_dir.join("python/polyglot-dma-buf-consumer-0.1.0.slpkg");
             if !slpkg_path.exists() {
-                return Err(streamlib::sdk::error::StreamError::Configuration(format!(
+                return Err(streamlib::sdk::error::Error::Configuration(format!(
                     "Package not found: {}\nRun: cargo run -p streamlib-cli -- pack examples/polyglot-dma-buf-consumer/python",
                     slpkg_path.display()
                 )));
@@ -135,7 +135,7 @@ fn main() -> Result<()> {
         RuntimeKind::Deno => {
             let project_path = manifest_dir.join("deno");
             if !project_path.join("streamlib.yaml").exists() {
-                return Err(streamlib::sdk::error::StreamError::Configuration(format!(
+                return Err(streamlib::sdk::error::Error::Configuration(format!(
                     "Deno project not found: {}",
                     project_path.display()
                 )));

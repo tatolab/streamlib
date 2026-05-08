@@ -25,7 +25,7 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::error::StreamError;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
@@ -129,7 +129,7 @@ impl HostFixture {
         .expect("register_surface_with_format")
     }
 
-    /// Fallible variant — returns `Err(StreamError)` when the host
+    /// Fallible variant — returns `Err(Error)` when the host
     /// can't allocate a render-target DMA-BUF in `texture_format` on
     /// this driver (typically NV12 RT modifier missing on the EGL
     /// probe). Multi-plane tests use this to skip cleanly.
@@ -140,7 +140,7 @@ impl HostFixture {
         height: u32,
         surface_format: SurfaceFormat,
         texture_format: TextureFormat,
-    ) -> Result<StreamlibSurface, StreamError> {
+    ) -> Result<StreamlibSurface, Error> {
         let stream_texture =
             self.gpu
                 .acquire_render_target_dma_buf_image(width, height, texture_format)?;
@@ -163,14 +163,14 @@ impl HostFixture {
                 pf,
             )
             .map_err(|e| {
-                StreamError::GpuError(format!("staging plane {plane_idx}: {e}"))
+                Error::GpuError(format!("staging plane {plane_idx}: {e}"))
             })?;
             staging_planes.push(Arc::new(pb));
         }
 
         let timeline = Arc::new(
             HostVulkanTimelineSemaphore::new(self.adapter.device().device(), 0)
-                .map_err(|e| StreamError::GpuError(format!("create timeline: {e}")))?,
+                .map_err(|e| Error::GpuError(format!("create timeline: {e}")))?,
         );
         self.adapter
             .register_host_surface(
@@ -186,7 +186,7 @@ impl HostFixture {
                 },
             )
             .map_err(|e| {
-                StreamError::GpuError(format!("register_host_surface: {e:?}"))
+                Error::GpuError(format!("register_host_surface: {e:?}"))
             })?;
         Ok(StreamlibSurface::new(
             surface_id,

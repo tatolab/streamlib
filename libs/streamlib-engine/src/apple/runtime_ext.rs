@@ -126,7 +126,7 @@ pub fn ensure_macos_platform_ready() -> Result<()> {
     use objc2_foundation::{NSDate, NSDefaultRunLoopMode};
 
     let mtm = MainThreadMarker::new().ok_or_else(|| {
-        crate::core::StreamError::Runtime(
+        crate::core::Error::Runtime(
             "ensure_macos_platform_ready must be called from main thread".to_string(),
         )
     })?;
@@ -177,7 +177,7 @@ pub fn ensure_macos_platform_ready() -> Result<()> {
 
         // Timeout check
         if start.elapsed() > timeout {
-            return Err(crate::core::StreamError::Runtime(format!(
+            return Err(crate::core::Error::Runtime(format!(
                 "macOS platform readiness timeout after {:?}: isFinishedLaunching={}",
                 timeout, is_finished_launching
             )));

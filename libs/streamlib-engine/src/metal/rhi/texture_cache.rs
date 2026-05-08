@@ -24,7 +24,7 @@ use crate::apple::corevideo_ffi::{
     CVMetalTextureGetTexture, CVMetalTextureRef,
 };
 use crate::core::rhi::{RhiPixelBuffer, RhiTextureCache, RhiTextureView};
-use crate::core::{Result, StreamError};
+use crate::core::{Result, Error};
 
 /// macOS texture cache wrapping CVMetalTextureCache.
 ///
@@ -95,7 +95,7 @@ impl TextureCacheMacOS {
         };
 
         if status != kCVReturnSuccess || texture.is_null() {
-            return Err(StreamError::GpuError(format!(
+            return Err(Error::GpuError(format!(
                 "Failed to create texture from CVPixelBuffer: status {}",
                 status
             )));
@@ -217,7 +217,7 @@ fn create_cache_on_main_thread(device_ptr: usize) -> Result<SendableCacheRef> {
     };
 
     if status != kCVReturnSuccess || cache.is_null() {
-        return Err(StreamError::GpuError(format!(
+        return Err(Error::GpuError(format!(
             "Failed to create CVMetalTextureCache: status {}",
             status
         )));
