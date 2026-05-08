@@ -44,6 +44,7 @@
 
 use std::mem::MaybeUninit;
 use std::sync::Arc;
+use streamlib::HostGpuDeviceExt;
 
 use serial_test::serial;
 use streamlib::core::context::GpuContext;

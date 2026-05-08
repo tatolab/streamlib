@@ -15,6 +15,7 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::Arc;
+use streamlib::{HostGpuDeviceExt, HostStreamTextureExt};
 
 use skia_safe::{Color, Color4f, Paint, Point};
 use streamlib::core::context::GpuContext;

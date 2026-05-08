@@ -18,6 +18,7 @@
 mod common;
 
 use std::sync::Arc;
+use streamlib::HostStreamTextureExt;
 
 use streamlib::host_rhi::{HostMarker, HostVulkanPixelBuffer, HostVulkanTimelineSemaphore};
 use streamlib::core::rhi::{PixelFormat, TextureFormat};

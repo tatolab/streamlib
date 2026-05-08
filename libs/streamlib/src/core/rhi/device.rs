@@ -4,6 +4,11 @@
 //! RHI device abstraction.
 
 use crate::core::Result;
+#[cfg(any(
+    feature = "backend-vulkan",
+    all(target_os = "linux", not(feature = "backend-metal"))
+))]
+use crate::host_rhi::HostStreamTextureExt;
 
 use super::command_queue::RhiCommandQueue;
 use super::texture::{StreamTexture, TextureDescriptor};
@@ -50,20 +55,11 @@ pub struct GpuDevice {
 }
 
 impl GpuDevice {
-    /// Adapter-facing: the underlying [`crate::vulkan::rhi::HostVulkanDevice`].
-    ///
-    /// Available only on Linux / when the Vulkan backend is selected.
-    /// In-tree surface adapters reach for this when they need raw
-    /// queue / device handles. Non-adapter callers must NOT use it —
-    /// the engine boundary rule from `CLAUDE.md` reserves direct Vulkan
-    /// access to the RHI and its adapters.
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
-    pub fn vulkan_device(&self) -> &std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice> {
-        &self.inner
-    }
+    // Privileged Host-flavor accessor (`vulkan_device`) lives on the
+    // [`crate::host_rhi::HostGpuDeviceExt`] extension trait —
+    // type-system-enforced boundary so the SDK's public inherent impl
+    // stays Host-free. Engine RHI helpers and in-tree adapters
+    // `use crate::host_rhi::HostGpuDeviceExt;` to surface it.
 
     /// Create a new GPU device using the system default.
     pub fn new() -> Result<Self> {

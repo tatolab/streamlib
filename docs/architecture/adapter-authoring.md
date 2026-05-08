@@ -422,6 +422,7 @@ the canonical snippet in your crate's top-level doc-comment:
 ```rust
 use std::sync::Arc;
 use streamlib::core::runtime::StreamRuntime;
+use streamlib::HostGpuDeviceExt;
 use streamlib_adapter_<name>::<Name>SurfaceAdapter;
 
 let runtime = StreamRuntime::new()?;

@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use streamlib::HostGpuDeviceExt;
 
 use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};
 use streamlib::core::{

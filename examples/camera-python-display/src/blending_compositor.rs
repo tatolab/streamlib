@@ -33,6 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
+use streamlib::HostGpuDeviceExt;
 
 use streamlib::core::display_info;
 use streamlib::core::rhi::{StreamTexture, TextureFormat, VulkanLayout};

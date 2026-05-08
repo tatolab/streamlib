@@ -18,6 +18,8 @@ use parking_lot::Mutex;
 
 use crate::core::rhi::RhiPixelBuffer;
 use crate::core::{Result, StreamError};
+#[cfg(target_os = "linux")]
+use crate::host_rhi::HostStreamTextureExt;
 
 /// Maximum number of entries in the SurfaceCache before eviction.
 const MAX_SURFACE_CACHE_SIZE: usize = 512;

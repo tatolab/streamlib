@@ -2043,6 +2043,7 @@ mod tests {
         VertexAttributeFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
         VertexInputState, derive_bindings_from_spirv_multistage,
     };
+    use crate::host_rhi::HostStreamTextureExt;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {

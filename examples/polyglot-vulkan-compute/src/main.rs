@@ -34,6 +34,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use streamlib::HostGpuDeviceExt;
 
 use streamlib::core::context::ComputeKernelBridge;
 use streamlib::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};

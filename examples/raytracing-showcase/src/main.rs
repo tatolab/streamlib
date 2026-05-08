@@ -17,6 +17,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use streamlib::HostStreamTextureExt;
 
 use anyhow::{Context, Result};
 use streamlib::core::rhi::{

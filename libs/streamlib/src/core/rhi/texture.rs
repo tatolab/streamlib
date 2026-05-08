@@ -224,36 +224,13 @@ impl StreamTexture {
             metal_texture: Some(arc_texture),
         }
     }
-
-    /// Create from a Vulkan texture (Vulkan backend only).
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
-    pub fn from_vulkan(texture: crate::vulkan::rhi::HostVulkanTexture) -> Self {
-        Self {
-            inner: Arc::new(texture),
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            metal_texture: None,
-        }
-    }
-
-    /// Adapter-facing: the underlying [`crate::vulkan::rhi::HostVulkanTexture`].
-    ///
-    /// In-tree surface adapters (`streamlib-adapter-vulkan`,
-    /// `-skia`, `-opengl`, `-cpu-readback`) need direct access to the
-    /// `VkImage` and DRM-modifier-bearing memory layout. Customers and
-    /// non-adapter code must NOT call this — the engine boundary rule
-    /// in `CLAUDE.md` says the only crates allowed to touch raw Vulkan
-    /// types are the RHI itself and the in-tree adapters.
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
-    pub fn vulkan_inner(&self) -> &Arc<crate::vulkan::rhi::HostVulkanTexture> {
-        &self.inner
-    }
 }
+
+// Privileged Host-flavor accessors (`from_vulkan`, `vulkan_inner`)
+// live on the [`crate::host_rhi::HostStreamTextureExt`] extension
+// trait — type-system-enforced boundary so the SDK's public inherent
+// impl stays Host-free. Engine RHI helpers and in-tree adapters
+// `use crate::host_rhi::HostStreamTextureExt;` to surface them.
 
 impl std::fmt::Debug for StreamTexture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
