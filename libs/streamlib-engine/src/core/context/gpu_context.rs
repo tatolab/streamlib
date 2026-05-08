@@ -5,12 +5,12 @@ use crate::_generated_::VideoFrame;
 use crate::core::context::TextureRegistration;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
-    RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool, StreamTexture, TextureDescriptor,
+    RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool, Texture, TextureDescriptor,
     TextureFormat, TextureUsages,
 };
 use crate::core::{Result, Error};
 #[cfg(target_os = "linux")]
-use crate::host_rhi::HostStreamTextureExt;
+use crate::host_rhi::HostTextureExt;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
@@ -400,7 +400,7 @@ pub struct GpuContext {
     /// rotating-pool producers don't render stale contents — kept separate
     /// from `texture_cache` so a same-process cache hit can't shortcut the
     /// refresh.
-    buffer_texture_cache: Arc<Mutex<HashMap<String, StreamTexture>>>,
+    buffer_texture_cache: Arc<Mutex<HashMap<String, Texture>>>,
     /// Raw handle for the camera's timeline semaphore (same-process GPU-GPU sync).
     /// Stored as u64 for platform-agnostic GpuContext (0 = not set).
     camera_timeline_semaphore_handle: Arc<AtomicU64>,
@@ -629,7 +629,7 @@ impl GpuContext {
     /// [`Self::register_texture_with_layout`] instead so consumers
     /// reaching the texture via [`Self::resolve_video_frame_registration`]
     /// can issue correct layout transitions.
-    pub fn register_texture(&self, id: &str, texture: StreamTexture) {
+    pub fn register_texture(&self, id: &str, texture: Texture) {
         #[cfg(target_os = "linux")]
         let registration = TextureRegistration::new(texture, VulkanLayout::UNDEFINED);
         #[cfg(not(target_os = "linux"))]
@@ -651,7 +651,7 @@ impl GpuContext {
     pub fn register_texture_with_layout(
         &self,
         id: &str,
-        texture: StreamTexture,
+        texture: Texture,
         initial_layout: VulkanLayout,
     ) {
         let registration = TextureRegistration::new(texture, initial_layout);
@@ -780,7 +780,7 @@ impl GpuContext {
     /// Layout-aware consumers (display, future encoders) should call
     /// `resolve_video_frame_registration` directly so they can issue
     /// correct barriers.
-    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<StreamTexture> {
+    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<Texture> {
         Ok(self.resolve_video_frame_registration(frame)?.texture().clone())
     }
 
@@ -790,7 +790,7 @@ impl GpuContext {
         width: u32,
         height: u32,
         format: TextureFormat,
-    ) -> Result<(String, StreamTexture)> {
+    ) -> Result<(String, Texture)> {
         let desc = TextureDescriptor::new(width, height, format)
             .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST);
         let texture = self.device.create_texture(&desc)?;
@@ -811,7 +811,7 @@ impl GpuContext {
         pixel_buffer: &crate::core::rhi::RhiPixelBuffer,
         width: u32,
         height: u32,
-    ) -> Result<StreamTexture> {
+    ) -> Result<Texture> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 
         // Get-or-create the cached texture for this surface_id.
@@ -964,7 +964,7 @@ impl GpuContext {
     ///
     /// The driver picks one of the EGL-advertised render-target modifiers
     /// from [`HostVulkanDevice::drm_modifier_table`]. The resulting
-    /// `StreamTexture` carries the chosen modifier on its inner
+    /// `Texture` carries the chosen modifier on its inner
     /// [`HostVulkanTexture`] (see [`HostVulkanTexture::chosen_drm_format_modifier`]),
     /// ready to be carried in a `SurfaceTransportHandle` when the host
     /// surface-share service registers the surface.
@@ -988,7 +988,7 @@ impl GpuContext {
         width: u32,
         height: u32,
         format: TextureFormat,
-    ) -> Result<StreamTexture> {
+    ) -> Result<Texture> {
         use crate::vulkan::rhi::drm_modifier_probe::fourcc;
 
         tracing::debug!(
@@ -1056,7 +1056,7 @@ impl GpuContext {
             &desc,
             &modifiers,
         )?;
-        Ok(StreamTexture::from_vulkan(texture))
+        Ok(Texture::from_vulkan(texture))
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
@@ -1218,7 +1218,7 @@ impl GpuContext {
     #[cfg(target_os = "linux")]
     pub fn transition_storage_image_to_general(
         &self,
-        texture: &crate::core::rhi::StreamTexture,
+        texture: &crate::core::rhi::Texture,
     ) -> Result<()> {
         let vulkan_device = &self.device.inner;
         crate::vulkan::rhi::HostVulkanTexture::transition_to_general(
@@ -1741,7 +1741,7 @@ impl GpuContextLimitedAccess {
     }
 
     /// Register a texture in the same-process texture cache.
-    pub fn register_texture(&self, id: &str, texture: StreamTexture) {
+    pub fn register_texture(&self, id: &str, texture: Texture) {
         self.inner.register_texture(id, texture);
     }
 
@@ -1751,7 +1751,7 @@ impl GpuContextLimitedAccess {
     pub fn register_texture_with_layout(
         &self,
         id: &str,
-        texture: StreamTexture,
+        texture: Texture,
         initial_layout: VulkanLayout,
     ) {
         self.inner
@@ -1767,7 +1767,7 @@ impl GpuContextLimitedAccess {
     }
 
     /// Resolve a [`VideoFrame`]'s texture (Split: cache hit).
-    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<StreamTexture> {
+    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<Texture> {
         self.inner.resolve_video_frame_texture(frame)
     }
 
@@ -1868,7 +1868,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
         format: TextureFormat,
-    ) -> Result<StreamTexture> {
+    ) -> Result<Texture> {
         self.inner
             .acquire_render_target_dma_buf_image(width, height, format)
     }
@@ -1884,7 +1884,7 @@ impl GpuContextFullAccess {
     }
 
     /// Register a texture in the same-process texture cache.
-    pub fn register_texture(&self, id: &str, texture: StreamTexture) {
+    pub fn register_texture(&self, id: &str, texture: Texture) {
         self.inner.register_texture(id, texture);
     }
 
@@ -1894,7 +1894,7 @@ impl GpuContextFullAccess {
     pub fn register_texture_with_layout(
         &self,
         id: &str,
-        texture: StreamTexture,
+        texture: Texture,
         initial_layout: VulkanLayout,
     ) {
         self.inner
@@ -1910,7 +1910,7 @@ impl GpuContextFullAccess {
     }
 
     /// Resolve a [`VideoFrame`]'s texture.
-    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<StreamTexture> {
+    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<Texture> {
         self.inner.resolve_video_frame_texture(frame)
     }
 
@@ -1920,7 +1920,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
         format: TextureFormat,
-    ) -> Result<(String, StreamTexture)> {
+    ) -> Result<(String, Texture)> {
         self.inner.acquire_output_texture(width, height, format)
     }
 

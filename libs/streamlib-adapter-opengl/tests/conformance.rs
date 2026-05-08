@@ -23,7 +23,7 @@ use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceId};
 use streamlib_adapter_opengl::{HostSurfaceRegistration, DRM_FORMAT_ARGB8888};
-use streamlib::sdk::engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostTextureExt;
 
 use common::HostFixture;
 

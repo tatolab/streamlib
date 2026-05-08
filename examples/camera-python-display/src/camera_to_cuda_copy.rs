@@ -22,7 +22,7 @@ use std::sync::Arc;
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::_generated_::VideoFrame;
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 #[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer};

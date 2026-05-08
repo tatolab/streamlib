@@ -685,7 +685,7 @@ fn assign_texture_handle_id(
 #[cfg(target_os = "linux")]
 fn assign_image_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
-    texture: &crate::core::rhi::StreamTexture,
+    texture: &crate::core::rhi::Texture,
 ) -> crate::core::error::Result<String> {
     let handle_id = Uuid::new_v4().to_string();
     if let Some(store) = full.surface_store() {

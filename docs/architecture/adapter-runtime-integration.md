@@ -365,7 +365,7 @@ surfaces have to be in place.
 The shape of what the hook does varies by seam:
 
 - **Surface-share seam** (Vulkan, OpenGL, Skia). The hook allocates
-  the host's `StreamTexture` (via
+  the host's `Texture` (via
   `gpu.acquire_render_target_dma_buf_image` for render-target-capable
   DMA-BUF), registers it in surface-share with a known UUID via
   `gpu.surface_store().register_texture(uuid, &texture, timeline,

@@ -9,10 +9,10 @@
 #![allow(dead_code)] // each test file uses a different subset
 
 use std::sync::Arc;
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::rhi::{StreamTexture, TextureDescriptor, TextureFormat, TextureUsages};
+use streamlib::sdk::rhi::{Texture, TextureDescriptor, TextureFormat, TextureUsages};
 use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
 use streamlib_adapter_abi::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
@@ -126,7 +126,7 @@ impl HostFixture {
              list contained only 0x{modifier:016x} — VUID violation in the RHI"
         );
 
-        let texture = StreamTexture::from_vulkan(host_texture);
+        let texture = Texture::from_vulkan(host_texture);
 
         let registration = HostSurfaceRegistration {
             dma_buf_fd,
@@ -229,7 +229,7 @@ impl HostFixture {
 
 pub struct RegisteredSurface {
     pub descriptor: StreamlibSurface,
-    pub texture: StreamTexture,
+    pub texture: Texture,
     pub width: u32,
     pub height: u32,
 }

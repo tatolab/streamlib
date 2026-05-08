@@ -17,7 +17,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use streamlib::sdk::engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostTextureExt;
 
 use anyhow::{Context, Result};
 use streamlib::sdk::rhi::{
@@ -27,7 +27,7 @@ use streamlib::sdk::rhi::{
     RayTracingShaderGroup,
     RayTracingShaderStageFlags,
     RayTracingStage,
-    StreamTexture,
+    Texture,
     TextureDescriptor,
     TextureFormat,
     TextureReadbackDescriptor,
@@ -119,7 +119,7 @@ fn main() -> Result<()> {
             usage: TextureUsages::STORAGE_BINDING | TextureUsages::COPY_SRC,
         },
     )?;
-    let stream_texture = StreamTexture::from_vulkan(texture);
+    let stream_texture = Texture::from_vulkan(texture);
     let image = stream_texture
         .vulkan_inner()
         .image()

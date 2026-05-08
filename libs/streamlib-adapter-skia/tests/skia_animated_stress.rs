@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use skia_safe::{
     gradient_shader, Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode,

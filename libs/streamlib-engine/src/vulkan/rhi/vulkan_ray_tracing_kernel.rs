@@ -32,7 +32,7 @@ use vma::Alloc as _;
 use crate::core::rhi::{
     validate_shader_groups, RayTracingBindingKind, RayTracingBindingSpec,
     RayTracingKernelDescriptor, RayTracingShaderGroup, RayTracingShaderStage,
-    RayTracingShaderStageFlags, RayTracingStage, RhiPixelBuffer, StreamTexture,
+    RayTracingShaderStageFlags, RayTracingStage, RhiPixelBuffer, Texture,
 };
 use crate::core::{Result, Error};
 
@@ -441,7 +441,7 @@ impl VulkanRayTracingKernel {
         Ok(())
     }
 
-    pub fn set_sampled_texture(&self, binding: u32, texture: &StreamTexture) -> Result<()> {
+    pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::SampledTexture)?;
         let view = texture.inner.image_view()?;
         let sampler = self.default_sampler()?;
@@ -452,7 +452,7 @@ impl VulkanRayTracingKernel {
         Ok(())
     }
 
-    pub fn set_storage_image(&self, binding: u32, texture: &StreamTexture) -> Result<()> {
+    pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::StorageImage)?;
         let view = texture.inner.image_view()?;
         self.pending
@@ -1605,11 +1605,11 @@ mod tests {
     use super::*;
     use crate::core::rhi::{
         RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
-        RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, StreamTexture,
+        RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, Texture,
         TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
         TextureUsages,
     };
-    use crate::host_rhi::HostStreamTextureExt;
+    use crate::host_rhi::HostTextureExt;
     use crate::vulkan::rhi::{
         HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc, VulkanAccelerationStructure,
         VulkanTextureReadback,
@@ -1826,7 +1826,7 @@ mod tests {
             },
         )
         .expect("texture creation");
-        let stream_texture = StreamTexture::from_vulkan(texture);
+        let stream_texture = Texture::from_vulkan(texture);
         let image = stream_texture
             .vulkan_inner()
             .image()

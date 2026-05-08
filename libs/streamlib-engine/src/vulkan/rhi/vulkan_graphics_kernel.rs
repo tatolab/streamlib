@@ -47,7 +47,7 @@ use crate::core::rhi::{
     DepthStencilState, DrawCall, DrawIndexedCall, FrontFace, GraphicsBindingKind,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, IndexType, PolygonMode,
-    PrimitiveTopology, RhiPixelBuffer, ScissorRect, StreamTexture, TextureFormat,
+    PrimitiveTopology, RhiPixelBuffer, ScissorRect, Texture, TextureFormat,
     VertexAttributeFormat, VertexInputRate, VertexInputState, Viewport,
 };
 use crate::core::{Result, Error};
@@ -142,7 +142,7 @@ struct OffscreenScaffold {
 
 /// One color attachment for [`VulkanGraphicsKernel::offscreen_render`].
 pub struct OffscreenColorTarget<'a> {
-    pub texture: &'a StreamTexture,
+    pub texture: &'a Texture,
     /// `Some` clears the attachment to this RGBA value before drawing;
     /// `None` loads existing contents.
     pub clear_color: Option<[f32; 4]>,
@@ -348,7 +348,7 @@ impl VulkanGraphicsKernel {
         &self,
         frame_index: u32,
         binding: u32,
-        texture: &StreamTexture,
+        texture: &Texture,
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::SampledTexture)?;
         let view = texture.inner.image_view()?;
@@ -403,7 +403,7 @@ impl VulkanGraphicsKernel {
         &self,
         frame_index: u32,
         binding: u32,
-        texture: &StreamTexture,
+        texture: &Texture,
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::StorageImage)?;
         let view = texture.inner.image_view()?;
@@ -2043,7 +2043,7 @@ mod tests {
         VertexAttributeFormat, VertexInputAttribute, VertexInputBinding, VertexInputRate,
         VertexInputState, derive_bindings_from_spirv_multistage,
     };
-    use crate::host_rhi::HostStreamTextureExt;
+    use crate::host_rhi::HostTextureExt;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
@@ -2330,7 +2330,7 @@ mod tests {
         // Some(...)` are set. This locks the *creation* path threading
         // `VkPipelineDepthStencilStateCreateInfo` through to the
         // pipeline builder — but does NOT lock depth-correctness
-        // rendering, because depth StreamTexture allocation depends on
+        // rendering, because depth Texture allocation depends on
         // `streamlib-consumer-rhi::TextureFormat` gaining depth
         // variants (tracked under the Graphics Kernel Buildout
         // milestone). A driver bug that silently ignored
@@ -2458,7 +2458,7 @@ mod tests {
         let texture =
             crate::vulkan::rhi::HostVulkanTexture::new_device_local(&device, &dummy_desc)
                 .expect("test texture allocation");
-        let stream_texture = crate::core::rhi::StreamTexture::from_vulkan(texture);
+        let stream_texture = crate::core::rhi::Texture::from_vulkan(texture);
 
         // Ring depth is 2; index 2 must fail.
         let err = kernel

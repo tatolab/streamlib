@@ -28,11 +28,11 @@ use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
 use crate::core::rhi::{
-    ReadbackTicket, StreamTexture, TextureFormat, TextureReadbackDescriptor, TextureReadbackError,
+    ReadbackTicket, Texture, TextureFormat, TextureReadbackDescriptor, TextureReadbackError,
     TextureSourceLayout,
 };
 use crate::core::{Result, Error};
-use crate::host_rhi::HostStreamTextureExt;
+use crate::host_rhi::HostTextureExt;
 
 use super::HostVulkanDevice;
 
@@ -257,7 +257,7 @@ impl VulkanTextureReadback {
     )]
     pub fn submit(
         &self,
-        texture: &StreamTexture,
+        texture: &Texture,
         source_layout: TextureSourceLayout,
     ) -> std::result::Result<ReadbackTicket, TextureReadbackError> {
         // ---- Validate descriptor match ----
@@ -720,7 +720,7 @@ mod tests {
         height: u32,
         format: TextureFormat,
         pattern: impl Fn(u32, u32) -> [u8; 4],
-    ) -> StreamTexture {
+    ) -> Texture {
         use crate::core::rhi::PixelFormat;
         use crate::vulkan::rhi::HostVulkanPixelBuffer;
 
@@ -759,7 +759,7 @@ mod tests {
             label: Some("readback-test-texture"),
         };
         let host_tex = crate::vulkan::rhi::HostVulkanTexture::new(device, &desc).expect("texture");
-        let texture = StreamTexture {
+        let texture = Texture {
             inner: Arc::new(host_tex),
         };
 

@@ -5,7 +5,7 @@
 //!
 //! In-tree surface adapters and engine-internal RHI code reach for
 //! raw Vulkan handles through this module. The SDK-bucket types
-//! ([`StreamTexture`], [`RhiPixelBufferRef`], [`GpuDevice`]) have no
+//! ([`Texture`], [`RhiPixelBufferRef`], [`GpuDevice`]) have no
 //! inherent `vulkan_*` accessors — the only way to the privileged
 //! surface is through the extension traits defined here. Importing
 //! one of these traits is an explicit acknowledgment that the caller
@@ -28,8 +28,8 @@
 //!
 //! ```compile_fail
 //! # #[cfg(target_os = "linux")]
-//! # fn _check(stream_texture: &streamlib::sdk::rhi::StreamTexture) {
-//! // Without `use streamlib::sdk::engine::HostStreamTextureExt;` the privileged
+//! # fn _check(stream_texture: &streamlib::sdk::rhi::Texture) {
+//! // Without `use streamlib::sdk::engine::HostTextureExt;` the privileged
 //! // `vulkan_inner` accessor is not visible — boundary held.
 //! let _ = stream_texture.vulkan_inner();
 //! # }
@@ -39,13 +39,13 @@
 //!
 //! ```no_run
 //! # #[cfg(target_os = "linux")]
-//! # fn _check(stream_texture: &streamlib::sdk::rhi::StreamTexture) {
-//! use streamlib::sdk::engine::HostStreamTextureExt;
+//! # fn _check(stream_texture: &streamlib::sdk::rhi::Texture) {
+//! use streamlib::sdk::engine::HostTextureExt;
 //! let _ = stream_texture.vulkan_inner();
 //! # }
 //! ```
 //!
-//! [`StreamTexture`]: crate::core::rhi::StreamTexture
+//! [`Texture`]: crate::core::rhi::Texture
 //! [`RhiPixelBufferRef`]: crate::core::rhi::RhiPixelBufferRef
 //! [`GpuDevice`]: crate::core::rhi::GpuDevice
 
@@ -61,20 +61,20 @@ pub use crate::vulkan::rhi::{
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 
-use crate::core::rhi::{GpuDevice, RhiPixelBufferRef, StreamTexture};
+use crate::core::rhi::{GpuDevice, RhiPixelBufferRef, Texture};
 
-/// Privileged engine-side accessors for [`StreamTexture`].
+/// Privileged engine-side accessors for [`Texture`].
 ///
 /// Engine RHI helpers and in-tree adapters import this trait to wrap a
-/// freshly-allocated [`HostVulkanTexture`] as a [`StreamTexture`] and
+/// freshly-allocated [`HostVulkanTexture`] as a [`Texture`] and
 /// to reach the underlying handle for raw `VkImage` access. Customer
-/// code never imports this trait — `streamlib::sdk::rhi::StreamTexture`
+/// code never imports this trait — `streamlib::sdk::rhi::Texture`
 /// is opaque on its public inherent impl.
 ///
 /// [`HostVulkanTexture`]: crate::vulkan::rhi::HostVulkanTexture
-pub trait HostStreamTextureExt {
+pub trait HostTextureExt {
     /// Wrap an already-allocated [`HostVulkanTexture`] as a
-    /// [`StreamTexture`].
+    /// [`Texture`].
     fn from_vulkan(texture: HostVulkanTexture) -> Self;
 
     /// Borrow the underlying [`HostVulkanTexture`] for raw `VkImage`
@@ -83,9 +83,9 @@ pub trait HostStreamTextureExt {
     fn vulkan_inner(&self) -> &Arc<HostVulkanTexture>;
 }
 
-impl HostStreamTextureExt for StreamTexture {
+impl HostTextureExt for Texture {
     fn from_vulkan(texture: HostVulkanTexture) -> Self {
-        StreamTexture {
+        Texture {
             inner: Arc::new(texture),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             metal_texture: None,

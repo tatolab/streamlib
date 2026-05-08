@@ -19,7 +19,7 @@ per-surface lifecycle state**, keyed by `surface_id` in
 plus the typed mutable fields that producers and consumers both need
 to read/write across the surface_id handoff:
 
-- `texture: StreamTexture` — the resource itself.
+- `texture: Texture` — the resource itself.
 - `current_layout: AtomicI32` (Linux only — stores
   `streamlib_consumer_rhi::VulkanLayout`) — the last-known Vulkan
   image layout. Producers update on transitions; consumers read for
@@ -36,7 +36,7 @@ is the same shape lifted from adapter-scope to engine-wide scope.
 ## Why it exists
 
 Before `TextureRegistration` (pre-#632), `GpuContext::texture_cache`
-was `HashMap<String, StreamTexture>` — a thin lookup with no
+was `HashMap<String, Texture>` — a thin lookup with no
 lifecycle metadata. Per-surface state lived in two disjoint places:
 
 - Adapter-scoped `Registry<SurfaceState>` per adapter — visible only
@@ -103,7 +103,7 @@ producer:                  consumer:
   ┌─────────────────────────────────────────┐
   │ GpuContext::texture_cache               │
   │   HashMap<surface_id, Arc<TexReg>>      │
-  │     ├── texture: StreamTexture          │
+  │     ├── texture: Texture          │
   │     └── current_layout: AtomicI32       │
   └─────────────────────────────────────────┘
        ▲                            │
@@ -142,7 +142,7 @@ Examples that fit:
 - ✓ `last_written_frame_index: AtomicU64` — staleness detection;
   producer increments per write, consumer compares to its expected
   frame.
-- ✓ `format`, `width`, `height` — could be hoisted from `StreamTexture`
+- ✓ `format`, `width`, `height` — could be hoisted from `Texture`
   for cheaper validation; arguably already covered by `texture`.
 - ✓ Exportable timeline-semaphore handle — for consumers that need to
   GPU-wait without a side-channel.

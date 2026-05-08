@@ -496,7 +496,7 @@ class EscalateChannel:
         "acceleration_structure"``, ``target_id`` is an ``as_id`` from
         a prior :meth:`register_acceleration_structure_tlas`; for all
         other kinds, ``target_id`` is the surface-share UUID of the
-        host-side ``RhiPixelBuffer`` / ``StreamTexture`` (same
+        host-side ``RhiPixelBuffer`` / ``Texture`` (same
         convention compute and graphics use).
 
         On failure raises :class:`EscalateError`.

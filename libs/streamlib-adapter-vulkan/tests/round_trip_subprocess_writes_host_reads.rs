@@ -11,7 +11,7 @@
 mod common;
 
 use std::sync::Arc;
-use streamlib::sdk::engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;

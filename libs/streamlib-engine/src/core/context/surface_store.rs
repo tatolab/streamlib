@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use crate::core::rhi::RhiPixelBuffer;
 use crate::core::{Result, Error};
 #[cfg(target_os = "linux")]
-use crate::host_rhi::HostStreamTextureExt;
+use crate::host_rhi::HostTextureExt;
 
 /// Maximum number of entries in the SurfaceCache before eviction.
 const MAX_SURFACE_CACHE_SIZE: usize = 512;
@@ -1089,7 +1089,7 @@ impl SurfaceStore {
     pub fn register_texture(
         &self,
         surface_id: &str,
-        texture: &crate::core::rhi::StreamTexture,
+        texture: &crate::core::rhi::Texture,
         timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
         current_image_layout: streamlib_consumer_rhi::VulkanLayout,
     ) -> Result<()> {
@@ -1458,7 +1458,7 @@ impl SurfaceStore {
     }
 
     /// Lookup a texture from the surface-share service via Unix socket.
-    /// Returns the imported [`StreamTexture`] paired with the
+    /// Returns the imported [`Texture`] paired with the
     /// producer's last-published `current_image_layout`. Cross-process
     /// consumers feed the layout into the source layout of their first
     /// QFOT acquire barrier (#633).
@@ -1466,7 +1466,7 @@ impl SurfaceStore {
     pub fn lookup_texture(
         &self,
         surface_id: &str,
-    ) -> Result<(crate::core::rhi::StreamTexture, streamlib_consumer_rhi::VulkanLayout)> {
+    ) -> Result<(crate::core::rhi::Texture, streamlib_consumer_rhi::VulkanLayout)> {
         let request = serde_json::json!({
             "op": "lookup",
             "surface_id": surface_id,
@@ -1578,7 +1578,7 @@ impl SurfaceStore {
             .unwrap_or(streamlib_consumer_rhi::VulkanLayout::UNDEFINED);
 
         Ok((
-            crate::core::rhi::StreamTexture::from_vulkan(vulkan_texture),
+            crate::core::rhi::Texture::from_vulkan(vulkan_texture),
             current_image_layout,
         ))
     }
@@ -1656,7 +1656,7 @@ impl SurfaceStore {
     pub fn register_texture(
         &self,
         _surface_id: &str,
-        _texture: &crate::core::rhi::StreamTexture,
+        _texture: &crate::core::rhi::Texture,
         _timeline: Option<&()>,
         _current_image_layout: i32,
     ) -> Result<()> {
@@ -1669,7 +1669,7 @@ impl SurfaceStore {
     pub fn lookup_texture(
         &self,
         _surface_id: &str,
-    ) -> Result<(crate::core::rhi::StreamTexture, i32)> {
+    ) -> Result<(crate::core::rhi::Texture, i32)> {
         Err(Error::NotSupported(
             "Texture lookup not supported on this platform".into(),
         ))

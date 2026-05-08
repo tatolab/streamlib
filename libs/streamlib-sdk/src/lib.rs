@@ -15,7 +15,7 @@
 //! ```ignore
 //! use streamlib::sdk::runtime::Runner;
 //! use streamlib::sdk::processors::ProcessorSpec;
-//! use streamlib::sdk::rhi::StreamTexture;
+//! use streamlib::sdk::rhi::Texture;
 //! use streamlib::sdk::iceoryx2::OutputWriter;
 //! ```
 //!
@@ -208,9 +208,9 @@ pub mod sdk {
         /// Privileged extension traits surfacing raw `Host*` handles
         /// on SDK-bucket types. Importing one unlocks `vulkan_inner()`
         /// / `from_vulkan()` / `vulkan_device()` on
-        /// `StreamTexture` / `RhiPixelBufferRef` / `GpuDevice`.
+        /// `Texture` / `RhiPixelBufferRef` / `GpuDevice`.
         pub use streamlib_engine::{
-            HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostStreamTextureExt,
+            HostGpuDeviceExt, HostRhiPixelBufferRefExt, HostTextureExt,
         };
 
         /// Per-runtime surface-share service primitives. For adapter

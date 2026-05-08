@@ -26,7 +26,7 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::Arc;
-use streamlib::sdk::engine::{HostGpuDeviceExt, HostStreamTextureExt};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};

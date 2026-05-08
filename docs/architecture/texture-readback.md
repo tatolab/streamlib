@@ -1,7 +1,7 @@
 # Host-side texture readback in the RHI
 
 streamlib's RHI exposes one canonical primitive for reading a host
-`StreamTexture` back into CPU memory: `VulkanTextureReadback` (Linux)
+`Texture` back into CPU memory: `VulkanTextureReadback` (Linux)
 plus the public binding-shape types in `core::rhi`
 (`TextureReadbackDescriptor`, `TextureSourceLayout`, `ReadbackTicket`,
 `TextureReadbackError`). **Every callsite that needs to copy GPU pixels

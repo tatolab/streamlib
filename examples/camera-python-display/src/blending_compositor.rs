@@ -8,9 +8,9 @@
 //! display's refresh rate (60 Hz fallback). Each tick reads the latest
 //! frame from each input port (older queued frames are dropped by the
 //! port's `SkipToLatest` read mode), resolves the input frames'
-//! [`StreamTexture`]s via `GpuContext::resolve_video_frame_registration`
+//! [`Texture`]s via `GpuContext::resolve_video_frame_registration`
 //! (Path 1 — same-process texture cache), picks the next slot in a
-//! ring of pre-allocated render-target output `StreamTexture`s,
+//! ring of pre-allocated render-target output `Texture`s,
 //! dispatches the compositor's graphics kernel into it, and emits the
 //! slot's surface UUID downstream.
 //!
@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::sdk::display_info;
-use streamlib::sdk::rhi::{StreamTexture, TextureFormat, VulkanLayout};
+use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
@@ -106,7 +106,7 @@ impl Default for BlendingCompositorConfig {
 /// it is registered under in `GpuContext::texture_cache`.
 struct OutputSlot {
     surface_id: String,
-    texture: StreamTexture,
+    texture: Texture,
 }
 
 /// GPU backend bundle owned by the processor and moved into the
@@ -576,7 +576,7 @@ fn compose_one_frame(
 /// completes.
 struct ResolvedLayer {
     registration: Arc<streamlib::sdk::context::TextureRegistration>,
-    texture: StreamTexture,
+    texture: Texture,
 }
 
 impl ResolvedLayer {

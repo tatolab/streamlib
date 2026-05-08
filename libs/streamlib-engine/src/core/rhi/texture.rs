@@ -76,7 +76,7 @@ impl<'a> TextureDescriptor<'a> {
 /// On macOS/iOS, Metal texture storage is always available for Apple platform
 /// interop (IOSurface, CVPixelBuffer) regardless of which GPU backend is selected.
 #[derive(Clone)]
-pub struct StreamTexture {
+pub struct Texture {
     // Metal backend: when vulkan NOT requested AND (explicit metal feature OR macOS/iOS)
     #[cfg(all(
         not(feature = "backend-vulkan"),
@@ -101,7 +101,7 @@ pub struct StreamTexture {
     pub(crate) metal_texture: Option<Arc<crate::metal::rhi::MetalTexture>>,
 }
 
-impl StreamTexture {
+impl Texture {
     /// Texture width in pixels.
     pub fn width(&self) -> u32 {
         // On macOS, prefer metal_texture if available (for IOSurface-backed textures)
@@ -227,14 +227,14 @@ impl StreamTexture {
 }
 
 // Privileged Host-flavor accessors (`from_vulkan`, `vulkan_inner`)
-// live on the [`crate::host_rhi::HostStreamTextureExt`] extension
+// live on the [`crate::host_rhi::HostTextureExt`] extension
 // trait — type-system-enforced boundary so the SDK's public inherent
 // impl stays Host-free. Engine RHI helpers and in-tree adapters
-// `use crate::host_rhi::HostStreamTextureExt;` to surface them.
+// `use crate::host_rhi::HostTextureExt;` to surface them.
 
-impl std::fmt::Debug for StreamTexture {
+impl std::fmt::Debug for Texture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamTexture")
+        f.debug_struct("Texture")
             .field("width", &self.width())
             .field("height", &self.height())
             .field("format", &self.format())
@@ -242,6 +242,6 @@ impl std::fmt::Debug for StreamTexture {
     }
 }
 
-// Ensure StreamTexture is Send + Sync
-unsafe impl Send for StreamTexture {}
-unsafe impl Sync for StreamTexture {}
+// Ensure Texture is Send + Sync
+unsafe impl Send for Texture {}
+unsafe impl Sync for Texture {}

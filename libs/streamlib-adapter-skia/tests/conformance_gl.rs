@@ -17,10 +17,10 @@
 #![cfg(target_os = "linux")]
 
 use std::sync::{Arc, Mutex};
-use streamlib::sdk::engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::rhi::{StreamTexture, TextureFormat};
+use streamlib::sdk::rhi::{Texture, TextureFormat};
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
@@ -49,7 +49,7 @@ fn try_init() -> Option<(GpuContext, Arc<EglRuntime>)> {
     Some((gpu, egl))
 }
 
-/// Factory that owns the per-surface `StreamTexture`s for the
+/// Factory that owns the per-surface `Texture`s for the
 /// duration of the conformance run. The GL adapter imports each
 /// texture's DMA-BUF FD into an EGLImage at registration time; the
 /// host-side `VkImage` backing must outlive every guard the
@@ -58,7 +58,7 @@ fn try_init() -> Option<(GpuContext, Arc<EglRuntime>)> {
 struct ConformanceFactory<'a> {
     inner: &'a OpenGlSurfaceAdapter,
     gpu: &'a GpuContext,
-    textures: Mutex<Vec<StreamTexture>>,
+    textures: Mutex<Vec<Texture>>,
 }
 
 impl<'a> ConformanceFactory<'a> {

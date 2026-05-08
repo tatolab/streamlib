@@ -1211,9 +1211,9 @@ pub struct EscalateRequestRunComputeKernel {
     #[serde(rename = "request_id")]
     pub request_id: String,
 
-    /// UUID string of a render-target surface previously registered with
-    /// the surface-share service via `register_texture`. The host bridge
-    /// holds an application-provided UUID→`StreamTexture` map (populated
+    /// UUID string of a render-target surface previously registered
+    /// with the surface-share service via `register_texture`. The host
+    /// bridge holds an application-provided UUID→`Texture` map (populated
     /// in `install_setup_hook`) and binds the looked-up `VkImage` as a
     /// storage_image at slot 0 (the single-output convention enforced for v1
     /// — multi-binding kernels are a future extension). UUID rather than u64
@@ -1433,7 +1433,7 @@ pub struct EscalateRequestRunGraphicsDraw {
 
     /// UUIDs of color attachment textures. v1 requires exactly one entry —
     /// multi-attachment is a future extension. Each UUID must resolve to a
-    /// host-side `StreamTexture` registered as a render target.
+    /// host-side `Texture` registered as a render target.
     #[serde(rename = "color_target_uuids")]
     pub color_target_uuids: Vec<String>,
 
@@ -1550,7 +1550,7 @@ pub struct EscalateRequestRunRayTracingKernel {
     /// `acceleration_structure`: `target_id` is an `as_id`
     ///   from a prior `register_acceleration_structure_tlas`.
     /// - all other kinds: `target_id` is the surface-share UUID
-    ///   of a host-side `RhiPixelBuffer` / `StreamTexture`
+    ///   of a host-side `RhiPixelBuffer` / `Texture`
     ///   (same convention compute and graphics use).
     #[serde(rename = "bindings")]
     pub bindings: Vec<EscalateRequestRunRayTracingKernelBinding>,

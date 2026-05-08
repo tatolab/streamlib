@@ -37,7 +37,7 @@
 //!
 //! ## Lifecycle
 //!
-//! Caller pre-allocates a ring of output `StreamTexture`s (mirrors
+//! Caller pre-allocates a ring of output `Texture`s (mirrors
 //! `BlendingCompositor`'s `OUTPUT_RING_DEPTH = 2`), hands one to
 //! [`SandboxedCrtFilmGrain::dispatch`] per frame along with the input
 //! texture + its current Vulkan layout, and `dispatch` returns once
@@ -46,7 +46,7 @@
 //! ready for the next consumer to sample without re-barriering.
 
 use std::sync::Arc;
-use streamlib::sdk::engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -68,7 +68,7 @@ use streamlib::sdk::rhi::{
     PrimitiveTopology,
     RasterizationState,
     ScissorRect,
-    StreamTexture,
+    Texture,
     TextureFormat,
     VertexInputState,
     Viewport,
@@ -100,7 +100,7 @@ pub struct CrtFilmGrainPushConstants {
 /// afterward.
 #[derive(Clone, Copy)]
 pub struct CrtFilmGrainInput<'a> {
-    pub texture: &'a StreamTexture,
+    pub texture: &'a Texture,
     pub current_layout: VulkanLayout,
 }
 
@@ -108,7 +108,7 @@ pub struct CrtFilmGrainInput<'a> {
 /// `BlendingOutput` in the sibling kernel.
 #[derive(Clone, Copy)]
 pub struct CrtFilmGrainOutput<'a> {
-    pub texture: &'a StreamTexture,
+    pub texture: &'a Texture,
     pub current_layout: VulkanLayout,
 }
 
@@ -501,7 +501,7 @@ mod tests {
         device: &Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
-    ) -> StreamTexture {
+    ) -> Texture {
         let desc = TextureDescriptor::new(width, height, TextureFormat::Bgra8Unorm).with_usage(
             TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
@@ -509,12 +509,12 @@ mod tests {
                 | TextureUsages::COPY_SRC,
         );
         let host_tex = device.create_texture_local(&desc).expect("texture");
-        StreamTexture::from_vulkan(host_tex)
+        Texture::from_vulkan(host_tex)
     }
 
     fn fill_texture_solid(
         device: &Arc<HostVulkanDevice>,
-        texture: &StreamTexture,
+        texture: &Texture,
         b: u8,
         g: u8,
         r: u8,
@@ -542,7 +542,7 @@ mod tests {
     /// Read a single BGRA pixel via the RHI readback primitive.
     fn read_pixel(
         device: &Arc<HostVulkanDevice>,
-        texture: &StreamTexture,
+        texture: &Texture,
         x: u32,
         y: u32,
     ) -> (u8, u8, u8, u8) {
@@ -576,7 +576,7 @@ mod tests {
     /// Read the full BGRA buffer from a texture for visual-smoke tests.
     fn read_bgra_buffer(
         device: &Arc<HostVulkanDevice>,
-        texture: &StreamTexture,
+        texture: &Texture,
     ) -> Vec<u8> {
         let w = texture.width();
         let h = texture.height();
@@ -605,8 +605,8 @@ mod tests {
     }
 
     fn default_inputs<'a>(
-        input: &'a StreamTexture,
-        output: &'a StreamTexture,
+        input: &'a Texture,
+        output: &'a Texture,
     ) -> CrtFilmGrainInputs<'a> {
         CrtFilmGrainInputs {
             input: CrtFilmGrainInput {

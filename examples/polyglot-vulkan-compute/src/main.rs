@@ -41,7 +41,7 @@ use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::rhi::{
     derive_bindings_from_spirv,
     ComputeKernelDescriptor,
-    StreamTexture,
+    Texture,
     TextureFormat,
     TextureReadbackDescriptor,
     TextureSourceLayout,
@@ -122,21 +122,21 @@ impl RuntimeKind {
 /// `streamlib-adapter-vulkan` crate cannot depend on the full
 /// `streamlib` (the consumer-rhi capability boundary forbids it).
 ///
-/// Holds a UUID → `StreamTexture` map populated at setup time so
+/// Holds a UUID → `Texture` map populated at setup time so
 /// `run_compute_kernel(surface_uuid, ...)` can resolve to the host's
 /// `VkImage` for the storage_image binding. The kernel cache is
 /// keyed by SHA-256(spv) hex (the same key the wire format returns
 /// to the subprocess).
 struct MandelbrotKernelBridge {
     device: Arc<HostVulkanDevice>,
-    surfaces: HashMap<String, StreamTexture>,
+    surfaces: HashMap<String, Texture>,
     kernels: parking_lot::Mutex<HashMap<String, Arc<VulkanComputeKernel>>>,
 }
 
 impl MandelbrotKernelBridge {
     fn new(
         device: Arc<HostVulkanDevice>,
-        surfaces: Vec<(String, StreamTexture)>,
+        surfaces: Vec<(String, Texture)>,
     ) -> Self {
         Self {
             device,
@@ -247,7 +247,7 @@ fn main() -> Result<()> {
     let runtime = Runner::new()?;
 
     let texture_slot: Arc<
-        Mutex<Option<streamlib::sdk::rhi::StreamTexture>>,
+        Mutex<Option<streamlib::sdk::rhi::Texture>>,
     > = Arc::new(Mutex::new(None));
     let timeline_slot: Arc<Mutex<Option<Arc<HostVulkanTimelineSemaphore>>>> =
         Arc::new(Mutex::new(None));
@@ -309,7 +309,7 @@ fn main() -> Result<()> {
             // `register_compute_kernel` + `run_compute_kernel` IPCs
             // are routed through this bridge to the host's
             // `VulkanComputeKernel`. The bridge holds a
-            // UUID→`StreamTexture` map populated here at setup time.
+            // UUID→`Texture` map populated here at setup time.
             let bridge = Arc::new(MandelbrotKernelBridge::new(
                 Arc::clone(&host_device),
                 vec![(SCENARIO_SURFACE_UUID.to_string(), texture.clone())],

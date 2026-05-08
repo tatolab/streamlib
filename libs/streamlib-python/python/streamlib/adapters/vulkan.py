@@ -578,7 +578,7 @@ class VulkanContext:
             self._compute_kernel_ids[spv_id] = (spirv, kernel_id)
         # Send the surface-share UUID, not the cdylib's local u64
         # surface_id — the host bridge resolves UUID → host
-        # `StreamTexture` via an application-provided map.
+        # `Texture` via an application-provided map.
         ch.run_compute_kernel(
             kernel_id=kernel_id,
             surface_uuid=pool_id,
@@ -683,7 +683,7 @@ class VulkanContext:
 
         # Use `pool_id` (surface-share UUID) for the color target — same
         # convention as compute. Host bridge resolves UUID → host-side
-        # `StreamTexture`.
+        # `Texture`.
         ch.run_graphics_draw(
             kernel_id=kernel_id,
             frame_index=int(frame_index),

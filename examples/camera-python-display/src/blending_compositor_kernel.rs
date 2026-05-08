@@ -35,7 +35,7 @@
 //!
 //! ## Lifecycle
 //!
-//! Caller pre-allocates a ring of output `StreamTexture`s (typically
+//! Caller pre-allocates a ring of output `Texture`s (typically
 //! `MAX_FRAMES_IN_FLIGHT = 2`), hands one to [`SandboxedBlendingCompositor::dispatch`]
 //! per frame along with the four layer textures + their current
 //! Vulkan layouts, and `dispatch` returns once the GPU has signaled
@@ -44,7 +44,7 @@
 //! ready for the next consumer to sample without re-barriering.
 
 use std::sync::Arc;
-use streamlib::sdk::engine::HostStreamTextureExt;
+use streamlib::sdk::engine::HostTextureExt;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -67,7 +67,7 @@ use streamlib::sdk::rhi::{
     PrimitiveTopology,
     RasterizationState,
     ScissorRect,
-    StreamTexture,
+    Texture,
     TextureDescriptor,
     TextureFormat,
     TextureUsages,
@@ -105,7 +105,7 @@ pub mod flag_bits {
 /// in that layout afterward.
 #[derive(Clone, Copy)]
 pub struct BlendingLayer<'a> {
-    pub texture: &'a StreamTexture,
+    pub texture: &'a Texture,
     pub current_layout: VulkanLayout,
 }
 
@@ -115,7 +115,7 @@ pub struct BlendingLayer<'a> {
 /// `UNDEFINED` on the first dispatch into this slot).
 #[derive(Clone, Copy)]
 pub struct BlendingOutput<'a> {
-    pub texture: &'a StreamTexture,
+    pub texture: &'a Texture,
     pub current_layout: VulkanLayout,
 }
 
@@ -154,7 +154,7 @@ pub struct SandboxedBlendingCompositor {
     /// graphics-kernel descriptor sets must be fully populated even
     /// when the corresponding `has_*` flag is false. Pre-uploaded once
     /// at construction; ends in `SHADER_READ_ONLY_OPTIMAL`.
-    placeholder: StreamTexture,
+    placeholder: Texture,
 }
 
 impl SandboxedBlendingCompositor {
@@ -455,7 +455,7 @@ impl SandboxedBlendingCompositor {
     fn layer_or_placeholder<'a>(
         &'a self,
         layer: Option<BlendingLayer<'a>>,
-    ) -> (&'a StreamTexture, VulkanLayout) {
+    ) -> (&'a Texture, VulkanLayout) {
         match layer {
             Some(BlendingLayer { texture, current_layout }) => (texture, current_layout),
             None => (&self.placeholder, VulkanLayout::SHADER_READ_ONLY_OPTIMAL),
@@ -477,7 +477,7 @@ impl Drop for SandboxedBlendingCompositor {
     }
 }
 
-fn make_placeholder_texture(vulkan_device: &Arc<HostVulkanDevice>) -> Result<StreamTexture> {
+fn make_placeholder_texture(vulkan_device: &Arc<HostVulkanDevice>) -> Result<Texture> {
     let desc = TextureDescriptor::new(1, 1, TextureFormat::Bgra8Unorm).with_usage(
         TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
     );
@@ -496,7 +496,7 @@ fn make_placeholder_texture(vulkan_device: &Arc<HostVulkanDevice>) -> Result<Str
         vulkan_device.upload_buffer_to_image(staging.buffer(), image, 1, 1)?;
     }
 
-    Ok(StreamTexture::from_vulkan(host_tex))
+    Ok(Texture::from_vulkan(host_tex))
 }
 
 fn create_command_pool(
@@ -607,7 +607,7 @@ mod tests {
         device: &Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
-    ) -> StreamTexture {
+    ) -> Texture {
         let desc = TextureDescriptor::new(width, height, TextureFormat::Bgra8Unorm).with_usage(
             TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
@@ -615,7 +615,7 @@ mod tests {
                 | TextureUsages::COPY_SRC,
         );
         let host_tex = device.create_texture_local(&desc).expect("texture");
-        StreamTexture::from_vulkan(host_tex)
+        Texture::from_vulkan(host_tex)
     }
 
     /// Fill a texture with a single BGRA color via host-visible staging
@@ -623,7 +623,7 @@ mod tests {
     /// SHADER_READ_ONLY_OPTIMAL.
     fn fill_texture_solid(
         device: &Arc<HostVulkanDevice>,
-        texture: &StreamTexture,
+        texture: &Texture,
         b: u8,
         g: u8,
         r: u8,
@@ -651,7 +651,7 @@ mod tests {
     /// Read one pixel from a texture via the RHI's readback primitive.
     fn read_pixel(
         device: &Arc<HostVulkanDevice>,
-        texture: &StreamTexture,
+        texture: &Texture,
         x: u32,
         y: u32,
     ) -> (u8, u8, u8, u8) {

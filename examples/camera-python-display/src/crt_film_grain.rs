@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib::sdk::rhi::{StreamTexture, TextureFormat, VulkanLayout};
+use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::_generated_::VideoFrame;
@@ -53,7 +53,7 @@ const CRT_OUTPUT_SURFACE_UUIDS: [&str; OUTPUT_RING_DEPTH] = [
 /// surface_id (the UUID it is dual-registered under).
 struct OutputSlot {
     surface_id: String,
-    texture: StreamTexture,
+    texture: Texture,
 }
 
 struct LinuxBackend {
