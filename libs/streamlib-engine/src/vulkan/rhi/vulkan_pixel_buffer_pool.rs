@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::core::rhi::{PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::rhi::{PixelBufferPoolId, PixelFormat, PixelBuffer, PixelBufferRef};
 use crate::core::{Result, Error};
 
 use super::{HostVulkanDevice, HostVulkanPixelBuffer};
@@ -100,7 +100,7 @@ impl VulkanPixelBufferPool {
     ///
     /// Skips buffers still held externally (Arc::strong_count > 1).
     /// Returns error if all buffers are in use.
-    pub fn acquire(&self) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+    pub fn acquire(&self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         let len = self.buffers.len();
         if len == 0 {
             return Err(Error::BufferError(
@@ -123,11 +123,11 @@ impl VulkanPixelBufferPool {
                         .unwrap_or_else(PixelBufferPoolId::new)
                 };
 
-                let pixel_buffer_ref = RhiPixelBufferRef {
+                let pixel_buffer_ref = PixelBufferRef {
                     inner: Arc::clone(buffer),
                 };
 
-                let rhi_pixel_buffer = RhiPixelBuffer::new(pixel_buffer_ref);
+                let rhi_pixel_buffer = PixelBuffer::new(pixel_buffer_ref);
 
                 return Ok((pool_id, rhi_pixel_buffer));
             }

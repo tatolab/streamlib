@@ -25,8 +25,8 @@ use crate::apple::corevideo_ffi::{
     kCVReturnSuccess, CVPixelBufferGetIOSurface, CVPixelBufferRef, IOSurfaceGetID,
 };
 use crate::core::rhi::{
-    PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiPixelBuffer, RhiPixelBufferPool,
-    RhiPixelBufferRef,
+    PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, PixelBuffer, RhiPixelBufferPool,
+    PixelBufferRef,
 };
 use crate::core::{Result, Error};
 
@@ -81,7 +81,7 @@ impl PixelBufferPoolMacOS {
     ///
     /// Returns (id, buffer) where id is a stable UUID for this physical buffer.
     /// If CVPixelBufferPool returns a recycled buffer, the same UUID is returned.
-    pub fn acquire(&self) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+    pub fn acquire(&self) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         tracing::trace!("PixelBufferPoolMacOS::acquire: requesting buffer");
         let mut pixel_buffer: CVPixelBufferRef = std::ptr::null_mut();
 
@@ -109,7 +109,7 @@ impl PixelBufferPoolMacOS {
 
         // The pool gives us a retained buffer, so use no_retain
         let buffer_ref = unsafe {
-            RhiPixelBufferRef::from_cv_pixel_buffer_no_retain(pixel_buffer)
+            PixelBufferRef::from_cv_pixel_buffer_no_retain(pixel_buffer)
                 .ok_or_else(|| Error::GpuError("Null pixel buffer from pool".into()))?
         };
 
@@ -155,7 +155,7 @@ impl PixelBufferPoolMacOS {
             new_id
         };
 
-        Ok((pool_id, RhiPixelBuffer::new(buffer_ref)))
+        Ok((pool_id, PixelBuffer::new(buffer_ref)))
     }
 }
 

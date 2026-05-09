@@ -23,7 +23,7 @@ use crate::apple::corevideo_ffi::{
     CVMetalTextureCacheCreateTextureFromImage, CVMetalTextureCacheFlush, CVMetalTextureCacheRef,
     CVMetalTextureGetTexture, CVMetalTextureRef,
 };
-use crate::core::rhi::{RhiPixelBuffer, RhiTextureCache, RhiTextureView};
+use crate::core::rhi::{PixelBuffer, RhiTextureCache, RhiTextureView};
 use crate::core::{Result, Error};
 
 /// macOS texture cache wrapping CVMetalTextureCache.
@@ -66,7 +66,7 @@ impl TextureCacheMacOS {
     /// Create a texture view from a pixel buffer.
     ///
     /// Automatically flushes stale cache entries every [`AUTO_FLUSH_INTERVAL`] calls.
-    pub fn create_view(&self, buffer: &RhiPixelBuffer) -> Result<RhiTextureView> {
+    pub fn create_view(&self, buffer: &PixelBuffer) -> Result<RhiTextureView> {
         // Auto-flush disabled temporarily - causes video skip
         // TODO: Investigate why flush causes frame discontinuity
         // let count = self.view_count.fetch_add(1, Ordering::Relaxed);

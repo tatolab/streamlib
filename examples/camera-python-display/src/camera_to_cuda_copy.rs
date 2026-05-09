@@ -25,7 +25,7 @@ use streamlib::sdk::_generated_::VideoFrame;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 #[cfg(target_os = "linux")]
-use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer};
+use streamlib::sdk::rhi::{PixelFormat, PixelBuffer};
 #[cfg(target_os = "linux")]
 use streamlib::sdk::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
@@ -166,7 +166,7 @@ impl CameraToCudaCopyProcessor::Processor {
         })?;
         let pixel_buffer_arc = Arc::new(pixel_buffer);
         let pixel_buffer_rhi =
-            RhiPixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&pixel_buffer_arc));
+            PixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&pixel_buffer_arc));
 
         // 2. Exportable timeline. The cdylib imports it as a CUDA
         //    timeline external semaphore so `acquire_read` blocks

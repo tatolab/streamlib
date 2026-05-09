@@ -16,7 +16,7 @@ use std::ffi::c_void;
 
 use parking_lot::Mutex;
 
-use crate::core::rhi::RhiPixelBuffer;
+use crate::core::rhi::PixelBuffer;
 use crate::core::{Result, Error};
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostTextureExt;
@@ -39,7 +39,7 @@ use crate::apple::xpc_ffi::{
 #[derive(Debug, Clone)]
 pub struct CachedSurface {
     /// The resolved pixel buffer.
-    pub pixel_buffer: RhiPixelBuffer,
+    pub pixel_buffer: PixelBuffer,
     /// Number of times this surface has been checked out.
     pub checkout_count: u64,
 }
@@ -57,7 +57,7 @@ impl SurfaceCache {
         }
     }
 
-    fn insert(&mut self, surface_id: String, pixel_buffer: RhiPixelBuffer) {
+    fn insert(&mut self, surface_id: String, pixel_buffer: PixelBuffer) {
         self.surfaces.insert(
             surface_id,
             CachedSurface {
@@ -235,7 +235,7 @@ impl SurfaceStore {
     /// If this pixel buffer was already checked in, returns the existing ID.
     /// Otherwise, sends the mach port to the surface-share service and receives a new ID.
     #[cfg(target_os = "macos")]
-    pub fn check_in(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+    pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
         use crate::apple::corevideo_ffi::{mach_port_deallocate, mach_task_self, IOSurfaceGetID};
 
         // Get the IOSurface ID for deduplication
@@ -304,7 +304,7 @@ impl SurfaceStore {
     ///
     /// Returns from cache if available, otherwise fetches from the surface-share service.
     #[cfg(target_os = "macos")]
-    pub fn check_out(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
         // Check cache first
         {
             let mut cache = self.inner.cache.lock();
@@ -328,15 +328,15 @@ impl SurfaceStore {
 
         // Import the pixel buffer from mach port
         use crate::core::rhi::{
-            PixelFormat, RhiExternalHandle, RhiPixelBufferImport, RhiPixelBufferRef,
+            PixelFormat, RhiExternalHandle, RhiPixelBufferImport, PixelBufferRef,
         };
 
         let handle = RhiExternalHandle::IOSurfaceMachPort { port: mach_port };
         // Width/height/format are extracted from the IOSurface itself after import
         // We pass dummy values as the import will query the actual values from the IOSurface
         let pixel_buffer_ref =
-            RhiPixelBufferRef::from_external_handle(handle, 0, 0, PixelFormat::default())?;
-        let pixel_buffer = RhiPixelBuffer::new(pixel_buffer_ref);
+            PixelBufferRef::from_external_handle(handle, 0, 0, PixelFormat::default())?;
+        let pixel_buffer = PixelBuffer::new(pixel_buffer_ref);
 
         // Cache for future use
         self.inner
@@ -509,7 +509,7 @@ impl SurfaceStore {
     /// The client provides the UUID (PixelBufferPoolId) and the buffer.
     /// This is used for pre-registering pooled buffers.
     #[cfg(target_os = "macos")]
-    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
         use crate::apple::corevideo_ffi::{mach_port_deallocate, mach_task_self};
 
         // Export mach port from the pixel buffer
@@ -628,18 +628,18 @@ impl SurfaceStore {
     ///
     /// Returns the mach port for the given UUID.
     #[cfg(target_os = "macos")]
-    pub fn lookup_buffer(&self, pool_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
         let mach_port = self.lookup_from_surface_share(pool_id)?;
 
         // Import the pixel buffer from mach port
         use crate::core::rhi::{
-            PixelFormat, RhiExternalHandle, RhiPixelBufferImport, RhiPixelBufferRef,
+            PixelFormat, RhiExternalHandle, RhiPixelBufferImport, PixelBufferRef,
         };
 
         let handle = RhiExternalHandle::IOSurfaceMachPort { port: mach_port };
         let pixel_buffer_ref =
-            RhiPixelBufferRef::from_external_handle(handle, 0, 0, PixelFormat::default())?;
-        Ok(RhiPixelBuffer::new(pixel_buffer_ref))
+            PixelBufferRef::from_external_handle(handle, 0, 0, PixelFormat::default())?;
+        Ok(PixelBuffer::new(pixel_buffer_ref))
     }
 
     /// Send lookup request to surface-share service via XPC (new protocol).
@@ -854,7 +854,7 @@ impl SurfaceStore {
 
     /// Check in a pixel buffer via Unix socket, returning a surface ID.
     #[cfg(target_os = "linux")]
-    pub fn check_in(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+    pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
         use crate::core::rhi::RhiPixelBufferExport;
 
         // Export every plane's fd. Single-plane pixel buffers return a
@@ -935,7 +935,7 @@ impl SurfaceStore {
 
     /// Check out a surface by ID via Unix socket.
     #[cfg(target_os = "linux")]
-    pub fn check_out(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
         // Check cache first
         {
             let mut cache = self.inner.cache.lock();
@@ -1013,7 +1013,7 @@ impl SurfaceStore {
             })
             .collect();
         let pixel_buffer =
-            RhiPixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())?;
+            PixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())?;
 
         // Cache for future use
         self.inner
@@ -1026,7 +1026,7 @@ impl SurfaceStore {
 
     /// Register a buffer with the surface-share service via Unix socket.
     #[cfg(target_os = "linux")]
-    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
         use crate::core::rhi::RhiPixelBufferExport;
 
         // Export the buffer's natural handle — DMA-BUF or OPAQUE_FD per
@@ -1204,7 +1204,7 @@ impl SurfaceStore {
     pub fn register_pixel_buffer_with_timeline(
         &self,
         surface_id: &str,
-        pixel_buffer: &RhiPixelBuffer,
+        pixel_buffer: &PixelBuffer,
         timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) -> Result<()> {
         use crate::core::rhi::RhiPixelBufferExport;
@@ -1312,7 +1312,7 @@ impl SurfaceStore {
     /// buffer in the same process (e.g. the escalate-on-behalf flow) skip the
     /// per-frame unix-socket round-trip and DMA-BUF re-import.
     #[cfg(target_os = "linux")]
-    pub fn lookup_buffer(&self, pool_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
         {
             let cache = self.inner.cache.lock();
             if let Some(cached) = cache.surfaces.get(pool_id) {
@@ -1357,7 +1357,7 @@ impl SurfaceStore {
         }
 
         // Dispatch on the wire-level handle type. OPAQUE_FD lookups can't
-        // construct a host-side `RhiPixelBuffer` (that import path is
+        // construct a host-side `PixelBuffer` (that import path is
         // DMA-BUF-only — see `RhiPixelBufferImport::from_external_plane_handles`).
         // Subprocess consumers go through `streamlib-surface-client` directly
         // and import via `streamlib_consumer_rhi::ConsumerVulkanPixelBuffer::from_opaque_fd`.
@@ -1372,7 +1372,7 @@ impl SurfaceStore {
             }
             return Err(Error::NotSupported(
                 "SurfaceStore::lookup_buffer: surface registered with \
-                 handle_type=\"opaque_fd\"; the host-side RhiPixelBuffer \
+                 handle_type=\"opaque_fd\"; the host-side PixelBuffer \
                  import path is DMA-BUF-only. Subprocess consumers should \
                  use streamlib-surface-client directly + \
                  ConsumerVulkanPixelBuffer::from_opaque_fd."
@@ -1397,7 +1397,7 @@ impl SurfaceStore {
                 size: *size as usize,
             })
             .collect();
-        RhiPixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())
+        PixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())
     }
 
     /// Publish a producer's post-release `VkImageLayout` for the given
@@ -1619,28 +1619,28 @@ impl SurfaceStore {
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    pub fn check_in(&self, _pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+    pub fn check_in(&self, _pixel_buffer: &PixelBuffer) -> Result<String> {
         Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    pub fn check_out(&self, _surface_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn check_out(&self, _surface_id: &str) -> Result<PixelBuffer> {
         Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    pub fn register_buffer(&self, _pool_id: &str, _pixel_buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn register_buffer(&self, _pool_id: &str, _pixel_buffer: &PixelBuffer) -> Result<()> {
         Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    pub fn lookup_buffer(&self, _pool_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn lookup_buffer(&self, _pool_id: &str) -> Result<PixelBuffer> {
         Err(Error::NotSupported(
             "SurfaceStore is only supported on macOS and Linux".into(),
         ))

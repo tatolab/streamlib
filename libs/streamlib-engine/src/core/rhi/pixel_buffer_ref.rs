@@ -14,7 +14,7 @@ use super::PixelFormat;
 ///
 /// Clone increments the appropriate refcount, Drop decrements it.
 /// No image data is ever copied.
-pub struct RhiPixelBufferRef {
+pub struct PixelBufferRef {
     #[cfg(target_os = "macos")]
     pub(crate) inner: std::ptr::NonNull<std::ffi::c_void>,
 
@@ -25,7 +25,7 @@ pub struct RhiPixelBufferRef {
     pub(crate) _marker: std::marker::PhantomData<()>,
 }
 
-impl RhiPixelBufferRef {
+impl PixelBufferRef {
     /// Query the pixel format from the platform.
     pub fn format(&self) -> PixelFormat {
         #[cfg(target_os = "macos")]
@@ -126,7 +126,7 @@ impl RhiPixelBufferRef {
         self.inner.as_ptr()
     }
 
-    /// Create an RhiPixelBufferRef from a raw IOSurfaceRef (macOS only).
+    /// Create a PixelBufferRef from a raw IOSurfaceRef (macOS only).
     ///
     /// This is useful for cross-process frame sharing where the IOSurfaceRef
     /// is received from another process.
@@ -141,7 +141,7 @@ impl RhiPixelBufferRef {
     }
 }
 
-impl Clone for RhiPixelBufferRef {
+impl Clone for PixelBufferRef {
     fn clone(&self) -> Self {
         #[cfg(target_os = "macos")]
         {
@@ -162,7 +162,7 @@ impl Clone for RhiPixelBufferRef {
     }
 }
 
-impl Drop for RhiPixelBufferRef {
+impl Drop for PixelBufferRef {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
         {
@@ -174,12 +174,12 @@ impl Drop for RhiPixelBufferRef {
 }
 
 // Safety: CVPixelBufferRef is thread-safe (reference counted with atomic ops)
-unsafe impl Send for RhiPixelBufferRef {}
-unsafe impl Sync for RhiPixelBufferRef {}
+unsafe impl Send for PixelBufferRef {}
+unsafe impl Sync for PixelBufferRef {}
 
-impl std::fmt::Debug for RhiPixelBufferRef {
+impl std::fmt::Debug for PixelBufferRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RhiPixelBufferRef")
+        f.debug_struct("PixelBufferRef")
             .field("format", &self.format())
             .field("width", &self.width())
             .field("height", &self.height())

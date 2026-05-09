@@ -11,7 +11,7 @@
 //! - Linux: DMA-BUF → GL texture via `EGL_EXT_image_dma_buf_import` (future)
 //! - Windows: DXGI → GL texture via `WGL_NV_DX_interop` (future)
 
-use crate::core::rhi::RhiPixelBuffer;
+use crate::core::rhi::PixelBuffer;
 use crate::core::{Result, Error};
 use std::ffi::c_void;
 
@@ -142,7 +142,7 @@ impl GlTextureBinding {
     /// # Requirements
     /// - GL context must be current
     /// - Pixel buffer must have GPU-compatible backing
-    pub fn update(&mut self, gl_ctx: &GlContext, buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn update(&mut self, gl_ctx: &GlContext, buffer: &PixelBuffer) -> Result<()> {
         #[cfg(target_os = "macos")]
         {
             self.inner.update(&gl_ctx.inner, buffer)

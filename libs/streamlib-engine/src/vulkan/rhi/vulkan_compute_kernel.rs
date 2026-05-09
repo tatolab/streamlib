@@ -25,7 +25,7 @@ use vulkanalia::vk;
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use crate::core::rhi::{
-    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, RhiPixelBuffer, Texture,
+    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer, Texture,
 };
 use crate::core::{Result, Error};
 
@@ -261,7 +261,7 @@ impl VulkanComputeKernel {
 
     /// Bind a storage buffer at `binding`. The slot must be declared as
     /// [`ComputeBindingKind::StorageBuffer`] in the descriptor.
-    pub fn set_storage_buffer(&self, binding: u32, buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn set_storage_buffer(&self, binding: u32, buffer: &PixelBuffer) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageBuffer)?;
         let (vk_buf, size) = vk_buffer_for(buffer)?;
         self.pending.lock().bindings.insert(
@@ -276,7 +276,7 @@ impl VulkanComputeKernel {
 
     /// Bind a uniform buffer at `binding`. The slot must be declared as
     /// [`ComputeBindingKind::UniformBuffer`] in the descriptor.
-    pub fn set_uniform_buffer(&self, binding: u32, buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn set_uniform_buffer(&self, binding: u32, buffer: &PixelBuffer) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::UniformBuffer)?;
         let (vk_buf, size) = vk_buffer_for(buffer)?;
         self.pending.lock().bindings.insert(
@@ -1084,7 +1084,7 @@ fn allocate_command_buffer(
     Ok(buffers[0])
 }
 
-fn vk_buffer_for(buffer: &RhiPixelBuffer) -> Result<(vk::Buffer, vk::DeviceSize)> {
+fn vk_buffer_for(buffer: &PixelBuffer) -> Result<(vk::Buffer, vk::DeviceSize)> {
     let inner = &buffer.buffer_ref().inner;
     Ok((inner.buffer(), inner.size()))
 }
@@ -1114,23 +1114,23 @@ mod tests {
     fn make_storage_buffer(
         device: &Arc<HostVulkanDevice>,
         element_count: u32,
-    ) -> RhiPixelBuffer {
+    ) -> PixelBuffer {
         let vk_buf = HostVulkanPixelBuffer::new(device, element_count, 1, 4, PixelFormat::Bgra32)
             .expect("Failed to create storage buffer");
-        let ref_ = crate::core::rhi::RhiPixelBufferRef {
+        let ref_ = crate::core::rhi::PixelBufferRef {
             inner: Arc::new(vk_buf),
         };
-        RhiPixelBuffer::new(ref_)
+        PixelBuffer::new(ref_)
     }
 
-    fn write_buffer_u32(buf: &RhiPixelBuffer, values: &[u32]) {
+    fn write_buffer_u32(buf: &PixelBuffer, values: &[u32]) {
         let ptr = buf.buffer_ref().inner.mapped_ptr() as *mut u32;
         unsafe {
             std::ptr::copy_nonoverlapping(values.as_ptr(), ptr, values.len());
         }
     }
 
-    fn read_buffer_u32(buf: &RhiPixelBuffer, len: usize) -> Vec<u32> {
+    fn read_buffer_u32(buf: &PixelBuffer, len: usize) -> Vec<u32> {
         let ptr = buf.buffer_ref().inner.mapped_ptr() as *const u32;
         let mut out = vec![0u32; len];
         unsafe {
@@ -1162,7 +1162,7 @@ mod tests {
         device: &Arc<HostVulkanDevice>,
         input_count: u32,
         element_count: u32,
-    ) -> (Vec<RhiPixelBuffer>, RhiPixelBuffer) {
+    ) -> (Vec<PixelBuffer>, PixelBuffer) {
         let bindings = blend_descriptor(input_count);
         let kernel = VulkanComputeKernel::new(
             device,
@@ -1175,7 +1175,7 @@ mod tests {
         )
         .expect("kernel creation");
 
-        let inputs: Vec<RhiPixelBuffer> = (0..input_count)
+        let inputs: Vec<PixelBuffer> = (0..input_count)
             .map(|i| {
                 let buf = make_storage_buffer(device, element_count);
                 let pattern: Vec<u32> = (0..element_count)
@@ -1207,7 +1207,7 @@ mod tests {
         (inputs, output)
     }
 
-    fn expected_blend(inputs: &[RhiPixelBuffer], element_count: u32) -> Vec<u32> {
+    fn expected_blend(inputs: &[PixelBuffer], element_count: u32) -> Vec<u32> {
         let active: Vec<Vec<u32>> = inputs
             .iter()
             .map(|b| read_buffer_u32(b, element_count as usize))

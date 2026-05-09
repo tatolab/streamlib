@@ -17,7 +17,7 @@
 
 use super::{ffi, format};
 use crate::_generated_::VideoFrame;
-use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
+use crate::core::rhi::{PixelFormat, PixelBuffer, PixelBufferRef};
 use crate::core::{GpuContext, Result, RuntimeContext, Error, VideoDecoderConfig};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -379,17 +379,17 @@ impl VideoToolboxDecoder {
         decoded_frame: DecodedFrame,
         gpu: &GpuContext,
     ) -> Result<VideoFrame> {
-        // Wrap CVPixelBuffer in RhiPixelBufferRef.
+        // Wrap CVPixelBuffer in PixelBufferRef.
         // Use no_retain since the callback already retained the buffer.
-        // When RhiPixelBufferRef is dropped, it will release the CVPixelBuffer.
+        // When PixelBufferRef is dropped, it will release the CVPixelBuffer.
         let buffer_ref = unsafe {
-            RhiPixelBufferRef::from_cv_pixel_buffer_no_retain(
+            PixelBufferRef::from_cv_pixel_buffer_no_retain(
                 decoded_frame.pixel_buffer as ffi::CVPixelBufferRef,
             )
         }
         .ok_or_else(|| Error::GpuError("Decoded frame has null pixel buffer".into()))?;
 
-        let source_buffer = RhiPixelBuffer::new(buffer_ref);
+        let source_buffer = PixelBuffer::new(buffer_ref);
 
         // Log resolution discovery on first frame or if resolution changes
         if source_buffer.width != self.config.width || source_buffer.height != self.config.height {

@@ -75,7 +75,7 @@ use crate::core::context::{
     RAY_TRACING_STAGE_INDEX_NONE,
 };
 use crate::core::logging::{push_polyglot_record, LogLevel, LogRecord, Source};
-use crate::core::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat, TextureUsages};
+use crate::core::rhi::{PixelFormat, PixelBuffer, TextureFormat, TextureUsages};
 
 #[cfg(test)]
 use crate::core::error::{Result, Error};
@@ -123,7 +123,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 /// `run_cpu_readback_copy` trigger that returns a timeline value.
 pub(crate) enum RegisteredHandle {
     #[allow(dead_code)]
-    PixelBuffer(RhiPixelBuffer),
+    PixelBuffer(PixelBuffer),
     #[allow(dead_code)]
     Texture(PooledTextureHandle),
 }
@@ -133,7 +133,7 @@ pub(crate) enum RegisteredHandle {
 /// alive for the duration of the host pool; this map simply prevents the
 /// resource from being immediately recycled while the subprocess still
 /// references it by ID. Dropping a [`PooledTextureHandle`] releases the pool
-/// slot; dropping an [`RhiPixelBuffer`] releases its refcount.
+/// slot; dropping an [`PixelBuffer`] releases its refcount.
 #[derive(Default)]
 pub(crate) struct EscalateHandleRegistry {
     handles: Mutex<HashMap<String, RegisteredHandle>>,
@@ -144,7 +144,7 @@ impl EscalateHandleRegistry {
         Arc::new(Self::default())
     }
 
-    pub(crate) fn insert_buffer(&self, handle_id: String, buffer: RhiPixelBuffer) {
+    pub(crate) fn insert_buffer(&self, handle_id: String, buffer: PixelBuffer) {
         let mut map = self.handles.lock().expect("poisoned");
         map.insert(handle_id, RegisteredHandle::PixelBuffer(buffer));
     }
@@ -631,7 +631,7 @@ fn now_ns() -> u64 {
 fn assign_buffer_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
     pool_id: &crate::core::rhi::PixelBufferPoolId,
-    buffer: &RhiPixelBuffer,
+    buffer: &PixelBuffer,
 ) -> crate::core::error::Result<String> {
     #[cfg(target_os = "linux")]
     {

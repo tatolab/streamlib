@@ -13,7 +13,7 @@
 //! - Texture IDs are STABLE - safe to cache in Skia objects
 
 use crate::apple::corevideo_ffi::CVPixelBufferRef;
-use crate::core::rhi::RhiPixelBuffer;
+use crate::core::rhi::PixelBuffer;
 use crate::core::{Result, Error};
 use std::ffi::c_void;
 
@@ -400,7 +400,7 @@ impl GlTextureBinding {
     /// # Requirements
     /// - GL context must be current
     /// - Pixel buffer must have IOSurface backing (created with proper attributes)
-    pub fn update(&mut self, gl_ctx: &MacOsGlContext, buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn update(&mut self, gl_ctx: &MacOsGlContext, buffer: &PixelBuffer) -> Result<()> {
         unsafe {
             let cv_buffer: CVPixelBufferRef = buffer.as_ptr();
 

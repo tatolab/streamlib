@@ -1015,8 +1015,8 @@ export enum EscalateRequestRunGraphicsDrawIndexBufferIndexType {
 
 /**
  * Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
- * `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
- * into it.
+ * `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset into
+ * it.
  */
 export interface EscalateRequestRunGraphicsDrawIndexBuffer {
   index_type: EscalateRequestRunGraphicsDrawIndexBufferIndexType;
@@ -1112,9 +1112,9 @@ export interface EscalateRequestRunGraphicsDraw {
 
   /**
    * Per-draw vertex buffer bindings. Each entry's `surface_uuid` must resolve
-   * to a host-side `RhiPixelBuffer`. `offset` is the byte offset into the
-   * buffer where vertex data starts (decimal-encoded u64 — JTD has no native
-   * u64). Empty for vertex-fabricating shaders (`gl_VertexIndex` patterns).
+   * to a host-side `PixelBuffer`. `offset` is the byte offset into the buffer
+   * where vertex data starts (decimal-encoded u64 — JTD has no native u64).
+   * Empty for vertex-fabricating shaders (`gl_VertexIndex` patterns).
    */
   vertex_buffers: EscalateRequestRunGraphicsDrawVertexBuffer[];
 
@@ -1126,7 +1126,7 @@ export interface EscalateRequestRunGraphicsDraw {
 
   /**
    * Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
-   * `surface_uuid` resolves to an `RhiPixelBuffer`; `offset` is the byte offset
+   * `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
    * into it.
    */
   index_buffer?: EscalateRequestRunGraphicsDrawIndexBuffer;
@@ -1167,7 +1167,7 @@ export interface EscalateRequestRunRayTracingKernel {
    * `acceleration_structure`: `target_id` is an `as_id`
    *   from a prior `register_acceleration_structure_tlas`.
    * - all other kinds: `target_id` is the surface-share UUID
-   *   of a host-side `RhiPixelBuffer` / `Texture`
+   *   of a host-side `PixelBuffer` / `Texture`
    *   (same convention compute and graphics use).
    */
   bindings: EscalateRequestRunRayTracingKernelBinding[];

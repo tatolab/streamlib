@@ -32,7 +32,7 @@ use vma::Alloc as _;
 use crate::core::rhi::{
     validate_shader_groups, RayTracingBindingKind, RayTracingBindingSpec,
     RayTracingKernelDescriptor, RayTracingShaderGroup, RayTracingShaderStage,
-    RayTracingShaderStageFlags, RayTracingStage, RhiPixelBuffer, Texture,
+    RayTracingShaderStageFlags, RayTracingStage, PixelBuffer, Texture,
 };
 use crate::core::{Result, Error};
 
@@ -415,7 +415,7 @@ impl VulkanRayTracingKernel {
         Ok(())
     }
 
-    pub fn set_storage_buffer(&self, binding: u32, buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn set_storage_buffer(&self, binding: u32, buffer: &PixelBuffer) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::StorageBuffer)?;
         let (vk_buf, size) = vk_buffer_for(buffer);
         self.pending.lock().bindings.insert(
@@ -428,7 +428,7 @@ impl VulkanRayTracingKernel {
         Ok(())
     }
 
-    pub fn set_uniform_buffer(&self, binding: u32, buffer: &RhiPixelBuffer) -> Result<()> {
+    pub fn set_uniform_buffer(&self, binding: u32, buffer: &PixelBuffer) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::UniformBuffer)?;
         let (vk_buf, size) = vk_buffer_for(buffer);
         self.pending.lock().bindings.insert(
@@ -1595,7 +1595,7 @@ fn drop_sbt(sbt: &Sbt, vulkan_device: &Arc<HostVulkanDevice>) {
     }
 }
 
-fn vk_buffer_for(buffer: &RhiPixelBuffer) -> (vk::Buffer, vk::DeviceSize) {
+fn vk_buffer_for(buffer: &PixelBuffer) -> (vk::Buffer, vk::DeviceSize) {
     let inner = &buffer.buffer_ref().inner;
     (inner.buffer(), inner.size())
 }

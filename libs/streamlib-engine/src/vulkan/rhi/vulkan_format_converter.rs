@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use crate::core::rhi::{
-    ComputeBindingSpec, ComputeKernelDescriptor, PixelFormat, RhiPixelBuffer,
+    ComputeBindingSpec, ComputeKernelDescriptor, PixelFormat, PixelBuffer,
 };
 use crate::core::{Result, Error};
 
@@ -61,7 +61,7 @@ impl VulkanFormatConverter {
 
     /// Convert NV12 → RGBA/BGRA. Source and destination must have the same
     /// dimensions; destination format determines the BGRA-vs-RGBA flag.
-    pub fn convert(&self, source: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+    pub fn convert(&self, source: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         let width = source.width;
         let height = source.height;
         if width != dest.width || height != dest.height {
@@ -111,7 +111,7 @@ impl VulkanFormatConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::RhiPixelBufferRef;
+    use crate::core::rhi::PixelBufferRef;
     use crate::core::Error;
     use crate::vulkan::rhi::HostVulkanPixelBuffer;
 
@@ -131,13 +131,13 @@ mod tests {
         height: u32,
         bytes_per_pixel: u32,
         format: PixelFormat,
-    ) -> RhiPixelBuffer {
+    ) -> PixelBuffer {
         let vk_buf = HostVulkanPixelBuffer::new(device, width, height, bytes_per_pixel, format)
             .expect("Failed to create pixel buffer");
-        let ref_ = RhiPixelBufferRef {
+        let ref_ = PixelBufferRef {
             inner: Arc::new(vk_buf),
         };
-        RhiPixelBuffer::new(ref_)
+        PixelBuffer::new(ref_)
     }
 
     /// CPU reference for the GLSL `nv12_to_bgra.comp` shader, full-range path.

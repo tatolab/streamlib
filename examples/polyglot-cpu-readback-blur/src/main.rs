@@ -50,7 +50,7 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use streamlib::sdk::context::{CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext};
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
-use streamlib::sdk::rhi::{PixelFormat, RhiPixelBuffer, TextureFormat};
+use streamlib::sdk::rhi::{PixelFormat, PixelBuffer, TextureFormat};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
@@ -367,7 +367,7 @@ fn register_host_surface(
     .map_err(|e| format!("HostVulkanPixelBuffer::new: {e}"))?;
     let staging_arc = Arc::new(staging);
     let staging_rhi =
-        RhiPixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&staging_arc));
+        PixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&staging_arc));
 
     // 3. Allocate the exportable timeline semaphore.
     let timeline = Arc::new(

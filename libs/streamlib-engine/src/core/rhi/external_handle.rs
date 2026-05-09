@@ -71,7 +71,7 @@ impl RhiExternalHandle {
     }
 }
 
-/// Extension trait for exporting RhiPixelBuffer to external handle.
+/// Extension trait for exporting PixelBuffer to external handle.
 pub trait RhiPixelBufferExport {
     /// Export the GPU buffer for sharing with another process.
     fn export_handle(&self) -> Result<RhiExternalHandle>;
@@ -87,7 +87,7 @@ pub trait RhiPixelBufferExport {
     }
 }
 
-/// Extension trait for importing RhiPixelBuffer from external handle.
+/// Extension trait for importing PixelBuffer from external handle.
 pub trait RhiPixelBufferImport {
     /// Import a GPU buffer from a single external handle.
     fn from_external_handle(
@@ -128,7 +128,7 @@ pub trait RhiPixelBufferImport {
 }
 
 #[cfg(target_os = "linux")]
-impl RhiPixelBufferExport for super::RhiPixelBuffer {
+impl RhiPixelBufferExport for super::PixelBuffer {
     /// Returns the natural handle type for the underlying allocation —
     /// `RhiExternalHandle::OpaqueFd` for OPAQUE_FD-flavored buffers
     /// (see [`crate::vulkan::rhi::HostVulkanPixelBuffer::new_opaque_fd_export`]),
@@ -140,7 +140,7 @@ impl RhiPixelBufferExport for super::RhiPixelBuffer {
 }
 
 #[cfg(target_os = "linux")]
-impl RhiPixelBufferImport for super::RhiPixelBuffer {
+impl RhiPixelBufferImport for super::PixelBuffer {
     fn from_external_handle(
         handle: RhiExternalHandle,
         width: u32,
@@ -235,11 +235,11 @@ impl RhiPixelBufferImport for super::RhiPixelBuffer {
                 format,
             )?;
 
-        let pixel_buffer_ref = super::RhiPixelBufferRef {
+        let pixel_buffer_ref = super::PixelBufferRef {
             inner: std::sync::Arc::new(vulkan_pixel_buffer),
         };
 
-        Ok(super::RhiPixelBuffer::new(pixel_buffer_ref))
+        Ok(super::PixelBuffer::new(pixel_buffer_ref))
     }
 }
 
@@ -276,7 +276,7 @@ mod tests {
         // silently miscoercing through the DMA-BUF code path.
         let opaque = RhiExternalHandle::OpaqueFd { fd: -1, size: 0 };
         let result =
-            <super::super::RhiPixelBuffer as RhiPixelBufferImport>::from_external_plane_handles(
+            <super::super::PixelBuffer as RhiPixelBufferImport>::from_external_plane_handles(
                 &[opaque],
                 1,
                 1,

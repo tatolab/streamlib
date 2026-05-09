@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::apple::iosurface;
-use crate::core::rhi::{GpuDevice, RhiCommandQueue, RhiPixelBuffer, Texture};
+use crate::core::rhi::{GpuDevice, RhiCommandQueue, PixelBuffer, Texture};
 use crate::core::{Result, Error};
 use metal::foreign_types::ForeignTypeRef;
 use objc2_core_video::CVPixelBuffer;
@@ -118,11 +118,11 @@ impl PixelTransferSession {
         Ok(dest_nv12_buffer)
     }
 
-    /// Converts an RhiPixelBuffer (containing CVPixelBuffer) to NV12 CVPixelBuffer.
+    /// Converts a PixelBuffer (containing CVPixelBuffer) to NV12 CVPixelBuffer.
     ///
     /// This is the buffer-centric path for VideoFrame encoding. The source buffer
     /// is typically BGRA from camera capture or BGRA from video decoder.
-    pub fn convert_buffer_to_nv12(&self, buffer: &RhiPixelBuffer) -> Result<*mut CVPixelBuffer> {
+    pub fn convert_buffer_to_nv12(&self, buffer: &PixelBuffer) -> Result<*mut CVPixelBuffer> {
         let source_ptr = buffer.ref_.as_ptr() as *mut CVPixelBuffer;
         self.transfer_rgba_to_nv12(source_ptr, buffer.width, buffer.height)
     }

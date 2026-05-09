@@ -7,7 +7,7 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 use crate::core::rhi::blitter::RhiBlitter;
-use crate::core::rhi::RhiPixelBuffer;
+use crate::core::rhi::PixelBuffer;
 use crate::core::{Result, Error};
 
 use super::HostVulkanDevice;
@@ -47,7 +47,7 @@ impl VulkanBlitter {
 }
 
 impl RhiBlitter for VulkanBlitter {
-    fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+    fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         let src_buffer = src.buffer_ref().inner.buffer();
         let dest_buffer = dest.buffer_ref().inner.buffer();
         let src_size = src.buffer_ref().inner.size();
@@ -160,7 +160,7 @@ impl RhiBlitter for VulkanBlitter {
     unsafe fn blit_copy_iosurface_raw(
         &self,
         _src: *const std::ffi::c_void,
-        _dest: &RhiPixelBuffer,
+        _dest: &PixelBuffer,
         _width: u32,
         _height: u32,
     ) -> Result<()> {
@@ -186,7 +186,7 @@ unsafe impl Sync for VulkanBlitter {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::{PixelFormat, RhiPixelBuffer, RhiPixelBufferRef};
+    use crate::core::rhi::{PixelFormat, PixelBuffer, PixelBufferRef};
     use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanPixelBuffer};
     use std::sync::Arc;
 
@@ -194,10 +194,10 @@ mod tests {
         device: &Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
-    ) -> RhiPixelBuffer {
+    ) -> PixelBuffer {
         let buf = HostVulkanPixelBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
             .expect("pixel buffer allocation failed");
-        RhiPixelBuffer::new(RhiPixelBufferRef {
+        PixelBuffer::new(PixelBufferRef {
             inner: Arc::new(buf),
         })
     }

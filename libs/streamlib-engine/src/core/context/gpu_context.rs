@@ -5,7 +5,7 @@ use crate::_generated_::VideoFrame;
 use crate::core::context::TextureRegistration;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
-    RhiCommandQueue, RhiPixelBuffer, RhiPixelBufferPool, Texture, TextureDescriptor,
+    RhiCommandQueue, PixelBuffer, RhiPixelBufferPool, Texture, TextureDescriptor,
     TextureFormat, TextureUsages,
 };
 use crate::core::{Result, Error};
@@ -32,7 +32,7 @@ struct NoOpBlitter;
 
 #[cfg(not(target_os = "macos"))]
 impl RhiBlitter for NoOpBlitter {
-    fn blit_copy(&self, _src: &RhiPixelBuffer, _dest: &RhiPixelBuffer) -> Result<()> {
+    fn blit_copy(&self, _src: &PixelBuffer, _dest: &PixelBuffer) -> Result<()> {
         Err(Error::NotSupported(
             "Blitter not supported on this platform".into(),
         ))
@@ -41,7 +41,7 @@ impl RhiBlitter for NoOpBlitter {
     unsafe fn blit_copy_iosurface_raw(
         &self,
         _src: *const std::ffi::c_void,
-        _dest: &RhiPixelBuffer,
+        _dest: &PixelBuffer,
         _width: u32,
         _height: u32,
     ) -> Result<()> {
@@ -77,7 +77,7 @@ struct PixelBufferPoolKey {
 /// A single entry in the ring pool.
 struct PixelBufferRingEntry {
     pool_id: PixelBufferPoolId,
-    buffer: RhiPixelBuffer,
+    buffer: PixelBuffer,
 }
 
 /// Ring pool of permanently held pixel buffers for a given (width, height, format).
@@ -102,9 +102,9 @@ struct PixelBufferRingPool {
 /// Buffers are held permanently for the runtime's lifetime.
 struct PixelBufferPoolManager {
     pools: Mutex<HashMap<PixelBufferPoolKey, PixelBufferRingPool>>,
-    /// Global cache for UUID -> RhiPixelBuffer lookups (includes buffers from all pools).
+    /// Global cache for UUID -> PixelBuffer lookups (includes buffers from all pools).
     /// Used by consumers (e.g., display processor) to resolve UUIDs received via IPC.
-    buffer_cache: Mutex<HashMap<String, RhiPixelBuffer>>,
+    buffer_cache: Mutex<HashMap<String, PixelBuffer>>,
     /// GPU device reference for creating platform pixel buffer pools.
     #[allow(dead_code)]
     device: Arc<GpuDevice>,
@@ -130,7 +130,7 @@ impl PixelBufferPoolManager {
         height: u32,
         format: PixelFormat,
         surface_store: Option<&SurfaceStore>,
-    ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         let key = PixelBufferPoolKey {
             width,
             height,
@@ -265,7 +265,7 @@ impl PixelBufferPoolManager {
             let entry = &ring_pool.buffers[idx];
 
             // Check if buffer is available (only our permanent references exist)
-            // RhiPixelBuffer wraps Arc<RhiPixelBufferRef>, so strong_count > 2 means in use
+            // PixelBuffer wraps Arc<PixelBufferRef>, so strong_count > 2 means in use
             // (2 = one in ring pool buffers Vec + one in buffer_cache HashMap)
             if Arc::strong_count(&entry.buffer.ref_) <= 2 {
                 tracing::trace!(
@@ -358,12 +358,12 @@ impl PixelBufferPoolManager {
     }
 
     /// Get a buffer by its UUID from local cache.
-    fn get_from_cache(&self, pool_id: &str) -> Option<RhiPixelBuffer> {
+    fn get_from_cache(&self, pool_id: &str) -> Option<PixelBuffer> {
         self.buffer_cache.lock().unwrap().get(pool_id).cloned()
     }
 
     /// Add a buffer to the local cache.
-    fn cache_buffer(&self, pool_id: &str, buffer: RhiPixelBuffer) {
+    fn cache_buffer(&self, pool_id: &str, buffer: PixelBuffer) {
         let mut cache = self.buffer_cache.lock().unwrap();
         cache.insert(pool_id.to_string(), buffer);
         if cache.len() > MAX_BUFFER_CACHE_SIZE {
@@ -565,7 +565,7 @@ impl GpuContext {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         tracing::debug!(
             rhi_op = "acquire_pixel_buffer",
             width,
@@ -582,7 +582,7 @@ impl GpuContext {
     ///
     /// First checks local cache, then falls back to surface-share service lookup for cross-process sharing.
     /// Returns the buffer if found, or an error if not found anywhere.
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
         // Check local cache first
         if let Some(buffer) = self
             .pixel_buffer_pool_manager
@@ -615,7 +615,7 @@ impl GpuContext {
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
-    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<RhiPixelBuffer> {
+    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<PixelBuffer> {
         let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
         self.get_pixel_buffer(&pool_id)
     }
@@ -808,7 +808,7 @@ impl GpuContext {
     fn refresh_pixel_buffer_texture(
         &self,
         surface_id: &str,
-        pixel_buffer: &crate::core::rhi::RhiPixelBuffer,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<Texture> {
@@ -868,7 +868,7 @@ impl GpuContext {
     pub fn upload_pixel_buffer_as_texture(
         &self,
         surface_id: &str,
-        pixel_buffer: &crate::core::rhi::RhiPixelBuffer,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<()> {
@@ -1320,7 +1320,7 @@ impl GpuContext {
     /// Copy pixels between same-format, same-size buffers.
     ///
     /// Uses GPU blit with texture caching for efficient repeated copies.
-    pub fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+    pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         self.blitter.blit_copy(src, dest)
     }
 
@@ -1333,7 +1333,7 @@ impl GpuContext {
     pub unsafe fn blit_copy_iosurface(
         &self,
         src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &RhiPixelBuffer,
+        dest: &PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<()> {
@@ -1457,7 +1457,7 @@ impl GpuContext {
     ///
     /// If this pixel buffer was already checked in, returns the existing ID.
     #[cfg(target_os = "macos")]
-    pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+    pub fn check_in_surface(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
         let store = self.surface_store.lock().unwrap();
         let store = store.as_ref().ok_or_else(|| {
             crate::core::Error::Configuration(
@@ -1473,7 +1473,7 @@ impl GpuContext {
     /// The first checkout for a given ID incurs XPC overhead (~100-200µs),
     /// subsequent checkouts are cache hits (~10-50ns).
     #[cfg(target_os = "macos")]
-    pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
         let store = self.surface_store.lock().unwrap();
         let store = store.as_ref().ok_or_else(|| {
             crate::core::Error::Configuration(
@@ -1485,7 +1485,7 @@ impl GpuContext {
 
     /// Check in a pixel buffer (non-macOS stub).
     #[cfg(not(target_os = "macos"))]
-    pub fn check_in_surface(&self, _pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+    pub fn check_in_surface(&self, _pixel_buffer: &PixelBuffer) -> Result<String> {
         Err(crate::core::Error::NotSupported(
             "Surface store is only supported on macOS".into(),
         ))
@@ -1493,7 +1493,7 @@ impl GpuContext {
 
     /// Check out a surface (non-macOS stub).
     #[cfg(not(target_os = "macos"))]
-    pub fn check_out_surface(&self, _surface_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn check_out_surface(&self, _surface_id: &str) -> Result<PixelBuffer> {
         Err(crate::core::Error::NotSupported(
             "Surface store is only supported on macOS".into(),
         ))
@@ -1726,17 +1726,17 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         self.inner.acquire_pixel_buffer(width, height, format)
     }
 
     /// Get a pixel buffer by its pool id (Split: local cache).
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
         self.inner.get_pixel_buffer(pool_id)
     }
 
     /// Resolve a [`VideoFrame`]'s buffer from its surface_id.
-    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<RhiPixelBuffer> {
+    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<PixelBuffer> {
         self.inner.resolve_video_frame_buffer(frame)
     }
 
@@ -1807,7 +1807,7 @@ impl GpuContextLimitedAccess {
     }
 
     /// Copy pixels between same-format, same-size buffers (Split: cache hit).
-    pub fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+    pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         self.inner.blit_copy(src, dest)
     }
 
@@ -1820,7 +1820,7 @@ impl GpuContextLimitedAccess {
     pub unsafe fn blit_copy_iosurface(
         &self,
         src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &RhiPixelBuffer,
+        dest: &PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<()> {
@@ -1833,7 +1833,7 @@ impl GpuContextLimitedAccess {
     }
 
     /// Check out a surface by ID (Split: cache hit).
-    pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
         self.inner.check_out_surface(surface_id)
     }
 }
@@ -1855,7 +1855,7 @@ impl GpuContextFullAccess {
         width: u32,
         height: u32,
         format: PixelFormat,
-    ) -> Result<(PixelBufferPoolId, RhiPixelBuffer)> {
+    ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         self.inner.acquire_pixel_buffer(width, height, format)
     }
 
@@ -1874,12 +1874,12 @@ impl GpuContextFullAccess {
     }
 
     /// Get a pixel buffer by its pool id.
-    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<RhiPixelBuffer> {
+    pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
         self.inner.get_pixel_buffer(pool_id)
     }
 
     /// Resolve a [`VideoFrame`]'s buffer from its surface_id.
-    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<RhiPixelBuffer> {
+    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<PixelBuffer> {
         self.inner.resolve_video_frame_buffer(frame)
     }
 
@@ -1929,7 +1929,7 @@ impl GpuContextFullAccess {
     pub fn upload_pixel_buffer_as_texture(
         &self,
         surface_id: &str,
-        pixel_buffer: &RhiPixelBuffer,
+        pixel_buffer: &PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<()> {
@@ -2046,7 +2046,7 @@ impl GpuContextFullAccess {
     }
 
     /// Copy pixels between same-format, same-size buffers.
-    pub fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+    pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         self.inner.blit_copy(src, dest)
     }
 
@@ -2059,7 +2059,7 @@ impl GpuContextFullAccess {
     pub unsafe fn blit_copy_iosurface(
         &self,
         src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &RhiPixelBuffer,
+        dest: &PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<()> {
@@ -2077,12 +2077,12 @@ impl GpuContextFullAccess {
     }
 
     /// Check in a pixel buffer to the surface-share service.
-    pub fn check_in_surface(&self, pixel_buffer: &RhiPixelBuffer) -> Result<String> {
+    pub fn check_in_surface(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
         self.inner.check_in_surface(pixel_buffer)
     }
 
     /// Check out a surface by ID.
-    pub fn check_out_surface(&self, surface_id: &str) -> Result<RhiPixelBuffer> {
+    pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
         self.inner.check_out_surface(surface_id)
     }
 

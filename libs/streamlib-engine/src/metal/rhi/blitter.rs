@@ -6,7 +6,7 @@
 use crate::apple::iosurface::create_metal_texture_from_iosurface;
 use crate::apple::texture_pool_macos::get_iosurface_id;
 use crate::core::rhi::blitter::RhiBlitter;
-use crate::core::rhi::{RhiCommandQueue, RhiPixelBuffer};
+use crate::core::rhi::{RhiCommandQueue, PixelBuffer};
 use crate::core::{Result, Error};
 use metal::foreign_types::ForeignTypeRef;
 use objc2::rc::Retained;
@@ -75,7 +75,7 @@ impl MetalBlitter {
 }
 
 impl RhiBlitter for MetalBlitter {
-    fn blit_copy(&self, src: &RhiPixelBuffer, dest: &RhiPixelBuffer) -> Result<()> {
+    fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         // Get IOSurfaces from both buffers
         let src_iosurface = src
             .buffer_ref()
@@ -144,7 +144,7 @@ impl RhiBlitter for MetalBlitter {
     unsafe fn blit_copy_iosurface_raw(
         &self,
         src: *const std::ffi::c_void,
-        dest: &RhiPixelBuffer,
+        dest: &PixelBuffer,
         width: u32,
         height: u32,
     ) -> Result<()> {

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! macOS RhiPixelBufferRef implementation.
+//! macOS PixelBufferRef implementation.
 
 use std::ptr::NonNull;
 
@@ -9,9 +9,9 @@ use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetPixelFormatType, CVPixelBufferGetWidth,
     CVPixelBufferRef, CVPixelBufferRelease, CVPixelBufferRetain,
 };
-use crate::core::rhi::{PixelFormat, RhiPixelBufferRef};
+use crate::core::rhi::{PixelFormat, PixelBufferRef};
 
-impl RhiPixelBufferRef {
+impl PixelBufferRef {
     /// Create from a raw CVPixelBufferRef.
     ///
     /// # Safety
@@ -64,33 +64,33 @@ impl RhiPixelBufferRef {
 }
 
 /// Query pixel format from CVPixelBuffer.
-pub(crate) fn format_impl(buffer_ref: &RhiPixelBufferRef) -> PixelFormat {
+pub(crate) fn format_impl(buffer_ref: &PixelBufferRef) -> PixelFormat {
     let cv_format = unsafe { CVPixelBufferGetPixelFormatType(buffer_ref.inner.as_ptr()) };
     PixelFormat::from_cv_pixel_format_type(cv_format)
 }
 
 /// Query width from CVPixelBuffer.
-pub(crate) fn width_impl(buffer_ref: &RhiPixelBufferRef) -> u32 {
+pub(crate) fn width_impl(buffer_ref: &PixelBufferRef) -> u32 {
     unsafe { CVPixelBufferGetWidth(buffer_ref.inner.as_ptr()) as u32 }
 }
 
 /// Query height from CVPixelBuffer.
-pub(crate) fn height_impl(buffer_ref: &RhiPixelBufferRef) -> u32 {
+pub(crate) fn height_impl(buffer_ref: &PixelBufferRef) -> u32 {
     unsafe { CVPixelBufferGetHeight(buffer_ref.inner.as_ptr()) as u32 }
 }
 
 /// Clone implementation - retains the CVPixelBuffer.
-pub(crate) fn clone_impl(buffer_ref: &RhiPixelBufferRef) -> RhiPixelBufferRef {
+pub(crate) fn clone_impl(buffer_ref: &PixelBufferRef) -> PixelBufferRef {
     unsafe {
         CVPixelBufferRetain(buffer_ref.inner.as_ptr());
-        RhiPixelBufferRef {
+        PixelBufferRef {
             inner: buffer_ref.inner,
         }
     }
 }
 
 /// Drop implementation - releases the CVPixelBuffer.
-pub(crate) fn drop_impl(buffer_ref: &mut RhiPixelBufferRef) {
+pub(crate) fn drop_impl(buffer_ref: &mut PixelBufferRef) {
     unsafe {
         CVPixelBufferRelease(buffer_ref.inner.as_ptr());
     }
@@ -108,7 +108,7 @@ use crate::apple::corevideo_ffi::{
 use crate::core::rhi::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
 use crate::core::{Result, Error};
 
-impl RhiPixelBufferExport for RhiPixelBufferRef {
+impl RhiPixelBufferExport for PixelBufferRef {
     /// Export the CVPixelBuffer's IOSurface for cross-process sharing.
     ///
     /// Uses IOSurface ID for sharing. Requires kIOSurfaceIsGlobal to be set
@@ -162,7 +162,7 @@ impl RhiPixelBufferExport for RhiPixelBufferRef {
     }
 }
 
-impl RhiPixelBufferRef {
+impl PixelBufferRef {
     /// Export the CVPixelBuffer's IOSurface as a mach port for cross-process sharing.
     ///
     /// This is the recommended method for cross-process IOSurface sharing on macOS.
@@ -227,7 +227,7 @@ impl RhiPixelBufferRef {
     }
 }
 
-impl RhiPixelBufferImport for RhiPixelBufferRef {
+impl RhiPixelBufferImport for PixelBufferRef {
     /// Import a CVPixelBuffer from an external handle.
     ///
     /// Supports:
@@ -340,7 +340,7 @@ impl RhiPixelBufferImport for RhiPixelBufferRef {
 /// Helper to create CVPixelBuffer from IOSurface.
 fn create_cv_buffer_from_iosurface(
     iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
-) -> Result<RhiPixelBufferRef> {
+) -> Result<PixelBufferRef> {
     let mut cv_buffer: crate::apple::corevideo_ffi::CVPixelBufferRef = std::ptr::null_mut();
 
     let result = unsafe {
@@ -382,11 +382,11 @@ fn create_cv_buffer_from_iosurface(
 
     // The CVPixelBuffer is already retained by CreateWithIOSurface,
     // so use from_cv_pixel_buffer_no_retain
-    unsafe { RhiPixelBufferRef::from_cv_pixel_buffer_no_retain(cv_buffer) }
+    unsafe { PixelBufferRef::from_cv_pixel_buffer_no_retain(cv_buffer) }
         .ok_or_else(|| Error::Configuration("Failed to wrap CVPixelBuffer".into()))
 }
 
-/// Create an RhiPixelBufferRef from a raw IOSurfaceRef.
+/// Create a PixelBufferRef from a raw IOSurfaceRef.
 ///
 /// This is the implementation called from core/rhi/pixel_buffer_ref.rs.
 ///
@@ -394,7 +394,7 @@ fn create_cv_buffer_from_iosurface(
 /// The caller must ensure the IOSurfaceRef is valid.
 pub unsafe fn from_iosurface_ref_impl(
     iosurface: crate::apple::corevideo_ffi::IOSurfaceRef,
-) -> Result<RhiPixelBufferRef> {
+) -> Result<PixelBufferRef> {
     if iosurface.is_null() {
         return Err(Error::Configuration("IOSurfaceRef is null".into()));
     }

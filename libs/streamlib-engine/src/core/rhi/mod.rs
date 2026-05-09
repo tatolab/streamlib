@@ -50,11 +50,11 @@ pub use ray_tracing_kernel::{
 pub use format_converter::RhiFormatConverter;
 pub use format_converter_cache::RhiFormatConverterCache;
 pub use gl_interop::{gl_constants, GlContext, GlTextureBinding};
-pub use pixel_buffer::RhiPixelBuffer;
+pub use pixel_buffer::PixelBuffer;
 pub use pixel_buffer_pool::{PixelBufferDescriptor, PixelBufferPoolId};
 // Note: RhiPixelBufferPool is intentionally not exported - use GpuContext::acquire_pixel_buffer()
 pub(crate) use pixel_buffer_pool::RhiPixelBufferPool;
-pub use pixel_buffer_ref::RhiPixelBufferRef;
+pub use pixel_buffer_ref::PixelBufferRef;
 // PixelFormat / TextureFormat / TextureUsages / VulkanLayout are
 // defined in the `streamlib-consumer-rhi` crate so subprocess-shape dep
 // graphs can reach them without pulling streamlib. Re-exported here for
