@@ -13,7 +13,7 @@ use crate::core::graph::{
 };
 use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, Error};
+use crate::core::{InputLinkPortRef, OutputLinkPortRef, PortDirection, Result, Error};
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -151,16 +151,45 @@ async fn connect_impl(
         }),
     );
 
-    let link_id = compiler.scope(|graph, tx| {
-        let id = graph
+    let link_id = compiler.scope(|graph, tx| -> Result<LinkUniqueId> {
+        // Validate endpoints + ports up-front so failures surface as typed
+        // errors instead of the generic `add_e`-returns-empty-traversal path.
+        // The `add_e` call still does its own checks defensively, but this
+        // pre-validation is what gets the typed error to the caller.
+        // Validate source processor + output port.
+        {
+            let from_node = graph.traversal().v(&from.processor_id).first().ok_or_else(
+                || Error::ProcessorNotFound(from.processor_id.to_string()),
+            )?;
+            if !from_node.has_output(&from.port_name) {
+                return Err(Error::ProcessorPortNotFound {
+                    processor_id: from.processor_id.to_string(),
+                    port_name: from.port_name.clone(),
+                    direction: PortDirection::Output,
+                });
+            }
+        }
+        // Validate target processor + input port.
+        {
+            let to_node = graph.traversal().v(&to.processor_id).first().ok_or_else(
+                || Error::ProcessorNotFound(to.processor_id.to_string()),
+            )?;
+            if !to_node.has_input(&to.port_name) {
+                return Err(Error::ProcessorPortNotFound {
+                    processor_id: to.processor_id.to_string(),
+                    port_name: to.port_name.clone(),
+                    direction: PortDirection::Input,
+                });
+            }
+        }
+
+        graph
             .traversal_mut()
             .add_e(from, to)
             .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
             .first()
             .map(|link| link.id.clone())
-            .ok_or_else(|| Error::GraphError("failed to create link".into()))?;
-
-        Ok::<_, Error>(id)
+            .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))
     })?;
 
     PUBSUB.publish(

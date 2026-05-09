@@ -50,6 +50,13 @@ pub enum Error {
         ident: crate::core::descriptors::SchemaIdent,
     },
 
+    #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
+    ProcessorPortNotFound {
+        processor_id: String,
+        port_name: String,
+        direction: PortDirection,
+    },
+
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
 
@@ -82,6 +89,25 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// Direction of a port relative to its processor — `Output` for source-side,
+/// `Input` for destination-side. Used by [`Error::ProcessorPortNotFound`] to
+/// distinguish "the source processor has no output port named X" from "the
+/// target processor has no input port named X."
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortDirection {
+    Input,
+    Output,
+}
+
+impl std::fmt::Display for PortDirection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Input => f.write_str("input"),
+            Self::Output => f.write_str("output"),
+        }
+    }
+}
 
 #[cfg(target_os = "linux")]
 impl From<streamlib_consumer_rhi::ConsumerRhiError> for Error {

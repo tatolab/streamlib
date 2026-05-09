@@ -178,6 +178,32 @@ struct UnknownProcessorTypeResponse {
     ident: SchemaIdentOutput,
 }
 
+/// Body returned alongside `404 Not Found` when a connection references a
+/// processor id that doesn't exist in the graph.
+#[derive(Serialize, utoipa::ToSchema)]
+struct ProcessorNotFoundResponse {
+    /// Typed error discriminator: always `"ProcessorNotFound"`.
+    error: &'static str,
+    /// The processor id that wasn't in the graph.
+    processor_id: String,
+}
+
+/// Body returned alongside `422 Unprocessable Entity` when a connection
+/// references a port name that doesn't exist on the named processor.
+/// Distinct from `UnknownProcessorTypeResponse`: the processor exists,
+/// but the port doesn't.
+#[derive(Serialize, utoipa::ToSchema)]
+struct ProcessorPortNotFoundResponse {
+    /// Typed error discriminator: always `"ProcessorPortNotFound"`.
+    error: &'static str,
+    /// The processor id whose port lookup failed.
+    processor_id: String,
+    /// The port name that wasn't found.
+    port_name: String,
+    /// `"input"` or `"output"`.
+    direction: &'static str,
+}
+
 // ============================================================================
 // OpenAPI Documentation
 // ============================================================================
@@ -511,23 +537,57 @@ async fn delete_processor(
     request_body = CreateConnectionRequest,
     responses(
         (status = 200, description = "Connection created successfully", body = IdResponse),
-        (status = 400, description = "Invalid connection (ports don't exist or types don't match)", body = ErrorResponse)
+        (status = 400, description = "Malformed request or generic graph error", body = ErrorResponse),
+        (status = 404, description = "One of the referenced processors isn't in the graph", body = ProcessorNotFoundResponse),
+        (status = 422, description = "Referenced processor exists but has no port with that name and direction", body = ProcessorPortNotFoundResponse)
     )
 )]
 async fn create_connection(
     State(state): State<AppState>,
     Json(body): Json<CreateConnectionRequest>,
-) -> std::result::Result<Json<IdResponse>, axum::http::StatusCode> {
+) -> axum::response::Response {
     let from = OutputLinkPortRef::new(body.from_processor, body.from_port);
     let to = InputLinkPortRef::new(body.to_processor, body.to_port);
 
-    state
-        .runtime_ctx
-        .runtime()
-        .connect_async(from, to)
-        .await
-        .map(|id| Json(IdResponse { id: id.to_string() }))
-        .map_err(|_| axum::http::StatusCode::BAD_REQUEST)
+    match state.runtime_ctx.runtime().connect_async(from, to).await {
+        Ok(id) => (
+            StatusCode::OK,
+            Json(IdResponse { id: id.to_string() }),
+        )
+            .into_response(),
+        Err(Error::ProcessorNotFound(processor_id)) => (
+            StatusCode::NOT_FOUND,
+            Json(ProcessorNotFoundResponse {
+                error: "ProcessorNotFound",
+                processor_id,
+            }),
+        )
+            .into_response(),
+        Err(Error::ProcessorPortNotFound {
+            processor_id,
+            port_name,
+            direction,
+        }) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ProcessorPortNotFoundResponse {
+                error: "ProcessorPortNotFound",
+                processor_id,
+                port_name,
+                direction: match direction {
+                    crate::core::PortDirection::Input => "input",
+                    crate::core::PortDirection::Output => "output",
+                },
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 #[utoipa::path(
