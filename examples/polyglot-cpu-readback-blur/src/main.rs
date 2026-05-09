@@ -49,7 +49,7 @@ use std::time::Duration;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use streamlib::sdk::context::{CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext};
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::rhi::{PixelFormat, PixelBuffer, TextureFormat};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
@@ -104,17 +104,17 @@ impl RuntimeKind {
 
     fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-cpu-readback-blur").unwrap(),
-                TypeName::new("CpuReadbackBlur").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident!(
+                "tatolab",
+                "polyglot-cpu-readback-blur",
+                "CpuReadbackBlur",
+                "0.1.0"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-cpu-readback-blur-deno").unwrap(),
-                TypeName::new("CpuReadbackBlurProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident!(
+                "tatolab",
+                "polyglot-cpu-readback-blur-deno",
+                "CpuReadbackBlurProcessor",
+                "0.1.0"
             ),
         }
     }

@@ -40,7 +40,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
@@ -58,11 +58,11 @@ const MIN_FRAMES_RECEIVED: u32 = 20;
 const COUNTING_SINK_PLUGIN_DYLIB: &str = "libpolyglot_manual_source_counting_sink_plugin.so";
 
 fn counting_sink_processor_ident() -> SchemaIdent {
-    SchemaIdent::new(
-        Org::new("tatolab").unwrap(),
-        Package::new("polyglot-manual-source-counting-sink").unwrap(),
-        TypeName::new("PolyglotManualSourceCountingSink").unwrap(),
-        SemVer::new(0, 1, 0),
+    streamlib::sdk::schema_ident!(
+        "tatolab",
+        "polyglot-manual-source-counting-sink",
+        "PolyglotManualSourceCountingSink",
+        "0.1.0"
     )
 }
 /// Env var the counting sink reads to know where to write JSON stats.
@@ -96,17 +96,17 @@ impl RuntimeKind {
 
     fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-manual-source").unwrap(),
-                TypeName::new("PolyglotManualSource").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident!(
+                "tatolab",
+                "polyglot-manual-source",
+                "PolyglotManualSource",
+                "0.1.0"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-manual-source-deno").unwrap(),
-                TypeName::new("PolyglotManualSource").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident!(
+                "tatolab",
+                "polyglot-manual-source-deno",
+                "PolyglotManualSource",
+                "0.1.0"
             ),
         }
     }

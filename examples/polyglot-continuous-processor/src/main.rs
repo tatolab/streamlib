@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
@@ -90,17 +90,17 @@ impl RuntimeKind {
 
     fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-continuous-processor").unwrap(),
-                TypeName::new("PolyglotContinuousProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident!(
+                "tatolab",
+                "polyglot-continuous-processor",
+                "PolyglotContinuousProcessor",
+                "0.1.0"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-continuous-processor-deno").unwrap(),
-                TypeName::new("PolyglotContinuousProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident!(
+                "tatolab",
+                "polyglot-continuous-processor-deno",
+                "PolyglotContinuousProcessor",
+                "0.1.0"
             ),
         }
     }

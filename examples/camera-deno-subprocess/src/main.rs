@@ -20,7 +20,6 @@
 //! ```
 
 use std::path::PathBuf;
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, ProcessorSpec};
 use streamlib::sdk::error::Result;
@@ -40,11 +39,11 @@ fn main() -> Result<()> {
     }))?;
 
     let halftone = runtime.add_processor(ProcessorSpec::new(
-        SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("camera-deno-subprocess").unwrap(),
-            TypeName::new("HalftoneProcessor").unwrap(),
-            SemVer::new(0, 1, 0),
+        streamlib::sdk::schema_ident!(
+            "tatolab",
+            "camera-deno-subprocess",
+            "HalftoneProcessor",
+            "0.1.0"
         ),
         serde_json::json!({}),
     ))?;

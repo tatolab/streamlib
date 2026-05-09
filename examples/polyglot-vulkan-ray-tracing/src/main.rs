@@ -52,7 +52,7 @@ use streamlib::sdk::context::{
     RayTracingShaderStageWire,
     TlasRegisterDecl,
 };
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::rhi::{
     RayTracingBindingSpec,
     RayTracingKernelDescriptor,
@@ -128,17 +128,17 @@ impl RuntimeKind {
 
     fn processor_ident(self) -> SchemaIdent {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-vulkan-ray-tracing").unwrap(),
-                TypeName::new("VulkanRayTracing").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident!(
+                "tatolab",
+                "polyglot-vulkan-ray-tracing",
+                "VulkanRayTracing",
+                "0.1.0"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-vulkan-ray-tracing-deno").unwrap(),
-                TypeName::new("VulkanRayTracingProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident!(
+                "tatolab",
+                "polyglot-vulkan-ray-tracing-deno",
+                "VulkanRayTracingProcessor",
+                "0.1.0"
             ),
         }
     }

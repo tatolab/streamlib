@@ -164,6 +164,10 @@ pub mod sdk {
     /// `#[derive(ConfigDescriptor)]` derive macro.
     pub use streamlib_engine::ConfigDescriptor;
 
+    /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
+    /// short form of [`SchemaIdent::new`](descriptors::SchemaIdent::new).
+    pub use streamlib_engine::schema_ident;
+
     // ---- Permission helpers ----
 
     pub mod permissions {

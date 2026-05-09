@@ -8,6 +8,9 @@
 //!   and resolves the full structured [`SchemaIdent`] from the package's
 //!   `package: { org, name, version }` block plus the matching entry in
 //!   the `processors:` list.
+//! - `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
+//!   short form of the long [`SchemaIdent::new`] constructor. Same four
+//!   fields, validated at compile time, expands to the long form verbatim.
 
 mod analysis;
 mod attributes;
@@ -15,11 +18,16 @@ mod codegen;
 mod config_descriptor;
 
 use proc_macro::TokenStream;
+use quote::quote;
 use std::path::Path;
 use streamlib_processor_schema::{
-    PackageMetadata, ProcessorSchema, ProjectConfigMinimal, SchemaIdent, TypeName,
+    Org, Package, PackageMetadata, ProcessorSchema, ProjectConfigMinimal, SchemaIdent, SemVer,
+    TypeName,
 };
-use syn::{parse_macro_input, DeriveInput, ItemStruct, LitStr};
+use syn::{
+    parse::{Parse, ParseStream},
+    parse_macro_input, DeriveInput, ItemStruct, LitStr, Token,
+};
 
 /// Main processor attribute macro.
 ///
@@ -138,6 +146,122 @@ fn load_processor_schema(
     let ident = SchemaIdent::new(pkg.org, pkg.name, type_name, pkg.version);
 
     Ok((schema, ident))
+}
+
+/// Short form of [`SchemaIdent::new`]. Takes the same four fields as the
+/// long-form constructor (org, package, type, version) as string literals,
+/// validates each at compile time, and expands to the equivalent
+/// `SchemaIdent::new(...)` expression.
+///
+/// ```ignore
+/// // Long form (5 lines):
+/// SchemaIdent::new(
+///     Org::new("tatolab").unwrap(),
+///     Package::new("polyglot-continuous-processor").unwrap(),
+///     TypeName::new("PolyglotContinuousProcessor").unwrap(),
+///     SemVer::new(1, 0, 0),
+/// )
+///
+/// // Short form (1 line):
+/// schema_ident!("tatolab", "polyglot-continuous-processor", "PolyglotContinuousProcessor", "1.0.0")
+/// ```
+///
+/// Each segment is validated at proc-macro expansion: invalid org / package /
+/// type / semver becomes a compile error, never a runtime panic.
+#[proc_macro]
+pub fn schema_ident(input: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(input as SchemaIdentArgs);
+    match expand_schema_ident(&args) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+struct SchemaIdentArgs {
+    org: LitStr,
+    package: LitStr,
+    type_name: LitStr,
+    version: LitStr,
+}
+
+impl Parse for SchemaIdentArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let org: LitStr = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let package: LitStr = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let type_name: LitStr = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let version: LitStr = input.parse()?;
+        // Tolerate an optional trailing comma.
+        let _ = input.parse::<Token![,]>();
+        Ok(Self {
+            org,
+            package,
+            type_name,
+            version,
+        })
+    }
+}
+
+fn expand_schema_ident(args: &SchemaIdentArgs) -> syn::Result<proc_macro2::TokenStream> {
+    let org_str = args.org.value();
+    let package_str = args.package.value();
+    let type_str = args.type_name.value();
+    let version_str = args.version.value();
+
+    Org::new(&org_str).map_err(|e| {
+        syn::Error::new(
+            args.org.span(),
+            format!("invalid org `{}`: {}", org_str, e),
+        )
+    })?;
+    Package::new(&package_str).map_err(|e| {
+        syn::Error::new(
+            args.package.span(),
+            format!("invalid package `{}`: {}", package_str, e),
+        )
+    })?;
+    TypeName::new(&type_str).map_err(|e| {
+        syn::Error::new(
+            args.type_name.span(),
+            format!("invalid type name `{}`: {}", type_str, e),
+        )
+    })?;
+    let (major, minor, patch) = parse_semver(&version_str).map_err(|e| {
+        syn::Error::new(
+            args.version.span(),
+            format!("invalid version `{}`: {}", version_str, e),
+        )
+    })?;
+
+    let _ = SemVer::new(major, minor, patch);
+
+    Ok(quote! {
+        ::streamlib::sdk::descriptors::SchemaIdent::new(
+            ::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
+            ::streamlib::sdk::descriptors::Package::new(#package_str).expect("validated by macro"),
+            ::streamlib::sdk::descriptors::TypeName::new(#type_str).expect("validated by macro"),
+            ::streamlib::sdk::descriptors::SemVer::new(#major, #minor, #patch),
+        )
+    })
+}
+
+fn parse_semver(s: &str) -> Result<(u32, u32, u32), String> {
+    let mut parts = s.split('.');
+    let major = parse_part(parts.next())?;
+    let minor = parse_part(parts.next())?;
+    let patch = parse_part(parts.next())?;
+    if parts.next().is_some() {
+        return Err("expected exactly three dot-separated integers (e.g. 1.0.0)".into());
+    }
+    Ok((major, minor, patch))
+}
+
+fn parse_part(part: Option<&str>) -> Result<u32, String> {
+    let p = part.ok_or_else(|| "expected three dot-separated integers".to_string())?;
+    p.parse::<u32>()
+        .map_err(|_| format!("`{}` is not a non-negative integer", p))
 }
 
 /// Derive macro for ConfigDescriptor trait.
