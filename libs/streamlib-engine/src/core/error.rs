@@ -45,6 +45,11 @@ pub enum Error {
     #[error("Processor not found: {0}")]
     ProcessorNotFound(String),
 
+    #[error("Unknown processor type: {ident} (not registered)")]
+    UnknownProcessorType {
+        ident: crate::core::descriptors::SchemaIdent,
+    },
+
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
 

@@ -149,9 +149,11 @@ impl GraphFileDefinition {
     /// Checks:
     /// - All aliases are unique
     /// - All connection references point to valid aliases
-    /// - All processor types exist in registry (optional, requires registry access)
+    /// - All processor types exist in the global processor registry
     pub fn validate(&self) -> Result<()> {
         use std::collections::HashSet;
+
+        use crate::core::processors::PROCESSOR_REGISTRY;
 
         // Check for duplicate aliases
         let mut aliases: HashSet<&str> = HashSet::new();
@@ -180,6 +182,17 @@ impl GraphFileDefinition {
                     "Connection references unknown processor alias: '{}'",
                     to.alias
                 )));
+            }
+        }
+
+        // Check all processor types resolve through the runtime registry.
+        // Bails on the first miss — matches the behavior of the surrounding
+        // alias / connection checks above.
+        for proc in &self.processors {
+            if PROCESSOR_REGISTRY.port_info(&proc.processor_type).is_none() {
+                return Err(Error::UnknownProcessorType {
+                    ident: proc.processor_type.clone(),
+                });
             }
         }
 
@@ -332,5 +345,35 @@ mod tests {
         assert!(def.processors.is_empty());
         assert!(def.connections.is_empty());
         assert!(def.validate().is_ok());
+    }
+
+    /// `validate()` checks every processor type against the global registry
+    /// and fails with the typed `UnknownProcessorType` variant on the first
+    /// miss. The docstring promised this; the implementation now delivers.
+    #[test]
+    fn test_validate_unknown_processor_type() {
+        let unknown_type = format!(
+            r#"{{ "org": "tatolab", "package": "streamlib", "type": "{}", "version": "1.0.0" }}"#,
+            "DefinitelyNotARegisteredProcessor",
+        );
+        let json = format!(
+            r#"{{
+                "processors": [
+                    {{ "alias": "ghost", "type": {}, "config": {{}} }}
+                ]
+            }}"#,
+            unknown_type,
+        );
+
+        let def = GraphFileDefinition::from_json_str(&json).unwrap();
+        match def.validate() {
+            Err(Error::UnknownProcessorType { ident }) => {
+                assert_eq!(ident.r#type.as_str(), "DefinitelyNotARegisteredProcessor");
+            }
+            other => panic!(
+                "expected UnknownProcessorType, got {:?}",
+                other
+            ),
+        }
     }
 }

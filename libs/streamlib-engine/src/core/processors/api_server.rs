@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::core::error::Error;
 use crate::core::pubsub::{topics, Event, EventListener, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use crate::PROCESSOR_REGISTRY;
@@ -15,6 +16,7 @@ use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::Path,
     extract::State,
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -159,6 +161,21 @@ use crate::core::json_schema::{
 struct ErrorResponse {
     /// Error message
     error: String,
+}
+
+/// Body returned alongside `422 Unprocessable Entity` when the caller
+/// supplies a structurally-valid `SchemaIdent` whose type isn't registered.
+/// The runtime is dynamic — types load and unload — so this is a normal
+/// runtime miss, not a malformed request. The client gets a typed
+/// discriminator (`error`), the offending ident, and the placeholder
+/// processor id (the failed node is left in the graph in `Error` state for
+/// observability via `GET /api/graph`).
+#[derive(Serialize, utoipa::ToSchema)]
+struct UnknownProcessorTypeResponse {
+    /// Typed error discriminator: always `"UnknownProcessorType"`.
+    error: &'static str,
+    /// The structured ident that didn't resolve.
+    ident: SchemaIdentOutput,
 }
 
 // ============================================================================
@@ -397,13 +414,14 @@ async fn get_graph(
     request_body = CreateProcessorRequest,
     responses(
         (status = 200, description = "Processor created successfully", body = IdResponse),
-        (status = 400, description = "Invalid processor type or configuration", body = ErrorResponse)
+        (status = 400, description = "Malformed request (invalid org / package / type / version segment)", body = ErrorResponse),
+        (status = 422, description = "Processor type is structurally valid but not registered in the runtime; the failed node is left in the graph in `Error` state", body = UnknownProcessorTypeResponse)
     )
 )]
 async fn create_processor(
     State(state): State<AppState>,
     Json(body): Json<CreateProcessorRequest>,
-) -> std::result::Result<Json<IdResponse>, axum::http::StatusCode> {
+) -> axum::response::Response {
     // Convert SchemaIdentOutput → SchemaIdent through the typed segment
     // validators (Org::new / Package::new / TypeName::new / SemVer::new).
     // This is typed conversion, not parsing — there is no `SchemaIdent::parse`.
@@ -412,22 +430,52 @@ async fn create_processor(
         package,
         type_name,
         version,
-    } = body.processor_type;
-    let ident = SchemaIdent::new(
-        Org::new(org).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
-        Package::new(package).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
-        TypeName::new(type_name).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
-        SemVer::new(version.major, version.minor, version.patch),
-    );
+    } = body.processor_type.clone();
+    let ident = match (
+        Org::new(org),
+        Package::new(package),
+        TypeName::new(type_name),
+    ) {
+        (Ok(org), Ok(package), Ok(type_name)) => SchemaIdent::new(
+            org,
+            package,
+            type_name,
+            SemVer::new(version.major, version.minor, version.patch),
+        ),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Malformed processor identifier — one of org / package / type failed validation".into(),
+                }),
+            )
+                .into_response();
+        }
+    };
     let spec = ProcessorSpec::new(ident, body.config);
 
-    state
-        .runtime_ctx
-        .runtime()
-        .add_processor_async(spec)
-        .await
-        .map(|id| Json(IdResponse { id: id.to_string() }))
-        .map_err(|_| axum::http::StatusCode::BAD_REQUEST)
+    match state.runtime_ctx.runtime().add_processor_async(spec).await {
+        Ok(id) => (
+            StatusCode::OK,
+            Json(IdResponse { id: id.to_string() }),
+        )
+            .into_response(),
+        Err(Error::UnknownProcessorType { ident: _ }) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(UnknownProcessorTypeResponse {
+                error: "UnknownProcessorType",
+                ident: body.processor_type,
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 #[utoipa::path(

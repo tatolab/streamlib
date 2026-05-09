@@ -9,9 +9,9 @@ use super::Runner;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
-    ProcessorUniqueId,
+    ProcessorUniqueId, StateComponent,
 };
-use crate::core::processors::ProcessorSpec;
+use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, Error};
 
@@ -42,16 +42,43 @@ async fn add_processor_impl(
         );
     };
 
-    let processor_id = compiler.scope(|graph, tx| {
-        graph
+    // Hold the ident so we can surface a typed `UnknownProcessorType` error
+    // if the registry doesn't know this type — `spec` is moved into `add_v`.
+    let ident_for_err = spec.name.clone();
+
+    let processor_id = compiler.scope(|graph, tx| -> Result<ProcessorUniqueId> {
+        let node_id = graph
             .traversal_mut()
             .add_v(spec)
-            .inspect(|node| emit_will_add(&node.id))
-            .inspect(|node| tx.log(PendingOperation::AddProcessor(node.id.clone())))
-            .inspect(|node| emit_did_add(&node.id))
             .first()
             .map(|node| node.id.clone())
-            .ok_or_else(|| Error::GraphError("Could not create node".into()))
+            .ok_or_else(|| Error::GraphError("Could not create node".into()))?;
+
+        // Registry miss: `add_v` already attached `StateComponent(Error)` so
+        // the failed node is visible via `GET /api/graph`. Skip pending-op
+        // logging so the compiler doesn't try to spawn it. Emit the
+        // graph-changed events so subscribers see the new node, then surface
+        // the typed error.
+        let registry_miss = graph
+            .traversal()
+            .v(&node_id)
+            .first()
+            .and_then(|node| node.get::<StateComponent>())
+            .map(|state_component| matches!(*state_component.0.lock(), ProcessorState::Error))
+            .unwrap_or(false);
+
+        if registry_miss {
+            emit_will_add(&node_id);
+            emit_did_add(&node_id);
+            return Err(Error::UnknownProcessorType {
+                ident: ident_for_err,
+            });
+        }
+
+        emit_will_add(&node_id);
+        tx.log(PendingOperation::AddProcessor(node_id.clone()));
+        emit_did_add(&node_id);
+        Ok(node_id)
     })?;
 
     PUBSUB.publish(
