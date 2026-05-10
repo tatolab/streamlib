@@ -141,10 +141,13 @@ processors:
     version: 1.0.0
     description: "Rechunks audio buffers to a fixed sample count"
     execution: reactive
-    # No `scheduling:` declared — pre-#722 the substring heuristic
-    # gave this `Normal` (short name doesn't contain `Audio`), and the
-    # migration preserves that. Flip to `realtime` + `kind: audio` if a
-    # workload surfaces evidence elevated priority is needed here.
+    # Sits on the audio path between capture and downstream consumers —
+    # same realtime constraint as AudioMixer/AudioResampler. The
+    # pre-#722 substring heuristic missed this (short name has no
+    # `Audio`); the migration corrects it.
+    scheduling:
+      priority: realtime
+      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/BufferRechunkerConfig@1.0.0"
@@ -163,7 +166,11 @@ processors:
     version: 1.0.0
     description: "Generates a C major chord (C4 + E4 + G4) driven by the runtime audio clock"
     execution: manual
-    # See BufferRechunker note — pre-#722 default was `Normal`, preserved.
+    # Synth driven by the audio clock — realtime audio path. Heuristic
+    # missed this on the same `Audio`-substring grounds as BufferRechunker.
+    scheduling:
+      priority: realtime
+      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/ChordGeneratorConfig@1.0.0"
