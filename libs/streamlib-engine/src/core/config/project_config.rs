@@ -6,7 +6,7 @@
 use crate::core::{Result, Error};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use streamlib_idents::{DependencySpec, PackageRef};
 use streamlib_processor_schema::{Org, Package, SemVer};
 
@@ -37,6 +37,16 @@ pub struct ProjectConfig {
     /// Environment variables to inject into subprocesses.
     #[serde(default)]
     pub env: HashMap<String, String>,
+
+    /// Schema YAML paths declared by this package, relative to its
+    /// manifest dir. The runtime reads each at `Runner::load_project`
+    /// time and registers the YAML body with the engine's schema
+    /// registry so `get_embedded_schema_definition` /
+    /// `max_payload_bytes_for_schema` / api-server `/schemas` discover
+    /// it. Absent from `streamlib.yaml` is fine — package may declare
+    /// only `processors:` without explicit schema files.
+    #[serde(default)]
+    pub schemas: Vec<PathBuf>,
 
     /// Inline processor definitions.
     #[serde(default)]
