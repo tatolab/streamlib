@@ -114,6 +114,32 @@ blocked by it.
   blocks on this one and lands in the same milestone. Don't accept a
   bare "Deno deferred" line — see #468.
 
+## Carve-out rules (for `packages/*` issues)
+
+When carving a domain processor cluster out of `libs/streamlib-engine/`
+into `packages/<name>/` (issues #673–#683 + audio's #672 precedent):
+
+- **Cargo crate type**: declare `crate-type = ["rlib", "cdylib"]` from
+  day one in the new `packages/<name>/Cargo.toml`. Apps continue to
+  link as rlib in milestone-10; the cdylib output is forward-compat
+  prep for milestone-11 ("All-Dynamic Package Loading") where every
+  domain crate ships as a `.slpkg`. Cost: one line in `Cargo.toml`.
+  Skipping this means milestone-11 has to retroactively add it across
+  every carved-out crate. Audio's `packages/audio/Cargo.toml` is
+  `rlib`-only today (#672 predates this rule); it gets the same
+  one-line update during the milestone-11 work.
+- **Engine purity** (per the
+  [`feedback_engine_purity_extends_to_codegen`](../../../.claude/projects/-home-jonathan-fontanez-Repositories-tatolab-streamlib/memory/feedback_engine_purity_extends_to_codegen.md)
+  memory): the engine's own `streamlib.yaml` must NOT declare
+  `@tatolab/<carved-package>` as a dep. Carve-out PRs are read-only
+  against `libs/streamlib`; if a domain processor needs a public
+  engine API that doesn't exist today, the carve-out pauses for a
+  precursor PR — never silently expands its scope.
+- **Slim glue**: `lib.rs` and `mod.rs` in the new package carry only
+  `pub mod ...;` and `pub use ...;`. Every processor lives in its
+  own named file (`audio_mixer.rs`, `h264_encoder.rs`, etc.) so the
+  module hierarchy mirrors the conceptual structure.
+
 ## PR body additions
 
 ```markdown

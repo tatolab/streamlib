@@ -381,9 +381,20 @@ impl Runner {
             }
         }
 
+        // Register every schema declared in `streamlib.yaml`'s
+        // `schemas:` list with the engine's runtime schema registry so
+        // `get_embedded_schema_definition` /
+        // `max_payload_bytes_for_schema` / api-server `/schemas`
+        // discover this package's schemas (#729). The engine's
+        // compile-time `EMBEDDED_SCHEMAS` const seeds the registry
+        // lazily on first lookup; this call is the runtime path that
+        // makes domain-package schemas reachable without the engine
+        // declaring them as deps.
+        register_package_schemas(project_path, &config)?;
+
         if config.processors.is_empty() {
-            tracing::warn!(
-                "No processors found in {} in {}",
+            tracing::debug!(
+                "No processors declared in {} at {} (schemas-only package or fixture).",
                 ProjectConfig::FILE_NAME,
                 project_path.display()
             );
@@ -1454,6 +1465,116 @@ impl Runner {
     }
 }
 
+/// Read each path in `config.schemas` (relative to `project_path`),
+/// derive the canonical identifier from the schema's `metadata.type`
+/// (or legacy `metadata.name`) plus the package's `org` / `name`, and
+/// hand the YAML body to the runtime schema registry. No-op when the
+/// manifest declares no schemas.
+fn register_package_schemas(
+    project_path: &std::path::Path,
+    config: &crate::core::config::ProjectConfig,
+) -> Result<()> {
+    use crate::core::config::ProjectConfig;
+    use crate::core::embedded_schemas;
+
+    if config.schemas.is_empty() {
+        return Ok(());
+    }
+
+    let pkg_meta = config.package.as_ref().ok_or_else(|| {
+        Error::Configuration(format!(
+            "{} at {} declares `schemas:` but is missing a `package:` block. \
+             Schema canonical identifiers are composed from \
+             `package.{{org, name}}`.",
+            ProjectConfig::FILE_NAME,
+            project_path.display(),
+        ))
+    })?;
+
+    for schema_rel_path in &config.schemas {
+        let schema_path = project_path.join(schema_rel_path);
+        let body = std::fs::read_to_string(&schema_path).map_err(|e| {
+            Error::Configuration(format!(
+                "failed to read schema declared in {}: {}: {}",
+                ProjectConfig::FILE_NAME,
+                schema_path.display(),
+                e
+            ))
+        })?;
+        let canonical = canonical_identifier_for_schema(&body, pkg_meta, &schema_path)?;
+        tracing::debug!(
+            "registering schema '{}' from {}",
+            canonical,
+            schema_path.display()
+        );
+        embedded_schemas::register_schema(canonical, body);
+    }
+    Ok(())
+}
+
+/// Resolve a schema's canonical (unversioned) lookup key from its YAML
+/// body + the enclosing package's metadata. Mirrors
+/// `build.rs::resolve_canonical_identifier` so the engine const path
+/// and the runtime registration path produce identical keys.
+fn canonical_identifier_for_schema(
+    body: &str,
+    pkg_meta: &crate::core::config::PackageMetadata,
+    schema_path: &std::path::Path,
+) -> Result<String> {
+    let value: serde_yaml::Value = serde_yaml::from_str(body).map_err(|e| {
+        Error::Configuration(format!(
+            "failed to parse schema {}: {}",
+            schema_path.display(),
+            e
+        ))
+    })?;
+
+    let metadata = value.get("metadata").ok_or_else(|| {
+        Error::Configuration(format!(
+            "schema {} missing `metadata` block",
+            schema_path.display()
+        ))
+    })?;
+
+    if let Some(type_name) = metadata.get("type").and_then(|t| t.as_str()) {
+        return Ok(format!(
+            "@{}/{}/{}",
+            pkg_meta.org.as_str(),
+            pkg_meta.name.as_str(),
+            type_name
+        ));
+    }
+
+    if let Some(name) = metadata.get("name").and_then(|n| n.as_str()) {
+        return Ok(strip_legacy_semver_suffix(name).to_string());
+    }
+
+    Err(Error::Configuration(format!(
+        "schema {} must declare either `metadata.type` (new shape) or \
+         `metadata.name` (legacy reverse-DNS) — required for runtime \
+         registration",
+        schema_path.display()
+    )))
+}
+
+/// Strip a trailing `@MAJOR.MINOR.PATCH` semver suffix. Mirrors
+/// `embedded_schemas::strip_semver_suffix` (kept private here to avoid
+/// introducing a cross-module dep on a tiny string helper).
+fn strip_legacy_semver_suffix(name: &str) -> &str {
+    if let Some(at_pos) = name.rfind('@') {
+        let suffix = &name[at_pos + 1..];
+        let parts: Vec<&str> = suffix.split('.').collect();
+        if parts.len() == 3
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        {
+            return &name[..at_pos];
+        }
+    }
+    name
+}
+
 /// Extract a .slpkg ZIP archive to the package cache.
 /// Cache key is {name}-{version} from the embedded streamlib.yaml.
 /// Always overwrites on load.
@@ -1680,6 +1801,70 @@ package:
         runtime
             .load_project(&a)
             .expect("load_project should recurse into path dep without error");
+    }
+
+    /// `Runner::load_project` reads each entry in `streamlib.yaml`'s
+    /// `schemas:` list and registers the YAML body with the engine's
+    /// runtime schema registry, so `get_embedded_schema_definition`
+    /// resolves the body and `max_payload_bytes_for_schema` returns
+    /// the value declared in `metadata.max_payload_bytes` (#729).
+    /// Mentally reverting the `register_package_schemas(...)` call in
+    /// `load_project` would make this test fail because the registered
+    /// schema would be invisible to the lookup paths.
+    #[test]
+    #[serial]
+    fn test_load_project_registers_package_schemas_for_runtime_lookup() {
+        let runtime = Runner::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Build a minimal package with a single schema. The package's
+        // `schemas:` list points at a schema file declaring
+        // `metadata.type` (new shape) + `metadata.max_payload_bytes`.
+        let pkg = tmp.path().join("pkg-with-schema");
+        std::fs::create_dir(&pkg).unwrap();
+        std::fs::create_dir(pkg.join("schemas")).unwrap();
+        std::fs::write(
+            pkg.join("schemas/my_test_config.yaml"),
+            "metadata:\n  type: MyTestConfig\n  max_payload_bytes: 8192\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: test-load-project-registers-schemas
+  version: "0.1.0"
+
+schemas:
+  - schemas/my_test_config.yaml
+"#,
+        )
+        .unwrap();
+
+        let canonical =
+            "@tatolab/test-load-project-registers-schemas/MyTestConfig";
+
+        // Pre-condition: schema not in registry.
+        assert!(
+            crate::core::embedded_schemas::get_embedded_schema_definition(canonical).is_none(),
+            "fresh canonical id must not exist before load_project"
+        );
+
+        runtime
+            .load_project(&pkg)
+            .expect("load_project must succeed for schemas-only package");
+
+        // Post-condition: lookup resolves both forms; payload bytes
+        // come from the schema's metadata, not the iceoryx2 default.
+        let body = crate::core::embedded_schemas::get_embedded_schema_definition(canonical)
+            .expect("registered schema must be discoverable post-load");
+        assert!(body.contains("MyTestConfig"));
+        assert_eq!(
+            crate::core::embedded_schemas::max_payload_bytes_for_schema(canonical),
+            8192,
+            "max_payload_bytes_for_schema must read metadata declared by the loaded package"
+        );
     }
 
     /// Negative pair to the test above: when `B`'s manifest is missing,
