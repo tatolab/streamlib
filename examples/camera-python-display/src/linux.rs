@@ -228,12 +228,11 @@ pub fn main() -> Result<()> {
     // opengl DMA-BUF surface, emits the surface UUID downstream.
     println!("🐍 Adding Python avatar character (subprocess, PyTorch pose + ModernGL)...");
     let avatar = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident!(
+        streamlib::sdk::schema_ident_any_version!(
             "tatolab",
             "cyberpunk-processor",
-            "AvatarCharacter",
-            "0.1.0"
-        ),
+            "AvatarCharacter"
+        )?,
         serde_json::json!({
             "cuda_camera_surface_id": AVATAR_CAMERA_CUDA_SURFACE_ID,
             "opengl_output_surface_uuid": AVATAR_OUTPUT_SURFACE_UUID,
@@ -249,12 +248,11 @@ pub fn main() -> Result<()> {
     // SkiaContext.acquire_write.
     println!("🐍 Adding Python cyberpunk lower third (subprocess, Skia-on-GL)...");
     let lower_third = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident!(
+        streamlib::sdk::schema_ident_any_version!(
             "tatolab",
             "cyberpunk-processor",
-            "CyberpunkLowerThird",
-            "0.1.0"
-        ),
+            "CyberpunkLowerThird"
+        )?,
         serde_json::json!({
             "output_surface_uuid": LOWER_THIRD_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,
@@ -267,12 +265,11 @@ pub fn main() -> Result<()> {
     // as lower-third — distinct UUID, same allocation pattern.
     println!("🐍 Adding Python cyberpunk watermark (subprocess, Skia-on-GL)...");
     let watermark = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident!(
+        streamlib::sdk::schema_ident_any_version!(
             "tatolab",
             "cyberpunk-processor",
-            "CyberpunkWatermark",
-            "0.1.0"
-        ),
+            "CyberpunkWatermark"
+        )?,
         serde_json::json!({
             "output_surface_uuid": WATERMARK_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,
@@ -316,12 +313,11 @@ pub fn main() -> Result<()> {
     // `cyberpunk_glitch.py::GlitchState`).
     println!("🐍 Adding Python cyberpunk glitch (subprocess, OpenGL fragment shader)...");
     let glitch = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident!(
+        streamlib::sdk::schema_ident_any_version!(
             "tatolab",
             "cyberpunk-processor",
-            "CyberpunkGlitch",
-            "0.1.0"
-        ),
+            "CyberpunkGlitch"
+        )?,
         serde_json::json!({
             "output_surface_uuid": GLITCH_OUTPUT_SURFACE_UUID,
             "width": SURFACE_WIDTH,

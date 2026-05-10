@@ -9,11 +9,13 @@
 //! 1. **Bare-string `ProcessorSpec::new`** (#707): catches
 //!    `ProcessorSpec::new("PascalCase", ...)` re-introductions.
 //! 2. **Hand-rolled `SchemaIdent` literal in `examples/*/src/`** (#719):
-//!    polyglot Rust example crates use the `streamlib::sdk::schema_ident!`
-//!    convenience macro — same four fields as the long form, less
-//!    typing. This pass flags `SchemaIdent::new(Org::new("..."), ...)`
-//!    literals in `examples/*/src/*.rs` to keep the pattern from
-//!    coming back.
+//!    polyglot Rust example crates use the
+//!    `streamlib::sdk::schema_ident_any_version!` macro by default
+//!    (3-arg, runtime resolution against the registry — the common
+//!    case), or the strict-pin `streamlib::sdk::schema_ident!` form
+//!    (4-arg, compile-time-validated `SemVer`). This pass flags
+//!    `SchemaIdent::new(Org::new("..."), ...)` literals in
+//!    `examples/*/src/*.rs` to keep the pattern from coming back.
 //!
 //! Both passes are deliberately tight — they catch the *exact* shape
 //! they're responsible for. Macro-generated code, `<Module>::schema_ident()`
@@ -63,7 +65,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         );
     }
     eprintln!(
-        "\nFix:\n  - Bare-string `ProcessorSpec::new(\"Foo\", ...)`: pass a structured `SchemaIdent`.\n  - Hand-rolled `SchemaIdent::new(Org::new(\"...\"), ...)` in examples/*/src/: replace with `streamlib::sdk::schema_ident!(\"org\", \"package\", \"Type\", \"1.0.0\")`.\n\nSee docs/architecture/schema-identity-and-packaging.md and the #707 / #719 issue bodies."
+        "\nFix:\n  - Bare-string `ProcessorSpec::new(\"Foo\", ...)`: pass a structured `SchemaIdent`.\n  - Hand-rolled `SchemaIdent::new(Org::new(\"...\"), ...)` in examples/*/src/: replace with `streamlib::sdk::schema_ident_any_version!(\"org\", \"package\", \"Type\")?` (the common case — registry resolves the version at runtime), or with `streamlib::sdk::schema_ident!(\"org\", \"package\", \"Type\", \"1.0.0\")` when strict version pinning is required.\n\nSee docs/architecture/schema-identity-and-packaging.md and the #707 / #719 issue bodies."
     );
     anyhow::bail!("check-processor-spec-new failed");
 }

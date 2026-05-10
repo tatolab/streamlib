@@ -95,12 +95,11 @@ fn main() -> Result<()> {
     }))?;
 
     let grayscale = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident!(
+        streamlib::sdk::schema_ident_any_version!(
             "tatolab",
             "camera-rust-plugin",
-            "GrayscaleRust",
-            "0.1.0"
-        ),
+            "GrayscaleRust"
+        )?,
         serde_json::Value::Null,
     ))?;
 

@@ -88,19 +88,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => streamlib::sdk::schema_ident!(
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-continuous-processor",
-                "PolyglotContinuousProcessor",
-                "0.1.0"
+                "PolyglotContinuousProcessor"
             ),
-            Self::Deno => streamlib::sdk::schema_ident!(
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-continuous-processor-deno",
-                "PolyglotContinuousProcessor",
-                "0.1.0"
+                "PolyglotContinuousProcessor"
             ),
         }
     }
@@ -187,7 +185,7 @@ fn run() -> Result<TickReport> {
     }
 
     let processor = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         serde_json::json!({
             "output_file": output_file.to_string_lossy(),
         }),

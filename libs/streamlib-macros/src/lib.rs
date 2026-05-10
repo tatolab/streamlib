@@ -8,14 +8,18 @@
 //!   and resolves the full structured [`SchemaIdent`] from the package's
 //!   `package: { org, name, version }` block plus the matching entry in
 //!   the `processors:` list.
+//! - `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")`
+//!   — **canonical, default form.** Validates `(org, package, type)` at
+//!   compile time; resolves the version at runtime against the global
+//!   processor registry (highest installed `SemVer` wins, Cargo / npm
+//!   convention). Returns `Result<SchemaIdent, Error>` —
+//!   `Error::UnknownProcessorType` when nothing matches.
 //! - `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
-//!   short form of the long [`SchemaIdent::new`] constructor. Same four
-//!   fields, validated at compile time, expands to the long form verbatim.
-//! - `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")` —
-//!   version-omitting companion of `schema_ident!`. Validates `(org,
-//!   package, type)` at compile time; resolves the version at runtime
-//!   against the global processor registry (highest installed
-//!   `SemVer` wins). Returns `Result<SchemaIdent, Error>`.
+//!   strict version-pinning form. Same four fields as the long
+//!   [`SchemaIdent::new`] constructor, validated at compile time,
+//!   expands to the long form verbatim. Reach for this when you have a
+//!   reason to refuse newer-but-compatible registered versions; the
+//!   `_any_version` form is the right default for everything else.
 
 mod analysis;
 mod attributes;
@@ -153,10 +157,18 @@ fn load_processor_schema(
     Ok((schema, ident))
 }
 
-/// Short form of [`SchemaIdent::new`]. Takes the same four fields as the
-/// long-form constructor (org, package, type, version) as string literals,
-/// validates each at compile time, and expands to the equivalent
-/// `SchemaIdent::new(...)` expression.
+/// Short form of [`SchemaIdent::new`] — strict version-pinning. Takes
+/// the same four fields as the long-form constructor (org, package,
+/// type, version) as string literals, validates each at compile time,
+/// and expands to the equivalent `SchemaIdent::new(...)` expression.
+///
+/// **Prefer [`schema_ident_any_version!`] for the common case.** Reach
+/// for `schema_ident!` only when you have a deliberate reason to refuse
+/// any version other than the one you typed: tests asserting against a
+/// specific historical version, callers that bind to a known-broken
+/// version they don't want auto-upgraded out of, or any other case
+/// where strict pinning is the *intent*. For "match whatever's
+/// registered" — the dominant case — use `schema_ident_any_version!`.
 ///
 /// ```ignore
 /// // Long form (5 lines):
@@ -182,14 +194,16 @@ pub fn schema_ident(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Companion of [`schema_ident!`] that omits the version arg and resolves
-/// it at runtime from the global processor registry, picking the highest
-/// registered `SemVer` for the `(org, package, type)` tuple.
+/// **Canonical, default form** for naming a processor at a call site.
+/// Omits the version arg and resolves it at runtime from the global
+/// processor registry, picking the highest registered `SemVer` for the
+/// `(org, package, type)` tuple (Cargo / npm convention).
 ///
-/// Use this when the spawning binary should match whatever version of a
-/// processor happens to be installed (Cargo / npm convention) instead of
-/// pinning a specific version. `schema_ident!(..., "1.0.0")` stays
-/// available for production callers that want strict pinning.
+/// This is the right shape for nearly every call site — the spawning
+/// binary should match whatever version of a processor happens to be
+/// registered when `runtime.load_project(...)` finishes. Reach for the
+/// strict-pin [`schema_ident!`] form only when you have a deliberate
+/// reason to refuse newer-but-compatible registered versions.
 ///
 /// ```ignore
 /// // Compile-time:  org / package / type validated at proc-macro expansion.

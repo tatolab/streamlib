@@ -58,19 +58,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => streamlib::sdk::schema_ident!(
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-dma-buf-consumer",
-                "DmaBufConsumer",
-                "0.1.0"
+                "DmaBufConsumer"
             ),
-            Self::Deno => streamlib::sdk::schema_ident!(
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-dma-buf-consumer-deno",
-                "DmaBufConsumer",
-                "0.1.0"
+                "DmaBufConsumer"
             ),
         }
     }
@@ -154,7 +152,7 @@ fn main() -> Result<()> {
         "force_bad_surface_id": negative,
     });
     let consumer = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         consumer_config,
     ))?;
     println!("+ Consumer: {consumer}");

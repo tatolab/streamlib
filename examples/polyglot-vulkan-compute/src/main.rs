@@ -98,19 +98,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => streamlib::sdk::schema_ident!(
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-vulkan-compute",
-                "VulkanCompute",
-                "0.1.0"
+                "VulkanCompute"
             ),
-            Self::Deno => streamlib::sdk::schema_ident!(
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-vulkan-compute-deno",
-                "VulkanComputeProcessor",
-                "0.1.0"
+                "VulkanComputeProcessor"
             ),
         }
     }
@@ -401,7 +399,7 @@ fn main() -> Result<()> {
         "shader_spv_hex": spv_hex,
     });
     let compute = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         compute_config,
     ))?;
     println!("+ Vulkan compute processor: {compute}");

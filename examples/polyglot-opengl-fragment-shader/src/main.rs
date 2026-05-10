@@ -74,19 +74,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => streamlib::sdk::schema_ident!(
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-opengl-fragment-shader",
-                "OpenGlFragmentShader",
-                "0.1.0"
+                "OpenGlFragmentShader"
             ),
-            Self::Deno => streamlib::sdk::schema_ident!(
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-opengl-fragment-shader-deno",
-                "OpenGlFragmentShaderProcessor",
-                "0.1.0"
+                "OpenGlFragmentShaderProcessor"
             ),
         }
     }
@@ -277,7 +275,7 @@ fn main() -> Result<()> {
         "height": SURFACE_SIZE,
     });
     let shader = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         shader_config,
     ))?;
     println!("+ Fragment shader: {shader}");

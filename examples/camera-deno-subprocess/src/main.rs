@@ -39,12 +39,11 @@ fn main() -> Result<()> {
     }))?;
 
     let halftone = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident!(
+        streamlib::sdk::schema_ident_any_version!(
             "tatolab",
             "camera-deno-subprocess",
-            "HalftoneProcessor",
-            "0.1.0"
-        ),
+            "HalftoneProcessor"
+        )?,
         serde_json::json!({}),
     ))?;
 

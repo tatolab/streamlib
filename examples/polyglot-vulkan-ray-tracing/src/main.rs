@@ -126,19 +126,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => streamlib::sdk::schema_ident!(
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-vulkan-ray-tracing",
-                "VulkanRayTracing",
-                "0.1.0"
+                "VulkanRayTracing"
             ),
-            Self::Deno => streamlib::sdk::schema_ident!(
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-vulkan-ray-tracing-deno",
-                "VulkanRayTracingProcessor",
-                "0.1.0"
+                "VulkanRayTracingProcessor"
             ),
         }
     }
@@ -697,7 +695,7 @@ fn main() -> Result<()> {
         "rchit_spv_hex": bytes_to_hex(SCENE_RCHIT_SPV),
     });
     let rt = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         rt_config,
     ))?;
     println!("+ Vulkan ray-tracing processor: {rt}");

@@ -102,19 +102,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => streamlib::sdk::schema_ident!(
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-cpu-readback-blur",
-                "CpuReadbackBlur",
-                "0.1.0"
+                "CpuReadbackBlur"
             ),
-            Self::Deno => streamlib::sdk::schema_ident!(
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-cpu-readback-blur-deno",
-                "CpuReadbackBlurProcessor",
-                "0.1.0"
+                "CpuReadbackBlurProcessor"
             ),
         }
     }
@@ -253,7 +251,7 @@ fn main() -> Result<()> {
         "sigma": sigma,
     });
     let blur = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         blur_config,
     ))?;
     println!("+ Blur:           {blur}");

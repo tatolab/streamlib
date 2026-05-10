@@ -57,12 +57,11 @@ const MIN_FRAMES_RECEIVED: u32 = 20;
 
 const COUNTING_SINK_PLUGIN_DYLIB: &str = "libpolyglot_manual_source_counting_sink_plugin.so";
 
-fn counting_sink_processor_ident() -> SchemaIdent {
-    streamlib::sdk::schema_ident!(
+fn counting_sink_processor_ident() -> Result<SchemaIdent> {
+    streamlib::sdk::schema_ident_any_version!(
         "tatolab",
         "polyglot-manual-source-counting-sink",
-        "PolyglotManualSourceCountingSink",
-        "0.1.0"
+        "PolyglotManualSourceCountingSink"
     )
 }
 /// Env var the counting sink reads to know where to write JSON stats.
@@ -94,19 +93,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => streamlib::sdk::schema_ident!(
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-manual-source",
-                "PolyglotManualSource",
-                "0.1.0"
+                "PolyglotManualSource"
             ),
-            Self::Deno => streamlib::sdk::schema_ident!(
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-manual-source-deno",
-                "PolyglotManualSource",
-                "0.1.0"
+                "PolyglotManualSource"
             ),
         }
     }
@@ -205,7 +202,7 @@ fn run() -> Result<SinkReport> {
 
     // 3. Add processors.
     let manual = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         serde_json::json!({
             "interval_ms": INTERVAL_MS,
         }),
@@ -213,7 +210,7 @@ fn run() -> Result<SinkReport> {
     println!("+ ManualSource: {manual}");
 
     let sink = runtime.add_processor(ProcessorSpec::new(
-        counting_sink_processor_ident(),
+        counting_sink_processor_ident()?,
         // Sink reads its output path from `SINK_OUTPUT_ENV_VAR` set above —
         // pass an empty config so the macro-derived `EmptyConfig` (the
         // default for processors without a YAML config schema) deserializes

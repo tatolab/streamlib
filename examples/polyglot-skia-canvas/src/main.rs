@@ -218,7 +218,7 @@ fn main() -> Result<()> {
         "fps": FPS,
     });
     let canvas = runtime.add_processor(ProcessorSpec::new(
-        streamlib::sdk::schema_ident!("tatolab", "polyglot-skia-canvas", "SkiaCanvas", "0.1.0"),
+        streamlib::sdk::schema_ident_any_version!("tatolab", "polyglot-skia-canvas", "SkiaCanvas")?,
         canvas_config,
     ))?;
     println!("+ Skia canvas processor: {canvas}");

@@ -128,19 +128,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => streamlib::sdk::schema_ident!(
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-vulkan-graphics",
-                "VulkanGraphics",
-                "0.1.0"
+                "VulkanGraphics"
             ),
-            Self::Deno => streamlib::sdk::schema_ident!(
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
                 "tatolab",
                 "polyglot-vulkan-graphics-deno",
-                "VulkanGraphicsProcessor",
-                "0.1.0"
+                "VulkanGraphicsProcessor"
             ),
         }
     }
@@ -716,7 +714,7 @@ fn main() -> Result<()> {
         "fragment_spv_hex": bytes_to_hex(TRIANGLE_FRAG_SPV),
     });
     let graphics = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         graphics_config,
     ))?;
     println!("+ Vulkan graphics processor: {graphics}");
