@@ -4,7 +4,7 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 use zip::write::FileOptions;
@@ -314,11 +314,16 @@ fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
 /// `[build].target-dir` config, custom `[profile]` settings, and
 /// anything else that would invalidate a hardcoded
 /// `<workspace>/target/release/<file>` assumption.
+///
+/// Cargo's progress output (the `Compiling foo …` lines and compiler
+/// diagnostics) is left inherited on stderr so a cold build does not
+/// appear hung. Only stdout — the JSON message stream — is captured.
 fn run_cargo_build_release(
     package_dir: &Path,
     cargo_name: &str,
     dylib_ext: &str,
 ) -> Result<PathBuf> {
+    println!("Building {} (cargo build --release -p {})", cargo_name, cargo_name);
     let output = Command::new("cargo")
         .arg("build")
         .arg("--release")
@@ -326,6 +331,8 @@ fn run_cargo_build_release(
         .arg("-p")
         .arg(cargo_name)
         .current_dir(package_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
         .output()
         .with_context(|| {
             format!(
@@ -336,12 +343,14 @@ fn run_cargo_build_release(
         })?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Cargo's own error output already streamed to the user's
+        // terminal via inherited stderr; the bail message just names
+        // the operation that failed.
         anyhow::bail!(
-            "cargo build --release -p {} failed (run from {}):\n{}",
+            "cargo build --release -p {} failed (run from {}). \
+             See cargo's output above.",
             cargo_name,
             package_dir.display(),
-            stderr.trim_end()
         );
     }
 
