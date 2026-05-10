@@ -37,7 +37,7 @@ use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::sdk::context::ComputeKernelBridge;
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::rhi::{
     derive_bindings_from_spirv,
     ComputeKernelDescriptor,
@@ -98,19 +98,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-vulkan-compute").unwrap(),
-                TypeName::new("VulkanCompute").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-vulkan-compute",
+                "VulkanCompute"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-vulkan-compute-deno").unwrap(),
-                TypeName::new("VulkanComputeProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-vulkan-compute-deno",
+                "VulkanComputeProcessor"
             ),
         }
     }
@@ -401,7 +399,7 @@ fn main() -> Result<()> {
         "shader_spv_hex": spv_hex,
     });
     let compute = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         compute_config,
     ))?;
     println!("+ Vulkan compute processor: {compute}");

@@ -9,11 +9,11 @@ use super::Runner;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
-    ProcessorUniqueId,
+    ProcessorUniqueId, StateComponent,
 };
-use crate::core::processors::ProcessorSpec;
+use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
-use crate::core::{InputLinkPortRef, OutputLinkPortRef, Result, Error};
+use crate::core::{InputLinkPortRef, OutputLinkPortRef, PortDirection, Result, Error};
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -42,16 +42,43 @@ async fn add_processor_impl(
         );
     };
 
-    let processor_id = compiler.scope(|graph, tx| {
-        graph
+    // Hold the ident so we can surface a typed `UnknownProcessorType` error
+    // if the registry doesn't know this type — `spec` is moved into `add_v`.
+    let ident_for_err = spec.name.clone();
+
+    let processor_id = compiler.scope(|graph, tx| -> Result<ProcessorUniqueId> {
+        let node_id = graph
             .traversal_mut()
             .add_v(spec)
-            .inspect(|node| emit_will_add(&node.id))
-            .inspect(|node| tx.log(PendingOperation::AddProcessor(node.id.clone())))
-            .inspect(|node| emit_did_add(&node.id))
             .first()
             .map(|node| node.id.clone())
-            .ok_or_else(|| Error::GraphError("Could not create node".into()))
+            .ok_or_else(|| Error::GraphError("Could not create node".into()))?;
+
+        // Registry miss: `add_v` already attached `StateComponent(Error)` so
+        // the failed node is visible via `GET /api/graph`. Skip pending-op
+        // logging so the compiler doesn't try to spawn it. Emit the
+        // graph-changed events so subscribers see the new node, then surface
+        // the typed error.
+        let registry_miss = graph
+            .traversal()
+            .v(&node_id)
+            .first()
+            .and_then(|node| node.get::<StateComponent>())
+            .map(|state_component| matches!(*state_component.0.lock(), ProcessorState::Error))
+            .unwrap_or(false);
+
+        if registry_miss {
+            emit_will_add(&node_id);
+            emit_did_add(&node_id);
+            return Err(Error::UnknownProcessorType {
+                ident: ident_for_err,
+            });
+        }
+
+        emit_will_add(&node_id);
+        tx.log(PendingOperation::AddProcessor(node_id.clone()));
+        emit_did_add(&node_id);
+        Ok(node_id)
     })?;
 
     PUBSUB.publish(
@@ -124,16 +151,45 @@ async fn connect_impl(
         }),
     );
 
-    let link_id = compiler.scope(|graph, tx| {
-        let id = graph
+    let link_id = compiler.scope(|graph, tx| -> Result<LinkUniqueId> {
+        // Validate endpoints + ports up-front so failures surface as typed
+        // errors instead of the generic `add_e`-returns-empty-traversal path.
+        // The `add_e` call still does its own checks defensively, but this
+        // pre-validation is what gets the typed error to the caller.
+        // Validate source processor + output port.
+        {
+            let from_node = graph.traversal().v(&from.processor_id).first().ok_or_else(
+                || Error::ProcessorNotFound(from.processor_id.to_string()),
+            )?;
+            if !from_node.has_output(&from.port_name) {
+                return Err(Error::ProcessorPortNotFound {
+                    processor_id: from.processor_id.to_string(),
+                    port_name: from.port_name.clone(),
+                    direction: PortDirection::Output,
+                });
+            }
+        }
+        // Validate target processor + input port.
+        {
+            let to_node = graph.traversal().v(&to.processor_id).first().ok_or_else(
+                || Error::ProcessorNotFound(to.processor_id.to_string()),
+            )?;
+            if !to_node.has_input(&to.port_name) {
+                return Err(Error::ProcessorPortNotFound {
+                    processor_id: to.processor_id.to_string(),
+                    port_name: to.port_name.clone(),
+                    direction: PortDirection::Input,
+                });
+            }
+        }
+
+        graph
             .traversal_mut()
             .add_e(from, to)
             .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
             .first()
             .map(|link| link.id.clone())
-            .ok_or_else(|| Error::GraphError("failed to create link".into()))?;
-
-        Ok::<_, Error>(id)
+            .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))
     })?;
 
     PUBSUB.publish(

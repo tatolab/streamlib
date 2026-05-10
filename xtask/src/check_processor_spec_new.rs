@@ -4,21 +4,25 @@
 //! CI lint enforcing the structured-everywhere `ProcessorSpec` rule from
 //! milestone 10.
 //!
-//! After #707, `ProcessorSpec::new` takes a structured
-//! [`SchemaIdent`](streamlib_processor_schema::SchemaIdent) — never a bare
-//! string literal. The macro emits the structured ident, the runtime
-//! constructs it from manifest fields, and every direct call site
-//! constructs `SchemaIdent::new(...)` or calls
-//! `<Module>::schema_ident()`.
+//! Two passes:
 //!
-//! This lint catches anyone re-introducing a `ProcessorSpec::new(
-//! "PascalCase", ...)` pattern. The regex is deliberately tight — matches
-//! only the exact "bare PascalCase string" shape. The structured
-//! `ProcessorSpec::new(SchemaIdent::new(...), ...)` is fine; the
-//! macro-generated `ProcessorSpec::new(Self::schema_ident(), ...)` is fine.
+//! 1. **Bare-string `ProcessorSpec::new`** (#707): catches
+//!    `ProcessorSpec::new("PascalCase", ...)` re-introductions.
+//! 2. **Hand-rolled `SchemaIdent` literal in `examples/*/src/`** (#719):
+//!    polyglot Rust example crates use the
+//!    `streamlib::sdk::schema_ident_any_version!` macro by default
+//!    (3-arg, runtime resolution against the registry — the common
+//!    case), or the strict-pin `streamlib::sdk::schema_ident!` form
+//!    (4-arg, compile-time-validated `SemVer`). This pass flags
+//!    `SchemaIdent::new(Org::new("..."), ...)` literals in
+//!    `examples/*/src/*.rs` to keep the pattern from coming back.
 //!
-//! See `docs/architecture/schema-identity-and-packaging.md` for the
-//! rule and the issue #707 body for the migration history.
+//! Both passes are deliberately tight — they catch the *exact* shape
+//! they're responsible for. Macro-generated code, `<Module>::schema_ident()`
+//! calls, and `tests/` fixtures all pass through.
+//!
+//! See `docs/architecture/schema-identity-and-packaging.md` for the rule
+//! and the #707 / #719 issue bodies for migration history.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -42,12 +46,14 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     let violations = lint_workspace(workspace_root)?;
 
     if violations.is_empty() {
-        println!("✓ check-processor-spec-new: no bare-string ProcessorSpec::new call sites");
+        println!(
+            "✓ check-processor-spec-new: no bare-string ProcessorSpec::new sites and no hand-rolled SchemaIdent literals in examples/"
+        );
         return Ok(());
     }
 
     eprintln!(
-        "✗ check-processor-spec-new: {} violation(s) — bare-string ProcessorSpec::new is forbidden (use SchemaIdent::new(...) or <Module>::schema_ident()):",
+        "✗ check-processor-spec-new: {} violation(s):",
         violations.len()
     );
     for v in &violations {
@@ -59,9 +65,36 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         );
     }
     eprintln!(
-        "\nSee docs/architecture/schema-identity-and-packaging.md and the issue #707 body."
+        "\nFix:\n  - Bare-string `ProcessorSpec::new(\"Foo\", ...)`: pass a structured `SchemaIdent`.\n  - Hand-rolled `SchemaIdent::new(Org::new(\"...\"), ...)` in examples/*/src/: replace with `streamlib::sdk::schema_ident_any_version!(\"org\", \"package\", \"Type\")?` (the common case — registry resolves the version at runtime), or with `streamlib::sdk::schema_ident!(\"org\", \"package\", \"Type\", \"1.0.0\")` when strict version pinning is required.\n\nSee docs/architecture/schema-identity-and-packaging.md and the #707 / #719 issue bodies."
     );
     anyhow::bail!("check-processor-spec-new failed");
+}
+
+/// True for paths under `<workspace_root>/examples/<crate>/src/`. The
+/// hand-rolled-literal pass is scoped to example main.rs / linux.rs files
+/// — codegen.rs in `streamlib-macros` legitimately emits the literal as a
+/// token stream, and integration tests in `libs/*/tests/` build expected
+/// values to assert against. Both must stay outside the lint's reach.
+fn is_example_src_file(path: &Path) -> bool {
+    let mut components = path.components();
+    let mut saw_examples = false;
+    let mut saw_src_after_examples = false;
+    let mut depth_after_examples = 0;
+    while let Some(c) = components.next() {
+        let s = c.as_os_str();
+        if !saw_examples {
+            if s == "examples" {
+                saw_examples = true;
+            }
+            continue;
+        }
+        depth_after_examples += 1;
+        // Component layout under `examples/`: <crate>/src/<file>.rs.
+        if depth_after_examples == 2 && s == "src" {
+            saw_src_after_examples = true;
+        }
+    }
+    saw_examples && saw_src_after_examples
 }
 
 pub fn lint_workspace(workspace_root: &Path) -> Result<Vec<LintViolation>> {
@@ -98,13 +131,25 @@ fn is_rust_source(path: &Path) -> bool {
 fn scan_file(path: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
     let content = fs::read_to_string(path)
         .with_context(|| format!("reading {}", path.display()))?;
-    for (idx, line) in content.lines().enumerate() {
+    let lines: Vec<&str> = content.lines().collect();
+    let example_src = is_example_src_file(path);
+    for (idx, line) in lines.iter().enumerate() {
         if has_bare_string_processor_spec(line) {
             violations.push(LintViolation {
                 file: path.to_path_buf(),
                 line: idx + 1,
-                snippet: line.to_string(),
+                snippet: (*line).to_string(),
             });
+        }
+        if example_src {
+            let next = lines.get(idx + 1).copied().unwrap_or("");
+            if has_hand_rolled_schema_ident_literal(line, next) {
+                violations.push(LintViolation {
+                    file: path.to_path_buf(),
+                    line: idx + 1,
+                    snippet: (*line).to_string(),
+                });
+            }
         }
     }
     Ok(())
@@ -144,6 +189,26 @@ pub fn has_bare_string_processor_spec(line: &str) -> bool {
         if is_pascal_case_string_literal(trimmed) {
             return true;
         }
+    }
+    false
+}
+
+/// Match a hand-rolled `SchemaIdent::new(Org::new(...), ...)` literal in an
+/// example's `src/` Rust file. Two shapes — same-line and multi-line —
+/// are caught at the line carrying `SchemaIdent::new(`. The
+/// `<Module>::schema_ident()` and macro-emitted forms are not flagged
+/// (no `Org::new(` follows).
+pub fn has_hand_rolled_schema_ident_literal(line: &str, next_line: &str) -> bool {
+    let Some(idx) = line.find("SchemaIdent::new(") else {
+        return false;
+    };
+    let after = &line[idx + "SchemaIdent::new(".len()..];
+    let trimmed = after.trim_start();
+    if trimmed.starts_with("Org::new(") {
+        return true;
+    }
+    if trimmed.is_empty() && next_line.trim_start().starts_with("Org::new(") {
+        return true;
     }
     false
 }
@@ -243,6 +308,58 @@ mod tests {
         assert!(!has_bare_string_processor_spec(
             r#"assert_eq!(name, "CameraProcessor");"#
         ));
+    }
+
+    #[test]
+    fn rejects_hand_rolled_schema_ident_same_line() {
+        assert!(has_hand_rolled_schema_ident_literal(
+            r#"        SchemaIdent::new(Org::new("tatolab").unwrap(), ..."#,
+            "",
+        ));
+    }
+
+    #[test]
+    fn rejects_hand_rolled_schema_ident_multi_line() {
+        assert!(has_hand_rolled_schema_ident_literal(
+            r#"        SchemaIdent::new("#,
+            r#"            Org::new("tatolab").unwrap(),"#,
+        ));
+    }
+
+    #[test]
+    fn accepts_module_schema_ident_call() {
+        assert!(!has_hand_rolled_schema_ident_literal(
+            r#"        SchemaIdent::new(SomeModule::schema_ident(), ..."#,
+            "",
+        ));
+    }
+
+    #[test]
+    fn accepts_convenience_macro_form() {
+        assert!(!has_hand_rolled_schema_ident_literal(
+            r#"        streamlib::sdk::schema_ident!("tatolab", "foo", "Foo", "1.0.0")"#,
+            "",
+        ));
+    }
+
+    #[test]
+    fn is_example_src_correctly_classifies_paths() {
+        assert!(is_example_src_file(Path::new(
+            "/abs/examples/foo/src/main.rs"
+        )));
+        assert!(is_example_src_file(Path::new(
+            "/abs/examples/camera-python-display/src/linux.rs"
+        )));
+        // libs/ tests legitimately build expected SchemaIdent values:
+        assert!(!is_example_src_file(Path::new(
+            "/abs/libs/streamlib-engine/tests/schema_ident_macro_test.rs"
+        )));
+        // Macro codegen emits the literal as a token stream:
+        assert!(!is_example_src_file(Path::new(
+            "/abs/libs/streamlib-macros/src/codegen.rs"
+        )));
+        // build.rs / shaders / fixtures sit beside src/, not under it:
+        assert!(!is_example_src_file(Path::new("/abs/examples/foo/build.rs")));
     }
 
     #[test]

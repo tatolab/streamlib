@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::core::error::Error;
 use crate::core::pubsub::{topics, Event, EventListener, PUBSUB};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use crate::PROCESSOR_REGISTRY;
@@ -15,6 +16,7 @@ use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::Path,
     extract::State,
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -159,6 +161,47 @@ use crate::core::json_schema::{
 struct ErrorResponse {
     /// Error message
     error: String,
+}
+
+/// Body returned alongside `422 Unprocessable Entity` when the caller
+/// supplies a structurally-valid `SchemaIdent` whose type isn't registered.
+/// The runtime is dynamic — types load and unload — so this is a normal
+/// runtime miss, not a malformed request. The client gets a typed
+/// discriminator (`error`), the offending ident, and the placeholder
+/// processor id (the failed node is left in the graph in `Error` state for
+/// observability via `GET /api/graph`).
+#[derive(Serialize, utoipa::ToSchema)]
+struct UnknownProcessorTypeResponse {
+    /// Typed error discriminator: always `"UnknownProcessorType"`.
+    error: &'static str,
+    /// The structured ident that didn't resolve.
+    ident: SchemaIdentOutput,
+}
+
+/// Body returned alongside `404 Not Found` when a connection references a
+/// processor id that doesn't exist in the graph.
+#[derive(Serialize, utoipa::ToSchema)]
+struct ProcessorNotFoundResponse {
+    /// Typed error discriminator: always `"ProcessorNotFound"`.
+    error: &'static str,
+    /// The processor id that wasn't in the graph.
+    processor_id: String,
+}
+
+/// Body returned alongside `422 Unprocessable Entity` when a connection
+/// references a port name that doesn't exist on the named processor.
+/// Distinct from `UnknownProcessorTypeResponse`: the processor exists,
+/// but the port doesn't.
+#[derive(Serialize, utoipa::ToSchema)]
+struct ProcessorPortNotFoundResponse {
+    /// Typed error discriminator: always `"ProcessorPortNotFound"`.
+    error: &'static str,
+    /// The processor id whose port lookup failed.
+    processor_id: String,
+    /// The port name that wasn't found.
+    port_name: String,
+    /// `"input"` or `"output"`.
+    direction: &'static str,
 }
 
 // ============================================================================
@@ -397,13 +440,14 @@ async fn get_graph(
     request_body = CreateProcessorRequest,
     responses(
         (status = 200, description = "Processor created successfully", body = IdResponse),
-        (status = 400, description = "Invalid processor type or configuration", body = ErrorResponse)
+        (status = 400, description = "Malformed request (invalid org / package / type / version segment)", body = ErrorResponse),
+        (status = 422, description = "Processor type is structurally valid but not registered in the runtime; the failed node is left in the graph in `Error` state", body = UnknownProcessorTypeResponse)
     )
 )]
 async fn create_processor(
     State(state): State<AppState>,
     Json(body): Json<CreateProcessorRequest>,
-) -> std::result::Result<Json<IdResponse>, axum::http::StatusCode> {
+) -> axum::response::Response {
     // Convert SchemaIdentOutput → SchemaIdent through the typed segment
     // validators (Org::new / Package::new / TypeName::new / SemVer::new).
     // This is typed conversion, not parsing — there is no `SchemaIdent::parse`.
@@ -412,22 +456,52 @@ async fn create_processor(
         package,
         type_name,
         version,
-    } = body.processor_type;
-    let ident = SchemaIdent::new(
-        Org::new(org).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
-        Package::new(package).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
-        TypeName::new(type_name).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?,
-        SemVer::new(version.major, version.minor, version.patch),
-    );
+    } = body.processor_type.clone();
+    let ident = match (
+        Org::new(org),
+        Package::new(package),
+        TypeName::new(type_name),
+    ) {
+        (Ok(org), Ok(package), Ok(type_name)) => SchemaIdent::new(
+            org,
+            package,
+            type_name,
+            SemVer::new(version.major, version.minor, version.patch),
+        ),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "Malformed processor identifier — one of org / package / type failed validation".into(),
+                }),
+            )
+                .into_response();
+        }
+    };
     let spec = ProcessorSpec::new(ident, body.config);
 
-    state
-        .runtime_ctx
-        .runtime()
-        .add_processor_async(spec)
-        .await
-        .map(|id| Json(IdResponse { id: id.to_string() }))
-        .map_err(|_| axum::http::StatusCode::BAD_REQUEST)
+    match state.runtime_ctx.runtime().add_processor_async(spec).await {
+        Ok(id) => (
+            StatusCode::OK,
+            Json(IdResponse { id: id.to_string() }),
+        )
+            .into_response(),
+        Err(Error::UnknownProcessorType { ident: _ }) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(UnknownProcessorTypeResponse {
+                error: "UnknownProcessorType",
+                ident: body.processor_type,
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 #[utoipa::path(
@@ -463,23 +537,57 @@ async fn delete_processor(
     request_body = CreateConnectionRequest,
     responses(
         (status = 200, description = "Connection created successfully", body = IdResponse),
-        (status = 400, description = "Invalid connection (ports don't exist or types don't match)", body = ErrorResponse)
+        (status = 400, description = "Malformed request or generic graph error", body = ErrorResponse),
+        (status = 404, description = "One of the referenced processors isn't in the graph", body = ProcessorNotFoundResponse),
+        (status = 422, description = "Referenced processor exists but has no port with that name and direction", body = ProcessorPortNotFoundResponse)
     )
 )]
 async fn create_connection(
     State(state): State<AppState>,
     Json(body): Json<CreateConnectionRequest>,
-) -> std::result::Result<Json<IdResponse>, axum::http::StatusCode> {
+) -> axum::response::Response {
     let from = OutputLinkPortRef::new(body.from_processor, body.from_port);
     let to = InputLinkPortRef::new(body.to_processor, body.to_port);
 
-    state
-        .runtime_ctx
-        .runtime()
-        .connect_async(from, to)
-        .await
-        .map(|id| Json(IdResponse { id: id.to_string() }))
-        .map_err(|_| axum::http::StatusCode::BAD_REQUEST)
+    match state.runtime_ctx.runtime().connect_async(from, to).await {
+        Ok(id) => (
+            StatusCode::OK,
+            Json(IdResponse { id: id.to_string() }),
+        )
+            .into_response(),
+        Err(Error::ProcessorNotFound(processor_id)) => (
+            StatusCode::NOT_FOUND,
+            Json(ProcessorNotFoundResponse {
+                error: "ProcessorNotFound",
+                processor_id,
+            }),
+        )
+            .into_response(),
+        Err(Error::ProcessorPortNotFound {
+            processor_id,
+            port_name,
+            direction,
+        }) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ProcessorPortNotFoundResponse {
+                error: "ProcessorPortNotFound",
+                processor_id,
+                port_name,
+                direction: match direction {
+                    crate::core::PortDirection::Input => "input",
+                    crate::core::PortDirection::Output => "output",
+                },
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 #[utoipa::path(

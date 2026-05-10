@@ -41,7 +41,7 @@ pub use _generated_::{ApiServerConfig, EncodedAudioFrame, EncodedVideoFrame, Vid
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("Camera")] - Processor definition by name lookup in streamlib.yaml
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
-pub use streamlib_macros::{processor, ConfigDescriptor};
+pub use streamlib_macros::{processor, schema_ident, schema_ident_any_version, ConfigDescriptor};
 
 pub use core::{
     are_synchronized,
@@ -324,7 +324,7 @@ pub mod sdk {
     pub use crate::crossbeam_channel;
     pub use crate::_generated_;
 
-    pub use streamlib_macros::{processor, ConfigDescriptor};
+    pub use streamlib_macros::{processor, schema_ident, schema_ident_any_version, ConfigDescriptor};
 
     pub mod permissions {
         pub use crate::{

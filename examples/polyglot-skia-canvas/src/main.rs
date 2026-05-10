@@ -48,7 +48,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::rhi::{
     TextureFormat,
     TextureReadbackDescriptor,
@@ -219,12 +218,7 @@ fn main() -> Result<()> {
         "fps": FPS,
     });
     let canvas = runtime.add_processor(ProcessorSpec::new(
-        SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("polyglot-skia-canvas").unwrap(),
-            TypeName::new("SkiaCanvas").unwrap(),
-            SemVer::new(0, 1, 0),
-        ),
+        streamlib::sdk::schema_ident_any_version!("tatolab", "polyglot-skia-canvas", "SkiaCanvas")?,
         canvas_config,
     ))?;
     println!("+ Skia canvas processor: {canvas}");

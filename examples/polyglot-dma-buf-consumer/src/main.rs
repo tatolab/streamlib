@@ -28,7 +28,7 @@
 
 use std::path::PathBuf;
 
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, ProcessorSpec};
 use streamlib::sdk::error::Result;
@@ -58,19 +58,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-dma-buf-consumer").unwrap(),
-                TypeName::new("DmaBufConsumer").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-dma-buf-consumer",
+                "DmaBufConsumer"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-dma-buf-consumer-deno").unwrap(),
-                TypeName::new("DmaBufConsumer").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-dma-buf-consumer-deno",
+                "DmaBufConsumer"
             ),
         }
     }
@@ -154,7 +152,7 @@ fn main() -> Result<()> {
         "force_bad_surface_id": negative,
     });
     let consumer = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         consumer_config,
     ))?;
     println!("+ Consumer: {consumer}");

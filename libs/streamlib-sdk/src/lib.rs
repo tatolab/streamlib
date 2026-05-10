@@ -164,6 +164,22 @@ pub mod sdk {
     /// `#[derive(ConfigDescriptor)]` derive macro.
     pub use streamlib_engine::ConfigDescriptor;
 
+    /// `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")` —
+    /// **canonical, default form** for naming a processor at a call site.
+    /// Validates `(org, package, type)` at compile time; resolves the
+    /// version at runtime against the global processor registry,
+    /// picking the highest registered `SemVer` (Cargo / npm convention).
+    /// Returns `Result<SchemaIdent, streamlib::sdk::error::Error>`.
+    pub use streamlib_engine::schema_ident_any_version;
+
+    /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
+    /// strict version-pinning form. Short form of
+    /// [`SchemaIdent::new`](descriptors::SchemaIdent::new). Reach for
+    /// this only when you have a deliberate reason to refuse
+    /// newer-but-compatible registered versions; otherwise prefer
+    /// [`schema_ident_any_version!`].
+    pub use streamlib_engine::schema_ident;
+
     // ---- Permission helpers ----
 
     pub mod permissions {

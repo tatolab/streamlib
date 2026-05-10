@@ -42,7 +42,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
@@ -88,19 +88,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-continuous-processor").unwrap(),
-                TypeName::new("PolyglotContinuousProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-continuous-processor",
+                "PolyglotContinuousProcessor"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-continuous-processor-deno").unwrap(),
-                TypeName::new("PolyglotContinuousProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-continuous-processor-deno",
+                "PolyglotContinuousProcessor"
             ),
         }
     }
@@ -187,7 +185,7 @@ fn run() -> Result<TickReport> {
     }
 
     let processor = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         serde_json::json!({
             "output_file": output_file.to_string_lossy(),
         }),

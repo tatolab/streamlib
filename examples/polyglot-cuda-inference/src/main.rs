@@ -51,7 +51,7 @@ use std::time::Duration;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::rhi::{PixelFormat, PixelBuffer};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
@@ -103,19 +103,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-cuda-inference").unwrap(),
-                TypeName::new("CudaInference").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-cuda-inference",
+                "CudaInference"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-cuda-inference-deno").unwrap(),
-                TypeName::new("CudaInferenceProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-cuda-inference-deno",
+                "CudaInferenceProcessor"
             ),
         }
     }
@@ -242,7 +240,7 @@ fn main() -> Result<()> {
         "output_path": output_png.to_string_lossy(),
     });
     let inference = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         inference_config,
     ))?;
     println!("+ Inference:      {inference}");

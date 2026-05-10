@@ -52,7 +52,7 @@ use streamlib::sdk::context::{
     PolygonModeWire,
     PrimitiveTopologyWire,
 };
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::rhi::{
     AttachmentFormats,
     ColorBlendState,
@@ -128,19 +128,17 @@ impl RuntimeKind {
         }
     }
 
-    fn processor_ident(self) -> SchemaIdent {
+    fn processor_ident(self) -> Result<SchemaIdent> {
         match self {
-            Self::Python => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-vulkan-graphics").unwrap(),
-                TypeName::new("VulkanGraphics").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Python => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-vulkan-graphics",
+                "VulkanGraphics"
             ),
-            Self::Deno => SchemaIdent::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("polyglot-vulkan-graphics-deno").unwrap(),
-                TypeName::new("VulkanGraphicsProcessor").unwrap(),
-                SemVer::new(0, 1, 0),
+            Self::Deno => streamlib::sdk::schema_ident_any_version!(
+                "tatolab",
+                "polyglot-vulkan-graphics-deno",
+                "VulkanGraphicsProcessor"
             ),
         }
     }
@@ -716,7 +714,7 @@ fn main() -> Result<()> {
         "fragment_spv_hex": bytes_to_hex(TRIANGLE_FRAG_SPV),
     });
     let graphics = runtime.add_processor(ProcessorSpec::new(
-        runtime_kind.processor_ident(),
+        runtime_kind.processor_ident()?,
         graphics_config,
     ))?;
     println!("+ Vulkan graphics processor: {graphics}");

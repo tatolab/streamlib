@@ -441,16 +441,42 @@ use tatolab_core::VIDEO_FRAME_IDENT;
 graph.add_edge(VIDEO_FRAME_IDENT, …);   // No org/package on the wire
 ```
 
-The package-internal short-name pattern (`#[streamlib::processor("Camera")]`
-— positional PascalCase short name resolved against the enclosing
-`streamlib.yaml`'s `package:` block, exposed via
-`Processor::schema_ident()`) is the **only** shorthand mechanism in the
-architecture. Cross-package references in graph JSON, IPC envelopes,
-generated code, and lockfiles carry a fully-qualified
+The package-internal short-name pattern
+(`#[streamlib::processor("Camera")]` — positional PascalCase short
+name resolved against the enclosing `streamlib.yaml`'s `package:`
+block, exposed via `Processor::schema_ident()`) is the canonical
+shorthand mechanism for **owning** a processor's identity inside its
+own crate. Two convenience macros sit alongside it for **referencing**
+processors at a call site (typically the spawning binary that doesn't
+own the processor's Rust module):
+
+- **`streamlib::sdk::schema_ident_any_version!("org", "package", "Type")`**
+  — the default reference form. Validates `(org, package, type)` at
+  compile time; resolves the version at runtime against the global
+  processor registry, picking the highest registered `SemVer`
+  (Cargo / npm convention). Returns
+  `Result<SchemaIdent, streamlib::sdk::error::Error>` so version drift
+  between the spawning binary and the resolved package surfaces as a
+  typed `Error::UnknownProcessorType` rather than a silent miss.
+- **`streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")`**
+  — strict-pin reference form. Same four fields as the long
+  `SchemaIdent::new(...)` constructor, validated at proc-macro
+  expansion. Reach for it only when the call site has a deliberate
+  reason to refuse newer-but-compatible versions.
+
+> ~~"is the **only** shorthand mechanism in the architecture"~~ —
+> Superseded 2026-05-10 (PR #745). The original claim predates both
+> reference-side macros — `schema_ident!` (the strict-pin form) and
+> `schema_ident_any_version!` (the canonical, runtime-resolving form).
+> All three mechanisms coexist; their roles split along
+> own-vs-reference lines.
+
+Cross-package references in graph JSON, IPC envelopes, generated
+code, and lockfiles still carry a fully-qualified
 `SchemaIdent { org, package, type, version }` structured record. The
-macro-emitted `schema_ident()` returns the structured record; consumers
-can read its fields, but serializing across a wire surface always emits
-the full structured shape.
+macro-emitted `schema_ident()` returns the structured record;
+consumers can read its fields, but serializing across a wire surface
+always emits the full structured shape.
 
 ### 3. Per-schema `version` field
 
