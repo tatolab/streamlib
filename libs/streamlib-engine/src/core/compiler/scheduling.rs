@@ -26,15 +26,6 @@ pub enum SchedulingStrategy {
     },
 }
 
-impl Default for SchedulingStrategy {
-    fn default() -> Self {
-        SchedulingStrategy::DedicatedThread {
-            priority: ThreadPriority::Normal,
-            name: String::new(),
-        }
-    }
-}
-
 impl SchedulingStrategy {
     /// Get a human-readable description.
     pub fn description(&self) -> String {
@@ -130,6 +121,13 @@ mod tests {
         );
     }
 
+    /// Build an ident whose short name is **deliberately neutral** —
+    /// none of the substrings the pre-#722 heuristic matched on
+    /// (`Camera`, `Display`, `Audio`, `Microphone`, `Speaker`, `Encoder`,
+    /// `Decoder`, `H264`, `H265`, `Compositor`). That way mentally
+    /// reverting `scheduling_strategy_for_processor` back to the old
+    /// substring-match heuristic causes these tests to fail — which is
+    /// what the regression-locking rule requires.
     fn ident(short: &str) -> SchemaIdent {
         SchemaIdent::new(
             Org::new("scheduling-test").unwrap(),
@@ -141,7 +139,11 @@ mod tests {
 
     #[test]
     fn strategy_reads_priority_and_kind_from_registered_descriptor() {
-        let id = ident("DescriptorDrivenRealtimeAudio");
+        // `Widgetron` contains none of the heuristic's substrings, so the
+        // old code would have returned `Normal` + `processor-{id}` here.
+        // The test asserts the new code returns `RealTime` + `audio-{id}`
+        // sourced from the registered descriptor.
+        let id = ident("Widgetron");
         let descriptor = ProcessorDescriptor::new(id.clone(), "fixture")
             .with_scheduling(ProcessorScheduling {
                 priority: ThreadPriority::RealTime,

@@ -337,12 +337,15 @@ processors:
     version: 1.0.0
     description: "Encodes AudioFrame to EncodedAudioFrame (Opus)"
     execution: reactive
-    # Audio codec — RealTime + audio kind. The pre-#722 substring heuristic
-    # mis-bucketed this on the `Encoder` branch (High priority, `video-{id}`
-    # thread name); the migration corrects it to its semantically right
-    # priority and role.
+    # The pre-#722 heuristic matched `Encoder` first, so this audio codec
+    # ran under the `video-{id}` thread name — visible in
+    # `/proc/<pid>/task/*/comm` and confusing for anyone debugging audio
+    # latency. Migration preserves the heuristic's `high` priority and
+    # corrects the role label to `audio` (yields `audio-{id}`). Whether
+    # an audio encoder warrants `realtime` is a separate decision; flip
+    # if a workload warrants it.
     scheduling:
-      priority: realtime
+      priority: high
       kind: audio
     runtime:
       language: rust
@@ -364,10 +367,10 @@ processors:
     version: 1.0.0
     description: "Decodes EncodedAudioFrame (Opus) to AudioFrame"
     execution: reactive
-    # Audio codec — RealTime + audio kind. See OpusEncoder above for the
-    # pre-#722 mis-bucketing details.
+    # See OpusEncoder above. Heuristic priority (`high`) preserved;
+    # thread-name role corrected from `video` to `audio`.
     scheduling:
-      priority: realtime
+      priority: high
       kind: audio
     runtime:
       language: rust
