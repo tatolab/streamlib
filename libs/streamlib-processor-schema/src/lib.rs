@@ -21,8 +21,8 @@ pub use thread_priority::ThreadPriority;
 pub use error::{SchemaError, SchemaResult};
 pub use processor_schema::{
     compute_schema_id, to_pascal_case, to_snake_case, PortSchemaSpec, ProcessorConfigSchema,
-    ProcessorLanguage, ProcessorPortSchema, ProcessorSchema, ProcessorSchemaExecution,
-    ProcessorStateField, RuntimeConfig, RuntimeOptions,
+    ProcessorLanguage, ProcessorPortSchema, ProcessorScheduling, ProcessorSchedulingKind,
+    ProcessorSchema, ProcessorSchemaExecution, ProcessorStateField, RuntimeConfig, RuntimeOptions,
 };
 pub use processor_schema_parser::{parse_processor_yaml, parse_processor_yaml_file};
 

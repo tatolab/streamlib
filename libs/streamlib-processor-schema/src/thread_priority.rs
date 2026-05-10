@@ -1,13 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Thread scheduling priority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+///
+/// Serializes as `"realtime"` / `"high"` / `"normal"` so YAML manifests
+/// can declare `scheduling: { priority: high }` without PascalCase noise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum ThreadPriority {
+    /// Real-time priority (SCHED_FIFO on Linux, time-constraint policy on Apple).
+    #[serde(alias = "real_time", alias = "real-time", alias = "RealTime")]
     RealTime,
+    /// Elevated priority (SCHED_RR on Linux/Apple).
     High,
+    /// Default OS scheduling.
     #[default]
     Normal,
 }

@@ -4,7 +4,10 @@
 //! Processor and port descriptor types for introspection.
 
 use serde::{Deserialize, Serialize};
-pub use streamlib_processor_schema::{Org, Package, PortSchemaSpec, SchemaIdent, SemVer, TypeName};
+pub use streamlib_processor_schema::{
+    Org, Package, PortSchemaSpec, ProcessorScheduling, ProcessorSchedulingKind, SchemaIdent,
+    SemVer, TypeName,
+};
 
 /// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -127,6 +130,11 @@ pub struct ProcessorDescriptor {
     /// Reference to config schema (e.g., "com.example.blur.config@1.0.0").
     #[serde(default)]
     pub config_schema: Option<String>,
+    /// Declarative scheduling intent sourced from the manifest's
+    /// `scheduling:` block. Read by `compiler/scheduling.rs` at thread-spawn
+    /// time. Defaults to `Normal` priority + `processor-{id}` thread name.
+    #[serde(default)]
+    pub scheduling: ProcessorScheduling,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -142,6 +150,7 @@ impl ProcessorDescriptor {
             runtime: ProcessorRuntime::default(),
             entrypoint: None,
             config_schema: None,
+            scheduling: ProcessorScheduling::default(),
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),
@@ -170,6 +179,11 @@ impl ProcessorDescriptor {
 
     pub fn with_config_schema(mut self, schema: impl Into<String>) -> Self {
         self.config_schema = Some(schema.into());
+        self
+    }
+
+    pub fn with_scheduling(mut self, scheduling: ProcessorScheduling) -> Self {
+        self.scheduling = scheduling;
         self
     }
 

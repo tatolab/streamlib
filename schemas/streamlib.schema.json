@@ -232,6 +232,53 @@
       },
       "additionalProperties": false
     },
+    "ProcessorScheduling": {
+      "description": "Declarative scheduling intent for a processor — replaces the substring- matching heuristic that picked priority by processor short name.\n\nOptional; omission means [`ThreadPriority::Normal`] with the default `processor-{id}` thread name.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "Optional role hint. Drives the default `{kind}-{id}` thread name; the value is also surfaced on the descriptor for downstream tooling (htop, perf, tracing).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProcessorSchedulingKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "description": "Thread priority. Defaults to [`ThreadPriority::Normal`] when absent.",
+          "default": "normal",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ThreadPriority"
+            }
+          ]
+        },
+        "thread_name": {
+          "description": "Explicit thread-name override. When present this string is used verbatim and takes precedence over `kind`'s default. Linux's `pthread_setname_np` truncates at 15 chars — keep it short.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ProcessorSchedulingKind": {
+      "description": "Role hint for a processor's dedicated thread.\n\nUsed as the default OS-thread-name prefix (`{kind}-{id}`, lowercase) so `/proc/<pid>/task/*/comm` and tracing-by-thread lookups can group processors of the same kind. When absent the thread defaults to `processor-{id}`.",
+      "type": "string",
+      "enum": [
+        "camera",
+        "display",
+        "audio",
+        "video",
+        "compositor"
+      ]
+    },
     "ProcessorSchema": {
       "description": "A complete processor schema definition parsed from YAML.",
       "type": "object",
@@ -303,6 +350,18 @@
           "allOf": [
             {
               "$ref": "#/definitions/RuntimeConfig"
+            }
+          ]
+        },
+        "scheduling": {
+          "description": "Declarative scheduling intent. Absent → `Normal` priority, default `processor-{id}` thread name.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ProcessorScheduling"
+            },
+            {
+              "type": "null"
             }
           ]
         },
@@ -492,6 +551,32 @@
       "description": "SemVer range matcher: `=1.2.3` exact, `>=1.2.3` lower bound, `^1.2.3` caret (npm), `~1.2.3` tilde, or bare `1.2.3` (exact).",
       "type": "string",
       "pattern": "^(\\^|~|>=|=)?[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "ThreadPriority": {
+      "description": "Thread scheduling priority.\n\nSerializes as `\"realtime\"` / `\"high\"` / `\"normal\"` so YAML manifests can declare `scheduling: { priority: high }` without PascalCase noise.",
+      "oneOf": [
+        {
+          "description": "Real-time priority (SCHED_FIFO on Linux, time-constraint policy on Apple).",
+          "type": "string",
+          "enum": [
+            "realtime"
+          ]
+        },
+        {
+          "description": "Elevated priority (SCHED_RR on Linux/Apple).",
+          "type": "string",
+          "enum": [
+            "high"
+          ]
+        },
+        {
+          "description": "Default OS scheduling.",
+          "type": "string",
+          "enum": [
+            "normal"
+          ]
+        }
+      ]
     },
     "TypeName": {
       "description": "Type segment of a schema identifier (PascalCase, the `Type` part of `@org/package/Type@version`).",

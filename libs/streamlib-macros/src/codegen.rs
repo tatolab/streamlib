@@ -593,7 +593,6 @@ fn generate_processor_impl_from_schema(
             fn execution_config(&self) -> ::streamlib::sdk::execution::ExecutionConfig {
                 ::streamlib::sdk::execution::ExecutionConfig {
                     execution: #execution_variant,
-                    priority: ::streamlib::sdk::execution::ThreadPriority::Normal,
                 }
             }
 
@@ -771,6 +770,30 @@ fn generate_descriptor_from_schema(
         }
     });
 
+    // Declarative scheduling block sourced from the manifest. Absent →
+    // `Normal` priority + default `processor-{id}` thread name.
+    let scheduling = schema.scheduling.as_ref().map(|s| {
+        let priority_tokens = thread_priority_tokens(s.priority);
+        let kind_tokens = match s.kind {
+            Some(kind) => {
+                let variant = scheduling_kind_variant(kind);
+                quote! { Some(::streamlib::sdk::descriptors::ProcessorSchedulingKind::#variant) }
+            }
+            None => quote! { None },
+        };
+        let thread_name_tokens = match s.thread_name.as_deref() {
+            Some(name) => quote! { Some(#name.to_string()) },
+            None => quote! { None },
+        };
+        quote! {
+            .with_scheduling(::streamlib::sdk::descriptors::ProcessorScheduling {
+                priority: #priority_tokens,
+                kind: #kind_tokens,
+                thread_name: #thread_name_tokens,
+            })
+        }
+    });
+
     quote! {
         fn descriptor() -> Option<::streamlib::sdk::descriptors::ProcessorDescriptor> {
             Some(
@@ -778,10 +801,33 @@ fn generate_descriptor_from_schema(
                     .with_version(#version)
                     .with_repository(#repository)
                     #config_schema
+                    #scheduling
                     #(#ipc_input_ports)*
                     #(#ipc_output_ports)*
             )
         }
+    }
+}
+
+fn thread_priority_tokens(priority: streamlib_processor_schema::ThreadPriority) -> TokenStream {
+    use streamlib_processor_schema::ThreadPriority;
+    match priority {
+        ThreadPriority::RealTime => quote! { ::streamlib::sdk::execution::ThreadPriority::RealTime },
+        ThreadPriority::High => quote! { ::streamlib::sdk::execution::ThreadPriority::High },
+        ThreadPriority::Normal => quote! { ::streamlib::sdk::execution::ThreadPriority::Normal },
+    }
+}
+
+fn scheduling_kind_variant(
+    kind: streamlib_processor_schema::ProcessorSchedulingKind,
+) -> TokenStream {
+    use streamlib_processor_schema::ProcessorSchedulingKind;
+    match kind {
+        ProcessorSchedulingKind::Camera => quote! { Camera },
+        ProcessorSchedulingKind::Display => quote! { Display },
+        ProcessorSchedulingKind::Audio => quote! { Audio },
+        ProcessorSchedulingKind::Video => quote! { Video },
+        ProcessorSchedulingKind::Compositor => quote! { Compositor },
     }
 }
 

@@ -34,6 +34,9 @@ processors:
     version: 1.0.0
     description: "Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal (#612)"
     execution: reactive
+    scheduling:
+      priority: high
+      kind: camera
     inputs:
       - name: video_in
         schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
@@ -47,6 +50,9 @@ processors:
     version: 1.0.0
     description: "Multi-layer alpha blending compositor with PiP support"
     execution: manual
+    scheduling:
+      priority: realtime
+      kind: compositor
     runtime:
       options:
         unsafe_send: true

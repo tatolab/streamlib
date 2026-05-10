@@ -33,6 +33,9 @@ processors:
     version: 1.0.0
     description: "Captures mono audio from microphones in device-native format (CoreAudio on macOS, ALSA on Linux)"
     execution: manual
+    scheduling:
+      priority: realtime
+      kind: audio
     runtime:
       language: rust
       options:
@@ -49,6 +52,9 @@ processors:
     version: 1.0.0
     description: "Plays audio through speakers/headphones (CoreAudio on macOS, ALSA on Linux)"
     execution: manual
+    scheduling:
+      priority: realtime
+      kind: audio
     runtime:
       language: rust
       options:
@@ -67,6 +73,9 @@ processors:
     version: 1.0.0
     description: "Mixes two mono audio signals into a single stereo signal"
     execution: reactive
+    scheduling:
+      priority: realtime
+      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/AudioMixerConfig@1.0.0"
@@ -90,6 +99,9 @@ processors:
     version: 1.0.0
     description: "Converts mono audio to N-channel audio according to the configured mode"
     execution: reactive
+    scheduling:
+      priority: realtime
+      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/AudioChannelConverterConfig@1.0.0"
@@ -108,6 +120,9 @@ processors:
     version: 1.0.0
     description: "Resamples audio between sample rates"
     execution: reactive
+    scheduling:
+      priority: realtime
+      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/AudioResamplerConfig@1.0.0"
@@ -126,6 +141,14 @@ processors:
     version: 1.0.0
     description: "Rechunks audio buffers to a fixed sample count"
     execution: reactive
+    # Pre-#722 the substring heuristic gave this `Normal` (the short name
+    # has no `Audio`). It runs on the audio hot path between capture and
+    # downstream consumers, so the migration upgrades it to RealTime to
+    # match its sibling processors. Flip back to `normal` if a workload
+    # surfaces evidence the elevated priority is undesired here.
+    scheduling:
+      priority: realtime
+      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/BufferRechunkerConfig@1.0.0"
@@ -144,6 +167,11 @@ processors:
     version: 1.0.0
     description: "Generates a C major chord (C4 + E4 + G4) driven by the runtime audio clock"
     execution: manual
+    # See BufferRechunker note — pre-#722 default was `Normal`; upgraded
+    # because the synth drives the audio clock and benefits from realtime.
+    scheduling:
+      priority: realtime
+      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/ChordGeneratorConfig@1.0.0"

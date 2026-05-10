@@ -610,6 +610,10 @@ impl Runner {
                 descriptor = descriptor.with_config_schema(&config.schema);
             }
 
+            if let Some(scheduling) = &proc_schema.scheduling {
+                descriptor = descriptor.with_scheduling(scheduling.clone());
+            }
+
             descriptor.inputs = inputs;
             descriptor.outputs = outputs;
 
