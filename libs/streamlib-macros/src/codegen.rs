@@ -593,7 +593,6 @@ fn generate_processor_impl_from_schema(
             fn execution_config(&self) -> ::streamlib::sdk::execution::ExecutionConfig {
                 ::streamlib::sdk::execution::ExecutionConfig {
                     execution: #execution_variant,
-                    priority: ::streamlib::sdk::execution::ThreadPriority::Normal,
                 }
             }
 
@@ -771,6 +770,18 @@ fn generate_descriptor_from_schema(
         }
     });
 
+    // Declarative scheduling block sourced from the manifest. Absent →
+    // `Normal` priority. The OS thread name is derived by the compiler
+    // from the processor type + node id at spawn time, not authored.
+    let scheduling = schema.scheduling.as_ref().map(|s| {
+        let priority_tokens = thread_priority_tokens(s.priority);
+        quote! {
+            .with_scheduling(::streamlib::sdk::descriptors::ProcessorScheduling {
+                priority: #priority_tokens,
+            })
+        }
+    });
+
     quote! {
         fn descriptor() -> Option<::streamlib::sdk::descriptors::ProcessorDescriptor> {
             Some(
@@ -778,10 +789,20 @@ fn generate_descriptor_from_schema(
                     .with_version(#version)
                     .with_repository(#repository)
                     #config_schema
+                    #scheduling
                     #(#ipc_input_ports)*
                     #(#ipc_output_ports)*
             )
         }
+    }
+}
+
+fn thread_priority_tokens(priority: streamlib_processor_schema::ThreadPriority) -> TokenStream {
+    use streamlib_processor_schema::ThreadPriority;
+    match priority {
+        ThreadPriority::RealTime => quote! { ::streamlib::sdk::execution::ThreadPriority::RealTime },
+        ThreadPriority::High => quote! { ::streamlib::sdk::execution::ThreadPriority::High },
+        ThreadPriority::Normal => quote! { ::streamlib::sdk::execution::ThreadPriority::Normal },
     }
 }
 

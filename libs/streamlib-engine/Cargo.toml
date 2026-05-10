@@ -165,6 +165,12 @@ opus = "0.3"  # Opus audio codec encoder/decoder
 cpal = "0.15"  # Cross-platform audio I/O (uses ALSA on Linux)
 winit = "0.30"  # Window creation and event loop for display processor
 raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
+# rtkit (RealtimeKit) D-Bus client for unprivileged SCHED_FIFO / nice
+# priority elevation on Linux. PipeWire / PulseAudio / JACK use the
+# same path. Without it, `pthread_setschedparam(SCHED_FIFO|RR, ...)`
+# fails with EPERM on every desktop process; rtkit-daemon does the
+# privileged syscall on the requesting thread's behalf.
+zbus = "5"
 # Wire-format helpers for the per-runtime surface-sharing socket
 streamlib-surface-client = { path = "../streamlib-surface-client" }
 # Surface adapter ABI types referenced by the host-side CpuReadbackBridge

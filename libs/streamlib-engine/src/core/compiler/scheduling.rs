@@ -2,182 +2,112 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Processor scheduling logic for the compiler.
+//!
+//! Resolves a [`SchedulingStrategy`] for a processor by reading the
+//! [`ProcessorScheduling`] block off the registered [`ProcessorDescriptor`].
+//! The block is sourced from the processor's `streamlib.yaml`; processors
+//! that don't declare one fall through to [`ThreadPriority::Normal`].
 
 use crate::core::execution::ThreadPriority;
 use crate::core::graph::ProcessorNode;
+use crate::core::processors::PROCESSOR_REGISTRY;
 
 /// How a processor should be scheduled at runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchedulingStrategy {
     /// Dedicated OS thread with configurable priority.
-    DedicatedThread {
-        priority: ThreadPriority,
-        name: Option<String>,
-    },
-}
-
-impl Default for SchedulingStrategy {
-    fn default() -> Self {
-        SchedulingStrategy::DedicatedThread {
-            priority: ThreadPriority::Normal,
-            name: None,
-        }
-    }
+    DedicatedThread { priority: ThreadPriority },
 }
 
 impl SchedulingStrategy {
     /// Get a human-readable description.
     pub fn description(&self) -> String {
         match self {
-            SchedulingStrategy::DedicatedThread { priority, name } => {
-                if let Some(n) = name {
-                    format!("dedicated thread '{}' ({})", n, priority.description())
-                } else {
-                    format!("dedicated thread ({})", priority.description())
-                }
+            SchedulingStrategy::DedicatedThread { priority } => {
+                format!("dedicated thread ({})", priority.description())
             }
         }
     }
 }
 
-/// Determine scheduling strategy for a processor based on its type.
-///
-/// The PascalCase short-name segment of the structured ident drives the
-/// heuristic — package/org are intentionally ignored so any package
-/// shipping a processor whose short name contains "Audio", "Camera",
-/// etc. picks up the right thread priority.
+/// Resolve the [`SchedulingStrategy`] for a processor. Reads the
+/// `priority` off its registered [`ProcessorDescriptor`] (defaults to
+/// [`ThreadPriority::Normal`] when the processor isn't registered or has
+/// no `scheduling:` block declared).
 pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> SchedulingStrategy {
-    let type_name = node.processor_type.r#type.as_str();
+    let priority = PROCESSOR_REGISTRY
+        .descriptor(&node.processor_type)
+        .map(|d| d.scheduling.priority)
+        .unwrap_or(ThreadPriority::Normal);
 
-    // Camera processors - dedicated thread with high priority
-    if type_name == "CameraProcessor" || type_name.contains("Camera") {
-        return SchedulingStrategy::DedicatedThread {
-            priority: ThreadPriority::High,
-            name: Some(format!("camera-{}", node.id)),
-        };
-    }
-
-    // Display processors - dedicated thread with high priority
-    if type_name == "DisplayProcessor" || type_name.contains("Display") {
-        return SchedulingStrategy::DedicatedThread {
-            priority: ThreadPriority::High,
-            name: Some(format!("display-{}", node.id)),
-        };
-    }
-
-    // Audio processors get real-time priority
-    if type_name.contains("Audio")
-        || type_name.contains("Microphone")
-        || type_name.contains("Speaker")
-    {
-        return SchedulingStrategy::DedicatedThread {
-            priority: ThreadPriority::RealTime,
-            name: Some(format!("audio-{}", node.id)),
-        };
-    }
-
-    // Video encoding/decoding gets high priority
-    if type_name.contains("Encoder")
-        || type_name.contains("Decoder")
-        || type_name.contains("H264")
-        || type_name.contains("H265")
-    {
-        return SchedulingStrategy::DedicatedThread {
-            priority: ThreadPriority::High,
-            name: Some(format!("video-{}", node.id)),
-        };
-    }
-
-    // Compositors get real-time priority (video processing with strict timing)
-    if type_name.contains("Compositor") {
-        return SchedulingStrategy::DedicatedThread {
-            priority: ThreadPriority::RealTime,
-            name: Some(format!("compositor-{}", node.id)),
-        };
-    }
-
-    // Default: normal dedicated thread
-    SchedulingStrategy::DedicatedThread {
-        priority: ThreadPriority::Normal,
-        name: None,
-    }
+    SchedulingStrategy::DedicatedThread { priority }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+    use crate::core::descriptors::{
+        Org, Package, ProcessorDescriptor, ProcessorScheduling, SchemaIdent, SemVer, TypeName,
+    };
 
-    fn ident(short_name: &str) -> SchemaIdent {
+    /// Build an ident whose short name is **deliberately neutral** —
+    /// none of the substrings the pre-#722 heuristic matched on
+    /// (`Camera`, `Display`, `Audio`, `Microphone`, `Speaker`, `Encoder`,
+    /// `Decoder`, `H264`, `H265`, `Compositor`). That way mentally
+    /// reverting `scheduling_strategy_for_processor` back to the old
+    /// substring-match heuristic causes these tests to fail.
+    fn ident(short: &str) -> SchemaIdent {
         SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("streamlib").unwrap(),
-            TypeName::new(short_name).unwrap(),
+            Org::new("scheduling-test").unwrap(),
+            Package::new("fixture").unwrap(),
+            TypeName::new(short).unwrap(),
             SemVer::new(1, 0, 0),
         )
     }
 
     #[test]
-    fn test_scheduling_camera() {
-        let node = ProcessorNode::new(
-            ident("CameraProcessor"),
-            "CameraProcessor",
-            None,
-            vec![],
-            vec![],
-        );
-        match scheduling_strategy_for_processor(&node) {
-            SchedulingStrategy::DedicatedThread { priority, .. } => {
-                assert_eq!(priority, ThreadPriority::High);
-            }
-        }
-    }
+    fn strategy_reads_priority_from_registered_descriptor() {
+        let id = ident("Widgetron");
+        let descriptor = ProcessorDescriptor::new(id.clone(), "fixture")
+            .with_scheduling(ProcessorScheduling {
+                priority: ThreadPriority::RealTime,
+            });
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(descriptor)
+            .expect("fixture descriptor registers cleanly");
 
-    #[test]
-    fn test_scheduling_audio() {
-        let node = ProcessorNode::new(
-            ident("AudioCaptureProcessor"),
-            "AudioCaptureProcessor",
-            None,
-            vec![],
-            vec![],
-        );
+        let node = ProcessorNode::new(id, "fixture-node", None, vec![], vec![]);
         match scheduling_strategy_for_processor(&node) {
-            SchedulingStrategy::DedicatedThread { priority, .. } => {
+            SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::RealTime);
             }
         }
     }
 
     #[test]
-    fn test_scheduling_encoder() {
-        let node = ProcessorNode::new(
-            ident("H264Encoder"),
-            "H264Encoder",
-            None,
-            vec![],
-            vec![],
-        );
+    fn strategy_falls_back_to_normal_when_descriptor_missing() {
+        let id = ident("UnregisteredFixtureProcessor");
+        let node = ProcessorNode::new(id, "ghost-node", None, vec![], vec![]);
         match scheduling_strategy_for_processor(&node) {
-            SchedulingStrategy::DedicatedThread { priority, .. } => {
-                assert_eq!(priority, ThreadPriority::High);
+            SchedulingStrategy::DedicatedThread { priority } => {
+                assert_eq!(priority, ThreadPriority::Normal);
             }
         }
     }
 
+    /// Smoke test that the macro → manifest → registry path produces a
+    /// descriptor whose `scheduling.priority` matches what
+    /// `libs/streamlib-engine/streamlib.yaml` declares for an in-tree
+    /// processor. Mentally reverting the codegen emission in
+    /// `streamlib-macros/src/codegen.rs::generate_descriptor_from_schema`
+    /// or the engine yaml's `scheduling:` block makes this fail.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn test_scheduling_generic() {
-        let node = ProcessorNode::new(
-            ident("SomeProcessor"),
-            "SomeProcessor",
-            None,
-            vec![],
-            vec![],
-        );
-        match scheduling_strategy_for_processor(&node) {
-            SchedulingStrategy::DedicatedThread { priority, .. } => {
-                assert_eq!(priority, ThreadPriority::Normal);
-            }
-        }
+    fn linux_camera_descriptor_carries_declared_priority() {
+        use crate::linux::processors::LinuxCameraProcessor;
+        let descriptor = PROCESSOR_REGISTRY
+            .descriptor(&LinuxCameraProcessor::schema_ident())
+            .expect("Linux Camera processor must be registered via inventory at test start");
+        assert_eq!(descriptor.scheduling.priority, ThreadPriority::High);
     }
 }

@@ -55,6 +55,8 @@ processors:
     version: 1.0.0
     description: "Captures video from macOS cameras using AVFoundation"
     execution: manual
+    scheduling:
+      priority: high
     config:
       name: config
       schema: com.tatolab.camera.config@1.0.0
@@ -67,6 +69,8 @@ processors:
     version: 1.0.0
     description: "Displays video frames in a window using Metal with vsync"
     execution: manual
+    scheduling:
+      priority: high
     config:
       name: config
       schema: com.tatolab.display.config@1.0.0
@@ -239,6 +243,8 @@ processors:
     version: 1.0.0
     description: "Encodes VideoFrame to EncodedVideoFrame (H.264) via Vulkan Video"
     execution: reactive
+    scheduling:
+      priority: high
     runtime:
       language: rust
     config:
@@ -259,6 +265,8 @@ processors:
     version: 1.0.0
     description: "Decodes EncodedVideoFrame (H.264) to VideoFrame via Vulkan Video"
     execution: reactive
+    scheduling:
+      priority: high
     runtime:
       language: rust
     config:
@@ -279,6 +287,8 @@ processors:
     version: 1.0.0
     description: "Encodes VideoFrame to EncodedVideoFrame (H.265) via Vulkan Video"
     execution: reactive
+    scheduling:
+      priority: high
     runtime:
       language: rust
     config:
@@ -299,6 +309,8 @@ processors:
     version: 1.0.0
     description: "Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video"
     execution: reactive
+    scheduling:
+      priority: high
     runtime:
       language: rust
     config:
@@ -319,6 +331,14 @@ processors:
     version: 1.0.0
     description: "Encodes AudioFrame to EncodedAudioFrame (Opus)"
     execution: reactive
+    # Opus is a low-latency realtime audio codec (WebRTC, real-time
+    # streaming). The pre-#722 heuristic matched `Encoder` first, so
+    # this audio codec ran with `high` priority + `video-{id}` thread
+    # name — both wrong for an audio realtime path. Migration corrects
+    # to `realtime` + `audio` so it groups with the rest of the audio
+    # graph (AudioCapture, AudioMixer, etc.).
+    scheduling:
+      priority: realtime
     runtime:
       language: rust
     config:
@@ -339,6 +359,9 @@ processors:
     version: 1.0.0
     description: "Decodes EncodedAudioFrame (Opus) to AudioFrame"
     execution: reactive
+    # See OpusEncoder above — realtime audio codec, audio role.
+    scheduling:
+      priority: realtime
     runtime:
       language: rust
     config:

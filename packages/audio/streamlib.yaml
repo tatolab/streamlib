@@ -33,6 +33,8 @@ processors:
     version: 1.0.0
     description: "Captures mono audio from microphones in device-native format (CoreAudio on macOS, ALSA on Linux)"
     execution: manual
+    scheduling:
+      priority: realtime
     runtime:
       language: rust
       options:
@@ -49,6 +51,8 @@ processors:
     version: 1.0.0
     description: "Plays audio through speakers/headphones (CoreAudio on macOS, ALSA on Linux)"
     execution: manual
+    scheduling:
+      priority: realtime
     runtime:
       language: rust
       options:
@@ -67,6 +71,8 @@ processors:
     version: 1.0.0
     description: "Mixes two mono audio signals into a single stereo signal"
     execution: reactive
+    scheduling:
+      priority: realtime
     config:
       name: config
       schema: "@tatolab/audio/AudioMixerConfig@1.0.0"
@@ -90,6 +96,8 @@ processors:
     version: 1.0.0
     description: "Converts mono audio to N-channel audio according to the configured mode"
     execution: reactive
+    scheduling:
+      priority: realtime
     config:
       name: config
       schema: "@tatolab/audio/AudioChannelConverterConfig@1.0.0"
@@ -108,6 +116,8 @@ processors:
     version: 1.0.0
     description: "Resamples audio between sample rates"
     execution: reactive
+    scheduling:
+      priority: realtime
     config:
       name: config
       schema: "@tatolab/audio/AudioResamplerConfig@1.0.0"
@@ -126,6 +136,12 @@ processors:
     version: 1.0.0
     description: "Rechunks audio buffers to a fixed sample count"
     execution: reactive
+    # Sits on the audio path between capture and downstream consumers —
+    # same realtime constraint as AudioMixer/AudioResampler. The
+    # pre-#722 substring heuristic missed this (short name has no
+    # `Audio`); the migration corrects it.
+    scheduling:
+      priority: realtime
     config:
       name: config
       schema: "@tatolab/audio/BufferRechunkerConfig@1.0.0"
@@ -144,6 +160,10 @@ processors:
     version: 1.0.0
     description: "Generates a C major chord (C4 + E4 + G4) driven by the runtime audio clock"
     execution: manual
+    # Synth driven by the audio clock — realtime audio path. Heuristic
+    # missed this on the same `Audio`-substring grounds as BufferRechunker.
+    scheduling:
+      priority: realtime
     config:
       name: config
       schema: "@tatolab/audio/ChordGeneratorConfig@1.0.0"

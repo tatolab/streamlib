@@ -361,6 +361,80 @@ inputs:
     }
 
     #[test]
+    fn scheduling_block_round_trips_priority() {
+        let yaml = r#"
+name: com.example.audio
+version: 1.0.0
+
+scheduling:
+  priority: realtime
+"#;
+        let schema = parse_processor_yaml(yaml).unwrap();
+        let scheduling = schema.scheduling.expect("scheduling block parsed");
+        assert_eq!(scheduling.priority, crate::ThreadPriority::RealTime);
+    }
+
+    #[test]
+    fn scheduling_block_absent_yields_none() {
+        let yaml = r#"
+name: com.example.passthrough
+version: 1.0.0
+"#;
+        let schema = parse_processor_yaml(yaml).unwrap();
+        assert!(schema.scheduling.is_none());
+    }
+
+    #[test]
+    fn scheduling_block_rejects_invalid_priority() {
+        let yaml = r#"
+name: com.example.bogus
+version: 1.0.0
+
+scheduling:
+  priority: NotAValidVariant
+"#;
+        let result = parse_processor_yaml(yaml);
+        let err = result.expect_err("invalid priority variant must error").to_string();
+        assert!(
+            err.contains("priority")
+                || err.contains("realtime")
+                || err.contains("variant"),
+            "expected diagnostic to mention `priority`, `realtime`, or `variant`; got: {err}"
+        );
+    }
+
+    #[test]
+    fn scheduling_block_rejects_unknown_field() {
+        let yaml = r#"
+name: com.example.bogus
+version: 1.0.0
+
+scheduling:
+  priority: high
+  totally_unknown: 42
+"#;
+        let result = parse_processor_yaml(yaml);
+        assert!(
+            result.is_err(),
+            "deny_unknown_fields on ProcessorScheduling must reject extra keys"
+        );
+    }
+
+    #[test]
+    fn thread_priority_accepts_legacy_pascal_case_aliases() {
+        let yaml = r#"
+name: com.example.audio
+version: 1.0.0
+
+scheduling:
+  priority: RealTime
+"#;
+        let schema = parse_processor_yaml(yaml).unwrap();
+        let scheduling = schema.scheduling.expect("scheduling block parsed");
+        assert_eq!(scheduling.priority, crate::ThreadPriority::RealTime);
+    }
+
+    #[test]
     fn test_input_port_buffer_size_zero_rejected() {
         let yaml = r#"
 name: com.example.test

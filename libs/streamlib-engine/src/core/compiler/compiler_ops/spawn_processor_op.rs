@@ -90,108 +90,39 @@ pub(crate) fn spawn_processor(
         (barrier, ProcessorUniqueId::from(processor_id))
     };
 
-    match runtime {
-        ProcessorRuntime::Rust => {
-            // Extract scheduling strategy for Rust processors
-            let strategy = {
-                let graph = graph_arc.read();
-                let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
-                    Error::ProcessorNotFound(format!(
-                        "Processor '{}' not found",
-                        proc_id_clone
-                    ))
-                })?;
-                scheduling_strategy_for_processor(node)
-            };
+    // Same strategy resolution for all three runtimes — Python and TypeScript
+    // are hosted by Rust subprocess processors whose host thread participates
+    // in the same scheduling regime as native Rust processors.
+    let strategy = {
+        let graph = graph_arc.read();
+        let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
+            Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id_clone))
+        })?;
+        scheduling_strategy_for_processor(node)
+    };
 
-            tracing::info!(
-                "[{}] Spawning Rust processor with strategy: {}",
-                processor_id,
-                strategy.description()
-            );
+    let runtime_label = match runtime {
+        ProcessorRuntime::Rust => "Rust processor",
+        ProcessorRuntime::Python => "Python subprocess host",
+        ProcessorRuntime::TypeScript => "Deno subprocess host",
+    };
+    tracing::info!(
+        "[{}] Spawning {} with strategy: {}",
+        processor_id,
+        runtime_label,
+        strategy.description()
+    );
 
-            match strategy {
-                SchedulingStrategy::DedicatedThread { priority, name: _ } => {
-                    spawn_dedicated_thread(
-                        graph_arc,
-                        factory,
-                        runtime_ctx,
-                        proc_id_clone,
-                        priority,
-                        barrier_component,
-                    )?;
-                }
-            }
-        }
-        ProcessorRuntime::Python => {
-            // Python processors are hosted by SubprocessHostProcessor (a Rust processor
-            // that bridges to a Python subprocess via pipes). They use the same
-            // dedicated thread path as Rust processors since they have real
-            // InputMailboxes/OutputWriter wired by the compiler.
-            let strategy = {
-                let graph = graph_arc.read();
-                let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
-                    Error::ProcessorNotFound(format!(
-                        "Processor '{}' not found",
-                        proc_id_clone
-                    ))
-                })?;
-                scheduling_strategy_for_processor(node)
-            };
-
-            tracing::info!(
-                "[{}] Spawning Python subprocess host with strategy: {}",
-                processor_id,
-                strategy.description()
-            );
-
-            match strategy {
-                SchedulingStrategy::DedicatedThread { priority, name: _ } => {
-                    spawn_dedicated_thread(
-                        graph_arc,
-                        factory,
-                        runtime_ctx,
-                        proc_id_clone,
-                        priority,
-                        barrier_component,
-                    )?;
-                }
-            }
-        }
-        ProcessorRuntime::TypeScript => {
-            // TypeScript/Deno processors are hosted by DenoSubprocessHostProcessor
-            // (a Rust processor that manages a Deno subprocess lifecycle).
-            // The Deno subprocess manages its own iceoryx2 I/O via FFI, so the
-            // Rust host has no InputMailboxes/OutputWriter and runs in Manual mode.
-            let strategy = {
-                let graph = graph_arc.read();
-                let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
-                    Error::ProcessorNotFound(format!(
-                        "Processor '{}' not found",
-                        proc_id_clone
-                    ))
-                })?;
-                scheduling_strategy_for_processor(node)
-            };
-
-            tracing::info!(
-                "[{}] Spawning Deno subprocess host with strategy: {}",
-                processor_id,
-                strategy.description()
-            );
-
-            match strategy {
-                SchedulingStrategy::DedicatedThread { priority, name: _ } => {
-                    spawn_dedicated_thread(
-                        graph_arc,
-                        factory,
-                        runtime_ctx,
-                        proc_id_clone,
-                        priority,
-                        barrier_component,
-                    )?;
-                }
-            }
+    match strategy {
+        SchedulingStrategy::DedicatedThread { priority } => {
+            spawn_dedicated_thread(
+                graph_arc,
+                factory,
+                runtime_ctx,
+                proc_id_clone,
+                priority,
+                barrier_component,
+            )?;
         }
     }
 
@@ -224,22 +155,25 @@ fn spawn_dedicated_thread(
 
     let processor_arc_clone = Arc::clone(&processor_arc);
 
-    let thread_name = format!("processor-{}", processor_id);
-
     // 4 MB stack — FramePayload is 128 KB inline (MAX_PAYLOAD_SIZE) and
     // multiple instances may be on the stack during IPC read/write operations.
+    //
+    // No `.name()` set on the Builder — Linux's `pthread_setname_np`
+    // truncates at 15 chars and most apps that name threads use fixed
+    // role names (Postgres `walwriter`, nginx `worker process`,
+    // Chrome `v8.IO`), not unique-per-instance ones. Custom thread
+    // naming for streamlib processors isn't worth the API surface;
+    // tracing spans + the processor id in log lines provide the same
+    // observability without OS-level truncation.
     let thread = std::thread::Builder::new()
-        .name(thread_name.clone())
         .stack_size(8 * 1024 * 1024)
         .spawn(move || {
             let current_thread = std::thread::current();
-            let thread_name = current_thread.name().unwrap_or("unnamed");
             let thread_id = current_thread.id();
 
             tracing::info!(
-                "[{}] Thread started: name='{}', id={:?}",
+                "[{}] Thread started: id={:?}",
                 proc_id_clone,
-                thread_name,
                 thread_id
             );
 
@@ -397,9 +331,8 @@ fn spawn_dedicated_thread(
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
 
                 tracing::info!(
-                    "[{}] Calling setup on thread '{}' (id={:?}) - escalating via setup mutex",
+                    "[{}] Calling setup (thread id={:?}) - escalating via setup mutex",
                     proc_id_clone,
-                    thread_name,
                     thread_id
                 );
 
@@ -431,9 +364,8 @@ fn spawn_dedicated_thread(
 
             // === PHASE 5: Process loop ===
             tracing::trace!(
-                "[{}] Entering process loop on thread '{}' (id={:?})",
+                "[{}] Entering process loop (thread id={:?})",
                 proc_id_clone,
-                thread_name,
                 thread_id
             );
             run_processor_loop(
