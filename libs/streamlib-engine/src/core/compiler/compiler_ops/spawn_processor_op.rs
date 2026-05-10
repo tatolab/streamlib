@@ -114,14 +114,13 @@ pub(crate) fn spawn_processor(
     );
 
     match strategy {
-        SchedulingStrategy::DedicatedThread { priority, name } => {
+        SchedulingStrategy::DedicatedThread { priority } => {
             spawn_dedicated_thread(
                 graph_arc,
                 factory,
                 runtime_ctx,
                 proc_id_clone,
                 priority,
-                name,
                 barrier_component,
             )?;
         }
@@ -136,7 +135,6 @@ fn spawn_dedicated_thread(
     runtime_ctx: &Arc<RuntimeContext>,
     processor_id: ProcessorUniqueId,
     priority: crate::core::execution::ThreadPriority,
-    thread_name: String,
     mut barrier: ProcessorReadyBarrierComponent,
 ) -> Result<()> {
     // Clone Arcs for thread
@@ -159,18 +157,23 @@ fn spawn_dedicated_thread(
 
     // 4 MB stack — FramePayload is 128 KB inline (MAX_PAYLOAD_SIZE) and
     // multiple instances may be on the stack during IPC read/write operations.
+    //
+    // No `.name()` set on the Builder — Linux's `pthread_setname_np`
+    // truncates at 15 chars and most apps that name threads use fixed
+    // role names (Postgres `walwriter`, nginx `worker process`,
+    // Chrome `v8.IO`), not unique-per-instance ones. Custom thread
+    // naming for streamlib processors isn't worth the API surface;
+    // tracing spans + the processor id in log lines provide the same
+    // observability without OS-level truncation.
     let thread = std::thread::Builder::new()
-        .name(thread_name.clone())
         .stack_size(8 * 1024 * 1024)
         .spawn(move || {
             let current_thread = std::thread::current();
-            let thread_name = current_thread.name().unwrap_or("unnamed");
             let thread_id = current_thread.id();
 
             tracing::info!(
-                "[{}] Thread started: name='{}', id={:?}",
+                "[{}] Thread started: id={:?}",
                 proc_id_clone,
-                thread_name,
                 thread_id
             );
 
@@ -328,9 +331,8 @@ fn spawn_dedicated_thread(
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
 
                 tracing::info!(
-                    "[{}] Calling setup on thread '{}' (id={:?}) - escalating via setup mutex",
+                    "[{}] Calling setup (thread id={:?}) - escalating via setup mutex",
                     proc_id_clone,
-                    thread_name,
                     thread_id
                 );
 
@@ -362,9 +364,8 @@ fn spawn_dedicated_thread(
 
             // === PHASE 5: Process loop ===
             tracing::trace!(
-                "[{}] Entering process loop on thread '{}' (id={:?})",
+                "[{}] Entering process loop (thread id={:?})",
                 proc_id_clone,
-                thread_name,
                 thread_id
             );
             run_processor_loop(

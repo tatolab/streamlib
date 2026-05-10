@@ -57,7 +57,6 @@ processors:
     execution: manual
     scheduling:
       priority: high
-      kind: camera
     config:
       name: config
       schema: com.tatolab.camera.config@1.0.0
@@ -72,7 +71,6 @@ processors:
     execution: manual
     scheduling:
       priority: high
-      kind: display
     config:
       name: config
       schema: com.tatolab.display.config@1.0.0
@@ -247,7 +245,6 @@ processors:
     execution: reactive
     scheduling:
       priority: high
-      kind: video
     runtime:
       language: rust
     config:
@@ -270,7 +267,6 @@ processors:
     execution: reactive
     scheduling:
       priority: high
-      kind: video
     runtime:
       language: rust
     config:
@@ -293,7 +289,6 @@ processors:
     execution: reactive
     scheduling:
       priority: high
-      kind: video
     runtime:
       language: rust
     config:
@@ -316,7 +311,6 @@ processors:
     execution: reactive
     scheduling:
       priority: high
-      kind: video
     runtime:
       language: rust
     config:
@@ -345,7 +339,6 @@ processors:
     # graph (AudioCapture, AudioMixer, etc.).
     scheduling:
       priority: realtime
-      kind: audio
     runtime:
       language: rust
     config:
@@ -369,7 +362,6 @@ processors:
     # See OpusEncoder above — realtime audio codec, audio role.
     scheduling:
       priority: realtime
-      kind: audio
     runtime:
       language: rust
     config:

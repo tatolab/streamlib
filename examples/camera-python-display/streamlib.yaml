@@ -36,7 +36,6 @@ processors:
     execution: reactive
     scheduling:
       priority: high
-      kind: camera
     inputs:
       - name: video_in
         schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
@@ -52,7 +51,6 @@ processors:
     execution: manual
     scheduling:
       priority: realtime
-      kind: compositor
     runtime:
       options:
         unsafe_send: true

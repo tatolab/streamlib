@@ -35,7 +35,6 @@ processors:
     execution: manual
     scheduling:
       priority: realtime
-      kind: audio
     runtime:
       language: rust
       options:
@@ -54,7 +53,6 @@ processors:
     execution: manual
     scheduling:
       priority: realtime
-      kind: audio
     runtime:
       language: rust
       options:
@@ -75,7 +73,6 @@ processors:
     execution: reactive
     scheduling:
       priority: realtime
-      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/AudioMixerConfig@1.0.0"
@@ -101,7 +98,6 @@ processors:
     execution: reactive
     scheduling:
       priority: realtime
-      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/AudioChannelConverterConfig@1.0.0"
@@ -122,7 +118,6 @@ processors:
     execution: reactive
     scheduling:
       priority: realtime
-      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/AudioResamplerConfig@1.0.0"
@@ -147,7 +142,6 @@ processors:
     # `Audio`); the migration corrects it.
     scheduling:
       priority: realtime
-      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/BufferRechunkerConfig@1.0.0"
@@ -170,7 +164,6 @@ processors:
     # missed this on the same `Audio`-substring grounds as BufferRechunker.
     scheduling:
       priority: realtime
-      kind: audio
     config:
       name: config
       schema: "@tatolab/audio/ChordGeneratorConfig@1.0.0"

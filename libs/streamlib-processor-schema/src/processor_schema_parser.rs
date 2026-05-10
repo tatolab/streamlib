@@ -361,40 +361,17 @@ inputs:
     }
 
     #[test]
-    fn scheduling_block_round_trips_priority_kind_and_thread_name() {
+    fn scheduling_block_round_trips_priority() {
         let yaml = r#"
 name: com.example.audio
 version: 1.0.0
 
 scheduling:
   priority: realtime
-  kind: audio
-  thread_name: my-audio
 "#;
         let schema = parse_processor_yaml(yaml).unwrap();
         let scheduling = schema.scheduling.expect("scheduling block parsed");
         assert_eq!(scheduling.priority, crate::ThreadPriority::RealTime);
-        assert_eq!(
-            scheduling.kind,
-            Some(crate::processor_schema::ProcessorSchedulingKind::Audio)
-        );
-        assert_eq!(scheduling.thread_name.as_deref(), Some("my-audio"));
-    }
-
-    #[test]
-    fn scheduling_block_priority_only_round_trips() {
-        let yaml = r#"
-name: com.example.video
-version: 1.0.0
-
-scheduling:
-  priority: high
-"#;
-        let schema = parse_processor_yaml(yaml).unwrap();
-        let scheduling = schema.scheduling.expect("scheduling block parsed");
-        assert_eq!(scheduling.priority, crate::ThreadPriority::High);
-        assert_eq!(scheduling.kind, None);
-        assert_eq!(scheduling.thread_name, None);
     }
 
     #[test]
@@ -423,24 +400,6 @@ scheduling:
                 || err.contains("realtime")
                 || err.contains("variant"),
             "expected diagnostic to mention `priority`, `realtime`, or `variant`; got: {err}"
-        );
-    }
-
-    #[test]
-    fn scheduling_block_rejects_invalid_kind() {
-        let yaml = r#"
-name: com.example.bogus
-version: 1.0.0
-
-scheduling:
-  priority: high
-  kind: NotAValidKind
-"#;
-        let result = parse_processor_yaml(yaml);
-        let err = result.expect_err("invalid kind variant must error").to_string();
-        assert!(
-            err.contains("kind") || err.contains("variant") || err.contains("camera"),
-            "expected diagnostic to mention `kind`, `variant`, or known kind name; got: {err}"
         );
     }
 

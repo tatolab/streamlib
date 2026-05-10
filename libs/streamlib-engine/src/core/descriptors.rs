@@ -5,8 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 pub use streamlib_processor_schema::{
-    Org, Package, PortSchemaSpec, ProcessorScheduling, ProcessorSchedulingKind, SchemaIdent,
-    SemVer, TypeName,
+    Org, Package, PortSchemaSpec, ProcessorScheduling, SchemaIdent, SemVer, TypeName,
 };
 
 /// Runtime environment for a processor.
