@@ -28,19 +28,16 @@ pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
 }
 
 fn set_realtime_priority() -> Result<()> {
-    const TARGET_PRIO: u32 = 80;
-
-    match rtkit::make_current_thread_realtime(TARGET_PRIO) {
+    match rtkit::make_current_thread_realtime() {
         Ok(()) => {
             tracing::info!(
-                "Applied real-time thread priority via rtkit (SCHED_RR, priority {TARGET_PRIO})"
+                "Applied real-time thread priority via rtkit (SCHED_RR at policy max)"
             );
             return Ok(());
         }
         Err(e) => {
-            tracing::debug!(
-                "rtkit refused or unreachable for SCHED_RR={TARGET_PRIO}: {e}; \
-                 falling back to direct pthread_setschedparam"
+            tracing::warn!(
+                "rtkit refused realtime: {e}; falling back to direct pthread_setschedparam"
             );
         }
     }
@@ -49,22 +46,16 @@ fn set_realtime_priority() -> Result<()> {
 }
 
 fn set_high_priority() -> Result<()> {
-    // rtkit grants nice level adjustments via SCHED_OTHER. -10 sits
-    // comfortably below rtkit's typical `MinNiceLevel` policy (-11)
-    // and produces visibly elevated scheduling without crossing into
-    // realtime territory.
-    const TARGET_NICE: i32 = -10;
-
-    match rtkit::make_current_thread_high_priority(TARGET_NICE) {
+    match rtkit::make_current_thread_high_priority() {
         Ok(()) => {
             tracing::info!(
-                "Applied high thread priority via rtkit (SCHED_OTHER, nice {TARGET_NICE})"
+                "Applied high thread priority via rtkit (SCHED_OTHER at policy nice floor)"
             );
             return Ok(());
         }
         Err(e) => {
             tracing::debug!(
-                "rtkit refused or unreachable for nice={TARGET_NICE}: {e}; \
+                "rtkit refused or unreachable for high priority: {e}; \
                  falling back to direct pthread_setschedparam SCHED_RR"
             );
         }
