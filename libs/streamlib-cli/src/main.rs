@@ -32,6 +32,17 @@ enum Commands {
         /// Output file path (default: {name}-{version}.slpkg in package dir)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Require `lib/` to be pre-populated; do not invoke cargo build.
+        ///
+        /// By default, when a package declares Rust runtime processors and
+        /// `lib/` has no host-OS dylib, `pack` runs
+        /// `cargo build --release -p <name>` against the package's
+        /// `Cargo.toml` and bundles the produced cdylib. Set this flag for
+        /// CI / reproducible-publish flows where the dylib must be supplied
+        /// by an earlier build step.
+        #[arg(long)]
+        no_build: bool,
     },
 
     /// Stream a runtime's on-disk JSONL log file in pretty format.
@@ -216,9 +227,10 @@ async fn async_main(cli: Cli) -> Result<()> {
         Some(Commands::Pack {
             package_dir,
             output,
+            no_build,
         }) => {
             let dir = package_dir.unwrap_or_else(|| std::env::current_dir().unwrap());
-            commands::pack::pack(&dir, output.as_deref())?;
+            commands::pack::pack(&dir, output.as_deref(), no_build)?;
         }
         Some(Commands::Logs {
             runtime_id,
