@@ -11,6 +11,11 @@
 //! - `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
 //!   short form of the long [`SchemaIdent::new`] constructor. Same four
 //!   fields, validated at compile time, expands to the long form verbatim.
+//! - `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")` —
+//!   version-omitting companion of `schema_ident!`. Validates `(org,
+//!   package, type)` at compile time; resolves the version at runtime
+//!   against the global processor registry (highest installed
+//!   `SemVer` wins). Returns `Result<SchemaIdent, Error>`.
 
 mod analysis;
 mod attributes;
@@ -175,6 +180,92 @@ pub fn schema_ident(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
+}
+
+/// Companion of [`schema_ident!`] that omits the version arg and resolves
+/// it at runtime from the global processor registry, picking the highest
+/// registered `SemVer` for the `(org, package, type)` tuple.
+///
+/// Use this when the spawning binary should match whatever version of a
+/// processor happens to be installed (Cargo / npm convention) instead of
+/// pinning a specific version. `schema_ident!(..., "1.0.0")` stays
+/// available for production callers that want strict pinning.
+///
+/// ```ignore
+/// // Compile-time:  org / package / type validated at proc-macro expansion.
+/// // Runtime:       PROCESSOR_REGISTRY.resolve_any_version(...) picks the
+/// //                highest semver and returns Result<SchemaIdent, Error>.
+/// let id: SchemaIdent =
+///     streamlib::sdk::schema_ident_any_version!("tatolab", "polyglot-foo", "PolyglotFoo")?;
+/// ```
+///
+/// Returns `Result<SchemaIdent, streamlib::sdk::error::Error>`. `Error::UnknownProcessorType`
+/// is returned when no registration matches `(org, package, type)`.
+#[proc_macro]
+pub fn schema_ident_any_version(input: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(input as SchemaIdentAnyVersionArgs);
+    match expand_schema_ident_any_version(&args) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+struct SchemaIdentAnyVersionArgs {
+    org: LitStr,
+    package: LitStr,
+    type_name: LitStr,
+}
+
+impl Parse for SchemaIdentAnyVersionArgs {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let org: LitStr = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let package: LitStr = input.parse()?;
+        input.parse::<Token![,]>()?;
+        let type_name: LitStr = input.parse()?;
+        // Tolerate an optional trailing comma.
+        let _ = input.parse::<Token![,]>();
+        Ok(Self {
+            org,
+            package,
+            type_name,
+        })
+    }
+}
+
+fn expand_schema_ident_any_version(
+    args: &SchemaIdentAnyVersionArgs,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let org_str = args.org.value();
+    let package_str = args.package.value();
+    let type_str = args.type_name.value();
+
+    Org::new(&org_str).map_err(|e| {
+        syn::Error::new(
+            args.org.span(),
+            format!("invalid org `{}`: {}", org_str, e),
+        )
+    })?;
+    Package::new(&package_str).map_err(|e| {
+        syn::Error::new(
+            args.package.span(),
+            format!("invalid package `{}`: {}", package_str, e),
+        )
+    })?;
+    TypeName::new(&type_str).map_err(|e| {
+        syn::Error::new(
+            args.type_name.span(),
+            format!("invalid type name `{}`: {}", type_str, e),
+        )
+    })?;
+
+    Ok(quote! {
+        ::streamlib::sdk::processors::PROCESSOR_REGISTRY.resolve_any_version(
+            &::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
+            &::streamlib::sdk::descriptors::Package::new(#package_str).expect("validated by macro"),
+            &::streamlib::sdk::descriptors::TypeName::new(#type_str).expect("validated by macro"),
+        )
+    })
 }
 
 struct SchemaIdentArgs {

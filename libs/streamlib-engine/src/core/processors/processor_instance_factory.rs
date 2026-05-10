@@ -378,6 +378,40 @@ impl ProcessorInstanceFactory {
         self.descriptors.read().values().cloned().collect()
     }
 
+    /// Resolve `(org, package, type)` against the registry by picking the
+    /// highest-`SemVer` match across all registered idents. Returns
+    /// [`Error::UnknownProcessorType`] when nothing matches.
+    ///
+    /// Iterates over `descriptors` (the truth for registered idents),
+    /// not `constructors`, so subprocess-only processors registered via
+    /// [`Self::register_descriptor_only`] participate in resolution.
+    pub fn resolve_any_version(
+        &self,
+        org: &crate::core::descriptors::Org,
+        package: &crate::core::descriptors::Package,
+        type_name: &crate::core::descriptors::TypeName,
+    ) -> Result<SchemaIdent> {
+        let descriptors = self.descriptors.read();
+        let highest = descriptors
+            .keys()
+            .filter(|id| &id.org == org && &id.package == package && &id.r#type == type_name)
+            .max_by_key(|id| id.version.clone())
+            .cloned();
+        highest.ok_or_else(|| Error::UnknownProcessorType {
+            // No version was supplied; we render the search target as
+            // `(org, package, type)@0.0.0` so the diagnostic still names
+            // the offending tuple. Callers who want the exact "any
+            // version" semantics in the message string should match on
+            // the variant and re-render.
+            ident: SchemaIdent::new(
+                org.clone(),
+                package.clone(),
+                type_name.clone(),
+                crate::core::descriptors::SemVer::new(0, 0, 0),
+            ),
+        })
+    }
+
     /// All known schema strings from registered processor ports, sorted.
     pub fn known_schemas(&self) -> Vec<String> {
         let mut schemas: Vec<String> = self.schemas.read().iter().cloned().collect();
@@ -484,5 +518,105 @@ mod tests {
 
         assert!(factory.descriptor(&v1).is_some());
         assert!(factory.descriptor(&v2).is_some());
+    }
+
+    #[test]
+    fn resolve_any_version_picks_highest_semver_when_multiple_registered() {
+        let factory = ProcessorInstanceFactory::new();
+        let org = Org::new("acme").unwrap();
+        let pkg = Package::new("core").unwrap();
+        let ty = TypeName::new("Camera").unwrap();
+
+        let v1 = SchemaIdent::new(org.clone(), pkg.clone(), ty.clone(), SemVer::new(1, 0, 0));
+        let v2 = SchemaIdent::new(org.clone(), pkg.clone(), ty.clone(), SemVer::new(1, 2, 0));
+        let v3 = SchemaIdent::new(org.clone(), pkg.clone(), ty.clone(), SemVer::new(2, 0, 0));
+
+        // Insert out of order to prove the resolver picks max, not last-inserted.
+        factory.register_descriptor_only(unit_descriptor(v2.clone())).unwrap();
+        factory.register_descriptor_only(unit_descriptor(v3.clone())).unwrap();
+        factory.register_descriptor_only(unit_descriptor(v1.clone())).unwrap();
+
+        let resolved = factory.resolve_any_version(&org, &pkg, &ty).unwrap();
+        assert_eq!(
+            resolved, v3,
+            "resolve_any_version must return the highest semver"
+        );
+    }
+
+    #[test]
+    fn resolve_any_version_returns_unknown_processor_type_when_nothing_matches() {
+        let factory = ProcessorInstanceFactory::new();
+        // Register an unrelated ident — must not satisfy the lookup.
+        factory
+            .register_descriptor_only(unit_descriptor(ident(
+                "other",
+                "core",
+                "Camera",
+                SemVer::new(1, 0, 0),
+            )))
+            .unwrap();
+
+        let org = Org::new("acme").unwrap();
+        let pkg = Package::new("core").unwrap();
+        let ty = TypeName::new("Camera").unwrap();
+
+        let err = factory.resolve_any_version(&org, &pkg, &ty).unwrap_err();
+        match err {
+            Error::UnknownProcessorType { ident } => {
+                assert_eq!(ident.org, org);
+                assert_eq!(ident.package, pkg);
+                assert_eq!(ident.r#type, ty);
+            }
+            other => panic!("expected UnknownProcessorType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_any_version_does_not_cross_org_or_package_or_type_boundaries() {
+        let factory = ProcessorInstanceFactory::new();
+
+        // Same type name + version, different (org, package) tuples must
+        // not satisfy a lookup against the wrong tuple.
+        factory
+            .register_descriptor_only(unit_descriptor(ident(
+                "acme",
+                "core",
+                "Camera",
+                SemVer::new(1, 0, 0),
+            )))
+            .unwrap();
+        factory
+            .register_descriptor_only(unit_descriptor(ident(
+                "acme",
+                "audio",
+                "Camera",
+                SemVer::new(9, 9, 9),
+            )))
+            .unwrap();
+        factory
+            .register_descriptor_only(unit_descriptor(ident(
+                "contoso",
+                "core",
+                "Camera",
+                SemVer::new(9, 9, 9),
+            )))
+            .unwrap();
+        factory
+            .register_descriptor_only(unit_descriptor(ident(
+                "acme",
+                "core",
+                "Microphone",
+                SemVer::new(9, 9, 9),
+            )))
+            .unwrap();
+
+        let resolved = factory
+            .resolve_any_version(
+                &Org::new("acme").unwrap(),
+                &Package::new("core").unwrap(),
+                &TypeName::new("Camera").unwrap(),
+            )
+            .unwrap();
+        assert_eq!(resolved.version, SemVer::new(1, 0, 0));
     }
 }

@@ -168,6 +168,13 @@ pub mod sdk {
     /// short form of [`SchemaIdent::new`](descriptors::SchemaIdent::new).
     pub use streamlib_engine::schema_ident;
 
+    /// `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")` —
+    /// companion of [`schema_ident!`] that omits the version arg and resolves
+    /// it at runtime against the global processor registry, picking the
+    /// highest registered `SemVer`. Returns
+    /// `Result<SchemaIdent, streamlib::sdk::error::Error>`.
+    pub use streamlib_engine::schema_ident_any_version;
+
     // ---- Permission helpers ----
 
     pub mod permissions {
