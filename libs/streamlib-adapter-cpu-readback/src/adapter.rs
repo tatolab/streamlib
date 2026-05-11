@@ -36,7 +36,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use streamlib_consumer_rhi::{
-    DevicePrivilege, VulkanRhiBufferStorage, VulkanRhiDevice, VulkanTextureLike,
+    DevicePrivilege, VulkanRhiPixelStagingBuffer, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike,
 };
 use streamlib_adapter_abi::{

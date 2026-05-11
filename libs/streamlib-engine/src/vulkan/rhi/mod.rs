@@ -41,7 +41,7 @@ pub use vulkan_texture::HostVulkanTexture;
 #[allow(unused_imports)]
 pub use streamlib_consumer_rhi::{
     ConsumerMarker, ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
-    ConsumerVulkanTimelineSemaphore, DevicePrivilege, VulkanRhiBufferStorage, VulkanRhiDevice,
+    ConsumerVulkanTimelineSemaphore, DevicePrivilege, VulkanRhiPixelStagingBuffer, VulkanRhiDevice,
     VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 

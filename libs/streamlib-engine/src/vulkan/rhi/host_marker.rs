@@ -42,7 +42,7 @@ impl DevicePrivilege for HostMarker {
 #[cfg(not(target_os = "linux"))]
 mod placeholder {
     use streamlib_consumer_rhi::{
-        DevicePrivilege, TextureFormat, VulkanRhiBufferStorage, VulkanTextureLike,
+        DevicePrivilege, TextureFormat, VulkanRhiPixelStagingBuffer, VulkanTextureLike,
         VulkanTimelineSemaphoreLike,
     };
 
@@ -104,7 +104,7 @@ mod placeholder {
         }
     }
 
-    impl VulkanRhiBufferStorage for NotAvailableOnThisPlatform {
+    impl VulkanRhiPixelStagingBuffer for NotAvailableOnThisPlatform {
         fn buffer(&self) -> vulkanalia::vk::Buffer {
             match *self {}
         }

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::{ConsumerRhiError, ConsumerVulkanDevice, PixelFormat, Result, VulkanRhiBufferStorage};
+use crate::{ConsumerRhiError, ConsumerVulkanDevice, PixelFormat, Result, VulkanRhiPixelStagingBuffer};
 
 /// One imported plane: buffer + memory + mapped pointer + size.
 struct ConsumerImportedPlane {
@@ -394,7 +394,7 @@ impl Drop for ConsumerVulkanBuffer {
 unsafe impl Send for ConsumerVulkanBuffer {}
 unsafe impl Sync for ConsumerVulkanBuffer {}
 
-impl VulkanRhiBufferStorage for ConsumerVulkanBuffer {
+impl VulkanRhiPixelStagingBuffer for ConsumerVulkanBuffer {
     fn buffer(&self) -> vk::Buffer {
         ConsumerVulkanBuffer::buffer(self)
     }
