@@ -3,7 +3,7 @@
 ## Symptom
 
 `VK_ERROR_OUT_OF_DEVICE_MEMORY` returned from `vmaCreateBuffer` (or
-the host RHI's `HostVulkanPixelBuffer::new_opaque_fd_export*`) when:
+the host RHI's `HostVulkanBuffer::new_opaque_fd_export*`) when:
 
 - Running on NVIDIA Linux Vulkan driver
 - A `VkSwapchainKHR` has been created in this process
@@ -20,7 +20,7 @@ handle type, same kernel-side budget pressure.
 **Failure pattern observed in streamlib:**
 `CameraToCudaCopyProcessor::setup_inner` (in
 `examples/camera-python-display`) called
-`HostVulkanPixelBuffer::new_opaque_fd_export_device_local` after the
+`HostVulkanBuffer::new_opaque_fd_export_device_local` after the
 display processor's render thread had created its swapchain, and the
 allocation failed with `A device memory allocation has failed`. Issue
 #624.
@@ -120,7 +120,7 @@ construction either yields a fully-usable instance with all
 init-time invariants run, or fails — there is no half-formed state
 observable to callers. Sentinel storage is bypassed in the wrapper
 chain (raw `vk::Buffer` + `vma::Allocation`, not
-`HostVulkanPixelBuffer`) to avoid the `Arc<HostVulkanDevice>`
+`HostVulkanBuffer`) to avoid the `Arc<HostVulkanDevice>`
 back-reference cycle that would prevent the device from ever
 dropping.
 

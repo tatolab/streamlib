@@ -42,7 +42,7 @@ use streamlib_adapter_abi::{
     SurfaceRegistration, WriteGuard,
 };
 use streamlib_consumer_rhi::{
-    DevicePrivilege, VulkanLayout, VulkanPixelBufferLike, VulkanRhiDevice, VulkanTextureLike,
+    DevicePrivilege, VulkanLayout, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike,
 };
 #[cfg(target_os = "linux")]
@@ -172,7 +172,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     pub fn surface_pixel_buffer(
         &self,
         id: SurfaceId,
-    ) -> Option<Arc<<D::Privilege as DevicePrivilege>::PixelBuffer>> {
+    ) -> Option<Arc<<D::Privilege as DevicePrivilege>::Buffer>> {
         self.surfaces
             .with(id, |state| Arc::clone(&state.pixel_buffer))
     }
@@ -249,7 +249,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         // closure (the trait doesn't expose it), so we use the buffer
         // size in bytes vs. width*height*4 — Bgra32 is the only
         // OPAQUE_FD format the host allocator emits today
-        // (vulkan_pixel_buffer.rs::new_opaque_fd_export_device_local
+        // (vulkan_buffer.rs::new_opaque_fd_export_device_local
         // hardcodes bytes_per_pixel=4 in the example caller). If a
         // future caller uses a non-4-bpp format, extend this check.
         let required_bytes = (image_extent.width as u64)

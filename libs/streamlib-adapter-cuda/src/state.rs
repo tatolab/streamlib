@@ -24,10 +24,10 @@ use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 
 /// Inputs handed to [`crate::CudaSurfaceAdapter::register_host_surface`].
 ///
-/// On the host side `pixel_buffer` is a fresh `Arc<HostVulkanPixelBuffer>`
-/// allocated via either `HostVulkanPixelBuffer::new_opaque_fd_export`
+/// On the host side `pixel_buffer` is a fresh `Arc<HostVulkanBuffer>`
+/// allocated via either `HostVulkanBuffer::new_opaque_fd_export`
 /// (HOST_VISIBLE — Python writes via CPU mmap; the carve-out test path)
-/// or `HostVulkanPixelBuffer::new_opaque_fd_export_device_local`
+/// or `HostVulkanBuffer::new_opaque_fd_export_device_local`
 /// (DEVICE_LOCAL — host pipeline writes via `vkCmdCopyImageToBuffer`;
 /// hot-path camera→inference flows). The adapter holds the `Arc` for the
 /// surface's lifetime so the underlying GPU memory stays alive while
@@ -39,7 +39,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// the imported pointer automatically via
     /// `cudaPointerGetAttributes` so the adapter doesn't need to know.
     /// Host- or consumer-flavored per `P`.
-    pub pixel_buffer: Arc<P::PixelBuffer>,
+    pub pixel_buffer: Arc<P::Buffer>,
     /// Timeline semaphore — host- or consumer-flavored per `P`. Both
     /// flavors implement
     /// [`streamlib_consumer_rhi::VulkanTimelineSemaphoreLike`] so the
@@ -61,7 +61,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
 pub(crate) struct SurfaceState<P: DevicePrivilege> {
     #[allow(dead_code)] // kept for tracing / debug output, not read in hot paths
     pub(crate) surface_id: SurfaceId,
-    pub(crate) pixel_buffer: Arc<P::PixelBuffer>,
+    pub(crate) pixel_buffer: Arc<P::Buffer>,
     pub(crate) timeline: Arc<P::TimelineSemaphore>,
     #[allow(dead_code)] // shape-parity with the Vulkan adapter; read by future image support
     pub(crate) current_layout: VulkanLayout,

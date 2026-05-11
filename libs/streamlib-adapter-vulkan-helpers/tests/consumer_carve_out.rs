@@ -336,8 +336,7 @@ mod warn_capture {
 #[test]
 #[serial]
 fn consumer_device_drop_with_live_imports_emits_leak_warning() {
-    use streamlib::sdk::rhi::PixelFormat;
-    use streamlib::sdk::engine::host_rhi::HostVulkanPixelBuffer;
+    use streamlib::sdk::engine::host_rhi::HostVulkanBuffer;
     use tracing_subscriber::layer::SubscriberExt;
 
     // Both devices required for the round-trip.
@@ -361,7 +360,7 @@ fn consumer_device_drop_with_live_imports_emits_leak_warning() {
 
     // Allocate an exportable HOST_VISIBLE staging buffer on the host
     // and grab its DMA-BUF fd.
-    let host_buf = HostVulkanPixelBuffer::new(&host, 64, 64, 4, PixelFormat::Bgra32)
+    let host_buf = HostVulkanBuffer::new(&host, (64 as u64) * (64 as u64) * (4 as u64))
         .expect("host pixel buffer");
     let fd = match host_buf.export_dma_buf_fd() {
         Ok(fd) => fd,

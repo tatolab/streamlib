@@ -24,7 +24,7 @@
 //!   `D: VulkanRhiDevice` and instantiates against either flavor of
 //!   device — `HostVulkanDevice` host-side, `ConsumerVulkanDevice`
 //!   inside the cdylib once `streamlib-consumer-rhi`'s
-//!   `import_opaque_fd_memory` + `ConsumerVulkanPixelBuffer::from_opaque_fd`
+//!   `import_opaque_fd_memory` + `ConsumerVulkanBuffer::from_opaque_fd`
 //!   land the surface-share-passed FD. Same trait surface, same
 //!   acquire/release semantics on either side.
 //! - DLPack capsule shape: [`crate::dlpack`] re-exports the v0.8

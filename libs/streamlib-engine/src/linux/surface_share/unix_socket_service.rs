@@ -961,8 +961,8 @@ mod tests {
     /// `handle_type` rides along through the register/lookup wire path.
     /// Subprocess consumers (#589 Python / #590 Deno CUDA cdylibs) read
     /// it to dispatch on the import API: `"dma_buf"` →
-    /// `ConsumerVulkanPixelBuffer::from_dma_buf_fds`, `"opaque_fd"` →
-    /// `ConsumerVulkanPixelBuffer::from_opaque_fd`. The default-when-absent
+    /// `ConsumerVulkanBuffer::from_dma_buf_fds`, `"opaque_fd"` →
+    /// `ConsumerVulkanBuffer::from_opaque_fd`. The default-when-absent
     /// behavior (`"dma_buf"`) preserves backward compatibility with every
     /// adapter that predates this field. Locking the round-trip contract
     /// for both halves: explicit-OPAQUE_FD and default-DMA-BUF.
@@ -978,7 +978,7 @@ mod tests {
 
         // Half 1: explicit OPAQUE_FD round-trip. The wire treats the FD
         // opaquely — a memfd stands in for what the host RHI would emit
-        // from `HostVulkanPixelBuffer::export_opaque_fd_memory`.
+        // from `HostVulkanBuffer::export_opaque_fd_memory`.
         let send_fd = make_memfd_with(b"opaque-fd-fixture");
         let opaque_req = serde_json::json!({
             "op": "check_in",

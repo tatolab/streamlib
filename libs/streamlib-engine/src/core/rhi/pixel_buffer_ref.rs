@@ -7,10 +7,13 @@ use super::PixelFormat;
 
 /// Platform pixel buffer reference.
 ///
-/// Wraps the platform's native pixel buffer type:
-/// - macOS/iOS: CVPixelBufferRef (raw pointer, platform manages lifecycle)
-/// - Linux: Arc\<HostVulkanPixelBuffer\> (shared GPU staging buffer, Rust manages lifecycle)
-/// - Windows: ID3D11Texture2D* (future)
+/// Wraps the platform's native pixel buffer type plus its pixel-shaped
+/// metadata (width, height, format, bytes-per-pixel):
+/// - macOS/iOS: `CVPixelBufferRef` (raw pointer, platform manages lifecycle)
+/// - Linux: `Arc<HostVulkanBuffer>` (shared generic-buffer primitive)
+///   plus pixel metadata stored on this reference (the bottom-layer
+///   `HostVulkanBuffer` is role-agnostic and does not carry pixel shape).
+/// - Windows: `ID3D11Texture2D*` (future)
 ///
 /// Clone increments the appropriate refcount, Drop decrements it.
 /// No image data is ever copied.
@@ -19,14 +22,22 @@ pub struct PixelBufferRef {
     pub(crate) inner: std::ptr::NonNull<std::ffi::c_void>,
 
     #[cfg(target_os = "linux")]
-    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::HostVulkanBuffer>,
+    #[cfg(target_os = "linux")]
+    pub(crate) width: u32,
+    #[cfg(target_os = "linux")]
+    pub(crate) height: u32,
+    #[cfg(target_os = "linux")]
+    pub(crate) bytes_per_pixel: u32,
+    #[cfg(target_os = "linux")]
+    pub(crate) format: PixelFormat,
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(crate) _marker: std::marker::PhantomData<()>,
 }
 
 impl PixelBufferRef {
-    /// Query the pixel format from the platform.
+    /// Query the pixel format.
     pub fn format(&self) -> PixelFormat {
         #[cfg(target_os = "macos")]
         {
@@ -34,7 +45,7 @@ impl PixelBufferRef {
         }
         #[cfg(target_os = "linux")]
         {
-            self.inner.format()
+            self.format
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -42,7 +53,7 @@ impl PixelBufferRef {
         }
     }
 
-    /// Query the width from the platform.
+    /// Query the width.
     pub fn width(&self) -> u32 {
         #[cfg(target_os = "macos")]
         {
@@ -50,7 +61,7 @@ impl PixelBufferRef {
         }
         #[cfg(target_os = "linux")]
         {
-            self.inner.width()
+            self.width
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
@@ -58,7 +69,7 @@ impl PixelBufferRef {
         }
     }
 
-    /// Query the height from the platform.
+    /// Query the height.
     pub fn height(&self) -> u32 {
         #[cfg(target_os = "macos")]
         {
@@ -66,12 +77,18 @@ impl PixelBufferRef {
         }
         #[cfg(target_os = "linux")]
         {
-            self.inner.height()
+            self.height
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             0
         }
+    }
+
+    /// Bytes per pixel.
+    #[cfg(target_os = "linux")]
+    pub fn bytes_per_pixel(&self) -> u32 {
+        self.bytes_per_pixel
     }
 
     /// Number of DMA-BUF planes backing this pixel buffer.
@@ -151,6 +168,10 @@ impl Clone for PixelBufferRef {
         {
             Self {
                 inner: std::sync::Arc::clone(&self.inner),
+                width: self.width,
+                height: self.height,
+                bytes_per_pixel: self.bytes_per_pixel,
+                format: self.format,
             }
         }
         #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -168,7 +189,7 @@ impl Drop for PixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::drop_impl(self);
         }
-        // On Linux, HostVulkanPixelBuffer handles its own cleanup via its Drop impl.
+        // On Linux, HostVulkanBuffer handles its own cleanup via its Drop impl.
         // No additional action needed here.
     }
 }

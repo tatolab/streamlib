@@ -248,10 +248,9 @@ fn host_readback_bgra(
     width: u32,
     height: u32,
 ) -> Vec<u8> {
-    use streamlib::sdk::rhi::PixelFormat;
-    use streamlib::sdk::engine::host_rhi::HostVulkanPixelBuffer;
+    use streamlib::sdk::engine::host_rhi::HostVulkanBuffer;
 
-    let staging = HostVulkanPixelBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
+    let staging = HostVulkanBuffer::new(device, (width as u64) * (height as u64) * (4 as u64))
         .expect("staging pixel buffer");
     let dev = device.device();
     let queue = device.queue();

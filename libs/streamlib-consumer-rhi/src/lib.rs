@@ -20,7 +20,7 @@
 //!   memory that EGL / V4L2 / multi-plane Vulkan importers consume;
 //!   OPAQUE_FD imports back memory that Vulkan-aware importers (CUDA via
 //!   UUID-matched device, peer VkInstance) consume.
-//! - [`ConsumerVulkanTexture`], [`ConsumerVulkanPixelBuffer`],
+//! - [`ConsumerVulkanTexture`], [`ConsumerVulkanBuffer`],
 //!   [`ConsumerVulkanTimelineSemaphore`] — import-only resource
 //!   wrappers paired with the consumer device.
 //! - [`VulkanRhiDevice`], [`DevicePrivilege`], [`VulkanTextureLike`],
@@ -51,7 +51,7 @@ mod pixel_format;
 #[cfg(target_os = "linux")]
 mod consumer_vulkan_device;
 #[cfg(target_os = "linux")]
-mod consumer_vulkan_pixel_buffer;
+mod consumer_vulkan_buffer;
 #[cfg(target_os = "linux")]
 mod consumer_vulkan_sync;
 #[cfg(target_os = "linux")]
@@ -68,14 +68,14 @@ pub use pixel_format::PixelFormat;
 #[cfg(target_os = "linux")]
 pub use consumer_vulkan_device::ConsumerVulkanDevice;
 #[cfg(target_os = "linux")]
-pub use consumer_vulkan_pixel_buffer::ConsumerVulkanPixelBuffer;
+pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
 #[cfg(target_os = "linux")]
 pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;
 #[cfg(target_os = "linux")]
 pub use consumer_vulkan_texture::ConsumerVulkanTexture;
 #[cfg(target_os = "linux")]
 pub use device_capability::{
-    ConsumerMarker, DevicePrivilege, VulkanPixelBufferLike, VulkanRhiDevice, VulkanTextureLike,
+    ConsumerMarker, DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike,
 };
 #[cfg(target_os = "linux")]

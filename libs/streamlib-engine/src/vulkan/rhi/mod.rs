@@ -40,16 +40,16 @@ pub use vulkan_texture::HostVulkanTexture;
 #[cfg(target_os = "linux")]
 #[allow(unused_imports)]
 pub use streamlib_consumer_rhi::{
-    ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, ConsumerVulkanTexture,
-    ConsumerVulkanTimelineSemaphore, DevicePrivilege, VulkanPixelBufferLike, VulkanRhiDevice,
+    ConsumerMarker, ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
+    ConsumerVulkanTimelineSemaphore, DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice,
     VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 
 mod vulkan_blitter;
 pub use vulkan_blitter::VulkanBlitter;
 
-pub(crate) mod vulkan_pixel_buffer;
-pub use vulkan_pixel_buffer::HostVulkanPixelBuffer;
+pub(crate) mod vulkan_buffer;
+pub use vulkan_buffer::HostVulkanBuffer;
 
 mod vulkan_storage_binding;
 pub use vulkan_storage_binding::{

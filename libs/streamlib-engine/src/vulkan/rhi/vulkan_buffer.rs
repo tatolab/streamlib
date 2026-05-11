@@ -8,7 +8,6 @@ use vulkanalia::vk;
 use vulkanalia_vma as vma;
 use vma::Alloc as _;
 
-use crate::core::rhi::PixelFormat;
 use crate::core::{Result, Error};
 
 use super::HostVulkanDevice;
@@ -23,7 +22,7 @@ pub(crate) static VULKAN_DEVICE_FOR_IMPORT: std::sync::OnceLock<Arc<HostVulkanDe
     std::sync::OnceLock::new();
 
 /// One extra plane of a multi-plane DMA-BUF import (planes 1..N on the
-/// Linux side). Plane 0 lives in [`HostVulkanPixelBuffer::buffer`] /
+/// Linux side). Plane 0 lives in [`HostVulkanBuffer::buffer`] /
 /// `imported_memory` / `mapped_ptr` for back-compat with the
 /// single-plane accessors; additional planes are stored here so an
 /// exported multi-plane format (e.g. NV12 with disjoint Y and UV
@@ -36,8 +35,18 @@ struct VulkanImportedPlane {
     size: vk::DeviceSize,
 }
 
-/// CPU-visible staging buffer for pixel data upload/readback.
-pub struct HostVulkanPixelBuffer {
+/// Generic Vulkan `VkBuffer` allocation primitive — flat bytes with usage flags
+/// and (optionally) DMA-BUF / OPAQUE_FD export bookkeeping.
+///
+/// Role-specific metadata (pixel `width`/`height`/`format`, vertex stride,
+/// uniform element size, etc.) lives on the higher-tier wrappers in
+/// [`crate::core::rhi`] ([`crate::core::rhi::PixelBuffer`],
+/// [`crate::core::rhi::StorageBuffer`], [`crate::core::rhi::UniformBuffer`],
+/// [`crate::core::rhi::VertexBuffer`], [`crate::core::rhi::IndexBuffer`]),
+/// not on this type. Matches UE5 `FRHIBuffer` / wgpu `Buffer` / Vulkano
+/// `Buffer` / Granite `Buffer` shape: the bottom-layer primitive carries
+/// only `(size, usage, memory)`; role is a composition concern above.
+pub struct HostVulkanBuffer {
     /// HostVulkanDevice reference for tracked allocation/free through the RHI.
     vulkan_device: Arc<HostVulkanDevice>,
     buffer: vk::Buffer,
@@ -55,112 +64,43 @@ pub struct HostVulkanPixelBuffer {
     #[cfg(target_os = "linux")]
     is_opaque_fd_export: bool,
     /// Persistently mapped CPU pointer — plane 0 for multi-plane imports.
+    /// `null` for DEVICE_LOCAL allocations.
     mapped_ptr: *mut u8,
     /// Planes 1..N for multi-plane DMA-BUF imports. Empty for single-plane
     /// imports and for VMA-allocated buffers.
     #[cfg(target_os = "linux")]
     extra_imported_planes: Vec<VulkanImportedPlane>,
-    width: u32,
-    height: u32,
-    bytes_per_pixel: u32,
-    format: PixelFormat,
+    /// Plane 0 size in bytes.
     size: vk::DeviceSize,
 }
 
-impl HostVulkanPixelBuffer {
-    /// Create a new DMA-BUF exportable CPU-visible staging buffer via the
-    /// device's dedicated VMA export pool.
+impl HostVulkanBuffer {
+    /// Create a HOST_VISIBLE, DMA-BUF exportable `VkBuffer` with
+    /// `STORAGE_BUFFER | TRANSFER_SRC | TRANSFER_DST` usage, allocated
+    /// through the device's DMA-BUF export VMA pool.
+    ///
+    /// Thin alias for [`Self::new_storage_buffer_host_visible`] for the
+    /// "default DMA-BUF storage buffer" use case. Callers that need
+    /// pixel-shape metadata wrap the result in
+    /// [`crate::core::rhi::PixelBuffer`]; the primitive itself carries no
+    /// pixel semantics.
     ///
     /// The export pool isolates DMA-BUF allocations from the default VMA pool,
     /// avoiding NVIDIA driver failures where global export configuration causes
     /// OOM after swapchain creation.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(width, height, bytes_per_pixel, format = ?format))]
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
     pub fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
-        width: u32,
-        height: u32,
-        bytes_per_pixel: u32,
-        format: PixelFormat,
+        size: u64,
     ) -> Result<Self> {
-        let size = (width as vk::DeviceSize)
-            * (height as vk::DeviceSize)
-            * (bytes_per_pixel as vk::DeviceSize);
-
-        // Declare DMA-BUF handle type at buffer creation — required by Vulkan spec
-        // when memory will be allocated with VkExportMemoryAllocateInfo::handleTypes.
-        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
-            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
-            .build();
-
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size(size)
-            .usage(
-                vk::BufferUsageFlags::TRANSFER_SRC
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                    | vk::BufferUsageFlags::STORAGE_BUFFER,
-            )
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .push_next(&mut external_buffer_info);
-
-        // DEDICATED_MEMORY: required for DMA-BUF export per VMA docs.
-        // MAPPED: persistent CPU mapping.
-        // HOST_ACCESS_SEQUENTIAL_WRITE: hints VMA to pick host-visible memory type.
-        let alloc_opts = vma::AllocationOptions {
-            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
-                | vma::AllocationCreateFlags::MAPPED
-                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ..Default::default()
-        };
-
-        let allocator = vulkan_device.allocator();
-
-        // Prefer the DMA-BUF buffer pool; fall back to default allocator if pool unavailable.
-        let (buffer, allocation) = {
-            #[cfg(target_os = "linux")]
-            let result = if let Some(pool) = vulkan_device.dma_buf_buffer_pool() {
-                unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
-            } else {
-                unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
-            };
-            #[cfg(not(target_os = "linux"))]
-            let result = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) };
-            result.map_err(|e| {
-                Error::GpuError(format!("Failed to create exportable buffer: {e}"))
-            })?
-        };
-
-        // Retrieve the persistently mapped pointer from VMA
-        let alloc_info = allocator.get_allocation_info(allocation);
-        let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
-
-        if mapped_ptr.is_null() {
-            unsafe { allocator.destroy_buffer(buffer, allocation) };
-            return Err(Error::GpuError(
-                "VMA staging buffer mapped pointer is null — expected persistent mapping".into(),
-            ));
-        }
-
-        Ok(Self {
-            vulkan_device: Arc::clone(vulkan_device),
-            buffer,
-            allocation: Some(allocation),
-            #[cfg(target_os = "linux")]
-            imported_memory: None,
-            #[cfg(target_os = "linux")]
-            imported_from_dma_buf: false,
-            #[cfg(target_os = "linux")]
-            is_opaque_fd_export: false,
-            mapped_ptr,
-            #[cfg(target_os = "linux")]
-            extra_imported_planes: Vec::new(),
-            width,
-            height,
-            bytes_per_pixel,
-            format,
+        Self::new_host_visible_with_usage(
+            vulkan_device,
             size,
-        })
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
+            "HostVulkanBuffer::new",
+        )
     }
 
     /// Internal: allocate a HOST_VISIBLE + HOST_COHERENT mapped buffer with
@@ -242,10 +182,6 @@ impl HostVulkanPixelBuffer {
             mapped_ptr,
             #[cfg(target_os = "linux")]
             extra_imported_planes: Vec::new(),
-            width: byte_size as u32,
-            height: 1,
-            bytes_per_pixel: 1,
-            format: PixelFormat::Bgra32,
             size,
         })
     }
@@ -273,7 +209,7 @@ impl HostVulkanPixelBuffer {
             vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
-            "HostVulkanPixelBuffer::new_storage_buffer_host_visible",
+            "HostVulkanBuffer::new_storage_buffer_host_visible",
         )
     }
 
@@ -292,7 +228,7 @@ impl HostVulkanPixelBuffer {
             vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::UNIFORM_BUFFER,
-            "HostVulkanPixelBuffer::new_uniform_buffer_host_visible",
+            "HostVulkanBuffer::new_uniform_buffer_host_visible",
         )
     }
 
@@ -309,7 +245,7 @@ impl HostVulkanPixelBuffer {
             vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::VERTEX_BUFFER,
-            "HostVulkanPixelBuffer::new_vertex_buffer_host_visible",
+            "HostVulkanBuffer::new_vertex_buffer_host_visible",
         )
     }
 
@@ -326,18 +262,18 @@ impl HostVulkanPixelBuffer {
             vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::INDEX_BUFFER,
-            "HostVulkanPixelBuffer::new_index_buffer_host_visible",
+            "HostVulkanBuffer::new_index_buffer_host_visible",
         )
     }
 
     /// Persistently mapped pointer for CPU access — plane 0 for
-    /// multi-plane imports. Use [`Self::plane_mapped_ptr`] for any plane
-    /// index.
+    /// multi-plane imports. `null` for DEVICE_LOCAL allocations. Use
+    /// [`Self::plane_mapped_ptr`] for any plane index.
     pub fn mapped_ptr(&self) -> *mut u8 {
         self.mapped_ptr
     }
 
-    /// Number of DMA-BUF planes backing this pixel buffer. Always `>= 1`:
+    /// Number of imported planes backing this buffer. Always `>= 1`:
     /// `1` for VMA-allocated buffers and single-plane imports, `N` for
     /// multi-plane DMA-BUF imports.
     pub fn plane_count(&self) -> u32 {
@@ -390,27 +326,7 @@ impl HostVulkanPixelBuffer {
         }
     }
 
-    /// Buffer width in pixels.
-    pub fn width(&self) -> u32 {
-        self.width
-    }
-
-    /// Buffer height in pixels.
-    pub fn height(&self) -> u32 {
-        self.height
-    }
-
-    /// Bytes per pixel.
-    pub fn bytes_per_pixel(&self) -> u32 {
-        self.bytes_per_pixel
-    }
-
-    /// Pixel format.
-    pub fn format(&self) -> PixelFormat {
-        self.format
-    }
-
-    /// Total buffer size in bytes.
+    /// Plane 0 size in bytes.
     pub fn size(&self) -> vk::DeviceSize {
         self.size
     }
@@ -421,29 +337,20 @@ impl HostVulkanPixelBuffer {
     }
 }
 
-impl super::VulkanPixelBufferLike for HostVulkanPixelBuffer {
+impl super::VulkanRhiBuffer for HostVulkanBuffer {
     fn buffer(&self) -> vk::Buffer {
-        HostVulkanPixelBuffer::buffer(self)
+        HostVulkanBuffer::buffer(self)
     }
     fn mapped_ptr(&self) -> *mut u8 {
-        HostVulkanPixelBuffer::mapped_ptr(self)
+        HostVulkanBuffer::mapped_ptr(self)
     }
     fn size(&self) -> vk::DeviceSize {
-        HostVulkanPixelBuffer::size(self)
-    }
-    fn width(&self) -> u32 {
-        HostVulkanPixelBuffer::width(self)
-    }
-    fn height(&self) -> u32 {
-        HostVulkanPixelBuffer::height(self)
-    }
-    fn bytes_per_pixel(&self) -> u32 {
-        HostVulkanPixelBuffer::bytes_per_pixel(self)
+        HostVulkanBuffer::size(self)
     }
 }
 
 #[cfg(target_os = "linux")]
-impl HostVulkanPixelBuffer {
+impl HostVulkanBuffer {
     /// Create a new OPAQUE_FD-exportable HOST_VISIBLE staging buffer via
     /// the device's dedicated [`HostVulkanDevice::opaque_fd_buffer_pool`].
     ///
@@ -460,17 +367,17 @@ impl HostVulkanPixelBuffer {
     /// non-exportable allocation — the resulting buffer would be
     /// unusable for CUDA / OpenCL interop and the failure would
     /// surface only at `vkGetMemoryFdKHR` time.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(width, height, bytes_per_pixel, format = ?format))]
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
     pub fn new_opaque_fd_export(
         vulkan_device: &Arc<HostVulkanDevice>,
-        width: u32,
-        height: u32,
-        bytes_per_pixel: u32,
-        format: PixelFormat,
+        size: u64,
     ) -> Result<Self> {
-        let size = (width as vk::DeviceSize)
-            * (height as vk::DeviceSize)
-            * (bytes_per_pixel as vk::DeviceSize);
+        if size == 0 {
+            return Err(Error::Configuration(
+                "HostVulkanBuffer::new_opaque_fd_export: size must be > 0".into(),
+            ));
+        }
+        let size = size as vk::DeviceSize;
 
         let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
@@ -528,10 +435,6 @@ impl HostVulkanPixelBuffer {
             is_opaque_fd_export: true,
             mapped_ptr,
             extra_imported_planes: Vec::new(),
-            width,
-            height,
-            bytes_per_pixel,
-            format,
             size,
         })
     }
@@ -551,17 +454,17 @@ impl HostVulkanPixelBuffer {
     /// as `cudaMemoryTypeDevice` (DLPack `kDLCUDA`) automatically via
     /// `cudaPointerGetAttributes` on `cudaExternalMemoryGetMappedBuffer`'s
     /// returned pointer, so no separate handle-type wire flag is needed.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(width, height, bytes_per_pixel, format = ?format))]
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(size))]
     pub fn new_opaque_fd_export_device_local(
         vulkan_device: &Arc<HostVulkanDevice>,
-        width: u32,
-        height: u32,
-        bytes_per_pixel: u32,
-        format: PixelFormat,
+        size: u64,
     ) -> Result<Self> {
-        let size = (width as vk::DeviceSize)
-            * (height as vk::DeviceSize)
-            * (bytes_per_pixel as vk::DeviceSize);
+        if size == 0 {
+            return Err(Error::Configuration(
+                "HostVulkanBuffer::new_opaque_fd_export_device_local: size must be > 0".into(),
+            ));
+        }
+        let size = size as vk::DeviceSize;
 
         let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
@@ -609,10 +512,6 @@ impl HostVulkanPixelBuffer {
             is_opaque_fd_export: true,
             mapped_ptr: std::ptr::null_mut(),
             extra_imported_planes: Vec::new(),
-            width,
-            height,
-            bytes_per_pixel,
-            format,
             size,
         })
     }
@@ -629,7 +528,7 @@ impl HostVulkanPixelBuffer {
     pub fn export_opaque_fd_memory(&self) -> Result<std::os::unix::io::RawFd> {
         if !self.is_opaque_fd_export {
             return Err(Error::GpuError(
-                "HostVulkanPixelBuffer::export_opaque_fd_memory: buffer was not created \
+                "HostVulkanBuffer::export_opaque_fd_memory: buffer was not created \
                  with `new_opaque_fd_export`; the underlying memory carries DMA_BUF_EXT \
                  (or no) export flags and OPAQUE_FD export will fail at the driver"
                     .into(),
@@ -637,7 +536,7 @@ impl HostVulkanPixelBuffer {
         }
         let allocation = self.allocation.as_ref().ok_or_else(|| {
             Error::GpuError(
-                "HostVulkanPixelBuffer::export_opaque_fd_memory: buffer has no VMA allocation"
+                "HostVulkanBuffer::export_opaque_fd_memory: buffer has no VMA allocation"
                     .into(),
             )
         })?;
@@ -697,7 +596,7 @@ impl HostVulkanPixelBuffer {
     /// [`Self::export_opaque_fd_memory`] directly. The returned `fd` carries
     /// the same ownership semantics as the underlying export — caller
     /// closes it (or transfers ownership via SCM_RIGHTS).
-    #[tracing::instrument(level = "trace", skip(self), fields(width = self.width, height = self.height, opaque_fd = self.is_opaque_fd_export))]
+    #[tracing::instrument(level = "trace", skip(self), fields(size = self.size, opaque_fd = self.is_opaque_fd_export))]
     pub fn export_external_handle(&self) -> Result<crate::core::rhi::RhiExternalHandle> {
         let size = self.size() as usize;
         if self.is_opaque_fd_export {
@@ -714,46 +613,29 @@ impl HostVulkanPixelBuffer {
     /// Thin wrapper over [`Self::from_dma_buf_fds`] for back-compat with
     /// existing single-plane callers — new code should prefer the
     /// multi-plane signature even when there is only one plane.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, width, height, bytes_per_pixel, format = ?format, allocation_size))]
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
     pub fn from_dma_buf_fd(
         vulkan_device: &Arc<HostVulkanDevice>,
         fd: std::os::unix::io::RawFd,
-        width: u32,
-        height: u32,
-        bytes_per_pixel: u32,
-        format: PixelFormat,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
-        Self::from_dma_buf_fds(
-            vulkan_device,
-            &[fd],
-            &[allocation_size],
-            width,
-            height,
-            bytes_per_pixel,
-            format,
-        )
+        Self::from_dma_buf_fds(vulkan_device, &[fd], &[allocation_size])
     }
 
     /// Import one `vk::Buffer` + `vk::DeviceMemory` pair per plane from
-    /// the given DMA-BUF fds. `plane_sizes[i]` must be the allocation
-    /// size of plane `i` (0 falls back to `width*height*bytes_per_pixel`
-    /// on plane 0, required for every other plane).
+    /// the given DMA-BUF fds. `plane_sizes[i]` must be the non-zero
+    /// allocation size of plane `i`.
     ///
     /// Partial-failure semantics: if plane N fails to import, every
     /// plane 0..N that already succeeded is torn down (buffer destroyed,
     /// memory unmapped + freed) before the error is returned. The
     /// caller retains ownership of the fds — each fd is consumed by
     /// `vkAllocateMemory` only on success.
-    #[tracing::instrument(level = "trace", skip(vulkan_device, fds, plane_sizes), fields(plane_count = fds.len(), width, height, bytes_per_pixel, format = ?format))]
+    #[tracing::instrument(level = "trace", skip(vulkan_device, fds, plane_sizes), fields(plane_count = fds.len()))]
     pub fn from_dma_buf_fds(
         vulkan_device: &Arc<HostVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
         plane_sizes: &[vk::DeviceSize],
-        width: u32,
-        height: u32,
-        bytes_per_pixel: u32,
-        format: PixelFormat,
     ) -> Result<Self> {
         if fds.is_empty() {
             return Err(Error::Configuration(
@@ -775,32 +657,22 @@ impl HostVulkanPixelBuffer {
             )));
         }
 
-        let size = (width as vk::DeviceSize)
-            * (height as vk::DeviceSize)
-            * (bytes_per_pixel as vk::DeviceSize);
-
         // Import every plane. Stash each successful import in a vec so we
         // can unwind on partial failure.
         let mut imported: Vec<VulkanImportedPlane> = Vec::with_capacity(fds.len());
         for (idx, (&fd, &plane_size)) in fds.iter().zip(plane_sizes.iter()).enumerate() {
-            let effective_size = if plane_size > 0 {
-                plane_size
-            } else if idx == 0 {
-                size
-            } else {
-                // Planes 1..N need an explicit size — we can't derive it
-                // from width/height since subsampling and format
-                // modifiers vary per plane.
+            if plane_size == 0 {
                 for plane in imported.into_iter() {
                     teardown_imported_plane(vulkan_device, plane);
                 }
                 return Err(Error::Configuration(format!(
-                    "DMA-BUF import: plane {} has size=0 and cannot be derived from width*height",
-                    idx
+                    "DMA-BUF import: plane {idx} has size=0 — caller must supply each \
+                     plane's allocation size (pixel-shape derivation no longer lives on \
+                     the bottom-layer primitive)"
                 )));
-            };
+            }
 
-            match import_single_plane(vulkan_device, fd, effective_size) {
+            match import_single_plane(vulkan_device, fd, plane_size) {
                 Ok(plane) => imported.push(plane),
                 Err(e) => {
                     for plane in imported.into_iter() {
@@ -811,8 +683,7 @@ impl HostVulkanPixelBuffer {
             }
         }
 
-        // Split plane 0 out into the existing back-compat fields; the
-        // rest become `extra_imported_planes`.
+        // Split plane 0 out; the rest become `extra_imported_planes`.
         let plane0 = imported.remove(0);
         Ok(Self {
             vulkan_device: Arc::clone(vulkan_device),
@@ -823,10 +694,6 @@ impl HostVulkanPixelBuffer {
             is_opaque_fd_export: false,
             mapped_ptr: plane0.mapped_ptr,
             extra_imported_planes: imported,
-            width,
-            height,
-            bytes_per_pixel,
-            format,
             size: plane0.size,
         })
     }
@@ -858,12 +725,12 @@ impl HostVulkanPixelBuffer {
     ) -> Result<Self> {
         if size == 0 {
             return Err(Error::Configuration(
-                "HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer: size must be > 0".into(),
+                "HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer: size must be > 0".into(),
             ));
         }
         if size > u32::MAX as u64 {
             return Err(Error::Configuration(format!(
-                "HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer: size {size} \
+                "HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer: size {size} \
                  exceeds 4 GB synthetic-width cap"
             )));
         }
@@ -878,10 +745,6 @@ impl HostVulkanPixelBuffer {
             is_opaque_fd_export: false,
             mapped_ptr: plane.mapped_ptr,
             extra_imported_planes: Vec::new(),
-            width: size as u32,
-            height: 1,
-            bytes_per_pixel: 1,
-            format: PixelFormat::Bgra32,
             size: plane.size,
         })
     }
@@ -889,7 +752,7 @@ impl HostVulkanPixelBuffer {
 }
 
 /// Create one `VkBuffer` + bind one imported `VkDeviceMemory` + map it.
-/// Used by [`HostVulkanPixelBuffer::from_dma_buf_fds`] once per plane.
+/// Used by [`HostVulkanBuffer::from_dma_buf_fds`] once per plane.
 #[cfg(target_os = "linux")]
 fn import_single_plane(
     vulkan_device: &Arc<HostVulkanDevice>,
@@ -954,7 +817,7 @@ fn import_single_plane(
     })
 }
 
-/// Partial-unwind helper for [`HostVulkanPixelBuffer::from_dma_buf_fds`] —
+/// Partial-unwind helper for [`HostVulkanBuffer::from_dma_buf_fds`] —
 /// tears down one already-imported plane when a later plane fails.
 #[cfg(target_os = "linux")]
 fn teardown_imported_plane(vulkan_device: &Arc<HostVulkanDevice>, plane: VulkanImportedPlane) {
@@ -965,7 +828,7 @@ fn teardown_imported_plane(vulkan_device: &Arc<HostVulkanDevice>, plane: VulkanI
     vulkan_device.free_imported_memory(plane.memory);
 }
 
-impl Drop for HostVulkanPixelBuffer {
+impl Drop for HostVulkanBuffer {
     fn drop(&mut self) {
         #[cfg(target_os = "linux")]
         if self.imported_from_dma_buf {
@@ -991,8 +854,8 @@ impl Drop for HostVulkanPixelBuffer {
 }
 
 // Safety: Vulkan handles are thread-safe
-unsafe impl Send for HostVulkanPixelBuffer {}
-unsafe impl Sync for HostVulkanPixelBuffer {}
+unsafe impl Send for HostVulkanBuffer {}
+unsafe impl Sync for HostVulkanBuffer {}
 
 #[cfg(test)]
 mod tests {
@@ -1009,23 +872,17 @@ mod tests {
             }
         };
 
-        let buf = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
-            .expect("buffer creation failed");
+        const W: u64 = 1920;
+        const H: u64 = 1080;
+        const BPP: u64 = 4;
+        let size = W * H * BPP;
+        let buf = HostVulkanBuffer::new(&device, size).expect("buffer creation failed");
 
-        assert_eq!(buf.width(), 1920);
-        assert_eq!(buf.height(), 1080);
-        assert_eq!(buf.bytes_per_pixel(), 4);
-        assert_eq!(buf.size(), 1920 * 1080 * 4);
+        assert_eq!(buf.size(), size);
         assert!(!buf.mapped_ptr().is_null());
         assert_ne!(buf.buffer(), vk::Buffer::null());
 
-        println!(
-            "Pool buffer created: {}x{}x{} = {} bytes",
-            buf.width(),
-            buf.height(),
-            buf.bytes_per_pixel(),
-            buf.size()
-        );
+        println!("Pool buffer created: {} bytes ({W}x{H}x{BPP})", buf.size());
     }
 
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
@@ -1039,8 +896,7 @@ mod tests {
             }
         };
 
-        let buf = HostVulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
-            .expect("buffer creation failed");
+        let buf = HostVulkanBuffer::new(&device, 64 * 64 * 4).expect("buffer creation failed");
 
         let size = buf.size() as usize;
         let ptr = buf.mapped_ptr();
@@ -1078,7 +934,7 @@ mod tests {
             }
         };
 
-        let buf = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
             .expect("buffer creation failed");
 
         let fd = buf.export_dma_buf_fd().expect("DMA-BUF export failed");
@@ -1110,13 +966,7 @@ mod tests {
         }
 
         // Positive: OPAQUE_FD-allocated buffer exports an OPAQUE_FD fd.
-        let buf = HostVulkanPixelBuffer::new_opaque_fd_export(
-            &device,
-            128,
-            128,
-            4,
-            PixelFormat::Bgra32,
-        )
+        let buf = HostVulkanBuffer::new_opaque_fd_export(&device, (128 as u64) * (128 as u64) * (4 as u64))
         .expect("new_opaque_fd_export failed");
         assert!(!buf.mapped_ptr().is_null(), "mapped pointer should be non-null");
         assert_eq!(buf.size(), (128 * 128 * 4) as vk::DeviceSize);
@@ -1127,7 +977,7 @@ mod tests {
         unsafe { libc::close(fd) };
 
         // Negative: DMA-BUF-allocated buffer rejects OPAQUE_FD export.
-        let dma_buf = HostVulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
+        let dma_buf = HostVulkanBuffer::new(&device, (64 as u64) * (64 as u64) * (4 as u64))
             .expect("dma-buf buffer failed");
         match dma_buf.export_opaque_fd_memory() {
             Err(crate::core::Error::GpuError(msg)) => {
@@ -1165,13 +1015,7 @@ mod tests {
             return;
         }
 
-        let buf = HostVulkanPixelBuffer::new_opaque_fd_export_device_local(
-            &device,
-            128,
-            128,
-            4,
-            PixelFormat::Bgra32,
-        )
+        let buf = HostVulkanBuffer::new_opaque_fd_export_device_local(&device, (128 as u64) * (128 as u64) * (4 as u64))
         .expect("new_opaque_fd_export_device_local failed");
         // DEVICE_LOCAL allocations are not host-mapped.
         assert!(
@@ -1205,7 +1049,7 @@ mod tests {
 
         // DMA-BUF flavor → DmaBuf variant.
         let dma_buf =
-            HostVulkanPixelBuffer::new(&device, 64, 64, 4, PixelFormat::Bgra32)
+            HostVulkanBuffer::new(&device, (64 as u64) * (64 as u64) * (4 as u64))
                 .expect("dma-buf buffer failed");
         match dma_buf.export_external_handle() {
             Ok(RhiExternalHandle::DmaBuf { fd, size }) => {
@@ -1219,13 +1063,7 @@ mod tests {
         // OPAQUE_FD flavor → OpaqueFd variant. Skip if the pool isn't
         // available on this driver (already tested separately above).
         if device.opaque_fd_buffer_pool().is_some() {
-            let opaque_buf = HostVulkanPixelBuffer::new_opaque_fd_export(
-                &device,
-                64,
-                64,
-                4,
-                PixelFormat::Bgra32,
-            )
+            let opaque_buf = HostVulkanBuffer::new_opaque_fd_export(&device, (64 as u64) * (64 as u64) * (4 as u64))
             .expect("new_opaque_fd_export failed");
             match opaque_buf.export_external_handle() {
                 Ok(RhiExternalHandle::OpaqueFd { fd, size }) => {
@@ -1292,13 +1130,13 @@ mod tests {
             }
         };
 
-        let b0 = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b0 = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
             .expect("buffer 0 failed");
-        let b1 = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b1 = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
             .expect("buffer 1 failed");
-        let b2 = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b2 = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
             .expect("buffer 2 failed");
-        let b3 = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let b3 = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
             .expect("buffer 3 failed");
 
         assert_ne!(b0.buffer(), vk::Buffer::null());
@@ -1327,7 +1165,7 @@ mod tests {
             }
         };
 
-        let buf = HostVulkanPixelBuffer::new(&device, 1920, 1080, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanBuffer::new(&device, (1920 as u64) * (1080 as u64) * (4 as u64))
             .expect("buffer creation failed");
         drop(buf);
 
@@ -1349,7 +1187,7 @@ mod tests {
         let width = 64u32;
         let height = 64u32;
         let bpp = 4u32;
-        let src = HostVulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
+        let src = HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * (bpp as u64))
             .expect("source buffer creation failed");
 
         let size = src.size() as usize;
@@ -1365,15 +1203,7 @@ mod tests {
         assert!(fd >= 0);
 
         // Import into a new buffer from the DMA-BUF fd
-        let imported = HostVulkanPixelBuffer::from_dma_buf_fd(
-            &device,
-            fd,
-            width,
-            height,
-            bpp,
-            PixelFormat::Bgra32,
-            src.size(),
-        )
+        let imported = HostVulkanBuffer::from_dma_buf_fd(&device, fd, src.size())
         .expect("DMA-BUF import failed");
 
         // Verify imported buffer has the same data
@@ -1396,7 +1226,7 @@ mod tests {
 
     /// Multi-plane `from_dma_buf_fds` round-trip: import two independently
     /// allocated + pattern-written DMA-BUFs as the two planes of a single
-    /// `HostVulkanPixelBuffer`, confirm `plane_count()` reports 2, and each
+    /// `HostVulkanBuffer`, confirm `plane_count()` reports 2, and each
     /// plane's bytes survive intact. Mirrors the symmetry the polyglot
     /// Python and Deno shims provide via `*_gpu_surface_plane_{count,size,mmap,base_address}`.
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
@@ -1418,9 +1248,9 @@ mod tests {
         // Two independent source buffers, each seeded with a distinct
         // byte pattern so a cross-plane swap would be visible in the
         // readback.
-        let src0 = HostVulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
+        let src0 = HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * (bpp as u64))
             .expect("source plane 0 creation failed");
-        let src1 = HostVulkanPixelBuffer::new(&device, width, height, bpp, PixelFormat::Bgra32)
+        let src1 = HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * (bpp as u64))
             .expect("source plane 1 creation failed");
         let pattern0: [u8; 4] = [0xA0, 0xA1, 0xA2, 0xA3];
         let pattern1: [u8; 4] = [0xB0, 0xB1, 0xB2, 0xB3];
@@ -1435,15 +1265,7 @@ mod tests {
         let fd1 = src1.export_dma_buf_fd().expect("plane 1 export failed");
 
         // Import both as planes of a single pixel buffer.
-        let imported = HostVulkanPixelBuffer::from_dma_buf_fds(
-            &device,
-            &[fd0, fd1],
-            &[plane_size, plane_size],
-            width,
-            height,
-            bpp,
-            PixelFormat::Bgra32,
-        )
+        let imported = HostVulkanBuffer::from_dma_buf_fds(&device, &[fd0, fd1], &[plane_size, plane_size])
         .expect("multi-plane DMA-BUF import failed");
 
         assert_eq!(imported.plane_count(), 2, "plane_count must report 2");
@@ -1511,15 +1333,7 @@ mod tests {
                 .collect();
         let sizes: Vec<vk::DeviceSize> = vec![1024; fds.len()];
 
-        let result = HostVulkanPixelBuffer::from_dma_buf_fds(
-            &device,
-            &fds,
-            &sizes,
-            64,
-            4,
-            4,
-            PixelFormat::Bgra32,
-        );
+        let result = HostVulkanBuffer::from_dma_buf_fds(&device, &fds, &sizes);
         match result {
             Ok(_) => panic!("oversize plane vec must be rejected"),
             Err(e) => assert!(
@@ -1545,7 +1359,7 @@ mod tests {
         };
 
         let byte_size: u64 = 4096;
-        let buf = HostVulkanPixelBuffer::new_storage_buffer_host_visible(&device, byte_size)
+        let buf = HostVulkanBuffer::new_storage_buffer_host_visible(&device, byte_size)
             .expect("storage buffer allocation failed");
 
         assert_eq!(buf.size(), byte_size as vk::DeviceSize);
@@ -1587,7 +1401,7 @@ mod tests {
             }
         };
 
-        match HostVulkanPixelBuffer::new_storage_buffer_host_visible(&device, 0) {
+        match HostVulkanBuffer::new_storage_buffer_host_visible(&device, 0) {
             Err(Error::Configuration(msg)) => {
                 assert!(msg.contains("byte_size must be > 0"), "got: {msg}");
             }
@@ -1596,7 +1410,7 @@ mod tests {
         }
 
         let oversized = (u32::MAX as u64) + 1;
-        match HostVulkanPixelBuffer::new_storage_buffer_host_visible(&device, oversized) {
+        match HostVulkanBuffer::new_storage_buffer_host_visible(&device, oversized) {
             Err(Error::Configuration(msg)) => {
                 assert!(
                     msg.contains("exceeds 4 GB synthetic-width cap"),
@@ -1626,7 +1440,7 @@ mod tests {
         };
 
         let byte_size: u64 = 8192;
-        let src = HostVulkanPixelBuffer::new_storage_buffer_host_visible(&device, byte_size)
+        let src = HostVulkanBuffer::new_storage_buffer_host_visible(&device, byte_size)
             .expect("source SSBO allocation failed");
 
         let pattern: [u8; 4] = [0x55, 0xAA, 0xCC, 0x33];
@@ -1641,7 +1455,7 @@ mod tests {
         assert!(fd >= 0);
 
         let imported =
-            HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(&device, fd, byte_size)
+            HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(&device, fd, byte_size)
                 .expect("DMA-BUF SSBO import failed");
 
         assert_eq!(imported.size(), byte_size as vk::DeviceSize);
@@ -1678,7 +1492,7 @@ mod tests {
 
         // fd = -1 would fail at import-time; but size validation runs
         // first so the fd is never touched here.
-        match HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(&device, -1, 0) {
+        match HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(&device, -1, 0) {
             Err(Error::Configuration(msg)) => {
                 assert!(msg.contains("size must be > 0"), "got: {msg}");
             }
@@ -1687,7 +1501,7 @@ mod tests {
         }
 
         let oversized = (u32::MAX as u64) + 1;
-        match HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(&device, -1, oversized) {
+        match HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(&device, -1, oversized) {
             Err(Error::Configuration(msg)) => {
                 assert!(
                     msg.contains("exceeds 4 GB synthetic-width cap"),
@@ -1733,7 +1547,7 @@ mod tests {
         // be rejected per spec (the dma_buf cannot back the
         // requested size).
         let source_size: u64 = 4096;
-        let source = HostVulkanPixelBuffer::new_storage_buffer_host_visible(
+        let source = HostVulkanBuffer::new_storage_buffer_host_visible(
             &device,
             source_size,
         )
@@ -1742,7 +1556,7 @@ mod tests {
 
         let oversized: u64 = 16 * 1024 * 1024;
         let before = device.live_import_allocation_count();
-        let result = HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(
+        let result = HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer(
             &device,
             fd,
             oversized,

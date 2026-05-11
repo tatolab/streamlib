@@ -13,7 +13,7 @@ use std::sync::Arc;
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
 pub struct UniformBuffer {
-    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
 }
 
 #[cfg(target_os = "linux")]
@@ -26,7 +26,7 @@ impl UniformBuffer {
         byte_size: u64,
     ) -> crate::core::Result<Self> {
         let inner =
-            crate::vulkan::rhi::HostVulkanPixelBuffer::new_uniform_buffer_host_visible(
+            crate::vulkan::rhi::HostVulkanBuffer::new_uniform_buffer_host_visible(
                 device, byte_size,
             )?;
         Ok(Self { inner: Arc::new(inner) })
@@ -35,8 +35,8 @@ impl UniformBuffer {
     /// Wrap a pre-allocated buffer that already has `UNIFORM_BUFFER`
     /// usage. Callers are responsible for confirming the usage flag at
     /// allocation time; mismatched usage will fail at descriptor write.
-    pub fn from_host_vulkan_pixel_buffer(
-        inner: Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub fn from_host_vulkan_buffer(
+        inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
     ) -> Self {
         Self { inner }
     }

@@ -31,7 +31,7 @@ serde_json.workspace = true
 tracing-subscriber.workspace = true
 
 # `streamlib` is dev-deps only: tests bring up a real `HostVulkanDevice`
-# + `HostVulkanPixelBuffer` + `HostVulkanTimelineSemaphore` to exercise
+# + `HostVulkanBuffer` + `HostVulkanTimelineSemaphore` to exercise
 # the host trigger end-to-end. The runtime crate (above) does NOT pull
 # `streamlib`, so subprocess cdylibs depending on `streamlib-adapter-
 # cpu-readback` get the consumer-rhi carve-out only and `streamlib` is

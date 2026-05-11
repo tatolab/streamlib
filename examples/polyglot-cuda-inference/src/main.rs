@@ -8,7 +8,7 @@
 //! allocates one HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` and one
 //! exportable timeline semaphore, registers the pair with the surface-
 //! share service so the subprocess can import them through
-//! `streamlib-consumer-rhi`'s `ConsumerVulkanPixelBuffer` /
+//! `streamlib-consumer-rhi`'s `ConsumerVulkanBuffer` /
 //! `ConsumerVulkanTimelineSemaphore` and re-import them into CUDA via
 //! `cudaImportExternalMemory(OPAQUE_FD)` /
 //! `cudaImportExternalSemaphore(TimelineSemaphoreFd)`. The Python
@@ -57,7 +57,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
-    HostVulkanPixelBuffer,
+    HostVulkanBuffer,
     HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
@@ -297,17 +297,16 @@ fn register_host_surface(
     //    exported as OPAQUE_FD. See
     //    `docs/architecture/subprocess-rhi-parity.md` →
     //    "OPAQUE_FD VkBuffer import (cuda — #588)".
-    let pixel_buffer = HostVulkanPixelBuffer::new_opaque_fd_export(
-        host_device,
+    let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export(host_device, (SURFACE_WIDTH as u64) * (SURFACE_HEIGHT as u64) * (BYTES_PER_PIXEL as u64))
+    .map_err(|e| format!("HostVulkanBuffer::new_opaque_fd_export: {e}"))?;
+    let pixel_buffer_arc = Arc::new(pixel_buffer);
+    let pixel_buffer_rhi = PixelBuffer::from_host_vulkan_buffer(
+        Arc::clone(&pixel_buffer_arc),
         SURFACE_WIDTH,
         SURFACE_HEIGHT,
         BYTES_PER_PIXEL,
         PixelFormat::Bgra32,
-    )
-    .map_err(|e| format!("HostVulkanPixelBuffer::new_opaque_fd_export: {e}"))?;
-    let pixel_buffer_arc = Arc::new(pixel_buffer);
-    let pixel_buffer_rhi =
-        PixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&pixel_buffer_arc));
+    );
 
     // 2. Allocate the exportable timeline semaphore (initial value 0).
     //    First subprocess `acquire_*` will wait on 0 → satisfied

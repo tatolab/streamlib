@@ -8,7 +8,7 @@
 //! `VkBuffer`, and an exportable timeline semaphore; registers the
 //! staging buffer + timeline with the surface-share service so the
 //! subprocess can import them through `streamlib-consumer-rhi`'s
-//! `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`;
+//! `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore`;
 //! and uploads a known input pattern. A Python or Deno polyglot
 //! processor opens the surface through `CpuReadbackContext.acquire_write`,
 //! applies a Gaussian blur (cv2 in Python, hand-rolled separable
@@ -55,7 +55,7 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
-    HostVulkanPixelBuffer,
+    HostVulkanBuffer,
     HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
@@ -355,17 +355,16 @@ fn register_host_surface(
     let texture_arc = Arc::clone(stream_texture.vulkan_inner());
 
     // 2. Allocate the HOST_VISIBLE staging buffer (BGRA8 = 1 plane).
-    let staging = HostVulkanPixelBuffer::new(
-        host_device,
+    let staging = HostVulkanBuffer::new(host_device, (SURFACE_SIZE as u64) * (SURFACE_SIZE as u64) * (4 as u64))
+    .map_err(|e| format!("HostVulkanBuffer::new: {e}"))?;
+    let staging_arc = Arc::new(staging);
+    let staging_rhi = PixelBuffer::from_host_vulkan_buffer(
+        Arc::clone(&staging_arc),
         SURFACE_SIZE,
         SURFACE_SIZE,
         4,
         PixelFormat::Bgra32,
-    )
-    .map_err(|e| format!("HostVulkanPixelBuffer::new: {e}"))?;
-    let staging_arc = Arc::new(staging);
-    let staging_rhi =
-        PixelBuffer::from_host_vulkan_pixel_buffer(Arc::clone(&staging_arc));
+    );
 
     // 3. Allocate the exportable timeline semaphore.
     let timeline = Arc::new(

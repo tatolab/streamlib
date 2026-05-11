@@ -19,19 +19,19 @@ use std::sync::Arc;
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
 pub struct StorageBuffer {
-    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
 }
 
 #[cfg(target_os = "linux")]
 impl StorageBuffer {
-    /// Wrap an externally-allocated `Arc<HostVulkanPixelBuffer>` as a
+    /// Wrap an externally-allocated `Arc<HostVulkanBuffer>` as a
     /// `StorageBuffer`. The inner buffer must have been allocated via
     /// one of the SSBO constructors
-    /// ([`crate::vulkan::rhi::HostVulkanPixelBuffer::new_storage_buffer_host_visible`]
+    /// ([`crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible`]
     /// or
-    /// [`crate::vulkan::rhi::HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer`]).
-    pub fn from_host_vulkan_pixel_buffer(
-        inner: Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    /// [`crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer`]).
+    pub fn from_host_vulkan_buffer(
+        inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
     ) -> Self {
         Self { inner }
     }

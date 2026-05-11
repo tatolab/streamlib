@@ -14,7 +14,7 @@
  * 1. The Deno SDK looks the host's pre-registered cpu-readback surface
  *    up via surface-share once (`sldn_cpu_readback_register_surface`).
  *    The DMA-BUF FDs and timeline OPAQUE_FD are consumed by the cdylib
- *    via `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`.
+ *    via `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore`.
  * 2. On every `acquireRead` / `acquireWrite` the cdylib's adapter
  *    calls back into a JS-installed `Deno.UnsafeCallback` that sends a
  *    `run_cpu_readback_copy` escalate-IPC request to the host. The

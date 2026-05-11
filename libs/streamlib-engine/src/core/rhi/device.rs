@@ -112,7 +112,7 @@ impl GpuDevice {
             // static method with no device parameter, so the global bridges that gap.
             #[cfg(target_os = "linux")]
             {
-                if crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
+                if crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
                     .set(std::sync::Arc::clone(&device_arc))
                     .is_err()
                 {

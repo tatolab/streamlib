@@ -14,7 +14,7 @@ subprocess-local Vulkan device. Per-acquire control flow:
    up via surface-share once (``slpn_cpu_readback_register_surface``)
    — that's where the staging-buffer DMA-BUF FDs and the timeline
    OPAQUE_FD enter the cdylib's address space, get imported through
-   ``ConsumerVulkanPixelBuffer`` / ``ConsumerVulkanTimelineSemaphore``,
+   ``ConsumerVulkanBuffer`` / ``ConsumerVulkanTimelineSemaphore``,
    and stay alive for the surface's lifetime.
 2. On every ``acquire_read`` / ``acquire_write`` the cdylib's adapter
    calls back into a Python-installed trigger callback that sends a

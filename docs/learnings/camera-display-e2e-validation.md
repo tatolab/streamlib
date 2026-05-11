@@ -3,7 +3,7 @@
 ## When you need this
 
 You changed anything in the GPU pipeline (`vulkan_device.rs`,
-`vulkan_pixel_buffer.rs`, `vulkan_texture.rs`, `linux/processors/camera.rs`,
+`vulkan_buffer.rs`, `vulkan_texture.rs`, `linux/processors/camera.rs`,
 `linux/processors/display.rs`) and need to confirm:
 
 - Pipeline runs end-to-end without OOM or driver errors

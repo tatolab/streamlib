@@ -86,7 +86,7 @@ Every surface adapter rides the same shape:
   for cpu-readback) via the host RHI; registers via surface-share.
 - **Subprocess setup** looks the registration up via surface-share,
   imports the FDs through `ConsumerVulkanTexture` /
-  `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`,
+  `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore`,
   and instantiates the **same** adapter type against a
   consumer-flavor device. Same trait surface, same acquire/release
   shape.
@@ -116,14 +116,14 @@ three flow through the same `consumer-rhi` types.
 | Per-queue submit mutex | Host-only | Subprocess holds no `VkQueue` |
 | Frames-in-flight=2 sizing | Host-only | Subprocess has no swapchain |
 | `VulkanComputeKernel` SPIR-V reflection + dispatch | Escalate IPC (#550) | `RegisterComputeKernel` + `RunComputeKernel` |
-| **`vkCmdCopyImageToBuffer` for cpu-readback** | **Escalate IPC (thin trigger only; staging buffers + timeline pre-registered via surface-share)** | **Subprocess imports the staging buffer + timeline through `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore` once at registration, then per-acquire is `RunCpuReadbackCopy(surface_id) → done(timeline_value)` plus a consumer-side wait** |
+| **`vkCmdCopyImageToBuffer` for cpu-readback** | **Escalate IPC (thin trigger only; staging buffers + timeline pre-registered via surface-share)** | **Subprocess imports the staging buffer + timeline through `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore` once at registration, then per-acquire is `RunCpuReadbackCopy(surface_id) → done(timeline_value)` plus a consumer-side wait** |
 | Layout transitions / timeline waits beyond carve-out | Host-only | Adapter runs at acquire/release boundary |
 | Validation layers + tracing | Host-only | Subprocess uses `tracing::*!` macros via escalate `log` op |
 | Single `VkDevice` per process (NVIDIA dual-device crash) | Host has `FullAccess` device; subprocess has consumer-only device | Crash triggers on *concurrent submission*; subprocess submits nothing — provably safe ([learning](../learnings/nvidia-dual-vulkan-device-crash.md)) |
 | DMA-BUF FD import + bind + map | **Carve-out** (host AND subprocess) | One shared crate (`streamlib-consumer-rhi` post-#560) |
 | Tiled-image import (`VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`) | **Carve-out** | Same crate |
-| HOST_VISIBLE staging-buffer import (cpu-readback) | **Carve-out** | Same crate (`ConsumerVulkanPixelBuffer`) |
-| **OPAQUE_FD VkBuffer import (cuda — #588)** | **Carve-out** | **Same crate (`ConsumerVulkanDevice::import_opaque_fd_memory` + `ConsumerVulkanPixelBuffer::from_opaque_fd`); the cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedBuffer`. OPAQUE_FD is not interchangeable with DMA-BUF: DLPack consumers (PyTorch / JAX / NumPy `from_dlpack`) require a flat `void*` device pointer, and only `cudaExternalMemoryGetMappedBuffer` produces one — and that requires the source memory to be a `VkBuffer` exported as OPAQUE_FD, not DMA-BUF. The wire format carries `handle_type: "dma_buf" \| "opaque_fd"` so surface-share lookup picks the right import path** |
+| HOST_VISIBLE staging-buffer import (cpu-readback) | **Carve-out** | Same crate (`ConsumerVulkanBuffer`) |
+| **OPAQUE_FD VkBuffer import (cuda — #588)** | **Carve-out** | **Same crate (`ConsumerVulkanDevice::import_opaque_fd_memory` + `ConsumerVulkanBuffer::from_opaque_fd`); the cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedBuffer`. OPAQUE_FD is not interchangeable with DMA-BUF: DLPack consumers (PyTorch / JAX / NumPy `from_dlpack`) require a flat `void*` device pointer, and only `cudaExternalMemoryGetMappedBuffer` produces one — and that requires the source memory to be a `VkBuffer` exported as OPAQUE_FD, not DMA-BUF. The wire format carries `handle_type: "dma_buf" \| "opaque_fd"` so surface-share lookup picks the right import path** |
 
 ## Today (post-#560 Phase 2 + #562 cpu-readback rewire + #588 cuda OPAQUE_FD plumbing)
 
@@ -143,7 +143,7 @@ three flow through the same `consumer-rhi` types.
 > (`RhiExternalHandle::OpaqueFd` variant, host-side polymorphic
 > export through `RhiPixelBufferExport`, surface-share `handle_type`
 > wire-format discriminator, `ConsumerVulkanDevice::import_opaque_fd_memory`
-> + `ConsumerVulkanPixelBuffer::from_opaque_fd`, end-to-end
+> + `ConsumerVulkanBuffer::from_opaque_fd`, end-to-end
 > integration test, DLPack capsule shape on `CudaReadView` /
 > `CudaWriteView`, `cudaPointerGetAttributes` probe). The
 > `streamlib-adapter-cuda` adapter (#587 / #588) is now the
@@ -172,7 +172,7 @@ three flow through the same `consumer-rhi` types.
 │  │ streamlib-consumer-rhi (#560 — standalone crate)              │   │
 │  │ ConsumerVulkanDevice, ConsumerVulkan{Texture,PixelBuffer,     │   │
 │  │ TimelineSemaphore}, VulkanRhiDevice / DevicePrivilege /       │   │
-│  │ VulkanTextureLike / VulkanPixelBufferLike /                   │   │
+│  │ VulkanTextureLike / VulkanRhiBuffer /                   │   │
 │  │ VulkanTimelineSemaphoreLike trait machinery,                  │   │
 │  │ TextureFormat / TextureUsages / PixelFormat                   │   │
 │  │ ✓ Capability boundary TYPE-SYSTEM enforced                    │   │

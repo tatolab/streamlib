@@ -722,7 +722,7 @@ mod tests {
         pattern: impl Fn(u32, u32) -> [u8; 4],
     ) -> Texture {
         use crate::core::rhi::PixelFormat;
-        use crate::vulkan::rhi::HostVulkanPixelBuffer;
+        use crate::vulkan::rhi::HostVulkanBuffer;
 
         let bpp = format.bytes_per_pixel();
         // Allocate staging via the export-capable pool — fine for fill:
@@ -733,7 +733,7 @@ mod tests {
             other => panic!("test fixture only supports 8-bit RGBA/BGRA, got {other:?}"),
         };
         let staging =
-            HostVulkanPixelBuffer::new(device, width, height, bpp, pix_format).expect("staging");
+            HostVulkanBuffer::new(device, (width as u64) * (height as u64) * (bpp as u64)).expect("staging");
         unsafe {
             let mut p = staging.mapped_ptr();
             for y in 0..height {

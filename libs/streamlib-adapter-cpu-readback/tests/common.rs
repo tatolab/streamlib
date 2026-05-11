@@ -10,7 +10,7 @@
 //! and constructs the adapter with an in-process trigger. No
 //! surface-share IPC, no CpuReadbackBridge wiring — the host adapter
 //! sees the imported staging buffers natively as
-//! `Arc<HostVulkanPixelBuffer>` through `HostSurfaceRegistration<HostMarker>`.
+//! `Arc<HostVulkanBuffer>` through `HostSurfaceRegistration<HostMarker>`.
 
 #![cfg(target_os = "linux")]
 #![allow(dead_code)] // each test file uses a different subset
@@ -21,7 +21,7 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
     HostVulkanDevice,
-    HostVulkanPixelBuffer,
+    HostVulkanBuffer,
     HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::context::GpuContext;
@@ -148,20 +148,14 @@ impl HostFixture {
 
         // Allocate one HOST_VISIBLE staging buffer per logical plane.
         let plane_count = surface_format.plane_count();
-        let mut staging_planes: Vec<Arc<HostVulkanPixelBuffer>> =
+        let mut staging_planes: Vec<Arc<HostVulkanBuffer>> =
             Vec::with_capacity(plane_count as usize);
         for plane_idx in 0..plane_count {
             let plane_w = surface_format.plane_width(width, plane_idx);
             let plane_h = surface_format.plane_height(height, plane_idx);
             let plane_bpp = surface_format.plane_bytes_per_pixel(plane_idx);
             let pf = staging_pixel_format_for(surface_format, plane_idx);
-            let pb = HostVulkanPixelBuffer::new(
-                self.adapter.device(),
-                plane_w,
-                plane_h,
-                plane_bpp,
-                pf,
-            )
+            let pb = HostVulkanBuffer::new(self.adapter.device(), (plane_w as u64) * (plane_h as u64) * (plane_bpp as u64))
             .map_err(|e| {
                 Error::GpuError(format!("staging plane {plane_idx}: {e}"))
             })?;

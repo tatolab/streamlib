@@ -1062,7 +1062,7 @@ impl GpuContext {
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
     ///
     /// Thin wrapper over
-    /// [`crate::vulkan::rhi::HostVulkanPixelBuffer::new_storage_buffer_host_visible`].
+    /// [`crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible`].
     /// Unlike [`Self::acquire_pixel_buffer`], the returned buffer is
     /// **caller-owned-lifecycle, not pool-managed** — SSBOs are typically
     /// per-stage ring slots whose count is known at processor setup, so
@@ -1088,11 +1088,11 @@ impl GpuContext {
             "GpuContext::acquire_storage_buffer"
         );
         let vulkan_device = &self.device.inner;
-        let buffer = crate::vulkan::rhi::HostVulkanPixelBuffer::new_storage_buffer_host_visible(
+        let buffer = crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
             vulkan_device,
             byte_size,
         )?;
-        Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_pixel_buffer(Arc::new(buffer)))
+        Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(Arc::new(buffer)))
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer (UBO).

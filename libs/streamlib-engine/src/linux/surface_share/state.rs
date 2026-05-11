@@ -45,7 +45,7 @@ pub struct SurfaceMetadata {
     /// `"opaque_fd"` for OPAQUE_FD-typed FDs that Vulkan-aware importers
     /// (CUDA via UUID-matched device, peer VkInstance) consume. The host
     /// sets this from the `RhiExternalHandle` variant returned by
-    /// [`crate::vulkan::rhi::HostVulkanPixelBuffer::export_external_handle`].
+    /// [`crate::vulkan::rhi::HostVulkanBuffer::export_external_handle`].
     pub handle_type: String,
     /// DRM format modifier of the underlying VkImage. Zero means
     /// `DRM_FORMAT_MOD_LINEAR` (sampler-only on NVIDIA — see

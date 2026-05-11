@@ -12,7 +12,7 @@ use std::sync::Arc;
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
 pub struct VertexBuffer {
-    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
 }
 
 #[cfg(target_os = "linux")]
@@ -25,7 +25,7 @@ impl VertexBuffer {
         byte_size: u64,
     ) -> crate::core::Result<Self> {
         let inner =
-            crate::vulkan::rhi::HostVulkanPixelBuffer::new_vertex_buffer_host_visible(
+            crate::vulkan::rhi::HostVulkanBuffer::new_vertex_buffer_host_visible(
                 device, byte_size,
             )?;
         Ok(Self { inner: Arc::new(inner) })
@@ -34,8 +34,8 @@ impl VertexBuffer {
     /// Wrap a pre-allocated buffer that already has `VERTEX_BUFFER`
     /// usage. Callers are responsible for confirming the usage flag at
     /// allocation time; mismatched usage fails at descriptor write.
-    pub fn from_host_vulkan_pixel_buffer(
-        inner: Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub fn from_host_vulkan_buffer(
+        inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
     ) -> Self {
         Self { inner }
     }

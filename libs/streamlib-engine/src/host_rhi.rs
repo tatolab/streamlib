@@ -53,7 +53,7 @@ use std::sync::Arc;
 
 pub use crate::vulkan::rhi::{
     drm_modifier_probe, AccelerationStructureKind, HostMarker, HostVulkanDevice,
-    HostVulkanPixelBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
+    HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
     OffscreenColorTarget, OffscreenDraw, RayTracingPipelineProperties, RhiCommandRecorder,
     TlasInstanceDesc, VulkanAccelerationStructure, VulkanAccess, VulkanBufferLike,
     VulkanComputeKernel, VulkanGraphicsKernel, VulkanIndexBindable, VulkanRayTracingKernel,
@@ -103,16 +103,16 @@ impl HostTextureExt for Texture {
 ///
 /// In-tree adapters that issue `vkCmdCopyImageToBuffer` or
 /// `vkCmdCopyBufferToImage` against a HOST_VISIBLE staging buffer
-/// reach the underlying [`HostVulkanPixelBuffer`] through this trait.
+/// reach the underlying [`HostVulkanBuffer`] through this trait.
 ///
-/// [`HostVulkanPixelBuffer`]: crate::vulkan::rhi::HostVulkanPixelBuffer
+/// [`HostVulkanBuffer`]: crate::vulkan::rhi::HostVulkanBuffer
 pub trait HostPixelBufferRefExt {
-    /// Borrow the underlying [`HostVulkanPixelBuffer`].
-    fn vulkan_inner(&self) -> &Arc<HostVulkanPixelBuffer>;
+    /// Borrow the underlying [`HostVulkanBuffer`].
+    fn vulkan_inner(&self) -> &Arc<HostVulkanBuffer>;
 }
 
 impl HostPixelBufferRefExt for PixelBufferRef {
-    fn vulkan_inner(&self) -> &Arc<HostVulkanPixelBuffer> {
+    fn vulkan_inner(&self) -> &Arc<HostVulkanBuffer> {
         &self.inner
     }
 }

@@ -33,7 +33,7 @@ impl consumer_rhi_private::Sealed for HostMarker {}
 impl DevicePrivilege for HostMarker {
     type TimelineSemaphore = super::HostVulkanTimelineSemaphore;
     type Texture = super::HostVulkanTexture;
-    type PixelBuffer = super::HostVulkanPixelBuffer;
+    type Buffer = super::HostVulkanBuffer;
 }
 
 // Non-Linux: HostMarker still resolves but to phantom unit types for
@@ -42,7 +42,7 @@ impl DevicePrivilege for HostMarker {
 #[cfg(not(target_os = "linux"))]
 mod placeholder {
     use streamlib_consumer_rhi::{
-        DevicePrivilege, TextureFormat, VulkanPixelBufferLike, VulkanTextureLike,
+        DevicePrivilege, TextureFormat, VulkanRhiBuffer, VulkanTextureLike,
         VulkanTimelineSemaphoreLike,
     };
 
@@ -56,7 +56,7 @@ mod placeholder {
     impl DevicePrivilege for HostMarker {
         type TimelineSemaphore = NotAvailableOnThisPlatform;
         type Texture = NotAvailableOnThisPlatform;
-        type PixelBuffer = NotAvailableOnThisPlatform;
+        type Buffer = NotAvailableOnThisPlatform;
     }
 
     impl VulkanTimelineSemaphoreLike for NotAvailableOnThisPlatform {
@@ -104,7 +104,7 @@ mod placeholder {
         }
     }
 
-    impl VulkanPixelBufferLike for NotAvailableOnThisPlatform {
+    impl VulkanRhiBuffer for NotAvailableOnThisPlatform {
         fn buffer(&self) -> vulkanalia::vk::Buffer {
             match *self {}
         }

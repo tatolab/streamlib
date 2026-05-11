@@ -11,7 +11,7 @@
 //! bytes through its own mapped pointer. This is the primitive the
 //! polyglot blur example exercises end-to-end through the cdylib +
 //! escalate IPC; the helper crate exercises the same primitive
-//! in-process so a regression in `ConsumerVulkanPixelBuffer::from_dma_buf_fd`
+//! in-process so a regression in `ConsumerVulkanBuffer::from_dma_buf_fd`
 //! lights up here without needing a full subprocess spawn.
 //!
 //! Same `#[serial]` discipline as the adapter-vulkan helper:
@@ -29,7 +29,7 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 use streamlib::sdk::engine::host_rhi::{
     HostMarker,
-    HostVulkanPixelBuffer,
+    HostVulkanBuffer,
     HostVulkanTimelineSemaphore,
 };
 use streamlib_adapter_abi::{
@@ -41,7 +41,7 @@ use streamlib_adapter_cpu_readback::{
     InProcessCpuReadbackCopyTrigger, VulkanLayout,
 };
 use streamlib_consumer_rhi::{
-    ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, ConsumerVulkanTimelineSemaphore,
+    ConsumerVulkanDevice, ConsumerVulkanBuffer, ConsumerVulkanTimelineSemaphore,
     PixelFormat as ConsumerPixelFormat,
 };
 
@@ -82,8 +82,8 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
     // Allocate the host-side HOST_VISIBLE staging buffer. We keep an
     // independent Arc so we can export its DMA-BUF FD AFTER
     // registration without unwrapping the registration's vec.
-    let staging = HostVulkanPixelBuffer::new(&host_device, W, H, 4, PixelFormat::Bgra32)
-        .expect("HostVulkanPixelBuffer::new");
+    let staging = HostVulkanBuffer::new(&host_device, (W as u64) * (H as u64) * (4 as u64))
+        .expect("HostVulkanBuffer::new");
     let staging_arc = Arc::new(staging);
 
     // Allocate the exportable timeline. Keep our own Arc so we can
@@ -177,7 +177,7 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
     // the same boundary the cdylibs cross).
     let dma_buf_fd = staging_arc
         .export_dma_buf_fd()
-        .expect("HostVulkanPixelBuffer::export_dma_buf_fd");
+        .expect("HostVulkanBuffer::export_dma_buf_fd");
     let sync_fd = timeline_arc
         .export_opaque_fd()
         .expect("HostVulkanTimelineSemaphore::export_opaque_fd");
@@ -193,16 +193,8 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
             return;
         }
     };
-    let consumer_staging = ConsumerVulkanPixelBuffer::from_dma_buf_fd(
-        &consumer,
-        dma_buf_fd,
-        W,
-        H,
-        4,
-        ConsumerPixelFormat::Bgra32,
-        (W as u64) * (H as u64) * 4,
-    )
-    .expect("ConsumerVulkanPixelBuffer::from_dma_buf_fd");
+    let consumer_staging = ConsumerVulkanBuffer::from_dma_buf_fd(&consumer, dma_buf_fd, (W as u64) * (H as u64) * 4)
+    .expect("ConsumerVulkanBuffer::from_dma_buf_fd");
     let consumer_timeline =
         ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(&consumer, sync_fd)
             .expect("ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd");

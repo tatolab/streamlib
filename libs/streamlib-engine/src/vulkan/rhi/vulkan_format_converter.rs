@@ -70,8 +70,8 @@ impl VulkanFormatConverter {
             ));
         }
 
-        let src_format = source.buffer_ref().inner.format();
-        let dst_format = dest.buffer_ref().inner.format();
+        let src_format = source.buffer_ref().format();
+        let dst_format = dest.buffer_ref().format();
         let flags = match (src_format, dst_format) {
             (
                 PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange,
@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     use crate::core::rhi::PixelBufferRef;
     use crate::core::Error;
-    use crate::vulkan::rhi::HostVulkanPixelBuffer;
+    use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
@@ -132,10 +132,14 @@ mod tests {
         bytes_per_pixel: u32,
         format: PixelFormat,
     ) -> PixelBuffer {
-        let vk_buf = HostVulkanPixelBuffer::new(device, width, height, bytes_per_pixel, format)
+        let vk_buf = HostVulkanBuffer::new(device, (width as u64) * (height as u64) * (bytes_per_pixel as u64))
             .expect("Failed to create pixel buffer");
         let ref_ = PixelBufferRef {
             inner: Arc::new(vk_buf),
+            width,
+            height,
+            bytes_per_pixel,
+            format,
         };
         PixelBuffer::new(ref_)
     }

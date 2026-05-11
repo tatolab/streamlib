@@ -35,7 +35,7 @@ The canonical recipe:
 1. **The adapter type is generic over `D: VulkanRhiDevice`** from
    `streamlib-consumer-rhi`. The `VulkanRhiDevice` trait, plus the
    companion `DevicePrivilege` / `VulkanTextureLike` /
-   `VulkanPixelBufferLike` / `VulkanTimelineSemaphoreLike` traits,
+   `VulkanRhiBuffer` / `VulkanTimelineSemaphoreLike` traits,
    is everything the adapter needs from the device. The same
    adapter type instantiates against `HostVulkanDevice` host-side
    and `ConsumerVulkanDevice` cdylib-side — same trait surface,
@@ -53,7 +53,7 @@ The canonical recipe:
 3. **Subprocess setup looks up the registration** via surface-share
    and **imports the FDs through `streamlib-consumer-rhi`** —
    `ConsumerVulkanTexture::from_dma_buf_fd`,
-   `ConsumerVulkanPixelBuffer::from_dma_buf_fd` (single-plane) /
+   `ConsumerVulkanBuffer::from_dma_buf_fd` (single-plane) /
    `from_dma_buf_fds` (multi-plane) / `from_opaque_fd` (cuda's
    OPAQUE_FD path), and
    `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`
@@ -434,7 +434,7 @@ runtime.install_setup_hook(move |gpu| {
     // Allocate + register host surface(s) the adapter manages.
     // For DMA-BUF GPU adapters: gpu.acquire_render_target_dma_buf_image
     //   + gpu.surface_store().register_texture(uuid, &texture).
-    // For OPAQUE_FD (cuda): HostVulkanPixelBuffer::new_opaque_fd_export
+    // For OPAQUE_FD (cuda): HostVulkanBuffer::new_opaque_fd_export
     //   + register with handle_type: "opaque_fd".
     // For cpu-readback: HOST_VISIBLE staging VkBuffer + timeline.
 

@@ -1378,12 +1378,11 @@ mod tests {
         let width = 1920u32;
         let height = 1080u32;
 
-        // Step 1: Camera pixel buffers via HostVulkanPixelBuffer (raw exportable allocation)
-        use crate::vulkan::rhi::HostVulkanPixelBuffer;
-        use crate::core::rhi::PixelFormat;
+        // Step 1: Camera pixel buffers via HostVulkanBuffer (raw exportable allocation)
+        use crate::vulkan::rhi::HostVulkanBuffer;
         let mut pixel_buffers = Vec::new();
         for i in 0..4 {
-            let buf = HostVulkanPixelBuffer::new(&device, width, height, 4, PixelFormat::Bgra32)
+            let buf = HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * (4 as u64))
                 .unwrap_or_else(|e| panic!("pixel buffer [{i}] creation failed: {e}"));
             assert!(!buf.mapped_ptr().is_null());
             pixel_buffers.push(buf);
