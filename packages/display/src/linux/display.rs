@@ -536,7 +536,7 @@ impl DisplayEventLoopHandler {
                     VulkanStage::ALL_COMMANDS,
                     VulkanStage::FRAGMENT_SHADER,
                     VulkanAccess::MEMORY_WRITE,
-                    VulkanAccess::SHADER_READ,
+                    VulkanAccess::SHADER_SAMPLED_READ,
                 )?;
                 registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
             }

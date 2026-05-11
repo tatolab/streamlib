@@ -63,6 +63,13 @@ pub struct VulkanAccess(pub u64);
 impl VulkanAccess {
     pub const NONE: Self = Self(vk::AccessFlags2::NONE.bits());
     pub const SHADER_READ: Self = Self(vk::AccessFlags2::SHADER_READ.bits());
+    /// Sync2 refinement of `SHADER_READ` covering only sampled-image reads
+    /// (`OpTypeSampledImage` + `OpImageSampleImplicitLod` and friends).
+    /// Prefer this over the umbrella `SHADER_READ` when the only access is
+    /// fragment-stage sampling — the validation layers track the narrower
+    /// flag and the documented intent travels with the barrier.
+    pub const SHADER_SAMPLED_READ: Self =
+        Self(vk::AccessFlags2::SHADER_SAMPLED_READ.bits());
     pub const SHADER_WRITE: Self = Self(vk::AccessFlags2::SHADER_WRITE.bits());
     pub const TRANSFER_READ: Self = Self(vk::AccessFlags2::TRANSFER_READ.bits());
     pub const TRANSFER_WRITE: Self = Self(vk::AccessFlags2::TRANSFER_WRITE.bits());

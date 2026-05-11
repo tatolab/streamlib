@@ -397,15 +397,23 @@ impl VulkanPresentTarget {
         let extra_waits = std::mem::take(&mut frame.inner.extra_waits);
 
         if let Err(e) = user_result {
-            // User error — best-effort recorder cleanup. The recorder
-            // state must be restored to Idle so the next render_frame
-            // can begin() again. End the command buffer then mark
-            // submission_not_in_flight semantics by NOT calling submit.
-            //
-            // Simpler: call submit_and_wait to drain. The cost is one
-            // round-trip per error frame, but the alternative is
-            // wedging the recorder forever.
-            let _ = frame.recorder.submit_and_wait();
+            // User error — drain the binary `image_available_semaphore`
+            // that `vkAcquireNextImageKHR` already signaled. Without the
+            // wait, the next iteration that reuses this frame slot's
+            // acquire-sem would trip
+            // `VUID-vkQueueSubmit2-semaphore-03868` (signal-on-pending-
+            // signal). We submit with the binary wait and no signals so
+            // the recorder's internal completion fence advances and the
+            // next `begin()` waits on a clean slate. We skip
+            // `queue_present` — the swapchain image is left wherever
+            // the user error left it; the next acquire of the same
+            // image_index uses `UNDEFINED` old_layout which permits any
+            // current state.
+            let drain_wait = [vk::SemaphoreSubmitInfo::builder()
+                .semaphore(image_available_semaphore)
+                .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .build()];
+            let _ = frame.recorder.submit_with_semaphores(&drain_wait, &[]);
             self.frame_timeline_value = self
                 .frame_timeline_value
                 .saturating_sub(1);
@@ -800,6 +808,35 @@ fn vk_format_to_texture_format(format: vk::Format) -> Option<TextureFormat> {
     }
 }
 
+/// Test-only synthetic `PresentFrame` constructor. Locks the
+/// `PresentFrameInner` state-machine (extra-waits accumulation +
+/// `in_render_pass` flag) without requiring a real swapchain or
+/// `vk::ImageView` — the `image_view` is left null because the
+/// state-machine tests below never record `cmd_begin_rendering`
+/// against it. The full acquire/submit/present cycle is exercised
+/// by the camera+display E2E (see `docs/testing.md`).
+#[cfg(test)]
+fn synthetic_present_frame<'a>(
+    recorder: &'a mut RhiCommandRecorder,
+    frame_index: u32,
+    image_index: u32,
+    extent: (u32, u32),
+    color_format: TextureFormat,
+) -> PresentFrame<'a> {
+    PresentFrame {
+        frame_index,
+        image_index,
+        extent,
+        color_format,
+        recorder,
+        inner: PresentFrameInner {
+            image_view: vk::ImageView::null(),
+            extra_waits: Vec::new(),
+            in_render_pass: false,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,6 +884,147 @@ mod tests {
         assert_eq!(MAX_FRAMES_IN_FLIGHT, 2);
     }
 
+    /// `PresentFrame::add_timeline_wait` must accumulate in insertion
+    /// order — the submit copies the buffer verbatim into
+    /// `wait_semaphore_infos`, and GPU sync correctness depends on the
+    /// ordering the caller asked for. Mentally reverting `push` to
+    /// `insert(0, info)` (or a `HashSet` re-ordering) would silently
+    /// reshuffle producer-finished waits.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests"
+    )]
+    #[test]
+    fn present_frame_extra_waits_accumulate_in_insertion_order() {
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => {
+                println!("Skipping — no Vulkan device available");
+                return;
+            }
+        };
+        let timeline_a = HostVulkanTimelineSemaphore::new(device.device(), 0).expect("timeline a");
+        let timeline_b = HostVulkanTimelineSemaphore::new(device.device(), 0).expect("timeline b");
+        let mut recorder = RhiCommandRecorder::new(&device, "test-present-frame-waits")
+            .expect("recorder");
+
+        {
+            let mut frame = synthetic_present_frame(
+                &mut recorder,
+                0,
+                0,
+                (1920, 1080),
+                TextureFormat::Bgra8Unorm,
+            );
+            frame.add_timeline_wait(&timeline_a, 7, VulkanStage::FRAGMENT_SHADER);
+            frame.add_timeline_wait(&timeline_b, 13, VulkanStage::COLOR_ATTACHMENT_OUTPUT);
+            assert_eq!(frame.inner.extra_waits.len(), 2);
+            assert_eq!(frame.inner.extra_waits[0].semaphore, timeline_a.semaphore());
+            assert_eq!(frame.inner.extra_waits[0].value, 7);
+            assert_eq!(frame.inner.extra_waits[1].semaphore, timeline_b.semaphore());
+            assert_eq!(frame.inner.extra_waits[1].value, 13);
+        }
+    }
+
+    /// Double `begin_rendering` must error — the `in_render_pass` flag
+    /// is what prevents the recorder from issuing a nested
+    /// `vkCmdBeginRendering` on the same primary command buffer (which
+    /// is a Vulkan validation error). Mentally reverting the flag
+    /// check to `Ok(())` makes this test fail.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests"
+    )]
+    #[test]
+    fn present_frame_begin_rendering_twice_is_typed_error() {
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => {
+                println!("Skipping — no Vulkan device available");
+                return;
+            }
+        };
+        let mut recorder = RhiCommandRecorder::new(&device, "test-present-frame-double-begin")
+            .expect("recorder");
+        recorder.begin().expect("begin recording");
+
+        let mut frame = synthetic_present_frame(
+            &mut recorder,
+            0,
+            0,
+            (1920, 1080),
+            TextureFormat::Bgra8Unorm,
+        );
+        // First begin_rendering would normally succeed and issue a
+        // real `cmd_begin_rendering` — but `image_view` is null in this
+        // synthetic frame, so the underlying Vulkan call records a
+        // begin against a null view (validation would flag this if it
+        // ran on a real submit). The state-machine flag flip is what
+        // we're locking, not the Vulkan-side correctness; the second
+        // call must short-circuit BEFORE reaching the cmd_begin call.
+        //
+        // Force-set the flag to simulate "begin_rendering already
+        // succeeded" without poking the null view:
+        frame.inner.in_render_pass = true;
+
+        let err = frame
+            .begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))
+            .err()
+            .expect("expected typed error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("render pass already active"),
+            "got: {msg}"
+        );
+
+        // Drain the recorder so Drop is clean.
+        frame.inner.in_render_pass = false;
+        drop(frame);
+        let _ = recorder.submit_and_wait();
+    }
+
+    /// `end_rendering` without an active render pass must error — the
+    /// `in_render_pass` flag is what prevents a stray
+    /// `vkCmdEndRendering` outside a begun render pass (a Vulkan
+    /// validation error). Mentally reverting the flag check to
+    /// unconditionally record `cmd_end_rendering` makes this test
+    /// fail.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests"
+    )]
+    #[test]
+    fn present_frame_end_rendering_without_begin_is_typed_error() {
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => {
+                println!("Skipping — no Vulkan device available");
+                return;
+            }
+        };
+        let mut recorder = RhiCommandRecorder::new(&device, "test-present-frame-stray-end")
+            .expect("recorder");
+        recorder.begin().expect("begin recording");
+
+        let mut frame = synthetic_present_frame(
+            &mut recorder,
+            0,
+            0,
+            (1920, 1080),
+            TextureFormat::Bgra8Unorm,
+        );
+
+        let err = frame.end_rendering().err().expect("expected typed error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("no active render pass"),
+            "got: {msg}"
+        );
+
+        drop(frame);
+        let _ = recorder.submit_and_wait();
+    }
+
     /// Smoke construction: requires a Vulkan device + winit window. We
     /// can build a Vulkan device in tests but not a winit window
     /// (event-loop-per-process). The render-frame loop is exercised
@@ -865,10 +1043,6 @@ mod tests {
                 return;
             }
         };
-        // Confirm the queue family the present target binds against
-        // exists; surface-support check needs a real surface so we
-        // stop short of constructing one. The E2E covers the full
-        // construct→present→destroy cycle.
         let _ = device.queue_family_index();
     }
 }
