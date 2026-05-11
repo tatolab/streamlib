@@ -38,10 +38,10 @@
 //! "I'm reaching past the curated boundary; I know what I'm doing."
 //!
 //! Engine-internal `core::*` modules (`compiler`, `embedded_schemas`,
-//! `pubsub`, `runtime_hooks`, etc.) are `pub(crate)` in the engine,
-//! so `streamlib::engine_internal::core::<internal>` does not
-//! compile by construction — even Tier 3 cannot reach module paths
-//! the engine has marked private. Items inside those modules that
+//! `runtime_hooks`, etc.) are `pub(crate)` in the engine, so
+//! `streamlib::engine_internal::core::<internal>` does not compile
+//! by construction — even Tier 3 cannot reach module paths the
+//! engine has marked private. Items inside those modules that
 //! genuinely need cross-crate access are explicitly re-exported
 //! item-by-item at `streamlib_engine::core::*` or at the engine
 //! crate root. The set of those re-exports IS the engine's external
@@ -67,12 +67,12 @@ pub mod sdk {
     // ---- Engine `core::*` sub-modules that are SDK-public ----
     //
     // Engine internals (`clap`, `codec`, `compiler`, `config`,
-    // `embedded_schemas`, `logging`, `observability`, `pubsub`,
-    // `runtime_hooks`, `signals`, `streamlib_home`) are
-    // `pub(crate)` in the engine crate (see `core/mod.rs`) — those
-    // module paths are not reachable here OR via `engine_internal::*`
-    // (Tier 3) by construction. Items inside that ARE customer-facing
-    // (e.g. `H264Profile` from `codec`, `LfoWaveform` from `clap`) are
+    // `embedded_schemas`, `logging`, `observability`, `runtime_hooks`,
+    // `signals`, `streamlib_home`) are `pub(crate)` in the engine
+    // crate (see `core/mod.rs`) — those module paths are not
+    // reachable here OR via `engine_internal::*` (Tier 3) by
+    // construction. Items inside that ARE customer-facing (e.g.
+    // `H264Profile` from `codec`, `LfoWaveform` from `clap`) are
     // re-exported by the engine at its crate root and travel into the
     // SDK via the top-level `pub use streamlib_engine::*` items below
     // and the Tier-3 `engine_internal` namespace.
@@ -87,6 +87,7 @@ pub mod sdk {
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
     pub use streamlib_engine::core::prelude;
+    pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
     pub use streamlib_engine::core::streaming;
@@ -255,11 +256,6 @@ pub mod sdk {
 /// ```compile_fail
 /// // `core::compiler` is `pub(crate)` in streamlib-engine.
 /// use streamlib::engine_internal::core::compiler::Compiler;
-/// ```
-///
-/// ```compile_fail
-/// // `core::pubsub` is `pub(crate)` in streamlib-engine.
-/// use streamlib::engine_internal::core::pubsub::PUBSUB;
 /// ```
 ///
 /// ```compile_fail
