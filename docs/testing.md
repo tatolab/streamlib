@@ -259,8 +259,8 @@ and runs faster.
 
 ### When to use
 
-- Changes to `libs/streamlib-engine/src/linux/processors/camera.rs` (V4L2, MMAP,
-  DMA-BUF import, NV12/YUYV compute shaders, ring textures).
+- Changes to `packages/camera/src/linux/camera.rs` (V4L2, MMAP, DMA-BUF
+  import, NV12/YUYV compute shaders, ring textures).
 - Changes to `libs/streamlib-engine/src/linux/processors/display.rs` (swapchain,
   acquire/present, descriptor layout, PNG sampler itself).
 - Changes to `GpuContext`, `PixelBufferPool`, `TextureCache`, or `VulkanTexture`

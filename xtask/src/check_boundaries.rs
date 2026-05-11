@@ -289,13 +289,6 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::ExactFile,
         rationale: "platform display: swapchain + rendering pipeline (CLAUDE.md exception)",
     },
-    // Camera processor — historical use of cmd_pipeline_barrier per
-    // docs/learnings/vulkanalia-empty-slice-cast.md.
-    AllowEntry {
-        path: "libs/streamlib-engine/src/linux/processors/camera.rs",
-        kind: AllowKind::ExactFile,
-        rationale: "cmd_pipeline_barrier for layout transitions (vulkanalia-empty-slice-cast learning)",
-    },
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
     AllowEntry {
@@ -550,13 +543,6 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
         path: "libs/vulkan-video/",
         kind: AllowKind::PathPrefix,
         rationale: "codec layer; refactor-to-RHI tracked under Vulkan Video RHI Coupling milestone",
-    },
-    // Camera processor compiles a compute pipeline locally (NV12 → BGRA).
-    // Tracked separately for migration to VulkanComputeKernel.
-    AllowEntry {
-        path: "libs/streamlib-engine/src/linux/processors/camera.rs",
-        kind: AllowKind::ExactFile,
-        rationale: "compute pipeline for NV12→BGRA; migration to VulkanComputeKernel tracked separately",
     },
     // Subprocess cdylibs are NOT allowlisted post-#572 — their entire
     // privileged-vk surface lives in `streamlib-consumer-rhi`'s

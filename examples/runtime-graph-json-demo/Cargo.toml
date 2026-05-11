@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-camera = { path = "../../packages/camera" }
 serde_json = "1.0"

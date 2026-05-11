@@ -4,9 +4,10 @@
 use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
-use crate::core::rhi::{PixelFormat, PixelBuffer, PixelBufferRef};
-use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, Error};
-use crate::iceoryx2::OutputWriter;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib::sdk::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send};
@@ -139,7 +140,7 @@ impl CaptureSessionInitState {
 /// This is guaranteed by holding `_outputs_arc` which keeps the Arc alive.
 struct CameraCallbackContext {
     output_writer: *const OutputWriter,
-    gpu_context: crate::core::GpuContextLimitedAccess,
+    gpu_context: GpuContextLimitedAccess,
     frame_count: std::sync::atomic::AtomicU64,
     /// Negotiated capture frame rate (set during AVFoundation init, read by callback).
     capture_fps: std::sync::atomic::AtomicU32,
@@ -238,7 +239,7 @@ define_class!(
                     }
                 };
 
-            let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
+            let timestamp_ns = streamlib::sdk::media_clock::MediaClock::now().as_nanos() as i64;
 
             // Create IPC frame with surface_id as string
             // The receiving process will use check_out_surface() or IOSurfaceLookup(id) to access the surface
@@ -296,7 +297,7 @@ unsafe fn blit_iosurface_to_pooled_buffer(
     pooled_buffer: &PixelBuffer,
     width: u32,
     height: u32,
-) -> crate::core::Result<()> {
+) -> Result<()> {
     ctx.gpu_context
         .blit_copy_iosurface(camera_iosurface, pooled_buffer, width, height)
 }
@@ -326,16 +327,16 @@ unsafe fn forward_camera_iosurface_directly(
     }
 }
 
-#[crate::processor("Camera")]
+#[streamlib::sdk::processor("Camera")]
 pub struct AppleCameraProcessor {
     camera_name: String,
     /// Async init state - None means init not started yet.
     capture_init_state: Option<Arc<CaptureSessionInitState>>,
     /// GPU context for surface store access (set in setup, used in start).
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
 }
 
-impl crate::core::ManualProcessor for AppleCameraProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for AppleCameraProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -495,7 +496,7 @@ impl AppleCameraProcessor::Processor {
             let requested_min_fps = config.min_fps.unwrap_or(60.0);
             let requested_max_fps = config
                 .max_fps
-                .unwrap_or_else(|| crate::core::display_info::get_refresh_rate(None));
+                .unwrap_or_else(|| streamlib::sdk::display_info::get_refresh_rate(None));
 
             // Query camera's supported frame rate range from active format
             let active_format = device.activeFormat();

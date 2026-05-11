@@ -103,11 +103,11 @@ mod tests {
     /// or the engine yaml's `scheduling:` block makes this fail.
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_camera_descriptor_carries_declared_priority() {
-        use crate::linux::processors::LinuxCameraProcessor;
+    fn linux_display_descriptor_carries_declared_priority() {
+        use crate::linux::processors::LinuxDisplayProcessor;
         let descriptor = PROCESSOR_REGISTRY
-            .descriptor(&LinuxCameraProcessor::schema_ident())
-            .expect("Linux Camera processor must be registered via inventory at test start");
+            .descriptor(&LinuxDisplayProcessor::schema_ident())
+            .expect("Linux Display processor must be registered via inventory at test start");
         assert_eq!(descriptor.scheduling.priority, ThreadPriority::High);
     }
 }

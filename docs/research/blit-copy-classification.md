@@ -138,7 +138,7 @@ ScreenCaptureKit / VideoToolbox callback closures (effectively
 | File | Line | Call |
 |---|---|---|
 | `libs/streamlib-engine/src/apple/processors/screen_capture.rs` | 171 (→ 242) | `gpu_context.blit_copy_iosurface` |
-| `libs/streamlib-engine/src/apple/processors/camera.rs` | 236 (→ 325) | `gpu_context.blit_copy_iosurface` |
+| `packages/camera/src/apple/camera.rs` | 236 (→ 325) | `gpu_context.blit_copy_iosurface` |
 | `libs/streamlib-engine/src/apple/videotoolbox/decoder.rs` | 413 | `gpu.blit_copy` |
 
 Linux processors do not call `blit_copy`. The Vulkan backend's lack of

@@ -55,10 +55,12 @@ their elements.
 
 Any file calling Vulkan commands with mixed empty/non-empty barrier arrays.
 Currently:
-- `libs/streamlib-engine/src/linux/processors/camera.rs` — two `cmd_pipeline_barrier`
-  calls during image layout transitions (capture → transfer, transfer → present)
 - `libs/streamlib-engine/src/vulkan/rhi/vulkan_format_converter.rs` — compute dispatch
   barriers
+
+`RhiCommandRecorder::record_image_barrier` /
+`record_buffer_barrier` carry the empty-slice cast internally —
+consumers driving barriers through the recorder don't hit this trap.
 
 ## Reference
 - Migration PR: #252 (ash → vulkanalia)

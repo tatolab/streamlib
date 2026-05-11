@@ -1603,8 +1603,8 @@ mod tests {
     #[test]
     fn schema_name_to_struct_name_handles_config_suffix() {
         assert_eq!(
-            schema_name_to_struct_name("com.tatolab.camera.config@1.0.0"),
-            "CameraConfig"
+            schema_name_to_struct_name("com.tatolab.display.config@1.0.0"),
+            "DisplayConfig"
         );
     }
 

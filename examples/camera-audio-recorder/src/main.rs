@@ -13,7 +13,9 @@ fn main() {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::sdk::permissions::{request_audio_permission, request_camera_permission};
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::processors::{CameraProcessor, Mp4WriterProcessor};
+use streamlib::sdk::processors::Mp4WriterProcessor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib_camera::CameraProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -160,7 +160,6 @@ vulkanalia-vma = { workspace = true }
 vulkan-video = { path = "../vulkan-video" }
 rspirv-reflect = { workspace = true }
 libc.workspace = true
-v4l = "0.14"  # V4L2 camera capture (Video for Linux 2)
 opus = "0.3"  # Opus audio codec encoder/decoder
 cpal = "0.15"  # Cross-platform audio I/O (uses ALSA on Linux)
 winit = "0.30"  # Window creation and event loop for display processor

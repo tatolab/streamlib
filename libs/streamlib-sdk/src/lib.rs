@@ -115,8 +115,7 @@ pub mod sdk {
         // `streamlib-processor-schema`).
         pub use streamlib_engine::core::descriptors::PortSchemaSpec;
 
-        // Platform-aliased camera + display processors.
-        pub use streamlib_engine::{CameraProcessor, DisplayProcessor};
+        pub use streamlib_engine::DisplayProcessor;
 
         // Apple-only processors.
         #[cfg(any(target_os = "macos", target_os = "ios"))]

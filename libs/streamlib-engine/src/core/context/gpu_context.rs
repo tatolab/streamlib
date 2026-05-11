@@ -12,7 +12,6 @@ use crate::core::{Result, Error};
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostTextureExt;
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 #[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::VulkanLayout;
@@ -401,9 +400,16 @@ pub struct GpuContext {
     /// from `texture_cache` so a same-process cache hit can't shortcut the
     /// refresh.
     buffer_texture_cache: Arc<Mutex<HashMap<String, Texture>>>,
-    /// Raw handle for the camera's timeline semaphore (same-process GPU-GPU sync).
-    /// Stored as u64 for platform-agnostic GpuContext (0 = not set).
-    camera_timeline_semaphore_handle: Arc<AtomicU64>,
+    /// Engine-tier publication slot for an in-process producer's timeline
+    /// semaphore. The producer (today: the camera; in principle any in-tree
+    /// video source) publishes a typed handle here so an in-process consumer
+    /// (today: display) can `vkQueueSubmit2`-wait on it for GPU-GPU sync.
+    /// The slot is single-publisher by construction; concurrent publishers
+    /// would clobber. Promote to a registry keyed by producer id if/when a
+    /// second concurrent publisher is filed.
+    #[cfg(target_os = "linux")]
+    video_source_timeline_semaphore:
+        Arc<Mutex<Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>>>,
     /// Serializes processor setup() across threads so concurrent GPU resource
     /// creation (video sessions, DPB images, swapchain) can't race on the
     /// device. The compiler acquires this during Phase 4 of spawn_processor
@@ -458,7 +464,8 @@ impl GpuContext {
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
-            camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
+            #[cfg(target_os = "linux")]
+            video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
             processor_setup_lock: Arc::new(Mutex::new(())),
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
@@ -484,7 +491,8 @@ impl GpuContext {
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
-            camera_timeline_semaphore_handle: Arc::new(AtomicU64::new(0)),
+            #[cfg(target_os = "linux")]
+            video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
             processor_setup_lock: Arc::new(Mutex::new(())),
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
@@ -904,16 +912,30 @@ impl GpuContext {
         Ok(())
     }
 
-    /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
-    pub fn set_camera_timeline_semaphore(&self, raw_handle: u64) {
-        self.camera_timeline_semaphore_handle
-            .store(raw_handle, std::sync::atomic::Ordering::Release);
+    /// Publish a producer's timeline semaphore for in-process GPU-GPU sync.
+    /// The slot is shared across `GpuContext` clones; clone the input Arc
+    /// so the producer drop doesn't strand the consumer mid-wait.
+    #[cfg(target_os = "linux")]
+    pub fn set_video_source_timeline_semaphore(
+        &self,
+        timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    ) {
+        *self.video_source_timeline_semaphore.lock().unwrap() = Some(Arc::clone(timeline));
     }
 
-    /// Get the camera's timeline semaphore handle (0 = not set).
-    pub fn camera_timeline_semaphore(&self) -> u64 {
-        self.camera_timeline_semaphore_handle
-            .load(std::sync::atomic::Ordering::Acquire)
+    /// Drop the published producer timeline. Called by the producer on
+    /// teardown so the consumer can observe the absence and skip the wait.
+    #[cfg(target_os = "linux")]
+    pub fn clear_video_source_timeline_semaphore(&self) {
+        *self.video_source_timeline_semaphore.lock().unwrap() = None;
+    }
+
+    /// Snapshot the currently-published producer timeline, if any.
+    #[cfg(target_os = "linux")]
+    pub fn video_source_timeline_semaphore(
+        &self,
+    ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        self.video_source_timeline_semaphore.lock().unwrap().clone()
     }
 
     /// Get a reference to the RHI GPU device.
@@ -1925,14 +1947,27 @@ impl GpuContextLimitedAccess {
         self.inner.resolve_video_frame_texture(frame)
     }
 
-    /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
-    pub fn set_camera_timeline_semaphore(&self, raw_handle: u64) {
-        self.inner.set_camera_timeline_semaphore(raw_handle);
+    /// See [`GpuContext::set_video_source_timeline_semaphore`].
+    #[cfg(target_os = "linux")]
+    pub fn set_video_source_timeline_semaphore(
+        &self,
+        timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    ) {
+        self.inner.set_video_source_timeline_semaphore(timeline);
     }
 
-    /// Get the camera's timeline semaphore handle (0 = not set).
-    pub fn camera_timeline_semaphore(&self) -> u64 {
-        self.inner.camera_timeline_semaphore()
+    /// See [`GpuContext::clear_video_source_timeline_semaphore`].
+    #[cfg(target_os = "linux")]
+    pub fn clear_video_source_timeline_semaphore(&self) {
+        self.inner.clear_video_source_timeline_semaphore();
+    }
+
+    /// See [`GpuContext::video_source_timeline_semaphore`].
+    #[cfg(target_os = "linux")]
+    pub fn video_source_timeline_semaphore(
+        &self,
+    ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        self.inner.video_source_timeline_semaphore()
     }
 
     /// Acquire a pooled texture from a pre-reserved pool (Split: fast path).
@@ -2128,14 +2163,27 @@ impl GpuContextFullAccess {
             .upload_pixel_buffer_as_texture(surface_id, pixel_buffer, width, height)
     }
 
-    /// Set the camera's timeline semaphore handle for same-process GPU-GPU sync.
-    pub fn set_camera_timeline_semaphore(&self, raw_handle: u64) {
-        self.inner.set_camera_timeline_semaphore(raw_handle);
+    /// See [`GpuContext::set_video_source_timeline_semaphore`].
+    #[cfg(target_os = "linux")]
+    pub fn set_video_source_timeline_semaphore(
+        &self,
+        timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    ) {
+        self.inner.set_video_source_timeline_semaphore(timeline);
     }
 
-    /// Get the camera's timeline semaphore handle (0 = not set).
-    pub fn camera_timeline_semaphore(&self) -> u64 {
-        self.inner.camera_timeline_semaphore()
+    /// See [`GpuContext::clear_video_source_timeline_semaphore`].
+    #[cfg(target_os = "linux")]
+    pub fn clear_video_source_timeline_semaphore(&self) {
+        self.inner.clear_video_source_timeline_semaphore();
+    }
+
+    /// See [`GpuContext::video_source_timeline_semaphore`].
+    #[cfg(target_os = "linux")]
+    pub fn video_source_timeline_semaphore(
+        &self,
+    ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        self.inner.video_source_timeline_semaphore()
     }
 
     /// Get a reference to the RHI GPU device.
@@ -2533,15 +2581,29 @@ mod tests {
         };
         assert!(gpu.resolve_video_frame_texture(&frame).is_err());
 
-        // Timeline semaphore sharing via Clone
-        assert_eq!(gpu.camera_timeline_semaphore(), 0);
-        gpu.set_camera_timeline_semaphore(0xDEAD_BEEF);
-        assert_eq!(gpu.camera_timeline_semaphore(), 0xDEAD_BEEF);
+        // Timeline semaphore publication slot is shared across Clones.
+        #[cfg(target_os = "linux")]
+        {
+            use crate::host_rhi::HostGpuDeviceExt;
+            assert!(gpu.video_source_timeline_semaphore().is_none());
 
-        let gpu2 = gpu.clone();
-        assert_eq!(gpu2.camera_timeline_semaphore(), 0xDEAD_BEEF);
-        gpu2.set_camera_timeline_semaphore(0xCAFE_BABE);
-        assert_eq!(gpu.camera_timeline_semaphore(), 0xCAFE_BABE);
+            let vk_device = gpu.device().vulkan_device();
+            let timeline = Arc::new(
+                crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(vk_device.device(), 0)
+                    .expect("create timeline semaphore"),
+            );
+
+            gpu.set_video_source_timeline_semaphore(&timeline);
+            let snapshot1 = gpu.video_source_timeline_semaphore().expect("set");
+            assert!(Arc::ptr_eq(&snapshot1, &timeline));
+
+            let gpu2 = gpu.clone();
+            let snapshot2 = gpu2.video_source_timeline_semaphore().expect("shared");
+            assert!(Arc::ptr_eq(&snapshot2, &timeline));
+
+            gpu2.clear_video_source_timeline_semaphore();
+            assert!(gpu.video_source_timeline_semaphore().is_none());
+        }
 
         println!("Texture cache miss + timeline semaphore sharing: OK");
     }
@@ -2556,21 +2618,54 @@ mod tests {
             }
         };
 
-        // Limited-access delegates to the same underlying context (shared semaphore state).
+        // Limited-access delegates to the same underlying context.
         let limited = GpuContextLimitedAccess::new(gpu.clone());
-        limited.set_camera_timeline_semaphore(0xA11CE);
-        assert_eq!(gpu.camera_timeline_semaphore(), 0xA11CE);
-        assert_eq!(limited.camera_timeline_semaphore(), 0xA11CE);
-
-        // Conversion limited -> full shares the same context.
         let full = limited.to_full_access();
-        assert_eq!(full.camera_timeline_semaphore(), 0xA11CE);
-        full.set_camera_timeline_semaphore(0xB0B);
-        assert_eq!(limited.camera_timeline_semaphore(), 0xB0B);
 
-        // Conversion full -> limited round-trips.
-        let limited2 = full.to_limited_access();
-        assert_eq!(limited2.camera_timeline_semaphore(), 0xB0B);
+        #[cfg(target_os = "linux")]
+        {
+            use crate::host_rhi::HostGpuDeviceExt;
+            let vk_device = gpu.device().vulkan_device();
+            let timeline_a = Arc::new(
+                crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(vk_device.device(), 0)
+                    .expect("create timeline a"),
+            );
+            let timeline_b = Arc::new(
+                crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(vk_device.device(), 0)
+                    .expect("create timeline b"),
+            );
+
+            limited.set_video_source_timeline_semaphore(&timeline_a);
+            assert!(Arc::ptr_eq(
+                &gpu.video_source_timeline_semaphore().expect("via gpu"),
+                &timeline_a,
+            ));
+            assert!(Arc::ptr_eq(
+                &limited.video_source_timeline_semaphore().expect("via limited"),
+                &timeline_a,
+            ));
+
+            // The full-access view shares the same publication slot.
+            assert!(Arc::ptr_eq(
+                &full.video_source_timeline_semaphore().expect("via full"),
+                &timeline_a,
+            ));
+            full.set_video_source_timeline_semaphore(&timeline_b);
+            assert!(Arc::ptr_eq(
+                &limited.video_source_timeline_semaphore().expect("limited sees b"),
+                &timeline_b,
+            ));
+
+            // Conversion full -> limited round-trips.
+            let limited2 = full.to_limited_access();
+            assert!(Arc::ptr_eq(
+                &limited2
+                    .video_source_timeline_semaphore()
+                    .expect("limited2 sees b"),
+                &timeline_b,
+            ));
+            full.clear_video_source_timeline_semaphore();
+        }
 
         // Delegated accessor reaches the same RHI device. `device()` is
         // FullAccess-only after #324; Sandbox reaches the same underlying

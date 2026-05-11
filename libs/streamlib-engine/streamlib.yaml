@@ -39,7 +39,6 @@ schemas:
   - schemas/com.streamlib.opus_encoder.config@1.0.0.yaml
   - schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
   - schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml
-  - schemas/com.tatolab.camera.config@1.0.0.yaml
   - schemas/com.tatolab.display.config@1.0.0.yaml
   - schemas/com.tatolab.mp4_writer.config@1.0.0.yaml
   - schemas/com.tatolab.screen_capture.config@1.0.0.yaml
@@ -50,20 +49,6 @@ schemas:
 
 processors:
   # === Apple platform processors ===
-
-  - name: Camera
-    version: 1.0.0
-    description: "Captures video from macOS cameras using AVFoundation"
-    execution: manual
-    scheduling:
-      priority: high
-    config:
-      name: config
-      schema: com.tatolab.camera.config@1.0.0
-    outputs:
-      - name: video
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
-        description: Live video frames from the camera
 
   - name: Display
     version: 1.0.0
