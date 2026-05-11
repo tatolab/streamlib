@@ -362,8 +362,6 @@ let (id, buffer) = ctx.gpu.acquire_pixel_buffer(width, height, format)?;
 let texture = ctx.gpu.acquire_texture(&desc)?;
 ```
 
-**Exception:** Platform display processors (`linux/processors/display.rs`) may access the underlying Vulkan device handle from GpuContext for swapchain and rendering pipeline setup (this is platform-specific rendering, like Metal rendering on macOS). But they MUST acquire all textures and buffers through GpuContext pools, never allocate GPU memory directly.
-
 #### Compute kernels — single canonical abstraction
 
 All GPU compute work goes through `VulkanComputeKernel` plus the public

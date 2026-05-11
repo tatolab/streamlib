@@ -1,0 +1,51 @@
+[package]
+name = "streamlib-display"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Display processor — renders video frames to a window via the engine's host RHI presentation primitive. Linux first; macOS port is in the package but disabled (rewrite on top of a Metal present target tracked separately)."
+keywords = ["display", "vulkan", "swapchain", "video", "rendering"]
+categories = ["multimedia::video", "multimedia"]
+
+[lib]
+name = "streamlib_display"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated config
+# types under `streamlib::_generated_::tatolab__display::*`, VideoFrame
+# wire type, host RHI types (HostVulkanDevice, VulkanGraphicsKernel,
+# VulkanPresentTarget, RhiCommandRecorder, OffscreenColorTarget,
+# TextureFormat).
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+tracing.workspace = true
+serde.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Window creation + event loop for the Linux display processor.
+winit = "0.30"
+# Raw window-handle traits — `VulkanPresentTarget::new` takes
+# `&(impl HasWindowHandle + HasDisplayHandle)`; the winit `Window` type
+# implements both.
+raw-window-handle = "0.6"
+# Consumer-side RHI carve-out — typed `VulkanLayout` enum used in
+# producer/consumer surface-share interop. Camera uses the same dep
+# for the same reason.
+streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi" }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# Apple module is ported into this package but DISABLED in `lib.rs` —
+# the Metal-side rewrite onto a Metal-equivalent present target is
+# tracked as a separate follow-up. Listed here so the apple/ source
+# tree is greppable / discoverable; nothing depends on these symbols
+# being reachable yet.
+
+[lints]
+workspace = true

@@ -145,7 +145,7 @@ fn matches_allow(rel_path: &Path, allow: &[AllowEntry]) -> bool {
 /// `target/`, `.git/`, vendored node_modules, etc. by construction. `xtask`
 /// is intentionally excluded — it is build tooling with no Vulkan deps, and
 /// the fixture-test strings in this very file would otherwise self-flag.
-const SCAN_ROOTS: &[&str] = &["libs", "examples"];
+const SCAN_ROOTS: &[&str] = &["libs", "examples", "packages"];
 
 fn walk_rs(project_root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     SCAN_ROOTS
@@ -281,14 +281,11 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "codec layer; refactor-to-RHI tracked under Vulkan Video RHI Coupling milestone",
     },
-    // Display processor — CLAUDE.md-documented exception: needs raw
-    // vulkanalia for the swapchain and rendering pipeline (mirrors how
-    // Metal rendering is platform-specific on macOS).
-    AllowEntry {
-        path: "libs/streamlib-engine/src/linux/processors/display.rs",
-        kind: AllowKind::ExactFile,
-        rationale: "platform display: swapchain + rendering pipeline (CLAUDE.md exception)",
-    },
+    // Display processor lives in `@tatolab/display` (#674) — the carve-out
+    // rewrote it on `streamlib::sdk::engine::host_rhi::VulkanPresentTarget`,
+    // retiring the prior CLAUDE.md exception for raw vulkanalia in the
+    // engine's `linux/processors/display.rs`. No allowlist entry needed.
+    //
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
     AllowEntry {

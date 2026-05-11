@@ -10,4 +10,5 @@ publish = false
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-camera = { path = "../../packages/camera" }
+streamlib-display = { path = "../../packages/display" }
 serde_json = "1.0"

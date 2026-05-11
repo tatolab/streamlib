@@ -1,0 +1,41 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/display — display processor carved out of the streamlib engine
+# substrate. Owns the display config schema and the Display processor
+# declaration (Linux winit + Vulkan swapchain; macOS port disabled and
+# tracked separately).
+package:
+  org: tatolab
+  name: display
+  version: 1.0.0
+  description: "Display processor — renders video frames to a window via the engine's host RHI presentation primitive"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  - schemas/display_config.yaml
+
+processors:
+  - name: Display
+    version: 1.0.0
+    description: "Displays video frames in a window with vsync"
+    execution: manual
+    scheduling:
+      priority: high
+    config:
+      name: config
+      schema: "@tatolab/display/DisplayConfig@1.0.0"
+    inputs:
+      - name: video
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        description: Video frames to display in the window
+        read_mode: skip_to_latest
+        buffer_size: 4

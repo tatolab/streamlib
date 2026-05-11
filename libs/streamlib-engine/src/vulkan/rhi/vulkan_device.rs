@@ -2086,6 +2086,35 @@ impl HostVulkanDevice {
     pub fn lock_device(&self) -> std::sync::MutexGuard<'_, ()> {
         self.device_mutex.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// `vkDeviceWaitIdle` with the threading discipline the Vulkan spec
+    /// requires. Per the spec, `vkDeviceWaitIdle` is externally
+    /// synchronized over **every `VkQueue` the device owns** — calling
+    /// it concurrently with `vkQueueSubmit2` / `vkQueuePresentKHR` on
+    /// any of those queues trips
+    /// `UNASSIGNED-Threading-MultipleThreads-Write`. Acquires all
+    /// per-queue mutexes (in a fixed lock order so there's no deadlock
+    /// against [`Self::submit_to_queue`] / [`Self::present_to_queue`],
+    /// each of which takes only a single queue mutex) and then the
+    /// device mutex before calling through.
+    ///
+    /// Every in-tree consumer should reach `vkDeviceWaitIdle` through
+    /// this helper, not raw `self.device().device_wait_idle()`.
+    pub fn wait_idle(&self) -> Result<()> {
+        // Fixed lock order: graphics → transfer → compute → video-encode →
+        // video-decode → device. `submit_to_queue` / `present_to_queue`
+        // only ever take ONE queue mutex, so any order here is deadlock-
+        // safe against them; this order matches struct-field declaration
+        // for readability.
+        let _g = self.graphics_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        let _t = self.transfer_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        let _c = self.compute_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        let _ve = self.video_encode_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        let _vd = self.video_decode_queue_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        let _dev = self.device_mutex.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { self.device.device_wait_idle() }
+            .map_err(|e| Error::GpuError(format!("device_wait_idle failed: {e}")))
+    }
 }
 
 impl vulkan_video::RhiQueueSubmitter for HostVulkanDevice {

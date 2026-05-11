@@ -19,8 +19,6 @@ from .com_streamlib_opus_decoder_config import OpusDecoderConfig
 from .com_streamlib_opus_encoder_config import OpusEncoderConfig
 from .com_streamlib_webrtc_whep_config import WebrtcWhepConfig
 from .com_streamlib_webrtc_whip_config import WebrtcWhipConfig
-from .com_tatolab_camera_config import CameraConfig
-from .com_tatolab_display_config import DisplayConfig
 from .com_tatolab_mp4_writer_config import Mp4WriterConfig
 from .com_tatolab_screen_capture_config import ScreenCaptureConfig
 from .com_tatolab_simple_passthrough_config import SimplePassthroughConfig
@@ -46,8 +44,6 @@ __all__ = [
     "OpusEncoderConfig",
     "WebrtcWhepConfig",
     "WebrtcWhipConfig",
-    "CameraConfig",
-    "DisplayConfig",
     "Mp4WriterConfig",
     "ScreenCaptureConfig",
     "SimplePassthroughConfig",

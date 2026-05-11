@@ -61,6 +61,9 @@ pub use crate::vulkan::rhi::{
     VulkanVertexBindable, IDENTITY_TRANSFORM,
 };
 
+#[cfg(target_os = "linux")]
+pub use crate::vulkan::rhi::{PresentFrame, VulkanPresentTarget, MAX_FRAMES_IN_FLIGHT};
+
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 
 use crate::core::rhi::{GpuDevice, PixelBufferRef, Texture};

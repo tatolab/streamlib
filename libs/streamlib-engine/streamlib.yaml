@@ -39,7 +39,6 @@ schemas:
   - schemas/com.streamlib.opus_encoder.config@1.0.0.yaml
   - schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
   - schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml
-  - schemas/com.tatolab.display.config@1.0.0.yaml
   - schemas/com.tatolab.mp4_writer.config@1.0.0.yaml
   - schemas/com.tatolab.screen_capture.config@1.0.0.yaml
   - schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml
@@ -49,22 +48,7 @@ schemas:
 
 processors:
   # === Apple platform processors ===
-
-  - name: Display
-    version: 1.0.0
-    description: "Displays video frames in a window using Metal with vsync"
-    execution: manual
-    scheduling:
-      priority: high
-    config:
-      name: config
-      schema: com.tatolab.display.config@1.0.0
-    inputs:
-      - name: video
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
-        description: Video frames to display in the window
-        read_mode: skip_to_latest
-        buffer_size: 4
+  # Display processor lives in @tatolab/display (#674).
 
   - name: Mp4Writer
     version: 1.0.0
