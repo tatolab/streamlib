@@ -418,11 +418,11 @@ impl VulkanRayTracingKernel {
     /// Bind a storage buffer. Accepts either
     /// [`crate::core::rhi::PixelBuffer`] or
     /// [`crate::core::rhi::StorageBuffer`] via
-    /// [`super::VulkanStorageBufferBinding`].
+    /// [`super::VulkanStorageBindable`].
     pub fn set_storage_buffer(
         &self,
         binding: u32,
-        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
+        buffer: &(impl super::VulkanStorageBindable + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::StorageBuffer)?;
         self.pending.lock().bindings.insert(
@@ -435,10 +435,13 @@ impl VulkanRayTracingKernel {
         Ok(())
     }
 
+    /// Bind a uniform buffer. Accepts only
+    /// [`crate::core::rhi::UniformBuffer`] via
+    /// [`super::VulkanUniformBindable`].
     pub fn set_uniform_buffer(
         &self,
         binding: u32,
-        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
+        buffer: &(impl super::VulkanUniformBindable + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::UniformBuffer)?;
         self.pending.lock().bindings.insert(

@@ -1095,6 +1095,61 @@ impl GpuContext {
         Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_pixel_buffer(Arc::new(buffer)))
     }
 
+    /// Acquire a HOST_VISIBLE uniform buffer (UBO).
+    ///
+    /// Returns a [`crate::core::rhi::UniformBuffer`] — the type system
+    /// enforces that this buffer can only be bound to a kernel's
+    /// `set_uniform_buffer` slot (not storage / vertex / index).
+    #[cfg(target_os = "linux")]
+    pub fn acquire_uniform_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::UniformBuffer> {
+        tracing::debug!(
+            rhi_op = "acquire_uniform_buffer",
+            byte_size,
+            "GpuContext::acquire_uniform_buffer"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::core::rhi::UniformBuffer::new_host_visible(vulkan_device, byte_size)
+    }
+
+    /// Acquire a HOST_VISIBLE vertex buffer.
+    ///
+    /// Returns a [`crate::core::rhi::VertexBuffer`] — only bindable to
+    /// `set_vertex_buffer` slots.
+    #[cfg(target_os = "linux")]
+    pub fn acquire_vertex_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::VertexBuffer> {
+        tracing::debug!(
+            rhi_op = "acquire_vertex_buffer",
+            byte_size,
+            "GpuContext::acquire_vertex_buffer"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::core::rhi::VertexBuffer::new_host_visible(vulkan_device, byte_size)
+    }
+
+    /// Acquire a HOST_VISIBLE index buffer.
+    ///
+    /// Returns a [`crate::core::rhi::IndexBuffer`] — only bindable to
+    /// `set_index_buffer` slots.
+    #[cfg(target_os = "linux")]
+    pub fn acquire_index_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::IndexBuffer> {
+        tracing::debug!(
+            rhi_op = "acquire_index_buffer",
+            byte_size,
+            "GpuContext::acquire_index_buffer"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::core::rhi::IndexBuffer::new_host_visible(vulkan_device, byte_size)
+    }
+
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
     ///
     /// Reflects the SPIR-V at creation time and validates that the declared
@@ -1776,6 +1831,36 @@ impl GpuContextLimitedAccess {
         self.inner.acquire_storage_buffer(byte_size)
     }
 
+    /// Acquire a HOST_VISIBLE uniform buffer.
+    /// See [`GpuContext::acquire_uniform_buffer`].
+    #[cfg(target_os = "linux")]
+    pub fn acquire_uniform_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::UniformBuffer> {
+        self.inner.acquire_uniform_buffer(byte_size)
+    }
+
+    /// Acquire a HOST_VISIBLE vertex buffer.
+    /// See [`GpuContext::acquire_vertex_buffer`].
+    #[cfg(target_os = "linux")]
+    pub fn acquire_vertex_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::VertexBuffer> {
+        self.inner.acquire_vertex_buffer(byte_size)
+    }
+
+    /// Acquire a HOST_VISIBLE index buffer.
+    /// See [`GpuContext::acquire_index_buffer`].
+    #[cfg(target_os = "linux")]
+    pub fn acquire_index_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::IndexBuffer> {
+        self.inner.acquire_index_buffer(byte_size)
+    }
+
     /// Get a pixel buffer by its pool id (Split: local cache).
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
         self.inner.get_pixel_buffer(pool_id)
@@ -1913,6 +1998,33 @@ impl GpuContextFullAccess {
         byte_size: u64,
     ) -> Result<crate::core::rhi::StorageBuffer> {
         self.inner.acquire_storage_buffer(byte_size)
+    }
+
+    /// Acquire a HOST_VISIBLE uniform buffer.
+    #[cfg(target_os = "linux")]
+    pub fn acquire_uniform_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::UniformBuffer> {
+        self.inner.acquire_uniform_buffer(byte_size)
+    }
+
+    /// Acquire a HOST_VISIBLE vertex buffer.
+    #[cfg(target_os = "linux")]
+    pub fn acquire_vertex_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::VertexBuffer> {
+        self.inner.acquire_vertex_buffer(byte_size)
+    }
+
+    /// Acquire a HOST_VISIBLE index buffer.
+    #[cfg(target_os = "linux")]
+    pub fn acquire_index_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<crate::core::rhi::IndexBuffer> {
+        self.inner.acquire_index_buffer(byte_size)
     }
 
     /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —

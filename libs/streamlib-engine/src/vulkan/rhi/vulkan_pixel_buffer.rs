@@ -163,38 +163,25 @@ impl HostVulkanPixelBuffer {
         })
     }
 
-    /// Create a formatless HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
-    ///
-    /// Sibling of [`Self::new`] for callers that have raw bytes rather than
-    /// formatted pixel data (V4L2 MMAP frames, audio→GPU compute, ML upload).
-    /// Same memory shape — HOST_VISIBLE | HOST_COHERENT, persistently mapped,
-    /// DMA-BUF exportable via the device's existing `dma_buf_buffer_pool` —
-    /// but `byte_size` is taken flat: no `PixelFormat` interrogation, no
-    /// `width * height * bpp` derivation.
-    ///
-    /// The wrapping [`crate::core::rhi::PixelBuffer`] receives synthetic
-    /// dimensions (`width = byte_size`, `height = 1`, `bytes_per_pixel = 1`,
-    /// `format = PixelFormat::Bgra32`) so it round-trips through the existing
-    /// SDK surface; compute kernels reach the buffer via
-    /// [`crate::vulkan::rhi::VulkanComputeKernel::set_storage_buffer`] which
-    /// reads `inner.size()` directly and is indifferent to the synthetic
-    /// dimensions. `byte_size` must fit in `u32` (4 GB cap) — SSBOs larger
-    /// than that are not a current consumer need; file a follow-up if they
-    /// become one.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
-    pub fn new_storage_buffer_host_visible(
+    /// Internal: allocate a HOST_VISIBLE + HOST_COHERENT mapped buffer with
+    /// the given usage flags, via the device's `dma_buf_buffer_pool` so it
+    /// remains DMA-BUF exportable. Shared spine for every formatless
+    /// host-visible buffer constructor on this type.
+    fn new_host_visible_with_usage(
         vulkan_device: &Arc<HostVulkanDevice>,
         byte_size: u64,
+        usage: vk::BufferUsageFlags,
+        constructor_label: &'static str,
     ) -> Result<Self> {
         if byte_size == 0 {
-            return Err(Error::Configuration(
-                "HostVulkanPixelBuffer::new_storage_buffer_host_visible: byte_size must be > 0".into(),
-            ));
+            return Err(Error::Configuration(format!(
+                "{constructor_label}: byte_size must be > 0"
+            )));
         }
         if byte_size > u32::MAX as u64 {
             return Err(Error::Configuration(format!(
-                "HostVulkanPixelBuffer::new_storage_buffer_host_visible: byte_size {byte_size} \
-                 exceeds 4 GB synthetic-width cap; larger SSBOs not supported here"
+                "{constructor_label}: byte_size {byte_size} \
+                 exceeds 4 GB synthetic-width cap"
             )));
         }
         let size = byte_size as vk::DeviceSize;
@@ -205,11 +192,7 @@ impl HostVulkanPixelBuffer {
 
         let buffer_info = vk::BufferCreateInfo::builder()
             .size(size)
-            .usage(
-                vk::BufferUsageFlags::TRANSFER_SRC
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                    | vk::BufferUsageFlags::STORAGE_BUFFER,
-            )
+            .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .push_next(&mut external_buffer_info);
 
@@ -233,7 +216,7 @@ impl HostVulkanPixelBuffer {
             #[cfg(not(target_os = "linux"))]
             let result = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) };
             result.map_err(|e| {
-                Error::GpuError(format!("Failed to create storage buffer: {e}"))
+                Error::GpuError(format!("{constructor_label}: vmaCreateBuffer failed: {e}"))
             })?
         };
 
@@ -241,10 +224,9 @@ impl HostVulkanPixelBuffer {
         let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
         if mapped_ptr.is_null() {
             unsafe { allocator.destroy_buffer(buffer, allocation) };
-            return Err(Error::GpuError(
-                "HostVulkanPixelBuffer::new_storage_buffer_host_visible: VMA mapped pointer \
-                 is null — expected persistent mapping".into(),
-            ));
+            return Err(Error::GpuError(format!(
+                "{constructor_label}: VMA mapped pointer is null — expected persistent mapping"
+            )));
         }
 
         Ok(Self {
@@ -266,6 +248,86 @@ impl HostVulkanPixelBuffer {
             format: PixelFormat::Bgra32,
             size,
         })
+    }
+
+    /// Create a formatless HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    ///
+    /// Sibling of [`Self::new`] for callers that have raw bytes rather than
+    /// formatted pixel data (V4L2 MMAP frames, audio→GPU compute, ML upload).
+    /// Same memory shape — HOST_VISIBLE | HOST_COHERENT, persistently mapped,
+    /// DMA-BUF exportable via the device's existing `dma_buf_buffer_pool` —
+    /// but `byte_size` is taken flat: no `PixelFormat` interrogation, no
+    /// `width * height * bpp` derivation.
+    ///
+    /// `byte_size` must fit in `u32` (4 GB cap) — SSBOs larger than that
+    /// are not a current consumer need; file a follow-up if they become
+    /// one.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
+    pub fn new_storage_buffer_host_visible(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+    ) -> Result<Self> {
+        Self::new_host_visible_with_usage(
+            vulkan_device,
+            byte_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
+            "HostVulkanPixelBuffer::new_storage_buffer_host_visible",
+        )
+    }
+
+    /// Create a formatless HOST_VISIBLE uniform buffer for small per-draw
+    /// shader parameters (UBOs). DMA-BUF exportable (shared
+    /// `dma_buf_buffer_pool`) so cross-process consumers can reach it
+    /// when needed; usage carries `UNIFORM_BUFFER | TRANSFER_SRC | TRANSFER_DST`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
+    pub fn new_uniform_buffer_host_visible(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+    ) -> Result<Self> {
+        Self::new_host_visible_with_usage(
+            vulkan_device,
+            byte_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::UNIFORM_BUFFER,
+            "HostVulkanPixelBuffer::new_uniform_buffer_host_visible",
+        )
+    }
+
+    /// Create a formatless HOST_VISIBLE vertex buffer for graphics pipeline
+    /// vertex input. Usage carries `VERTEX_BUFFER | TRANSFER_SRC | TRANSFER_DST`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
+    pub fn new_vertex_buffer_host_visible(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+    ) -> Result<Self> {
+        Self::new_host_visible_with_usage(
+            vulkan_device,
+            byte_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::VERTEX_BUFFER,
+            "HostVulkanPixelBuffer::new_vertex_buffer_host_visible",
+        )
+    }
+
+    /// Create a formatless HOST_VISIBLE index buffer for graphics pipeline
+    /// indexed draws. Usage carries `INDEX_BUFFER | TRANSFER_SRC | TRANSFER_DST`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
+    pub fn new_index_buffer_host_visible(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+    ) -> Result<Self> {
+        Self::new_host_visible_with_usage(
+            vulkan_device,
+            byte_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::INDEX_BUFFER,
+            "HostVulkanPixelBuffer::new_index_buffer_host_visible",
+        )
     }
 
     /// Persistently mapped pointer for CPU access — plane 0 for

@@ -263,15 +263,15 @@ impl VulkanComputeKernel {
     /// [`ComputeBindingKind::StorageBuffer`] in the descriptor.
     ///
     /// Accepts either a [`crate::core::rhi::PixelBuffer`] (pixel-shaped
-    /// data being bound as an SSBO — kernels read raw bytes regardless
-    /// of the wrapper's dimensions) or a
+    /// data being bound as an SSBO — pixel buffers carry `STORAGE_BUFFER`
+    /// usage from allocation time) or a
     /// [`crate::core::rhi::StorageBuffer`] (canonical raw-bytes shape
     /// from
     /// [`crate::core::context::GpuContext::acquire_storage_buffer`]).
     pub fn set_storage_buffer(
         &self,
         binding: u32,
-        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
+        buffer: &(impl super::VulkanStorageBindable + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageBuffer)?;
         self.pending.lock().bindings.insert(
@@ -286,10 +286,15 @@ impl VulkanComputeKernel {
 
     /// Bind a uniform buffer at `binding`. The slot must be declared as
     /// [`ComputeBindingKind::UniformBuffer`] in the descriptor.
+    ///
+    /// Accepts only [`crate::core::rhi::UniformBuffer`]. Pixel buffers
+    /// cannot be bound as UBOs because their allocations don't carry
+    /// `UNIFORM_BUFFER` usage; this is enforced at compile time via
+    /// [`super::VulkanUniformBindable`].
     pub fn set_uniform_buffer(
         &self,
         binding: u32,
-        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
+        buffer: &(impl super::VulkanUniformBindable + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::UniformBuffer)?;
         self.pending.lock().bindings.insert(

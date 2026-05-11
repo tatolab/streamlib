@@ -47,7 +47,7 @@ use crate::core::rhi::{
     DepthStencilState, DrawCall, DrawIndexedCall, FrontFace, GraphicsBindingKind,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, IndexType, PolygonMode,
-    PrimitiveTopology, PixelBuffer, ScissorRect, Texture, TextureFormat,
+    PrimitiveTopology, ScissorRect, Texture, TextureFormat,
     VertexAttributeFormat, VertexInputRate, VertexInputState, Viewport,
 };
 use crate::core::{Result, Error};
@@ -364,13 +364,13 @@ impl VulkanGraphicsKernel {
 
     /// Bind a storage buffer at `(frame_index, binding)`.
     ///
-    /// Accepts either a [`PixelBuffer`] or a [`crate::core::rhi::StorageBuffer`]
-    /// via [`super::VulkanStorageBufferBinding`].
+    /// Accepts either a [`crate::core::rhi::PixelBuffer`] or a
+    /// [`crate::core::rhi::StorageBuffer`] via [`super::VulkanStorageBindable`].
     pub fn set_storage_buffer(
         &self,
         frame_index: u32,
         binding: u32,
-        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
+        buffer: &(impl super::VulkanStorageBindable + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::StorageBuffer)?;
         let vk_buf = buffer.vk_buffer();
@@ -385,11 +385,14 @@ impl VulkanGraphicsKernel {
     }
 
     /// Bind a uniform buffer at `(frame_index, binding)`.
+    ///
+    /// Accepts only [`crate::core::rhi::UniformBuffer`] via
+    /// [`super::VulkanUniformBindable`].
     pub fn set_uniform_buffer(
         &self,
         frame_index: u32,
         binding: u32,
-        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
+        buffer: &(impl super::VulkanUniformBindable + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::UniformBuffer)?;
         let vk_buf = buffer.vk_buffer();
@@ -452,11 +455,16 @@ impl VulkanGraphicsKernel {
     /// Bind a vertex buffer at `(frame_index, binding)`. `binding` must
     /// match a `VertexInputBinding` declared in the pipeline's vertex
     /// input state.
+    ///
+    /// Accepts only [`crate::core::rhi::VertexBuffer`] via
+    /// [`super::VulkanVertexBindable`] — pixel buffers can't be bound as
+    /// vertex input because their allocations don't carry `VERTEX_BUFFER`
+    /// usage.
     pub fn set_vertex_buffer(
         &self,
         frame_index: u32,
         binding: u32,
-        buffer: &PixelBuffer,
+        buffer: &(impl super::VulkanVertexBindable + ?Sized),
         offset: u64,
     ) -> Result<()> {
         match &self.pipeline_state.vertex_input {
@@ -475,7 +483,7 @@ impl VulkanGraphicsKernel {
                 }
             }
         }
-        let (vk_buf, _) = vk_buffer_for(buffer);
+        let vk_buf = buffer.vk_buffer();
         self.with_slot(frame_index, |slot| {
             slot.vertex_buffers.insert(
                 binding,
@@ -489,14 +497,17 @@ impl VulkanGraphicsKernel {
     }
 
     /// Bind an index buffer at `frame_index`.
+    ///
+    /// Accepts only [`crate::core::rhi::IndexBuffer`] via
+    /// [`super::VulkanIndexBindable`].
     pub fn set_index_buffer(
         &self,
         frame_index: u32,
-        buffer: &PixelBuffer,
+        buffer: &(impl super::VulkanIndexBindable + ?Sized),
         offset: u64,
         index_type: IndexType,
     ) -> Result<()> {
-        let (vk_buf, _) = vk_buffer_for(buffer);
+        let vk_buf = buffer.vk_buffer();
         self.with_slot(frame_index, |slot| {
             slot.index_buffer = Some(BoundIndexBuffer {
                 buffer: vk_buf,
@@ -1667,11 +1678,6 @@ fn allocate_command_buffer(
     let buffers = unsafe { device.allocate_command_buffers(&info) }
         .map_err(|e| Error::GpuError(format!("Failed to allocate command buffer: {e}")))?;
     Ok(buffers[0])
-}
-
-fn vk_buffer_for(buffer: &PixelBuffer) -> (vk::Buffer, vk::DeviceSize) {
-    let inner = &buffer.buffer_ref().inner;
-    (inner.buffer(), inner.size())
 }
 
 fn create_graphics_pipeline_with_cache(

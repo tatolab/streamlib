@@ -52,7 +52,9 @@ pub(crate) mod vulkan_pixel_buffer;
 pub use vulkan_pixel_buffer::HostVulkanPixelBuffer;
 
 mod vulkan_storage_binding;
-pub use vulkan_storage_binding::VulkanStorageBufferBinding;
+pub use vulkan_storage_binding::{
+    VulkanIndexBindable, VulkanStorageBindable, VulkanUniformBindable, VulkanVertexBindable,
+};
 
 mod vulkan_texture_cache;
 pub use vulkan_texture_cache::VulkanTextureCache;
