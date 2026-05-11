@@ -603,19 +603,18 @@ impl DisplayEventLoopHandler {
         let src_width = camera_texture.width();
         let src_height = camera_texture.height();
 
-        // Parse camera timeline semaphore value from frame_index
-        let camera_timeline_wait_value: u64 = ipc_frame
+        // Parse producer timeline semaphore value from frame_index
+        let video_source_timeline_wait_value: u64 = ipc_frame
             .frame_index
             .parse()
             .unwrap_or(0);
 
-        // Get camera timeline semaphore handle for GPU-GPU sync (same-process only)
-        let camera_timeline_raw = self.gpu_context.camera_timeline_semaphore();
-        let camera_timeline_sem: Option<vk::Semaphore> = if camera_timeline_raw != 0 {
-            Some(unsafe { std::mem::transmute(camera_timeline_raw) })
-        } else {
-            None
-        };
+        // Snapshot the producer's timeline semaphore for the in-process GPU
+        // wait below. The Arc is held over `vkQueueSubmit2` so the producer
+        // dropping mid-frame doesn't strand this wait.
+        let video_source_timeline = self.gpu_context.video_source_timeline_semaphore();
+        let video_source_sem: Option<vk::Semaphore> =
+            video_source_timeline.as_deref().map(|t| t.semaphore());
 
         // Stage the camera texture binding for this frame's descriptor-set
         // ring slot. The kernel flushes the write at cmd_bind_and_draw time.
@@ -898,13 +897,14 @@ impl DisplayEventLoopHandler {
                     .build(),
             ];
 
-            // GPU-wait on camera's timeline semaphore at FRAGMENT_SHADER stage
-            if let Some(cam_sem) = camera_timeline_sem {
-                if camera_timeline_wait_value > 0 {
+            // GPU-wait on the producer's timeline semaphore at the
+            // FRAGMENT_SHADER stage where the sample read happens.
+            if let Some(sem) = video_source_sem {
+                if video_source_timeline_wait_value > 0 {
                     wait_semaphore_infos.push(
                         vk::SemaphoreSubmitInfo::builder()
-                            .semaphore(cam_sem)
-                            .value(camera_timeline_wait_value)
+                            .semaphore(sem)
+                            .value(video_source_timeline_wait_value)
                             .stage_mask(vk::PipelineStageFlags2::FRAGMENT_SHADER)
                             .build(),
                     );

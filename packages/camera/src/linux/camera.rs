@@ -391,7 +391,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
 struct CameraGpuResources {
     kernel: Arc<VulkanComputeKernel>,
     recorder: RhiCommandRecorder,
-    timeline: HostVulkanTimelineSemaphore,
+    timeline: Arc<HostVulkanTimelineSemaphore>,
     input_storage_buffers: Vec<StorageBuffer>,
     input_mapped_ptrs: [*mut u8; 2],
     ring_textures: Vec<Texture>,
@@ -485,7 +485,7 @@ fn capture_thread_loop(
 
         let recorder = full.create_command_recorder("camera_capture")?;
 
-        let timeline = HostVulkanTimelineSemaphore::new(vulkan_device.device(), 0)?;
+        let timeline = Arc::new(HostVulkanTimelineSemaphore::new(vulkan_device.device(), 0)?);
 
         // Double-buffered HOST_VISIBLE input SSBOs (MMAP+memcpy fallback path).
         let mut input_storage_buffers: Vec<StorageBuffer> = Vec::with_capacity(2);
@@ -715,12 +715,7 @@ fn capture_thread_loop(
         );
     }
 
-    // `vk::Semaphore` is `#[repr(transparent)]` over `u64`; the
-    // engine-side `set_camera_timeline_semaphore` API takes the raw u64
-    // and the display processor reverses the transmute on read-back.
-    let raw_semaphore_handle: u64 =
-        unsafe { std::mem::transmute(camera_timeline.semaphore()) };
-    gpu_context.set_camera_timeline_semaphore(raw_semaphore_handle);
+    gpu_context.set_video_source_timeline_semaphore(&camera_timeline);
     let mut timeline_signal_value: u64;
 
     let dispatch_x = (width + 15) / 16;
@@ -1171,7 +1166,7 @@ fn capture_thread_loop(
 
     // Clear the published handle so a future runtime swap doesn't try to
     // wait on a dead semaphore.
-    gpu_context.set_camera_timeline_semaphore(0);
+    gpu_context.clear_video_source_timeline_semaphore();
     drop(dmabuf_imported_buffers);
     drop(ring_textures);
     drop(input_storage_buffers);
