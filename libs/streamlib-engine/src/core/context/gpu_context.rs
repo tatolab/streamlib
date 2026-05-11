@@ -522,10 +522,12 @@ impl GpuContext {
             all(target_os = "linux", not(feature = "backend-metal"))
         ))]
         {
-            use vulkanalia::vk::DeviceV1_0;
-            unsafe { self.device.inner.device().device_wait_idle() }.map_err(|e| {
-                Error::GpuError(format!("device_wait_idle failed: {e}"))
-            })?;
+            // `vkDeviceWaitIdle` is externally synchronized over every
+            // `VkQueue` the device has — go through
+            // `HostVulkanDevice::wait_idle()` so the queue mutexes are
+            // taken and we don't race with active submits on other
+            // threads.
+            self.device.inner.wait_idle()?;
         }
         Ok(())
     }

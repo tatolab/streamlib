@@ -208,13 +208,13 @@ impl VulkanPresentTarget {
     #[tracing::instrument(level = "trace", skip(self), fields(width, height))]
     pub fn recreate(&mut self, width: u32, height: u32) -> Result<()> {
         // Drain in-flight work before destroying the old swapchain.
-        unsafe {
-            self.device.device().device_wait_idle().map_err(|e| {
-                Error::GpuError(format!(
-                    "VulkanPresentTarget::recreate: device_wait_idle: {e}"
-                ))
-            })?;
-        }
+        // `wait_idle()` takes the queue mutexes so it doesn't race with
+        // an active submit on another thread.
+        self.device.wait_idle().map_err(|e| {
+            Error::GpuError(format!(
+                "VulkanPresentTarget::recreate: wait_idle: {e}"
+            ))
+        })?;
 
         let raw_device = self.device.device();
         let (new_swapchain, new_images, new_views, new_format, new_extent) = create_swapchain(
