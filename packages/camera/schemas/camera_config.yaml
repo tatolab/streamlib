@@ -1,0 +1,22 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for Camera config.
+
+metadata:
+  type: CameraConfig
+  description: "Configuration for camera capture (V4L2 on Linux, AVFoundation on macOS/iOS)"
+
+optionalProperties:
+  device_id:
+    metadata:
+      description: "Camera device path (V4L2 /dev/videoN) or AVCaptureDevice name. If None, picks the first available capture device."
+    type: string
+  min_fps:
+    metadata:
+      description: "Minimum frame rate. AVFoundation only; ignored on Linux. Default: 60.0"
+    type: float64
+  max_fps:
+    metadata:
+      description: "Maximum frame rate. AVFoundation only; ignored on Linux. Defaults to the main display refresh rate."
+    type: float64

@@ -289,13 +289,11 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::ExactFile,
         rationale: "platform display: swapchain + rendering pipeline (CLAUDE.md exception)",
     },
-    // Camera processor — historical use of cmd_pipeline_barrier per
-    // docs/learnings/vulkanalia-empty-slice-cast.md.
-    AllowEntry {
-        path: "libs/streamlib-engine/src/linux/processors/camera.rs",
-        kind: AllowKind::ExactFile,
-        rationale: "cmd_pipeline_barrier for layout transitions (vulkanalia-empty-slice-cast learning)",
-    },
+    // Camera processor lives in `packages/camera` (#673) — moved out of
+    // the engine. The new file uses `RhiCommandRecorder::record_image_barrier`
+    // instead of raw `cmd_pipeline_barrier2` and rides `gpu_context.escalate(
+    // |full| ...)` for the one-shot GPU resource construction; no
+    // allowlist entry needed.
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
     AllowEntry {
@@ -551,13 +549,11 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathPrefix,
         rationale: "codec layer; refactor-to-RHI tracked under Vulkan Video RHI Coupling milestone",
     },
-    // Camera processor compiles a compute pipeline locally (NV12 → BGRA).
-    // Tracked separately for migration to VulkanComputeKernel.
-    AllowEntry {
-        path: "libs/streamlib-engine/src/linux/processors/camera.rs",
-        kind: AllowKind::ExactFile,
-        rationale: "compute pipeline for NV12→BGRA; migration to VulkanComputeKernel tracked separately",
-    },
+    // Camera processor lives in `packages/camera` (#673). The new file
+    // creates its NV12/YUYV→RGBA kernel via
+    // `GpuContextFullAccess::create_compute_kernel` inside a single
+    // `gpu_context.escalate(|full| ...)` closure — no raw
+    // `create_compute_pipelines` call left to allowlist.
     // Subprocess cdylibs are NOT allowlisted post-#572 — their entire
     // privileged-vk surface lives in `streamlib-consumer-rhi`'s
     // import-side carve-out and `streamlib-adapter-*`. A privileged

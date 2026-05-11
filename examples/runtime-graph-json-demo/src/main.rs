@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::path::PathBuf;
-use streamlib::sdk::{CameraConfig, DisplayConfig, Mp4WriterConfig};
-use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, Mp4WriterProcessor};
+use streamlib::sdk::{DisplayConfig, Mp4WriterConfig};
+use streamlib::sdk::processors::{DisplayProcessor, Mp4WriterProcessor};
+use streamlib_camera::{CameraConfig, CameraProcessor};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::processors::{input, output};

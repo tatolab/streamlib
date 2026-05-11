@@ -23,12 +23,13 @@
 use streamlib::sdk::processors::{H264DecoderProcessor, OpusEncoderProcessor, OpusDecoderProcessor, MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
 use streamlib::sdk::_generated_::MoqSubscribeTrackConfig;
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output, // Sources
-    CameraProcessor, AudioCaptureProcessor, ChordGeneratorProcessor, // Codecs + audio processing
-    H264EncoderProcessor, AudioResamplerProcessor, BufferRechunkerProcessor, // MoQ transport
+use streamlib::sdk::processors::{input, output, // Codecs + audio processing
+    H264EncoderProcessor, // MoQ transport
     MoqPublishTrackConfig, // Sinks
-    DisplayProcessor, AudioOutputProcessor, // Runtime
+    DisplayProcessor, // Runtime
     Result};
+use streamlib_audio::{AudioCaptureProcessor, AudioOutputProcessor, AudioResamplerProcessor, BufferRechunkerProcessor, ChordGeneratorProcessor};
+use streamlib_camera::CameraProcessor;
 use streamlib::sdk::_generated_::{
     AudioResamplerConfig, BufferRechunkerConfig, ChordGeneratorConfig, DisplayConfig,
     H264EncoderConfig,

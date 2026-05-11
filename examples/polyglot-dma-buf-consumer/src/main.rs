@@ -30,7 +30,8 @@ use std::path::PathBuf;
 
 use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::{CameraProcessor, DisplayProcessor, ProcessorSpec};
+use streamlib::sdk::processors::{DisplayProcessor, ProcessorSpec};
+use streamlib_camera::CameraProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 

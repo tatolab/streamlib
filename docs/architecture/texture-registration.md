@@ -569,8 +569,9 @@ When a new field lands on `TextureRegistration`:
   `libs/streamlib-engine/src/linux/processors/display.rs`.
 - **First adapter-output producer**: `register_opengl_output_surface`
   in `examples/camera-python-display/src/linux.rs`.
-- **First in-tree producer**: `LinuxCameraProcessor` in
-  `libs/streamlib-engine/src/linux/processors/camera.rs`.
+- **First in-tree producer**: `LinuxCameraProcessor` in the
+  `streamlib-camera` package —
+  `packages/camera/src/linux/camera.rs`.
 - **Adapter-scope sibling**: `streamlib-adapter-vulkan::SurfaceState`
   in `libs/streamlib-adapter-vulkan/src/state.rs:48` (and the
   same-shape cuda + cpu-readback adapter state structs). These are

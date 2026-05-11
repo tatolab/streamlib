@@ -19,7 +19,8 @@
 
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::_generated_::ApiServerConfig;
-use streamlib::sdk::processors::{ApiServerProcessor, CameraProcessor, DisplayProcessor, ProcessorSpec};
+use streamlib::sdk::processors::{ApiServerProcessor, DisplayProcessor, ProcessorSpec};
+use streamlib_camera::CameraProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::processors::{input, output};

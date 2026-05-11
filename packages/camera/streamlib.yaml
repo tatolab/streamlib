@@ -1,0 +1,39 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/camera — camera capture processor cluster carved out of the
+# streamlib engine substrate. Owns the camera config schema and the
+# Camera processor declaration (Linux V4L2 + macOS AVFoundation behind
+# a single platform-aliased name).
+package:
+  org: tatolab
+  name: camera
+  version: 1.0.0
+  description: "Camera capture processor — V4L2 on Linux, AVFoundation on macOS/iOS"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  - schemas/camera_config.yaml
+
+processors:
+  - name: Camera
+    version: 1.0.0
+    description: "Captures video from cameras (V4L2 on Linux, AVFoundation on macOS/iOS)"
+    execution: manual
+    scheduling:
+      priority: high
+    config:
+      name: config
+      schema: "@tatolab/camera/CameraConfig@1.0.0"
+    outputs:
+      - name: video
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        description: Live video frames from the camera

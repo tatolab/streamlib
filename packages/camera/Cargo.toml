@@ -1,0 +1,60 @@
+[package]
+name = "streamlib-camera"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Camera capture processor — V4L2 on Linux, AVFoundation on macOS/iOS — carved out of the streamlib engine."
+keywords = ["camera", "v4l2", "avfoundation", "video", "streaming"]
+categories = ["multimedia::video", "multimedia"]
+
+[lib]
+name = "streamlib_camera"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated config
+# types under `streamlib::_generated_::tatolab__camera::*`, VideoFrame
+# wire type, RHI primitives.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Cross-platform deps used by the camera processor.
+parking_lot = "0.12"
+tracing.workspace = true
+
+# Serialization (config dataclass ships as serde-derived).
+serde.workspace = true
+
+# UUID generation for ring texture / pixel-buffer surface_ids.
+uuid = { version = "1.11", features = ["v4"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# V4L2 capture (Video for Linux 2).
+v4l = "0.14"
+# Raw ioctl + close fd plumbing for VIDIOC_EXPBUF / VIDIOC_QBUF / VIDIOC_STREAMON
+# (V4L2's stream type doesn't expose enough for the DMA-BUF zero-copy path).
+libc.workspace = true
+# Consumer-side RHI carve-out — typed `VulkanLayout` enum used in
+# surface-share registrations + recorder barriers. Camera does NOT use
+# anything else from consumer-rhi (no `ConsumerVulkanDevice`, no imports);
+# this is the typed-layout interop type shared between the host RHI's
+# `RhiCommandRecorder` and the cross-process surface-share schema.
+streamlib-consumer-rhi = { path = "../../libs/streamlib-consumer-rhi" }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# Objective-C interop and Apple framework bindings.
+objc2.workspace = true
+objc2-av-foundation = { workspace = true, features = ["objc2-core-media", "objc2-core-video"] }
+objc2-core-video.workspace = true
+objc2-foundation.workspace = true
+libc.workspace = true
+# GCD wrapper for dispatching AVFoundation init to the main thread.
+dispatch2 = "0.3"
+
+[lints]
+workspace = true

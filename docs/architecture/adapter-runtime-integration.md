@@ -467,11 +467,12 @@ the other by Path 1 (in-process, via the registry held in
 [`TextureRegistration` anti-pattern #2 — descriptor-side claims
 that don't match registration](texture-registration.md#anti-patterns).
 
-The reference in-tree producer is `LinuxCameraProcessor` —
-`libs/streamlib-engine/src/linux/processors/camera.rs` calls both
-`store.register_texture(...)` (around line 833) and
-`gpu_context.register_texture_with_layout(...)` (around line 862)
-for every ring texture it allocates, with the same
+The reference in-tree producer is `LinuxCameraProcessor` in the
+`streamlib-camera` package — `packages/camera/src/linux/camera.rs`
+calls both `store.register_texture(...)` and
+`gpu_context.register_texture_with_layout(...)` (outside the
+`escalate(|full| ...)` closure where the ring textures were
+constructed) for every ring texture it allocates, with the same
 `VulkanLayout::SHADER_READ_ONLY_OPTIMAL` declaration on both
 sides.
 

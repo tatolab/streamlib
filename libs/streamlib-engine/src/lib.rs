@@ -127,9 +127,9 @@ pub(crate) mod apple;
 
 // Apple processor re-exports
 // Audio capture / output processors live in `@tatolab/audio` (#672).
+// Camera processor lives in `@tatolab/camera` (#673).
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    AppleCameraProcessor as CameraProcessor,
     AppleDisplayProcessor as DisplayProcessor,
     AppleMp4WriterProcessor as Mp4WriterProcessor,
     AppleScreenCaptureProcessor as ScreenCaptureProcessor,
@@ -137,10 +137,7 @@ pub use apple::{
 
 // Linux processor re-exports
 #[cfg(target_os = "linux")]
-pub use linux::{
-    LinuxCameraProcessor as CameraProcessor,
-    LinuxDisplayProcessor as DisplayProcessor,
-};
+pub use linux::LinuxDisplayProcessor as DisplayProcessor;
 
 /// Per-runtime surface-share service primitives. Exposed for adapter
 /// integration tests and 3rd-party tooling that needs to drive the
@@ -302,7 +299,8 @@ pub mod sdk {
         // `core::descriptors`.
         pub use crate::core::descriptors::PortSchemaSpec;
 
-        pub use crate::{CameraProcessor, DisplayProcessor};
+        // Camera processor lives in `streamlib-camera` (#673).
+        pub use crate::DisplayProcessor;
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         pub use crate::{ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor};
