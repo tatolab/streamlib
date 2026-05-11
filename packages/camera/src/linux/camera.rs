@@ -535,7 +535,6 @@ fn capture_thread_loop(
         for i in 0..2 {
             let buf = full.acquire_storage_buffer(input_alloc_size)?;
             input_mapped_ptrs[i] = buf.mapped_ptr();
-            let _ = i;
             input_storage_buffers.push(buf);
         }
 
