@@ -32,7 +32,7 @@ use vma::Alloc as _;
 use crate::core::rhi::{
     validate_shader_groups, RayTracingBindingKind, RayTracingBindingSpec,
     RayTracingKernelDescriptor, RayTracingShaderGroup, RayTracingShaderStage,
-    RayTracingShaderStageFlags, RayTracingStage, PixelBuffer, Texture,
+    RayTracingShaderStageFlags, RayTracingStage, Texture,
 };
 use crate::core::{Result, Error};
 
@@ -415,27 +415,37 @@ impl VulkanRayTracingKernel {
         Ok(())
     }
 
-    pub fn set_storage_buffer(&self, binding: u32, buffer: &PixelBuffer) -> Result<()> {
+    /// Bind a storage buffer. Accepts either
+    /// [`crate::core::rhi::PixelBuffer`] or
+    /// [`crate::core::rhi::StorageBuffer`] via
+    /// [`super::VulkanStorageBufferBinding`].
+    pub fn set_storage_buffer(
+        &self,
+        binding: u32,
+        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
+    ) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::StorageBuffer)?;
-        let (vk_buf, size) = vk_buffer_for(buffer);
         self.pending.lock().bindings.insert(
             binding,
             BindingResource::Buffer {
-                buffer: vk_buf,
-                size,
+                buffer: buffer.vk_buffer(),
+                size: buffer.vk_buffer_size(),
             },
         );
         Ok(())
     }
 
-    pub fn set_uniform_buffer(&self, binding: u32, buffer: &PixelBuffer) -> Result<()> {
+    pub fn set_uniform_buffer(
+        &self,
+        binding: u32,
+        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
+    ) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::UniformBuffer)?;
-        let (vk_buf, size) = vk_buffer_for(buffer);
         self.pending.lock().bindings.insert(
             binding,
             BindingResource::Buffer {
-                buffer: vk_buf,
-                size,
+                buffer: buffer.vk_buffer(),
+                size: buffer.vk_buffer_size(),
             },
         );
         Ok(())
@@ -1593,11 +1603,6 @@ fn drop_sbt(sbt: &Sbt, vulkan_device: &Arc<HostVulkanDevice>) {
     if let Some(allocation) = sbt.allocation.as_ref().copied() {
         unsafe { vulkan_device.allocator().destroy_buffer(sbt.buffer, allocation) };
     }
-}
-
-fn vk_buffer_for(buffer: &PixelBuffer) -> (vk::Buffer, vk::DeviceSize) {
-    let inner = &buffer.buffer_ref().inner;
-    (inner.buffer(), inner.size())
 }
 
 #[cfg(test)]

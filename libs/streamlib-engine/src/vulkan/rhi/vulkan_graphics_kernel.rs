@@ -363,14 +363,18 @@ impl VulkanGraphicsKernel {
     }
 
     /// Bind a storage buffer at `(frame_index, binding)`.
+    ///
+    /// Accepts either a [`PixelBuffer`] or a [`crate::core::rhi::StorageBuffer`]
+    /// via [`super::VulkanStorageBufferBinding`].
     pub fn set_storage_buffer(
         &self,
         frame_index: u32,
         binding: u32,
-        buffer: &PixelBuffer,
+        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::StorageBuffer)?;
-        let (vk_buf, size) = vk_buffer_for(buffer);
+        let vk_buf = buffer.vk_buffer();
+        let size = buffer.vk_buffer_size();
         self.with_slot(frame_index, |slot| {
             slot.bindings.insert(
                 binding,
@@ -385,10 +389,11 @@ impl VulkanGraphicsKernel {
         &self,
         frame_index: u32,
         binding: u32,
-        buffer: &PixelBuffer,
+        buffer: &(impl super::VulkanStorageBufferBinding + ?Sized),
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::UniformBuffer)?;
-        let (vk_buf, size) = vk_buffer_for(buffer);
+        let vk_buf = buffer.vk_buffer();
+        let size = buffer.vk_buffer_size();
         self.with_slot(frame_index, |slot| {
             slot.bindings.insert(
                 binding,

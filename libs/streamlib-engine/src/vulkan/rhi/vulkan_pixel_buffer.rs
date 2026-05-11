@@ -1638,17 +1638,22 @@ mod tests {
     }
 
     /// `from_dma_buf_fd_as_storage_buffer` cleans up on import failure —
-    /// a closed-but-was-valid fd must return `Err` without leaking any
-    /// `VkBuffer` or `VkDeviceMemory`. The `import_single_plane` helper
-    /// owns the unwind path; this test exercises the engine's error
-    /// surface and confirms the device's live allocation count doesn't
-    /// climb across the failed call.
+    /// an undersized DMA-BUF import (small fd, larger requested size)
+    /// must return `Err` and not leak `VkBuffer` / `VkDeviceMemory`.
     ///
-    /// Uses a closed pipe fd rather than `-1` because some drivers
-    /// (notably NVIDIA proprietary) tolerate negative fds at
-    /// `vkAllocateMemory` time and silently allocate ordinary memory;
-    /// a real-but-closed fd hits the spec-required validation reliably
-    /// across drivers.
+    /// Choice of failure mode: undersized fd is the only failure path
+    /// every modern Linux Vulkan driver (NVIDIA proprietary, Mesa
+    /// iris/radeonsi) is empirically known to reject — closed fds, `-1`,
+    /// and `/dev/null` fds are tolerated by NVIDIA proprietary at
+    /// `vkAllocateMemory` time despite the spec requiring rejection
+    /// (driver returns success with phantom memory). Asking the driver
+    /// to import a 4 KB-backed DMA-BUF as 16 MB hits the kernel's
+    /// `dma_buf_attach`-time size check, which NVIDIA does honor.
+    ///
+    /// Source DMA-BUF is itself allocated through the engine so we
+    /// don't depend on external producers. Import counter is verified
+    /// to stay flat across the failed call (allocator + cleanup paths
+    /// must be balanced).
     #[cfg(target_os = "linux")]
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
@@ -1661,34 +1666,50 @@ mod tests {
             }
         };
 
-        // Open a pipe + close the read end to obtain a real fd integer
-        // that the kernel will reject. (A fresh pipe is sufficient — its
-        // fds are not DMA-BUFs, and on closed fds the driver returns
-        // `INVALID_EXTERNAL_HANDLE`.)
-        let mut fds = [0i32; 2];
-        let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-        assert_eq!(rc, 0, "pipe(2) failed: errno={}", std::io::Error::last_os_error());
-        unsafe {
-            libc::close(fds[0]);
-            libc::close(fds[1]);
-        }
-        let closed_fd = fds[0]; // closed but was valid
+        // Allocate a small source DMA-BUF (4 KB). Its kernel-side
+        // backing is one page; asking to import it at 16 MB must
+        // be rejected per spec (the dma_buf cannot back the
+        // requested size).
+        let source_size: u64 = 4096;
+        let source = HostVulkanPixelBuffer::new_storage_buffer_host_visible(
+            &device,
+            source_size,
+        )
+        .expect("source SSBO allocation failed");
+        let fd = source.export_dma_buf_fd().expect("DMA-BUF export failed");
 
+        let oversized: u64 = 16 * 1024 * 1024;
         let before = device.live_import_allocation_count();
         let result = HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(
-            &device, closed_fd, 4096,
+            &device,
+            fd,
+            oversized,
         );
-        if result.is_ok() {
-            println!(
-                "Skipping leak assertion - driver accepted closed fd at import \
-                 (NVIDIA-style tolerance); cleanup path unexercised"
-            );
-            return;
-        }
         let after = device.live_import_allocation_count();
+
+        // Strict: the driver MUST reject. If it accepts, either the
+        // driver is silently allocating ordinary memory (NVIDIA-style
+        // tolerance generalizing beyond closed fds), or our test
+        // setup is wrong. Either way the leak invariant isn't being
+        // exercised and the test should fail rather than silently no-op.
+        let err = match result {
+            Ok(_) => {
+                panic!(
+                    "expected DMA-BUF import to reject oversized request \
+                     (source={source_size} bytes, requested={oversized} bytes) — \
+                     driver accepted; leak invariant unverified"
+                );
+            }
+            Err(e) => e,
+        };
+        let _ = err;
+
         assert_eq!(
             before, after,
             "failed import must not leak VkDeviceMemory — live count: before={before}, after={after}"
         );
+        // fd ownership stayed with the caller because allocate failed;
+        // close it.
+        unsafe { libc::close(fd) };
     }
 }

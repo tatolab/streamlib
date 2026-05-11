@@ -18,6 +18,7 @@ mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;
 mod ray_tracing_kernel;
+mod storage_buffer;
 mod texture;
 mod texture_cache;
 mod texture_readback;
@@ -52,6 +53,8 @@ pub use format_converter_cache::RhiFormatConverterCache;
 pub use gl_interop::{gl_constants, GlContext, GlTextureBinding};
 pub use pixel_buffer::PixelBuffer;
 pub use pixel_buffer_pool::{PixelBufferDescriptor, PixelBufferPoolId};
+#[cfg(target_os = "linux")]
+pub use storage_buffer::StorageBuffer;
 // Note: RhiPixelBufferPool is intentionally not exported - use GpuContext::acquire_pixel_buffer()
 pub(crate) use pixel_buffer_pool::RhiPixelBufferPool;
 pub use pixel_buffer_ref::PixelBufferRef;
