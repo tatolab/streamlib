@@ -7,7 +7,7 @@
 //! interop work rides on:
 //!
 //! 1. The host allocates an OPAQUE_FD-exportable HOST_VISIBLE
-//!    `VkBuffer` via `HostVulkanPixelBuffer::new_opaque_fd_export`
+//!    `VkBuffer` via `HostVulkanBuffer::new_opaque_fd_export`
 //!    (new in #587) and a Vulkan timeline semaphore via
 //!    `HostVulkanTimelineSemaphore::new_exportable`.
 //! 2. The host registers the surface with `CudaSurfaceAdapter`, writes
@@ -51,7 +51,7 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice,
-    HostVulkanPixelBuffer,
+    HostVulkanBuffer,
     HostVulkanTimelineSemaphore,
 };
 use streamlib_adapter_abi::{
@@ -105,7 +105,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     }
 
     // ── Phase 1: host allocates OPAQUE_FD-exportable pixel buffer ──
-    let pixel_buffer = match HostVulkanPixelBuffer::new_opaque_fd_export(
+    let pixel_buffer = match HostVulkanBuffer::new_opaque_fd_export(
         &host_device,
         W,
         H,
@@ -222,7 +222,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     );
     let memory_fd = registered_pixel_buffer
         .export_opaque_fd_memory()
-        .expect("HostVulkanPixelBuffer::export_opaque_fd_memory");
+        .expect("HostVulkanBuffer::export_opaque_fd_memory");
     let timeline_fd = registered_timeline
         .export_opaque_fd()
         .expect("HostVulkanTimelineSemaphore::export_opaque_fd");
@@ -273,7 +273,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     //    Expected: `cudaMemoryTypeDevice` for the imported HOST_VISIBLE
     //    OPAQUE_FD `VkBuffer`. If a future driver downgrades to
     //    `cudaMemoryTypeHost`, drop `HOST_VISIBLE` from
-    //    `HostVulkanPixelBuffer::new_opaque_fd_export` and re-test —
+    //    `HostVulkanBuffer::new_opaque_fd_export` and re-test —
     //    the host-side mapped pointer goes away (host-side population
     //    routes through `vkCmdCopyBuffer` instead) but device-side
     //    inference performance is preserved. The flip is recorded in
@@ -311,7 +311,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
                 "Stage 8 regression (#588): imported OPAQUE_FD device pointer \
                  presents as `cudaMemoryTypeHost` (pinned-host, PCIe per \
                  access). Action: drop `HOST_VISIBLE` from \
-                 `HostVulkanPixelBuffer::new_opaque_fd_export`'s memory-property \
+                 `HostVulkanBuffer::new_opaque_fd_export`'s memory-property \
                  mask, document the change in `context.md`, and update \
                  `streamlib-adapter-cuda::dlpack` so the cdylib advertises \
                  `kDLCUDAHost = 3` instead of `kDLCUDA = 2`."

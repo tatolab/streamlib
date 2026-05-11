@@ -14,7 +14,7 @@
 //!    `handle_type="opaque_fd"` (Stage 4 wire-format extension).
 //! 4. A *separate* `ConsumerVulkanDevice` looks the surface up and imports
 //!    the OPAQUE_FD memory + timeline via the carve-out
-//!    (`ConsumerVulkanPixelBuffer::from_opaque_fd` / `from_imported_opaque_fd`,
+//!    (`ConsumerVulkanBuffer::from_opaque_fd` / `from_imported_opaque_fd`,
 //!    Stage 5).
 //! 5. Byte-equal assertion across host and consumer mapped pointers proves
 //!    both `VkDevice`s see the same GPU memory through the FD.
@@ -49,7 +49,7 @@ use serial_test::serial;
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice,
-    HostVulkanPixelBuffer,
+    HostVulkanBuffer,
     HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
@@ -59,7 +59,7 @@ use streamlib_adapter_abi::{
 };
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 use streamlib_consumer_rhi::{
-    ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, ConsumerVulkanTimelineSemaphore,
+    ConsumerVulkanDevice, ConsumerVulkanBuffer, ConsumerVulkanTimelineSemaphore,
     PixelFormat as ConsumerPixelFormat,
 };
 use streamlib_surface_client::{
@@ -107,7 +107,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     }
 
     // ── Phase 1: host allocates OPAQUE_FD VkBuffer + timeline ──────────
-    let host_buffer = match HostVulkanPixelBuffer::new_opaque_fd_export(
+    let host_buffer = match HostVulkanBuffer::new_opaque_fd_export(
         &host_device,
         W,
         H,
@@ -247,7 +247,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
 
     // FD ownership semantics: `from_opaque_fd` and `from_imported_opaque_fd`
     // transfer fd ownership to the Vulkan driver on success.
-    let consumer_buffer = ConsumerVulkanPixelBuffer::from_opaque_fd(
+    let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd(
         &consumer_device,
         consumer_memory_fd,
         W,
@@ -264,7 +264,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
                 libc::close(consumer_memory_fd);
                 libc::close(consumer_timeline_fd);
             }
-            panic!("ConsumerVulkanPixelBuffer::from_opaque_fd failed: {e:?}");
+            panic!("ConsumerVulkanBuffer::from_opaque_fd failed: {e:?}");
         }
     };
 

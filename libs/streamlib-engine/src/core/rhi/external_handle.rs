@@ -38,9 +38,9 @@ pub enum RhiExternalHandle {
     /// Must be passed via SCM_RIGHTS ancillary data.
     ///
     /// Source-side allocation is via
-    /// [`crate::vulkan::rhi::HostVulkanPixelBuffer::new_opaque_fd_export`].
+    /// [`crate::vulkan::rhi::HostVulkanBuffer::new_opaque_fd_export`].
     /// Consumer-side import is via
-    /// `streamlib_consumer_rhi::ConsumerVulkanPixelBuffer::from_opaque_fd`
+    /// `streamlib_consumer_rhi::ConsumerVulkanBuffer::from_opaque_fd`
     /// or, in CUDA's case, `cudaImportExternalMemory` with
     /// `cudaExternalMemoryHandleTypeOpaqueFd` directly.
     #[cfg(target_os = "linux")]
@@ -131,7 +131,7 @@ pub trait RhiPixelBufferImport {
 impl RhiPixelBufferExport for super::PixelBuffer {
     /// Returns the natural handle type for the underlying allocation —
     /// `RhiExternalHandle::OpaqueFd` for OPAQUE_FD-flavored buffers
-    /// (see [`crate::vulkan::rhi::HostVulkanPixelBuffer::new_opaque_fd_export`]),
+    /// (see [`crate::vulkan::rhi::HostVulkanBuffer::new_opaque_fd_export`]),
     /// `RhiExternalHandle::DmaBuf` otherwise. Callers dispatch on the
     /// returned variant.
     fn export_handle(&self) -> Result<RhiExternalHandle> {
@@ -170,7 +170,7 @@ impl RhiPixelBufferImport for super::PixelBuffer {
                 return Err(crate::core::Error::NotSupported(
                     "RhiPixelBufferImport::from_external_plane_handles: \
                      OPAQUE_FD handles must be imported via \
-                     ConsumerVulkanPixelBuffer::from_opaque_fd, not \
+                     ConsumerVulkanBuffer::from_opaque_fd, not \
                      this host-side DMA-BUF constructor"
                         .into(),
                 ));
@@ -178,7 +178,7 @@ impl RhiPixelBufferImport for super::PixelBuffer {
         }
 
         let vulkan_device =
-            crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
+            crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
                 .get()
                 .ok_or_else(|| {
                     crate::core::Error::NotSupported(
@@ -224,8 +224,8 @@ impl RhiPixelBufferImport for super::PixelBuffer {
             plane_sizes.push(effective);
         }
 
-        let vulkan_pixel_buffer =
-            crate::vulkan::rhi::HostVulkanPixelBuffer::from_dma_buf_fds(
+        let vulkan_buffer =
+            crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fds(
                 vulkan_device,
                 &fds,
                 &plane_sizes,
@@ -236,7 +236,7 @@ impl RhiPixelBufferImport for super::PixelBuffer {
             )?;
 
         let pixel_buffer_ref = super::PixelBufferRef {
-            inner: std::sync::Arc::new(vulkan_pixel_buffer),
+            inner: std::sync::Arc::new(vulkan_buffer),
         };
 
         Ok(super::PixelBuffer::new(pixel_buffer_ref))
@@ -270,8 +270,8 @@ mod tests {
     #[test]
     fn host_side_dma_buf_constructor_rejects_opaque_fd_handles() {
         // Contract: `RhiPixelBufferImport::from_external_plane_handles`
-        // builds a `HostVulkanPixelBuffer` from DMA-BUF FDs only. OPAQUE_FD
-        // handles take a different path (`ConsumerVulkanPixelBuffer::from_opaque_fd`)
+        // builds a `HostVulkanBuffer` from DMA-BUF FDs only. OPAQUE_FD
+        // handles take a different path (`ConsumerVulkanBuffer::from_opaque_fd`)
         // and must be rejected up-front with a clear error rather than
         // silently miscoercing through the DMA-BUF code path.
         let opaque = RhiExternalHandle::OpaqueFd { fd: -1, size: 0 };
@@ -289,7 +289,7 @@ mod tests {
                     "error message must mention OPAQUE_FD: {msg}"
                 );
                 assert!(
-                    msg.contains("ConsumerVulkanPixelBuffer::from_opaque_fd"),
+                    msg.contains("ConsumerVulkanBuffer::from_opaque_fd"),
                     "error must point at the right alternative: {msg}"
                 );
             }

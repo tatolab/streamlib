@@ -14,7 +14,7 @@ use std::sync::Arc;
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
 pub struct IndexBuffer {
-    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
 }
 
 #[cfg(target_os = "linux")]
@@ -27,15 +27,15 @@ impl IndexBuffer {
         byte_size: u64,
     ) -> crate::core::Result<Self> {
         let inner =
-            crate::vulkan::rhi::HostVulkanPixelBuffer::new_index_buffer_host_visible(
+            crate::vulkan::rhi::HostVulkanBuffer::new_index_buffer_host_visible(
                 device, byte_size,
             )?;
         Ok(Self { inner: Arc::new(inner) })
     }
 
     /// Wrap a pre-allocated buffer that already has `INDEX_BUFFER` usage.
-    pub fn from_host_vulkan_pixel_buffer(
-        inner: Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub fn from_host_vulkan_buffer(
+        inner: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
     ) -> Self {
         Self { inner }
     }

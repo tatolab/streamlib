@@ -215,7 +215,7 @@ pub mod sdk {
     ))]
     pub mod engine {
         /// Host-side Vulkan RHI types (HostVulkanDevice,
-        /// HostVulkanTexture, HostVulkanPixelBuffer,
+        /// HostVulkanTexture, HostVulkanBuffer,
         /// HostVulkanTimelineSemaphore, VulkanComputeKernel,
         /// VulkanGraphicsKernel, VulkanRayTracingKernel,
         /// VulkanTextureReadback, VulkanAccelerationStructure, etc.).

@@ -1505,14 +1505,14 @@ class EscalateRequestRunCPUReadbackCopy(EscalateRequest):
 
     surface_id: 'str'
     """
-    Host-assigned surface id (the u64 carried by `StreamlibSurface::id`)
-    of a surface previously registered with the host's cpu-readback adapter
-    and whose staging buffer + timeline were registered with the surface-
-    share service via `register_pixel_buffer_with_timeline`. The subprocess
-    imported them once at registration time through `streamlib-consumer-rhi`'s
-    `ConsumerVulkanPixelBuffer` / `ConsumerVulkanTimelineSemaphore`. JTD has no
-    native u64 — the wire form is the decimal string representation, parsed back
-    into u64 by the host before dispatch.
+    Host-assigned surface id (the u64 carried by `StreamlibSurface::id`) of a
+    surface previously registered with the host's cpu-readback adapter and whose
+    staging buffer + timeline were registered with the surface-share service via
+    `register_pixel_buffer_with_timeline`. The subprocess imported them once at
+    registration time through `streamlib-consumer-rhi`'s `ConsumerVulkanBuffer`
+    / `ConsumerVulkanTimelineSemaphore`. JTD has no native u64 — the wire form
+    is the decimal string representation, parsed back into u64 by the host
+    before dispatch.
     """
 
 

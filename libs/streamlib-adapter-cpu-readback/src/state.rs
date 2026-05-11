@@ -26,13 +26,13 @@ use streamlib_adapter_abi::{SurfaceFormat, SurfaceId, SurfaceRegistration};
 /// Both flavors carry the same fields but the concrete types behind the
 /// `Arc`s differ:
 ///
-/// - Host: `Arc<HostVulkanTexture>` + `Vec<Arc<HostVulkanPixelBuffer>>` +
+/// - Host: `Arc<HostVulkanTexture>` + `Vec<Arc<HostVulkanBuffer>>` +
 ///   `Arc<HostVulkanTimelineSemaphore>` — pre-allocated through the host
 ///   RHI and registered with the surface-share service so subprocesses can
 ///   import them.
 /// - Consumer: `Arc<ConsumerVulkanTexture>` (placeholder — the consumer
 ///   typically does not import the source image; image transitions are
-///   host-only) + `Vec<Arc<ConsumerVulkanPixelBuffer>>` (imported via
+///   host-only) + `Vec<Arc<ConsumerVulkanBuffer>>` (imported via
 ///   `from_dma_buf_fds`) + `Arc<ConsumerVulkanTimelineSemaphore>`
 ///   (imported via `from_imported_opaque_fd`).
 pub struct HostSurfaceRegistration<P: DevicePrivilege> {
@@ -44,7 +44,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     pub texture: Option<Arc<P::Texture>>,
     /// One staging buffer per plane (1 for BGRA/RGBA, 2 for NV12).
     /// HOST_VISIBLE / HOST_COHERENT linear `VkBuffer` on both flavors.
-    pub staging_planes: Vec<Arc<P::PixelBuffer>>,
+    pub staging_planes: Vec<Arc<P::Buffer>>,
     /// Shared timeline semaphore. Host owns the export side; consumer
     /// imports via OPAQUE_FD. Both flavors `wait` and `signal_host`
     /// against the same kernel object after import.
@@ -60,17 +60,17 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     pub format: SurfaceFormat,
     /// Surface width in pixels. The adapter uses this to dimension the
     /// per-plane views; staging buffers carry their own per-plane
-    /// dimensions through [`streamlib_consumer_rhi::VulkanPixelBufferLike`].
+    /// dimensions through [`streamlib_consumer_rhi::VulkanRhiBufferStorage`].
     pub width: u32,
     /// Surface height in pixels.
     pub height: u32,
 }
 
-/// Per-plane staging slot. Holds an `Arc<P::PixelBuffer>` that
+/// Per-plane staging slot. Holds an `Arc<P::Buffer>` that
 /// outlives every acquire scope; the staging buffers are reused on
 /// every acquire, never reallocated.
 pub(crate) struct PlaneSlot<P: DevicePrivilege> {
-    pub(crate) staging: Arc<P::PixelBuffer>,
+    pub(crate) staging: Arc<P::Buffer>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) bytes_per_pixel: u32,

@@ -8,16 +8,16 @@ use std::sync::{Arc, Mutex};
 use crate::core::rhi::{PixelBufferPoolId, PixelFormat, PixelBuffer, PixelBufferRef};
 use crate::core::{Result, Error};
 
-use super::{HostVulkanDevice, HostVulkanPixelBuffer};
+use super::{HostVulkanDevice, HostVulkanBuffer};
 
-/// Reusable pool of [`HostVulkanPixelBuffer`]s for efficient buffer recycling.
+/// Reusable pool of [`HostVulkanBuffer`]s for efficient buffer recycling.
 pub struct VulkanPixelBufferPool {
     device: Arc<HostVulkanDevice>,
     width: u32,
     height: u32,
     bytes_per_pixel: u32,
     format: PixelFormat,
-    buffers: Vec<Arc<HostVulkanPixelBuffer>>,
+    buffers: Vec<Arc<HostVulkanBuffer>>,
     next_index: AtomicUsize,
     buffer_to_pool_id: Mutex<HashMap<usize, PixelBufferPoolId>>,
 }
@@ -42,7 +42,7 @@ impl VulkanPixelBufferPool {
         let mut last_err: Option<Error> = None;
 
         for i in 0..pre_allocate {
-            match HostVulkanPixelBuffer::new(&device, width, height, bytes_per_pixel, format) {
+            match HostVulkanBuffer::new(&device, width, height, bytes_per_pixel, format) {
                 Ok(buffer) => {
                     buffers.push(Arc::new(buffer));
                     buffer_to_pool_id.insert(i, PixelBufferPoolId::new());

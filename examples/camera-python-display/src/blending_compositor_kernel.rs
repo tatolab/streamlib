@@ -76,7 +76,7 @@ use streamlib::sdk::rhi::{
     VulkanLayout,
 };
 use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanPixelBuffer, VulkanGraphicsKernel};
+use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanBuffer, VulkanGraphicsKernel};
 
 /// Push-constants layout — must match `blending_compositor.frag`'s
 /// `layout(push_constant)` block byte-for-byte.
@@ -490,7 +490,7 @@ fn make_placeholder_texture(vulkan_device: &Arc<HostVulkanDevice>) -> Result<Tex
 
     // Upload zeros (transparent BGRA); `upload_buffer_to_image` leaves
     // the image in SHADER_READ_ONLY_OPTIMAL.
-    let staging = HostVulkanPixelBuffer::new(vulkan_device, 1, 1, 4, PixelFormat::Bgra32)?;
+    let staging = HostVulkanBuffer::new(vulkan_device, 1, 1, 4, PixelFormat::Bgra32)?;
     unsafe {
         std::ptr::write_bytes(staging.mapped_ptr(), 0, 4);
         vulkan_device.upload_buffer_to_image(staging.buffer(), image, 1, 1)?;
@@ -631,7 +631,7 @@ mod tests {
     ) {
         let w = texture.width();
         let h = texture.height();
-        let staging = HostVulkanPixelBuffer::new(device, w, h, 4, PixelFormat::Bgra32)
+        let staging = HostVulkanBuffer::new(device, w, h, 4, PixelFormat::Bgra32)
             .expect("staging");
         let pixel = (b as u32) | ((g as u32) << 8) | ((r as u32) << 16) | ((a as u32) << 24);
         unsafe {

@@ -8,7 +8,7 @@
 //! pattern in the same plane. Validates:
 //!
 //!  - Per-plane staging allocation (Y plane and UV plane each get their
-//!    own `HostVulkanPixelBuffer`).
+//!    own `HostVulkanBuffer`).
 //!  - Per-plane `vkCmdCopyImageToBuffer` regions with the right
 //!    `VK_IMAGE_ASPECT_PLANE_{0,1}_BIT` aspect — wrong aspect or wrong
 //!    extent would scramble the read-back.

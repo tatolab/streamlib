@@ -642,7 +642,7 @@ impl std::fmt::Debug for VulkanAccelerationStructure {
 
 /// Owning DEVICE_LOCAL buffer with a pre-queried device address. Internal
 /// to the AS module — the engine's public buffer types
-/// (`HostVulkanPixelBuffer`) target HOST_VISIBLE / OPAQUE_FD-export use cases
+/// (`HostVulkanBuffer`) target HOST_VISIBLE / OPAQUE_FD-export use cases
 /// and don't carry a `BUFFER_DEVICE_ADDRESS` flag, which AS builds need.
 struct AsBuffer {
     vulkan_device: Arc<HostVulkanDevice>,

@@ -1031,7 +1031,7 @@ impl SurfaceStore {
 
         // Export the buffer's natural handle — DMA-BUF or OPAQUE_FD per
         // the underlying allocation flavor (see
-        // `HostVulkanPixelBuffer::export_external_handle`).
+        // `HostVulkanBuffer::export_external_handle`).
         let handle = pixel_buffer.export_handle()?;
         let (fd, _size, handle_type) = match handle {
             crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size, "dma_buf"),
@@ -1194,7 +1194,7 @@ impl SurfaceStore {
     /// the host pre-allocates one HOST_VISIBLE / HOST_COHERENT linear
     /// staging `VkBuffer` per plane and an exportable timeline; the
     /// subprocess `check_out`s the bundle once at registration time and
-    /// imports each plane via [`streamlib_consumer_rhi::ConsumerVulkanPixelBuffer::from_dma_buf_fds`]
+    /// imports each plane via [`streamlib_consumer_rhi::ConsumerVulkanBuffer::from_dma_buf_fds`]
     /// + the timeline via [`streamlib_consumer_rhi::ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`].
     ///
     /// Per-acquire IPC after registration is a thin trigger that
@@ -1360,7 +1360,7 @@ impl SurfaceStore {
         // construct a host-side `PixelBuffer` (that import path is
         // DMA-BUF-only — see `RhiPixelBufferImport::from_external_plane_handles`).
         // Subprocess consumers go through `streamlib-surface-client` directly
-        // and import via `streamlib_consumer_rhi::ConsumerVulkanPixelBuffer::from_opaque_fd`.
+        // and import via `streamlib_consumer_rhi::ConsumerVulkanBuffer::from_opaque_fd`.
         let handle_type = response
             .get("handle_type")
             .and_then(|v| v.as_str())
@@ -1375,7 +1375,7 @@ impl SurfaceStore {
                  handle_type=\"opaque_fd\"; the host-side PixelBuffer \
                  import path is DMA-BUF-only. Subprocess consumers should \
                  use streamlib-surface-client directly + \
-                 ConsumerVulkanPixelBuffer::from_opaque_fd."
+                 ConsumerVulkanBuffer::from_opaque_fd."
                     .into(),
             ));
         }
@@ -1550,7 +1550,7 @@ impl SurfaceStore {
         let allocation_size = (width as u64) * (height as u64) * (format.bytes_per_pixel() as u64);
 
         let vulkan_device =
-            crate::vulkan::rhi::vulkan_pixel_buffer::VULKAN_DEVICE_FOR_IMPORT
+            crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
                 .get()
                 .ok_or_else(|| {
                     Error::NotSupported(

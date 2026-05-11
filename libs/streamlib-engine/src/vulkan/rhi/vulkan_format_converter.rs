@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     use crate::core::rhi::PixelBufferRef;
     use crate::core::Error;
-    use crate::vulkan::rhi::HostVulkanPixelBuffer;
+    use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
@@ -132,7 +132,7 @@ mod tests {
         bytes_per_pixel: u32,
         format: PixelFormat,
     ) -> PixelBuffer {
-        let vk_buf = HostVulkanPixelBuffer::new(device, width, height, bytes_per_pixel, format)
+        let vk_buf = HostVulkanBuffer::new(device, width, height, bytes_per_pixel, format)
             .expect("Failed to create pixel buffer");
         let ref_ = PixelBufferRef {
             inner: Arc::new(vk_buf),

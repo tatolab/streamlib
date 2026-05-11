@@ -1168,7 +1168,7 @@ fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
 mod tests {
     use super::*;
     use crate::core::rhi::{PixelBuffer, PixelFormat};
-    use crate::vulkan::rhi::HostVulkanPixelBuffer;
+    use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
@@ -1186,7 +1186,7 @@ mod tests {
         device: &Arc<HostVulkanDevice>,
         element_count: u32,
     ) -> PixelBuffer {
-        let vk_buf = HostVulkanPixelBuffer::new(device, element_count, 1, 4, PixelFormat::Bgra32)
+        let vk_buf = HostVulkanBuffer::new(device, element_count, 1, 4, PixelFormat::Bgra32)
             .expect("Failed to create storage buffer");
         let ref_ = crate::core::rhi::PixelBufferRef {
             inner: Arc::new(vk_buf),

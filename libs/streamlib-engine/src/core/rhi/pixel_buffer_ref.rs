@@ -9,7 +9,7 @@ use super::PixelFormat;
 ///
 /// Wraps the platform's native pixel buffer type:
 /// - macOS/iOS: CVPixelBufferRef (raw pointer, platform manages lifecycle)
-/// - Linux: Arc\<HostVulkanPixelBuffer\> (shared GPU staging buffer, Rust manages lifecycle)
+/// - Linux: Arc\<HostVulkanBuffer\> (shared GPU staging buffer, Rust manages lifecycle)
 /// - Windows: ID3D11Texture2D* (future)
 ///
 /// Clone increments the appropriate refcount, Drop decrements it.
@@ -19,7 +19,7 @@ pub struct PixelBufferRef {
     pub(crate) inner: std::ptr::NonNull<std::ffi::c_void>,
 
     #[cfg(target_os = "linux")]
-    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::HostVulkanPixelBuffer>,
+    pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::HostVulkanBuffer>,
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     pub(crate) _marker: std::marker::PhantomData<()>,
@@ -168,7 +168,7 @@ impl Drop for PixelBufferRef {
         {
             crate::metal::rhi::pixel_buffer_ref::drop_impl(self);
         }
-        // On Linux, HostVulkanPixelBuffer handles its own cleanup via its Drop impl.
+        // On Linux, HostVulkanBuffer handles its own cleanup via its Drop impl.
         // No additional action needed here.
     }
 }

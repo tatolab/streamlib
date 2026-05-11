@@ -14,7 +14,7 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::{ConsumerRhiError, ConsumerVulkanDevice, PixelFormat, Result, VulkanPixelBufferLike};
+use crate::{ConsumerRhiError, ConsumerVulkanDevice, PixelFormat, Result, VulkanRhiBufferStorage};
 
 /// One imported plane: buffer + memory + mapped pointer + size.
 struct ConsumerImportedPlane {
@@ -25,7 +25,7 @@ struct ConsumerImportedPlane {
 }
 
 /// Consumer-side CPU-visible imported staging buffer. See module docs.
-pub struct ConsumerVulkanPixelBuffer {
+pub struct ConsumerVulkanBuffer {
     vulkan_device: Arc<ConsumerVulkanDevice>,
     /// Plane 0's `VkBuffer`. Single-plane imports use only this; multi-
     /// plane imports keep planes 1..N in [`Self::extra_imported_planes`].
@@ -42,7 +42,7 @@ pub struct ConsumerVulkanPixelBuffer {
     size: vk::DeviceSize,
 }
 
-impl ConsumerVulkanPixelBuffer {
+impl ConsumerVulkanBuffer {
     /// Import a single-plane DMA-BUF as a HOST_VISIBLE staging buffer.
     pub fn from_dma_buf_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
@@ -67,7 +67,7 @@ impl ConsumerVulkanPixelBuffer {
     /// Import an OPAQUE_FD as a HOST_VISIBLE staging buffer.
     ///
     /// Pairs with the host's
-    /// [`crate::HostVulkanPixelBuffer::new_opaque_fd_export`] +
+    /// [`crate::HostVulkanBuffer::new_opaque_fd_export`] +
     /// `export_opaque_fd_memory`. This is the constructor #589 / #590
     /// CUDA cdylibs use after looking up a surface registered with
     /// `handle_type="opaque_fd"` on the surface-share wire — the resulting
@@ -98,7 +98,7 @@ impl ConsumerVulkanPixelBuffer {
             derived_size
         } else {
             return Err(ConsumerRhiError::Configuration(
-                "ConsumerVulkanPixelBuffer::from_opaque_fd: allocation_size=0 \
+                "ConsumerVulkanBuffer::from_opaque_fd: allocation_size=0 \
                  and width*height*bpp cannot derive a size"
                     .into(),
             ));
@@ -141,19 +141,19 @@ impl ConsumerVulkanPixelBuffer {
     ) -> Result<Self> {
         if fds.is_empty() {
             return Err(ConsumerRhiError::Configuration(
-                "ConsumerVulkanPixelBuffer: fd vec must be non-empty".into(),
+                "ConsumerVulkanBuffer: fd vec must be non-empty".into(),
             ));
         }
         if fds.len() != plane_sizes.len() {
             return Err(ConsumerRhiError::Configuration(format!(
-                "ConsumerVulkanPixelBuffer: plane_sizes length ({}) must match fds length ({})",
+                "ConsumerVulkanBuffer: plane_sizes length ({}) must match fds length ({})",
                 plane_sizes.len(),
                 fds.len()
             )));
         }
         if fds.len() > streamlib_surface_client::MAX_DMA_BUF_PLANES {
             return Err(ConsumerRhiError::Configuration(format!(
-                "ConsumerVulkanPixelBuffer: plane count {} exceeds MAX_DMA_BUF_PLANES ({})",
+                "ConsumerVulkanBuffer: plane count {} exceeds MAX_DMA_BUF_PLANES ({})",
                 fds.len(),
                 streamlib_surface_client::MAX_DMA_BUF_PLANES
             )));
@@ -174,7 +174,7 @@ impl ConsumerVulkanPixelBuffer {
                     teardown_plane(vulkan_device, plane);
                 }
                 return Err(ConsumerRhiError::Configuration(format!(
-                    "ConsumerVulkanPixelBuffer: plane {} size=0 cannot be derived from width*height",
+                    "ConsumerVulkanBuffer: plane {} size=0 cannot be derived from width*height",
                     idx
                 )));
             };
@@ -322,7 +322,7 @@ fn import_single_plane_with_handle_type(
 
     let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
         ConsumerRhiError::Gpu(format!(
-            "ConsumerVulkanPixelBuffer: create_buffer failed: {e}"
+            "ConsumerVulkanBuffer: create_buffer failed: {e}"
         ))
     })?;
 
@@ -352,7 +352,7 @@ fn import_single_plane_with_handle_type(
         vulkan_device.free_imported_memory(memory);
         unsafe { device.destroy_buffer(buffer, None) };
         ConsumerRhiError::Gpu(format!(
-            "ConsumerVulkanPixelBuffer: bind_buffer_memory failed: {e}"
+            "ConsumerVulkanBuffer: bind_buffer_memory failed: {e}"
         ))
     })?;
 
@@ -378,7 +378,7 @@ fn teardown_plane(vulkan_device: &Arc<ConsumerVulkanDevice>, plane: ConsumerImpo
     vulkan_device.free_imported_memory(plane.memory);
 }
 
-impl Drop for ConsumerVulkanPixelBuffer {
+impl Drop for ConsumerVulkanBuffer {
     fn drop(&mut self) {
         unsafe {
             self.vulkan_device.device().destroy_buffer(self.buffer, None);
@@ -391,26 +391,26 @@ impl Drop for ConsumerVulkanPixelBuffer {
     }
 }
 
-unsafe impl Send for ConsumerVulkanPixelBuffer {}
-unsafe impl Sync for ConsumerVulkanPixelBuffer {}
+unsafe impl Send for ConsumerVulkanBuffer {}
+unsafe impl Sync for ConsumerVulkanBuffer {}
 
-impl VulkanPixelBufferLike for ConsumerVulkanPixelBuffer {
+impl VulkanRhiBufferStorage for ConsumerVulkanBuffer {
     fn buffer(&self) -> vk::Buffer {
-        ConsumerVulkanPixelBuffer::buffer(self)
+        ConsumerVulkanBuffer::buffer(self)
     }
     fn mapped_ptr(&self) -> *mut u8 {
-        ConsumerVulkanPixelBuffer::mapped_ptr(self)
+        ConsumerVulkanBuffer::mapped_ptr(self)
     }
     fn size(&self) -> vk::DeviceSize {
-        ConsumerVulkanPixelBuffer::size(self)
+        ConsumerVulkanBuffer::size(self)
     }
     fn width(&self) -> u32 {
-        ConsumerVulkanPixelBuffer::width(self)
+        ConsumerVulkanBuffer::width(self)
     }
     fn height(&self) -> u32 {
-        ConsumerVulkanPixelBuffer::height(self)
+        ConsumerVulkanBuffer::height(self)
     }
     fn bytes_per_pixel(&self) -> u32 {
-        ConsumerVulkanPixelBuffer::bytes_per_pixel(self)
+        ConsumerVulkanBuffer::bytes_per_pixel(self)
     }
 }

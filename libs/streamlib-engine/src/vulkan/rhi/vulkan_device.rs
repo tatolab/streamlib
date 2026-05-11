@@ -1250,7 +1250,7 @@ impl HostVulkanDevice {
     fn prewarm_export_pools(device: &Arc<Self>) -> Result<Vec<ExportPoolSentinel>> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
         use streamlib_consumer_rhi::PixelFormat;
-        use super::{HostVulkanPixelBuffer, HostVulkanTexture};
+        use super::{HostVulkanBuffer, HostVulkanTexture};
 
         const PROBE_W: u32 = 8;
         const PROBE_H: u32 = 8;
@@ -1262,7 +1262,7 @@ impl HostVulkanDevice {
         //    Allocate-and-drop: compositor swapchain DMA-BUF imports
         //    keep the kernel state alive for the process's lifetime.
         if device.dma_buf_buffer_pool().is_some() {
-            let probe = HostVulkanPixelBuffer::new(
+            let probe = HostVulkanBuffer::new(
                 device, PROBE_W, PROBE_H, PROBE_BPP, PixelFormat::Bgra32,
             )
             .map_err(|e| {
@@ -1378,7 +1378,7 @@ impl HostVulkanDevice {
 /// [`HostVulkanDevice::prewarm_export_pools`] to pin the kernel-side
 /// state for the OPAQUE_FD handle type for the device's lifetime.
 ///
-/// Bypasses [`super::HostVulkanPixelBuffer`] deliberately: that wrapper
+/// Bypasses [`super::HostVulkanBuffer`] deliberately: that wrapper
 /// holds an `Arc<HostVulkanDevice>` for cleanup, which would create a
 /// reference cycle when stored as a field on the device itself. The
 /// sentinel holds only raw `vk::Buffer` + `vma::Allocation`; cleanup
@@ -1532,7 +1532,7 @@ impl HostVulkanDevice {
     )> {
         // ── Find memory type for HOST_VISIBLE DMA-BUF exportable buffers ──
         // The probe must mirror the real buffer create info used by
-        // `HostVulkanPixelBuffer::new`, including the `ExternalMemoryBufferCreateInfo`
+        // `HostVulkanBuffer::new`, including the `ExternalMemoryBufferCreateInfo`
         // pNext chain — DMA-BUF external buffers have a narrower
         // `memoryTypeBits` than plain buffers, and omitting the chain lets VMA
         // pick a memory type the real buffer won't accept at bind time
@@ -1721,7 +1721,7 @@ impl HostVulkanDevice {
     fn create_opaque_fd_buffer_pool(
         allocator: &Arc<vma::Allocator>,
     ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
-        // Probe with the same shape `HostVulkanPixelBuffer::new_opaque_fd_export`
+        // Probe with the same shape `HostVulkanBuffer::new_opaque_fd_export`
         // will use: HOST_VISIBLE | HOST_COHERENT, TRANSFER_SRC | TRANSFER_DST,
         // chained `VkExternalMemoryBufferCreateInfo::OPAQUE_FD`. The probe's
         // memoryTypeBits must match the real buffer's or the bind fails
@@ -2592,7 +2592,7 @@ impl HostVulkanDevice {
     /// Returns `None` when external memory isn't supported on this device,
     /// or when the pool's memory-type probe failed at construction.
     /// Used by CUDA / OpenCL interop — see
-    /// [`super::HostVulkanPixelBuffer::new_opaque_fd_export`].
+    /// [`super::HostVulkanBuffer::new_opaque_fd_export`].
     #[cfg(target_os = "linux")]
     pub fn opaque_fd_buffer_pool(&self) -> Option<&vma::Pool> {
         self.opaque_fd_buffer_pool.as_ref()
@@ -2604,7 +2604,7 @@ impl HostVulkanDevice {
     /// Returns `None` when external memory isn't supported or the
     /// DEVICE_LOCAL probe failed at construction. Used by GPU-resident
     /// CUDA interop paths — see
-    /// [`super::HostVulkanPixelBuffer::new_opaque_fd_export_device_local`].
+    /// [`super::HostVulkanBuffer::new_opaque_fd_export_device_local`].
     #[cfg(target_os = "linux")]
     pub fn opaque_fd_buffer_pool_device_local(&self) -> Option<&vma::Pool> {
         self.opaque_fd_buffer_pool_device_local.as_ref()

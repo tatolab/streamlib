@@ -187,7 +187,7 @@ unsafe impl Sync for VulkanBlitter {}
 mod tests {
     use super::*;
     use crate::core::rhi::{PixelFormat, PixelBuffer, PixelBufferRef};
-    use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanPixelBuffer};
+    use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanBuffer};
     use std::sync::Arc;
 
     fn make_rhi_buffer(
@@ -195,7 +195,7 @@ mod tests {
         width: u32,
         height: u32,
     ) -> PixelBuffer {
-        let buf = HostVulkanPixelBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
             .expect("pixel buffer allocation failed");
         PixelBuffer::new(PixelBufferRef {
             inner: Arc::new(buf),

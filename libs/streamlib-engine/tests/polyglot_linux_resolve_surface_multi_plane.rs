@@ -14,7 +14,7 @@
 //! DMA-BUFs — the shim only `mmap`s them, never Vulkan-imports, so
 //! SCM_RIGHTS + `mmap(MAP_SHARED)` is enough.
 //!
-//! The Rust-side test goes through `HostVulkanPixelBuffer::from_dma_buf_fds`
+//! The Rust-side test goes through `HostVulkanBuffer::from_dma_buf_fds`
 //! via `SurfaceStore::check_out`, which *does* Vulkan-import each plane.
 //! NVIDIA's driver rejects memfds as DMA_BUF_EXT handles, so the Rust
 //! case uses `TestDmaBufProducer` to mint two real Vulkan-exported

@@ -14,7 +14,7 @@ Per-acquire control flow:
 1. The Python SDK looks the host's pre-registered cuda surface up via
    surface-share once (``slpn_cuda_register_surface``). The OPAQUE_FD
    memory + timeline FDs enter the cdylib's address space, get
-   imported via ``ConsumerVulkanPixelBuffer::from_opaque_fd`` /
+   imported via ``ConsumerVulkanBuffer::from_opaque_fd`` /
    ``ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`` AND
    re-imported into CUDA via ``cudaImportExternalMemory`` /
    ``cudaImportExternalSemaphore``. The CUDA device pointer

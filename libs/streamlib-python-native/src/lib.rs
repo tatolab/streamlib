@@ -1263,14 +1263,14 @@ mod gpu_surface {
     //!
     //! CPU access on lock goes through a Vulkan DMA-BUF import
     //! (`VkImportMemoryFdInfoKHR` + `vkBindBufferMemory` + `vkMapMemory`) —
-    //! same shape as the host's `HostVulkanPixelBuffer::from_dma_buf_fd` so both
+    //! same shape as the host's `HostVulkanBuffer::from_dma_buf_fd` so both
     //! ends speak the canonical driver-supported path. The import-side only —
     //! allocation always escalates to the host per the research doc.
     use std::ffi::c_void;
     use std::os::unix::io::RawFd;
     use std::sync::Arc;
 
-    use streamlib_consumer_rhi::{ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, PixelFormat};
+    use streamlib_consumer_rhi::{ConsumerVulkanDevice, ConsumerVulkanBuffer, PixelFormat};
 
     /// Surface backend used for the currently-locked mapping. Reported via
     /// [`slpn_gpu_surface_backend`] so tests can assert the import took the
@@ -1363,7 +1363,7 @@ mod gpu_surface {
         /// runs `vkDestroyBuffer` + `vkFreeMemory` via the consumer-rhi
         /// teardown path; `slpn_gpu_surface_unlock` takes() to tear down
         /// without dropping the surface handle.
-        pub imported_pixel_buffer: Option<ConsumerVulkanPixelBuffer>,
+        pub imported_pixel_buffer: Option<ConsumerVulkanBuffer>,
         /// Backend used for the current (or most recent) lock.
         pub backend: u32,
     }
@@ -1388,7 +1388,7 @@ mod gpu_surface {
         fn drop(&mut self) {
             // Tear down any outstanding Vulkan import (lock without
             // unlock). `lock` imports a dup of `self.fds[0]`; Vulkan
-            // owns that dup. Dropping the `ConsumerVulkanPixelBuffer`
+            // owns that dup. Dropping the `ConsumerVulkanBuffer`
             // runs `vkDestroyBuffer` + `vkFreeMemory`, which releases
             // the dup — not our fds.
             let _ = self.imported_pixel_buffer.take();
@@ -1473,7 +1473,7 @@ mod gpu_surface {
         }
         let format = pixel_format_from_str(&handle.format);
         let bytes_per_pixel = format.bits_per_pixel().div_ceil(8);
-        let imported = match ConsumerVulkanPixelBuffer::from_dma_buf_fd(
+        let imported = match ConsumerVulkanBuffer::from_dma_buf_fd(
             &device,
             dup_fd,
             handle.width,
@@ -4259,7 +4259,7 @@ mod cpu_readback {
         HostSurfaceRegistration, VulkanLayout,
     };
     use streamlib_consumer_rhi::{
-        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanPixelBuffer,
+        ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanBuffer,
         ConsumerVulkanTimelineSemaphore, PixelFormat,
     };
 
@@ -4502,7 +4502,7 @@ mod cpu_readback {
     }
 
     /// Register a host cpu-readback surface — imports each per-plane
-    /// DMA-BUF FD as its own [`ConsumerVulkanPixelBuffer`], imports the
+    /// DMA-BUF FD as its own [`ConsumerVulkanBuffer`], imports the
     /// host's exportable timeline via OPAQUE_FD, and hands the
     /// resulting [`HostSurfaceRegistration`] to the adapter.
     ///
@@ -4554,11 +4554,11 @@ mod cpu_readback {
         let surface_width = gpu.width;
         let surface_height = gpu.height;
 
-        // Import each plane as its own ConsumerVulkanPixelBuffer.
+        // Import each plane as its own ConsumerVulkanBuffer.
         // `from_dma_buf_fd` `dup`s the fd internally; the SurfaceHandle
         // keeps its originals so the SDK can re-import for a sibling
         // adapter (e.g. peeking the same surface via Vulkan).
-        let mut staging_planes: Vec<Arc<ConsumerVulkanPixelBuffer>> =
+        let mut staging_planes: Vec<Arc<ConsumerVulkanBuffer>> =
             Vec::with_capacity(plane_count);
         for plane_idx in 0..plane_count {
             let plane_idx_u32 = plane_idx as u32;
@@ -4574,7 +4574,7 @@ mod cpu_readback {
                     (plane_width as u64) * (plane_height as u64) * (plane_bpp as u64)
                 });
             let pixel_format = pixel_format_for_plane(format, plane_idx_u32);
-            let pb = match ConsumerVulkanPixelBuffer::from_dma_buf_fd(
+            let pb = match ConsumerVulkanBuffer::from_dma_buf_fd(
                 &rt.device,
                 gpu.fds[plane_idx],
                 plane_width,
@@ -5074,7 +5074,7 @@ mod cuda {
     };
     use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
     use streamlib_consumer_rhi::{
-        ConsumerVulkanDevice, ConsumerVulkanPixelBuffer, ConsumerVulkanTimelineSemaphore,
+        ConsumerVulkanDevice, ConsumerVulkanBuffer, ConsumerVulkanTimelineSemaphore,
         PixelFormat,
     };
 
@@ -5174,7 +5174,7 @@ mod cuda {
         // adapter's registry already owns them. Holding our own clones
         // is belt-and-suspenders.
         #[allow(dead_code)] // Arc held for lifetime; never read after register.
-        pixel_buffer: Arc<ConsumerVulkanPixelBuffer>,
+        pixel_buffer: Arc<ConsumerVulkanBuffer>,
         timeline: Arc<ConsumerVulkanTimelineSemaphore>,
     }
 
@@ -5276,7 +5276,7 @@ mod cuda {
     /// the host's pre-registered cuda surface).
     ///
     /// Single-FD only: the host registers cuda surfaces as a
-    /// flat OPAQUE_FD `VkBuffer` per `HostVulkanPixelBuffer::new_opaque_fd_export`;
+    /// flat OPAQUE_FD `VkBuffer` per `HostVulkanBuffer::new_opaque_fd_export`;
     /// CUDA's `cudaExternalMemoryGetMappedBuffer` requires a flat memory
     /// region (multi-plane variants need
     /// `cudaExternalMemoryGetMappedMipmappedArray`, which doesn't have a
@@ -5340,7 +5340,7 @@ mod cuda {
             unsafe { libc::close(vk_fd) };
             return SLPN_CUDA_ERR;
         }
-        let pixel_buffer = match ConsumerVulkanPixelBuffer::from_opaque_fd(
+        let pixel_buffer = match ConsumerVulkanBuffer::from_opaque_fd(
             &rt.device,
             vk_fd,
             gpu.width,

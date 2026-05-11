@@ -593,7 +593,7 @@ mod tests {
     use crate::core::rhi::{
         ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer, PixelFormat,
     };
-    use crate::vulkan::rhi::HostVulkanPixelBuffer;
+    use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
         match HostVulkanDevice::new() {
@@ -606,7 +606,7 @@ mod tests {
     }
 
     fn make_storage_buffer(device: &Arc<HostVulkanDevice>, element_count: u32) -> PixelBuffer {
-        let vk_buf = HostVulkanPixelBuffer::new(
+        let vk_buf = HostVulkanBuffer::new(
             device,
             element_count,
             1,
