@@ -760,6 +760,21 @@ impl HostVulkanTexture {
             Error::GpuError("dma_buf_plane_layout: no image".into())
         })?;
 
+        // `vkGetImageSubresourceLayout` (the call below) requires LINEAR
+        // or DRM_FORMAT_MODIFIER tiling per VUID-vkGetImageSubresourceLayout-image-07790.
+        // OPTIMAL-tiled images have driver-opaque layouts; their plane
+        // strides aren't meaningful for DMA-BUF export (those textures
+        // aren't DMA-BUF importable anyway). Refuse the query so the
+        // caller (`surface_store::register_texture`) takes the fallback
+        // `vec![(0, 0)]` path it already tolerates.
+        if self.vk_image_meta.vk_image_tiling == vk::ImageTiling::OPTIMAL {
+            return Err(Error::GpuError(
+                "dma_buf_plane_layout: not applicable for VK_IMAGE_TILING_OPTIMAL textures \
+                 (only LINEAR or DRM_FORMAT_MODIFIER tilings expose queryable plane layouts)"
+                    .into(),
+            ));
+        }
+
         let plane_count = match self.format {
             TextureFormat::Nv12 => 2,
             _ => 1,
