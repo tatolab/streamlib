@@ -67,6 +67,13 @@ mod vulkan_command_recorder;
 #[cfg(target_os = "linux")]
 pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
 
+#[cfg(target_os = "linux")]
+mod vulkan_present_target;
+#[cfg(target_os = "linux")]
+pub use vulkan_present_target::{
+    PresentFrame, VulkanPresentTarget, MAX_FRAMES_IN_FLIGHT,
+};
+
 mod vulkan_texture_cache;
 pub use vulkan_texture_cache::VulkanTextureCache;
 

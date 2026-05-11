@@ -11,7 +11,8 @@
 //! Usage:
 //!   vulkan-video-psnr <h264|h265> <bgra-path> <width> <height> <fps> <frame-count>
 
-use streamlib::sdk::processors::{BgraFileSourceProcessor, DisplayProcessor, H264DecoderProcessor, H264EncoderProcessor, H265DecoderProcessor, H265EncoderProcessor};
+use streamlib::sdk::processors::{BgraFileSourceProcessor, H264DecoderProcessor, H264EncoderProcessor, H265DecoderProcessor, H265EncoderProcessor};
+use streamlib_display::DisplayProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::processors::{input, output};

@@ -125,15 +125,13 @@ pub(crate) mod linux;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 
+// Display processor lives in `@tatolab/display` (#674).
+
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
-    AppleDisplayProcessor as DisplayProcessor,
     AppleMp4WriterProcessor as Mp4WriterProcessor,
     AppleScreenCaptureProcessor as ScreenCaptureProcessor,
 };
-
-#[cfg(target_os = "linux")]
-pub use linux::LinuxDisplayProcessor as DisplayProcessor;
 
 /// Per-runtime surface-share service primitives. Exposed for adapter
 /// integration tests and 3rd-party tooling that needs to drive the
@@ -296,7 +294,7 @@ pub mod sdk {
         pub use crate::core::descriptors::PortSchemaSpec;
 
         // Camera processor lives in `streamlib-camera` (#673).
-        pub use crate::DisplayProcessor;
+        // Display processor lives in `streamlib-display` (#674).
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         pub use crate::{ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor};

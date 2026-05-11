@@ -19,8 +19,6 @@ export * from "./com_streamlib_opus_decoder_config.ts";
 export * from "./com_streamlib_opus_encoder_config.ts";
 export * from "./com_streamlib_webrtc_whep_config.ts";
 export * from "./com_streamlib_webrtc_whip_config.ts";
-export * from "./com_tatolab_camera_config.ts";
-export * from "./com_tatolab_display_config.ts";
 export * from "./com_tatolab_mp4_writer_config.ts";
 export * from "./com_tatolab_screen_capture_config.ts";
 export * from "./com_tatolab_simple_passthrough_config.ts";

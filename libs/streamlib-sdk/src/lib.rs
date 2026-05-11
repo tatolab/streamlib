@@ -116,7 +116,9 @@ pub mod sdk {
         // `streamlib-processor-schema`).
         pub use streamlib_engine::core::descriptors::PortSchemaSpec;
 
-        pub use streamlib_engine::DisplayProcessor;
+        // Display processor lives in `@tatolab/display` (`streamlib-display`),
+        // not in the engine (#674). Apps depend on `streamlib-display`
+        // directly alongside `streamlib`; the SDK does not re-export it.
 
         // Apple-only processors.
         #[cfg(any(target_os = "macos", target_os = "ios"))]

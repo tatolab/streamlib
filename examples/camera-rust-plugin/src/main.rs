@@ -23,8 +23,9 @@
 
 use std::path::PathBuf;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::{DisplayProcessor, ProcessorSpec};
+use streamlib::sdk::processors::ProcessorSpec;
 use streamlib_camera::CameraProcessor;
+use streamlib_display::DisplayProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 

@@ -95,19 +95,8 @@ mod tests {
         }
     }
 
-    /// Smoke test that the macro → manifest → registry path produces a
-    /// descriptor whose `scheduling.priority` matches what
-    /// `libs/streamlib-engine/streamlib.yaml` declares for an in-tree
-    /// processor. Mentally reverting the codegen emission in
-    /// `streamlib-macros/src/codegen.rs::generate_descriptor_from_schema`
-    /// or the engine yaml's `scheduling:` block makes this fail.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_display_descriptor_carries_declared_priority() {
-        use crate::linux::processors::LinuxDisplayProcessor;
-        let descriptor = PROCESSOR_REGISTRY
-            .descriptor(&LinuxDisplayProcessor::schema_ident())
-            .expect("Linux Display processor must be registered via inventory at test start");
-        assert_eq!(descriptor.scheduling.priority, ThreadPriority::High);
-    }
+    // The macro → manifest → registry smoke test previously locked here
+    // for `LinuxDisplayProcessor` moved with the display processor into
+    // `@tatolab/display` (#674). Other macro-roundtrip locks live in
+    // `streamlib-macros` and the per-processor packages' own test trees.
 }

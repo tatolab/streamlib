@@ -11,4 +11,4 @@ pub mod thread_priority;
 
 pub use audio_clock::LinuxTimerFdAudioClock;
 
-pub use processors::LinuxDisplayProcessor;
+// Display processor lives in `@tatolab/display` (#674).

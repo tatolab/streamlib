@@ -9,12 +9,12 @@ use parking_lot::Mutex;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{Texture, VulkanLayout};
+use crate::core::rhi::{DrawCall, DrawIndexedCall, Texture, VulkanLayout};
 use crate::core::{Error, Result};
 
 use super::{
     HostVulkanDevice, HostVulkanTimelineSemaphore, VulkanAccess, VulkanBufferLike,
-    VulkanComputeKernel, VulkanStage,
+    VulkanComputeKernel, VulkanGraphicsKernel, VulkanStage,
 };
 
 /// Image-to-buffer / buffer-to-image copy region.
@@ -433,6 +433,116 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.expect_recording("record_dispatch")?;
         kernel.record(self.command_buffer, group_x, group_y, group_z)
+    }
+
+    /// Record a draw via [`VulkanGraphicsKernel::cmd_bind_and_draw`]
+    /// into the recorder's command buffer.
+    ///
+    /// Must be called inside an active render pass (e.g. between
+    /// [`PresentFrame::begin_rendering`](super::vulkan_present_target::PresentFrame::begin_rendering)
+    /// and `end_rendering`). Bindings + push constants for `frame_index`
+    /// must have been staged via the kernel's `set_*` methods before this
+    /// call; the kernel drains them on entry.
+    #[tracing::instrument(level = "trace", skip(self, kernel, draw), fields(label = %self.label, frame_index))]
+    pub fn record_draw(
+        &mut self,
+        kernel: &VulkanGraphicsKernel,
+        frame_index: u32,
+        draw: &DrawCall,
+    ) -> Result<()> {
+        self.expect_recording("record_draw")?;
+        kernel.cmd_bind_and_draw(self.command_buffer, frame_index, draw)
+    }
+
+    /// Indexed-draw variant of [`Self::record_draw`]. Caller must have
+    /// set an index buffer for `frame_index` via
+    /// [`VulkanGraphicsKernel::set_index_buffer`].
+    #[tracing::instrument(level = "trace", skip(self, kernel, draw), fields(label = %self.label, frame_index))]
+    pub fn record_draw_indexed(
+        &mut self,
+        kernel: &VulkanGraphicsKernel,
+        frame_index: u32,
+        draw: &DrawIndexedCall,
+    ) -> Result<()> {
+        self.expect_recording("record_draw_indexed")?;
+        kernel.cmd_bind_and_draw_indexed(self.command_buffer, frame_index, draw)
+    }
+
+    /// Engine-internal accessor for the underlying command buffer.
+    /// Used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
+    /// to record swapchain-image transitions + `cmd_begin/end_rendering`
+    /// alongside the user's recorded draws.
+    pub(crate) fn command_buffer_raw(&self) -> vk::CommandBuffer {
+        self.command_buffer
+    }
+
+    /// Engine-internal accessor for the underlying [`HostVulkanDevice`].
+    /// Used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)'s
+    /// `PresentFrame::begin_rendering` / `end_rendering` to issue
+    /// `cmd_begin_rendering` / `cmd_end_rendering` on the same command
+    /// buffer this recorder owns.
+    pub(crate) fn vulkan_device_ref(&self) -> &Arc<HostVulkanDevice> {
+        &self.vulkan_device
+    }
+
+    /// Engine-internal submit path supporting binary + timeline waits
+    /// and signals, used by [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
+    /// for the swapchain image-available wait → render-finished binary
+    /// signal + frame-timeline signal dance that `submit_signaling_timeline`
+    /// can't express. Mirrors [`Self::submit_inner`]'s recorder-state and
+    /// fence bookkeeping so the next [`Self::begin`] waits correctly.
+    pub(crate) fn submit_with_semaphores(
+        &mut self,
+        waits: &[vk::SemaphoreSubmitInfo],
+        signals: &[vk::SemaphoreSubmitInfo],
+    ) -> Result<()> {
+        {
+            let mut state = self.state.lock();
+            if *state != RecorderState::Recording {
+                return Err(Error::GpuError(format!(
+                    "RhiCommandRecorder '{}': submit_with_semaphores called without an active recording",
+                    self.label
+                )));
+            }
+            *state = RecorderState::Idle;
+        }
+
+        unsafe {
+            self.device
+                .end_command_buffer(self.command_buffer)
+                .map_err(|e| {
+                    Error::GpuError(format!(
+                        "RhiCommandRecorder '{}': end_command_buffer: {e}",
+                        self.label
+                    ))
+                })?;
+        }
+
+        let cmd_info = vk::CommandBufferSubmitInfo::builder()
+            .command_buffer(self.command_buffer)
+            .build();
+        let cmd_infos = [cmd_info];
+
+        let submit = vk::SubmitInfo2::builder()
+            .wait_semaphore_infos(waits)
+            .command_buffer_infos(&cmd_infos)
+            .signal_semaphore_infos(signals)
+            .build();
+
+        unsafe {
+            self.vulkan_device
+                .submit_to_queue(self.queue, &[submit], self.completion_fence)
+                .map_err(|e| {
+                    Error::GpuError(format!(
+                        "RhiCommandRecorder '{}': submit_to_queue: {e}",
+                        self.label
+                    ))
+                })?;
+        }
+
+        self.submission_in_flight = true;
+
+        Ok(())
     }
 
     /// End recording and submit, signaling `timeline` at `signal_value`

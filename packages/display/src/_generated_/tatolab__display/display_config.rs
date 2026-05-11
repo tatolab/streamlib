@@ -20,7 +20,7 @@ pub enum ScalingMode {
     Stretch,
 }
 
-/// Configuration for video display window (macOS/iOS)
+/// Configuration for video display window
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DisplayConfig {
