@@ -74,6 +74,7 @@ impl HostVulkanPixelBuffer {
     /// The export pool isolates DMA-BUF allocations from the default VMA pool,
     /// avoiding NVIDIA driver failures where global export configuration causes
     /// OOM after swapchain creation.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(width, height, bytes_per_pixel, format = ?format))]
     pub fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         width: u32,
@@ -160,6 +161,173 @@ impl HostVulkanPixelBuffer {
             format,
             size,
         })
+    }
+
+    /// Internal: allocate a HOST_VISIBLE + HOST_COHERENT mapped buffer with
+    /// the given usage flags, via the device's `dma_buf_buffer_pool` so it
+    /// remains DMA-BUF exportable. Shared spine for every formatless
+    /// host-visible buffer constructor on this type.
+    fn new_host_visible_with_usage(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+        usage: vk::BufferUsageFlags,
+        constructor_label: &'static str,
+    ) -> Result<Self> {
+        if byte_size == 0 {
+            return Err(Error::Configuration(format!(
+                "{constructor_label}: byte_size must be > 0"
+            )));
+        }
+        if byte_size > u32::MAX as u64 {
+            return Err(Error::Configuration(format!(
+                "{constructor_label}: byte_size {byte_size} \
+                 exceeds 4 GB synthetic-width cap"
+            )));
+        }
+        let size = byte_size as vk::DeviceSize;
+
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
+            .build();
+
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(usage)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut external_buffer_info);
+
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY
+                | vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
+            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            ..Default::default()
+        };
+
+        let allocator = vulkan_device.allocator();
+        let (buffer, allocation) = {
+            #[cfg(target_os = "linux")]
+            let result = if let Some(pool) = vulkan_device.dma_buf_buffer_pool() {
+                unsafe { pool.create_buffer(buffer_info, &alloc_opts) }
+            } else {
+                unsafe { allocator.create_buffer(buffer_info, &alloc_opts) }
+            };
+            #[cfg(not(target_os = "linux"))]
+            let result = unsafe { allocator.create_buffer(buffer_info, &alloc_opts) };
+            result.map_err(|e| {
+                Error::GpuError(format!("{constructor_label}: vmaCreateBuffer failed: {e}"))
+            })?
+        };
+
+        let alloc_info = allocator.get_allocation_info(allocation);
+        let mapped_ptr = alloc_info.pMappedData.cast::<u8>();
+        if mapped_ptr.is_null() {
+            unsafe { allocator.destroy_buffer(buffer, allocation) };
+            return Err(Error::GpuError(format!(
+                "{constructor_label}: VMA mapped pointer is null — expected persistent mapping"
+            )));
+        }
+
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer,
+            allocation: Some(allocation),
+            #[cfg(target_os = "linux")]
+            imported_memory: None,
+            #[cfg(target_os = "linux")]
+            imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            is_opaque_fd_export: false,
+            mapped_ptr,
+            #[cfg(target_os = "linux")]
+            extra_imported_planes: Vec::new(),
+            width: byte_size as u32,
+            height: 1,
+            bytes_per_pixel: 1,
+            format: PixelFormat::Bgra32,
+            size,
+        })
+    }
+
+    /// Create a formatless HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    ///
+    /// Sibling of [`Self::new`] for callers that have raw bytes rather than
+    /// formatted pixel data (V4L2 MMAP frames, audio→GPU compute, ML upload).
+    /// Same memory shape — HOST_VISIBLE | HOST_COHERENT, persistently mapped,
+    /// DMA-BUF exportable via the device's existing `dma_buf_buffer_pool` —
+    /// but `byte_size` is taken flat: no `PixelFormat` interrogation, no
+    /// `width * height * bpp` derivation.
+    ///
+    /// `byte_size` must fit in `u32` (4 GB cap) — SSBOs larger than that
+    /// are not a current consumer need; file a follow-up if they become
+    /// one.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
+    pub fn new_storage_buffer_host_visible(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+    ) -> Result<Self> {
+        Self::new_host_visible_with_usage(
+            vulkan_device,
+            byte_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::STORAGE_BUFFER,
+            "HostVulkanPixelBuffer::new_storage_buffer_host_visible",
+        )
+    }
+
+    /// Create a formatless HOST_VISIBLE uniform buffer for small per-draw
+    /// shader parameters (UBOs). DMA-BUF exportable (shared
+    /// `dma_buf_buffer_pool`) so cross-process consumers can reach it
+    /// when needed; usage carries `UNIFORM_BUFFER | TRANSFER_SRC | TRANSFER_DST`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
+    pub fn new_uniform_buffer_host_visible(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+    ) -> Result<Self> {
+        Self::new_host_visible_with_usage(
+            vulkan_device,
+            byte_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::UNIFORM_BUFFER,
+            "HostVulkanPixelBuffer::new_uniform_buffer_host_visible",
+        )
+    }
+
+    /// Create a formatless HOST_VISIBLE vertex buffer for graphics pipeline
+    /// vertex input. Usage carries `VERTEX_BUFFER | TRANSFER_SRC | TRANSFER_DST`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
+    pub fn new_vertex_buffer_host_visible(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+    ) -> Result<Self> {
+        Self::new_host_visible_with_usage(
+            vulkan_device,
+            byte_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::VERTEX_BUFFER,
+            "HostVulkanPixelBuffer::new_vertex_buffer_host_visible",
+        )
+    }
+
+    /// Create a formatless HOST_VISIBLE index buffer for graphics pipeline
+    /// indexed draws. Usage carries `INDEX_BUFFER | TRANSFER_SRC | TRANSFER_DST`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(byte_size))]
+    pub fn new_index_buffer_host_visible(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_size: u64,
+    ) -> Result<Self> {
+        Self::new_host_visible_with_usage(
+            vulkan_device,
+            byte_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::TRANSFER_DST
+                | vk::BufferUsageFlags::INDEX_BUFFER,
+            "HostVulkanPixelBuffer::new_index_buffer_host_visible",
+        )
     }
 
     /// Persistently mapped pointer for CPU access — plane 0 for
@@ -292,6 +460,7 @@ impl HostVulkanPixelBuffer {
     /// non-exportable allocation — the resulting buffer would be
     /// unusable for CUDA / OpenCL interop and the failure would
     /// surface only at `vkGetMemoryFdKHR` time.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(width, height, bytes_per_pixel, format = ?format))]
     pub fn new_opaque_fd_export(
         vulkan_device: &Arc<HostVulkanDevice>,
         width: u32,
@@ -382,6 +551,7 @@ impl HostVulkanPixelBuffer {
     /// as `cudaMemoryTypeDevice` (DLPack `kDLCUDA`) automatically via
     /// `cudaPointerGetAttributes` on `cudaExternalMemoryGetMappedBuffer`'s
     /// returned pointer, so no separate handle-type wire flag is needed.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(width, height, bytes_per_pixel, format = ?format))]
     pub fn new_opaque_fd_export_device_local(
         vulkan_device: &Arc<HostVulkanDevice>,
         width: u32,
@@ -544,6 +714,7 @@ impl HostVulkanPixelBuffer {
     /// Thin wrapper over [`Self::from_dma_buf_fds`] for back-compat with
     /// existing single-plane callers — new code should prefer the
     /// multi-plane signature even when there is only one plane.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, width, height, bytes_per_pixel, format = ?format, allocation_size))]
     pub fn from_dma_buf_fd(
         vulkan_device: &Arc<HostVulkanDevice>,
         fd: std::os::unix::io::RawFd,
@@ -574,6 +745,7 @@ impl HostVulkanPixelBuffer {
     /// memory unmapped + freed) before the error is returned. The
     /// caller retains ownership of the fds — each fd is consumed by
     /// `vkAllocateMemory` only on success.
+    #[tracing::instrument(level = "trace", skip(vulkan_device, fds, plane_sizes), fields(plane_count = fds.len(), width, height, bytes_per_pixel, format = ?format))]
     pub fn from_dma_buf_fds(
         vulkan_device: &Arc<HostVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
@@ -656,6 +828,61 @@ impl HostVulkanPixelBuffer {
             bytes_per_pixel,
             format,
             size: plane0.size,
+        })
+    }
+
+    /// Import a DMA-BUF fd as a STORAGE_BUFFER-usage `VkBuffer` bound to
+    /// imported memory.
+    ///
+    /// Sibling of [`Self::from_dma_buf_fd`] for V4L2-shape capture paths
+    /// that hand the kernel a flat DMA-BUF fd (e.g. V4L2 `M_DMABUF` MMAP
+    /// frames) rather than formatted pixel data. Same plumbing — calls
+    /// [`HostVulkanDevice::import_dma_buf_memory`] under the hood — but
+    /// the `byte_size` is taken flat and the wrapping
+    /// [`crate::core::rhi::PixelBuffer`] receives synthetic dimensions
+    /// (see [`Self::new_storage_buffer_host_visible`] for the convention).
+    ///
+    /// Caller retains ownership of `fd` only when import fails *before*
+    /// `vkAllocateMemory` consumes the descriptor (parameter validation
+    /// rejections, `vkCreateBuffer` failure). On successful return the
+    /// driver owns the fd — caller must NOT `close()` it. If
+    /// `vkAllocateMemory` succeeds but a later step (`vkBindBufferMemory`,
+    /// `vkMapMemory`) fails, the fd is still consumed (the import path
+    /// frees the imported memory + destroys the buffer, but the kernel-
+    /// side fd transfer is irreversible).
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, size))]
+    pub fn from_dma_buf_fd_as_storage_buffer(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        fd: std::os::unix::io::RawFd,
+        size: u64,
+    ) -> Result<Self> {
+        if size == 0 {
+            return Err(Error::Configuration(
+                "HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer: size must be > 0".into(),
+            ));
+        }
+        if size > u32::MAX as u64 {
+            return Err(Error::Configuration(format!(
+                "HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer: size {size} \
+                 exceeds 4 GB synthetic-width cap"
+            )));
+        }
+        let effective_size = size as vk::DeviceSize;
+        let plane = import_single_plane(vulkan_device, fd, effective_size)?;
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer: plane.buffer,
+            allocation: None,
+            imported_memory: Some(plane.memory),
+            imported_from_dma_buf: true,
+            is_opaque_fd_export: false,
+            mapped_ptr: plane.mapped_ptr,
+            extra_imported_planes: Vec::new(),
+            width: size as u32,
+            height: 1,
+            bytes_per_pixel: 1,
+            format: PixelFormat::Bgra32,
+            size: plane.size,
         })
     }
 
@@ -1300,5 +1527,251 @@ mod tests {
                 "error should name the cap, got: {e}"
             ),
         }
+    }
+
+    /// `new_storage_buffer_host_visible` allocates a HOST_VISIBLE
+    /// STORAGE_BUFFER-usage VkBuffer: mapped pointer is non-null, size
+    /// matches the requested byte count, write→readback round-trips
+    /// through the persistent mapping.
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn storage_buffer_host_visible_write_readback() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let byte_size: u64 = 4096;
+        let buf = HostVulkanPixelBuffer::new_storage_buffer_host_visible(&device, byte_size)
+            .expect("storage buffer allocation failed");
+
+        assert_eq!(buf.size(), byte_size as vk::DeviceSize);
+        assert!(!buf.mapped_ptr().is_null(), "mapped pointer must be non-null");
+        assert_ne!(buf.buffer(), vk::Buffer::null());
+
+        // Write a counter pattern through the mapped pointer and read it back.
+        let ptr = buf.mapped_ptr();
+        unsafe {
+            for i in 0..byte_size as usize {
+                std::ptr::write(ptr.add(i), (i & 0xFF) as u8);
+            }
+            for i in 0..byte_size as usize {
+                let v = std::ptr::read(ptr.add(i));
+                assert_eq!(v, (i & 0xFF) as u8, "mismatch at offset {i}");
+            }
+        }
+
+        println!(
+            "storage buffer round-trip verified: {} bytes",
+            byte_size
+        );
+    }
+
+    /// `new_storage_buffer_host_visible` rejects byte_size = 0 and
+    /// byte_size > u32::MAX with a `Configuration` error. No device touch
+    /// for the validation paths, so this runs without hardware.
+    #[test]
+    fn storage_buffer_host_visible_rejects_invalid_sizes() {
+        // Validation errors fire before any device interaction. Build a
+        // device lazily — if it fails (no GPU), skip; the validation
+        // path itself doesn't depend on the device but the function
+        // signature requires one.
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        match HostVulkanPixelBuffer::new_storage_buffer_host_visible(&device, 0) {
+            Err(Error::Configuration(msg)) => {
+                assert!(msg.contains("byte_size must be > 0"), "got: {msg}");
+            }
+            Err(other) => panic!("expected Configuration error for zero size, got {other:?}"),
+            Ok(_) => panic!("expected zero-size rejection, got Ok"),
+        }
+
+        let oversized = (u32::MAX as u64) + 1;
+        match HostVulkanPixelBuffer::new_storage_buffer_host_visible(&device, oversized) {
+            Err(Error::Configuration(msg)) => {
+                assert!(
+                    msg.contains("exceeds 4 GB synthetic-width cap"),
+                    "got: {msg}"
+                );
+            }
+            Err(other) => panic!("expected Configuration error for oversized, got {other:?}"),
+            Ok(_) => panic!("expected oversized rejection, got Ok"),
+        }
+    }
+
+    /// `from_dma_buf_fd_as_storage_buffer` imports a DMA-BUF fd as a
+    /// STORAGE_BUFFER-usage VkBuffer with mapped memory. Round-trip:
+    /// allocate a source HOST_VISIBLE SSBO, export its DMA-BUF fd,
+    /// import via `from_dma_buf_fd_as_storage_buffer`, verify the
+    /// imported mapping carries the same bytes the source wrote.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn storage_buffer_from_dma_buf_fd_round_trip() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        let byte_size: u64 = 8192;
+        let src = HostVulkanPixelBuffer::new_storage_buffer_host_visible(&device, byte_size)
+            .expect("source SSBO allocation failed");
+
+        let pattern: [u8; 4] = [0x55, 0xAA, 0xCC, 0x33];
+        let size_usize = byte_size as usize;
+        unsafe {
+            for i in (0..size_usize).step_by(4) {
+                std::ptr::copy_nonoverlapping(pattern.as_ptr(), src.mapped_ptr().add(i), 4);
+            }
+        }
+
+        let fd = src.export_dma_buf_fd().expect("DMA-BUF export failed");
+        assert!(fd >= 0);
+
+        let imported =
+            HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(&device, fd, byte_size)
+                .expect("DMA-BUF SSBO import failed");
+
+        assert_eq!(imported.size(), byte_size as vk::DeviceSize);
+        assert!(!imported.mapped_ptr().is_null());
+
+        unsafe {
+            for i in (0..size_usize).step_by(4) {
+                let b = std::ptr::read(imported.mapped_ptr().add(i));
+                let g = std::ptr::read(imported.mapped_ptr().add(i + 1));
+                let r = std::ptr::read(imported.mapped_ptr().add(i + 2));
+                let a = std::ptr::read(imported.mapped_ptr().add(i + 3));
+                assert_eq!([b, g, r, a], pattern, "imported mismatch at offset {i}");
+            }
+        }
+
+        println!(
+            "DMA-BUF SSBO round-trip verified: {} bytes, fd={fd}",
+            byte_size
+        );
+    }
+
+    /// `from_dma_buf_fd_as_storage_buffer` returns a typed error for
+    /// invalid sizes (zero, > u32::MAX) before touching the fd.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn storage_buffer_from_dma_buf_fd_rejects_invalid_sizes() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        // fd = -1 would fail at import-time; but size validation runs
+        // first so the fd is never touched here.
+        match HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(&device, -1, 0) {
+            Err(Error::Configuration(msg)) => {
+                assert!(msg.contains("size must be > 0"), "got: {msg}");
+            }
+            Err(other) => panic!("expected Configuration error for zero size, got {other:?}"),
+            Ok(_) => panic!("expected zero-size rejection, got Ok"),
+        }
+
+        let oversized = (u32::MAX as u64) + 1;
+        match HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(&device, -1, oversized) {
+            Err(Error::Configuration(msg)) => {
+                assert!(
+                    msg.contains("exceeds 4 GB synthetic-width cap"),
+                    "got: {msg}"
+                );
+            }
+            Err(other) => panic!("expected Configuration error for oversized, got {other:?}"),
+            Ok(_) => panic!("expected oversized rejection, got Ok"),
+        }
+    }
+
+    /// `from_dma_buf_fd_as_storage_buffer` cleans up on import failure —
+    /// an undersized DMA-BUF import (small fd, larger requested size)
+    /// must return `Err` and not leak `VkBuffer` / `VkDeviceMemory`.
+    ///
+    /// Choice of failure mode: undersized fd is the only failure path
+    /// every modern Linux Vulkan driver (NVIDIA proprietary, Mesa
+    /// iris/radeonsi) is empirically known to reject — closed fds, `-1`,
+    /// and `/dev/null` fds are tolerated by NVIDIA proprietary at
+    /// `vkAllocateMemory` time despite the spec requiring rejection
+    /// (driver returns success with phantom memory). Asking the driver
+    /// to import a 4 KB-backed DMA-BUF as 16 MB hits the kernel's
+    /// `dma_buf_attach`-time size check, which NVIDIA does honor.
+    ///
+    /// Source DMA-BUF is itself allocated through the engine so we
+    /// don't depend on external producers. Import counter is verified
+    /// to stay flat across the failed call (allocator + cleanup paths
+    /// must be balanced).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn storage_buffer_from_dma_buf_fd_drops_on_failure() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+
+        // Allocate a small source DMA-BUF (4 KB). Its kernel-side
+        // backing is one page; asking to import it at 16 MB must
+        // be rejected per spec (the dma_buf cannot back the
+        // requested size).
+        let source_size: u64 = 4096;
+        let source = HostVulkanPixelBuffer::new_storage_buffer_host_visible(
+            &device,
+            source_size,
+        )
+        .expect("source SSBO allocation failed");
+        let fd = source.export_dma_buf_fd().expect("DMA-BUF export failed");
+
+        let oversized: u64 = 16 * 1024 * 1024;
+        let before = device.live_import_allocation_count();
+        let result = HostVulkanPixelBuffer::from_dma_buf_fd_as_storage_buffer(
+            &device,
+            fd,
+            oversized,
+        );
+        let after = device.live_import_allocation_count();
+
+        // Strict: the driver MUST reject. If it accepts, either the
+        // driver is silently allocating ordinary memory (NVIDIA-style
+        // tolerance generalizing beyond closed fds), or our test
+        // setup is wrong. Either way the leak invariant isn't being
+        // exercised and the test should fail rather than silently no-op.
+        let err = match result {
+            Ok(_) => {
+                panic!(
+                    "expected DMA-BUF import to reject oversized request \
+                     (source={source_size} bytes, requested={oversized} bytes) — \
+                     driver accepted; leak invariant unverified"
+                );
+            }
+            Err(e) => e,
+        };
+        let _ = err;
+
+        assert_eq!(
+            before, after,
+            "failed import must not leak VkDeviceMemory — live count: before={before}, after={after}"
+        );
+        // fd ownership stayed with the caller because allocate failed;
+        // close it.
+        unsafe { libc::close(fd) };
     }
 }

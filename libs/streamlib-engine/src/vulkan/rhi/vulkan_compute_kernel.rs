@@ -25,7 +25,7 @@ use vulkanalia::vk;
 use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use crate::core::rhi::{
-    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, PixelBuffer, Texture,
+    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture,
 };
 use crate::core::{Result, Error};
 
@@ -261,14 +261,24 @@ impl VulkanComputeKernel {
 
     /// Bind a storage buffer at `binding`. The slot must be declared as
     /// [`ComputeBindingKind::StorageBuffer`] in the descriptor.
-    pub fn set_storage_buffer(&self, binding: u32, buffer: &PixelBuffer) -> Result<()> {
+    ///
+    /// Accepts either a [`crate::core::rhi::PixelBuffer`] (pixel-shaped
+    /// data being bound as an SSBO — pixel buffers carry `STORAGE_BUFFER`
+    /// usage from allocation time) or a
+    /// [`crate::core::rhi::StorageBuffer`] (canonical raw-bytes shape
+    /// from
+    /// [`crate::core::context::GpuContext::acquire_storage_buffer`]).
+    pub fn set_storage_buffer(
+        &self,
+        binding: u32,
+        buffer: &(impl super::VulkanStorageBindable + ?Sized),
+    ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageBuffer)?;
-        let (vk_buf, size) = vk_buffer_for(buffer)?;
         self.pending.lock().bindings.insert(
             binding,
             BindingResource::Buffer {
-                buffer: vk_buf,
-                size,
+                buffer: buffer.vk_buffer(),
+                size: buffer.vk_buffer_size(),
             },
         );
         Ok(())
@@ -276,14 +286,22 @@ impl VulkanComputeKernel {
 
     /// Bind a uniform buffer at `binding`. The slot must be declared as
     /// [`ComputeBindingKind::UniformBuffer`] in the descriptor.
-    pub fn set_uniform_buffer(&self, binding: u32, buffer: &PixelBuffer) -> Result<()> {
+    ///
+    /// Accepts only [`crate::core::rhi::UniformBuffer`]. Pixel buffers
+    /// cannot be bound as UBOs because their allocations don't carry
+    /// `UNIFORM_BUFFER` usage; this is enforced at compile time via
+    /// [`super::VulkanUniformBindable`].
+    pub fn set_uniform_buffer(
+        &self,
+        binding: u32,
+        buffer: &(impl super::VulkanUniformBindable + ?Sized),
+    ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::UniformBuffer)?;
-        let (vk_buf, size) = vk_buffer_for(buffer)?;
         self.pending.lock().bindings.insert(
             binding,
             BindingResource::Buffer {
-                buffer: vk_buf,
-                size,
+                buffer: buffer.vk_buffer(),
+                size: buffer.vk_buffer_size(),
             },
         );
         Ok(())
@@ -1084,11 +1102,6 @@ fn allocate_command_buffer(
     Ok(buffers[0])
 }
 
-fn vk_buffer_for(buffer: &PixelBuffer) -> Result<(vk::Buffer, vk::DeviceSize)> {
-    let inner = &buffer.buffer_ref().inner;
-    Ok((inner.buffer(), inner.size()))
-}
-
 fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
     texture.inner.image_view()
 }
@@ -1096,7 +1109,7 @@ fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::PixelFormat;
+    use crate::core::rhi::{PixelBuffer, PixelFormat};
     use crate::vulkan::rhi::HostVulkanPixelBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
