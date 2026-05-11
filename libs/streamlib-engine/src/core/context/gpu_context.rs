@@ -1059,6 +1059,40 @@ impl GpuContext {
         Ok(Texture::from_vulkan(texture))
     }
 
+    /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    ///
+    /// Thin wrapper over
+    /// [`crate::vulkan::rhi::HostVulkanPixelBuffer::new_storage_buffer_host_visible`].
+    /// Unlike [`Self::acquire_pixel_buffer`], the returned buffer is
+    /// **caller-owned-lifecycle, not pool-managed** — SSBOs are typically
+    /// per-stage ring slots whose count is known at processor setup, so
+    /// pool churn is the wrong shape. Callers retain the
+    /// [`crate::core::rhi::PixelBuffer`] in their processor state and drop
+    /// it when teardown runs.
+    ///
+    /// The buffer carries `STORAGE_BUFFER | TRANSFER_SRC | TRANSFER_DST`
+    /// usage and DMA-BUF export flags; compute kernels bind it via
+    /// [`crate::vulkan::rhi::VulkanComputeKernel::set_storage_buffer`].
+    /// `byte_size` must fit in `u32` (4 GB cap); larger SSBOs are not a
+    /// current consumer need.
+    #[cfg(target_os = "linux")]
+    pub fn acquire_storage_buffer(
+        &self,
+        byte_size: u64,
+    ) -> Result<PixelBuffer> {
+        tracing::debug!(
+            rhi_op = "acquire_storage_buffer",
+            byte_size,
+            "GpuContext::acquire_storage_buffer"
+        );
+        let vulkan_device = &self.device.inner;
+        let buffer = crate::vulkan::rhi::HostVulkanPixelBuffer::new_storage_buffer_host_visible(
+            vulkan_device,
+            byte_size,
+        )?;
+        Ok(PixelBuffer::from_host_vulkan_pixel_buffer(Arc::new(buffer)))
+    }
+
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
     ///
     /// Reflects the SPIR-V at creation time and validates that the declared
@@ -1730,6 +1764,13 @@ impl GpuContextLimitedAccess {
         self.inner.acquire_pixel_buffer(width, height, format)
     }
 
+    /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    /// See [`GpuContext::acquire_storage_buffer`].
+    #[cfg(target_os = "linux")]
+    pub fn acquire_storage_buffer(&self, byte_size: u64) -> Result<PixelBuffer> {
+        self.inner.acquire_storage_buffer(byte_size)
+    }
+
     /// Get a pixel buffer by its pool id (Split: local cache).
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
         self.inner.get_pixel_buffer(pool_id)
@@ -1857,6 +1898,13 @@ impl GpuContextFullAccess {
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
         self.inner.acquire_pixel_buffer(width, height, format)
+    }
+
+    /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    /// See [`GpuContext::acquire_storage_buffer`].
+    #[cfg(target_os = "linux")]
+    pub fn acquire_storage_buffer(&self, byte_size: u64) -> Result<PixelBuffer> {
+        self.inner.acquire_storage_buffer(byte_size)
     }
 
     /// Allocate a render-target-capable DMA-BUF VkImage (privileged path —
@@ -2452,5 +2500,59 @@ mod tests {
         assert_eq!(after.expect("escalate after error"), 7);
 
         println!("escalate propagates closure error + releases lock: OK");
+    }
+
+    /// `GpuContextLimitedAccess::acquire_storage_buffer` reaches the
+    /// shared inner context, allocates a HOST_VISIBLE storage buffer with
+    /// the requested byte size, and hands back a `PixelBuffer` whose
+    /// inner Vulkan buffer is non-null and mapped. This exercises
+    /// Sandbox-side reachability — the path subprocess Vulkan code rides
+    /// after the camera carve-out (#673) lands.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn acquire_storage_buffer_via_limited_access() {
+        use crate::host_rhi::HostPixelBufferRefExt;
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        let limited = GpuContextLimitedAccess::new(gpu.clone());
+        let byte_size: u64 = 1024 * 64;
+
+        let buffer = limited
+            .acquire_storage_buffer(byte_size)
+            .expect("Sandbox-side acquire_storage_buffer should succeed");
+
+        // Reach the underlying Vulkan buffer via the Tier-2 SDK extension
+        // trait. Confirms the SSBO is wired through PixelBufferRef and
+        // reachable from same-process consumers (kernels via
+        // VulkanComputeKernel::set_storage_buffer take this shape).
+        let inner = buffer.buffer_ref().vulkan_inner();
+        assert_eq!(inner.size(), byte_size as vulkanalia::vk::DeviceSize);
+        assert!(
+            !inner.mapped_ptr().is_null(),
+            "Sandbox-acquired SSBO must expose a non-null mapped pointer"
+        );
+
+        // FullAccess mirror also reaches the same inner context.
+        let full = limited.to_full_access();
+        let buffer2 = full
+            .acquire_storage_buffer(byte_size)
+            .expect("FullAccess mirror should succeed");
+        assert_eq!(
+            buffer2.buffer_ref().vulkan_inner().size(),
+            byte_size as vulkanalia::vk::DeviceSize
+        );
+
+        println!(
+            "GpuContextLimitedAccess::acquire_storage_buffer: {} bytes; FullAccess mirror also OK",
+            byte_size
+        );
     }
 }
