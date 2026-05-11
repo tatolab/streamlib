@@ -53,11 +53,12 @@ use std::sync::Arc;
 
 pub use crate::vulkan::rhi::{
     drm_modifier_probe, AccelerationStructureKind, HostMarker, HostVulkanDevice,
-    HostVulkanPixelBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, OffscreenColorTarget,
-    OffscreenDraw, RayTracingPipelineProperties, TlasInstanceDesc, VulkanAccelerationStructure,
+    HostVulkanPixelBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
+    OffscreenColorTarget, OffscreenDraw, RayTracingPipelineProperties, RhiCommandRecorder,
+    TlasInstanceDesc, VulkanAccelerationStructure, VulkanAccess, VulkanBufferLike,
     VulkanComputeKernel, VulkanGraphicsKernel, VulkanIndexBindable, VulkanRayTracingKernel,
-    VulkanStorageBindable, VulkanTextureReadback, VulkanUniformBindable, VulkanVertexBindable,
-    IDENTITY_TRANSFORM,
+    VulkanStage, VulkanStorageBindable, VulkanTextureReadback, VulkanUniformBindable,
+    VulkanVertexBindable, IDENTITY_TRANSFORM,
 };
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;

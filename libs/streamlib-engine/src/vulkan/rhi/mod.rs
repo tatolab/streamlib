@@ -56,6 +56,17 @@ pub use vulkan_storage_binding::{
     VulkanIndexBindable, VulkanStorageBindable, VulkanUniformBindable, VulkanVertexBindable,
 };
 
+mod vulkan_buffer_binding;
+pub use vulkan_buffer_binding::VulkanBufferLike;
+
+mod vulkan_pipeline_flags;
+pub use vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
+
+#[cfg(target_os = "linux")]
+mod vulkan_command_recorder;
+#[cfg(target_os = "linux")]
+pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
+
 mod vulkan_texture_cache;
 pub use vulkan_texture_cache::VulkanTextureCache;
 

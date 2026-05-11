@@ -198,9 +198,14 @@ pub struct HostVulkanTimelineSemaphore {
 impl HostVulkanTimelineSemaphore {
     /// Create an in-process timeline semaphore (no export).
     ///
-    /// Pair with [`Self::wait`] / [`Self::signal_host`] / [`Self::signal_on_queue`]
-    /// for single-process work. Use [`Self::new_exportable`] when the
-    /// timeline must be shared with a subprocess via sync-fd.
+    /// Pair with [`Self::wait`] / [`Self::signal_host`] for
+    /// single-process work, or pass the raw [`Self::semaphore`] handle
+    /// to a `vkQueueSubmit2` `signal_semaphore_infos` slot for
+    /// GPU-side advance — the
+    /// [`RhiCommandRecorder`](super::RhiCommandRecorder) `submit_signaling_timeline`
+    /// path is the canonical entry point.
+    /// Use [`Self::new_exportable`] when the timeline must be shared
+    /// with a subprocess via sync-fd.
     pub fn new(device: &vulkanalia::Device, initial_value: u64) -> Result<Self> {
         Self::create(device, initial_value, false)
     }
