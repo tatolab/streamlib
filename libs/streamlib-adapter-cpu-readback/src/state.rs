@@ -60,7 +60,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     pub format: SurfaceFormat,
     /// Surface width in pixels. The adapter uses this to dimension the
     /// per-plane views; staging buffers carry their own per-plane
-    /// dimensions through [`streamlib_consumer_rhi::VulkanRhiPixelStagingBuffer`].
+    /// dimensions through [`streamlib_consumer_rhi::VulkanRhiBuffer`].
     pub width: u32,
     /// Surface height in pixels.
     pub height: u32,

@@ -42,7 +42,7 @@ use streamlib_adapter_abi::{
     SurfaceRegistration, WriteGuard,
 };
 use streamlib_consumer_rhi::{
-    DevicePrivilege, VulkanLayout, VulkanRhiPixelStagingBuffer, VulkanRhiDevice, VulkanTextureLike,
+    DevicePrivilege, VulkanLayout, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike,
 };
 #[cfg(target_os = "linux")]

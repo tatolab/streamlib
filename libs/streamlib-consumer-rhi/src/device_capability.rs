@@ -74,8 +74,8 @@ pub trait DevicePrivilege: private::Sealed + 'static + Send + Sync {
     /// Concrete HOST_VISIBLE staging-buffer type for this privilege
     /// flavor. Adapters that need CPU-mapped per-plane staging
     /// (cpu-readback) hold `Arc<P::Buffer>` and read its mapped
-    /// pointer through [`VulkanRhiPixelStagingBuffer`].
-    type Buffer: VulkanRhiPixelStagingBuffer + Send + Sync + 'static;
+    /// pointer through [`VulkanRhiBuffer`].
+    type Buffer: VulkanRhiBuffer + Send + Sync + 'static;
 }
 
 impl DevicePrivilege for ConsumerMarker {
@@ -117,7 +117,7 @@ pub trait VulkanTimelineSemaphoreLike {
 /// imported from the host's exported FD via
 /// [`crate::ConsumerVulkanBuffer::from_dma_buf_fd`]. Both expose
 /// the same `vk::Buffer` + mapped-pointer + plane-size shape.
-pub trait VulkanRhiPixelStagingBuffer {
+pub trait VulkanRhiBuffer {
     /// `vk::Buffer` handle for plane 0.
     fn buffer(&self) -> vk::Buffer;
     /// Persistently mapped CPU pointer for plane 0.
@@ -215,7 +215,7 @@ pub trait VulkanTextureLike {
     /// `VkMemoryPropertyFlags` of the backing allocation. Default
     /// `DEVICE_LOCAL` matches the universal surface-adapter shape
     /// (render targets are GPU-local; HOST_VISIBLE staging buffers
-    /// live on [`VulkanRhiPixelStagingBuffer`], not here).
+    /// live on [`VulkanRhiBuffer`], not here).
     fn vk_memory_property_flags(&self) -> vk::MemoryPropertyFlags {
         vk::MemoryPropertyFlags::DEVICE_LOCAL
     }

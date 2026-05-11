@@ -172,7 +172,7 @@ three flow through the same `consumer-rhi` types.
 │  │ streamlib-consumer-rhi (#560 — standalone crate)              │   │
 │  │ ConsumerVulkanDevice, ConsumerVulkan{Texture,PixelBuffer,     │   │
 │  │ TimelineSemaphore}, VulkanRhiDevice / DevicePrivilege /       │   │
-│  │ VulkanTextureLike / VulkanRhiPixelStagingBuffer /                   │   │
+│  │ VulkanTextureLike / VulkanRhiBuffer /                   │   │
 │  │ VulkanTimelineSemaphoreLike trait machinery,                  │   │
 │  │ TextureFormat / TextureUsages / PixelFormat                   │   │
 │  │ ✓ Capability boundary TYPE-SYSTEM enforced                    │   │

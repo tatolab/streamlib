@@ -35,7 +35,7 @@ The canonical recipe:
 1. **The adapter type is generic over `D: VulkanRhiDevice`** from
    `streamlib-consumer-rhi`. The `VulkanRhiDevice` trait, plus the
    companion `DevicePrivilege` / `VulkanTextureLike` /
-   `VulkanRhiPixelStagingBuffer` / `VulkanTimelineSemaphoreLike` traits,
+   `VulkanRhiBuffer` / `VulkanTimelineSemaphoreLike` traits,
    is everything the adapter needs from the device. The same
    adapter type instantiates against `HostVulkanDevice` host-side
    and `ConsumerVulkanDevice` cdylib-side — same trait surface,

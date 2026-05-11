@@ -421,7 +421,7 @@ impl HostVulkanBuffer {
     }
 }
 
-impl super::VulkanRhiPixelStagingBuffer for HostVulkanBuffer {
+impl super::VulkanRhiBuffer for HostVulkanBuffer {
     fn buffer(&self) -> vk::Buffer {
         HostVulkanBuffer::buffer(self)
     }
