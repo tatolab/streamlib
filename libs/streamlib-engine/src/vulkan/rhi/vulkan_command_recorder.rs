@@ -108,9 +108,22 @@ pub struct RhiCommandRecorder {
     queue: vk::Queue,
     command_pool: vk::CommandPool,
     command_buffer: vk::CommandBuffer,
-    /// Signaled by every submit; waited on at `begin()` and `Drop`.
-    /// Pre-signaled at construction so the first `begin()` doesn't block.
+    /// Signaled on `vkQueueSubmit2` completion and waited on at the
+    /// next `begin()`. Tracked together with `submission_in_flight` so
+    /// a failed submit (fence stays unsignaled) doesn't deadlock the
+    /// next `begin()`'s wait.
     completion_fence: vk::Fence,
+    /// `true` between a successful `submit_to_queue` and the next
+    /// `begin()`'s wait/reset. Initialized `false` (no prior submit).
+    /// A submit call sets this only AFTER `vkQueueSubmit2` returns
+    /// success — if any earlier step (or the submit itself) fails,
+    /// `submission_in_flight` stays `false` and the next `begin()`
+    /// skips the fence wait. This is the defensive path for the
+    /// fail-then-deadlock failure mode that the bare fence pattern
+    /// (`VulkanComputeKernel` / `VulkanGraphicsKernel`) inherits from
+    /// raw Vulkan — `DEVICE_LOST` / `OUT_OF_DEVICE_MEMORY` on
+    /// `vkQueueSubmit` leaves the fence unsignaled forever.
+    submission_in_flight: bool,
     state: Mutex<RecorderState>,
 }
 
@@ -152,9 +165,10 @@ impl RhiCommandRecorder {
         };
         let command_buffer = buffers[0];
 
-        // Pre-signaled so the first begin()'s fence wait is a no-op.
+        // Starts unsignaled — first `begin()` sees
+        // `submission_in_flight = false` and skips the fence wait.
         let fence_info = vk::FenceCreateInfo::builder()
-            .flags(vk::FenceCreateFlags::SIGNALED)
+            .flags(vk::FenceCreateFlags::empty())
             .build();
         let completion_fence = match unsafe { device.create_fence(&fence_info, None) } {
             Ok(f) => f,
@@ -176,6 +190,7 @@ impl RhiCommandRecorder {
             command_pool,
             command_buffer,
             completion_fence,
+            submission_in_flight: false,
             state: Mutex::new(RecorderState::Idle),
         })
     }
@@ -199,22 +214,25 @@ impl RhiCommandRecorder {
         }
 
         unsafe {
-            self.device
-                .wait_for_fences(&[self.completion_fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "RhiCommandRecorder '{}': wait_for_fences at begin(): {e}",
-                        self.label
-                    ))
-                })?;
-            self.device
-                .reset_fences(&[self.completion_fence])
-                .map_err(|e| {
-                    Error::GpuError(format!(
-                        "RhiCommandRecorder '{}': reset_fences at begin(): {e}",
-                        self.label
-                    ))
-                })?;
+            if self.submission_in_flight {
+                self.device
+                    .wait_for_fences(&[self.completion_fence], true, u64::MAX)
+                    .map_err(|e| {
+                        Error::GpuError(format!(
+                            "RhiCommandRecorder '{}': wait_for_fences at begin(): {e}",
+                            self.label
+                        ))
+                    })?;
+                self.device
+                    .reset_fences(&[self.completion_fence])
+                    .map_err(|e| {
+                        Error::GpuError(format!(
+                            "RhiCommandRecorder '{}': reset_fences at begin(): {e}",
+                            self.label
+                        ))
+                    })?;
+                self.submission_in_flight = false;
+            }
             self.device
                 .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
                 .map_err(|e| {
@@ -518,6 +536,12 @@ impl RhiCommandRecorder {
                 })?;
         }
 
+        // Only mark in-flight AFTER the queue accepted the submission.
+        // If submit failed (or any earlier step did), the flag stays
+        // `false` and the next `begin()` skips the fence wait — which
+        // would otherwise deadlock on an unsignaled fence.
+        self.submission_in_flight = true;
+
         Ok(())
     }
 
@@ -679,6 +703,27 @@ mod tests {
             msg.contains("without an active recording"),
             "got: {msg}"
         );
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
+    )]
+    #[test]
+    fn first_begin_does_not_block_on_unsignaled_fence() {
+        // `submission_in_flight=false` at construction must gate the
+        // fence wait — otherwise the first `begin()` would block forever
+        // on the unsignaled fence (the fence is created without
+        // `SIGNALED` flag now, since the gate makes pre-signaling
+        // unnecessary). Mentally revert the gate: the wait_for_fences
+        // call at begin() blocks indefinitely and this test hangs.
+        let device = match try_vulkan_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let mut rec = RhiCommandRecorder::new(&device, "first-begin-no-block").expect("create");
+        rec.begin().expect("first begin must not block on unsignaled fence");
+        rec.submit_and_wait().expect("submit_and_wait");
     }
 
     #[cfg_attr(
