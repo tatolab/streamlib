@@ -170,6 +170,17 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
                     .ok()
                     .and_then(|s| s.parse::<u64>().ok())
                     .unwrap_or(30);
+                // Test-only: when set, the render closure deliberately
+                // returns `Err` at the given frame counter, exercising
+                // `VulkanPresentTarget`'s error-path drain (consumes the
+                // `image_available_semaphore` so the next slot reuse
+                // doesn't trip `VUID-vkQueueSubmit2-semaphore-03868`).
+                // Run with `VK_LOADER_LAYERS_ENABLE=*validation*` to
+                // surface any drain bug as a VUID at the next acquire.
+                let inject_error_at_frame =
+                    std::env::var("STREAMLIB_DISPLAY_INJECT_ERROR_AT_FRAME")
+                        .ok()
+                        .and_then(|s| s.parse::<u64>().ok());
 
                 if let Some(ref dir) = png_sample_dir {
                     if let Err(e) = std::fs::create_dir_all(dir) {
@@ -211,6 +222,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
                     png_sample_every,
                     png_samples_saved: 0,
                     png_texture_readback: None,
+                    inject_error_at_frame,
                 };
 
                 if let Err(e) = event_loop.run_app(&mut app) {
@@ -316,6 +328,10 @@ struct DisplayEventLoopHandler {
     png_sample_every: u64,
     png_samples_saved: u64,
     png_texture_readback: Option<Arc<VulkanTextureReadback>>,
+    /// Test-only: when set, the render closure returns `Err` once the
+    /// displayed-frame counter hits this value. Exercises
+    /// `VulkanPresentTarget`'s error-path semaphore drain.
+    inject_error_at_frame: Option<u64>,
 }
 
 impl ApplicationHandler for DisplayEventLoopHandler {
@@ -514,6 +530,10 @@ impl DisplayEventLoopHandler {
         let scaling_mode = self.scaling_mode.clone();
         let kernel_for_draw = Arc::clone(&graphics_kernel);
         let window_id = self.window_id;
+        let inject_error_this_frame = self
+            .inject_error_at_frame
+            .map(|n| self.frame_counter.load(Ordering::Relaxed) == n)
+            .unwrap_or(false);
 
         let result = present_target.render_frame(|frame: &mut PresentFrame<'_>| {
             let frame_index = frame.frame_index;
@@ -578,6 +598,17 @@ impl DisplayEventLoopHandler {
             // Begin render pass on the acquired swapchain image with CLEAR.
             frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;
 
+            // Test-only error-injection point: AFTER begin_rendering so
+            // the dangling-render-pass close path is also exercised
+            // alongside the binary-acquire-sem drain. Validation layers
+            // catch any drain bug at the next acquire as
+            // VUID-vkQueueSubmit2-semaphore-03868.
+            if inject_error_this_frame {
+                return Err(Error::GpuError(
+                    "STREAMLIB_DISPLAY_INJECT_ERROR_AT_FRAME: forced closure error after begin_rendering".into(),
+                ));
+            }
+
             // Draw — bind pipeline + descriptors + push consts, viewport/scissor
             // matching the swapchain extent.
             let draw = DrawCall {
@@ -603,6 +634,14 @@ impl DisplayEventLoopHandler {
             }
             Err(e) => {
                 tracing::warn!("Display {}: render frame failed: {}", window_id, e);
+                // Advance the counter so frame-counter-keyed logic
+                // (frame limit, fault-injection trigger) makes
+                // progress on every render attempt, not only on
+                // success. `VulkanPresentTarget::render_frame`
+                // already completes the swapchain submit+present on
+                // error before propagating, so the frame is "done"
+                // from the swapchain's perspective regardless.
+                self.frame_counter.fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }

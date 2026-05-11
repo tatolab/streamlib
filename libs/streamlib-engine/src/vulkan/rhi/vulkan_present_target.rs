@@ -396,30 +396,23 @@ impl VulkanPresentTarget {
 
         let extra_waits = std::mem::take(&mut frame.inner.extra_waits);
 
-        if let Err(e) = user_result {
-            // User error — drain the binary `image_available_semaphore`
-            // that `vkAcquireNextImageKHR` already signaled. Without the
-            // wait, the next iteration that reuses this frame slot's
-            // acquire-sem would trip
-            // `VUID-vkQueueSubmit2-semaphore-03868` (signal-on-pending-
-            // signal). We submit with the binary wait and no signals so
-            // the recorder's internal completion fence advances and the
-            // next `begin()` waits on a clean slate. We skip
-            // `queue_present` — the swapchain image is left wherever
-            // the user error left it; the next acquire of the same
-            // image_index uses `UNDEFINED` old_layout which permits any
-            // current state.
-            let drain_wait = [vk::SemaphoreSubmitInfo::builder()
-                .semaphore(image_available_semaphore)
-                .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
-                .build()];
-            let _ = frame.recorder.submit_with_semaphores(&drain_wait, &[]);
-            self.frame_timeline_value = self
-                .frame_timeline_value
-                .saturating_sub(1);
-            return Err(e);
-        }
-
+        // Always run the post-draw barrier + submit + present, even on
+        // user error. Dropping the acquired image without presenting
+        // would leave the swapchain image app-owned indefinitely; the
+        // next `vkAcquireNextImageKHR` with UINT64_MAX timeout would
+        // then trip `VUID-vkAcquireNextImageKHR-surface-07783`
+        // (forward progress not guaranteed) and potentially block. On
+        // user error the post-draw barrier sources from the pre-draw
+        // `COLOR_ATTACHMENT_OPTIMAL` layout regardless of what the
+        // user managed to record; the presented image may be
+        // partially-drawn or clear-color black (a visible glitch the
+        // user-error semantics already accept). The
+        // `image_available_semaphore` is consumed via the submit's
+        // wait list and `render_finished_semaphore` is signaled
+        // normally so the present wait succeeds. The user error
+        // propagates to the caller AFTER the swapchain is back in a
+        // consistent state.
+        //
         // Post-draw barrier: swapchain image COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR.
         record_swapchain_barrier(
             frame.recorder.command_buffer_raw(),
@@ -482,6 +475,12 @@ impl VulkanPresentTarget {
         };
 
         self.current_frame = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
+
+        // Propagate the user closure's error AFTER the swapchain image
+        // has been presented back. The frame is "done" from the
+        // swapchain's perspective; the caller still sees the error.
+        user_result?;
+
         Ok(!out_of_date)
     }
 }
