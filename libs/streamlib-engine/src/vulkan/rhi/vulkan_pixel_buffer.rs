@@ -780,11 +780,14 @@ impl HostVulkanPixelBuffer {
     /// [`crate::core::rhi::PixelBuffer`] receives synthetic dimensions
     /// (see [`Self::new_storage_buffer_host_visible`] for the convention).
     ///
-    /// Ownership of `fd` transfers to the driver on success; the caller
-    /// must NOT `close()` it after a successful return. On error the
-    /// caller still owns the fd (the import path destroys its own
-    /// throwaway `VkBuffer` and bails before `vkAllocateMemory` consumes
-    /// the descriptor).
+    /// Caller retains ownership of `fd` only when import fails *before*
+    /// `vkAllocateMemory` consumes the descriptor (parameter validation
+    /// rejections, `vkCreateBuffer` failure). On successful return the
+    /// driver owns the fd — caller must NOT `close()` it. If
+    /// `vkAllocateMemory` succeeds but a later step (`vkBindBufferMemory`,
+    /// `vkMapMemory`) fails, the fd is still consumed (the import path
+    /// frees the imported memory + destroys the buffer, but the kernel-
+    /// side fd transfer is irreversible).
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, size))]
     pub fn from_dma_buf_fd_as_storage_buffer(
         vulkan_device: &Arc<HostVulkanDevice>,
