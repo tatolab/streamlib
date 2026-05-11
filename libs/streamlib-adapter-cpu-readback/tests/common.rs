@@ -155,13 +155,7 @@ impl HostFixture {
             let plane_h = surface_format.plane_height(height, plane_idx);
             let plane_bpp = surface_format.plane_bytes_per_pixel(plane_idx);
             let pf = staging_pixel_format_for(surface_format, plane_idx);
-            let pb = HostVulkanBuffer::new(
-                self.adapter.device(),
-                plane_w,
-                plane_h,
-                plane_bpp,
-                pf,
-            )
+            let pb = HostVulkanBuffer::new(self.adapter.device(), (plane_w as u64) * (plane_h as u64) * (plane_bpp as u64))
             .map_err(|e| {
                 Error::GpuError(format!("staging plane {plane_idx}: {e}"))
             })?;

@@ -29,7 +29,7 @@ use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
+use streamlib::sdk::rhi::{TextureFormat};
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice,
     HostVulkanBuffer,
@@ -71,10 +71,7 @@ fn persistent_pool_count_stays_at_one_across_repeated_submits() {
     // the on-path scenario for this hot-path test.
     let pixel_buffer = match HostVulkanBuffer::new_opaque_fd_export_device_local(
         &host_device,
-        W,
-        H,
-        4,
-        PixelFormat::Bgra32,
+        (W as u64) * (H as u64) * 4,
     ) {
         Ok(b) => Arc::new(b),
         Err(e) => {

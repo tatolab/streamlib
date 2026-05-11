@@ -1249,7 +1249,6 @@ impl HostVulkanDevice {
     #[cfg(target_os = "linux")]
     fn prewarm_export_pools(device: &Arc<Self>) -> Result<Vec<ExportPoolSentinel>> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
-        use streamlib_consumer_rhi::PixelFormat;
         use super::{HostVulkanBuffer, HostVulkanTexture};
 
         const PROBE_W: u32 = 8;
@@ -1262,9 +1261,7 @@ impl HostVulkanDevice {
         //    Allocate-and-drop: compositor swapchain DMA-BUF imports
         //    keep the kernel state alive for the process's lifetime.
         if device.dma_buf_buffer_pool().is_some() {
-            let probe = HostVulkanBuffer::new(
-                device, PROBE_W, PROBE_H, PROBE_BPP, PixelFormat::Bgra32,
-            )
+            let probe = HostVulkanBuffer::new(device, (PROBE_W as u64) * (PROBE_H as u64) * (PROBE_BPP as u64))
             .map_err(|e| {
                 Error::GpuError(format!(
                     "DMA-BUF buffer pool pre-warm failed: {e}"

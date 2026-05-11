@@ -1,9 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Consumer-side Vulkan pixel buffer — imports a host-allocated
-//! HOST_VISIBLE DMA-BUF as a `VkBuffer` and exposes a CPU-mapped
-//! pointer for staging upload / readback.
+//! Consumer-side generic Vulkan `VkBuffer` — imports a host-allocated
+//! DMA-BUF or OPAQUE_FD and exposes a CPU-mapped pointer for staging
+//! upload / readback. Role-specific shape (pixel `width`/`height`,
+//! vertex stride, etc.) lives on the wrapping struct in the calling
+//! adapter, not on this primitive.
 //!
 //! Mirrors [`crate::ConsumerVulkanTexture`] for buffer handles.
 //! Single-plane and multi-plane import constructors only — no
@@ -14,7 +16,7 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::{ConsumerRhiError, ConsumerVulkanDevice, PixelFormat, Result, VulkanRhiBuffer};
+use crate::{ConsumerRhiError, ConsumerVulkanDevice, Result, VulkanRhiBuffer};
 
 /// One imported plane: buffer + memory + mapped pointer + size.
 struct ConsumerImportedPlane {
@@ -24,7 +26,7 @@ struct ConsumerImportedPlane {
     size: vk::DeviceSize,
 }
 
-/// Consumer-side CPU-visible imported staging buffer. See module docs.
+/// Consumer-side imported `VkBuffer`. See module docs.
 pub struct ConsumerVulkanBuffer {
     vulkan_device: Arc<ConsumerVulkanDevice>,
     /// Plane 0's `VkBuffer`. Single-plane imports use only this; multi-
@@ -34,42 +36,27 @@ pub struct ConsumerVulkanBuffer {
     /// Persistently mapped CPU pointer for plane 0.
     mapped_ptr: *mut u8,
     extra_imported_planes: Vec<ConsumerImportedPlane>,
-    width: u32,
-    height: u32,
-    bytes_per_pixel: u32,
-    format: PixelFormat,
     /// Size of plane 0 in bytes.
     size: vk::DeviceSize,
 }
 
 impl ConsumerVulkanBuffer {
-    /// Import a single-plane DMA-BUF as a HOST_VISIBLE staging buffer.
+    /// Import a single-plane DMA-BUF as a HOST_VISIBLE `VkBuffer`.
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
     pub fn from_dma_buf_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fd: std::os::unix::io::RawFd,
-        width: u32,
-        height: u32,
-        bytes_per_pixel: u32,
-        format: PixelFormat,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
-        Self::from_dma_buf_fds(
-            vulkan_device,
-            &[fd],
-            &[allocation_size],
-            width,
-            height,
-            bytes_per_pixel,
-            format,
-        )
+        Self::from_dma_buf_fds(vulkan_device, &[fd], &[allocation_size])
     }
 
-    /// Import an OPAQUE_FD as a HOST_VISIBLE staging buffer.
+    /// Import an OPAQUE_FD as a HOST_VISIBLE `VkBuffer`.
     ///
     /// Pairs with the host's
     /// [`crate::HostVulkanBuffer::new_opaque_fd_export`] +
-    /// `export_opaque_fd_memory`. This is the constructor #589 / #590
-    /// CUDA cdylibs use after looking up a surface registered with
+    /// `export_opaque_fd_memory`. This is the constructor CUDA cdylibs
+    /// use after looking up a surface registered with
     /// `handle_type="opaque_fd"` on the surface-share wire — the resulting
     /// `VkBuffer`'s memory is also what `cudaImportExternalMemory` reaches
     /// for via the same FD.
@@ -79,35 +66,22 @@ impl ConsumerVulkanBuffer {
     /// fd ownership transfers to the Vulkan driver on success — caller
     /// must NOT close `fd` afterwards. On error the caller still owns
     /// `fd`.
-    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size, width, height))]
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
     pub fn from_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fd: std::os::unix::io::RawFd,
-        width: u32,
-        height: u32,
-        bytes_per_pixel: u32,
-        format: PixelFormat,
         allocation_size: vk::DeviceSize,
     ) -> Result<Self> {
-        let derived_size = (width as vk::DeviceSize)
-            * (height as vk::DeviceSize)
-            * (bytes_per_pixel as vk::DeviceSize);
-        let effective_size = if allocation_size > 0 {
-            allocation_size
-        } else if width > 0 && height > 0 && bytes_per_pixel > 0 {
-            derived_size
-        } else {
+        if allocation_size == 0 {
             return Err(ConsumerRhiError::Configuration(
-                "ConsumerVulkanBuffer::from_opaque_fd: allocation_size=0 \
-                 and width*height*bpp cannot derive a size"
-                    .into(),
+                "ConsumerVulkanBuffer::from_opaque_fd: allocation_size must be > 0".into(),
             ));
-        };
+        }
 
         let plane = import_single_plane_with_handle_type(
             vulkan_device,
             fd,
-            effective_size,
+            allocation_size,
             ImportHandleType::OpaqueFd,
         )?;
         Ok(Self {
@@ -116,28 +90,22 @@ impl ConsumerVulkanBuffer {
             imported_memory: plane.memory,
             mapped_ptr: plane.mapped_ptr,
             extra_imported_planes: Vec::new(),
-            width,
-            height,
-            bytes_per_pixel,
-            format,
             size: plane.size,
         })
     }
 
     /// Import N planes from N DMA-BUF FDs — each gets its own
-    /// `VkBuffer` + imported `VkDeviceMemory` + mapping.
+    /// `VkBuffer` + imported `VkDeviceMemory` + mapping. `plane_sizes[i]`
+    /// must be the non-zero allocation size of plane `i`.
     ///
     /// Partial-failure semantics: every plane that succeeded is torn
     /// down before the error is returned. fd ownership transfers to
     /// the Vulkan driver on success per plane.
+    #[tracing::instrument(level = "trace", skip(vulkan_device, fds, plane_sizes), fields(plane_count = fds.len()))]
     pub fn from_dma_buf_fds(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fds: &[std::os::unix::io::RawFd],
         plane_sizes: &[vk::DeviceSize],
-        width: u32,
-        height: u32,
-        bytes_per_pixel: u32,
-        format: PixelFormat,
     ) -> Result<Self> {
         if fds.is_empty() {
             return Err(ConsumerRhiError::Configuration(
@@ -159,27 +127,19 @@ impl ConsumerVulkanBuffer {
             )));
         }
 
-        let derived_size = (width as vk::DeviceSize)
-            * (height as vk::DeviceSize)
-            * (bytes_per_pixel as vk::DeviceSize);
-
         let mut imported: Vec<ConsumerImportedPlane> = Vec::with_capacity(fds.len());
         for (idx, (&fd, &plane_size)) in fds.iter().zip(plane_sizes.iter()).enumerate() {
-            let effective_size = if plane_size > 0 {
-                plane_size
-            } else if idx == 0 {
-                derived_size
-            } else {
+            if plane_size == 0 {
                 for plane in imported.into_iter() {
                     teardown_plane(vulkan_device, plane);
                 }
                 return Err(ConsumerRhiError::Configuration(format!(
-                    "ConsumerVulkanBuffer: plane {} size=0 cannot be derived from width*height",
-                    idx
+                    "ConsumerVulkanBuffer: plane {idx} has size=0 — caller must supply \
+                     each plane's allocation size"
                 )));
-            };
+            }
 
-            match import_single_plane(vulkan_device, fd, effective_size) {
+            match import_single_plane(vulkan_device, fd, plane_size) {
                 Ok(plane) => imported.push(plane),
                 Err(e) => {
                     for plane in imported.into_iter() {
@@ -197,10 +157,6 @@ impl ConsumerVulkanBuffer {
             imported_memory: plane0.memory,
             mapped_ptr: plane0.mapped_ptr,
             extra_imported_planes: imported,
-            width,
-            height,
-            bytes_per_pixel,
-            format,
             size: plane0.size,
         })
     }
@@ -238,26 +194,6 @@ impl ConsumerVulkanBuffer {
             .get(plane_index as usize - 1)
             .map(|p| p.size)
             .unwrap_or(0)
-    }
-
-    /// Buffer width in pixels.
-    pub fn width(&self) -> u32 {
-        self.width
-    }
-
-    /// Buffer height in pixels.
-    pub fn height(&self) -> u32 {
-        self.height
-    }
-
-    /// Bytes per pixel.
-    pub fn bytes_per_pixel(&self) -> u32 {
-        self.bytes_per_pixel
-    }
-
-    /// Pixel format.
-    pub fn format(&self) -> PixelFormat {
-        self.format
     }
 
     /// Plane 0 size in bytes.
@@ -403,14 +339,5 @@ impl VulkanRhiBuffer for ConsumerVulkanBuffer {
     }
     fn size(&self) -> vk::DeviceSize {
         ConsumerVulkanBuffer::size(self)
-    }
-    fn width(&self) -> u32 {
-        ConsumerVulkanBuffer::width(self)
-    }
-    fn height(&self) -> u32 {
-        ConsumerVulkanBuffer::height(self)
-    }
-    fn bytes_per_pixel(&self) -> u32 {
-        ConsumerVulkanBuffer::bytes_per_pixel(self)
     }
 }

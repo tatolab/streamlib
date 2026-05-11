@@ -42,21 +42,34 @@ impl PixelBuffer {
         }
     }
 
-    /// Wrap an externally-allocated `Arc<HostVulkanBuffer>` so it can
-    /// be passed to host-side APIs that take `&PixelBuffer` (e.g.
+    /// Wrap an externally-allocated `Arc<HostVulkanBuffer>` with the
+    /// pixel-shape metadata the caller knows about so it can be passed
+    /// to host-side APIs that take `&PixelBuffer` (e.g.
     /// [`crate::core::context::SurfaceStore::register_pixel_buffer_with_timeline`])
     /// without going through the [`crate::core::context::PixelBufferPoolManager`].
     /// Used by application setup code that wants to allocate a staging
     /// buffer directly via the RHI and register it with a surface_id of
     /// its own choosing.
+    ///
+    /// `HostVulkanBuffer` is the generic Vulkan buffer allocation
+    /// primitive and carries no pixel semantics; pixel `width` /
+    /// `height` / `bytes_per_pixel` / `format` live on this wrapper.
     #[cfg(target_os = "linux")]
     pub fn from_host_vulkan_buffer(
         buffer: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        format: PixelFormat,
     ) -> Self {
-        let width = buffer.width();
-        let height = buffer.height();
         Self {
-            ref_: Arc::new(PixelBufferRef { inner: buffer }),
+            ref_: Arc::new(PixelBufferRef {
+                inner: buffer,
+                width,
+                height,
+                bytes_per_pixel,
+                format,
+            }),
             width,
             height,
         }

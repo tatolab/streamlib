@@ -107,13 +107,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
     }
 
     // ── Phase 1: host allocates OPAQUE_FD VkBuffer + timeline ──────────
-    let host_buffer = match HostVulkanBuffer::new_opaque_fd_export(
-        &host_device,
-        W,
-        H,
-        BPP,
-        PixelFormat::Bgra32,
-    ) {
+    let host_buffer = match HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (BPP as u64)) {
         Ok(b) => Arc::new(b),
         Err(e) => {
             println!("stage6: new_opaque_fd_export failed: {e} — skipping");
@@ -247,15 +241,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
 
     // FD ownership semantics: `from_opaque_fd` and `from_imported_opaque_fd`
     // transfer fd ownership to the Vulkan driver on success.
-    let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd(
-        &consumer_device,
-        consumer_memory_fd,
-        W,
-        H,
-        BPP,
-        ConsumerPixelFormat::Bgra32,
-        buffer_size as vulkanalia::vk::DeviceSize,
-    );
+    let consumer_buffer = ConsumerVulkanBuffer::from_opaque_fd(&consumer_device, consumer_memory_fd, buffer_size as vulkanalia::vk::DeviceSize);
     let consumer_buffer = match consumer_buffer {
         Ok(b) => Arc::new(b),
         Err(e) => {

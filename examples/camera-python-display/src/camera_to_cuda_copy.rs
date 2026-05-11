@@ -154,10 +154,7 @@ impl CameraToCudaCopyProcessor::Processor {
         //    `kDLCUDA`-classified device pointer to PyTorch.
         let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export_device_local(
             &host_device,
-            width,
-            height,
-            4,
-            PixelFormat::Bgra32,
+            (width as u64) * (height as u64) * 4,
         )
         .map_err(|e| {
             Error::Configuration(format!(
@@ -165,8 +162,13 @@ impl CameraToCudaCopyProcessor::Processor {
             ))
         })?;
         let pixel_buffer_arc = Arc::new(pixel_buffer);
-        let pixel_buffer_rhi =
-            PixelBuffer::from_host_vulkan_buffer(Arc::clone(&pixel_buffer_arc));
+        let pixel_buffer_rhi = PixelBuffer::from_host_vulkan_buffer(
+            Arc::clone(&pixel_buffer_arc),
+            width,
+            height,
+            4,
+            PixelFormat::Bgra32,
+        );
 
         // 2. Exportable timeline. The cdylib imports it as a CUDA
         //    timeline external semaphore so `acquire_read` blocks

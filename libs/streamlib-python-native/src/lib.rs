@@ -1473,15 +1473,7 @@ mod gpu_surface {
         }
         let format = pixel_format_from_str(&handle.format);
         let bytes_per_pixel = format.bits_per_pixel().div_ceil(8);
-        let imported = match ConsumerVulkanBuffer::from_dma_buf_fd(
-            &device,
-            dup_fd,
-            handle.width,
-            handle.height,
-            bytes_per_pixel,
-            format,
-            plane0_size,
-        ) {
+        let imported = match ConsumerVulkanBuffer::from_dma_buf_fd(&device, dup_fd, plane0_size) {
             Ok(i) => i,
             Err(e) => {
                 tracing::error!(
@@ -4574,15 +4566,7 @@ mod cpu_readback {
                     (plane_width as u64) * (plane_height as u64) * (plane_bpp as u64)
                 });
             let pixel_format = pixel_format_for_plane(format, plane_idx_u32);
-            let pb = match ConsumerVulkanBuffer::from_dma_buf_fd(
-                &rt.device,
-                gpu.fds[plane_idx],
-                plane_width,
-                plane_height,
-                plane_bpp,
-                pixel_format,
-                plane_size,
-            ) {
+            let pb = match ConsumerVulkanBuffer::from_dma_buf_fd(&rt.device, gpu.fds[plane_idx], plane_size) {
                 Ok(b) => Arc::new(b),
                 Err(e) => {
                     tracing::error!(
@@ -5340,15 +5324,7 @@ mod cuda {
             unsafe { libc::close(vk_fd) };
             return SLPN_CUDA_ERR;
         }
-        let pixel_buffer = match ConsumerVulkanBuffer::from_opaque_fd(
-            &rt.device,
-            vk_fd,
-            gpu.width,
-            gpu.height,
-            gpu.bytes_per_row.div_ceil(gpu.width.max(1)),
-            PixelFormat::Bgra32,
-            buffer_size,
-        ) {
+        let pixel_buffer = match ConsumerVulkanBuffer::from_opaque_fd(&rt.device, vk_fd, buffer_size) {
             Ok(b) => Arc::new(b),
             Err(e) => {
                 tracing::error!(

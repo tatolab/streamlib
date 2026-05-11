@@ -21,7 +21,7 @@ use std::sync::Arc;
 use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
-use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
+use streamlib::sdk::rhi::{TextureFormat};
 use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
 use streamlib_adapter_abi::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
@@ -89,7 +89,7 @@ fn duplicate_registration_returns_surface_already_registered() {
         .expect("acquire_render_target_dma_buf_image");
     let texture_arc = Arc::clone(stream_texture.vulkan_inner());
     let staging = Arc::new(
-        HostVulkanBuffer::new(fixture.adapter.device(), 64, 64, 4, PixelFormat::Bgra32)
+        HostVulkanBuffer::new(fixture.adapter.device(), (64 as u64) * (64 as u64) * (4 as u64))
             .expect("staging plane"),
     );
     let timeline = Arc::new(

@@ -214,21 +214,19 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
             let ph = format.plane_height(height, plane_idx as u32);
             let pbpp = format.plane_bytes_per_pixel(plane_idx as u32);
 
-            // The staging buffer's recorded geometry must match the
-            // plane's logical geometry. Caller's responsibility to
-            // size them correctly — we surface a clear error if not.
-            if staging.width() != pw
-                || staging.height() != ph
-                || staging.bytes_per_pixel() != pbpp
-            {
+            // The staging buffer's byte size must match the plane's
+            // logical byte size (`pw * ph * pbpp`). Caller's responsibility
+            // to size the underlying `Vk::Buffer` allocation correctly —
+            // pixel-shape lives on `PlaneSlot`, not on the bottom-layer
+            // primitive, so we validate against `size()` only.
+            let expected_size = (pw as u64) * (ph as u64) * (pbpp as u64);
+            let actual_size = staging.size() as u64;
+            if actual_size != expected_size {
                 return Err(AdapterError::UnsupportedFormat {
                     surface_id: id,
                     reason: format!(
-                        "plane {} staging geometry mismatch: expected {pw}x{ph}@{pbpp}bpp, got {}x{}@{}bpp",
-                        plane_idx,
-                        staging.width(),
-                        staging.height(),
-                        staging.bytes_per_pixel()
+                        "plane {plane_idx} staging size mismatch: expected {expected_size} bytes \
+                         ({pw}x{ph}@{pbpp}bpp), got {actual_size}"
                     ),
                 });
             }

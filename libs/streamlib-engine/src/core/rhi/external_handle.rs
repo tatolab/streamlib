@@ -225,18 +225,14 @@ impl RhiPixelBufferImport for super::PixelBuffer {
         }
 
         let vulkan_buffer =
-            crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fds(
-                vulkan_device,
-                &fds,
-                &plane_sizes,
-                width,
-                height,
-                bytes_per_pixel,
-                format,
-            )?;
+            crate::vulkan::rhi::HostVulkanBuffer::from_dma_buf_fds(vulkan_device, &fds, &plane_sizes)?;
 
         let pixel_buffer_ref = super::PixelBufferRef {
             inner: std::sync::Arc::new(vulkan_buffer),
+            width,
+            height,
+            bytes_per_pixel,
+            format,
         };
 
         Ok(super::PixelBuffer::new(pixel_buffer_ref))

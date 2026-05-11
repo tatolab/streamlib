@@ -733,7 +733,7 @@ mod tests {
             other => panic!("test fixture only supports 8-bit RGBA/BGRA, got {other:?}"),
         };
         let staging =
-            HostVulkanBuffer::new(device, width, height, bpp, pix_format).expect("staging");
+            HostVulkanBuffer::new(device, (width as u64) * (height as u64) * (bpp as u64)).expect("staging");
         unsafe {
             let mut p = staging.mapped_ptr();
             for y in 0..height {

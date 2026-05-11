@@ -522,7 +522,7 @@ mod tests {
     ) {
         let w = texture.width();
         let h = texture.height();
-        let staging = HostVulkanBuffer::new(device, w, h, 4, PixelFormat::Bgra32)
+        let staging = HostVulkanBuffer::new(device, (w as u64) * (h as u64) * (4 as u64))
             .expect("staging");
         let pixel = (b as u32) | ((g as u32) << 8) | ((r as u32) << 16) | ((a as u32) << 24);
         unsafe {
@@ -720,7 +720,7 @@ mod tests {
         // checkerboard with a magenta block in the upper-left and a
         // green diagonal stripe.
         let staging =
-            HostVulkanBuffer::new(&device, w, h, 4, PixelFormat::Bgra32).expect("staging");
+            HostVulkanBuffer::new(&device, (w as u64) * (h as u64) * (4 as u64)).expect("staging");
         unsafe {
             let ptr = staging.mapped_ptr() as *mut u32;
             for y in 0..h {

@@ -42,7 +42,7 @@ impl VulkanPixelBufferPool {
         let mut last_err: Option<Error> = None;
 
         for i in 0..pre_allocate {
-            match HostVulkanBuffer::new(&device, width, height, bytes_per_pixel, format) {
+            match HostVulkanBuffer::new(&device, (width as u64) * (height as u64) * (bytes_per_pixel as u64)) {
                 Ok(buffer) => {
                     buffers.push(Arc::new(buffer));
                     buffer_to_pool_id.insert(i, PixelBufferPoolId::new());
@@ -125,6 +125,10 @@ impl VulkanPixelBufferPool {
 
                 let pixel_buffer_ref = PixelBufferRef {
                     inner: Arc::clone(buffer),
+                    width: self.width,
+                    height: self.height,
+                    bytes_per_pixel: self.bytes_per_pixel,
+                    format: self.format,
                 };
 
                 let rhi_pixel_buffer = PixelBuffer::new(pixel_buffer_ref);

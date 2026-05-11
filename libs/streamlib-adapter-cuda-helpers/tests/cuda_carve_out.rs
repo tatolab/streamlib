@@ -48,7 +48,6 @@ use streamlib::sdk::engine::HostGpuDeviceExt;
 
 use serial_test::serial;
 use streamlib::sdk::context::GpuContext;
-use streamlib::sdk::rhi::PixelFormat;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice,
     HostVulkanBuffer,
@@ -105,13 +104,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     }
 
     // ── Phase 1: host allocates OPAQUE_FD-exportable pixel buffer ──
-    let pixel_buffer = match HostVulkanBuffer::new_opaque_fd_export(
-        &host_device,
-        W,
-        H,
-        BPP,
-        PixelFormat::Bgra32,
-    ) {
+    let pixel_buffer = match HostVulkanBuffer::new_opaque_fd_export(&host_device, (W as u64) * (H as u64) * (BPP as u64)) {
         Ok(b) => Arc::new(b),
         Err(e) => {
             println!("cuda carve-out: new_opaque_fd_export failed: {e} — skipping");

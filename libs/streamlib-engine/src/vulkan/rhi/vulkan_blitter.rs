@@ -195,11 +195,15 @@ mod tests {
         width: u32,
         height: u32,
     ) -> PixelBuffer {
-        let buf = HostVulkanBuffer::new(device, width, height, 4, PixelFormat::Bgra32)
+        let buf = HostVulkanBuffer::new(device, (width as u64) * (height as u64) * 4)
             .expect("pixel buffer allocation failed");
-        PixelBuffer::new(PixelBufferRef {
-            inner: Arc::new(buf),
-        })
+        PixelBuffer::from_host_vulkan_buffer(
+            Arc::new(buf),
+            width,
+            height,
+            4,
+            crate::core::rhi::PixelFormat::Bgra32,
+        )
     }
 
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]

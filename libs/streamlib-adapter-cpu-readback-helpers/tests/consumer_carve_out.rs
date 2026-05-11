@@ -82,7 +82,7 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
     // Allocate the host-side HOST_VISIBLE staging buffer. We keep an
     // independent Arc so we can export its DMA-BUF FD AFTER
     // registration without unwrapping the registration's vec.
-    let staging = HostVulkanBuffer::new(&host_device, W, H, 4, PixelFormat::Bgra32)
+    let staging = HostVulkanBuffer::new(&host_device, (W as u64) * (H as u64) * (4 as u64))
         .expect("HostVulkanBuffer::new");
     let staging_arc = Arc::new(staging);
 
@@ -193,15 +193,7 @@ fn host_image_to_consumer_staging_byte_equal_round_trip() {
             return;
         }
     };
-    let consumer_staging = ConsumerVulkanBuffer::from_dma_buf_fd(
-        &consumer,
-        dma_buf_fd,
-        W,
-        H,
-        4,
-        ConsumerPixelFormat::Bgra32,
-        (W as u64) * (H as u64) * 4,
-    )
+    let consumer_staging = ConsumerVulkanBuffer::from_dma_buf_fd(&consumer, dma_buf_fd, (W as u64) * (H as u64) * 4)
     .expect("ConsumerVulkanBuffer::from_dma_buf_fd");
     let consumer_timeline =
         ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(&consumer, sync_fd)
