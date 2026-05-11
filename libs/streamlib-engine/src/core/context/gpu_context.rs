@@ -1175,6 +1175,29 @@ impl GpuContext {
         Ok(Arc::new(kernel))
     }
 
+    /// Build an engine-owned command-buffer recorder bound to the
+    /// device's default queue.
+    ///
+    /// Wraps the long-lived command pool + reset-able primary command
+    /// buffer + per-frame barrier/copy/dispatch recording + queue-mutex-
+    /// guarded submit-with-timeline-signal shape that processors
+    /// reinvented inline pre-#751. See
+    /// [`RhiCommandRecorder`](crate::vulkan::rhi::RhiCommandRecorder)
+    /// for the per-frame usage protocol.
+    #[cfg(target_os = "linux")]
+    pub fn create_command_recorder(
+        &self,
+        label: &str,
+    ) -> Result<crate::vulkan::rhi::RhiCommandRecorder> {
+        tracing::debug!(
+            rhi_op = "create_command_recorder",
+            label,
+            "GpuContext::create_command_recorder"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::RhiCommandRecorder::new(vulkan_device, label)
+    }
+
     /// Create a graphics kernel from a multi-stage SPIR-V set + binding
     /// declaration + pipeline state. Graphics counterpart to
     /// [`Self::create_compute_kernel`].
@@ -2150,6 +2173,24 @@ impl GpuContextFullAccess {
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
     ) -> Result<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.inner.create_compute_kernel(descriptor)
+    }
+
+    /// Build an engine-owned multi-step command-buffer recorder. See
+    /// [`GpuContext::create_command_recorder`](crate::core::context::GpuContext::create_command_recorder)
+    /// for the per-frame usage protocol.
+    ///
+    /// FullAccess-only because the recorder dispatches
+    /// [`VulkanComputeKernel`](crate::vulkan::rhi::VulkanComputeKernel),
+    /// which itself is FullAccess-only (privileged pipeline
+    /// construction is excluded from the consumer-rhi carve-out). Subprocess
+    /// consumers that need cross-process recording must escalate
+    /// dispatch through the escalate IPC.
+    #[cfg(target_os = "linux")]
+    pub fn create_command_recorder(
+        &self,
+        label: &str,
+    ) -> Result<crate::vulkan::rhi::RhiCommandRecorder> {
+        self.inner.create_command_recorder(label)
     }
 
     /// Create a graphics kernel from a multi-stage SPIR-V set, binding

@@ -363,8 +363,109 @@ impl VulkanComputeKernel {
     /// dispatch (unset bindings are an error — Vulkan's behavior in that case
     /// is undefined, so we refuse to dispatch).
     pub fn dispatch(&self, group_count_x: u32, group_count_y: u32, group_count_z: u32) -> Result<()> {
-        // Drain pending state up-front so concurrent set_* calls during the
-        // dispatch do not leak into the next one.
+        // Drain + validate up-front so concurrent set_* calls during the
+        // dispatch don't leak into the next one.
+        let pending = self.drain_and_validate_pending()?;
+
+        // Wait for prior dispatch (if any) to drain so the command buffer +
+        // descriptor set are safe to mutate.
+        unsafe {
+            self.device
+                .wait_for_fences(&[self.fence], true, u64::MAX)
+                .map_err(|e| {
+                    Error::GpuError(format!("Failed to wait for compute fence: {e}"))
+                })?;
+            self.device
+                .reset_fences(&[self.fence])
+                .map_err(|e| {
+                    Error::GpuError(format!("Failed to reset compute fence: {e}"))
+                })?;
+
+            self.device
+                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
+                .map_err(|e| {
+                    Error::GpuError(format!("Failed to reset command buffer: {e}"))
+                })?;
+
+            let begin_info = vk::CommandBufferBeginInfo::builder()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+                .build();
+            self.device
+                .begin_command_buffer(self.command_buffer, &begin_info)
+                .map_err(|e| {
+                    Error::GpuError(format!("Failed to begin command buffer: {e}"))
+                })?;
+        }
+
+        self.record_inner(
+            self.command_buffer,
+            &pending,
+            group_count_x,
+            group_count_y,
+            group_count_z,
+        )?;
+
+        unsafe {
+            self.device
+                .end_command_buffer(self.command_buffer)
+                .map_err(|e| {
+                    Error::GpuError(format!("Failed to end command buffer: {e}"))
+                })?;
+
+            let cmd_info = vk::CommandBufferSubmitInfo::builder()
+                .command_buffer(self.command_buffer)
+                .build();
+            let cmd_infos = [cmd_info];
+            let submit = vk::SubmitInfo2::builder()
+                .command_buffer_infos(&cmd_infos)
+                .build();
+
+            self.vulkan_device
+                .submit_to_queue(self.queue, &[submit], self.fence)?;
+
+            self.device
+                .wait_for_fences(&[self.fence], true, u64::MAX)
+                .map_err(|e| {
+                    Error::GpuError(format!("Failed to wait for compute fence: {e}"))
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Record bind + push-constants + dispatch into a caller-owned
+    /// command buffer (already in the `Recording` state via
+    /// `vkBeginCommandBuffer`). Does **not** submit or wait; the caller
+    /// is responsible for surrounding `end`/`submit`/sync.
+    ///
+    /// Drains the kernel's pending `set_*` state on entry, same as
+    /// [`Self::dispatch`]. Validates every declared binding has been
+    /// set; mismatches surface as [`Error::GpuError`] before any GPU
+    /// recording happens.
+    ///
+    /// **Caller contract:** no concurrent `record` or `dispatch` on
+    /// this kernel may be in flight — the kernel's descriptor set is
+    /// shared across calls and Vulkan disallows updating an in-use
+    /// descriptor set. For per-frame use, the recorder's own
+    /// timeline-semaphore wait between frames satisfies this.
+    pub fn record(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        let pending = self.drain_and_validate_pending()?;
+        self.record_inner(
+            command_buffer,
+            &pending,
+            group_count_x,
+            group_count_y,
+            group_count_z,
+        )
+    }
+
+    fn drain_and_validate_pending(&self) -> Result<PendingState> {
         let pending = {
             let mut guard = self.pending.lock();
             PendingState {
@@ -388,48 +489,28 @@ impl VulkanComputeKernel {
             )));
         }
 
-        // Wait for prior dispatch (if any) to drain so the command buffer is
-        // safe to reset.
-        unsafe {
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to wait for compute fence: {e}"))
-                })?;
-            self.device
-                .reset_fences(&[self.fence])
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to reset compute fence: {e}"))
-                })?;
-        }
+        Ok(pending)
+    }
 
-        self.flush_descriptor_writes(&pending)?;
+    fn record_inner(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        pending: &PendingState,
+        group_count_x: u32,
+        group_count_y: u32,
+        group_count_z: u32,
+    ) -> Result<()> {
+        self.flush_descriptor_writes(pending)?;
 
         unsafe {
-            self.device
-                .reset_command_buffer(self.command_buffer, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to reset command buffer: {e}"))
-                })?;
-
-            let begin_info = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                .build();
-
-            self.device
-                .begin_command_buffer(self.command_buffer, &begin_info)
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to begin command buffer: {e}"))
-                })?;
-
             self.device.cmd_bind_pipeline(
-                self.command_buffer,
+                command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
                 self.pipeline,
             );
 
             self.device.cmd_bind_descriptor_sets(
-                self.command_buffer,
+                command_buffer,
                 vk::PipelineBindPoint::COMPUTE,
                 self.pipeline_layout,
                 0,
@@ -439,7 +520,7 @@ impl VulkanComputeKernel {
 
             if self.push_constant_size > 0 {
                 self.device.cmd_push_constants(
-                    self.command_buffer,
+                    command_buffer,
                     self.pipeline_layout,
                     vk::ShaderStageFlags::COMPUTE,
                     0,
@@ -448,34 +529,11 @@ impl VulkanComputeKernel {
             }
 
             self.device.cmd_dispatch(
-                self.command_buffer,
+                command_buffer,
                 group_count_x,
                 group_count_y,
                 group_count_z,
             );
-
-            self.device
-                .end_command_buffer(self.command_buffer)
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to end command buffer: {e}"))
-                })?;
-
-            let cmd_info = vk::CommandBufferSubmitInfo::builder()
-                .command_buffer(self.command_buffer)
-                .build();
-            let cmd_infos = [cmd_info];
-            let submit = vk::SubmitInfo2::builder()
-                .command_buffer_infos(&cmd_infos)
-                .build();
-
-            self.vulkan_device
-                .submit_to_queue(self.queue, &[submit], self.fence)?;
-
-            self.device
-                .wait_for_fences(&[self.fence], true, u64::MAX)
-                .map_err(|e| {
-                    Error::GpuError(format!("Failed to wait for compute fence: {e}"))
-                })?;
         }
 
         Ok(())
