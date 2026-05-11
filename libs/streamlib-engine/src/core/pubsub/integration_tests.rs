@@ -21,8 +21,9 @@
 //!   thread startup and the first publish (PubSub provides no
 //!   readiness signal)
 //!
-//! Lives in-source (rather than `tests/`) because the pubsub module
-//! is `pub(crate)` — see `core/mod.rs`.
+//! Lives in-source (rather than `tests/`) to access `super::bus::PubSub`
+//! directly — the tests construct ad-hoc `PubSub` instances per case
+//! for isolation, which is not exposed through the public surface.
 
 use super::bus::PubSub;
 use super::events::{
