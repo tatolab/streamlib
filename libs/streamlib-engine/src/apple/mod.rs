@@ -33,8 +33,6 @@ pub mod thread_priority;
 pub use audio_clock::CoreAudioClock;
 pub use pixel_transfer::PixelTransferSession;
 
-// Audio capture / output processors live in `@tatolab/audio` (#672).
-// Camera processor lives in `@tatolab/camera` (#673).
 pub use processors::{
     AppleDisplayProcessor,
     AppleMp4WriterProcessor,

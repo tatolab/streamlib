@@ -125,9 +125,6 @@ pub(crate) mod linux;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 
-// Apple processor re-exports
-// Audio capture / output processors live in `@tatolab/audio` (#672).
-// Camera processor lives in `@tatolab/camera` (#673).
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
     AppleDisplayProcessor as DisplayProcessor,
@@ -135,7 +132,6 @@ pub use apple::{
     AppleScreenCaptureProcessor as ScreenCaptureProcessor,
 };
 
-// Linux processor re-exports
 #[cfg(target_os = "linux")]
 pub use linux::LinuxDisplayProcessor as DisplayProcessor;
 

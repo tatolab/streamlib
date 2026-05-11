@@ -49,7 +49,6 @@ schemas:
 
 processors:
   # === Apple platform processors ===
-  # Camera lives in `@tatolab/camera` (#673).
 
   - name: Display
     version: 1.0.0

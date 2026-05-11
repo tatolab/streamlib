@@ -115,8 +115,6 @@ pub mod sdk {
         // `streamlib-processor-schema`).
         pub use streamlib_engine::core::descriptors::PortSchemaSpec;
 
-        // Platform-aliased display processor.
-        // Camera processor lives in `streamlib-camera` (#673).
         pub use streamlib_engine::DisplayProcessor;
 
         // Apple-only processors.

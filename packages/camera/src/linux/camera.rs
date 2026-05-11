@@ -2,23 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! V4L2 camera capture processor.
-//!
-//! Pipeline: V4L2 frame (NV12/YUYV) → compute kernel writes RGBA into a
-//! ring texture → `vkCmdCopyImageToBuffer` into a pooled
-//! `PixelBuffer` for cross-process IPC → publish `VideoFrame` on the
-//! `video` output port.
-//!
-//! Path-B (post #673 / #750 / #751) runs every Vulkan operation through
-//! engine RHI primitives — `GpuContext::create_compute_kernel`,
-//! `GpuContext::create_command_recorder`,
-//! `GpuContext::acquire_storage_buffer`,
-//! `HostVulkanBuffer::from_dma_buf_fd_as_storage_buffer`,
-//! `HostVulkanTexture::new`, `HostVulkanTimelineSemaphore::new`. The
-//! file has no `use vulkanalia` import; the only V4L2-side raw-ioctl
-//! plumbing left is `VIDIOC_EXPBUF` / `VIDIOC_QBUF` / `VIDIOC_DQBUF` /
-//! `VIDIOC_STREAMON` / `VIDIOC_QUERYCAP` / `VIDIOC_G_FMT`, which `v4l`
-//! doesn't expose at a high enough level for the DMA-BUF zero-copy
-//! path.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -405,19 +388,6 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
     }
 }
 
-/// V4L2 capture thread main loop.
-///
-/// Polls for frames from the mmap stream, converts NV12/YUYV to RGBA via
-/// a `VulkanComputeKernel` writing directly to a 2-texture DEVICE_LOCAL
-/// ring, copies into a pooled pixel buffer for cross-process IPC, and
-/// publishes the `surface_id` via `OutputWriter`. Display resolves the
-/// texture from the same-process texture cache — no GPU→CPU→GPU
-/// roundtrip.
-/// Bundles all GPU resources the camera builds at thread start. Created
-/// inside a single `GpuContextLimitedAccess::escalate(|full| ...)` closure
-/// — the engine's queued serialization primitive for runtime FullAccess
-/// upgrades — so privileged construction is correctly gated through the
-/// processor-setup mutex rather than bypassed via Tier-2.
 struct CameraGpuResources {
     kernel: Arc<VulkanComputeKernel>,
     recorder: RhiCommandRecorder,
@@ -429,8 +399,6 @@ struct CameraGpuResources {
     use_dmabuf: bool,
     dmabuf_imported_buffers: Vec<StorageBuffer>,
     dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize],
-    /// `vulkan_device.name()` captured inside the closure, used for log
-    /// messages emitted outside it.
     vulkan_device_name: String,
     probe_skipped: bool,
 }
@@ -499,16 +467,6 @@ fn capture_thread_loop(
         }
     };
 
-    // -----------------------------------------------------------------------
-    // Privileged GPU resource setup via `GpuContextLimitedAccess::escalate`.
-    //
-    // The escalation primitive acquires the engine's processor-setup mutex
-    // and hands the closure a `GpuContextFullAccess`; constructing the
-    // compute kernel, command recorder, timeline semaphore, ring textures,
-    // input SSBOs, and DMA-BUF imports all happen inside a SINGLE closure
-    // so the upgrade fires exactly once per capture-thread lifetime. The
-    // per-frame loop below stays on LimitedAccess.
-    // -----------------------------------------------------------------------
     const KERNEL_BINDINGS: &[ComputeBindingSpec] = &[
         ComputeBindingSpec::storage_buffer(0),
         ComputeBindingSpec::storage_image(1),
@@ -724,19 +682,14 @@ fn capture_thread_loop(
         "ring textures created (RGBA8 DEVICE_LOCAL DMA-BUF exportable, STORAGE | SAMPLED)",
     );
 
-    // Register ring textures with the cross-process surface-share service +
-    // the in-process texture cache. Both use LimitedAccess methods — they
-    // run outside the escalation. Camera ring textures don't carry a
-    // host-exported timeline: legacy DMA-BUF consumers
-    // (`polyglot-dma-buf-consumer`) read pixels via CPU mapping, not Vulkan
-    // compute, so explicit cross-process timeline sync is unused. The
-    // post-compute barrier transitions the ring to SHADER_READ_ONLY_OPTIMAL
-    // before the IPC publish, so by the time any cross-process consumer
-    // dereferences the surface_id, the actual contents match the declared
-    // layout (#633). The in-process Path-1 fast path (per
+    // Camera ring textures have no host-exported timeline: legacy DMA-BUF
+    // consumers read pixels via CPU mapping, not Vulkan compute, so
+    // cross-process timeline sync is unused. The post-compute barrier
+    // transitions the ring to `SHADER_READ_ONLY_OPTIMAL` before IPC publish,
+    // so the registered layout matches contents by the time any consumer
+    // dereferences `surface_id`. See
     // `docs/architecture/adapter-runtime-integration.md` →
-    // Dual-registration) requires the same declaration on
-    // `register_texture_with_layout`.
+    // Dual-registration for the Path-1 / Path-2 contract.
     for (i, (texture_id, stream_texture)) in
         ring_texture_ids.iter().zip(ring_textures.iter()).enumerate()
     {
@@ -762,11 +715,9 @@ fn capture_thread_loop(
         );
     }
 
-    // Publish the raw timeline-semaphore handle so the same-process display
-    // processor can wait on it. `vk::Semaphore` is `#[repr(transparent)]`
-    // over `u64`; the camera publishes the raw handle and display reverses
-    // the transmute — preserves the legacy engine-side coordination shape
-    // so the display processor's wait path is unchanged.
+    // `vk::Semaphore` is `#[repr(transparent)]` over `u64`; the
+    // engine-side `set_camera_timeline_semaphore` API takes the raw u64
+    // and the display processor reverses the transmute on read-back.
     let raw_semaphore_handle: u64 =
         unsafe { std::mem::transmute(camera_timeline.semaphore()) };
     gpu_context.set_camera_timeline_semaphore(raw_semaphore_handle);
@@ -775,10 +726,10 @@ fn capture_thread_loop(
     let dispatch_x = (width + 15) / 16;
     let dispatch_y = (height + 15) / 16;
 
-    // In DMA-BUF mode, manually start the V4L2 stream via raw ioctls (the v4l
-    // crate's mmap stream type sequences QBUF/STREAMON internally on its
-    // first `next()` call — but in the DMA-BUF path we drive DQBUF/QBUF
-    // directly per frame instead of going through `stream.next()`).
+    // DMA-BUF path drives DQBUF/QBUF per frame directly, so it has to
+    // QBUF the initial set + STREAMON manually (the v4l crate's mmap
+    // stream does this internally on first `next()`, which the MMAP path
+    // relies on).
     if use_dmabuf {
         unsafe {
             for i in 0..V4L2_BUFFER_COUNT {
@@ -801,9 +752,6 @@ fn capture_thread_loop(
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Main capture loop.
-    // -----------------------------------------------------------------------
     let mut ping_pong_index: usize = 0;
 
     while is_capturing.load(Ordering::Acquire) {
@@ -1200,11 +1148,7 @@ fn capture_thread_loop(
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Cleanup.
-    // -----------------------------------------------------------------------
-
-    // Stop V4L2 stream in DMA-BUF mode (mmap stream Drop handles MMAP mode).
+    // STREAMOFF in DMA-BUF mode (the mmap stream's Drop handles MMAP mode).
     if use_dmabuf {
         unsafe {
             let mut buf_type: u32 = v4l::buffer::Type::VideoCapture as u32;
@@ -1216,9 +1160,8 @@ fn capture_thread_loop(
         }
     }
 
-    // Close any DMA-BUF fds the kernel inherited via VIDIOC_EXPBUF — the
-    // imported `HostVulkanBuffer`s also held a reference, but that's a
-    // dup; the V4L2 fd is ours to close.
+    // The VIDIOC_EXPBUF fds were dup'd into Vulkan imports above; the
+    // V4L2-side fds are ours to close.
     for fd in &mut dmabuf_fds {
         if *fd >= 0 {
             unsafe { libc::close(*fd) };
@@ -1226,12 +1169,8 @@ fn capture_thread_loop(
         }
     }
 
-    // Engine RHI primitives drop via their normal `Drop` impls when the
-    // surrounding `Vec` / scope goes away — recorder, kernel, timeline,
-    // ring textures, input SSBOs, DMA-BUF imports, pooled pixel buffers.
-    // The only manual reset is clearing the published raw handle so the
-    // display processor doesn't try to wait on a dead semaphore on the
-    // next runtime swap.
+    // Clear the published handle so a future runtime swap doesn't try to
+    // wait on a dead semaphore.
     gpu_context.set_camera_timeline_semaphore(0);
     drop(dmabuf_imported_buffers);
     drop(ring_textures);
