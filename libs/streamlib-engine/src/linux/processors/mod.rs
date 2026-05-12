@@ -2,5 +2,3 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 pub mod bgra_file_source;
-
-// MP4 writer processor lives in `@tatolab/mp4` (#678).
