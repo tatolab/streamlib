@@ -10,8 +10,6 @@ from .com_streamlib_escalate_response import EscalateResponse
 from .com_streamlib_moq_publish_track_config import MoqPublishTrackConfig
 from .com_streamlib_moq_subscribe_track_config import MoqSubscribeTrackConfig
 from .com_streamlib_test_configured_processor_config import ConfiguredProcessorConfig
-from .com_streamlib_webrtc_whep_config import WebrtcWhepConfig
-from .com_streamlib_webrtc_whip_config import WebrtcWhipConfig
 from .com_tatolab_screen_capture_config import ScreenCaptureConfig
 from .com_tatolab_simple_passthrough_config import SimplePassthroughConfig
 from .tatolab__core import AudioFrame
@@ -27,8 +25,6 @@ __all__ = [
     "MoqPublishTrackConfig",
     "MoqSubscribeTrackConfig",
     "ConfiguredProcessorConfig",
-    "WebrtcWhepConfig",
-    "WebrtcWhipConfig",
     "ScreenCaptureConfig",
     "SimplePassthroughConfig",
     "AudioFrame",

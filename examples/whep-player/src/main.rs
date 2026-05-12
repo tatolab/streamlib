@@ -34,11 +34,8 @@ fn main() -> Result<()> {
 
 #[cfg(target_os = "macos")]
 fn run_whep_player() -> Result<()> {
-    use streamlib::sdk::processors::WebRtcWhepProcessor;
-    use streamlib::sdk::streaming::WhepConfig;
-    // Note: WebRtcWhepConfig type is not currently defined anywhere in the
-    // engine — this example is excluded from the workspace and predates the
-    // current WebRTC config shape. Left as-is until the example is revived.
+    use streamlib_webrtc::streaming::WhepConfig;
+    use streamlib_webrtc::WebRtcWhepProcessor;
 
     // Get WHEP endpoint URL from environment or use Cloudflare Stream default
     let whep_url = std::env::var("WHEP_URL").unwrap_or_else(|_| {

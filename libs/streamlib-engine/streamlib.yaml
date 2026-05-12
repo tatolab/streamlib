@@ -44,10 +44,6 @@ schemas:
     file: schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml
   MoqSubscribeTrackConfig:
     file: schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml
-  WebrtcWhepConfig:
-    file: schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
-  WebrtcWhipConfig:
-    file: schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml
   ScreenCaptureConfig:
     file: schemas/com.tatolab.screen_capture.config@1.0.0.yaml
   SimplePassthroughConfig:
@@ -116,44 +112,6 @@ processors:
       - name: audio_out
         schema: AudioFrame
         description: Processed stereo audio frame from CLAP plugin (2 channels)
-
-  - name: WebrtcWhep
-    version: 1.0.0
-    description: "Receives video and audio from WHEP endpoint (WebRTC egress)"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: WebrtcWhepConfig
-    outputs:
-      - name: encoded_video_out
-        schema: EncodedVideoFrame
-        description: H.264 encoded video frames from WHEP stream
-      - name: encoded_audio_out
-        schema: EncodedAudioFrame
-        description: Opus encoded audio frames from WHEP stream
-
-  - name: WebrtcWhip
-    version: 1.0.0
-    description: "Streams pre-encoded video and audio via WebRTC WHIP"
-    execution: reactive
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: WebrtcWhipConfig
-    inputs:
-      - name: encoded_video_in
-        schema: EncodedVideoFrame
-        description: H.264 encoded video frames to stream
-        read_mode: read_next_in_order
-        buffer_size: 16
-      - name: encoded_audio_in
-        schema: EncodedAudioFrame
-        description: Opus encoded audio frames to stream
-        read_mode: skip_to_latest
-        buffer_size: 8
 
   # === Linux File Source ===
 

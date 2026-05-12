@@ -10,8 +10,6 @@ pub mod com_streamlib_escalate_response;
 pub mod com_streamlib_moq_publish_track_config;
 pub mod com_streamlib_moq_subscribe_track_config;
 pub mod com_streamlib_test_configured_processor_config;
-pub mod com_streamlib_webrtc_whep_config;
-pub mod com_streamlib_webrtc_whip_config;
 pub mod com_tatolab_screen_capture_config;
 pub mod com_tatolab_simple_passthrough_config;
 #[allow(non_snake_case)]
@@ -24,8 +22,6 @@ pub use com_streamlib_escalate_response::EscalateResponse;
 pub use com_streamlib_moq_publish_track_config::MoqPublishTrackConfig;
 pub use com_streamlib_moq_subscribe_track_config::MoqSubscribeTrackConfig;
 pub use com_streamlib_test_configured_processor_config::ConfiguredProcessorConfig;
-pub use com_streamlib_webrtc_whep_config::WebrtcWhepConfig;
-pub use com_streamlib_webrtc_whip_config::WebrtcWhipConfig;
 pub use com_tatolab_screen_capture_config::ScreenCaptureConfig;
 pub use com_tatolab_simple_passthrough_config::SimplePassthroughConfig;
 pub use tatolab__core::AudioFrame;

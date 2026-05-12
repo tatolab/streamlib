@@ -1,11 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::EncodedVideoFrame;
-use crate::_generated_::EncodedAudioFrame;
-use crate::core::{Result, Error};
+use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 use bytes::Bytes;
 use std::time::Duration;
+use streamlib::sdk::error::{Error, Result};
 
 /// Converts encoded H.264 video frame to webrtc Sample(s).
 pub fn convert_video_to_samples(

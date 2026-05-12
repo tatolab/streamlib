@@ -41,10 +41,6 @@ pub struct EmptyConfig;
 pub mod clap_effect;
 pub mod simple_passthrough;
 
-// WebRTC Streaming
-pub mod webrtc_whep;
-pub mod webrtc_whip;
-
 // MoQ Streaming
 #[cfg(feature = "moq")]
 pub mod moq_publish_track;
@@ -54,8 +50,6 @@ pub mod moq_subscribe_track;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
-pub use webrtc_whep::WebRtcWhepProcessor;
-pub use webrtc_whip::WebRtcWhipProcessor;
 #[cfg(feature = "moq")]
 pub use moq_publish_track::MoqPublishTrackProcessor;
 #[cfg(feature = "moq")]

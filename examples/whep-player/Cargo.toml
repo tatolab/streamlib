@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-webrtc = { path = "../../packages/webrtc" }
 ctrlc = "3.4"

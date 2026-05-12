@@ -9,6 +9,7 @@ streamlib-audio = { path = "../../packages/audio" }
 streamlib-camera = { path = "../../packages/camera" }
 streamlib-h264 = { path = "../../packages/h264" }
 streamlib-opus = { path = "../../packages/opus" }
+streamlib-webrtc = { path = "../../packages/webrtc" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
 libc = "0.2"

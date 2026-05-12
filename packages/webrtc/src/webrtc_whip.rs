@@ -8,10 +8,13 @@
 // Encoding is handled by upstream H264EncoderProcessor / OpusEncoderProcessor.
 
 use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
-use crate::core::streaming::{convert_audio_to_sample, convert_video_to_samples};
-use crate::core::streaming::{WhipClient, WhipConfig};
-use crate::core::{media_clock::MediaClock, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
+use crate::streaming::{convert_audio_to_sample, convert_video_to_samples};
+use crate::streaming::{WhipClient, WhipConfig};
 use std::sync::Arc;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::media_clock::MediaClock;
+use streamlib::sdk::processors::ReactiveProcessor;
 use tokio::sync::mpsc as tokio_mpsc;
 
 // ============================================================================
@@ -28,7 +31,7 @@ enum WhipClientMessage {
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("WebrtcWhip")]
+#[streamlib::sdk::processor("WebrtcWhip")]
 pub struct WebRtcWhipProcessor {
     // Session state
     session_started: bool,
@@ -46,7 +49,7 @@ pub struct WebRtcWhipProcessor {
     last_stats_time_ns: i64,
 }
 
-impl crate::core::ReactiveProcessor for WebRtcWhipProcessor::Processor {
+impl ReactiveProcessor for WebRtcWhipProcessor::Processor {
     async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Convert generated config to WhipConfig
         let whip_config = WhipConfig {

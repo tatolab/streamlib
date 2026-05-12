@@ -6,8 +6,8 @@
 // Manages WebRTC PeerConnection, tracks, and RTP packetization using webrtc-rs.
 // Supports both send (WHIP) and receive (WHEP) modes.
 
-use crate::core::{Result, Error};
 use std::sync::Arc;
+use streamlib::sdk::error::{Error, Result};
 use webrtc::track::track_local::TrackLocalWriter;
 
 /// WebRTC session mode (send-only vs receive-only)
@@ -168,7 +168,7 @@ impl WebRtcSession {
         // Monitor signaling state changes
         peer_connection.on_signaling_state_change(Box::new(move |state| {
             Box::pin(async move {
-                tracing::info!("[WebRTC] 🔄 Signaling state: {:?}", state);
+                tracing::info!("[WebRTC] Signaling state: {:?}", state);
             })
         }));
 
@@ -176,7 +176,7 @@ impl WebRtcSession {
         peer_connection.on_peer_connection_state_change(Box::new(move |state| {
             Box::pin(async move {
                 tracing::info!("[WebRTC] ========================================");
-                tracing::info!("[WebRTC] 🔗 Peer connection state: {:?}", state);
+                tracing::info!("[WebRTC] Peer connection state: {:?}", state);
                 tracing::info!("[WebRTC] ========================================");
                 match state {
                     webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::New => {
@@ -186,16 +186,16 @@ impl WebRtcSession {
                         tracing::info!("[WebRTC] Peer connection: Connecting... (DTLS handshake in progress)");
                     }
                     webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Connected => {
-                        tracing::info!("[WebRTC] ✅✅✅ Peer connection: CONNECTED! ✅✅✅");
-                        tracing::info!("[WebRTC] DTLS handshake completed successfully!");
-                        tracing::info!("[WebRTC] RTP packets can now be sent/received!");
+                        tracing::info!("[WebRTC] Peer connection: CONNECTED");
+                        tracing::info!("[WebRTC] DTLS handshake completed successfully");
+                        tracing::info!("[WebRTC] RTP packets can now be sent/received");
                     }
                     webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Disconnected => {
-                        tracing::warn!("[WebRTC] ⚠️  Peer connection: DISCONNECTED!");
+                        tracing::warn!("[WebRTC] Peer connection: DISCONNECTED");
                     }
                     webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Failed => {
-                        tracing::error!("[WebRTC] ❌❌❌ Peer connection: FAILED! ❌❌❌");
-                        tracing::error!("[WebRTC] This means DTLS handshake or ICE failed!");
+                        tracing::error!("[WebRTC] Peer connection: FAILED");
+                        tracing::error!("[WebRTC] DTLS handshake or ICE failed");
                     }
                     webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState::Closed => {
                         tracing::info!("[WebRTC] Peer connection: Closed");
@@ -208,7 +208,7 @@ impl WebRtcSession {
         // Monitor ICE gathering state
         peer_connection.on_ice_gathering_state_change(Box::new(move |state| {
             Box::pin(async move {
-                tracing::info!("[WebRTC] 🧊 ICE gathering state: {:?}", state);
+                tracing::info!("[WebRTC] ICE gathering state: {:?}", state);
             })
         }));
 
@@ -226,7 +226,7 @@ impl WebRtcSession {
                 tracing::info!("[WebRTC] ========================================");
 
                 if connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Connected {
-                    tracing::info!("[WebRTC] ✅ ICE Connected!");
+                    tracing::info!("[WebRTC] ICE Connected");
 
                     // Verify transceiver payload types
                     let transceivers = pc.get_transceivers().await;
@@ -243,11 +243,11 @@ impl WebRtcSession {
                     }
 
                     flag.store(true, std::sync::atomic::Ordering::Release);
-                    tracing::info!("[WebRTC] 🚀 Ready to send samples!");
+                    tracing::info!("[WebRTC] Ready to send samples");
 
                 } else if connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Disconnected
                        || connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Failed {
-                    tracing::warn!("[WebRTC] ❌ ICE connection lost: {:?}", connection_state);
+                    tracing::warn!("[WebRTC] ICE connection lost: {:?}", connection_state);
                     flag.store(false, std::sync::atomic::Ordering::Release);
                 }
             })
@@ -511,7 +511,7 @@ impl WebRtcSession {
                 tracing::info!("[WebRTC WHEP] ICE connection state: {:?}", connection_state);
 
                 if connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Connected {
-                    tracing::info!("[WebRTC WHEP] ICE Connected - ready to receive samples!");
+                    tracing::info!("[WebRTC WHEP] ICE Connected - ready to receive samples");
                     flag.store(true, std::sync::atomic::Ordering::Release);
                 } else if connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Disconnected
                        || connection_state == webrtc::ice_transport::ice_connection_state::RTCIceConnectionState::Failed {
@@ -801,7 +801,7 @@ impl WebRtcSession {
     fn validate_and_log_h264_nal(sample_data: &[u8], sample_idx: usize) {
         if sample_data.len() < 5 {
             tracing::error!(
-                "[H264 Validation] ❌ Sample {}: Too short ({} bytes, need ≥5)",
+                "[H264 Validation] Sample {}: Too short ({} bytes, need >=5)",
                 sample_idx,
                 sample_data.len()
             );
@@ -828,13 +828,12 @@ impl WebRtcSession {
 
         if is_annex_b {
             tracing::error!(
-                "[H264 Validation] ❌❌❌ Sample {}: ANNEX-B FORMAT DETECTED!",
+                "[H264 Validation] Sample {}: ANNEX-B FORMAT DETECTED",
                 sample_idx
             );
             tracing::error!(
-                "[H264 Validation] WebRTC requires AVCC format (length-prefixed), not Annex-B!"
+                "[H264 Validation] WebRTC requires AVCC format (length-prefixed), not Annex-B"
             );
-            tracing::error!("[H264 Validation] This explains why Cloudflare receives no packets!");
 
             // Extract NAL unit type from after start code
             let nal_offset = if sample_data.len() >= 4 && sample_data[3] == 0x01 {
@@ -862,7 +861,7 @@ impl WebRtcSession {
 
         if nal_length + 4 != sample_data.len() {
             tracing::warn!(
-                "[H264 Validation] ⚠️  Sample {}: NAL length mismatch (prefix says {}, actual {})",
+                "[H264 Validation] Sample {}: NAL length mismatch (prefix says {}, actual {})",
                 sample_idx,
                 nal_length,
                 sample_data.len() - 4
@@ -875,14 +874,14 @@ impl WebRtcSession {
         // Log NAL unit type
         match nal_unit_type {
             1 => tracing::trace!("[H264] Sample {}: Coded slice (non-IDR)", sample_idx),
-            5 => tracing::info!("[H264] Sample {}: IDR (keyframe) ✅", sample_idx),
+            5 => tracing::info!("[H264] Sample {}: IDR (keyframe)", sample_idx),
             6 => tracing::trace!("[H264] Sample {}: SEI", sample_idx),
             7 => tracing::info!(
-                "[H264] Sample {}: SPS (Sequence Parameter Set) ✅",
+                "[H264] Sample {}: SPS (Sequence Parameter Set)",
                 sample_idx
             ),
             8 => tracing::info!(
-                "[H264] Sample {}: PPS (Picture Parameter Set) ✅",
+                "[H264] Sample {}: PPS (Picture Parameter Set)",
                 sample_idx
             ),
             9 => tracing::trace!("[H264] Sample {}: AUD (Access Unit Delimiter)", sample_idx),
@@ -912,7 +911,7 @@ impl WebRtcSession {
             .fetch_add(samples.len() as u64, std::sync::atomic::Ordering::Relaxed);
 
         if counter == 0 {
-            tracing::info!("[WebRTC] 🎬 FIRST VIDEO WRITE after ICE Connected!");
+            tracing::info!("[WebRTC] FIRST VIDEO WRITE after ICE Connected");
             tracing::info!(
                 "[WebRTC]    NAL units: {}, First NAL bytes: {}",
                 samples.len(),
@@ -954,7 +953,7 @@ impl WebRtcSession {
             // Log NAL unit types for debugging decoder issues
             if counter <= 10 || nal_type == 5 || nal_type == 7 || nal_type == 8 {
                 tracing::info!(
-                    "[WebRTC] 🎬 NAL unit #{}: type={} ({}), size={} bytes",
+                    "[WebRTC] NAL unit #{}: type={} ({}), size={} bytes",
                     counter,
                     nal_type,
                     nal_type_name,
@@ -988,10 +987,10 @@ impl WebRtcSession {
                 })?;
 
                 if counter == 0 && i == 0 {
-                    tracing::info!("[WebRTC] ✅ Successfully wrote first video RTP packet (Single NAL, {} bytes)", sample.data.len());
+                    tracing::info!("[WebRTC] Successfully wrote first video RTP packet (Single NAL, {} bytes)", sample.data.len());
                 } else if counter.is_multiple_of(30) && i == 0 {
                     tracing::info!(
-                        "[WebRTC] 📊 Video RTP packet #{} sent (Single NAL, {} bytes)",
+                        "[WebRTC] Video RTP packet #{} sent (Single NAL, {} bytes)",
                         counter,
                         sample.data.len()
                     );
@@ -1054,12 +1053,12 @@ impl WebRtcSession {
                     })?;
 
                     if counter == 0 && i == 0 && frag_count == 0 {
-                        tracing::info!("[WebRTC] ✅ Successfully wrote first video RTP packet (FU-A mode, NAL size {} bytes, fragments ~{})",
+                        tracing::info!("[WebRTC] Successfully wrote first video RTP packet (FU-A mode, NAL size {} bytes, fragments ~{})",
                             sample.data.len(),
                             sample.data.len().div_ceil(MAX_PAYLOAD_SIZE));
                     } else if counter.is_multiple_of(30) && i == 0 && frag_count == 0 {
                         tracing::info!(
-                            "[WebRTC] 📊 Video RTP packet #{} sent (FU-A mode, NAL size {} bytes)",
+                            "[WebRTC] Video RTP packet #{} sent (FU-A mode, NAL size {} bytes)",
                             counter,
                             sample.data.len()
                         );
@@ -1098,7 +1097,7 @@ impl WebRtcSession {
         let counter = AUDIO_SAMPLE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         if counter == 0 {
-            tracing::info!("[WebRTC] 🎵 FIRST AUDIO WRITE after ICE Connected!");
+            tracing::info!("[WebRTC] FIRST AUDIO WRITE after ICE Connected");
             tracing::info!(
                 "[WebRTC]    Bytes: {}, Duration: {:?}",
                 sample.data.len(),
@@ -1143,12 +1142,12 @@ impl WebRtcSession {
         });
 
         if let Err(ref e) = result {
-            tracing::error!("[WebRTC] ❌ Failed to write audio RTP {}: {}", counter, e);
+            tracing::error!("[WebRTC] Failed to write audio RTP {}: {}", counter, e);
         } else if counter == 0 {
-            tracing::info!("[WebRTC] ✅ Successfully wrote first audio RTP packet with PT=111");
+            tracing::info!("[WebRTC] Successfully wrote first audio RTP packet with PT=111");
         } else if counter.is_multiple_of(50) {
             tracing::info!(
-                "[WebRTC] 📊 Audio RTP packet #{} sent (PT=111, {} bytes)",
+                "[WebRTC] Audio RTP packet #{} sent (PT=111, {} bytes)",
                 counter,
                 rtp_packet.payload.len()
             );

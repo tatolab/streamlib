@@ -13,14 +13,15 @@
 //!
 //! Run with: cargo test --test whip_client_test -- --nocapture --ignored
 //!
-//! Note: This test is marked #[ignore] by default because it requires:
+//! Note: These integration tests are marked `#[ignore]` by default because they
+//! require:
 //! - Network connectivity to Cloudflare
 //! - The Cloudflare test endpoint to be active
 
 #[cfg(target_os = "macos")]
 #[cfg(test)]
 mod whip_client_tests {
-    use streamlib_engine::core::error::Result;
+    use streamlib::sdk::error::Result;
 
     /// Type alias for boxed body used by hyper client
     type BoxBody = http_body_util::combinators::BoxBody<
@@ -179,7 +180,7 @@ mod whip_client_tests {
             "SDP answer should contain media sections"
         );
 
-        println!("\n✅ WHIP POST test passed!");
+        println!("\nWHIP POST test passed:");
         println!("   - Cloudflare accepted our SDP offer");
         println!("   - Received valid SDP answer");
         println!("   - Session URL available for PATCH/DELETE");
@@ -247,7 +248,7 @@ mod whip_client_tests {
             .expect("Invalid Location header")
             .to_string();
 
-        println!("   ✓ Session created: {}\n", session_url);
+        println!("   Session created: {}\n", session_url);
 
         // Consume the POST response body
         runtime
@@ -292,7 +293,7 @@ mod whip_client_tests {
             "PATCH should return 204 or 200, got: {}",
             patch_status
         );
-        println!("   ✓ ICE candidates sent\n");
+        println!("   ICE candidates sent\n");
 
         // Step 3: DELETE session
         println!("Step 3: DELETE session");
@@ -323,10 +324,9 @@ mod whip_client_tests {
             delete_status == StatusCode::OK || delete_status == StatusCode::NO_CONTENT,
             "DELETE failed"
         );
-        println!("   ✓ Session terminated\n");
+        println!("   Session terminated\n");
 
-        println!("✅ Full WHIP flow test passed!");
-        println!("   POST -> PATCH -> DELETE all succeeded");
+        println!("Full WHIP flow test passed: POST -> PATCH -> DELETE all succeeded");
 
         Ok(())
     }
@@ -354,7 +354,7 @@ mod whip_client_tests {
         // Must contain Opus audio
         assert!(sdp.contains("opus/48000/2"), "SDP must specify Opus codec");
 
-        println!("✅ SDP offer validation passed");
+        println!("SDP offer validation passed:");
         println!("   - H.264 Baseline Profile Level 3.1 (42e01f)");
         println!("   - Packetization mode 1");
         println!("   - Opus 48kHz stereo");
