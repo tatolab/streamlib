@@ -48,10 +48,6 @@ schemas:
     file: schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml
   MoqSubscribeTrackConfig:
     file: schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml
-  OpusDecoderConfig:
-    file: schemas/com.streamlib.opus_decoder.config@1.0.0.yaml
-  OpusEncoderConfig:
-    file: schemas/com.streamlib.opus_encoder.config@1.0.0.yaml
   WebrtcWhepConfig:
     file: schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
   WebrtcWhipConfig:
@@ -229,59 +225,6 @@ processors:
         description: Decoded video frames (raw pixels) to encode and write
         read_mode: skip_to_latest
         buffer_size: 4
-
-  # === Codecs ===
-
-  - name: OpusEncoder
-    version: 1.0.0
-    description: "Encodes AudioFrame to EncodedAudioFrame (Opus)"
-    execution: reactive
-    # Opus is a low-latency realtime audio codec (WebRTC, real-time
-    # streaming). The pre-#722 heuristic matched `Encoder` first, so
-    # this audio codec ran with `high` priority + `video-{id}` thread
-    # name — both wrong for an audio realtime path. Migration corrects
-    # to `realtime` + `audio` so it groups with the rest of the audio
-    # graph (AudioCapture, AudioMixer, etc.).
-    scheduling:
-      priority: realtime
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: OpusEncoderConfig
-    inputs:
-      - name: audio_in
-        schema: AudioFrame
-        description: Raw audio frames to encode
-        read_mode: read_next_in_order
-        buffer_size: 32
-    outputs:
-      - name: encoded_audio_out
-        schema: EncodedAudioFrame
-        description: Opus encoded audio frames
-
-  - name: OpusDecoder
-    version: 1.0.0
-    description: "Decodes EncodedAudioFrame (Opus) to AudioFrame"
-    execution: reactive
-    # See OpusEncoder above — realtime audio codec, audio role.
-    scheduling:
-      priority: realtime
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: OpusDecoderConfig
-    inputs:
-      - name: encoded_audio_in
-        schema: EncodedAudioFrame
-        description: Opus encoded audio frames to decode
-        read_mode: skip_to_latest
-        buffer_size: 8
-    outputs:
-      - name: audio_out
-        schema: AudioFrame
-        description: Decoded audio frames
 
   # === MoQ Streaming ===
 

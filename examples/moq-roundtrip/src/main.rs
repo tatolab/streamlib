@@ -20,7 +20,7 @@
 //! Usage:
 //!   cargo run -p moq-roundtrip
 
-use streamlib::sdk::processors::{OpusEncoderProcessor, OpusDecoderProcessor, MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
+use streamlib::sdk::processors::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
 use streamlib::sdk::_generated_::MoqSubscribeTrackConfig;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::processors::{input, output, // Codecs + audio processing
@@ -30,6 +30,7 @@ use streamlib::sdk::processors::{input, output, // Codecs + audio processing
 use streamlib_audio::{AudioCaptureProcessor, AudioOutputProcessor, AudioResamplerProcessor, BufferRechunkerProcessor, ChordGeneratorProcessor};
 use streamlib_camera::CameraProcessor;
 use streamlib_h264::{H264DecoderProcessor, H264EncoderConfig, H264EncoderProcessor};
+use streamlib_opus::{OpusDecoderProcessor, OpusEncoderProcessor};
 use streamlib::sdk::_generated_::{
     AudioResamplerConfig, BufferRechunkerConfig, ChordGeneratorConfig, DisplayConfig,
 };

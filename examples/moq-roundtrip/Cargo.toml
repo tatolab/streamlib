@@ -8,6 +8,7 @@ streamlib = { path = "../../libs/streamlib-sdk", features = ["moq", "vulkan-vide
 streamlib-audio = { path = "../../packages/audio" }
 streamlib-camera = { path = "../../packages/camera" }
 streamlib-h264 = { path = "../../packages/h264" }
+streamlib-opus = { path = "../../packages/opus" }
 tokio = { version = "1.48.0", features = ["full"] }
 tracing = "0.1.41"
 rustls = { version = "0.23", features = ["ring"] }

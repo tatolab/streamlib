@@ -6,10 +6,6 @@
 // Core streaming components for audio/video encoding/decoding and RTP/WebRTC.
 
 pub mod h264_rtp;
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-pub mod opus;
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-pub mod opus_decoder;
 pub mod rtp;
 pub mod webrtc_session;
 pub mod whep_client;
@@ -20,10 +16,6 @@ pub mod moq_catalog;
 pub mod moq_session;
 
 pub use h264_rtp::H264RtpDepacketizer;
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-pub(crate) use opus::{AudioEncoderConfig, AudioEncoderOpus, OpusEncoder};
-#[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
-pub(crate) use opus_decoder::OpusDecoder;
 pub use rtp::convert_video_to_samples;
 pub use rtp::convert_audio_to_sample;
 pub use rtp::RtpTimestampCalculator;

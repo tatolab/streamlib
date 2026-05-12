@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/opus — Opus audio encoder + decoder processors via libopus.
+# Pure cross-platform Rust gated to macOS / iOS / Linux (no Windows).
+package:
+  org: tatolab
+  name: opus
+  version: 1.0.0
+  description: "Opus audio encoder + decoder processors via libopus"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  # Wire types imported from @tatolab/core.
+  AudioFrame:
+    package: "@tatolab/core"
+  EncodedAudioFrame:
+    package: "@tatolab/core"
+  # Local config schemas this package owns.
+  OpusDecoderConfig:
+    file: schemas/opus_decoder_config.yaml
+  OpusEncoderConfig:
+    file: schemas/opus_encoder_config.yaml
+
+processors:
+  - name: OpusEncoder
+    version: 1.0.0
+    description: "Encodes AudioFrame to EncodedAudioFrame (Opus)"
+    execution: reactive
+    # Opus is a low-latency realtime audio codec (WebRTC, real-time
+    # streaming). The pre-#722 heuristic matched `Encoder` first, so
+    # this audio codec ran with `high` priority + `video-{id}` thread
+    # name — both wrong for an audio realtime path. Migration corrects
+    # to `realtime` + `audio` so it groups with the rest of the audio
+    # graph (AudioCapture, AudioMixer, etc.).
+    scheduling:
+      priority: realtime
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: OpusEncoderConfig
+    inputs:
+      - name: audio_in
+        schema: AudioFrame
+        description: Raw audio frames to encode
+        read_mode: read_next_in_order
+        buffer_size: 32
+    outputs:
+      - name: encoded_audio_out
+        schema: EncodedAudioFrame
+        description: Opus encoded audio frames
+
+  - name: OpusDecoder
+    version: 1.0.0
+    description: "Decodes EncodedAudioFrame (Opus) to AudioFrame"
+    execution: reactive
+    # See OpusEncoder above — realtime audio codec, audio role.
+    scheduling:
+      priority: realtime
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: OpusDecoderConfig
+    inputs:
+      - name: encoded_audio_in
+        schema: EncodedAudioFrame
+        description: Opus encoded audio frames to decode
+        read_mode: skip_to_latest
+        buffer_size: 8
+    outputs:
+      - name: audio_out
+        schema: AudioFrame
+        description: Decoded audio frames

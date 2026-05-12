@@ -152,7 +152,6 @@ dispatch2 = "0.3"  # GCD dispatch queues
 pollster = "0.3"  # For blocking on async
 cpal = "0.15"  # Cross-platform audio I/O (uses CoreAudio on macOS)
 mach2 = "0.4"  # Mach kernel API for thread priorities and timing
-opus = "0.3"  # Opus audio codec encoder/decoder
 
 [target.'cfg(target_os = "linux")'.dependencies]
 vulkanalia = { workspace = true }
@@ -160,7 +159,6 @@ vulkanalia-vma = { workspace = true }
 vulkan-video = { path = "../vulkan-video" }
 rspirv-reflect = { workspace = true }
 libc.workspace = true
-opus = "0.3"  # Opus audio codec encoder/decoder
 cpal = "0.15"  # Cross-platform audio I/O (uses ALSA on Linux)
 winit = "0.30"  # Window creation and event loop for display processor
 raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation

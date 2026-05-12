@@ -42,10 +42,6 @@ pub struct EmptyConfig;
 pub mod clap_effect;
 pub mod simple_passthrough;
 
-// Codecs
-pub mod opus_encoder;
-pub mod opus_decoder;
-
 // WebRTC Streaming
 pub mod webrtc_whep;
 pub mod webrtc_whip;
@@ -60,8 +56,6 @@ pub use api_server::*;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;
-pub use opus_encoder::OpusEncoderProcessor;
-pub use opus_decoder::OpusDecoderProcessor;
 pub use webrtc_whep::WebRtcWhepProcessor;
 pub use webrtc_whip::WebRtcWhipProcessor;
 #[cfg(feature = "moq")]

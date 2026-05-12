@@ -157,10 +157,6 @@ pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, Whi
 // WebRTC WHIP/WHEP processors (cross-platform)
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
-// Codec processors (cross-platform)
-pub use core::processors::{OpusEncoderProcessor, OpusDecoderProcessor};
-pub use _generated_::{OpusEncoderConfig, OpusDecoderConfig};
-
 #[cfg(target_os = "linux")]
 pub use linux::processors::mp4_writer::LinuxMp4WriterProcessor;
 #[cfg(target_os = "linux")]

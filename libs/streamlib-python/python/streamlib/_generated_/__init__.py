@@ -11,8 +11,6 @@ from .com_streamlib_escalate_response import EscalateResponse
 from .com_streamlib_linux_mp4_writer_config import LinuxMp4WriterConfig
 from .com_streamlib_moq_publish_track_config import MoqPublishTrackConfig
 from .com_streamlib_moq_subscribe_track_config import MoqSubscribeTrackConfig
-from .com_streamlib_opus_decoder_config import OpusDecoderConfig
-from .com_streamlib_opus_encoder_config import OpusEncoderConfig
 from .com_streamlib_test_configured_processor_config import ConfiguredProcessorConfig
 from .com_streamlib_webrtc_whep_config import WebrtcWhepConfig
 from .com_streamlib_webrtc_whip_config import WebrtcWhipConfig
@@ -33,8 +31,6 @@ __all__ = [
     "LinuxMp4WriterConfig",
     "MoqPublishTrackConfig",
     "MoqSubscribeTrackConfig",
-    "OpusDecoderConfig",
-    "OpusEncoderConfig",
     "ConfiguredProcessorConfig",
     "WebrtcWhepConfig",
     "WebrtcWhipConfig",

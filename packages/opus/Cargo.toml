@@ -1,0 +1,38 @@
+[package]
+name = "streamlib-opus"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Opus audio encoder + decoder processors via libopus. Cross-platform Rust (macOS / iOS / Linux)."
+keywords = ["opus", "audio", "encoder", "decoder", "codec"]
+categories = ["multimedia::audio", "multimedia"]
+
+[lib]
+name = "streamlib_opus"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated wire
+# types under `streamlib::sdk::_generated_::*` (AudioFrame,
+# EncodedAudioFrame from `@tatolab/core`), error/result types.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+# Logging.
+tracing.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))'.dependencies]
+# libopus encoder/decoder bindings — not available on Windows; the
+# package compiles to an empty surface on unsupported platforms.
+opus = "0.3"
+
+[lints]
+workspace = true
