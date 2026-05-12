@@ -235,8 +235,16 @@ fn derive_config_type_from_schema(schema_ref: &str) -> TokenStream {
             let org = segments[0];
             let package = segments[1];
             let type_name = segments[2];
-            let module_ident =
-                Ident::new(&format!("{}__{}", org, package), Span::call_site());
+            // Package grammar (`[a-z][a-z0-9-]*`) permits hyphens, but Rust
+            // module identifiers don't. The codegen-side `_generated_/`
+            // tree maps `api-server` → `api_server` (snake_case mod name);
+            // mirror that here so `crate::_generated_::tatolab__api_server`
+            // resolves.
+            let package_ident_form = package.replace('-', "_");
+            let module_ident = Ident::new(
+                &format!("{}__{}", org, package_ident_form),
+                Span::call_site(),
+            );
             let type_ident = Ident::new(type_name, Span::call_site());
             quote! { crate::_generated_::#module_ident::#type_ident }
         } else {
@@ -320,9 +328,17 @@ mod derive_config_type_tests {
             render("com.tatolab.jtd_codegen_fixture_a.config@1.0.0"),
             "crate :: _generated_ :: JtdCodegenFixtureAConfig",
         );
+    }
+
+    #[test]
+    fn new_shape_sanitizes_hyphenated_package_name() {
+        // Package grammar allows hyphens (`api-server`), Rust module
+        // identifiers do not. The macro emits the snake_case form so
+        // `crate::_generated_::tatolab__api_server` resolves against the
+        // codegen-side `pub mod tatolab__api_server;`.
         assert_eq!(
-            render("com.streamlib.api_server.config@1.0.0"),
-            "crate :: _generated_ :: ApiServerConfig",
+            render("@tatolab/api-server/ApiServerConfig@1.0.0"),
+            "crate :: _generated_ :: tatolab__api_server :: ApiServerConfig",
         );
     }
 

@@ -9,7 +9,6 @@ pub mod traits;
 #[doc(hidden)]
 pub mod __generated_private;
 
-mod api_server;
 mod processor_instance_factory;
 mod processor_spec;
 // Re-export graph types
@@ -52,7 +51,6 @@ pub mod moq_publish_track;
 #[cfg(feature = "moq")]
 pub mod moq_subscribe_track;
 
-pub use api_server::*;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;

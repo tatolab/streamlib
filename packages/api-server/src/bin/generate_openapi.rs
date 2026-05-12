@@ -6,22 +6,22 @@
 
 //! Generates OpenAPI specification for the StreamLib Runtime API.
 //!
-//! Run with: `cargo run --bin generate_openapi`
+//! Run with: `cargo run -p streamlib-api-server --bin generate_openapi`.
 //!
-//! This generates an OpenAPI 3.0 spec in `dist/schemas/openapi.json` that can be used for:
-//! - API documentation
-//! - TypeScript client generation
-//! - API testing tools
+//! Emits an OpenAPI 3.0 spec at `dist/schemas/openapi.json` consumable by
+//! documentation tooling, TypeScript client generation, and API testing
+//! harnesses.
 
 use std::fs;
 use std::path::Path;
 use utoipa::OpenApi;
 
-// Re-create the OpenAPI doc structure from api_server.rs
-// We need to duplicate this because the original is private to the processor module
+// Re-create the OpenAPI doc structure from the processor's runtime router.
+// We declare the schema independently here so the codegen binary doesn't
+// need to spin up an axum Router or a runtime context.
 
 use serde::{Deserialize, Serialize};
-use streamlib_engine::core::json_schema::{GraphResponse, RegistryResponse, SchemaIdentOutput};
+use streamlib::sdk::json_schema::{GraphResponse, RegistryResponse, SchemaIdentOutput};
 
 #[derive(Deserialize, utoipa::ToSchema)]
 struct CreateProcessorRequest {

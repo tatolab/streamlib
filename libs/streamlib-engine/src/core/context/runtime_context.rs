@@ -672,7 +672,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// `gpu_full_access()` / `gpu_limited_access()`. Commit 5 of #322
     /// narrows the base type's API so even this clone can't hand out GPU
     /// ops directly.
-    pub(crate) fn clone_runtime_context(&self) -> RuntimeContext {
+    pub fn clone_runtime_context(&self) -> RuntimeContext {
         self.base.clone()
     }
 

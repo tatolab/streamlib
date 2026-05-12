@@ -154,6 +154,12 @@ pub mod sdk {
     /// Generated schema types (config types, wire vocabulary types).
     pub use streamlib_engine::_generated_;
 
+    /// Public catalog of schemas currently registered with the runtime.
+    /// Consumers (e.g. the api-server HTTP catalog endpoints) query
+    /// `known_schema_idents()` + `schema_definition(name)` through this
+    /// surface — the underlying registry stays engine-internal.
+    pub use streamlib_engine::schemas;
+
     // ---- Procedural macros ----
 
     /// `#[streamlib::sdk::processor("...")]` attribute macro.

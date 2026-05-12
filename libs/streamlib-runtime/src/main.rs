@@ -12,9 +12,8 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use libloading::Library;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::_generated_::ApiServerConfig;
-use streamlib::sdk::processors::ApiServerProcessor;
 use streamlib::sdk::runtime::Runner;
+use streamlib_api_server::{ApiServerConfig, ApiServerProcessor};
 use streamlib_plugin_abi::{PluginDeclaration, STREAMLIB_ABI_VERSION};
 
 // ---------------------------------------------------------------------------

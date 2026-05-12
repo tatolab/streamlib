@@ -36,7 +36,27 @@ pub mod logging {
 pub mod _generated_;
 
 // Re-export commonly used generated config types
-pub use _generated_::{ApiServerConfig, EncodedAudioFrame, EncodedVideoFrame, VideoFrame};
+pub use _generated_::{EncodedAudioFrame, EncodedVideoFrame, VideoFrame};
+
+/// Public catalog of schemas currently registered with the runtime.
+///
+/// Domain packages register their schemas via the runtime loader; consumers
+/// (notably the api-server's HTTP catalog endpoints, but any downstream
+/// tooling) query through this surface. Surfaced as
+/// [`streamlib::sdk::schemas`] at the SDK tier.
+pub mod schemas {
+    use std::sync::Arc;
+
+    /// Every currently-known schema's canonical identifier, sorted.
+    pub fn known_schema_idents() -> Vec<String> {
+        crate::core::embedded_schemas::list_embedded_schema_names()
+    }
+
+    /// YAML body of a registered schema, or `None` when unknown.
+    pub fn schema_definition(name: &str) -> Option<Arc<str>> {
+        crate::core::embedded_schemas::get_embedded_schema_definition(name)
+    }
+}
 
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("Camera")] - Processor definition by name lookup in streamlib.yaml
@@ -97,8 +117,6 @@ pub use core::{
     FOURCC_H264,
     PROCESSOR_REGISTRY,
 };
-
-pub use core::ApiServerProcessor;
 
 pub use core::{convert_audio_to_sample, convert_video_to_samples};
 

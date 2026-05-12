@@ -4,8 +4,7 @@
 # JSON Type Definition (RFC 8927) schema for ApiServer config
 
 metadata:
-  name: com.streamlib.api_server.config
-  version: 1.0.0
+  type: ApiServerConfig
   description: "Configuration for the runtime API server"
 
 properties:

@@ -9,6 +9,7 @@ backend-vulkan = ["streamlib/backend-vulkan"]
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-api-server = { path = "../../packages/api-server" }
 streamlib-camera = { path = "../../packages/camera" }
 streamlib-display = { path = "../../packages/display" }
 tokio = { version = "1.48.0", features = ["full"] }
