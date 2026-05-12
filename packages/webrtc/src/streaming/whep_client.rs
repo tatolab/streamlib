@@ -1,31 +1,30 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// WHIP (WebRTC-HTTP Ingestion Protocol) Client
+// WHEP (WebRTC-HTTP Egress Protocol) Client
 //
 // Unified client that owns both HTTP signaling and WebRTC session management.
-// Implements RFC 9725 WHIP signaling for WebRTC streaming.
+// Implements IETF WHEP specification for WebRTC playback/egress.
 
-use crate::core::{Result, Error};
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use streamlib::sdk::error::{Error, Result};
 use tokio::sync::mpsc;
-use webrtc::track::track_local::TrackLocalWriter;
-use webrtc::track::track_local::track_local_static_sample::TrackLocalStaticSample;
 
 // ============================================================================
-// WHIP CONFIGURATION
+// WHEP CONFIGURATION
 // ============================================================================
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub struct WhipConfig {
+pub struct WhepConfig {
     pub endpoint_url: String,
     /// Optional Bearer token for authentication.
     pub auth_token: Option<String>,
     pub timeout_ms: u64,
 }
 
-impl Default for WhipConfig {
+impl Default for WhepConfig {
     fn default() -> Self {
         Self {
             endpoint_url: String::new(),
@@ -36,24 +35,41 @@ impl Default for WhipConfig {
 }
 
 // ============================================================================
-// WHIP CLIENT
+// RTP SAMPLE
 // ============================================================================
 
-/// Unified WHIP client that owns HTTP signaling and WebRTC session.
+/// RTP sample received from WebRTC track.
+#[derive(Debug, Clone)]
+pub struct RtpSample {
+    /// MIME type (e.g., "video/H264", "audio/opus")
+    pub media_type: String,
+    /// RTP payload data
+    pub payload: Bytes,
+    /// RTP timestamp
+    pub timestamp: u32,
+    /// RTP sequence number (for packet loss detection)
+    pub sequence_number: u16,
+}
+
+// ============================================================================
+// WHEP CLIENT
+// ============================================================================
+
+/// Unified WHEP client that owns HTTP signaling and WebRTC session.
 ///
-/// This client is the single source of truth for a WHIP streaming session.
+/// This client is the single source of truth for a WHEP playback session.
 /// It manages:
 /// - HTTP signaling (POST offer, PATCH ICE candidates, DELETE terminate)
-/// - WebRTC peer connection and media tracks
-/// - ICE candidate collection and transmission
+/// - WebRTC peer connection (receive-only mode)
+/// - Media sample delivery via channels
 ///
 /// Usage:
-/// 1. Create client with `WhipClient::new(config)`
+/// 1. Create client with `WhepClient::new(config)`
 /// 2. Connect with `client.connect().await`
-/// 3. Send media with `client.write_video_samples()` / `client.write_audio_sample()`
+/// 3. Receive media with `client.try_recv_video()` / `try_recv_audio()`
 /// 4. Terminate with `client.terminate().await`
-pub struct WhipClient {
-    config: WhipConfig,
+pub struct WhepClient {
+    config: WhepConfig,
 
     /// HTTP client with HTTPS support
     http_client: hyper_util::client::legacy::Client<
@@ -68,31 +84,25 @@ pub struct WhipClient {
     session_url: Option<String>,
 
     /// RTCPeerConnection
-    pub(crate) peer_connection: Option<Arc<webrtc::peer_connection::RTCPeerConnection>>,
-
-    /// Video track (H.264 @ 90kHz) — uses TrackLocalStaticSample for automatic
-    /// H.264 packetization (STAP-A aggregation of SPS/PPS, FU-A fragmentation).
-    video_track: Option<Arc<TrackLocalStaticSample>>,
-
-    /// Audio track (Opus @ 48kHz)
-    audio_track:
-        Option<Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>>,
+    peer_connection: Option<Arc<webrtc::peer_connection::RTCPeerConnection>>,
 
     /// ICE candidate receiver (candidates collected from callback)
     ice_candidate_rx: Option<mpsc::Receiver<String>>,
 
-    /// Video frame counter (for startup logging).
-    video_frame_count: u64,
+    /// Video sample receiver (RTP packets from video track)
+    video_sample_rx: Option<mpsc::Receiver<RtpSample>>,
 
-    /// Audio RTP state
-    audio_seq_num: u32,
-    audio_timestamp: u32,
-    audio_sample_count: u64,
+    /// Audio sample receiver (RTP packets from audio track)
+    audio_sample_rx: Option<mpsc::Receiver<RtpSample>>,
+
+    /// Audio configuration from SDP negotiation
+    audio_sample_rate: Option<u32>,
+    audio_channels: Option<usize>,
 }
 
-impl WhipClient {
-    /// Creates a new WHIP client.
-    pub fn new(config: WhipConfig) -> Result<Self> {
+impl WhepClient {
+    /// Creates a new WHEP client.
+    pub fn new(config: WhepConfig) -> Result<Self> {
         // Install rustls crypto provider if needed
         if rustls::crypto::CryptoProvider::get_default().is_none() {
             rustls::crypto::ring::default_provider()
@@ -106,7 +116,7 @@ impl WhipClient {
         }
 
         tracing::info!(
-            "[WhipClient] Creating client for endpoint: {}",
+            "[WhepClient] Creating client for endpoint: {}",
             config.endpoint_url
         );
 
@@ -129,80 +139,96 @@ impl WhipClient {
             http_client,
             session_url: None,
             peer_connection: None,
-            video_track: None,
-            audio_track: None,
             ice_candidate_rx: None,
-            // RTP sequence numbers and timestamps should start at random values for security
-            video_frame_count: 0,
-            // Use simple time-based seeds since we don't have rand crate
-            audio_seq_num: (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u32)
-                ^ 0xBEEF_CAFE,
-            audio_timestamp: (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u32)
-                ^ 0xFACE_FEED,
-            audio_sample_count: 0,
+            video_sample_rx: None,
+            audio_sample_rx: None,
+            audio_sample_rate: None,
+            audio_channels: None,
         })
     }
 
-    /// Connects to the WHIP endpoint and establishes WebRTC session.
-    ///
-    /// This creates the peer connection, generates SDP offer, posts to WHIP endpoint,
-    /// and sets the remote answer.
-    pub async fn connect(&mut self, video_bitrate_bps: u32, audio_bitrate_bps: u32) -> Result<()> {
-        tracing::info!("[WhipClient] Connecting...");
+    /// Connects to the WHEP endpoint and establishes WebRTC session.
+    pub async fn connect(&mut self) -> Result<()> {
+        tracing::info!("[WhepClient] Connecting...");
+
+        // Clean up any existing peer connection from a previous failed attempt
+        if let Some(pc) = self.peer_connection.take() {
+            tracing::debug!("[WhepClient] Closing previous peer connection before retry");
+            let _ = pc.close().await;
+        }
+        self.ice_candidate_rx = None;
+        self.video_sample_rx = None;
+        self.audio_sample_rx = None;
 
         // Create peer connection and tracks
-        let (peer_connection, video_track, audio_track, ice_rx) =
-            self.create_peer_connection().await?;
+        let (peer_connection, ice_rx, video_rx, audio_rx) = self.create_peer_connection().await?;
 
         self.peer_connection = Some(peer_connection.clone());
-        self.video_track = Some(video_track);
-        self.audio_track = Some(audio_track);
         self.ice_candidate_rx = Some(ice_rx);
+        self.video_sample_rx = Some(video_rx);
+        self.audio_sample_rx = Some(audio_rx);
 
         // Create SDP offer
-        let offer = self.create_offer(&peer_connection).await?;
-        let offer_with_bandwidth =
-            Self::add_bandwidth_to_sdp(&offer, video_bitrate_bps, audio_bitrate_bps);
+        let offer = match self.create_offer(&peer_connection).await {
+            Ok(o) => o,
+            Err(e) => {
+                self.cleanup_peer_connection().await;
+                return Err(e);
+            }
+        };
 
-        tracing::info!("[WhipClient] ========== SDP OFFER ==========");
-        for (i, line) in offer_with_bandwidth.lines().enumerate() {
-            tracing::debug!("[WhipClient] OFFER [{}]: {}", i, line);
-        }
+        tracing::debug!("[WhepClient] SDP offer:\n{}", offer);
 
-        // POST offer to WHIP endpoint
-        let answer = self.post_offer(&offer_with_bandwidth).await?;
+        // POST offer to WHEP endpoint
+        let answer = match self.post_offer(&offer).await {
+            Ok(a) => a,
+            Err(e) => {
+                self.cleanup_peer_connection().await;
+                return Err(e);
+            }
+        };
 
-        tracing::info!("[WhipClient] ========== SDP ANSWER ==========");
-        for (i, line) in answer.lines().enumerate() {
-            tracing::debug!("[WhipClient] ANSWER [{}]: {}", i, line);
-        }
+        tracing::debug!("[WhepClient] SDP answer:\n{}", answer);
+
+        // Parse audio configuration from SDP answer
+        self.parse_audio_config(&answer);
 
         // Set remote answer
-        self.set_remote_answer(&peer_connection, &answer).await?;
-
-        // Send any buffered ICE candidates (trickle ICE)
-        if let Err(e) = self.send_ice_candidates().await {
-            tracing::debug!("[WhipClient] Trickle ICE not supported: {}", e);
+        if let Err(e) = self.set_remote_answer(&peer_connection, &answer).await {
+            self.cleanup_peer_connection().await;
+            return Err(e);
         }
 
-        tracing::info!("[WhipClient] Connected successfully");
+        // Wait briefly for ICE candidates to gather, then send them
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Send ICE candidates (trickle ICE)
+        if let Err(e) = self.send_ice_candidates().await {
+            tracing::debug!("[WhepClient] Trickle ICE not supported: {}", e);
+        }
+
+        tracing::info!("[WhepClient] Connected successfully");
         Ok(())
     }
 
-    /// Creates the WebRTC peer connection with video and audio tracks.
+    /// Cleans up peer connection and related resources on connection failure.
+    async fn cleanup_peer_connection(&mut self) {
+        if let Some(pc) = self.peer_connection.take() {
+            let _ = pc.close().await;
+        }
+        self.ice_candidate_rx = None;
+        self.video_sample_rx = None;
+        self.audio_sample_rx = None;
+    }
+
+    /// Creates the WebRTC peer connection with receive-only transceivers.
     async fn create_peer_connection(
         &self,
     ) -> Result<(
         Arc<webrtc::peer_connection::RTCPeerConnection>,
-        Arc<TrackLocalStaticSample>,
-        Arc<webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP>,
         mpsc::Receiver<String>,
+        mpsc::Receiver<RtpSample>,
+        mpsc::Receiver<RtpSample>,
     )> {
         // Create MediaEngine and register codecs
         let mut media_engine = webrtc::api::media_engine::MediaEngine::default();
@@ -218,20 +244,7 @@ impl WhipClient {
                         sdp_fmtp_line:
                             "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
                                 .to_owned(),
-                        rtcp_feedback: vec![
-                            webrtc::rtp_transceiver::RTCPFeedback {
-                                typ: "goog-remb".to_owned(),
-                                parameter: "".to_owned(),
-                            },
-                            webrtc::rtp_transceiver::RTCPFeedback {
-                                typ: "nack".to_owned(),
-                                parameter: "".to_owned(),
-                            },
-                            webrtc::rtp_transceiver::RTCPFeedback {
-                                typ: "nack".to_owned(),
-                                parameter: "pli".to_owned(),
-                            },
-                        ],
+                        rtcp_feedback: vec![],
                     },
                     payload_type: 102,
                     ..Default::default()
@@ -262,7 +275,7 @@ impl WhipClient {
                 Error::Configuration(format!("Failed to register Opus codec: {}", e))
             })?;
 
-        tracing::info!("[WhipClient] Registered H.264 (PT=102) and Opus (PT=111) codecs");
+        tracing::info!("[WhepClient] Registered H.264 (PT=102) and Opus (PT=111) codecs");
 
         // Create interceptor registry for RTCP
         let mut registry = webrtc::interceptor::registry::Registry::new();
@@ -286,8 +299,10 @@ impl WhipClient {
             Error::Configuration(format!("Failed to create PeerConnection: {}", e))
         })?);
 
-        // Create ICE candidate channel
+        // Create channels for ICE candidates and media samples
         let (ice_tx, ice_rx) = mpsc::channel::<String>(100);
+        let (video_tx, video_rx) = mpsc::channel::<RtpSample>(1000);
+        let (audio_tx, audio_rx) = mpsc::channel::<RtpSample>(1000);
 
         // Subscribe to ICE candidate events
         let ice_tx_clone = ice_tx.clone();
@@ -297,7 +312,7 @@ impl WhipClient {
                 if let Some(candidate) = candidate_opt {
                     if let Ok(json) = candidate.to_json() {
                         let sdp_fragment = format!("a={}", json.candidate);
-                        tracing::debug!("[WhipClient] ICE candidate: {}", sdp_fragment);
+                        tracing::debug!("[WhepClient] ICE candidate: {}", sdp_fragment);
                         let _ = tx.send(sdp_fragment).await;
                     }
                 }
@@ -307,106 +322,96 @@ impl WhipClient {
         // Monitor peer connection state
         peer_connection.on_peer_connection_state_change(Box::new(move |state| {
             Box::pin(async move {
-                tracing::info!("[WhipClient] Peer connection state: {:?}", state);
+                tracing::info!("[WhepClient] Peer connection state: {:?}", state);
             })
         }));
 
         // Monitor ICE connection state
         peer_connection.on_ice_connection_state_change(Box::new(move |state| {
             Box::pin(async move {
-                tracing::info!("[WhipClient] ICE connection state: {:?}", state);
+                tracing::info!("[WhepClient] ICE connection state: {:?}", state);
             })
         }));
 
-        // Monitor ICE gathering state
-        peer_connection.on_ice_gathering_state_change(Box::new(move |state| {
+        // Subscribe to on_track for receiving media
+        let video_tx_clone = video_tx.clone();
+        let audio_tx_clone = audio_tx.clone();
+        peer_connection.on_track(Box::new(move |track, _receiver, _transceiver| {
+            let mime_type = track.codec().capability.mime_type.clone();
+            let is_video = mime_type.to_lowercase().contains("video");
+            let tx = if is_video {
+                video_tx_clone.clone()
+            } else {
+                audio_tx_clone.clone()
+            };
+
+            tracing::info!(
+                "[WhepClient] Received track: {} ({})",
+                mime_type,
+                if is_video { "video" } else { "audio" }
+            );
+
             Box::pin(async move {
-                tracing::info!("[WhipClient] ICE gathering state: {:?}", state);
+                // Spawn a task to read RTP packets from this track
+                let track_clone = track.clone();
+                let mime = mime_type.clone();
+                tokio::spawn(async move {
+                    loop {
+                        match track_clone.read_rtp().await {
+                            Ok((rtp_packet, _attributes)) => {
+                                let sample = RtpSample {
+                                    media_type: mime.clone(),
+                                    payload: rtp_packet.payload.clone(),
+                                    timestamp: rtp_packet.header.timestamp,
+                                    sequence_number: rtp_packet.header.sequence_number,
+                                };
+                                if tx.send(sample).await.is_err() {
+                                    // Channel closed, exit
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    "[WhepClient] Track read error (normal on close): {}",
+                                    e
+                                );
+                                break;
+                            }
+                        }
+                    }
+                    tracing::debug!("[WhepClient] Track reader task exited: {}", mime);
+                });
             })
         }));
 
-        // Create video track — TrackLocalStaticSample handles H.264 RTP
-        // packetization automatically (STAP-A for SPS/PPS, FU-A for large NALs)
-        let video_track = Arc::new(TrackLocalStaticSample::new(
-            webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
-                mime_type: webrtc::api::media_engine::MIME_TYPE_H264.to_owned(),
-                clock_rate: 90000,
-                channels: 0,
-                sdp_fmtp_line:
-                    "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"
-                        .to_owned(),
-                ..Default::default()
-            },
-            "video".to_owned(),
-            "streamlib-video".to_owned(),
-        ));
-
-        let video_rtp_sender = peer_connection
-            .add_track(Arc::clone(&video_track)
-                as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
+        // Add recvonly transceivers for video and audio
+        peer_connection
+            .add_transceiver_from_kind(
+                webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
+                Some(webrtc::rtp_transceiver::RTCRtpTransceiverInit {
+                    direction: webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Recvonly,
+                    send_encodings: vec![],
+                }),
+            )
             .await
-            .map_err(|e| Error::Configuration(format!("Failed to add video track: {}", e)))?;
+            .map_err(|e| {
+                Error::Configuration(format!("Failed to add video transceiver: {}", e))
+            })?;
 
-        // Drain incoming RTCP on the video sender. Required by webrtc-rs —
-        // without this, the interceptor pipeline stalls and RTCP Sender Reports
-        // are never generated, preventing the receiver from computing stats.
-        tokio::spawn(async move {
-            let mut buf = vec![0u8; 1500];
-            loop {
-                match video_rtp_sender.read(&mut buf).await {
-                    Ok(_) => {}
-                    Err(_) => {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
-                }
-            }
-        });
-
-        // Create audio track
-        let audio_track = Arc::new(
-            webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP::new(
-                webrtc::rtp_transceiver::rtp_codec::RTCRtpCodecCapability {
-                    mime_type: webrtc::api::media_engine::MIME_TYPE_OPUS.to_owned(),
-                    clock_rate: 48000,
-                    channels: 2,
-                    sdp_fmtp_line: "minptime=10;useinbandfec=1".to_owned(),
-                    ..Default::default()
-                },
-                "audio".to_owned(),
-                "streamlib-audio".to_owned(),
-            ),
-        );
-
-        let audio_rtp_sender = peer_connection
-            .add_track(Arc::clone(&audio_track)
-                as Arc<dyn webrtc::track::track_local::TrackLocal + Send + Sync>)
+        peer_connection
+            .add_transceiver_from_kind(
+                webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
+                Some(webrtc::rtp_transceiver::RTCRtpTransceiverInit {
+                    direction: webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Recvonly,
+                    send_encodings: vec![],
+                }),
+            )
             .await
-            .map_err(|e| Error::Configuration(format!("Failed to add audio track: {}", e)))?;
+            .map_err(|e| {
+                Error::Configuration(format!("Failed to add audio transceiver: {}", e))
+            })?;
 
-        // Drain incoming RTCP on the audio sender (same reason as video above).
-        tokio::spawn(async move {
-            let mut buf = vec![0u8; 1500];
-            loop {
-                match audio_rtp_sender.read(&mut buf).await {
-                    Ok(_) => {}
-                    Err(_) => {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    }
-                }
-            }
-        });
-
-        // Set transceivers to send-only
-        let transceivers = peer_connection.get_transceivers().await;
-        for transceiver in transceivers {
-            if transceiver.sender().await.track().await.is_some() {
-                transceiver.set_direction(
-                    webrtc::rtp_transceiver::rtp_transceiver_direction::RTCRtpTransceiverDirection::Sendonly,
-                ).await;
-            }
-        }
-
-        Ok((peer_connection, video_track, audio_track, ice_rx))
+        Ok((peer_connection, ice_rx, video_rx, audio_rx))
     }
 
     /// Creates SDP offer.
@@ -458,29 +463,40 @@ impl WhipClient {
         Ok(())
     }
 
-    /// Adds bandwidth attributes to SDP.
-    fn add_bandwidth_to_sdp(sdp: &str, video_bitrate_bps: u32, audio_bitrate_bps: u32) -> String {
-        let mut result = String::new();
+    /// Parses audio configuration from SDP answer.
+    fn parse_audio_config(&mut self, sdp: &str) {
+        // Look for rtpmap line for Opus
+        // Format: a=rtpmap:111 opus/48000/2
+        if let Some(rtpmap_line) = sdp
+            .lines()
+            .find(|line| line.contains("rtpmap") && line.to_lowercase().contains("opus"))
+        {
+            tracing::info!("[WhepClient] Audio rtpmap: {}", rtpmap_line);
 
-        for line in sdp.lines() {
-            result.push_str(line);
-            result.push('\n');
+            if let Some(codec_info) = rtpmap_line.split_whitespace().nth(1) {
+                let parts: Vec<&str> = codec_info.split('/').collect();
+                if parts.len() >= 2 {
+                    if let Ok(sample_rate) = parts[1].parse::<u32>() {
+                        self.audio_sample_rate = Some(sample_rate);
+                        tracing::info!("[WhepClient] Audio sample rate: {} Hz", sample_rate);
+                    }
 
-            if line.starts_with("m=video") {
-                let bitrate_kbps = video_bitrate_bps / 1000;
-                result.push_str(&format!("b=AS:{}\n", bitrate_kbps));
-                result.push_str(&format!("b=TIAS:{}\n", video_bitrate_bps));
-            } else if line.starts_with("m=audio") {
-                let bitrate_kbps = audio_bitrate_bps / 1000;
-                result.push_str(&format!("b=AS:{}\n", bitrate_kbps));
-                result.push_str(&format!("b=TIAS:{}\n", audio_bitrate_bps));
+                    if parts.len() >= 3 {
+                        if let Ok(channels) = parts[2].parse::<usize>() {
+                            self.audio_channels = Some(channels);
+                            tracing::info!("[WhepClient] Audio channels: {}", channels);
+                        }
+                    } else {
+                        // RFC 7587: defaults to 1 (mono) if not specified
+                        self.audio_channels = Some(1);
+                        tracing::info!("[WhepClient] Audio channels: 1 (default)");
+                    }
+                }
             }
         }
-
-        result
     }
 
-    /// POSTs SDP offer to WHIP endpoint.
+    /// POSTs SDP offer to WHEP endpoint.
     async fn post_offer(&mut self, sdp_offer: &str) -> Result<String> {
         use http_body_util::{BodyExt, Full};
         use hyper::{header, Request, StatusCode};
@@ -501,7 +517,7 @@ impl WhipClient {
             .body(boxed_body)
             .map_err(|e| Error::Runtime(format!("Failed to build request: {}", e)))?;
 
-        tracing::debug!("[WhipClient] POST to {}", self.config.endpoint_url);
+        tracing::debug!("[WhepClient] POST to {}", self.config.endpoint_url);
 
         let response = tokio::time::timeout(
             std::time::Duration::from_millis(self.config.timeout_ms),
@@ -510,11 +526,11 @@ impl WhipClient {
         .await
         .map_err(|_| {
             Error::Runtime(format!(
-                "WHIP POST timed out after {}ms",
+                "WHEP POST timed out after {}ms",
                 self.config.timeout_ms
             ))
         })?
-        .map_err(|e| Error::Runtime(format!("WHIP POST failed: {}", e)))?;
+        .map_err(|e| Error::Runtime(format!("WHEP POST failed: {}", e)))?;
 
         let status = response.status();
         let headers = response.headers().clone();
@@ -525,13 +541,16 @@ impl WhipClient {
             .to_bytes();
 
         match status {
-            StatusCode::CREATED => {
+            StatusCode::CREATED | StatusCode::NOT_ACCEPTABLE => {
                 // Extract Location header
                 let location = headers
                     .get(header::LOCATION)
                     .and_then(|v| v.to_str().ok())
                     .ok_or_else(|| {
-                        Error::Runtime("WHIP 201 without Location header".into())
+                        Error::Runtime(format!(
+                            "WHEP {} without Location header",
+                            status.as_u16()
+                        ))
                     })?;
 
                 // Convert relative to absolute URL
@@ -549,7 +568,7 @@ impl WhipClient {
                 };
 
                 tracing::info!(
-                    "[WhipClient] Session created: {}",
+                    "[WhepClient] Session created: {}",
                     self.session_url.as_ref().unwrap()
                 );
 
@@ -558,21 +577,11 @@ impl WhipClient {
 
                 Ok(sdp_answer)
             }
-            StatusCode::TEMPORARY_REDIRECT => {
-                let location = headers
-                    .get(header::LOCATION)
-                    .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| Error::Runtime("307 without Location header".into()))?;
-
-                tracing::info!("[WhipClient] Redirecting to: {}", location);
-                self.config.endpoint_url = location.to_owned();
-                Box::pin(self.post_offer(sdp_offer)).await
-            }
             _ => {
                 let error_body = String::from_utf8(body_bytes.to_vec())
                     .unwrap_or_else(|_| format!("HTTP {}", status));
                 Err(Error::Runtime(format!(
-                    "WHIP POST failed ({}): {}",
+                    "WHEP POST failed ({}): {}",
                     status, error_body
                 )))
             }
@@ -601,6 +610,8 @@ impl WhipClient {
             return Ok(());
         }
 
+        tracing::info!("[WhepClient] Sending {} ICE candidates", candidates.len());
+
         let sdp_fragment = candidates.join("\r\n");
 
         let body = Full::new(bytes::Bytes::from(sdp_fragment));
@@ -624,12 +635,12 @@ impl WhipClient {
             self.http_client.request(req),
         )
         .await
-        .map_err(|_| Error::Runtime("WHIP PATCH timed out".into()))?
-        .map_err(|e| Error::Runtime(format!("WHIP PATCH failed: {}", e)))?;
+        .map_err(|_| Error::Runtime("WHEP PATCH timed out".into()))?
+        .map_err(|e| Error::Runtime(format!("WHEP PATCH failed: {}", e)))?;
 
         match response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => {
-                tracing::debug!("[WhipClient] Sent {} ICE candidates", candidates.len());
+                tracing::debug!("[WhepClient] ICE candidates sent successfully");
                 Ok(())
             }
             status => {
@@ -639,123 +650,64 @@ impl WhipClient {
                     .and_then(|b| String::from_utf8(b.to_bytes().to_vec()).ok())
                     .unwrap_or_else(|| format!("HTTP {}", status));
                 Err(Error::Runtime(format!(
-                    "WHIP PATCH failed: {}",
+                    "WHEP PATCH failed: {}",
                     body_bytes
                 )))
             }
         }
     }
 
-    /// Writes a video frame to the WebRTC track.
-    ///
-    /// The sample data should be the full Annex B frame (with start codes).
-    /// The H264Payloader inside TrackLocalStaticSample handles NAL parsing,
-    /// STAP-A aggregation of SPS/PPS before IDR frames, and FU-A fragmentation.
-    pub async fn write_video_sample(&mut self, sample: webrtc::media::Sample) -> Result<()> {
-        let track = self
-            .video_track
-            .clone()
-            .ok_or_else(|| Error::Runtime("Video track not initialized".into()))?;
-
-        // Log first frame and keyframes at startup to confirm encoding pipeline works
-        if self.video_frame_count < 5 {
-            tracing::info!(
-                "[WhipClient] Video frame #{}: {} bytes",
-                self.video_frame_count,
-                sample.data.len()
-            );
-        }
-
-        track
-            .write_sample(&sample)
-            .await
-            .map_err(|e| Error::Runtime(format!("Failed to write video sample: {}", e)))?;
-
-        self.video_frame_count += 1;
-
-        Ok(())
+    /// Try to receive a video sample (non-blocking).
+    pub fn try_recv_video(&mut self) -> Option<RtpSample> {
+        self.video_sample_rx.as_mut()?.try_recv().ok()
     }
 
-    /// Writes an audio sample to the WebRTC track.
-    pub async fn write_audio_sample(&mut self, sample: webrtc::media::Sample) -> Result<()> {
-        use webrtc::rtp::header::Header as RtpHeader;
-        use webrtc::rtp::packet::Packet as RtpPacket;
-
-        let track = self
-            .audio_track
-            .as_ref()
-            .ok_or_else(|| Error::Runtime("Audio track not initialized".into()))?;
-
-        const TIMESTAMP_INCREMENT: u32 = 960; // 20ms @ 48kHz
-
-        if self.audio_sample_count == 0 {
-            tracing::info!(
-                "[WhipClient] First audio sample: {} bytes",
-                sample.data.len()
-            );
-        }
-
-        let rtp_packet = RtpPacket {
-            header: RtpHeader {
-                version: 2,
-                padding: false,
-                extension: false,
-                marker: false,
-                payload_type: 111,
-                sequence_number: self.audio_seq_num as u16,
-                timestamp: self.audio_timestamp,
-                ssrc: 0,
-                ..Default::default()
-            },
-            payload: sample.data,
-        };
-
-        self.audio_seq_num = self.audio_seq_num.wrapping_add(1);
-        self.audio_timestamp = self.audio_timestamp.wrapping_add(TIMESTAMP_INCREMENT);
-        self.audio_sample_count += 1;
-
-        track
-            .write_rtp(&rtp_packet)
-            .await
-            .map_err(|e| Error::Runtime(format!("Failed to write audio RTP: {}", e)))?;
-
-        Ok(())
+    /// Try to receive an audio sample (non-blocking).
+    pub fn try_recv_audio(&mut self) -> Option<RtpSample> {
+        self.audio_sample_rx.as_mut()?.try_recv().ok()
     }
 
-    /// Gets RTCP statistics.
-    pub async fn get_stats(&self) -> Option<webrtc::stats::StatsReport> {
-        match &self.peer_connection {
-            Some(pc) => Some(pc.get_stats().await),
-            None => None,
-        }
+    /// Take ownership of the video sample receiver for async processing.
+    pub fn take_video_rx(&mut self) -> Option<mpsc::Receiver<RtpSample>> {
+        self.video_sample_rx.take()
     }
 
-    /// Terminates the WHIP session.
+    /// Take ownership of the audio sample receiver for async processing.
+    pub fn take_audio_rx(&mut self) -> Option<mpsc::Receiver<RtpSample>> {
+        self.audio_sample_rx.take()
+    }
+
+    /// Get audio configuration from SDP negotiation.
+    pub fn audio_config(&self) -> (Option<u32>, Option<usize>) {
+        (self.audio_sample_rate, self.audio_channels)
+    }
+
+    /// Terminates the WHEP session.
     pub async fn terminate(&mut self) -> Result<()> {
-        tracing::info!("[WhipClient] Terminating session...");
+        tracing::info!("[WhepClient] Terminating session...");
 
-        // Close peer connection first
+        // Close peer connection first (stops media flow)
         if let Some(pc) = self.peer_connection.take() {
             if let Err(e) = pc.close().await {
-                tracing::warn!("[WhipClient] Error closing peer connection: {}", e);
+                tracing::warn!("[WhepClient] Error closing peer connection: {}", e);
             }
         }
 
-        // Clear tracks
-        self.video_track = None;
-        self.audio_track = None;
+        // Clear receivers (signals sender tasks to stop)
         self.ice_candidate_rx = None;
+        self.video_sample_rx = None;
+        self.audio_sample_rx = None;
 
-        // Send DELETE to WHIP server
+        // Send DELETE to WHEP server
         if let Some(session_url) = self.session_url.take() {
             self.send_delete(&session_url).await?;
         }
 
-        tracing::info!("[WhipClient] Session terminated");
+        tracing::info!("[WhepClient] Session terminated");
         Ok(())
     }
 
-    /// Sends DELETE request to terminate WHIP session.
+    /// Sends DELETE request to terminate WHEP session.
     async fn send_delete(&self, session_url: &str) -> Result<()> {
         use http_body_util::{BodyExt, Empty};
         use hyper::{header, Request};
@@ -773,21 +725,21 @@ impl WhipClient {
             .body(boxed_body)
             .map_err(|e| Error::Runtime(format!("Failed to build DELETE request: {}", e)))?;
 
-        tracing::debug!("[WhipClient] DELETE to {}", session_url);
+        tracing::debug!("[WhepClient] DELETE to {}", session_url);
 
         let response = tokio::time::timeout(
             std::time::Duration::from_millis(self.config.timeout_ms),
             self.http_client.request(req),
         )
         .await
-        .map_err(|_| Error::Runtime("WHIP DELETE timed out".into()))?
-        .map_err(|e| Error::Runtime(format!("WHIP DELETE failed: {}", e)))?;
+        .map_err(|_| Error::Runtime("WHEP DELETE timed out".into()))?
+        .map_err(|e| Error::Runtime(format!("WHEP DELETE failed: {}", e)))?;
 
         if response.status().is_success() {
-            tracing::info!("[WhipClient] WHIP session deleted: {}", session_url);
+            tracing::info!("[WhepClient] WHEP session deleted: {}", session_url);
         } else {
             tracing::warn!(
-                "[WhipClient] DELETE returned {}, session may still exist server-side",
+                "[WhepClient] DELETE returned {}, session may still exist server-side",
                 response.status()
             );
         }

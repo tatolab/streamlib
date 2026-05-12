@@ -95,7 +95,6 @@ pub use core::{
     ReactiveProcessor,
     ResamplingQuality,
     Result,
-    RtpTimestampCalculator,
     RuntimeContext,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -112,8 +111,6 @@ pub use core::{
     FOURCC_H264,
     PROCESSOR_REGISTRY,
 };
-
-pub use core::{convert_audio_to_sample, convert_video_to_samples};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use core::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
@@ -160,12 +157,6 @@ pub mod host_rhi;
     all(target_os = "linux", not(feature = "backend-metal"))
 ))]
 pub use host_rhi::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
-
-// WebRTC streaming (cross-platform)
-pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, WhipConfig};
-
-// WebRTC WHIP/WHEP processors (cross-platform)
-pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 #[cfg(target_os = "linux")]
 pub use linux::processors::bgra_file_source::BgraFileSourceProcessor;

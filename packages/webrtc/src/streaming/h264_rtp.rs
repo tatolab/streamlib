@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, Error};
 use bytes::Bytes;
 use std::collections::HashMap;
+use streamlib::sdk::error::{Error, Result};
 
 /// H.264 NAL unit types (bits 0-4 of NAL header)
 #[allow(dead_code)]

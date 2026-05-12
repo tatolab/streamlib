@@ -17,13 +17,12 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
-use streamlib::sdk::_generated_::com_streamlib_webrtc_whip_config::{Audio, Video, Whip};
-#[cfg(target_os = "linux")]
 use streamlib::sdk::permissions::{request_audio_permission, request_camera_permission};
-use streamlib::sdk::processors::WebRtcWhipProcessor;
 use streamlib_camera::CameraProcessor;
 use streamlib_h264::{H264EncoderConfig, H264EncoderProcessor};
 use streamlib_opus::{OpusEncoderConfig, OpusEncoderProcessor};
+use streamlib_webrtc::_generated_::tatolab__webrtc::webrtc_whip_config::{Audio, Video, Whip};
+use streamlib_webrtc::WebRtcWhipProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::processors::{input, output};

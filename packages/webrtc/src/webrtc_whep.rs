@@ -8,19 +8,21 @@
 // Decoding is handled by downstream H264DecoderProcessor / OpusDecoderProcessor.
 
 use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
-use crate::core::media_clock::MediaClock;
-use crate::core::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
-use crate::iceoryx2::OutputWriter;
+use crate::streaming::{H264RtpDepacketizer, RtpSample, WhepClient, WhepConfig};
 use std::future::Future;
 use std::sync::Arc;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib::sdk::media_clock::MediaClock;
+use streamlib::sdk::processors::ManualProcessor;
 use tokio::sync::mpsc;
 
 // ============================================================================
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("WebrtcWhep")]
+#[streamlib::sdk::processor("WebrtcWhep")]
 pub struct WebRtcWhepProcessor {
     // WHEP client (owns WebRTC session)
     whep_client: Option<WhepClient>,
@@ -32,7 +34,7 @@ pub struct WebRtcWhepProcessor {
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-impl crate::core::ManualProcessor for WebRtcWhepProcessor::Processor {
+impl ManualProcessor for WebRtcWhepProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,

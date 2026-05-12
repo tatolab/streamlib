@@ -61,6 +61,7 @@ pub use processors::*;
 pub use utils::*;
 pub use execution::*;
 pub use runtime::*;
+#[cfg(feature = "moq")]
 pub use streaming::*;
 pub use sync::*;
 pub use texture::*;

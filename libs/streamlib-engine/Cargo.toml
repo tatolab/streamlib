@@ -99,11 +99,8 @@ vulkanalia = { workspace = true, optional = true }
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
 
-# WebRTC streaming dependencies (using webrtc-rs)
-webrtc = "0.14.0"  # Full-featured WebRTC implementation
-bytes = "1.5"      # Zero-copy byte buffers for RTP samples
-fastrand = "2.0"   # Fast PRNG for RTP timestamp base
-local-ip-address = "0.6"  # Network interface enumeration for ICE candidates
+# Zero-copy byte buffers (used by MoQ session).
+bytes = "1.5"
 
 # MoQ (Media over QUIC) transport layer (optional, enabled via moq feature)
 moq-transport = { workspace = true, optional = true }
@@ -111,12 +108,6 @@ web-transport = { workspace = true, optional = true }
 quinn = { workspace = true, optional = true }
 url = { version = "2", optional = true }
 rustls-native-certs = { workspace = true, optional = true }
-
-# HTTP client for WHIP signaling (reuses existing hyper from workspace)
-hyper = { workspace = true }  # HTTP client core
-hyper-rustls = { version = "0.27", features = ["http2", "native-tokio", "ring"] }  # TLS support (ring for crypto)
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio"] }  # HTTP client utilities
-http-body-util = "0.1"  # Body handling utilities
 rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring crypto provider
 
 # OpenAPI schema derives on the JSON wire types in `core/json_schema.rs`.
@@ -188,7 +179,6 @@ core-graphics = "0.24"
 streamlib = { path = "../streamlib-sdk" }
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
-rustls = { version = "0.23", features = ["ring"] }  # For WHIP test crypto provider
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 tempfile = "3.14"  # Temporary directories for config tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
