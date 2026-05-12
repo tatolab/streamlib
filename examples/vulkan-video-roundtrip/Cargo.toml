@@ -8,4 +8,5 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-camera = { path = "../../packages/camera" }
 streamlib-display = { path = "../../packages/display" }
 streamlib-h264 = { path = "../../packages/h264" }
+streamlib-h265 = { path = "../../packages/h265" }
 anyhow = "1.0.100"

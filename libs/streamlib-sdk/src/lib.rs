@@ -116,24 +116,17 @@ pub mod sdk {
         // `streamlib-processor-schema`).
         pub use streamlib_engine::core::descriptors::PortSchemaSpec;
 
-        // Display processor lives in `@tatolab/display` (`streamlib-display`),
-        // not in the engine (#674). Apps depend on `streamlib-display`
-        // directly alongside `streamlib`; the SDK does not re-export it.
-
         // Apple-only processors.
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         pub use streamlib_engine::{
             ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor,
         };
 
-        // Linux-only processors (codec + bgra + mp4 writer).
-        // H.264 encoder/decoder live in `@tatolab/h264` (`streamlib-h264`),
-        // not in the engine (#675). Apps depend on `streamlib-h264` directly
-        // alongside `streamlib`; the SDK does not re-export them.
+        // Linux-only processors.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::{
             BgraFileSourceProcessor,
-            H265DecoderProcessor, H265EncoderProcessor, LinuxMp4WriterProcessor,
+            LinuxMp4WriterProcessor,
         };
 
         // MoQ feature-gated processors.

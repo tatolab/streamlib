@@ -2,9 +2,6 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Wire vocabulary now lives in @tatolab/core (#401). The four canonical
-# wire types (VideoFrame, AudioFrame, EncodedVideoFrame, EncodedAudioFrame)
-# are pulled in via this dependency rather than declared inline.
 package:
   org: tatolab
   name: streamlib-engine
@@ -14,7 +11,7 @@ package:
 dependencies:
   "@tatolab/core": "^1.0.0"
 
-# Dev-time path override; `streamlib pack` rejects this (#717).
+# Dev-time path override; `streamlib pack` rejects this.
 patch:
   "@tatolab/core":
     path: ../../packages/core
@@ -28,7 +25,7 @@ patch:
 # slpkg archive. `External { package }` — bare type-name imported from
 # the named dep; resolution walks the dep's own `schemas:` map.
 schemas:
-  # Wire types imported from @tatolab/core (#767).
+  # Wire types imported from @tatolab/core.
   AudioFrame:
     package: "@tatolab/core"
   EncodedAudioFrame:
@@ -38,18 +35,13 @@ schemas:
   VideoFrame:
     package: "@tatolab/core"
   # Processor config schemas. Map keys are PascalCase aliases for the
-  # legacy reverse-DNS schema files; in-passing reverse-DNS migration is
-  # tracked per carve-out, not in #767.
+  # reverse-DNS schema file names.
   ApiServerConfig:
     file: schemas/com.streamlib.api_server.config@1.0.0.yaml
   BgraFileSourceConfig:
     file: schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
   ClapEffectConfig:
     file: schemas/com.streamlib.clap.effect.config@1.0.0.yaml
-  H265DecoderConfig:
-    file: schemas/com.streamlib.h265_decoder.config@1.0.0.yaml
-  H265EncoderConfig:
-    file: schemas/com.streamlib.h265_encoder.config@1.0.0.yaml
   LinuxMp4WriterConfig:
     file: schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml
   MoqPublishTrackConfig:
@@ -81,7 +73,6 @@ schemas:
 
 processors:
   # === Apple platform processors ===
-  # Display processor lives in @tatolab/display (#674).
 
   - name: Mp4Writer
     version: 1.0.0
@@ -240,51 +231,6 @@ processors:
         buffer_size: 4
 
   # === Codecs ===
-  # H.264 encoder/decoder live in @tatolab/h264 (#675).
-
-  - name: H265Encoder
-    version: 1.0.0
-    description: "Encodes VideoFrame to EncodedVideoFrame (H.265) via Vulkan Video"
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: H265EncoderConfig
-    inputs:
-      - name: video_in
-        schema: VideoFrame
-        description: Raw video frames to encode
-        read_mode: read_next_in_order
-        buffer_size: 8
-    outputs:
-      - name: encoded_video_out
-        schema: EncodedVideoFrame
-        description: H.265 encoded video frames
-
-  - name: H265Decoder
-    version: 1.0.0
-    description: "Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video"
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: H265DecoderConfig
-    inputs:
-      - name: encoded_video_in
-        schema: EncodedVideoFrame
-        description: H.265 encoded video frames to decode
-        read_mode: read_next_in_order
-        buffer_size: 16
-    outputs:
-      - name: video_out
-        schema: VideoFrame
-        description: Decoded video frames
 
   - name: OpusEncoder
     version: 1.0.0

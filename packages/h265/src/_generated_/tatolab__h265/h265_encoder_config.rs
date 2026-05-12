@@ -16,13 +16,13 @@ pub struct H265EncoderConfig {
     pub bitrate_bps: Option<u32>,
 
     /// Vulkan API encoder-effort index
-    /// (VkVideoEncodeQualityLevelInfoKHR::quality_level). Higher =
-    /// more GPU work per frame (mode decision, RD-opt, motion search).
-    /// NOT an H.265 quality knob — profile, tier, level_idc, QP,
-    /// and rate-control are configured elsewhere. Valid values are
-    /// 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the session clamps as
-    /// a safety floor. Unset = codec default. See docs/research/h265-encoder-
-    /// quality-knobs.md.
+    /// (VkVideoEncodeQualityLevelInfoKHR::quality_level). Higher = more GPU
+    /// work per frame (mode decision, RD-opt, motion search). NOT an H.265
+    /// quality knob — profile, tier, level_idc, QP, and rate-control are
+    /// configured elsewhere. Valid values are
+    /// 0..VkVideoEncodeCapabilitiesKHR::maxQualityLevels; the session clamps
+    /// as a safety floor. Unset = codec default. See docs/research/h265-
+    /// encoder-quality-knobs.md.
     #[serde(rename = "effort_level")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort_level: Option<u32>,
