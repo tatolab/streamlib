@@ -29,7 +29,7 @@
 //!     version: "1.0.0"
 //!
 //! metadata:
-//!   name: H264EncoderConfig
+//!   name: JtdCodegenFixtureA
 //!
 //! properties:
 //!   source_frame:
@@ -606,7 +606,7 @@ mod tests {
     fn sentinel_name_differs_per_ident() {
         let a = make_ident("tatolab", "core", "VideoFrame", (1, 0, 0));
         let b = make_ident("tatolab", "core", "AudioFrame", (1, 0, 0));
-        let c = make_ident("tatolab", "h264", "VideoFrame", (1, 0, 0));
+        let c = make_ident("tatolab", "jtdcodegenother", "VideoFrame", (1, 0, 0));
         let d = make_ident("tatolab", "core", "VideoFrame", (1, 0, 1));
         assert_ne!(sentinel_name(&a), sentinel_name(&b));
         assert_ne!(sentinel_name(&a), sentinel_name(&c));
@@ -641,7 +641,7 @@ imports:
     version: "1.0.0"
 
 metadata:
-  name: H264EncoderConfig
+  name: JtdCodegenFixtureA
 
 properties:
   source:
@@ -714,7 +714,7 @@ properties:
              #[derive(Debug, Default, Serialize, Deserialize)]\n\
              pub struct {} {{\n}}\n\n\
              #[derive(Debug, Default, Serialize, Deserialize)]\n\
-             pub struct H264EncoderConfig {{\n    pub source: {},\n    pub bitrate: u32,\n}}\n",
+             pub struct JtdCodegenFixtureA {{\n    pub source: {},\n    pub bitrate: u32,\n}}\n",
             sentinel, sentinel
         );
 
@@ -743,7 +743,7 @@ properties:
             "# Copyright (c) 2025 Jonathan Fontanez\n\n\
              from dataclasses import dataclass\n\n\
              @dataclass\nclass {}:\n    pass\n\n\
-             @dataclass\nclass H264EncoderConfig:\n    source: '{}'\n    bitrate: 'int'\n",
+             @dataclass\nclass JtdCodegenFixtureA:\n    source: '{}'\n    bitrate: 'int'\n",
             sentinel, sentinel
         );
 
@@ -767,7 +767,7 @@ properties:
         let code = format!(
             "// Copyright (c) 2025 Jonathan Fontanez\n\n\
              export interface {} {{\n}}\n\n\
-             export interface H264EncoderConfig {{\n  source: {};\n  bitrate: number;\n}}\n",
+             export interface JtdCodegenFixtureA {{\n  source: {};\n  bitrate: number;\n}}\n",
             sentinel, sentinel
         );
 

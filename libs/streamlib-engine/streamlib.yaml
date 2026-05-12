@@ -28,8 +28,6 @@ schemas:
   - schemas/com.streamlib.api_server.config@1.0.0.yaml
   - schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
   - schemas/com.streamlib.clap.effect.config@1.0.0.yaml
-  - schemas/com.streamlib.h264_decoder.config@1.0.0.yaml
-  - schemas/com.streamlib.h264_encoder.config@1.0.0.yaml
   - schemas/com.streamlib.h265_decoder.config@1.0.0.yaml
   - schemas/com.streamlib.h265_encoder.config@1.0.0.yaml
   - schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml
@@ -207,50 +205,7 @@ processors:
         buffer_size: 4
 
   # === Codecs ===
-
-  - name: H264Encoder
-    version: 1.0.0
-    description: "Encodes VideoFrame to EncodedVideoFrame (H.264) via Vulkan Video"
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: com.streamlib.h264_encoder.config@1.0.0
-    inputs:
-      - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
-        description: Raw video frames to encode
-        read_mode: read_next_in_order
-        buffer_size: 8
-    outputs:
-      - name: encoded_video_out
-        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
-        description: H.264 encoded video frames
-
-  - name: H264Decoder
-    version: 1.0.0
-    description: "Decodes EncodedVideoFrame (H.264) to VideoFrame via Vulkan Video"
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: com.streamlib.h264_decoder.config@1.0.0
-    inputs:
-      - name: encoded_video_in
-        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
-        description: H.264 encoded video frames to decode
-        read_mode: read_next_in_order
-        buffer_size: 16
-    outputs:
-      - name: video_out
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
-        description: Decoded video frames
+  # H.264 encoder/decoder live in @tatolab/h264 (#675).
 
   - name: H265Encoder
     version: 1.0.0

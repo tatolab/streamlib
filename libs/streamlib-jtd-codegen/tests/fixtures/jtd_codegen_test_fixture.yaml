@@ -1,0 +1,54 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only fixture for jtd-codegen's cross-language consistency tests.
+# NOT a real production schema — exists solely to exercise the
+# deterministic field-ordering pass across Rust / Python / TypeScript
+# backends.
+#
+# Properties are intentionally declared in non-alphabetical order so a
+# regression that bypasses the lexicographic-ordering pass shows up as
+# a mismatch. The Greek-letter naming is deliberately abstract so no
+# one mistakes this for a domain config.
+#
+# Owned by `streamlib-jtd-codegen` — frozen here rather than in any
+# domain package so the codegen tests don't break when production
+# schemas migrate out into their own carve-out crates.
+
+metadata:
+  name: jtd_codegen_test_fixture
+  description: "Test fixture for jtd-codegen cross-language consistency. Not a real schema."
+
+optionalProperties:
+  zeta:
+    metadata:
+      description: "Test field — declared first in YAML, sorts last."
+    type: float64
+  alpha:
+    metadata:
+      description: "Test field — declared second, sorts first."
+    type: int32
+  mu:
+    metadata:
+      description: "Test field."
+    type: uint32
+  beta:
+    metadata:
+      description: "Test field."
+    type: string
+  epsilon:
+    metadata:
+      description: "Test field."
+    type: boolean
+  delta:
+    metadata:
+      description: "Test field."
+    type: int32
+  gamma:
+    metadata:
+      description: "Test field."
+    type: float32
+  nu:
+    metadata:
+      description: "Test field."
+    type: uint32

@@ -164,12 +164,9 @@ pub use core::processors::{OpusEncoderProcessor, OpusDecoderProcessor};
 pub use _generated_::{OpusEncoderConfig, OpusDecoderConfig};
 
 // Vulkan Video codec processors (Linux)
-#[cfg(target_os = "linux")]
-pub use linux::processors::h264_encoder::H264EncoderProcessor;
+// H.264 encoder/decoder live in `@tatolab/h264` (`streamlib-h264`) (#675).
 #[cfg(target_os = "linux")]
 pub use linux::processors::h265_encoder::H265EncoderProcessor;
-#[cfg(target_os = "linux")]
-pub use linux::processors::h264_decoder::H264DecoderProcessor;
 #[cfg(target_os = "linux")]
 pub use linux::processors::h265_decoder::H265DecoderProcessor;
 #[cfg(target_os = "linux")]
@@ -178,7 +175,6 @@ pub use linux::processors::mp4_writer::LinuxMp4WriterProcessor;
 pub use linux::processors::bgra_file_source::BgraFileSourceProcessor;
 #[cfg(target_os = "linux")]
 pub use _generated_::{
-    H264EncoderConfig, H264DecoderConfig,
     H265EncoderConfig, H265DecoderConfig,
     LinuxMp4WriterConfig, BgraFileSourceConfig,
 };
@@ -301,7 +297,7 @@ pub mod sdk {
 
         #[cfg(target_os = "linux")]
         pub use crate::{
-            BgraFileSourceProcessor, H264DecoderProcessor, H264EncoderProcessor,
+            BgraFileSourceProcessor,
             H265DecoderProcessor, H265EncoderProcessor, LinuxMp4WriterProcessor,
         };
 

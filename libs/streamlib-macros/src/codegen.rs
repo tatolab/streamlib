@@ -168,8 +168,8 @@ pub fn generate_from_processor_schema(
 ///   `com.tatolab.buffer_rechunker.config@1.0.0`) emits the unqualified
 ///   path `crate::_generated_::<TypeName>Config`. Legacy schemas land at
 ///   the `_generated_/` root by codegen convention (the reverse-DNS
-///   filename already encodes org/processor — `com_streamlib_h264_*` vs
-///   `com_tatolab_camera_*` — so collisions are filename-prevented at the
+///   filename already encodes org/processor — `com_streamlib_h265_*` vs
+///   `com_tatolab_screen_capture_*` — so collisions are filename-prevented at the
 ///   codegen layer).
 ///
 /// Defensive shape, not future-proofing: the qualified path makes
@@ -280,8 +280,8 @@ mod derive_config_type_tests {
             "crate :: _generated_ :: BufferRechunkerConfig",
         );
         assert_eq!(
-            render("com.streamlib.h264_encoder.config@1.0.0"),
-            "crate :: _generated_ :: H264EncoderConfig",
+            render("com.tatolab.jtd_codegen_fixture_a.config@1.0.0"),
+            "crate :: _generated_ :: JtdCodegenFixtureAConfig",
         );
         assert_eq!(
             render("com.streamlib.api_server.config@1.0.0"),

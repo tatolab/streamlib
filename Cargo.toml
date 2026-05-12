@@ -28,6 +28,7 @@ members = [
     "packages/audio",            # @tatolab/audio — audio processors carved out of the streamlib engine (#672)
     "packages/camera",           # @tatolab/camera — camera capture processor carved out of the streamlib engine (#673)
     "packages/display",          # @tatolab/display — display processor carved out of the streamlib engine (#674)
+    "packages/h264",             # @tatolab/h264 — H.264 encoder + decoder via Vulkan Video carved out of the streamlib engine (#675)
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
     # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
     "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)

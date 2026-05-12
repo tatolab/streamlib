@@ -8,8 +8,6 @@ from .com_streamlib_bgra_file_source_config import BgraFileSourceConfig
 from .com_streamlib_clap_effect_config import EffectConfig
 from .com_streamlib_escalate_request import EscalateRequest
 from .com_streamlib_escalate_response import EscalateResponse
-from .com_streamlib_h264_decoder_config import H264DecoderConfig
-from .com_streamlib_h264_encoder_config import H264EncoderConfig
 from .com_streamlib_h265_decoder_config import H265DecoderConfig
 from .com_streamlib_h265_encoder_config import H265EncoderConfig
 from .com_streamlib_linux_mp4_writer_config import LinuxMp4WriterConfig
@@ -33,8 +31,6 @@ __all__ = [
     "EffectConfig",
     "EscalateRequest",
     "EscalateResponse",
-    "H264DecoderConfig",
-    "H264EncoderConfig",
     "H265DecoderConfig",
     "H265EncoderConfig",
     "LinuxMp4WriterConfig",

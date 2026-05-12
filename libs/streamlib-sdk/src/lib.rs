@@ -127,9 +127,12 @@ pub mod sdk {
         };
 
         // Linux-only processors (codec + bgra + mp4 writer).
+        // H.264 encoder/decoder live in `@tatolab/h264` (`streamlib-h264`),
+        // not in the engine (#675). Apps depend on `streamlib-h264` directly
+        // alongside `streamlib`; the SDK does not re-export them.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::{
-            BgraFileSourceProcessor, H264DecoderProcessor, H264EncoderProcessor,
+            BgraFileSourceProcessor,
             H265DecoderProcessor, H265EncoderProcessor, LinuxMp4WriterProcessor,
         };
 
