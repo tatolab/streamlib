@@ -1,18 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// MoQ (Media over QUIC) Session
-//
-// Manages a QUIC/WebTransport connection to a MoQ relay for publish/subscribe.
-// Uses moq-transport (cloudflare/moq-rs) for the MoQ protocol and
-// web-transport-quinn for the underlying QUIC/WebTransport connection.
+//! MoQ (Media over QUIC) session — QUIC/WebTransport client + publish/subscribe state.
 
-use crate::core::{Result, Error};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
+use streamlib::sdk::error::{Error, Result};
+
+/// Default MoQ relay (Cloudflare draft-14).
+pub const DEFAULT_MOQ_RELAY_URL: &str = "https://draft-14.cloudflare.mediaoverquic.com";
 
 /// Accepts any TLS certificate without verification (development only).
 #[derive(Debug)]
@@ -63,16 +62,12 @@ impl rustls::client::danger::ServerCertVerifier for NoTlsCertificateVerification
     }
 }
 
-// ============================================================================
-// MOQ SESSION CONFIGURATION
-// ============================================================================
-
 /// Configuration for connecting to a MoQ relay.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MoqRelayConfig {
-    /// MoQ relay endpoint URL (e.g., "https://relay.quic.video").
+    /// MoQ relay endpoint URL.
     pub relay_endpoint_url: String,
-    /// Broadcast namespace path (e.g., "my-broadcast-name"). Case-sensitive, no trailing slash.
+    /// Broadcast namespace path. Case-sensitive, no trailing slash.
     pub broadcast_path: String,
     /// Disable TLS certificate verification (for development only).
     pub tls_disable_verify: bool,
@@ -83,7 +78,7 @@ pub struct MoqRelayConfig {
 impl Default for MoqRelayConfig {
     fn default() -> Self {
         Self {
-            relay_endpoint_url: "https://draft-14.cloudflare.mediaoverquic.com".to_string(),
+            relay_endpoint_url: DEFAULT_MOQ_RELAY_URL.to_string(),
             broadcast_path: String::new(),
             tls_disable_verify: false,
             timeout_ms: 10000,
@@ -115,13 +110,9 @@ fn create_webtransport_client(
     let crypto = if tls_disable_verify {
         rustls::ClientConfig::builder_with_provider(provider.clone())
             .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|e| {
-                Error::Runtime(format!("TLS config failed: {e}"))
-            })?
+            .map_err(|e| Error::Runtime(format!("TLS config failed: {e}")))?
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(
-                NoTlsCertificateVerification(provider),
-            ))
+            .with_custom_certificate_verifier(Arc::new(NoTlsCertificateVerification(provider)))
             .with_no_client_auth()
     } else {
         let mut roots = rustls::RootCertStore::empty();
@@ -133,9 +124,7 @@ fn create_webtransport_client(
         }
         rustls::ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])
-            .map_err(|e| {
-                Error::Runtime(format!("TLS config failed: {e}"))
-            })?
+            .map_err(|e| Error::Runtime(format!("TLS config failed: {e}")))?
             .with_root_certificates(roots)
             .with_no_client_auth()
     };
@@ -163,14 +152,7 @@ fn create_webtransport_client(
     Ok(web_transport::quinn::Client::new(endpoint, client_config))
 }
 
-// ============================================================================
-// MOQ PUBLISH SESSION
-// ============================================================================
-
 /// Publishes data to a MoQ relay via moq-transport.
-///
-/// Wraps a WebTransport connection + MoQ session with track management.
-/// Tracks are created on-demand and served to subscribers via the relay.
 pub struct MoqPublishSession {
     _config: MoqRelayConfig,
     tracks_writer: moq_transport::serve::TracksWriter,
@@ -178,16 +160,12 @@ pub struct MoqPublishSession {
     /// Active SubgroupWriter per track — reused across frames within a GOP.
     /// A new subgroup is created on keyframe; P-frames reuse the existing one.
     active_subgroup_writers: HashMap<String, moq_transport::serve::SubgroupWriter>,
-    /// Keeps the TracksRequest alive so announce can fulfill dynamic subscriptions.
     _tracks_request: moq_transport::serve::TracksRequest,
-    /// Keeps the MoQ session event loop alive.
     _session_task: tokio::task::JoinHandle<()>,
-    /// Keeps the announce (serve subscriptions) loop alive.
     _announce_task: tokio::task::JoinHandle<()>,
 }
 
 impl MoqPublishSession {
-    /// Connect to a MoQ relay and prepare to publish a broadcast.
     pub async fn connect(config: MoqRelayConfig) -> Result<Self> {
         let url = config.full_url()?;
         let client = create_webtransport_client(config.tls_disable_verify)?;
@@ -196,7 +174,6 @@ impl MoqPublishSession {
             Error::Runtime(format!("MoQ WebTransport connect failed: {e}"))
         })?;
 
-        // Convert web_transport_quinn::Session → web_transport::Session for moq-transport
         let wt_session: web_transport::Session = wt_session.into();
 
         let (session, mut publisher, _subscriber) =
@@ -210,7 +187,6 @@ impl MoqPublishSession {
                 Error::Runtime(format!("MoQ session connect failed: {e}"))
             })?;
 
-        // Run session event loop in background
         let session_task = tokio::spawn(async move {
             if let Err(e) = session.run().await {
                 if !e.is_graceful_close() {
@@ -219,16 +195,15 @@ impl MoqPublishSession {
             }
         });
 
-        // Namespace must be a non-empty broadcast name. The URL path is the
-        // scope (routing bucket) and the namespace lives inside it.
-        // Publisher and subscriber must use the exact same namespace.
+        // Namespace must be a non-empty broadcast name. Publisher and
+        // subscriber must use the exact same namespace.
         let namespace = moq_transport::coding::TrackNamespace::from_utf8_path(
             &config.broadcast_path,
         );
         let (tracks_writer, tracks_request, tracks_reader) =
             moq_transport::serve::Tracks::new(namespace).produce();
 
-        // Spawn announce loop — serves incoming subscriptions from the relay
+        // Spawn announce loop — serves incoming subscriptions from the relay.
         let announce_task = tokio::spawn(async move {
             if let Err(e) = publisher.announce(tracks_reader).await {
                 if !matches!(
@@ -258,23 +233,17 @@ impl MoqPublishSession {
         })
     }
 
-    /// Publish a frame (opaque bytes) to a track.
+    /// Publish a frame to a track.
     ///
-    /// - `track_name`: MoQ track name (typically the schema_name from FramePayload).
-    /// - `payload`: Raw bytes to publish.
-    /// - `is_keyframe`: If true, starts a new subgroup (MoQ Group = GOP boundary).
-    ///   P-frames reuse the active subgroup so all frames in a GOP share one
-    ///   subgroup, preventing the subscriber from missing frames.
+    /// A new subgroup is started on keyframe (or first frame); P-frames
+    /// reuse the existing one so a GOP shares one subgroup. Subscribers
+    /// stream objects in real-time without waiting for the GOP to end.
     pub fn publish_frame(
         &mut self,
         track_name: &str,
         payload: &[u8],
         is_keyframe: bool,
     ) -> Result<()> {
-        // Per-GOP subgroup grouping: start a new subgroup on keyframe (or first
-        // frame), then reuse it for subsequent P-frames. SubgroupReader streams
-        // objects in real-time from in-progress subgroups, so the subscriber
-        // receives each frame as it's written without waiting for the GOP to end.
         let needs_new_subgroup = is_keyframe
             || !self.active_subgroup_writers.contains_key(track_name);
 
@@ -290,11 +259,8 @@ impl MoqPublishSession {
         let subgroup = self.active_subgroup_writers.get_mut(track_name).unwrap();
         let write_result = subgroup.write(bytes::Bytes::copy_from_slice(payload));
         if let Err(e) = write_result {
-            // Remove the stale writer so next call creates a new one
             self.active_subgroup_writers.remove(track_name);
-            return Err(Error::Runtime(format!(
-                "Failed to write MoQ frame: {e}"
-            )));
+            return Err(Error::Runtime(format!("Failed to write MoQ frame: {e}")));
         }
 
         Ok(())
@@ -311,12 +277,11 @@ impl MoqPublishSession {
                 ))
             })?;
 
-            let subgroups_writer =
-                track_writer.subgroups().map_err(|e| {
-                    Error::Runtime(format!(
-                        "Failed to enter subgroups mode for track '{track_name}': {e}"
-                    ))
-                })?;
+            let subgroups_writer = track_writer.subgroups().map_err(|e| {
+                Error::Runtime(format!(
+                    "Failed to enter subgroups mode for track '{track_name}': {e}"
+                ))
+            })?;
 
             self.track_subgroup_writers
                 .insert(track_name.to_string(), subgroups_writer);
@@ -326,26 +291,17 @@ impl MoqPublishSession {
     }
 }
 
-// ============================================================================
-// MOQ SUBSCRIBE SESSION
-// ============================================================================
-
 /// Subscribes to data from a MoQ relay via moq-transport.
-///
-/// Creates subscriptions to individual tracks and returns readers
-/// that yield frames as they arrive from the relay.
 pub struct MoqSubscribeSession {
     _config: MoqRelayConfig,
     subscriber: moq_transport::session::Subscriber,
     namespace: moq_transport::coding::TrackNamespace,
     /// Tokio handle captured during connect() for spawning from non-tokio threads.
     tokio_handle: tokio::runtime::Handle,
-    /// Keeps the MoQ session event loop alive.
     _session_task: tokio::task::JoinHandle<()>,
 }
 
 impl MoqSubscribeSession {
-    /// Connect to a MoQ relay and prepare to subscribe.
     pub async fn connect(config: MoqRelayConfig) -> Result<Self> {
         let url = config.full_url()?;
         let client = create_webtransport_client(config.tls_disable_verify)?;
@@ -367,7 +323,6 @@ impl MoqSubscribeSession {
                 Error::Runtime(format!("MoQ session connect failed: {e}"))
             })?;
 
-        // Run session event loop in background
         let session_task = tokio::spawn(async move {
             if let Err(e) = session.run().await {
                 if !e.is_graceful_close() {
@@ -376,7 +331,6 @@ impl MoqSubscribeSession {
             }
         });
 
-        // Namespace must match exactly what the publisher announced.
         let namespace = moq_transport::coding::TrackNamespace::from_utf8_path(
             &config.broadcast_path,
         );
@@ -396,25 +350,13 @@ impl MoqSubscribeSession {
     }
 
     /// Subscribe to a specific track within the broadcast.
-    ///
-    /// Returns a [`MoqTrackReader`] that yields frames from the track.
-    /// The subscription runs in the background — data flows as long as
-    /// the session and reader are alive.
-    pub fn subscribe_track(
-        &self,
-        track_name: &str,
-    ) -> Result<MoqTrackReader> {
+    pub fn subscribe_track(&self, track_name: &str) -> Result<MoqTrackReader> {
         let (writer, reader) = moq_transport::serve::Track::new(
             self.namespace.clone(),
             track_name.to_string(),
         )
         .produce();
 
-        // Spawn the subscribe task — sends SUBSCRIBE to the relay and blocks
-        // until the subscription ends. Data is routed to the TrackWriter.
-        // Uses tokio::Handle::current() so this works from both tokio tasks
-        // and dedicated processor threads (which have a tokio runtime available
-        // via RuntimeContext).
         let mut subscriber = self.subscriber.clone();
         let track_name_owned = track_name.to_string();
         let handle = tokio::runtime::Handle::try_current()
@@ -438,26 +380,15 @@ impl MoqSubscribeSession {
     }
 }
 
-// ============================================================================
-// MOQ TRACK READER (subscribe-side)
-// ============================================================================
-
 /// Reads frames from a subscribed MoQ track.
-///
-/// Wraps the moq-transport subgroup reading pattern into a simple
-/// subgroup → frame iteration API similar to moq-lite's TrackConsumer.
 pub struct MoqTrackReader {
     track_reader: moq_transport::serve::TrackReader,
     subgroups_reader: Option<moq_transport::serve::SubgroupsReader>,
 }
 
 impl MoqTrackReader {
-    /// Wait for the next subgroup (analogous to moq-lite's `next_group`).
-    ///
-    /// On the first call, waits for the track mode to be set by the publisher.
-    /// Returns `None` when the track ends.
+    /// Wait for the next subgroup. Returns `None` when the track ends.
     pub async fn next_subgroup(&mut self) -> Result<Option<MoqSubgroupReader>> {
-        // Lazily initialize the subgroups reader on first call
         if self.subgroups_reader.is_none() {
             let mode = self.track_reader.mode().await.map_err(|e| {
                 Error::Runtime(format!("MoQ track mode error: {e}"))
@@ -492,7 +423,7 @@ pub struct MoqSubgroupReader {
 }
 
 impl MoqSubgroupReader {
-    /// Read the next frame from this subgroup. Returns `None` when the subgroup ends.
+    /// Read the next frame. Returns `None` when the subgroup ends.
     pub async fn read_frame(&mut self) -> Result<Option<bytes::Bytes>> {
         self.inner.read_next().await.map_err(|e| {
             Error::Runtime(format!("MoQ frame read error: {e}"))
@@ -500,29 +431,20 @@ impl MoqSubgroupReader {
     }
 }
 
-// ============================================================================
-// SHARED MOQ SESSIONS (runtime-managed)
-// ============================================================================
-
-/// Default MoQ relay (Cloudflare draft-14).
-pub const DEFAULT_MOQ_RELAY_URL: &str = "https://draft-14.cloudflare.mediaoverquic.com";
-
-/// Runtime-managed MoQ sessions shared by all MoQ processors.
+/// Per-runtime publish + subscribe sessions, lazily created on first use.
 ///
 /// One QUIC connection for publishing (multiple tracks), one for subscribing.
-/// Sessions are created lazily on first use and shared via Arc.
 #[derive(Clone)]
 pub struct SharedMoqSessions {
     relay_url: String,
     broadcast_path: String,
     publish_session: Arc<tokio::sync::OnceCell<Arc<Mutex<MoqPublishSession>>>>,
     subscribe_session: Arc<tokio::sync::OnceCell<Arc<MoqSubscribeSession>>>,
-    /// Track names currently being published (for catalog).
+    /// Track names currently being published (for catalog discovery).
     published_tracks: Arc<Mutex<Vec<String>>>,
 }
 
 impl SharedMoqSessions {
-    /// Create a new shared session holder for a runtime.
     pub fn new(runtime_id: &str) -> Self {
         let broadcast_path = format!("streamlib/{}", runtime_id);
         Self {
@@ -534,7 +456,6 @@ impl SharedMoqSessions {
         }
     }
 
-    /// Get or create the shared publish session.
     pub async fn get_publish_session(&self) -> Result<Arc<Mutex<MoqPublishSession>>> {
         let session = self.publish_session.get_or_try_init(|| async {
             let config = MoqRelayConfig {
@@ -549,7 +470,6 @@ impl SharedMoqSessions {
         Ok(Arc::clone(session))
     }
 
-    /// Get or create the shared subscribe session.
     pub async fn get_subscribe_session(&self) -> Result<Arc<MoqSubscribeSession>> {
         let session = self.subscribe_session.get_or_try_init(|| async {
             let config = MoqRelayConfig {
@@ -564,7 +484,6 @@ impl SharedMoqSessions {
         Ok(Arc::clone(session))
     }
 
-    /// Register a track name as published (for catalog).
     pub fn register_published_track(&self, track_name: &str) {
         let mut tracks = self.published_tracks.lock();
         if !tracks.contains(&track_name.to_string()) {
@@ -572,13 +491,125 @@ impl SharedMoqSessions {
         }
     }
 
-    /// Get all published track names.
     pub fn published_track_names(&self) -> Vec<String> {
         self.published_tracks.lock().clone()
     }
 
-    /// Get the broadcast path (for logging/discovery).
     pub fn broadcast_path(&self) -> &str {
         &self.broadcast_path
+    }
+}
+
+/// Process-global registry keyed by `RuntimeContext::runtime_id()`.
+///
+/// MoQ processors share one publish session per runtime so all tracks
+/// announce under one namespace. The engine no longer holds this state
+/// (`@tatolab/moq` is read-only against the engine substrate), so the
+/// package keeps its own registry keyed by the runtime's public id.
+///
+/// Entries persist for the process's lifetime — runtime teardown does
+/// not reclaim them. This matches the typical one-runtime-per-process
+/// shape; multi-runtime apps that recycle runtimes will accumulate
+/// stale entries until process exit.
+static RUNTIME_SESSIONS: LazyLock<Mutex<HashMap<String, SharedMoqSessions>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Get or create the [`SharedMoqSessions`] for a runtime, keyed by
+/// `RuntimeContext::runtime_id()`.
+pub fn sessions_for_runtime(runtime_id: &str) -> SharedMoqSessions {
+    let mut map = RUNTIME_SESSIONS.lock();
+    map.entry(runtime_id.to_string())
+        .or_insert_with(|| SharedMoqSessions::new(runtime_id))
+        .clone()
+}
+
+/// Look up the [`SharedMoqSessions`] for a runtime without creating one.
+///
+/// Returns `None` when no MoQ processor has touched this runtime yet.
+/// Used by read-only consumers (e.g. the API server's catalog endpoint).
+pub fn try_sessions_for_runtime(runtime_id: &str) -> Option<SharedMoqSessions> {
+    RUNTIME_SESSIONS.lock().get(runtime_id).cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Process-global registry — every test uses a unique runtime id so
+    // entries don't collide across tests in the same process.
+    fn unique_runtime_id(suffix: &str) -> String {
+        format!("test-{}-{}", suffix, uuid_like_counter())
+    }
+
+    fn uuid_like_counter() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    }
+
+    #[test]
+    fn sessions_for_runtime_returns_same_record_on_repeat_calls() {
+        let id = unique_runtime_id("same-record");
+        let a = sessions_for_runtime(&id);
+        let b = sessions_for_runtime(&id);
+
+        // Same broadcast path — namespacing is deterministic from runtime id.
+        assert_eq!(a.broadcast_path(), b.broadcast_path());
+
+        // Track registration on one clone is visible on the other — the
+        // two handles are the same logical registry.
+        a.register_published_track("video");
+        assert!(b.published_track_names().contains(&"video".to_string()));
+    }
+
+    #[test]
+    fn sessions_for_runtime_isolates_distinct_runtimes() {
+        let id_a = unique_runtime_id("isolated-a");
+        let id_b = unique_runtime_id("isolated-b");
+        let a = sessions_for_runtime(&id_a);
+        let b = sessions_for_runtime(&id_b);
+
+        assert_ne!(a.broadcast_path(), b.broadcast_path());
+
+        a.register_published_track("video");
+        // Registering on a does not bleed into b.
+        assert!(b.published_track_names().is_empty());
+    }
+
+    #[test]
+    fn try_sessions_for_runtime_returns_none_before_first_create() {
+        let id = unique_runtime_id("never-touched");
+        assert!(try_sessions_for_runtime(&id).is_none());
+    }
+
+    #[test]
+    fn try_sessions_for_runtime_finds_existing_record() {
+        let id = unique_runtime_id("found");
+        let created = sessions_for_runtime(&id);
+        created.register_published_track("audio");
+
+        let looked_up = try_sessions_for_runtime(&id)
+            .expect("sessions_for_runtime created an entry");
+        assert_eq!(looked_up.broadcast_path(), created.broadcast_path());
+        assert!(
+            looked_up
+                .published_track_names()
+                .contains(&"audio".to_string())
+        );
+    }
+
+    #[test]
+    fn shared_moq_sessions_broadcast_path_uses_runtime_id() {
+        let s = SharedMoqSessions::new("my-runtime");
+        assert_eq!(s.broadcast_path(), "streamlib/my-runtime");
+    }
+
+    #[test]
+    fn shared_moq_sessions_register_published_track_dedupes() {
+        let s = SharedMoqSessions::new("dedupe-runtime");
+        s.register_published_track("video");
+        s.register_published_track("video");
+        s.register_published_track("audio");
+        assert_eq!(s.published_track_names(), vec!["video", "audio"]);
     }
 }

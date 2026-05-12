@@ -15,49 +15,46 @@
 //!   MoqSubscribeTrack → OpusDecoder → AudioOutput (audio)
 //!   MoqSubscribeTrack (sensor data logged)
 //!
-//! All MoQ config is automatic — Cloudflare draft-14 relay, auto-generated namespace.
-//!
-//! Usage:
-//!   cargo run -p moq-roundtrip
+//! All MoQ config is automatic — Cloudflare draft-14 relay, auto-generated
+//! namespace.
 
-use streamlib::sdk::processors::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
-use streamlib::sdk::_generated_::MoqSubscribeTrackConfig;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::processors::{input, output};
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::{input, output, // Codecs + audio processing
-    MoqPublishTrackConfig, // Sinks
-    DisplayProcessor, // Runtime
-    Result};
-use streamlib_audio::{AudioCaptureProcessor, AudioOutputProcessor, AudioResamplerProcessor, BufferRechunkerProcessor, ChordGeneratorProcessor};
-use streamlib_camera::CameraProcessor;
-use streamlib_h264::{H264DecoderProcessor, H264EncoderConfig, H264EncoderProcessor};
-use streamlib_opus::{OpusDecoderProcessor, OpusEncoderProcessor};
-use streamlib::sdk::_generated_::{
-    AudioResamplerConfig, BufferRechunkerConfig, ChordGeneratorConfig, DisplayConfig,
+use streamlib_audio::{
+    AudioCaptureProcessor, AudioOutputProcessor, AudioResamplerProcessor,
+    BufferRechunkerProcessor, ChordGeneratorProcessor,
 };
+use streamlib_camera::CameraProcessor;
+use streamlib_display::DisplayProcessor;
+use streamlib_h264::{H264DecoderProcessor, H264EncoderProcessor};
+use streamlib_moq::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
+use streamlib_opus::{OpusDecoderProcessor, OpusEncoderProcessor};
 
 fn main() -> Result<()> {
     rustls::crypto::ring::default_provider()
         .install_default()
         .ok();
 
-    tracing::info!("=== MoQ Roundtrip - StreamLib Edition ===");
+    tracing::info!("=== MoQ Roundtrip ===");
     tracing::info!("Publishing: camera (H.264) + audio (Opus) + sensor data");
     tracing::info!("Subscribing: video → display, audio → speaker, sensor → log");
 
     let runtime = Runner::new()?;
 
-    // =========================================================================
-    // PUBLISH SIDE
-    // =========================================================================
+    // ---- PUBLISH SIDE ----
 
-    // Video: Camera → H264 Encoder → MoQ Publish
-    let camera = runtime.add_processor(CameraProcessor::Processor::node(Default::default()))?;
-    let h264_enc = runtime.add_processor(H264EncoderProcessor::Processor::node(H264EncoderConfig {
-        keyframe_interval_seconds: Some(2.0), // 2-second GOP (industry standard for streaming)
-        ..Default::default()
-    }))?;
-    let video_pub = runtime.add_processor(MoqPublishTrackProcessor::Processor::node(
-        MoqPublishTrackConfig { track_name: Some("video".to_string()) },
+    let camera = runtime.add_processor(CameraProcessor::node(Default::default()))?;
+    let h264_enc = runtime.add_processor(H264EncoderProcessor::node(
+        H264EncoderProcessor::Config {
+            keyframe_interval_seconds: Some(2.0),
+            ..Default::default()
+        },
+    ))?;
+    let video_pub = runtime.add_processor(MoqPublishTrackProcessor::node(
+        MoqPublishTrackProcessor::Config {
+            track_name: Some("video".to_string()),
+        },
     ))?;
 
     runtime.connect(
@@ -69,22 +66,23 @@ fn main() -> Result<()> {
         input::<MoqPublishTrackProcessor::InputLink::data_in>(&video_pub),
     )?;
 
-    // Audio: AudioCapture → Resampler (48kHz) → Rechunker (960 samples) → Opus Encoder → MoQ Publish
-    let mic = runtime.add_processor(AudioCaptureProcessor::Processor::node(Default::default()))?;
-    let resampler = runtime.add_processor(AudioResamplerProcessor::Processor::node(
-        AudioResamplerConfig {
+    let mic = runtime.add_processor(AudioCaptureProcessor::node(Default::default()))?;
+    let resampler = runtime.add_processor(AudioResamplerProcessor::node(
+        AudioResamplerProcessor::Config {
             target_sample_rate: 48000,
             ..Default::default()
         },
     ))?;
-    let rechunker = runtime.add_processor(BufferRechunkerProcessor::Processor::node(
-        BufferRechunkerConfig {
+    let rechunker = runtime.add_processor(BufferRechunkerProcessor::node(
+        BufferRechunkerProcessor::Config {
             target_buffer_size: 960,
         },
     ))?;
-    let opus_enc = runtime.add_processor(OpusEncoderProcessor::Processor::node(Default::default()))?;
-    let audio_pub = runtime.add_processor(MoqPublishTrackProcessor::Processor::node(
-        MoqPublishTrackConfig { track_name: Some("audio".to_string()) },
+    let opus_enc = runtime.add_processor(OpusEncoderProcessor::node(Default::default()))?;
+    let audio_pub = runtime.add_processor(MoqPublishTrackProcessor::node(
+        MoqPublishTrackProcessor::Config {
+            track_name: Some("audio".to_string()),
+        },
     ))?;
 
     runtime.connect(
@@ -104,16 +102,17 @@ fn main() -> Result<()> {
         input::<MoqPublishTrackProcessor::InputLink::data_in>(&audio_pub),
     )?;
 
-    // Sensor: ChordGenerator (simulating sensor telemetry) → MoQ Publish
-    let sensor = runtime.add_processor(ChordGeneratorProcessor::Processor::node(
-        ChordGeneratorConfig {
+    let sensor = runtime.add_processor(ChordGeneratorProcessor::node(
+        ChordGeneratorProcessor::Config {
             amplitude: 0.1,
             buffer_size: 128,
             sample_rate: 8000,
         },
     ))?;
-    let sensor_pub = runtime.add_processor(MoqPublishTrackProcessor::Processor::node(
-        MoqPublishTrackConfig { track_name: Some("sensor".to_string()) },
+    let sensor_pub = runtime.add_processor(MoqPublishTrackProcessor::node(
+        MoqPublishTrackProcessor::Config {
+            track_name: Some("sensor".to_string()),
+        },
     ))?;
 
     runtime.connect(
@@ -121,18 +120,17 @@ fn main() -> Result<()> {
         input::<MoqPublishTrackProcessor::InputLink::data_in>(&sensor_pub),
     )?;
 
-    tracing::info!("Publish side: camera + audio + sensor → MoQ relay");
+    tracing::info!("Publish side wired: camera + audio + sensor → MoQ relay");
 
-    // =========================================================================
-    // SUBSCRIBE SIDE
-    // =========================================================================
+    // ---- SUBSCRIBE SIDE ----
 
-    // Video: MoQ Subscribe → H264 Decoder → Display
-    let video_sub = runtime.add_processor(MoqSubscribeTrackProcessor::Processor::node(
-        MoqSubscribeTrackConfig { track_name: "video".to_string() },
+    let video_sub = runtime.add_processor(MoqSubscribeTrackProcessor::node(
+        MoqSubscribeTrackProcessor::Config {
+            track_name: "video".to_string(),
+        },
     ))?;
-    let h264_dec = runtime.add_processor(H264DecoderProcessor::Processor::node(Default::default()))?;
-    let display = runtime.add_processor(DisplayProcessor::Processor::node(DisplayConfig {
+    let h264_dec = runtime.add_processor(H264DecoderProcessor::node(Default::default()))?;
+    let display = runtime.add_processor(DisplayProcessor::node(DisplayProcessor::Config {
         width: 1280,
         height: 720,
         title: Some("MoQ Roundtrip".to_string()),
@@ -148,23 +146,24 @@ fn main() -> Result<()> {
         input::<DisplayProcessor::InputLink::video>(&display),
     )?;
 
-    // Audio: MoQ Subscribe → Opus Decoder → Resampler (44100Hz) → Rechunker (512) → Audio Output
-    let audio_sub = runtime.add_processor(MoqSubscribeTrackProcessor::Processor::node(
-        MoqSubscribeTrackConfig { track_name: "audio".to_string() },
+    let audio_sub = runtime.add_processor(MoqSubscribeTrackProcessor::node(
+        MoqSubscribeTrackProcessor::Config {
+            track_name: "audio".to_string(),
+        },
     ))?;
-    let opus_dec = runtime.add_processor(OpusDecoderProcessor::Processor::node(Default::default()))?;
-    let sub_resampler = runtime.add_processor(AudioResamplerProcessor::Processor::node(
-        AudioResamplerConfig {
+    let opus_dec = runtime.add_processor(OpusDecoderProcessor::node(Default::default()))?;
+    let sub_resampler = runtime.add_processor(AudioResamplerProcessor::node(
+        AudioResamplerProcessor::Config {
             target_sample_rate: 44100,
             ..Default::default()
         },
     ))?;
-    let sub_rechunker = runtime.add_processor(BufferRechunkerProcessor::Processor::node(
-        BufferRechunkerConfig {
+    let sub_rechunker = runtime.add_processor(BufferRechunkerProcessor::node(
+        BufferRechunkerProcessor::Config {
             target_buffer_size: 512,
         },
     ))?;
-    let speaker = runtime.add_processor(AudioOutputProcessor::Processor::node(Default::default()))?;
+    let speaker = runtime.add_processor(AudioOutputProcessor::node(Default::default()))?;
 
     runtime.connect(
         output::<MoqSubscribeTrackProcessor::OutputLink::data_out>(&audio_sub),
@@ -183,19 +182,16 @@ fn main() -> Result<()> {
         input::<AudioOutputProcessor::InputLink::audio>(&speaker),
     )?;
 
-    // Sensor: MoQ Subscribe (logs received frames, not wired to output)
-    let _sensor_sub = runtime.add_processor(MoqSubscribeTrackProcessor::Processor::node(
-        MoqSubscribeTrackConfig { track_name: "sensor".to_string() },
+    // Sensor subscriber — logs received frames, no downstream wiring.
+    let _sensor_sub = runtime.add_processor(MoqSubscribeTrackProcessor::node(
+        MoqSubscribeTrackProcessor::Config {
+            track_name: "sensor".to_string(),
+        },
     ))?;
 
-    tracing::info!("Subscribe side: MoQ relay → video display + audio output + sensor log");
+    tracing::info!("Subscribe side wired: MoQ relay → video display + audio output + sensor log");
 
-    // =========================================================================
-    // RUN
-    // =========================================================================
-
-    tracing::info!("Starting MoQ roundtrip pipeline...");
-    tracing::info!("Press Ctrl+C to stop.");
+    tracing::info!("Starting MoQ roundtrip pipeline... Ctrl+C to stop.");
 
     runtime.start()?;
     runtime.wait_for_signal()?;

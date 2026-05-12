@@ -18,8 +18,6 @@ default = []
 # GPU backend selection (feature overrides default platform backend)
 backend-metal = []
 backend-vulkan = ["dep:vulkanalia"]
-# MoQ (Media over QUIC) transport layer for network-transparent IPC
-moq = ["dep:moq-transport", "dep:web-transport", "dep:quinn", "dep:url", "dep:rustls-native-certs"]
 # Strip `debug!` (and `trace!`) from release builds. Opt-in per deployment
 # image. `warn!` / `error!` / `info!` are never stripped. See docs/logging.md.
 strip_debug_logging = ["tracing/release_max_level_info"]
@@ -99,16 +97,6 @@ vulkanalia = { workspace = true, optional = true }
 dasp = { version = "0.11", features = ["signal", "slice"] }
 dasp_signal = { version = "0.11", features = ["bus"] }
 
-# Zero-copy byte buffers (used by MoQ session).
-bytes = "1.5"
-
-# MoQ (Media over QUIC) transport layer (optional, enabled via moq feature)
-moq-transport = { workspace = true, optional = true }
-web-transport = { workspace = true, optional = true }
-quinn = { workspace = true, optional = true }
-url = { version = "2", optional = true }
-rustls-native-certs = { workspace = true, optional = true }
-rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring crypto provider
 
 # OpenAPI schema derives on the JSON wire types in `core/json_schema.rs`.
 utoipa = { version = "5.3", features = ["axum_extras"] }

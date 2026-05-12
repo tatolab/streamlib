@@ -17,8 +17,6 @@ struct StashedHandles {
     runtime: Arc<dyn RuntimeOperations>,
     tokio_handle: tokio::runtime::Handle,
     runtime_id: String,
-    #[cfg(feature = "moq")]
-    moq_sessions: streamlib::sdk::streaming::SharedMoqSessions,
 }
 
 /// Docker-style adjectives for runtime name generation.
@@ -122,8 +120,6 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             runtime: ctx.runtime(),
             tokio_handle: ctx.tokio_handle().clone(),
             runtime_id: ctx.runtime_id().to_string(),
-            #[cfg(feature = "moq")]
-            moq_sessions: ctx.moq_sessions().clone(),
         });
         std::future::ready(Ok(()))
     }
@@ -170,7 +166,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let app = crate::handlers::build_router(
             handles.runtime.clone(),
             #[cfg(feature = "moq")]
-            handles.moq_sessions.clone(),
+            handles.runtime_id.clone(),
         );
 
         let config = self.config.clone();

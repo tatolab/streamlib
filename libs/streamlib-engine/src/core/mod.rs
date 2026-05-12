@@ -36,7 +36,6 @@ pub mod processors;
 pub mod pubsub;
 pub mod rhi;
 pub mod runtime;
-pub mod streaming;
 pub mod sync;
 pub mod texture;
 pub mod utils;
@@ -61,8 +60,6 @@ pub use processors::*;
 pub use utils::*;
 pub use execution::*;
 pub use runtime::*;
-#[cfg(feature = "moq")]
-pub use streaming::*;
 pub use sync::*;
 pub use texture::*;
 

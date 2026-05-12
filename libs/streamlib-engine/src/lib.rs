@@ -163,12 +163,6 @@ pub use linux::processors::bgra_file_source::BgraFileSourceProcessor;
 #[cfg(target_os = "linux")]
 pub use _generated_::BgraFileSourceConfig;
 
-// MoQ streaming (cross-platform)
-#[cfg(feature = "moq")]
-pub use core::processors::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
-#[cfg(feature = "moq")]
-pub use _generated_::{MoqPublishTrackConfig, MoqSubscribeTrackConfig};
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{
     request_audio_permission, request_camera_permission, request_display_permission,
@@ -253,7 +247,6 @@ pub mod sdk {
     pub use crate::core::prelude;
     pub use crate::core::rhi;
     pub use crate::core::runtime;
-    pub use crate::core::streaming;
     pub use crate::core::sync;
     pub use crate::core::texture;
     pub use crate::core::utils;
@@ -278,9 +271,6 @@ pub mod sdk {
 
         #[cfg(target_os = "linux")]
         pub use crate::BgraFileSourceProcessor;
-
-        #[cfg(feature = "moq")]
-        pub use crate::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
     }
 
     pub use crate::iceoryx2;

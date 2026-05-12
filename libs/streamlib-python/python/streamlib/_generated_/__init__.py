@@ -7,8 +7,6 @@ from .com_streamlib_bgra_file_source_config import BgraFileSourceConfig
 from .com_streamlib_clap_effect_config import EffectConfig
 from .com_streamlib_escalate_request import EscalateRequest
 from .com_streamlib_escalate_response import EscalateResponse
-from .com_streamlib_moq_publish_track_config import MoqPublishTrackConfig
-from .com_streamlib_moq_subscribe_track_config import MoqSubscribeTrackConfig
 from .com_streamlib_test_configured_processor_config import ConfiguredProcessorConfig
 from .com_tatolab_screen_capture_config import ScreenCaptureConfig
 from .com_tatolab_simple_passthrough_config import SimplePassthroughConfig
@@ -22,8 +20,6 @@ __all__ = [
     "EffectConfig",
     "EscalateRequest",
     "EscalateResponse",
-    "MoqPublishTrackConfig",
-    "MoqSubscribeTrackConfig",
     "ConfiguredProcessorConfig",
     "ScreenCaptureConfig",
     "SimplePassthroughConfig",
