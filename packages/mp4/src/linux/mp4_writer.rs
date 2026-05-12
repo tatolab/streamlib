@@ -1,26 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// Linux MP4 Writer Processor
-//
-// Accepts decoded VideoFrame (raw RGBA pixels), pipes them to ffmpeg for
-// encoding + muxing into an MP4 container with a silent audio track.
-// The writer knows nothing about codecs — ffmpeg handles encoding.
-
-use crate::_generated_::VideoFrame;
-use crate::core::context::GpuContextLimitedAccess;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
+use streamlib::sdk::_generated_::VideoFrame;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::processors::ReactiveProcessor;
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
-// ============================================================================
-// PROCESSOR
-// ============================================================================
-
-#[crate::processor("LinuxMp4Writer")]
+#[streamlib::sdk::processor("LinuxMp4Writer")]
 pub struct LinuxMp4WriterProcessor {
-    /// GPU context for resolving VideoFrame pixel buffers.
     gpu_context: Option<GpuContextLimitedAccess>,
 
     /// ffmpeg child process (spawned on first frame).
@@ -30,7 +20,7 @@ pub struct LinuxMp4WriterProcessor {
     frames_received: u64,
 }
 
-impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
+impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
     async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
@@ -43,7 +33,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
 
     async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if let Some(mut child) = self.ffmpeg_process.take() {
-            // Close stdin to signal ffmpeg that input is done.
+            // Closing stdin signals ffmpeg that input is done.
             drop(child.stdin.take());
 
             let output = child.wait_with_output().map_err(|e| {
@@ -81,15 +71,17 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             .as_ref()
             .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
 
-        // Resolve VideoFrame to pixel buffer for decoded NV12 data.
-        // Decoder outputs NV12 (Y + UV = W*H*3/2). ffmpeg converts to display RGB
-        // internally — same as any consumer video player.
         let pixel_buffer = gpu_ctx.resolve_video_frame_buffer(&frame)?;
-        let raw_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
-        let frame_byte_size = (frame.width * frame.height * 4) as usize;
+        let raw_ptr = pixel_buffer.plane_base_address(0);
+        let frame_byte_size = pixel_buffer.plane_size(0) as usize;
+        if raw_ptr.is_null() || frame_byte_size == 0 {
+            return Err(Error::Runtime(
+                "VideoFrame pixel buffer has no mapped plane data".into(),
+            ));
+        }
         let raw_data = unsafe { std::slice::from_raw_parts(raw_ptr, frame_byte_size) };
 
-        // Lazy init: spawn ffmpeg on first frame so we know width/height/fps.
+        // ffmpeg spawns lazily on the first frame so width/height/fps come from the frame, not config.
         if self.ffmpeg_process.is_none() {
             let fps = frame.fps.unwrap_or(self.config.fps);
             let width = frame.width;
@@ -114,8 +106,7 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
                 "-i", "pipe:0",
             ];
 
-            // Silent audio track — use fixed duration if configured, otherwise
-            // -shortest will trim to video length when stdin closes.
+            // Silent audio track: fixed duration when configured; otherwise -shortest trims to video length when stdin closes.
             if let Some(ref dur) = duration_secs {
                 args.extend_from_slice(&["-f", "lavfi", "-t", dur,
                     "-i", "anullsrc=r=48000:cl=stereo"]);
@@ -144,7 +135,6 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             self.ffmpeg_process = Some(child);
         }
 
-        // Write raw RGBA frame to ffmpeg's stdin.
         let child = self.ffmpeg_process.as_mut().unwrap();
         let stdin = child.stdin.as_mut().ok_or_else(|| {
             Error::Runtime("ffmpeg stdin not available".into())

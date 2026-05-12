@@ -4,8 +4,7 @@
 # JSON Type Definition (RFC 8927) schema for Linux MP4 Writer config
 
 metadata:
-  name: com.streamlib.linux_mp4_writer.config
-  version: 1.0.0
+  type: LinuxMp4WriterConfig
   description: "Configuration for Linux MP4 video writing via ffmpeg encode + mux."
 
 properties:

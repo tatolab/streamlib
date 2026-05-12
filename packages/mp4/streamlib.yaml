@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+package:
+  org: tatolab
+  name: mp4
+  version: 1.0.0
+  description: "MP4 file writer processors"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  VideoFrame:
+    package: "@tatolab/core"
+  LinuxMp4WriterConfig:
+    file: schemas/linux_mp4_writer_config.yaml
+
+processors:
+  - name: LinuxMp4Writer
+    version: 1.0.0
+    description: "Writes video frames to MP4 via ffmpeg encode + mux with silent audio track"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: LinuxMp4WriterConfig
+    inputs:
+      - name: video_in
+        schema: VideoFrame
+        description: Decoded video frames (raw pixels) to encode and write
+        read_mode: skip_to_latest
+        buffer_size: 4
