@@ -10,7 +10,7 @@ pub mod moq_publish_track;
 pub mod moq_session;
 pub mod moq_subscribe_track;
 
-pub use _generated_::{EncodedVideoFrame, MoqPublishTrackConfig, MoqSubscribeTrackConfig};
+pub use _generated_::{MoqPublishTrackConfig, MoqSubscribeTrackConfig};
 pub use moq_catalog::{
     catalog_entry_for_output_port, processor_port_to_moq_track_name, MoqBroadcastCatalog,
     MoqCatalogTrackEntry,

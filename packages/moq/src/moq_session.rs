@@ -530,3 +530,86 @@ pub fn sessions_for_runtime(runtime_id: &str) -> SharedMoqSessions {
 pub fn try_sessions_for_runtime(runtime_id: &str) -> Option<SharedMoqSessions> {
     RUNTIME_SESSIONS.lock().get(runtime_id).cloned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Process-global registry — every test uses a unique runtime id so
+    // entries don't collide across tests in the same process.
+    fn unique_runtime_id(suffix: &str) -> String {
+        format!("test-{}-{}", suffix, uuid_like_counter())
+    }
+
+    fn uuid_like_counter() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    }
+
+    #[test]
+    fn sessions_for_runtime_returns_same_record_on_repeat_calls() {
+        let id = unique_runtime_id("same-record");
+        let a = sessions_for_runtime(&id);
+        let b = sessions_for_runtime(&id);
+
+        // Same broadcast path — namespacing is deterministic from runtime id.
+        assert_eq!(a.broadcast_path(), b.broadcast_path());
+
+        // Track registration on one clone is visible on the other — the
+        // two handles are the same logical registry.
+        a.register_published_track("video");
+        assert!(b.published_track_names().contains(&"video".to_string()));
+    }
+
+    #[test]
+    fn sessions_for_runtime_isolates_distinct_runtimes() {
+        let id_a = unique_runtime_id("isolated-a");
+        let id_b = unique_runtime_id("isolated-b");
+        let a = sessions_for_runtime(&id_a);
+        let b = sessions_for_runtime(&id_b);
+
+        assert_ne!(a.broadcast_path(), b.broadcast_path());
+
+        a.register_published_track("video");
+        // Registering on a does not bleed into b.
+        assert!(b.published_track_names().is_empty());
+    }
+
+    #[test]
+    fn try_sessions_for_runtime_returns_none_before_first_create() {
+        let id = unique_runtime_id("never-touched");
+        assert!(try_sessions_for_runtime(&id).is_none());
+    }
+
+    #[test]
+    fn try_sessions_for_runtime_finds_existing_record() {
+        let id = unique_runtime_id("found");
+        let created = sessions_for_runtime(&id);
+        created.register_published_track("audio");
+
+        let looked_up = try_sessions_for_runtime(&id)
+            .expect("sessions_for_runtime created an entry");
+        assert_eq!(looked_up.broadcast_path(), created.broadcast_path());
+        assert!(
+            looked_up
+                .published_track_names()
+                .contains(&"audio".to_string())
+        );
+    }
+
+    #[test]
+    fn shared_moq_sessions_broadcast_path_uses_runtime_id() {
+        let s = SharedMoqSessions::new("my-runtime");
+        assert_eq!(s.broadcast_path(), "streamlib/my-runtime");
+    }
+
+    #[test]
+    fn shared_moq_sessions_register_published_track_dedupes() {
+        let s = SharedMoqSessions::new("dedupe-runtime");
+        s.register_published_track("video");
+        s.register_published_track("video");
+        s.register_published_track("audio");
+        assert_eq!(s.published_track_names(), vec!["video", "audio"]);
+    }
+}

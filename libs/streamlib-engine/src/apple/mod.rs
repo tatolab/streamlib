@@ -16,8 +16,6 @@ pub mod videotoolbox;
 pub mod vimage_ffi;
 pub mod xpc_ffi;
 
-// Note: WebRTC module moved to core::streaming
-
 pub mod processors;
 
 pub mod permissions;
