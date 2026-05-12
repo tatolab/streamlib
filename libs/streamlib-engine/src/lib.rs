@@ -125,8 +125,6 @@ pub(crate) mod linux;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 
-// Display processor lives in `@tatolab/display` (#674).
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::{
     AppleMp4WriterProcessor as Mp4WriterProcessor,
@@ -163,9 +161,6 @@ pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 pub use core::processors::{OpusEncoderProcessor, OpusDecoderProcessor};
 pub use _generated_::{OpusEncoderConfig, OpusDecoderConfig};
 
-// Vulkan Video codec processors (Linux)
-// H.264 encoder/decoder live in `@tatolab/h264` (`streamlib-h264`) (#675).
-// H.265 encoder/decoder live in `@tatolab/h265` (`streamlib-h265`) (#676).
 #[cfg(target_os = "linux")]
 pub use linux::processors::mp4_writer::LinuxMp4WriterProcessor;
 #[cfg(target_os = "linux")]
@@ -284,9 +279,6 @@ pub mod sdk {
         // Port schema spec — semantically processor-related; lives in
         // `core::descriptors`.
         pub use crate::core::descriptors::PortSchemaSpec;
-
-        // Camera processor lives in `streamlib-camera` (#673).
-        // Display processor lives in `streamlib-display` (#674).
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         pub use crate::{ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor};

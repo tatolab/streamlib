@@ -2,10 +2,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# @tatolab/h265 — H.265 encoder + decoder carved out of the streamlib
-# engine substrate. Owns the encoder/decoder config schemas and the two
-# processor declarations. Linux-only today (Vulkan Video extensions);
-# macOS VideoToolbox is a future cross-platform addition.
+# @tatolab/h265 — H.265 encoder + decoder processors via Vulkan Video.
+# Linux-only today; macOS VideoToolbox is a future cross-platform
+# addition.
 package:
   org: tatolab
   name: h265
@@ -21,7 +20,7 @@ patch:
     path: ../core
 
 schemas:
-  # Wire types imported from @tatolab/core (#767).
+  # Wire types imported from @tatolab/core.
   EncodedVideoFrame:
     package: "@tatolab/core"
   VideoFrame:

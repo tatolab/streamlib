@@ -2,9 +2,6 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# Wire vocabulary now lives in @tatolab/core (#401). The four canonical
-# wire types (VideoFrame, AudioFrame, EncodedVideoFrame, EncodedAudioFrame)
-# are pulled in via this dependency rather than declared inline.
 package:
   org: tatolab
   name: streamlib-engine
@@ -14,7 +11,7 @@ package:
 dependencies:
   "@tatolab/core": "^1.0.0"
 
-# Dev-time path override; `streamlib pack` rejects this (#717).
+# Dev-time path override; `streamlib pack` rejects this.
 patch:
   "@tatolab/core":
     path: ../../packages/core
@@ -28,7 +25,7 @@ patch:
 # slpkg archive. `External { package }` — bare type-name imported from
 # the named dep; resolution walks the dep's own `schemas:` map.
 schemas:
-  # Wire types imported from @tatolab/core (#767).
+  # Wire types imported from @tatolab/core.
   AudioFrame:
     package: "@tatolab/core"
   EncodedAudioFrame:
@@ -38,8 +35,7 @@ schemas:
   VideoFrame:
     package: "@tatolab/core"
   # Processor config schemas. Map keys are PascalCase aliases for the
-  # legacy reverse-DNS schema files; in-passing reverse-DNS migration is
-  # tracked per carve-out, not in #767.
+  # reverse-DNS schema file names.
   ApiServerConfig:
     file: schemas/com.streamlib.api_server.config@1.0.0.yaml
   BgraFileSourceConfig:
@@ -77,7 +73,6 @@ schemas:
 
 processors:
   # === Apple platform processors ===
-  # Display processor lives in @tatolab/display (#674).
 
   - name: Mp4Writer
     version: 1.0.0
@@ -236,8 +231,6 @@ processors:
         buffer_size: 4
 
   # === Codecs ===
-  # H.264 encoder/decoder live in @tatolab/h264 (#675).
-  # H.265 encoder/decoder live in @tatolab/h265 (#676).
 
   - name: OpusEncoder
     version: 1.0.0

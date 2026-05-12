@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `@tatolab/h265` — H.265 encoder + decoder via Vulkan Video, carved
-//! out of the streamlib engine substrate.
+//! `@tatolab/h265` — H.265 encoder + decoder processors via Vulkan Video.
 //!
 //! Linux-only today; macOS VideoToolbox H.265 is a future addition.
 

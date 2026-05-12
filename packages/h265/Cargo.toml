@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
-description = "H.265 encoder + decoder via Vulkan Video — carved out of the streamlib engine. Linux-only today; macOS VideoToolbox is a future addition."
+description = "H.265 encoder + decoder processors for streamlib, via Vulkan Video. Linux-only today; macOS VideoToolbox is a future addition."
 keywords = ["h265", "hevc", "video", "encoder", "vulkan-video"]
 categories = ["multimedia::video", "multimedia"]
 
