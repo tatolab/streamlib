@@ -15,6 +15,7 @@ from .com_streamlib_moq_publish_track_config import MoqPublishTrackConfig
 from .com_streamlib_moq_subscribe_track_config import MoqSubscribeTrackConfig
 from .com_streamlib_opus_decoder_config import OpusDecoderConfig
 from .com_streamlib_opus_encoder_config import OpusEncoderConfig
+from .com_streamlib_test_configured_processor_config import ConfiguredProcessorConfig
 from .com_streamlib_webrtc_whep_config import WebrtcWhepConfig
 from .com_streamlib_webrtc_whip_config import WebrtcWhipConfig
 from .com_tatolab_mp4_writer_config import Mp4WriterConfig
@@ -38,6 +39,7 @@ __all__ = [
     "MoqSubscribeTrackConfig",
     "OpusDecoderConfig",
     "OpusEncoderConfig",
+    "ConfiguredProcessorConfig",
     "WebrtcWhepConfig",
     "WebrtcWhipConfig",
     "Mp4WriterConfig",

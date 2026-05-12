@@ -14,4 +14,4 @@ packages:
     source:
       kind: path
       path: ../../packages/core
-    content_hash: sha256:2f2723b519777976a052f85d09659c4532e1329014d16bb7f55b2f51d4c07a36
+    content_hash: sha256:42929566e77db3311b1bcf576124ee36d5505f1cd1a2e70ccca50ffcba431ec5
