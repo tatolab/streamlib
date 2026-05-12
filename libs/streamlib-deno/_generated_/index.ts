@@ -11,8 +11,6 @@ export * from "./com_streamlib_escalate_response.ts";
 export * from "./com_streamlib_linux_mp4_writer_config.ts";
 export * from "./com_streamlib_moq_publish_track_config.ts";
 export * from "./com_streamlib_moq_subscribe_track_config.ts";
-export * from "./com_streamlib_opus_decoder_config.ts";
-export * from "./com_streamlib_opus_encoder_config.ts";
 export * from "./com_streamlib_test_configured_processor_config.ts";
 export * from "./com_streamlib_webrtc_whep_config.ts";
 export * from "./com_streamlib_webrtc_whip_config.ts";

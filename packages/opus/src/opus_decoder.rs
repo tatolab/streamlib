@@ -1,8 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::AudioFrame;
-use crate::core::{Result, Error};
+//! Opus audio decoder — libopus codec + reactive processor wrapper.
+
+use streamlib::sdk::_generated_::{AudioFrame, EncodedAudioFrame};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
+
+// ============================================================================
+// OPUS DECODER IMPLEMENTATION
+// ============================================================================
 
 /// Opus audio decoder for real-time WebRTC streaming.
 #[derive(Debug)]
@@ -73,7 +80,7 @@ impl OpusDecoder {
 
         if decode_num == 0 {
             tracing::info!(
-                "[Opus Decoder] 🎵 FIRST DECODE: packet_size={} bytes, expected_frame_size={} samples, input_channels={}, output_buffer_size={} floats",
+                "[Opus Decoder] FIRST DECODE: packet_size={} bytes, expected_frame_size={} samples, input_channels={}, output_buffer_size={} floats",
                 packet.len(),
                 self.frame_size,
                 self.input_channels,
@@ -86,7 +93,7 @@ impl OpusDecoder {
             .decode_float(packet, &mut output, false)
             .map_err(|e| {
                 tracing::error!(
-                    "[Opus Decoder] ❌ Decode failed (packet #{}): {} (packet_size={} bytes, input_channels={})",
+                    "[Opus Decoder] Decode failed (packet #{}): {} (packet_size={} bytes, input_channels={})",
                     decode_num,
                     e,
                     packet.len(),
@@ -97,7 +104,7 @@ impl OpusDecoder {
 
         if decode_num == 0 {
             tracing::info!(
-                "[Opus Decoder] 🎵 FIRST DECODE RESULT: decoded_samples={} (per channel), total_output_samples={}",
+                "[Opus Decoder] FIRST DECODE RESULT: decoded_samples={} (per channel), total_output_samples={}",
                 decoded_samples,
                 decoded_samples * self.input_channels
             );
@@ -117,7 +124,7 @@ impl OpusDecoder {
         if self.input_channels == 1 {
             if decode_num == 0 {
                 tracing::info!(
-                    "[Opus Decoder] 🎵 Converting MONO to STEREO: {} mono samples → {} stereo samples",
+                    "[Opus Decoder] Converting MONO to STEREO: {} mono samples → {} stereo samples",
                     output.len(),
                     output.len() * 2
                 );
@@ -128,7 +135,7 @@ impl OpusDecoder {
         } else {
             if decode_num == 0 {
                 tracing::info!(
-                    "[Opus Decoder] 🎵 Already STEREO: {} samples (interleaved L,R,L,R...)",
+                    "[Opus Decoder] Already STEREO: {} samples (interleaved L,R,L,R...)",
                     output.len()
                 );
             }
@@ -166,6 +173,71 @@ impl OpusDecoder {
 
     pub fn frame_size(&self) -> usize {
         self.frame_size
+    }
+}
+
+// ============================================================================
+// PROCESSOR
+// ============================================================================
+
+#[streamlib::sdk::processor("OpusDecoder")]
+pub struct OpusDecoderProcessor {
+    /// Opus decoder.
+    opus_decoder: Option<OpusDecoder>,
+
+    /// Frames decoded counter.
+    frames_decoded: u64,
+}
+
+impl streamlib::sdk::processors::ReactiveProcessor for OpusDecoderProcessor::Processor {
+    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let sample_rate = self.config.sample_rate.unwrap_or(48000);
+        let channels = self.config.channels.unwrap_or(2) as usize;
+
+        let decoder = OpusDecoder::new(sample_rate, channels)?;
+
+        tracing::info!(
+            sample_rate,
+            channels,
+            "[OpusDecoder] Initialized"
+        );
+
+        self.opus_decoder = Some(decoder);
+        Ok(())
+    }
+
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        tracing::info!(
+            frames_decoded = self.frames_decoded,
+            "[OpusDecoder] Shutting down"
+        );
+        self.opus_decoder.take();
+        Ok(())
+    }
+
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        if !self.inputs.has_data("encoded_audio_in") {
+            return Ok(());
+        }
+        let encoded: EncodedAudioFrame = self.inputs.read("encoded_audio_in")?;
+
+        let decoder = self
+            .opus_decoder
+            .as_mut()
+            .ok_or_else(|| Error::Runtime("Opus decoder not initialized".into()))?;
+
+        let timestamp_ns: i64 = encoded.timestamp_ns.parse().unwrap_or(0);
+        let frame: AudioFrame = decoder.decode_to_audio_frame(&encoded.data, timestamp_ns)?;
+        self.outputs.write("audio_out", &frame)?;
+
+        self.frames_decoded += 1;
+        if self.frames_decoded == 1 {
+            tracing::info!("[OpusDecoder] First frame decoded");
+        } else if self.frames_decoded % 500 == 0 {
+            tracing::info!(frames = self.frames_decoded, "[OpusDecoder] Decode progress");
+        }
+
+        Ok(())
     }
 }
 

@@ -1,13 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// Opus Audio Encoding
-//
-// Provides Opus encoding for real-time audio streaming.
+//! Opus audio encoder — libopus codec + reactive processor wrapper.
 
-use crate::_generated_::{AudioFrame, EncodedAudioFrame};
-use crate::core::{Result, Error};
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::_generated_::{AudioFrame, EncodedAudioFrame};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
 
 // ============================================================================
 // OPUS ENCODING CONFIGURATION
@@ -190,6 +189,72 @@ impl AudioEncoderOpus for OpusEncoder {
         self.config.bitrate_bps = bitrate_bps;
 
         tracing::info!("Opus bitrate changed to {} kbps", bitrate_bps / 1000);
+        Ok(())
+    }
+}
+
+// ============================================================================
+// PROCESSOR
+// ============================================================================
+
+#[streamlib::sdk::processor("OpusEncoder")]
+pub struct OpusEncoderProcessor {
+    /// Opus encoder.
+    opus_encoder: Option<OpusEncoder>,
+
+    /// Frames encoded counter.
+    frames_encoded: u64,
+}
+
+impl streamlib::sdk::processors::ReactiveProcessor for OpusEncoderProcessor::Processor {
+    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let encoder_config = AudioEncoderConfig {
+            sample_rate: 48000,
+            channels: 2,
+            bitrate_bps: self.config.bitrate_bps.unwrap_or(128_000),
+            frame_duration_ms: 20,
+            complexity: 5,
+            vbr: true,
+        };
+
+        let encoder = OpusEncoder::new(encoder_config)?;
+
+        tracing::info!("[OpusEncoder] Initialized");
+
+        self.opus_encoder = Some(encoder);
+        Ok(())
+    }
+
+    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        tracing::info!(
+            frames_encoded = self.frames_encoded,
+            "[OpusEncoder] Shutting down"
+        );
+        self.opus_encoder.take();
+        Ok(())
+    }
+
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        if !self.inputs.has_data("audio_in") {
+            return Ok(());
+        }
+        let frame: AudioFrame = self.inputs.read("audio_in")?;
+
+        let encoder = self
+            .opus_encoder
+            .as_mut()
+            .ok_or_else(|| Error::Runtime("Opus encoder not initialized".into()))?;
+
+        let encoded: EncodedAudioFrame = encoder.encode(&frame)?;
+        self.outputs.write("encoded_audio_out", &encoded)?;
+
+        self.frames_encoded += 1;
+        if self.frames_encoded == 1 {
+            tracing::info!("[OpusEncoder] First frame encoded");
+        } else if self.frames_encoded % 500 == 0 {
+            tracing::info!(frames = self.frames_encoded, "[OpusEncoder] Encode progress");
+        }
+
         Ok(())
     }
 }
