@@ -548,10 +548,10 @@ processors:
     execution: manual
     inputs:
       - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: any
     outputs:
       - name: video_out
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: any
 "#;
 
     fn write_cargo_toml(dir: &Path, name: &str) {
