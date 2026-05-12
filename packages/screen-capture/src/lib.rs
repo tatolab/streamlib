@@ -15,3 +15,4 @@ pub mod apple;
 pub use apple::AppleScreenCaptureProcessor;
 
 pub use _generated_::ScreenCaptureConfig;
+pub use _generated_::tatolab__screen_capture::screen_capture_config::TargetType;
