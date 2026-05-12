@@ -12,10 +12,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::runtime::RuntimeOperations;
 
-/// Narrow capability snapshot that the api-server stashes during
-/// `setup()` so the long-lived HTTP server task spawned in `start()`
-/// doesn't hold the full `RuntimeContext`. Only the handles the
-/// router + handlers actually need cross the setup → start boundary.
+/// Handles cloned from the setup-time context for use in start().
 struct StashedHandles {
     runtime: Arc<dyn RuntimeOperations>,
     tokio_handle: tokio::runtime::Handle,

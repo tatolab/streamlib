@@ -38,25 +38,16 @@ pub mod _generated_;
 // Re-export commonly used generated config types
 pub use _generated_::{EncodedAudioFrame, EncodedVideoFrame, VideoFrame};
 
-/// Runtime schema catalog — every schema that's currently registered
-/// with this process, surfaced for tools that want to introspect what
-/// the live runtime knows about (api-server's HTTP catalog endpoints,
-/// CLI helpers, etc.). The catalog is dynamic by design — domain
-/// packages register their schemas via the runtime loader, so the
-/// returned set reflects what's loaded right now, not a baked-in list.
-///
-/// Surfaced as [`streamlib::sdk::schemas`] at the SDK tier.
+/// Schemas currently registered with the runtime.
 pub mod schemas {
     use std::sync::Arc;
 
-    /// Canonical identifiers of every schema currently registered with
-    /// the runtime, sorted. Reflects live state; not a static list.
+    /// Canonical identifiers of all currently-registered schemas, sorted.
     pub fn current_schema_idents() -> Vec<String> {
         crate::core::embedded_schemas::list_embedded_schema_names()
     }
 
-    /// YAML body of a currently-registered schema, or `None` when no
-    /// schema with that identifier is registered.
+    /// YAML body of a currently-registered schema.
     pub fn current_schema_definition(name: &str) -> Option<Arc<str>> {
         crate::core::embedded_schemas::get_embedded_schema_definition(name)
     }

@@ -664,17 +664,6 @@ impl<'a> RuntimeContextFullAccess<'a> {
         &self.gpu_limited
     }
 
-    /// Crate-internal escape hatch for in-engine processors that need
-    /// to spawn a tokio task outliving the call. The clone returned is
-    /// a plain `RuntimeContext`, not a capability view — but the same
-    /// rule still applies: it doesn't give the caller any GPU handle
-    /// they didn't already have access to through `gpu_full_access()` /
-    /// `gpu_limited_access()`. Commit 5 of #322 narrows the base
-    /// type's API so even this clone can't hand out GPU ops directly.
-    pub(crate) fn clone_runtime_context(&self) -> RuntimeContext {
-        self.base.clone()
-    }
-
     // ------------ forwarded RuntimeContext accessors ------------
 
     pub fn time(&self) -> &Arc<TimeContext> {

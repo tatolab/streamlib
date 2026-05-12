@@ -19,38 +19,25 @@ path = "src/bin/generate_openapi.rs"
 
 [features]
 default = []
-# Surface the `/api/moq/catalog` HTTP endpoint. Forwards to the SDK's
-# `moq` feature, which in turn enables the engine's MoQ subsystem.
 moq = ["streamlib/moq"]
 
 [dependencies]
-# Engine substrate — runtime context, processor traits, generated wire
-# types under `streamlib::sdk::_generated_::*`, schema catalog under
-# `streamlib::sdk::schemas::*`.
 streamlib = { path = "../../libs/streamlib-sdk" }
-
-# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
-# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = { path = "../../libs/streamlib-macros" }
 
-# HTTP + WebSocket runtime.
 axum.workspace = true
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"
 
-# OpenAPI documentation generation.
 utoipa = { version = "5.3", features = ["axum_extras"] }
 utoipa-axum = "0.2"
 
-# Serialization.
 serde.workspace = true
 serde_json.workspace = true
 
-# Concurrency primitives.
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync"] }
 parking_lot = "0.12"
 
-# Errors + logging.
 anyhow.workspace = true
 tracing.workspace = true
 

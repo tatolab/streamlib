@@ -40,9 +40,7 @@ use crate::state::{
 // Router Construction
 // ============================================================================
 
-/// Wire the documented OpenAPI routes plus the un-documented WebSocket /
-/// OpenAPI-spec endpoints into a single [`Router`], with the HTTP trace
-/// layer and shared state attached.
+/// Build the full router with shared state and trace layer attached.
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
     #[cfg(feature = "moq")] moq_sessions: streamlib::sdk::streaming::SharedMoqSessions,
@@ -375,14 +373,7 @@ pub(crate) async fn get_openapi_spec(
     Json(state.openapi)
 }
 
-/// Returns the MoQ broadcast catalog with active published tracks.
-///
-/// The schema and source-processor identity for each track aren't yet
-/// plumbed through `MoqSessions::published_track_names`; both fields
-/// are emitted as `None` until a future ticket extends the session API
-/// to carry structured idents alongside the track name. The track
-/// entries still serialize cleanly — `schema` and
-/// `source_processor_type` are `skip_serializing_if = Option::is_none`.
+/// MoQ broadcast catalog with currently-published tracks.
 #[cfg(feature = "moq")]
 pub(crate) async fn get_moq_catalog(
     State(state): State<AppState>,

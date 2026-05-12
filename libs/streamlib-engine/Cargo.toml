@@ -119,12 +119,7 @@ hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", 
 http-body-util = "0.1"  # Body handling utilities
 rustls = { version = "0.23", features = ["ring"] }  # TLS library with ring crypto provider
 
-# `#[derive(utoipa::ToSchema)]` on the JSON wire types in `core/json_schema.rs`
-# — these types double as the OpenAPI surface the api-server publishes, so the
-# derive itself stays engine-side even though api-server (the only HTTP
-# server consumer) has moved out to `@tatolab/api-server`. `axum`,
-# `tower-http`, `futures-util`, and `utoipa-axum` are api-server-only and
-# live in `packages/api-server/Cargo.toml`.
+# OpenAPI schema derives on the JSON wire types in `core/json_schema.rs`.
 utoipa = { version = "5.3", features = ["axum_extras"] }
 
 # Platform-specific: macOS/iOS

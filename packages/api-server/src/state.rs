@@ -9,11 +9,7 @@ use streamlib::sdk::json_schema::SchemaIdentOutput;
 use streamlib::sdk::runtime::RuntimeOperations;
 use utoipa::OpenApi;
 
-/// Per-request shared state — narrow capability view captured during
-/// the processor's `setup` so the long-lived HTTP server task doesn't
-/// hold a cloned `RuntimeContext`. Each handler reaches `state.runtime`
-/// (graph mutation + introspection) and, with the `moq` feature on,
-/// `state.moq_sessions` (catalog endpoint).
+/// Shared HTTP handler state.
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub runtime: Arc<dyn RuntimeOperations>,

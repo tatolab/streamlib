@@ -17,11 +17,6 @@ path = "src/main.rs"
 [dependencies]
 # Core library (bundles all Rust processors)
 streamlib = { path = "../streamlib-sdk" }
-
-# HTTP control-plane processor — the runtime binary adds this
-# unconditionally so `streamlib run` always exposes the api server. Apps
-# that don't want HTTP control-plane skip this dep and don't add the
-# processor to their `Runner`.
 streamlib-api-server = { path = "../../packages/api-server" }
 
 # Dynamic plugin loading
