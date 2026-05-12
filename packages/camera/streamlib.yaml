@@ -21,7 +21,8 @@ patch:
     path: ../core
 
 schemas:
-  - schemas/camera_config.yaml
+  CameraConfig:
+    file: schemas/camera_config.yaml
 
 processors:
   - name: Camera

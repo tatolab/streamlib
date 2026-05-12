@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use schemars::r#gen::SchemaGenerator;
-use schemars::schema::{Schema, SchemaObject, SubschemaValidation};
+use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{ResolverError, ResolverResult};
-use crate::ident::{Org, Package, PackageRef};
+use crate::ident::{Org, Package, PackageRef, TypeName};
 use crate::semver::{SemVer, SemVerRange};
 
 /// `streamlib.yaml` — single source of truth for a package or project.
@@ -54,11 +54,21 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub patch: BTreeMap<PackageRef, DependencySpec>,
 
-    /// Explicit list of schema YAML files this package owns, relative to the
-    /// manifest's directory. When `None`, the resolver auto-discovers
-    /// `schemas/*.yaml` in the manifest dir.
+    /// Name-keyed declarations of the schemas this package surfaces — both
+    /// schemas it owns (`Local { file }`) and types it imports from declared
+    /// dependencies (`External { package }`).
+    ///
+    /// Use-site references in `processors[].config.schema` and
+    /// `processors[].inputs/outputs[].schema` are bare type-name strings that
+    /// resolve against this map. Discrimination between local vs external
+    /// happens here at the declaration site; use-sites are parser-free.
+    ///
+    /// `None` → the resolver falls back to auto-discovery: every YAML file
+    /// under `<root_dir>/schemas/` is treated as a Local entry, keyed by the
+    /// schema file's `metadata.type` (or stem-derived PascalCase as a last
+    /// resort for legacy reverse-DNS schemas).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schemas: Option<Vec<PathBuf>>,
+    pub schemas: Option<BTreeMap<TypeName, SchemaEntry>>,
 }
 
 impl Manifest {
@@ -103,6 +113,160 @@ impl Manifest {
     /// internal lockfile-key + log-message paths.
     pub fn package_id(&self) -> Option<String> {
         self.package_ref().map(|r| r.to_string())
+    }
+}
+
+/// A single entry in a package's `schemas:` map.
+///
+/// Two flavors, discriminated by which key appears:
+/// - `{ file: <relative path> }` — schema YAML lives under this package's
+///   directory; the package owns the type.
+/// - `{ package: "@org/name" }` — type is imported from a declared
+///   dependency; resolution walks the dep's own `schemas:` map for the
+///   bare name.
+///
+/// Both keys present, or neither, is a parse error — the discrimination
+/// must be unambiguous at the declaration site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaEntry {
+    /// Schema YAML file owned by this package, relative to the manifest dir.
+    Local { file: PathBuf },
+    /// Bare-name reference to a type owned by a declared dependency.
+    External { package: PackageRef },
+}
+
+impl SchemaEntry {
+    /// Convenience: file path for local entries, `None` for external.
+    pub fn local_file(&self) -> Option<&Path> {
+        match self {
+            Self::Local { file } => Some(file),
+            Self::External { .. } => None,
+        }
+    }
+
+    /// Convenience: dep `PackageRef` for external entries, `None` for local.
+    pub fn external_package(&self) -> Option<&PackageRef> {
+        match self {
+            Self::External { package } => Some(package),
+            Self::Local { .. } => None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SchemaEntryRaw {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    file: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    package: Option<PackageRef>,
+}
+
+impl Serialize for SchemaEntry {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Local { file } => SchemaEntryRaw {
+                file: Some(file.clone()),
+                package: None,
+            }
+            .serialize(ser),
+            Self::External { package } => SchemaEntryRaw {
+                file: None,
+                package: Some(package.clone()),
+            }
+            .serialize(ser),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SchemaEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = SchemaEntryRaw::deserialize(d)?;
+        match (raw.file, raw.package) {
+            (Some(file), None) => Ok(Self::Local { file }),
+            (None, Some(package)) => Ok(Self::External { package }),
+            (Some(_), Some(_)) => Err(serde::de::Error::custom(
+                "schemas: entry has both `file:` and `package:` keys; pick one. \
+                 `file:` declares a local schema this package owns; `package:` \
+                 imports a bare type name from a declared dependency.",
+            )),
+            (None, None) => Err(serde::de::Error::custom(
+                "schemas: entry has neither `file:` nor `package:` key; one is required. \
+                 `file:` declares a local schema this package owns; `package:` \
+                 imports a bare type name from a declared dependency.",
+            )),
+        }
+    }
+}
+
+impl JsonSchema for SchemaEntry {
+    fn schema_name() -> String {
+        "SchemaEntry".into()
+    }
+    fn schema_id() -> Cow<'static, str> {
+        Cow::Borrowed("streamlib_idents::SchemaEntry")
+    }
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        use schemars::schema::ObjectValidation;
+        let pkg_ref = generator.subschema_for::<PackageRef>();
+
+        let local = Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::Object.into()),
+            object: Some(Box::new(ObjectValidation {
+                properties: {
+                    let mut p = schemars::Map::new();
+                    p.insert(
+                        "file".into(),
+                        Schema::Object(SchemaObject {
+                            instance_type: Some(InstanceType::String.into()),
+                            metadata: Some(Box::new(schemars::schema::Metadata {
+                                description: Some(
+                                    "Path to the schema YAML, relative to this manifest's directory."
+                                        .into(),
+                                ),
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        }),
+                    );
+                    p
+                },
+                required: ["file".to_string()].into_iter().collect(),
+                additional_properties: Some(Box::new(Schema::Bool(false))),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+
+        let external = Schema::Object(SchemaObject {
+            instance_type: Some(InstanceType::Object.into()),
+            object: Some(Box::new(ObjectValidation {
+                properties: {
+                    let mut p = schemars::Map::new();
+                    p.insert("package".into(), pkg_ref);
+                    p
+                },
+                required: ["package".to_string()].into_iter().collect(),
+                additional_properties: Some(Box::new(Schema::Bool(false))),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+
+        Schema::Object(SchemaObject {
+            metadata: Some(Box::new(schemars::schema::Metadata {
+                description: Some(
+                    "Schema declaration: either `{ file: path }` (local schema this package owns) \
+                     or `{ package: \"@org/name\" }` (imported from a declared dependency)."
+                        .into(),
+                ),
+                ..Default::default()
+            })),
+            subschemas: Some(Box::new(SubschemaValidation {
+                one_of: Some(vec![local, external]),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
     }
 }
 
@@ -221,6 +385,95 @@ mod tests {
 
     fn pkg_ref(org: &str, name: &str) -> PackageRef {
         PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
+    }
+
+    fn type_name(s: &str) -> TypeName {
+        TypeName::new(s).unwrap()
+    }
+
+    #[test]
+    fn schemas_map_round_trip() {
+        let yaml = r#"
+package:
+  org: tatolab
+  name: h264
+  version: 1.0.0
+schemas:
+  H264EncoderConfig:
+    file: schemas/h264_encoder_config.yaml
+  VideoFrame:
+    package: "@tatolab/core"
+"#;
+        let m: Manifest = serde_yaml::from_str(yaml).unwrap();
+        let schemas = m.schemas.expect("schemas: present");
+        assert_eq!(schemas.len(), 2);
+        match schemas.get(&type_name("H264EncoderConfig")).unwrap() {
+            SchemaEntry::Local { file } => {
+                assert_eq!(file, &PathBuf::from("schemas/h264_encoder_config.yaml"))
+            }
+            other => panic!("expected Local, got {:?}", other),
+        }
+        match schemas.get(&type_name("VideoFrame")).unwrap() {
+            SchemaEntry::External { package } => assert_eq!(package, &pkg_ref("tatolab", "core")),
+            other => panic!("expected External, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn schemas_entry_with_both_keys_rejected() {
+        let yaml = r#"
+package:
+  org: tatolab
+  name: foo
+  version: 1.0.0
+schemas:
+  Foo:
+    file: schemas/foo.yaml
+    package: "@tatolab/core"
+"#;
+        let res: Result<Manifest, _> = serde_yaml::from_str(yaml);
+        assert!(res.is_err());
+        let msg = res.unwrap_err().to_string();
+        assert!(
+            msg.contains("both `file:` and `package:`"),
+            "expected both-keys error message, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn schemas_entry_with_neither_key_rejected() {
+        let yaml = r#"
+package:
+  org: tatolab
+  name: foo
+  version: 1.0.0
+schemas:
+  Foo: {}
+"#;
+        let res: Result<Manifest, _> = serde_yaml::from_str(yaml);
+        assert!(res.is_err());
+        let msg = res.unwrap_err().to_string();
+        assert!(
+            msg.contains("neither `file:` nor `package:`"),
+            "expected neither-key error message, got: {msg}",
+        );
+    }
+
+    #[test]
+    fn schemas_map_key_must_be_pascal_case_type_name() {
+        // BTreeMap<TypeName, _> rejects keys that don't match the TypeName
+        // grammar (`^[A-Z][A-Za-z0-9]*$`).
+        let yaml = r#"
+package:
+  org: tatolab
+  name: foo
+  version: 1.0.0
+schemas:
+  not_pascal_case:
+    file: schemas/foo.yaml
+"#;
+        let res: Result<Manifest, _> = serde_yaml::from_str(yaml);
+        assert!(res.is_err());
     }
 
     #[test]

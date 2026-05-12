@@ -20,13 +20,20 @@ patch:
     path: ../core
 
 schemas:
-  - schemas/audio_capture_config.yaml
-  - schemas/audio_channel_converter_config.yaml
-  - schemas/audio_mixer_config.yaml
-  - schemas/audio_output_config.yaml
-  - schemas/audio_resampler_config.yaml
-  - schemas/buffer_rechunker_config.yaml
-  - schemas/chord_generator_config.yaml
+  AudioCaptureConfig:
+    file: schemas/audio_capture_config.yaml
+  AudioChannelConverterConfig:
+    file: schemas/audio_channel_converter_config.yaml
+  AudioMixerConfig:
+    file: schemas/audio_mixer_config.yaml
+  AudioOutputConfig:
+    file: schemas/audio_output_config.yaml
+  AudioResamplerConfig:
+    file: schemas/audio_resampler_config.yaml
+  BufferRechunkerConfig:
+    file: schemas/buffer_rechunker_config.yaml
+  ChordGeneratorConfig:
+    file: schemas/chord_generator_config.yaml
 
 processors:
   - name: AudioCapture

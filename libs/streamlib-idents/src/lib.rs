@@ -27,8 +27,10 @@ pub use lockfile::{
 };
 pub use manifest::{
     DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,
+    SchemaEntry,
 };
 pub use resolver::{
-    resolve, resolve_with, ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
+    resolve, resolve_bare_schema_name, resolve_with, ResolvedPackage, ResolvedPackages,
+    ResolvedSource, ResolverOptions,
 };
 pub use semver::{SemVer, SemVerRange};

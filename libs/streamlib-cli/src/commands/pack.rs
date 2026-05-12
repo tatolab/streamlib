@@ -484,7 +484,18 @@ fn collect_schema_files(package_dir: &Path) -> Result<Vec<std::path::PathBuf>> {
         .with_context(|| format!("Failed to parse {}", manifest_path.display()))?;
 
     if let Some(declared) = manifest.schemas {
-        return Ok(declared);
+        // Local entries contribute their `file:` path; External entries are
+        // imports from declared dependencies and not packed with this
+        // package.
+        let mut files: Vec<std::path::PathBuf> = declared
+            .into_values()
+            .filter_map(|entry| match entry {
+                streamlib_idents::SchemaEntry::Local { file } => Some(file),
+                streamlib_idents::SchemaEntry::External { .. } => None,
+            })
+            .collect();
+        files.sort();
+        return Ok(files);
     }
 
     let schemas_dir = package_dir.join("schemas");

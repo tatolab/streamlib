@@ -15,7 +15,11 @@ package:
   description: Canonical wire vocabulary (VideoFrame, AudioFrame, EncodedVideoFrame, EncodedAudioFrame)
 
 schemas:
-  - schemas/video_frame.yaml
-  - schemas/audio_frame.yaml
-  - schemas/encoded_video_frame.yaml
-  - schemas/encoded_audio_frame.yaml
+  AudioFrame:
+    file: schemas/audio_frame.yaml
+  EncodedAudioFrame:
+    file: schemas/encoded_audio_frame.yaml
+  EncodedVideoFrame:
+    file: schemas/encoded_video_frame.yaml
+  VideoFrame:
+    file: schemas/video_frame.yaml

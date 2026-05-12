@@ -21,7 +21,8 @@ patch:
     path: ../core
 
 schemas:
-  - schemas/display_config.yaml
+  DisplayConfig:
+    file: schemas/display_config.yaml
 
 processors:
   - name: Display

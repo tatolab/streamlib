@@ -124,6 +124,28 @@ pub enum ResolverError {
     #[error("schema file `{path}` not found (declared by manifest `{from}`)")]
     SchemaNotFound { path: PathBuf, from: PathBuf },
 
+    #[error(
+        "bare schema name `{name}` is not declared in the `schemas:` map of package `{package}` \
+         (resolution chain: {chain:?}). Add an entry like `{name}: {{ file: schemas/<file>.yaml }}` \
+         (local) or `{name}: {{ package: \"@org/name\" }}` (imported from a dependency)."
+    )]
+    BareSchemaNameUnresolved {
+        name: String,
+        package: String,
+        chain: Vec<String>,
+    },
+
+    #[error(
+        "schemas: entry `{name}` in package `{package}` declares `package: {dep}` but that \
+         dependency is not declared in `dependencies:` (or it failed to resolve). Add it to \
+         `dependencies:` first."
+    )]
+    BareSchemaNameDepMissing {
+        name: String,
+        package: String,
+        dep: String,
+    },
+
     #[error(transparent)]
     Ident(#[from] IdentError),
 }

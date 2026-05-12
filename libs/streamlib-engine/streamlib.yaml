@@ -24,25 +24,44 @@ patch:
 # build-script-generated embedded-schemas lookup. Replaces the legacy
 # `[package.metadata.streamlib].schemas` block in Cargo.toml (#402).
 schemas:
-  # Processor config schemas.
-  - schemas/com.streamlib.api_server.config@1.0.0.yaml
-  - schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
-  - schemas/com.streamlib.clap.effect.config@1.0.0.yaml
-  - schemas/com.streamlib.h265_decoder.config@1.0.0.yaml
-  - schemas/com.streamlib.h265_encoder.config@1.0.0.yaml
-  - schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml
-  - schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml
-  - schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml
-  - schemas/com.streamlib.opus_decoder.config@1.0.0.yaml
-  - schemas/com.streamlib.opus_encoder.config@1.0.0.yaml
-  - schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
-  - schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml
-  - schemas/com.tatolab.mp4_writer.config@1.0.0.yaml
-  - schemas/com.tatolab.screen_capture.config@1.0.0.yaml
-  - schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml
+  # Processor config schemas. Map keys are PascalCase aliases for the
+  # legacy reverse-DNS schema files; in-passing reverse-DNS migration is
+  # tracked per carve-out, not in #767.
+  ApiServerConfig:
+    file: schemas/com.streamlib.api_server.config@1.0.0.yaml
+  BgraFileSourceConfig:
+    file: schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
+  ClapEffectConfig:
+    file: schemas/com.streamlib.clap.effect.config@1.0.0.yaml
+  H265DecoderConfig:
+    file: schemas/com.streamlib.h265_decoder.config@1.0.0.yaml
+  H265EncoderConfig:
+    file: schemas/com.streamlib.h265_encoder.config@1.0.0.yaml
+  LinuxMp4WriterConfig:
+    file: schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml
+  MoqPublishTrackConfig:
+    file: schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml
+  MoqSubscribeTrackConfig:
+    file: schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml
+  OpusDecoderConfig:
+    file: schemas/com.streamlib.opus_decoder.config@1.0.0.yaml
+  OpusEncoderConfig:
+    file: schemas/com.streamlib.opus_encoder.config@1.0.0.yaml
+  WebrtcWhepConfig:
+    file: schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
+  WebrtcWhipConfig:
+    file: schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml
+  Mp4WriterConfig:
+    file: schemas/com.tatolab.mp4_writer.config@1.0.0.yaml
+  ScreenCaptureConfig:
+    file: schemas/com.tatolab.screen_capture.config@1.0.0.yaml
+  SimplePassthroughConfig:
+    file: schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml
   # Polyglot escalate IPC wire schemas (discriminator form).
-  - schemas/com.streamlib.escalate_request@1.0.0.yaml
-  - schemas/com.streamlib.escalate_response@1.0.0.yaml
+  EscalateRequest:
+    file: schemas/com.streamlib.escalate_request@1.0.0.yaml
+  EscalateResponse:
+    file: schemas/com.streamlib.escalate_response@1.0.0.yaml
 
 processors:
   # === Apple platform processors ===

@@ -21,8 +21,10 @@ patch:
     path: ../core
 
 schemas:
-  - schemas/h264_encoder_config.yaml
-  - schemas/h264_decoder_config.yaml
+  H264DecoderConfig:
+    file: schemas/h264_decoder_config.yaml
+  H264EncoderConfig:
+    file: schemas/h264_encoder_config.yaml
 
 processors:
   - name: H264Encoder
