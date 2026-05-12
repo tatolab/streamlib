@@ -48,6 +48,15 @@ fn schema_ident_wire_for_producer(spec: &PortSchemaSpec) -> SchemaIdentWire {
             ident.version.patch,
         )
         .expect("validated SchemaIdent fits in SchemaIdentWire bounds"),
+        // `Named` should never reach this site — runtime startup +
+        // proc-macro expansion both resolve bare-name port refs to
+        // `Specific(SchemaIdent)` against the enclosing manifest's
+        // `schemas:` map (#767). A `Named` here is a runtime bug.
+        PortSchemaSpec::Named(name) => panic!(
+            "PortSchemaSpec::Named(`{}`) reached iceoryx2 service open — \
+             must be resolved before this site",
+            name.as_str()
+        ),
     }
 }
 

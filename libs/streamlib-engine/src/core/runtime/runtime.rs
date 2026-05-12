@@ -436,6 +436,32 @@ impl Runner {
             ))
         })?;
 
+        // Eagerly resolve the dependency graph once per project — used
+        // below by `resolve_config_schema_canonical_id` for each
+        // processor's bare-name config schema (#767). The resolver walks
+        // declared paths/git/.slpkg sources and validates the `schemas:`
+        // map; we only invoke it when at least one processor actually
+        // declares a config block.
+        let config_resolved: Option<streamlib_idents::ResolvedPackages> =
+            if config.processors.iter().any(|p| p.config.is_some()) {
+                Some(
+                    streamlib_idents::resolve_with(
+                        project_path,
+                        &streamlib_idents::ResolverOptions::default(),
+                    )
+                    .map_err(|e| {
+                        Error::Configuration(format!(
+                            "failed to resolve manifest dependencies for bare-name \
+                             config schema lookup at {}: {}",
+                            project_path.display(),
+                            e
+                        ))
+                    })?,
+                )
+            } else {
+                None
+            };
+
         for proc_schema in &config.processors {
             // Compose the structured processor ident from the manifest's
             // package metadata + the processor's PascalCase short name.
@@ -607,7 +633,26 @@ impl Runner {
             }
 
             if let Some(config) = &proc_schema.config {
-                descriptor = descriptor.with_config_schema(&config.schema);
+                // Resolve the bare-name `TypeName` (#767) against the
+                // manifest's `schemas:` map to its canonical id string.
+                // The lookup walks the manifest's declarations, locates
+                // the owning package + schema file, and reads the
+                // schema's `metadata.type` (new shape) or
+                // `metadata.name` (legacy reverse-DNS) to compose the
+                // id. This must match what
+                // `register_package_schemas`/`canonical_identifier_for_schema`
+                // registered when the same manifest was loaded.
+                let canonical =
+                    resolve_config_schema_canonical_id(project_path, config, &config_resolved)
+                        .map_err(|msg| {
+                            Error::Configuration(format!(
+                                "processor `{}` config schema `{}`: {}",
+                                proc_schema.name,
+                                config.schema.as_str(),
+                                msg
+                            ))
+                        })?;
+                descriptor = descriptor.with_config_schema(canonical);
             }
 
             if let Some(scheduling) = &proc_schema.scheduling {
@@ -1469,19 +1514,25 @@ impl Runner {
     }
 }
 
-/// Read each path in `config.schemas` (relative to `project_path`),
-/// derive the canonical identifier from the schema's `metadata.type`
-/// (or legacy `metadata.name`) plus the package's `org` / `name`, and
-/// hand the YAML body to the runtime schema registry. No-op when the
-/// manifest declares no schemas.
+/// Iterate `config.schemas` map entries, registering each `Local` schema
+/// (the YAML body keyed by its canonical identifier) with the engine's
+/// runtime schema registry. `External` entries are import declarations
+/// owned by other packages and are skipped here — the dep's own
+/// `register_package_schemas` call handles them when its manifest loads.
+/// No-op when the manifest declares no `schemas:` map.
 fn register_package_schemas(
     project_path: &std::path::Path,
     config: &crate::core::config::ProjectConfig,
 ) -> Result<()> {
     use crate::core::config::ProjectConfig;
     use crate::core::embedded_schemas;
+    use streamlib_idents::SchemaEntry;
 
-    if config.schemas.is_empty() {
+    let Some(schemas) = config.schemas.as_ref() else {
+        return Ok(());
+    };
+
+    if schemas.is_empty() {
         return Ok(());
     }
 
@@ -1495,8 +1546,15 @@ fn register_package_schemas(
         ))
     })?;
 
-    for schema_rel_path in &config.schemas {
-        let schema_path = project_path.join(schema_rel_path);
+    for (_name, entry) in schemas {
+        let SchemaEntry::Local { file } = entry else {
+            continue;
+        };
+        let schema_path = if file.is_absolute() {
+            file.clone()
+        } else {
+            project_path.join(file)
+        };
         let body = std::fs::read_to_string(&schema_path).map_err(|e| {
             Error::Configuration(format!(
                 "failed to read schema declared in {}: {}: {}",
@@ -1514,6 +1572,69 @@ fn register_package_schemas(
         embedded_schemas::register_schema(canonical, body);
     }
     Ok(())
+}
+
+/// Resolve a processor's bare-name config schema reference (#767) to
+/// its canonical id string. Walks the manifest's `schemas:` map via
+/// the supplied resolver output, locates the owning package + schema
+/// file, then reads the schema's `metadata.type` (new shape) or
+/// `metadata.name` (legacy reverse-DNS) to compose the canonical id.
+///
+/// `resolved` is `None` only when the project's processors all lack a
+/// `config:` block — reaching this function with `None` is a runtime
+/// bug.
+fn resolve_config_schema_canonical_id(
+    project_path: &std::path::Path,
+    config: &streamlib_processor_schema::ProcessorConfigSchema,
+    resolved: &Option<streamlib_idents::ResolvedPackages>,
+) -> std::result::Result<String, String> {
+    let resolved = resolved.as_ref().ok_or_else(|| {
+        format!(
+            "internal error: config-schema resolution requested but \
+             dependency graph for {} was not pre-resolved",
+            project_path.display()
+        )
+    })?;
+
+    let (owner, schema_path) = streamlib_idents::resolve_bare_schema_name(
+        resolved,
+        &resolved.root,
+        &config.schema,
+    )
+    .map_err(|e| format!("bare-name resolution failed: {}", e))?;
+
+    let owner_pkg = owner
+        .manifest
+        .package
+        .as_ref()
+        .ok_or_else(|| "owning package has no `package:` block".to_string())?;
+
+    // Read the schema's metadata to determine the canonical id form.
+    let body = std::fs::read_to_string(&schema_path)
+        .map_err(|e| format!("failed to read schema {}: {}", schema_path.display(), e))?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&body)
+        .map_err(|e| format!("failed to parse schema {}: {}", schema_path.display(), e))?;
+    let metadata = value
+        .get("metadata")
+        .ok_or_else(|| format!("schema {} missing `metadata` block", schema_path.display()))?;
+
+    if let Some(type_str) = metadata.get("type").and_then(|t| t.as_str()) {
+        Ok(format!(
+            "@{}/{}/{}@{}",
+            owner_pkg.org.as_str(),
+            owner_pkg.name.as_str(),
+            type_str,
+            owner_pkg.version,
+        ))
+    } else if let Some(name_str) = metadata.get("name").and_then(|n| n.as_str()) {
+        // Legacy reverse-DNS form — append the owning package's semver.
+        Ok(format!("{}@{}", name_str, owner_pkg.version))
+    } else {
+        Err(format!(
+            "schema {} declares neither `metadata.type` nor `metadata.name`",
+            schema_path.display()
+        ))
+    }
 }
 
 /// Resolve a schema's canonical (unversioned) lookup key from its YAML
@@ -1840,8 +1961,12 @@ package:
   name: test-load-project-registers-schemas
   version: "0.1.0"
 
+# Post-#767: `schemas:` is a name-keyed map of `Local { file }` /
+# `External { package }` declarations — replaces the legacy
+# `Vec<PathBuf>` shape.
 schemas:
-  - schemas/my_test_config.yaml
+  MyTestConfig:
+    file: schemas/my_test_config.yaml
 "#,
         )
         .unwrap();

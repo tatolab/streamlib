@@ -290,6 +290,15 @@ impl SchemaIdentOutput {
         match spec {
             crate::core::PortSchemaSpec::Any => None,
             crate::core::PortSchemaSpec::Specific(ident) => Some(Self::from(ident)),
+            // `Named` should never reach this site — runtime startup +
+            // proc-macro expansion both resolve bare-name port refs to
+            // `Specific(SchemaIdent)` against the enclosing manifest's
+            // `schemas:` map (#767). A `Named` here is a runtime bug.
+            crate::core::PortSchemaSpec::Named(name) => panic!(
+                "PortSchemaSpec::Named(`{}`) reached json-schema render — \
+                 must be resolved before this site",
+                name.as_str()
+            ),
         }
     }
 }

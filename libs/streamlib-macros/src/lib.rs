@@ -30,8 +30,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use std::path::Path;
 use streamlib_processor_schema::{
-    Org, Package, PackageMetadata, ProcessorSchema, ProjectConfigMinimal, SchemaIdent, SemVer,
-    TypeName,
+    Org, Package, PackageMetadata, PortSchemaSpec, ProcessorSchema, ProjectConfigMinimal,
+    SchemaIdent, SemVer, TypeName,
 };
 use syn::{
     parse::{Parse, ParseStream},
@@ -58,12 +58,18 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let (schema, schema_ident) = match load_processor_schema(&short_name, &item_struct) {
-        Ok(pair) => pair,
-        Err(err) => return err.to_compile_error().into(),
-    };
+    let (schema, schema_ident, config_schema_id) =
+        match load_processor_schema(&short_name, &item_struct) {
+            Ok(triple) => triple,
+            Err(err) => return err.to_compile_error().into(),
+        };
 
-    let generated = codegen::generate_from_processor_schema(&item_struct, &schema, &schema_ident);
+    let generated = codegen::generate_from_processor_schema(
+        &item_struct,
+        &schema,
+        &schema_ident,
+        config_schema_id.as_deref(),
+    );
 
     TokenStream::from(generated)
 }
@@ -76,11 +82,19 @@ fn parse_processor_short_name(attr: TokenStream) -> syn::Result<String> {
 
 /// Locate `CARGO_MANIFEST_DIR/streamlib.yaml`, resolve the package metadata
 /// + matching processor entry by short name, and compose the full
-/// [`SchemaIdent`].
+/// [`SchemaIdent`]. Also resolves any bare-name [`PortSchemaSpec::Named`]
+/// references on the matched processor's port and config schemas against
+/// the manifest's `schemas:` map (#767), in-place rewriting them to
+/// [`PortSchemaSpec::Specific`]. Downstream codegen sees `Any` or
+/// `Specific` only — `Named` never reaches the token-emission layer.
+///
+/// Returns the (mutated) processor schema, the processor's structured
+/// [`SchemaIdent`], and an optional pre-resolved canonical id string for
+/// the config schema (or `None` when the processor declares no config).
 fn load_processor_schema(
     short_name: &str,
     item: &ItemStruct,
-) -> syn::Result<(ProcessorSchema, SchemaIdent)> {
+) -> syn::Result<(ProcessorSchema, SchemaIdent, Option<String>)> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").map_err(|_| {
         syn::Error::new_spanned(
             item,
@@ -88,7 +102,8 @@ fn load_processor_schema(
         )
     })?;
 
-    let config_path = Path::new(&manifest_dir).join("streamlib.yaml");
+    let manifest_dir_path = Path::new(&manifest_dir);
+    let config_path = manifest_dir_path.join("streamlib.yaml");
 
     if !config_path.exists() {
         return Err(syn::Error::new_spanned(
@@ -123,7 +138,7 @@ fn load_processor_schema(
 
     let available_names: Vec<String> = config.processors.iter().map(|p| p.name.clone()).collect();
 
-    let schema = config
+    let mut schema = config
         .processors
         .into_iter()
         .find(|p| p.name == short_name)
@@ -152,9 +167,185 @@ fn load_processor_schema(
         )
     })?;
 
-    let ident = SchemaIdent::new(pkg.org, pkg.name, type_name, pkg.version);
+    let ident = SchemaIdent::new(
+        pkg.org.clone(),
+        pkg.name.clone(),
+        type_name,
+        pkg.version,
+    );
 
-    Ok((schema, ident))
+    // Resolve bare-name port + config schema references against the
+    // enclosing manifest's `schemas:` map (#767). After this pass, every
+    // `PortSchemaSpec::Named` on this processor's ports is replaced with
+    // `PortSchemaSpec::Specific(SchemaIdent)`; `config.schema`'s
+    // canonical id is computed and returned to the caller for codegen.
+    //
+    // Skip resolution entirely when the processor has no `Named` /
+    // config refs to resolve — avoids invoking the resolver (which
+    // touches the dependency graph) for processors with `any`-only
+    // ports and no config.
+    let needs_resolution = schema
+        .inputs
+        .iter()
+        .chain(schema.outputs.iter())
+        .any(|p| matches!(p.schema, PortSchemaSpec::Named(_)))
+        || schema.config.is_some();
+
+    let config_schema_id = if needs_resolution {
+        let resolved = streamlib_idents::resolve_with(
+            manifest_dir_path,
+            &streamlib_idents::ResolverOptions::default(),
+        )
+        .map_err(|e| {
+            syn::Error::new_spanned(
+                item,
+                format!(
+                    "Failed to resolve manifest dependencies for bare-name schema lookup at {}: {}",
+                    config_path.display(),
+                    e
+                ),
+            )
+        })?;
+
+        // Resolve port schemas in-place.
+        for port in schema.inputs.iter_mut().chain(schema.outputs.iter_mut()) {
+            if let PortSchemaSpec::Named(name) = &port.schema {
+                let resolved_ident = resolve_named_to_ident(&resolved, name).map_err(|msg| {
+                    syn::Error::new_spanned(
+                        item,
+                        format!(
+                            "port `{}` in processor `{}`: {}",
+                            port.name, short_name, msg
+                        ),
+                    )
+                })?;
+                port.schema = PortSchemaSpec::Specific(resolved_ident);
+            }
+        }
+
+        // Resolve config schema (TypeName) to a canonical id string for
+        // the codegen `derive_config_type_from_schema` helper.
+        if let Some(config) = &schema.config {
+            let id = resolve_config_schema_to_canonical_id(&resolved, &config.schema).map_err(
+                |msg| {
+                    syn::Error::new_spanned(
+                        item,
+                        format!(
+                            "config schema `{}` in processor `{}`: {}",
+                            config.schema.as_str(),
+                            short_name,
+                            msg
+                        ),
+                    )
+                },
+            )?;
+            Some(id)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok((schema, ident, config_schema_id))
+}
+
+/// Walk the resolved-packages graph for a bare TypeName reference and
+/// build the fully-qualified [`SchemaIdent`] from the owning package's
+/// metadata. Reads the schema file's `metadata.type` (preferred) for
+/// the type segment; falls back to the bare name if the YAML lacks
+/// `metadata.type` (legacy reverse-DNS schemas with `metadata.name` only
+/// don't carry a separate type, so the bare-name lookup form falls back
+/// to the map key, which is the bare PascalCase the user wrote).
+fn resolve_named_to_ident(
+    resolved: &streamlib_idents::ResolvedPackages,
+    name: &TypeName,
+) -> Result<SchemaIdent, String> {
+    let (owner, schema_path) =
+        streamlib_idents::resolve_bare_schema_name(resolved, &resolved.root, name)
+            .map_err(|e| format!("bare-name resolution failed: {}", e))?;
+
+    let owner_pkg = owner
+        .manifest
+        .package
+        .as_ref()
+        .ok_or_else(|| "owning package has no `package:` block".to_string())?;
+
+    // Prefer `metadata.type` from the schema file when present; fall back
+    // to the bare map-key name. This preserves the round-trip identity
+    // for new-shape schemas while tolerating legacy reverse-DNS schemas
+    // that only declare `metadata.name`.
+    let type_segment = read_schema_metadata_type(&schema_path).unwrap_or_else(|| name.clone());
+
+    Ok(SchemaIdent::new(
+        owner_pkg.org.clone(),
+        owner_pkg.name.clone(),
+        type_segment,
+        owner_pkg.version,
+    ))
+}
+
+/// Resolve a config schema bare-name `TypeName` to its canonical id
+/// string for the codegen helper `derive_config_type_from_schema`.
+///
+/// Two id grammars are supported (and downstream codegen handles both):
+/// - New-shape `@<org>/<package>/<TypeName>@<version>` — emitted when
+///   the schema declares `metadata.type`
+/// - Legacy reverse-DNS `<segments>.config@<version>` — emitted when
+///   the schema declares only `metadata.name` (the legacy reverse-DNS
+///   filename form). The semver suffix is appended from the owning
+///   package's version.
+fn resolve_config_schema_to_canonical_id(
+    resolved: &streamlib_idents::ResolvedPackages,
+    name: &TypeName,
+) -> Result<String, String> {
+    let (owner, schema_path) =
+        streamlib_idents::resolve_bare_schema_name(resolved, &resolved.root, name)
+            .map_err(|e| format!("bare-name resolution failed: {}", e))?;
+
+    let owner_pkg = owner
+        .manifest
+        .package
+        .as_ref()
+        .ok_or_else(|| "owning package has no `package:` block".to_string())?;
+
+    if let Some(type_segment) = read_schema_metadata_type(&schema_path) {
+        Ok(format!(
+            "@{}/{}/{}@{}",
+            owner_pkg.org.as_str(),
+            owner_pkg.name.as_str(),
+            type_segment.as_str(),
+            owner_pkg.version,
+        ))
+    } else if let Some(legacy_name) = read_schema_metadata_name(&schema_path) {
+        // Legacy reverse-DNS — the metadata.name carries the canonical
+        // unversioned id; append the owning package's semver to match
+        // the long-form `<dotted>.config@<version>` codegen helper expects.
+        Ok(format!("{}@{}", legacy_name, owner_pkg.version))
+    } else {
+        Err(format!(
+            "schema {} declares neither `metadata.type` nor `metadata.name`",
+            schema_path.display()
+        ))
+    }
+}
+
+/// Read `metadata.type` from a schema YAML file, returning `None` when
+/// missing or when the file can't be read / parsed.
+fn read_schema_metadata_type(schema_path: &Path) -> Option<TypeName> {
+    let body = std::fs::read_to_string(schema_path).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&body).ok()?;
+    let type_str = value.get("metadata")?.get("type")?.as_str()?;
+    TypeName::new(type_str).ok()
+}
+
+/// Read `metadata.name` (legacy reverse-DNS form) from a schema YAML
+/// file. Returns `None` when missing or when the file can't be read.
+fn read_schema_metadata_name(schema_path: &Path) -> Option<String> {
+    let body = std::fs::read_to_string(schema_path).ok()?;
+    let value: serde_yaml::Value = serde_yaml::from_str(&body).ok()?;
+    let name = value.get("metadata")?.get("name")?.as_str()?;
+    Some(name.to_string())
 }
 
 /// Short form of [`SchemaIdent::new`] — strict version-pinning. Takes
