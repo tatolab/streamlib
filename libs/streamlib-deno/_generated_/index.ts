@@ -8,8 +8,6 @@ export * from "./com_streamlib_bgra_file_source_config.ts";
 export * from "./com_streamlib_clap_effect_config.ts";
 export * from "./com_streamlib_escalate_request.ts";
 export * from "./com_streamlib_escalate_response.ts";
-export * from "./com_streamlib_h265_decoder_config.ts";
-export * from "./com_streamlib_h265_encoder_config.ts";
 export * from "./com_streamlib_linux_mp4_writer_config.ts";
 export * from "./com_streamlib_moq_publish_track_config.ts";
 export * from "./com_streamlib_moq_subscribe_track_config.ts";

@@ -10,9 +10,14 @@
 // The camera's GPU-resident textures are on the same device, so encode_image()
 // accepts them directly (zero-copy).
 
-use crate::_generated_::{EncodedVideoFrame, VideoFrame};
-use crate::core::context::GpuContextLimitedAccess;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
+use std::sync::Arc;
+
+use streamlib::sdk::_generated_::{EncodedVideoFrame, VideoFrame};
+use streamlib::sdk::context::{
+    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
+use streamlib::sdk::error::{Error, Result};
 
 use vulkan_video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
 
@@ -20,7 +25,7 @@ use vulkan_video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("H265Encoder")]
+#[streamlib::sdk::processor("H265Encoder")]
 pub struct H265EncoderProcessor {
     /// Vulkan Video hardware encoder (shares RHI device).
     encoder: Option<SimpleEncoder>,
@@ -32,7 +37,7 @@ pub struct H265EncoderProcessor {
     frames_encoded: u64,
 }
 
-impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for H265EncoderProcessor::Processor {
     async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
@@ -58,7 +63,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
         // export-capable VMA pool at `HostVulkanDevice` construction
         // (see docs/learnings/nvidia-dma-buf-after-swapchain.md), so
         // encoder allocations no longer race the display's swapchain.
-        let vulkan_device = &ctx.gpu_full_access().device().inner;
+        let vulkan_device = Arc::clone(ctx.gpu_full_access().device().vulkan_device());
 
         let encode_queue = vulkan_device.video_encode_queue().ok_or_else(|| {
             Error::Runtime("GPU does not support Vulkan Video encode".into())
@@ -67,8 +72,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
             Error::Runtime("No video encode queue family".into())
         })?;
 
-        let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
-            ctx.gpu_full_access().device().inner.clone();
+        let submitter: Arc<dyn vulkan_video::RhiQueueSubmitter> = vulkan_device.clone();
 
         let mut encoder = SimpleEncoder::from_device(
             encoder_config,
@@ -132,7 +136,7 @@ impl crate::core::ReactiveProcessor for H265EncoderProcessor::Processor {
             .ok_or_else(|| Error::Runtime("H.265 encoder not initialized".into()))?;
 
         let texture = gpu_ctx.resolve_video_frame_texture(&frame)?;
-        let image_view = texture.inner.image_view().map_err(|e| {
+        let image_view = texture.vulkan_inner().image_view().map_err(|e| {
             Error::GpuError(format!("Failed to get image view: {e}"))
         })?;
 

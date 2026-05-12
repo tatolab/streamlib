@@ -13,10 +13,10 @@
 //!   cargo run -p vulkan-video-roundtrip -- h264 [device] [seconds]
 //!   cargo run -p vulkan-video-roundtrip -- h265 /dev/video2 10
 
-use streamlib::sdk::processors::{H265EncoderProcessor, H265DecoderProcessor};
 use streamlib_camera::CameraProcessor;
 use streamlib_display::DisplayProcessor;
 use streamlib_h264::{H264DecoderProcessor, H264EncoderProcessor};
+use streamlib_h265::{H265DecoderProcessor, H265EncoderProcessor};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::processors::{input, output};

@@ -46,10 +46,6 @@ schemas:
     file: schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
   ClapEffectConfig:
     file: schemas/com.streamlib.clap.effect.config@1.0.0.yaml
-  H265DecoderConfig:
-    file: schemas/com.streamlib.h265_decoder.config@1.0.0.yaml
-  H265EncoderConfig:
-    file: schemas/com.streamlib.h265_encoder.config@1.0.0.yaml
   LinuxMp4WriterConfig:
     file: schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml
   MoqPublishTrackConfig:
@@ -241,50 +237,7 @@ processors:
 
   # === Codecs ===
   # H.264 encoder/decoder live in @tatolab/h264 (#675).
-
-  - name: H265Encoder
-    version: 1.0.0
-    description: "Encodes VideoFrame to EncodedVideoFrame (H.265) via Vulkan Video"
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: H265EncoderConfig
-    inputs:
-      - name: video_in
-        schema: VideoFrame
-        description: Raw video frames to encode
-        read_mode: read_next_in_order
-        buffer_size: 8
-    outputs:
-      - name: encoded_video_out
-        schema: EncodedVideoFrame
-        description: H.265 encoded video frames
-
-  - name: H265Decoder
-    version: 1.0.0
-    description: "Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video"
-    execution: reactive
-    scheduling:
-      priority: high
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: H265DecoderConfig
-    inputs:
-      - name: encoded_video_in
-        schema: EncodedVideoFrame
-        description: H.265 encoded video frames to decode
-        read_mode: read_next_in_order
-        buffer_size: 16
-    outputs:
-      - name: video_out
-        schema: VideoFrame
-        description: Decoded video frames
+  # H.265 encoder/decoder live in @tatolab/h265 (#676).
 
   - name: OpusEncoder
     version: 1.0.0

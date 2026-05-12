@@ -6,10 +6,15 @@
 // Thin wrapper around vulkan_video::SimpleDecoder using the shared RHI
 // HostVulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
 
-use crate::_generated_::{EncodedVideoFrame, VideoFrame};
-use crate::core::context::GpuContextLimitedAccess;
-use crate::core::rhi::PixelFormat;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
+use std::sync::Arc;
+
+use streamlib::sdk::_generated_::{EncodedVideoFrame, VideoFrame};
+use streamlib::sdk::context::{
+    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostPixelBufferRefExt};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::rhi::PixelFormat;
 
 use vulkan_video::{Codec, SimpleDecoder, SimpleDecoderConfig};
 
@@ -17,7 +22,7 @@ use vulkan_video::{Codec, SimpleDecoder, SimpleDecoderConfig};
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("H265Decoder")]
+#[streamlib::sdk::processor("H265Decoder")]
 pub struct H265DecoderProcessor {
     /// Vulkan Video hardware decoder (shares RHI device).
     decoder: Option<SimpleDecoder>,
@@ -29,7 +34,7 @@ pub struct H265DecoderProcessor {
     frames_decoded: u64,
 }
 
-impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Processor {
     async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
@@ -41,7 +46,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             ..Default::default()
         };
 
-        let vulkan_device = &ctx.gpu_full_access().device().inner;
+        let vulkan_device = Arc::clone(ctx.gpu_full_access().device().vulkan_device());
 
         let decode_queue = vulkan_device.video_decode_queue().ok_or_else(|| {
             Error::Runtime("GPU does not support Vulkan Video decode".into())
@@ -50,8 +55,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             Error::Runtime("No video decode queue family".into())
         })?;
 
-        let submitter: std::sync::Arc<dyn vulkan_video::RhiQueueSubmitter> =
-            ctx.gpu_full_access().device().inner.clone();
+        let submitter: Arc<dyn vulkan_video::RhiQueueSubmitter> = vulkan_device.clone();
 
         let mut decoder = SimpleDecoder::from_device(
             decoder_config,
@@ -130,7 +134,7 @@ impl crate::core::ReactiveProcessor for H265DecoderProcessor::Processor {
             // buffers as textures on demand (buffer→image upload in GpuContext).
             let (pool_id, pixel_buffer) =
                 gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
-            let dst_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
+            let dst_ptr = pixel_buffer.buffer_ref().vulkan_inner().mapped_ptr();
             unsafe {
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }

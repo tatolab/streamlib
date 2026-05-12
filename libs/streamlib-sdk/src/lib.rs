@@ -126,14 +126,16 @@ pub mod sdk {
             ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor,
         };
 
-        // Linux-only processors (codec + bgra + mp4 writer).
+        // Linux-only processors (bgra + mp4 writer).
         // H.264 encoder/decoder live in `@tatolab/h264` (`streamlib-h264`),
-        // not in the engine (#675). Apps depend on `streamlib-h264` directly
-        // alongside `streamlib`; the SDK does not re-export them.
+        // not in the engine (#675). H.265 encoder/decoder live in
+        // `@tatolab/h265` (`streamlib-h265`), not in the engine (#676). Apps
+        // depend on `streamlib-h264` / `streamlib-h265` directly alongside
+        // `streamlib`; the SDK does not re-export them.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::{
             BgraFileSourceProcessor,
-            H265DecoderProcessor, H265EncoderProcessor, LinuxMp4WriterProcessor,
+            LinuxMp4WriterProcessor,
         };
 
         // MoQ feature-gated processors.

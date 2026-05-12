@@ -1,0 +1,40 @@
+[package]
+name = "streamlib-h265"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "H.265 encoder + decoder via Vulkan Video — carved out of the streamlib engine. Linux-only today; macOS VideoToolbox is a future addition."
+keywords = ["h265", "hevc", "video", "encoder", "vulkan-video"]
+categories = ["multimedia::video", "multimedia"]
+
+[lib]
+name = "streamlib_h265"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated config
+# types under `streamlib::_generated_::tatolab__h265::*`, EncodedVideoFrame /
+# VideoFrame wire types, host RHI bridge for queue handles + allocator.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+# Logging.
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Vulkan Video encoder/decoder primitives — H.264/H.265 via the
+# VK_KHR_video_{encode,decode}_h265 extensions. The crate exposes the
+# `RhiQueueSubmitter` trait the host's `HostVulkanDevice` implements,
+# so the encoder/decoder use the engine's queue mutex + allocator.
+vulkan-video = { path = "../../libs/vulkan-video" }
+
+[lints]
+workspace = true
