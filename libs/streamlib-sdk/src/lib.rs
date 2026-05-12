@@ -115,10 +115,6 @@ pub mod sdk {
         // `streamlib-processor-schema`).
         pub use streamlib_engine::core::descriptors::PortSchemaSpec;
 
-        // Apple-only processors.
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        pub use streamlib_engine::ScreenCaptureProcessor;
-
         // Linux-only processors.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::BgraFileSourceProcessor;

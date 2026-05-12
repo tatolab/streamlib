@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/screen-capture — screen capture processor for streamlib.
+# Apple-only today (macOS / iOS via ScreenCaptureKit); a Linux screen-
+# capture processor is tracked separately (#374).
+package:
+  org: tatolab
+  name: screen-capture
+  version: 1.0.0
+  description: "Screen capture processor — ScreenCaptureKit on macOS / iOS"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  # Wire types imported from @tatolab/core.
+  VideoFrame:
+    package: "@tatolab/core"
+  # Local config schemas this package owns.
+  ScreenCaptureConfig:
+    file: schemas/screen_capture_config.yaml
+
+processors:
+  - name: ScreenCapture
+    version: 1.0.0
+    description: "Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)"
+    execution: manual
+    runtime:
+      options:
+        unsafe_send: true
+    config:
+      name: config
+      schema: ScreenCaptureConfig
+    outputs:
+      - name: video
+        schema: VideoFrame
+        description: Captured video frames from screen content

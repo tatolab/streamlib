@@ -1,0 +1,46 @@
+[package]
+name = "streamlib-screen-capture"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Screen capture processor for streamlib (macOS / iOS via ScreenCaptureKit)."
+keywords = ["screen-capture", "screen-recording", "screencast", "video", "streaming"]
+categories = ["multimedia::video", "multimedia"]
+
+[lib]
+name = "streamlib_screen_capture"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated wire
+# types under `streamlib::sdk::_generated_::*` (VideoFrame), RHI primitives.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+# Logging.
+tracing.workspace = true
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# Objective-C interop and Apple framework bindings for ScreenCaptureKit.
+objc2.workspace = true
+objc2-screen-capture-kit = "0.3.2"
+objc2-core-media = "0.3"
+objc2-core-video.workspace = true
+objc2-foundation.workspace = true
+block2 = "0.6"
+# GCD wrapper for dispatching ScreenCaptureKit init to the main thread.
+dispatch2 = "0.3"
+# Lock for async init state shared between the GCD callback and the
+# processor thread.
+parking_lot = "0.12"
+
+[lints]
+workspace = true

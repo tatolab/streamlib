@@ -4,9 +4,6 @@
 use crate::apple::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
-use crate::core::rhi::{PixelFormat, PixelBuffer, PixelBufferRef};
-use crate::core::{GpuContextLimitedAccess, Result, RuntimeContextFullAccess, Error};
-use crate::iceoryx2::OutputWriter;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -22,9 +19,15 @@ use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib::sdk::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
 
 // Config type is generated from JTD schema
-pub use crate::_generated_::com_tatolab_screen_capture_config::{ScreenCaptureConfig, TargetType};
+pub use crate::_generated_::tatolab__screen_capture::screen_capture_config::{
+    ScreenCaptureConfig, TargetType,
+};
 
 type CMSampleBufferRef = *mut c_void;
 
@@ -152,7 +155,7 @@ define_class!(
             let screen_iosurface =
                 CVPixelBufferGetIOSurface(pixel_buffer_ptr as *mut std::ffi::c_void);
             if screen_iosurface.is_null() {
-                eprintln!("[ScreenCapture] CVPixelBuffer not backed by IOSurface");
+                tracing::warn!("[ScreenCapture] CVPixelBuffer not backed by IOSurface");
                 return;
             }
 
@@ -178,7 +181,10 @@ define_class!(
                             Ok(()) => pool_id.to_string(),
                             Err(e) => {
                                 if frame_num == 0 {
-                                    eprintln!("[ScreenCapture] Blit failed: {}, falling back", e);
+                                    tracing::warn!(
+                                        "[ScreenCapture] Blit failed: {}, falling back",
+                                        e
+                                    );
                                 }
                                 forward_iosurface_directly(ctx, screen_iosurface)
                             }
@@ -186,13 +192,17 @@ define_class!(
                     }
                     Err(e) => {
                         if frame_num == 0 {
-                            eprintln!("[ScreenCapture] Pool acquire failed: {}, falling back", e);
+                            tracing::warn!(
+                                "[ScreenCapture] Pool acquire failed: {}, falling back",
+                                e
+                            );
                         }
                         forward_iosurface_directly(ctx, screen_iosurface)
                     }
                 };
 
-            let timestamp_ns = crate::core::media_clock::MediaClock::now().as_nanos() as i64;
+            let timestamp_ns =
+                streamlib::sdk::media_clock::MediaClock::now().as_nanos() as i64;
 
             let ipc_frame = crate::_generated_::VideoFrame {
                 surface_id: surface_id_str,
@@ -208,17 +218,18 @@ define_class!(
 
             let outputs = &*ctx.output_writer;
             if let Err(e) = outputs.write("video", &ipc_frame) {
-                eprintln!("[ScreenCapture] Failed to write frame: {}", e);
+                tracing::warn!("[ScreenCapture] Failed to write frame: {}", e);
                 return;
             }
 
             if frame_num == 0 {
-                eprintln!(
+                tracing::info!(
                     "[ScreenCapture] First frame processed ({}x{}, pooled buffers)",
-                    width, height
+                    width,
+                    height
                 );
             } else if frame_num % 60 == 0 {
-                eprintln!("[ScreenCapture] Frame #{}", frame_num);
+                tracing::debug!("[ScreenCapture] Frame #{}", frame_num);
             }
         }
     }
@@ -240,7 +251,7 @@ unsafe fn blit_iosurface_to_pooled_buffer(
     pooled_buffer: &PixelBuffer,
     width: u32,
     height: u32,
-) -> crate::core::Result<()> {
+) -> Result<()> {
     ctx.gpu_context
         .blit_copy_iosurface(source_iosurface, pooled_buffer, width, height)
 }
@@ -262,15 +273,15 @@ unsafe fn forward_iosurface_directly(
     }
 }
 
-#[crate::processor("ScreenCapture")]
+#[streamlib::sdk::processor("ScreenCapture")]
 pub struct AppleScreenCaptureProcessor {
     /// GPU context for surface pooling (set in setup).
-    gpu_context: Option<GpuContext>,
+    gpu_context: Option<GpuContextLimitedAccess>,
     /// Async init state.
     capture_init_state: Option<Arc<ScreenCaptureInitState>>,
 }
 
-impl crate::core::ManualProcessor for AppleScreenCaptureProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for AppleScreenCaptureProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -359,7 +370,10 @@ impl AppleScreenCaptureProcessor::Processor {
                     if !error.is_null() {
                         let error = Retained::retain(error).unwrap();
                         let msg = error.localizedDescription().to_string();
-                        eprintln!("[ScreenCapture] Failed to get shareable content: {}", msg);
+                        tracing::warn!(
+                            "[ScreenCapture] Failed to get shareable content: {}",
+                            msg
+                        );
                         init_state_for_completion.mark_failed(msg);
                         return;
                     }
@@ -374,11 +388,11 @@ impl AppleScreenCaptureProcessor::Processor {
 
                     match Self::setup_capture_stream(&config, content) {
                         Ok(()) => {
-                            eprintln!("[ScreenCapture] Capture stream started");
+                            tracing::info!("[ScreenCapture] Capture stream started");
                             init_state_for_completion.mark_ready();
                         }
                         Err(e) => {
-                            eprintln!("[ScreenCapture] Setup failed: {}", e);
+                            tracing::warn!("[ScreenCapture] Setup failed: {}", e);
                             init_state_for_completion.mark_failed(e.to_string());
                         }
                     }
@@ -493,12 +507,12 @@ impl AppleScreenCaptureProcessor::Processor {
         let start_block = RcBlock::new(move |error: *mut NSError| {
             if !error.is_null() {
                 let error = Retained::retain(error).unwrap();
-                eprintln!(
+                tracing::warn!(
                     "[ScreenCapture] Start capture failed: {}",
                     error.localizedDescription()
                 );
             } else {
-                eprintln!("[ScreenCapture] Capture started successfully");
+                tracing::info!("[ScreenCapture] Capture started successfully");
             }
         });
         stream.startCaptureWithCompletionHandler(Some(&*start_block));

@@ -1,11 +1,10 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# JSON Type Definition (RFC 8927) schema for ScreenCapture config
+# JSON Type Definition (RFC 8927) schema for ScreenCapture config.
 
 metadata:
-  name: com.tatolab.screen_capture.config
-  version: 1.0.0
+  type: ScreenCaptureConfig
   description: "Configuration for screen capture using ScreenCaptureKit (macOS 12.3+)"
 
 properties:

@@ -11,11 +11,13 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::_generated_::com_tatolab_screen_capture_config::TargetType;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::sdk::permissions::request_display_permission;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::processors::{Mp4WriterProcessor, ScreenCaptureProcessor};
+use streamlib::sdk::processors::Mp4WriterProcessor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib_screen_capture::AppleScreenCaptureProcessor as ScreenCaptureProcessor;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib_screen_capture::_generated_::tatolab__screen_capture::screen_capture_config::TargetType;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 

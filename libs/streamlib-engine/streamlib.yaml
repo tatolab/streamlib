@@ -38,8 +38,6 @@ schemas:
   # reverse-DNS schema file names.
   BgraFileSourceConfig:
     file: schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
-  ScreenCaptureConfig:
-    file: schemas/com.tatolab.screen_capture.config@1.0.0.yaml
   SimplePassthroughConfig:
     file: schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml
   # Polyglot escalate IPC wire schemas (discriminator form).
@@ -52,23 +50,6 @@ schemas:
     file: schemas/com.streamlib.test.configured_processor.config@1.0.0.yaml
 
 processors:
-  # === Apple platform processors ===
-
-  - name: ScreenCapture
-    version: 1.0.0
-    description: "Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)"
-    execution: manual
-    runtime:
-      options:
-        unsafe_send: true
-    config:
-      name: config
-      schema: ScreenCaptureConfig
-    outputs:
-      - name: video
-        schema: VideoFrame
-        description: Captured video frames from screen content
-
   # === Core processors ===
 
   - name: SimplePassthrough
