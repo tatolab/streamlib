@@ -664,16 +664,14 @@ impl<'a> RuntimeContextFullAccess<'a> {
         &self.gpu_limited
     }
 
-    /// Clone the underlying [`RuntimeContext`] so processors can stash
-    /// it for long-lived work that outlives a single call into
-    /// `setup` / `start` — the canonical case is a tokio task spawned
-    /// during `start()` (HTTP server, websocket pump, etc.). The clone
-    /// is a plain `RuntimeContext`, not a capability view, but doesn't
-    /// hand the caller any GPU primitive they didn't already reach via
-    /// [`Self::gpu_full_access`] / [`Self::gpu_limited_access`] — the
-    /// base type's API is narrowed (see #322) so the clone alone can't
-    /// allocate GPU resources.
-    pub fn clone_runtime_context(&self) -> RuntimeContext {
+    /// Crate-internal escape hatch for in-engine processors that need
+    /// to spawn a tokio task outliving the call. The clone returned is
+    /// a plain `RuntimeContext`, not a capability view — but the same
+    /// rule still applies: it doesn't give the caller any GPU handle
+    /// they didn't already have access to through `gpu_full_access()` /
+    /// `gpu_limited_access()`. Commit 5 of #322 narrows the base
+    /// type's API so even this clone can't hand out GPU ops directly.
+    pub(crate) fn clone_runtime_context(&self) -> RuntimeContext {
         self.base.clone()
     }
 

@@ -15,7 +15,6 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use streamlib::sdk::context::RuntimeContext;
 use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
@@ -26,6 +25,7 @@ use streamlib::sdk::json_schema::{
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{topics, Event, EventListener, PUBSUB};
+use streamlib::sdk::runtime::RuntimeOperations;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use utoipa::OpenApi;
@@ -43,7 +43,10 @@ use crate::state::{
 /// Wire the documented OpenAPI routes plus the un-documented WebSocket /
 /// OpenAPI-spec endpoints into a single [`Router`], with the HTTP trace
 /// layer and shared state attached.
-pub(crate) fn build_router(runtime_ctx: RuntimeContext) -> Router {
+pub(crate) fn build_router(
+    runtime: Arc<dyn RuntimeOperations>,
+    #[cfg(feature = "moq")] moq_sessions: streamlib::sdk::streaming::SharedMoqSessions,
+) -> Router {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health))
         .routes(routes!(get_graph))
@@ -57,7 +60,9 @@ pub(crate) fn build_router(runtime_ctx: RuntimeContext) -> Router {
         .split_for_parts();
 
     let state = AppState {
-        runtime_ctx,
+        runtime,
+        #[cfg(feature = "moq")]
+        moq_sessions,
         openapi,
     };
 
@@ -106,8 +111,7 @@ pub(crate) async fn get_graph(
     State(state): State<AppState>,
 ) -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
     state
-        .runtime_ctx
-        .runtime()
+        .runtime
         .to_json_async()
         .await
         .map(Json)
@@ -161,7 +165,7 @@ pub(crate) async fn create_processor(
     };
     let spec = ProcessorSpec::new(ident, body.config);
 
-    match state.runtime_ctx.runtime().add_processor_async(spec).await {
+    match state.runtime.add_processor_async(spec).await {
         Ok(id) => (
             StatusCode::OK,
             Json(IdResponse { id: id.to_string() }),
@@ -203,8 +207,7 @@ pub(crate) async fn delete_processor(
 ) -> std::result::Result<axum::http::StatusCode, axum::http::StatusCode> {
     let processor_id = id.into();
     state
-        .runtime_ctx
-        .runtime()
+        .runtime
         .remove_processor_async(processor_id)
         .await
         .map(|_| axum::http::StatusCode::NO_CONTENT)
@@ -230,7 +233,7 @@ pub(crate) async fn create_connection(
     let from = OutputLinkPortRef::new(body.from_processor, body.from_port);
     let to = InputLinkPortRef::new(body.to_processor, body.to_port);
 
-    match state.runtime_ctx.runtime().connect_async(from, to).await {
+    match state.runtime.connect_async(from, to).await {
         Ok(id) => (
             StatusCode::OK,
             Json(IdResponse { id: id.to_string() }),
@@ -290,8 +293,7 @@ pub(crate) async fn delete_connection(
     let link_id = id.into();
 
     state
-        .runtime_ctx
-        .runtime()
+        .runtime
         .disconnect_async(link_id)
         .await
         .map(|_| axum::http::StatusCode::NO_CONTENT)
@@ -344,7 +346,7 @@ pub(crate) async fn get_registry() -> Json<RegistryResponse> {
     )
 )]
 pub(crate) async fn list_schema_definitions() -> Json<Vec<String>> {
-    Json(streamlib::sdk::schemas::known_schema_idents())
+    Json(streamlib::sdk::schemas::current_schema_idents())
 }
 
 #[utoipa::path(
@@ -362,7 +364,7 @@ pub(crate) async fn list_schema_definitions() -> Json<Vec<String>> {
 pub(crate) async fn get_schema_definition(
     Path(name): Path<String>,
 ) -> std::result::Result<String, axum::http::StatusCode> {
-    streamlib::sdk::schemas::schema_definition(&name)
+    streamlib::sdk::schemas::current_schema_definition(&name)
         .map(|def| def.to_string())
         .ok_or(axum::http::StatusCode::NOT_FOUND)
 }
@@ -385,9 +387,8 @@ pub(crate) async fn get_openapi_spec(
 pub(crate) async fn get_moq_catalog(
     State(state): State<AppState>,
 ) -> Json<streamlib::sdk::streaming::MoqBroadcastCatalog> {
-    let sessions = state.runtime_ctx.moq_sessions();
     let mut catalog = streamlib::sdk::streaming::MoqBroadcastCatalog::new();
-    for track_name in sessions.published_track_names() {
+    for track_name in state.moq_sessions.published_track_names() {
         catalog.add_track(&track_name, None, None, &track_name);
     }
     Json(catalog)

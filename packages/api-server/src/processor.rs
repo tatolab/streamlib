@@ -5,12 +5,24 @@
 //! shared [`crate::state::AppState`] to per-request handlers.
 
 use std::future::Future;
+use std::sync::Arc;
 
-use streamlib::sdk::context::{
-    RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
+use streamlib::sdk::runtime::RuntimeOperations;
+
+/// Narrow capability snapshot that the api-server stashes during
+/// `setup()` so the long-lived HTTP server task spawned in `start()`
+/// doesn't hold the full `RuntimeContext`. Only the handles the
+/// router + handlers actually need cross the setup → start boundary.
+struct StashedHandles {
+    runtime: Arc<dyn RuntimeOperations>,
+    tokio_handle: tokio::runtime::Handle,
+    runtime_id: String,
+    #[cfg(feature = "moq")]
+    moq_sessions: streamlib::sdk::streaming::SharedMoqSessions,
+}
 
 /// Docker-style adjectives for runtime name generation.
 const ADJECTIVES: &[&str] = &[
@@ -95,7 +107,7 @@ fn generate_runtime_name() -> String {
 
 #[streamlib::sdk::processor("ApiServer")]
 pub struct ApiServerProcessor {
-    runtime_ctx: Option<RuntimeContext>,
+    handles: Option<StashedHandles>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     runtime_id: Option<String>,
     resolved_name: Option<String>,
@@ -107,9 +119,15 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
     ) -> impl Future<Output = Result<()>> + Send {
-        // Stash a cloned RuntimeContext so the long-lived HTTP server task
-        // spawned in start() can reach tokio_handle + runtime_id.
-        self.runtime_ctx = Some(ctx.clone_runtime_context());
+        // Capture just the narrow handles the HTTP server task needs;
+        // the long-lived task never holds a `RuntimeContext`.
+        self.handles = Some(StashedHandles {
+            runtime: ctx.runtime(),
+            tokio_handle: ctx.tokio_handle().clone(),
+            runtime_id: ctx.runtime_id().to_string(),
+            #[cfg(feature = "moq")]
+            moq_sessions: ctx.moq_sessions().clone(),
+        });
         std::future::ready(Ok(()))
     }
 
@@ -135,9 +153,9 @@ impl ManualProcessor for ApiServerProcessor::Processor {
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let ctx = self
-            .runtime_ctx
-            .clone()
+        let handles = self
+            .handles
+            .as_ref()
             .expect("setup must be called before start");
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
@@ -150,16 +168,21 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             .unwrap_or_else(generate_runtime_name);
         self.resolved_name = Some(runtime_name.clone());
 
-        self.runtime_id = Some(ctx.runtime_id().to_string());
+        self.runtime_id = Some(handles.runtime_id.clone());
 
-        let app = crate::handlers::build_router(ctx.clone());
+        let app = crate::handlers::build_router(
+            handles.runtime.clone(),
+            #[cfg(feature = "moq")]
+            handles.moq_sessions.clone(),
+        );
 
         let config = self.config.clone();
         let host = config.host.clone();
         let base_port = config.port;
+        let tokio_handle = handles.tokio_handle.clone();
 
         // Try to bind to port, incrementing if in use (up to 10 attempts)
-        let (listener, actual_port) = ctx.tokio_handle().block_on(async {
+        let (listener, actual_port) = tokio_handle.block_on(async {
             for port_offset in 0..10u16 {
                 let port = base_port + port_offset;
                 let addr = format!("{}:{}", host, port);
@@ -199,7 +222,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         );
 
         // Spawn the HTTP server
-        ctx.tokio_handle().spawn(async move {
+        tokio_handle.spawn(async move {
             axum::serve(listener, app)
                 .with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;

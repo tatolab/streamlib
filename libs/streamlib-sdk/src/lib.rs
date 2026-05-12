@@ -154,10 +154,12 @@ pub mod sdk {
     /// Generated schema types (config types, wire vocabulary types).
     pub use streamlib_engine::_generated_;
 
-    /// Public catalog of schemas currently registered with the runtime.
-    /// Consumers (e.g. the api-server HTTP catalog endpoints) query
-    /// `known_schema_idents()` + `schema_definition(name)` through this
-    /// surface — the underlying registry stays engine-internal.
+    /// Runtime schema catalog — `current_schema_idents()` returns the
+    /// set of schemas the runtime currently has registered, and
+    /// `current_schema_definition(name)` returns the YAML body for one
+    /// of them. The catalog is dynamic by design; consumers (api-server's
+    /// HTTP endpoints, CLI introspection helpers) query it to see what
+    /// the live runtime knows about.
     pub use streamlib_engine::schemas;
 
     // ---- Procedural macros ----

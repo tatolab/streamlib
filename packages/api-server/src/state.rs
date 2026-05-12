@@ -4,13 +4,21 @@
 //! Shared HTTP state, OpenAPI document, and request/response wire types.
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::RuntimeContext;
+use std::sync::Arc;
 use streamlib::sdk::json_schema::SchemaIdentOutput;
+use streamlib::sdk::runtime::RuntimeOperations;
 use utoipa::OpenApi;
 
+/// Per-request shared state — narrow capability view captured during
+/// the processor's `setup` so the long-lived HTTP server task doesn't
+/// hold a cloned `RuntimeContext`. Each handler reaches `state.runtime`
+/// (graph mutation + introspection) and, with the `moq` feature on,
+/// `state.moq_sessions` (catalog endpoint).
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub runtime_ctx: RuntimeContext,
+    pub runtime: Arc<dyn RuntimeOperations>,
+    #[cfg(feature = "moq")]
+    pub moq_sessions: streamlib::sdk::streaming::SharedMoqSessions,
     pub openapi: utoipa::openapi::OpenApi,
 }
 
