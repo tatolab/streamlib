@@ -13,6 +13,11 @@ patch:
   "@tatolab/core":
     path: ../../../packages/core
 
+schemas:
+  # Wire types imported from @tatolab/core (#767).
+  VideoFrame:
+    package: "@tatolab/core"
+
 processors:
   - name: VulkanCompute
     version: "1.0.0"
@@ -22,4 +27,4 @@ processors:
     entrypoint: "vulkan_compute:VulkanComputeProcessor"
     inputs:
       - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame

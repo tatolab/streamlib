@@ -13,6 +13,11 @@ patch:
   "@tatolab/core":
     path: ../../../packages/core
 
+schemas:
+  # Wire types imported from @tatolab/core (#767).
+  VideoFrame:
+    package: "@tatolab/core"
+
 processors:
   - name: GrayscaleProcessor
     version: "1.0.0"
@@ -22,10 +27,10 @@ processors:
     entrypoint: "grayscale_processor.ts:default"
     inputs:
       - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
     outputs:
       - name: video_out
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
 
   - name: HalftoneProcessor
     version: "1.0.0"
@@ -35,7 +40,7 @@ processors:
     entrypoint: "halftone_processor.ts:default"
     inputs:
       - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
     outputs:
       - name: video_out
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame

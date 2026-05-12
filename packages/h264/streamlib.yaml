@@ -21,6 +21,12 @@ patch:
     path: ../core
 
 schemas:
+  # Wire types imported from @tatolab/core (#767).
+  EncodedVideoFrame:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"
+  # Local config schemas this package owns.
   H264DecoderConfig:
     file: schemas/h264_decoder_config.yaml
   H264EncoderConfig:
@@ -37,16 +43,16 @@ processors:
       language: rust
     config:
       name: config
-      schema: "@tatolab/h264/H264EncoderConfig@1.0.0"
+      schema: H264EncoderConfig
     inputs:
       - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Raw video frames to encode
         read_mode: read_next_in_order
         buffer_size: 8
     outputs:
       - name: encoded_video_out
-        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+        schema: EncodedVideoFrame
         description: H.264 encoded video frames
 
   - name: H264Decoder
@@ -59,14 +65,14 @@ processors:
       language: rust
     config:
       name: config
-      schema: "@tatolab/h264/H264DecoderConfig@1.0.0"
+      schema: H264DecoderConfig
     inputs:
       - name: encoded_video_in
-        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+        schema: EncodedVideoFrame
         description: H.264 encoded video frames to decode
         read_mode: read_next_in_order
         buffer_size: 16
     outputs:
       - name: video_out
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Decoded video frames

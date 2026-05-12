@@ -20,6 +20,10 @@ patch:
     path: ../core
 
 schemas:
+  # Wire types imported from @tatolab/core (#767).
+  AudioFrame:
+    package: "@tatolab/core"
+  # Local config schemas this package owns.
   AudioCaptureConfig:
     file: schemas/audio_capture_config.yaml
   AudioChannelConverterConfig:
@@ -48,10 +52,10 @@ processors:
         unsafe_send: true
     config:
       name: config
-      schema: "@tatolab/audio/AudioCaptureConfig@1.0.0"
+      schema: AudioCaptureConfig
     outputs:
       - name: audio
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Captured mono audio frames in device-native sample rate
 
   - name: AudioOutput
@@ -66,10 +70,10 @@ processors:
         unsafe_send: true
     config:
       name: config
-      schema: "@tatolab/audio/AudioOutputConfig@1.0.0"
+      schema: AudioOutputConfig
     inputs:
       - name: audio
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Stereo audio frame to play through speakers
         read_mode: read_next_in_order
         buffer_size: 32
@@ -82,21 +86,21 @@ processors:
       priority: realtime
     config:
       name: config
-      schema: "@tatolab/audio/AudioMixerConfig@1.0.0"
+      schema: AudioMixerConfig
     inputs:
       - name: left
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Left channel mono audio frame
         read_mode: read_next_in_order
         buffer_size: 32
       - name: right
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Right channel mono audio frame
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Mixed stereo audio frame
 
   - name: AudioChannelConverter
@@ -107,16 +111,16 @@ processors:
       priority: realtime
     config:
       name: config
-      schema: "@tatolab/audio/AudioChannelConverterConfig@1.0.0"
+      schema: AudioChannelConverterConfig
     inputs:
       - name: audio_in
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Mono audio frame
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio_out
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Multi-channel audio frame
 
   - name: AudioResampler
@@ -127,16 +131,16 @@ processors:
       priority: realtime
     config:
       name: config
-      schema: "@tatolab/audio/AudioResamplerConfig@1.0.0"
+      schema: AudioResamplerConfig
     inputs:
       - name: audio_in
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Audio frame to resample
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio_out
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Resampled audio frame
 
   - name: BufferRechunker
@@ -151,16 +155,16 @@ processors:
       priority: realtime
     config:
       name: config
-      schema: "@tatolab/audio/BufferRechunkerConfig@1.0.0"
+      schema: BufferRechunkerConfig
     inputs:
       - name: audio_in
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Variable-size audio frame
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio_out
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Fixed-size audio frame
 
   - name: ChordGenerator
@@ -173,8 +177,8 @@ processors:
       priority: realtime
     config:
       name: config
-      schema: "@tatolab/audio/ChordGeneratorConfig@1.0.0"
+      schema: ChordGeneratorConfig
     outputs:
       - name: chord
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Stereo chord audio frame
