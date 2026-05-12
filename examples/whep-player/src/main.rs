@@ -36,10 +36,6 @@ fn main() -> Result<()> {
 fn run_whep_player() -> Result<()> {
     use streamlib_webrtc::streaming::WhepConfig;
     use streamlib_webrtc::WebRtcWhepProcessor;
-    // Note: this example was excluded from the workspace before the
-    // `@tatolab/webrtc` carve-out (#679); it predates the current WebRTC
-    // config shape. Imports route through the carved-out package so a
-    // future revival has the right surface to talk to.
 
     // Get WHEP endpoint URL from environment or use Cloudflare Stream default
     let whep_url = std::env::var("WHEP_URL").unwrap_or_else(|_| {

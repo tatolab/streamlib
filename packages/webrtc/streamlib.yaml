@@ -2,10 +2,6 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# @tatolab/webrtc — WebRTC WHIP (ingress) and WHEP (egress) transport
-# processors carved out of the streamlib engine substrate. Transport-only:
-# accepts and produces EncodedVideoFrame / EncodedAudioFrame (from
-# @tatolab/core); codec choice is composed by the consumer pipeline.
 package:
   org: tatolab
   name: webrtc

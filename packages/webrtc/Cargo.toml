@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
-description = "WebRTC WHIP/WHEP transport processors for streamlib — carved out of the streamlib engine substrate."
+description = "WebRTC WHIP/WHEP transport processors for streamlib."
 keywords = ["webrtc", "whip", "whep", "streaming", "streamlib"]
 categories = ["multimedia::video", "multimedia"]
 
@@ -20,9 +20,6 @@ streamlib-macros = { path = "../../libs/streamlib-macros" }
 serde.workspace = true
 tracing.workspace = true
 
-# WebRTC stack — full-featured implementation used by both WHIP and WHEP
-# client/session code. Pinned to match what the engine carried previously
-# so the runtime behavior is identical post-carve-out.
 webrtc = "0.14.0"
 bytes = "1.5"
 fastrand = "2.0"
