@@ -1,22 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Apple AVAssetWriter implementation — **preserved verbatim** from
-//! `libs/streamlib-engine/src/apple/processors/mp4_writer.rs` at the
-//! time of the carve-out. Module is gated `#[cfg(any())]` at the crate
-//! root so this source never compiles.
-//!
-//! The original imports (`crate::_generated_::{AudioFrame, VideoFrame}`,
-//! `crate::core::sync::DEFAULT_SYNC_TOLERANCE_MS`,
-//! `crate::core::{GpuContextLimitedAccess, RuntimeContext, ...}`,
-//! `crate::apple::PixelTransferSession`,
-//! `#[crate::processor("Mp4Writer")]`) are kept exactly as they were in
-//! the engine so the rewiring work that re-enables this implementation
-//! has a faithful baseline to diff against.
-//!
-//! See `src/lib.rs` and `_apple_impl_pending_/mod.rs` for the
-//! architectural context.
-
 use crate::_generated_::{AudioFrame, VideoFrame};
 use crate::core::{
     sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error,

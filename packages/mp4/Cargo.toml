@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
-description = "MP4 file writer processors — Linux ffmpeg-driven (active) and Apple AVAssetWriter-driven (preserved but gated off pending an Apple SDK surface)."
+description = "MP4 file writer processors for streamlib."
 keywords = ["mp4", "video", "writer", "ffmpeg", "streamlib"]
 categories = ["multimedia::video", "multimedia"]
 

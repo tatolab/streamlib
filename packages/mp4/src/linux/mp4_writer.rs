@@ -1,12 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// Linux MP4 Writer Processor
-//
-// Accepts decoded VideoFrame (raw RGBA pixels), pipes them to ffmpeg for
-// encoding + muxing into an MP4 container with a silent audio track.
-// The writer knows nothing about codecs — ffmpeg handles encoding.
-
 use streamlib::sdk::_generated_::VideoFrame;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
@@ -15,13 +9,8 @@ use streamlib::sdk::processors::ReactiveProcessor;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
-// ============================================================================
-// PROCESSOR
-// ============================================================================
-
 #[streamlib::sdk::processor("LinuxMp4Writer")]
 pub struct LinuxMp4WriterProcessor {
-    /// GPU context for resolving VideoFrame pixel buffers.
     gpu_context: Option<GpuContextLimitedAccess>,
 
     /// ffmpeg child process (spawned on first frame).
@@ -44,7 +33,7 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
 
     async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if let Some(mut child) = self.ffmpeg_process.take() {
-            // Close stdin to signal ffmpeg that input is done.
+            // Closing stdin signals ffmpeg that input is done.
             drop(child.stdin.take());
 
             let output = child.wait_with_output().map_err(|e| {
@@ -82,9 +71,6 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             .as_ref()
             .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
 
-        // Resolve the VideoFrame to its host pixel buffer. The mp4 writer
-        // reads plane 0 (RGBA, single plane) through the tier-1 SDK pixel
-        // buffer API — no host-RHI extension trait needed.
         let pixel_buffer = gpu_ctx.resolve_video_frame_buffer(&frame)?;
         let raw_ptr = pixel_buffer.plane_base_address(0);
         let frame_byte_size = pixel_buffer.plane_size(0) as usize;
@@ -95,7 +81,7 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
         }
         let raw_data = unsafe { std::slice::from_raw_parts(raw_ptr, frame_byte_size) };
 
-        // Lazy init: spawn ffmpeg on first frame so we know width/height/fps.
+        // ffmpeg spawns lazily on the first frame so width/height/fps come from the frame, not config.
         if self.ffmpeg_process.is_none() {
             let fps = frame.fps.unwrap_or(self.config.fps);
             let width = frame.width;
@@ -120,8 +106,7 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
                 "-i", "pipe:0",
             ];
 
-            // Silent audio track — use fixed duration if configured, otherwise
-            // -shortest will trim to video length when stdin closes.
+            // Silent audio track: fixed duration when configured; otherwise -shortest trims to video length when stdin closes.
             if let Some(ref dur) = duration_secs {
                 args.extend_from_slice(&["-f", "lavfi", "-t", dur,
                     "-i", "anullsrc=r=48000:cl=stereo"]);
@@ -150,7 +135,6 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             self.ffmpeg_process = Some(child);
         }
 
-        // Write raw RGBA frame to ffmpeg's stdin.
         let child = self.ffmpeg_process.as_mut().unwrap();
         let stdin = child.stdin.as_mut().ok_or_else(|| {
             Error::Runtime("ffmpeg stdin not available".into())
