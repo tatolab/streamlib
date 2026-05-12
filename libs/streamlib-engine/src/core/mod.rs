@@ -8,7 +8,6 @@
 // genuinely need to cross the boundary are re-exported below as
 // narrow `pub use` selections; items not re-exported stay
 // engine-internal.
-pub(crate) mod clap;
 pub(crate) mod codec;
 pub(crate) mod compiler;
 pub(crate) mod config;
@@ -42,11 +41,10 @@ pub mod utils;
 
 // Customer-facing items from engine-internal modules. These
 // modules' contents include items that ARE customer-facing (e.g.
-// `H264Profile`, `LfoWaveform`); the wildcard re-export keeps
+// `H264Profile` from `codec`); the wildcard re-export keeps
 // those reachable at `streamlib_engine::core::*` so the engine's
 // crate-root list (in `lib.rs`) can re-export them. The module
 // path itself stays closed.
-pub use clap::*;
 pub use codec::*;
 
 // Customer-facing modules (wildcard re-exports stay).

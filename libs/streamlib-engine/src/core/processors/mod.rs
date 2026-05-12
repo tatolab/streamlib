@@ -37,10 +37,6 @@ pub struct EmptyConfig;
 // buffer rechunker, chord generator) live in `@tatolab/audio` (#672).
 
 // Transformers
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub mod clap_effect;
 pub mod simple_passthrough;
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use clap_effect::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 pub use simple_passthrough::SimplePassthroughProcessor;

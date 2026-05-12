@@ -6,24 +6,24 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Configuration for CLAP audio plugin processing
+/// Configuration for CLAP audio plugin processing.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EffectConfig {
-    /// Processing buffer size in samples
+pub struct ClapEffectConfig {
+    /// Processing buffer size in samples.
     #[serde(rename = "buffer_size")]
     pub buffer_size: u32,
 
-    /// Path to the CLAP plugin file
+    /// Path to the CLAP plugin file.
     #[serde(rename = "plugin_path")]
     pub plugin_path: String,
 
-    /// Index of the plugin to load (if multiple in file)
+    /// Index of the plugin to load (if multiple in file).
     #[serde(rename = "plugin_index")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_index: Option<u32>,
 
-    /// Name of the plugin to load (if multiple in file)
+    /// Name of the plugin to load (if multiple in file).
     #[serde(rename = "plugin_name")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,

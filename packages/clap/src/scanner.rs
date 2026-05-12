@@ -3,8 +3,8 @@
 
 use clack_host::entry::PluginEntry;
 
-use crate::core::{Result, Error};
 use std::path::{Path, PathBuf};
+use streamlib::sdk::error::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct ClapPluginInfo {

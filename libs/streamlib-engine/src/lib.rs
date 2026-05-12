@@ -79,16 +79,11 @@ pub use core::{
     GraphFileDefinition,
     H264Profile,
     InputPortMarker,
-    LfoWaveform,
     ManualProcessor,
     Mp4Muxer,
     Mp4MuxerConfig,
     NativeTextureHandle,
     OutputPortMarker,
-    ParameterAutomation,
-    ParameterInfo,
-    ParameterModulator,
-    PluginInfo,
     PooledTextureHandle,
     ProcessorDefinition,
     ProcessorSpec,
@@ -111,9 +106,6 @@ pub use core::{
     FOURCC_H264,
     PROCESSOR_REGISTRY,
 };
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use core::{ClapEffectProcessor, ClapPluginInfo, ClapScanner};
 
 // GPU Backends - Metal and Vulkan
 // Metal module is always available on macOS/iOS since Apple platform services need Metal types
@@ -267,7 +259,7 @@ pub mod sdk {
         pub use crate::core::descriptors::PortSchemaSpec;
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        pub use crate::{ClapEffectProcessor, ScreenCaptureProcessor};
+        pub use crate::ScreenCaptureProcessor;
 
         #[cfg(target_os = "linux")]
         pub use crate::BgraFileSourceProcessor;
@@ -289,9 +281,6 @@ pub mod sdk {
     }
 
     pub use crate::platform;
-
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub use crate::{ClapPluginInfo, ClapScanner};
 
     /// Engine-bridge surface mirror — same shape the SDK exposes via
     /// [`streamlib::sdk::engine`](../../streamlib-sdk/src/lib.rs).

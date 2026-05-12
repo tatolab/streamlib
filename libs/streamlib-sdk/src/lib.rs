@@ -66,16 +66,16 @@ pub mod sdk {
 
     // ---- Engine `core::*` sub-modules that are SDK-public ----
     //
-    // Engine internals (`clap`, `codec`, `compiler`, `config`,
+    // Engine internals (`codec`, `compiler`, `config`,
     // `embedded_schemas`, `logging`, `observability`, `runtime_hooks`,
     // `signals`, `streamlib_home`) are `pub(crate)` in the engine
     // crate (see `core/mod.rs`) — those module paths are not
     // reachable here OR via `engine_internal::*` (Tier 3) by
     // construction. Items inside that ARE customer-facing (e.g.
-    // `H264Profile` from `codec`, `LfoWaveform` from `clap`) are
-    // re-exported by the engine at its crate root and travel into the
-    // SDK via the top-level `pub use streamlib_engine::*` items below
-    // and the Tier-3 `engine_internal` namespace.
+    // `H264Profile` from `codec`) are re-exported by the engine at
+    // its crate root and travel into the SDK via the top-level
+    // `pub use streamlib_engine::*` items below and the Tier-3
+    // `engine_internal` namespace.
 
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;
@@ -117,9 +117,7 @@ pub mod sdk {
 
         // Apple-only processors.
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        pub use streamlib_engine::{
-            ClapEffectProcessor, ScreenCaptureProcessor,
-        };
+        pub use streamlib_engine::ScreenCaptureProcessor;
 
         // Linux-only processors.
         #[cfg(target_os = "linux")]
@@ -184,11 +182,6 @@ pub mod sdk {
     // ---- Platform info ----
 
     pub use streamlib_engine::platform;
-
-    // ---- CLAP plugin support (Apple-only) ----
-
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub use streamlib_engine::{ClapPluginInfo, ClapScanner};
 
     // =========================================================================
     // Tier 2 — SDK's curated engine-bridge surface
