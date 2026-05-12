@@ -67,11 +67,14 @@ pub(crate) fn build_router(runtime_ctx: RuntimeContext) -> Router {
         .on_request(DefaultOnRequest::new().level(Level::INFO))
         .on_response(DefaultOnResponse::new().level(Level::INFO));
 
-    router
+    let router = router
         .route("/ws/events", get(websocket_handler))
-        .route("/api/openapi.json", get(get_openapi_spec))
-        .layer(trace_layer)
-        .with_state(state)
+        .route("/api/openapi.json", get(get_openapi_spec));
+
+    #[cfg(feature = "moq")]
+    let router = router.route("/api/moq/catalog", get(get_moq_catalog));
+
+    router.layer(trace_layer).with_state(state)
 }
 
 // ============================================================================
@@ -368,6 +371,26 @@ pub(crate) async fn get_openapi_spec(
     State(state): State<AppState>,
 ) -> Json<utoipa::openapi::OpenApi> {
     Json(state.openapi)
+}
+
+/// Returns the MoQ broadcast catalog with active published tracks.
+///
+/// The schema and source-processor identity for each track aren't yet
+/// plumbed through `MoqSessions::published_track_names`; both fields
+/// are emitted as `None` until a future ticket extends the session API
+/// to carry structured idents alongside the track name. The track
+/// entries still serialize cleanly — `schema` and
+/// `source_processor_type` are `skip_serializing_if = Option::is_none`.
+#[cfg(feature = "moq")]
+pub(crate) async fn get_moq_catalog(
+    State(state): State<AppState>,
+) -> Json<streamlib::sdk::streaming::MoqBroadcastCatalog> {
+    let sessions = state.runtime_ctx.moq_sessions();
+    let mut catalog = streamlib::sdk::streaming::MoqBroadcastCatalog::new();
+    for track_name in sessions.published_track_names() {
+        catalog.add_track(&track_name, None, None, &track_name);
+    }
+    Json(catalog)
 }
 
 // ============================================================================

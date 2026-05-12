@@ -17,6 +17,12 @@ crate-type = ["rlib", "cdylib"]
 name = "generate_openapi"
 path = "src/bin/generate_openapi.rs"
 
+[features]
+default = []
+# Surface the `/api/moq/catalog` HTTP endpoint. Forwards to the SDK's
+# `moq` feature, which in turn enables the engine's MoQ subsystem.
+moq = ["streamlib/moq"]
+
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated wire
 # types under `streamlib::sdk::_generated_::*`, schema catalog under
