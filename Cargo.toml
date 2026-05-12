@@ -31,6 +31,7 @@ members = [
     "packages/h264",             # @tatolab/h264 — H.264 encoder + decoder via Vulkan Video carved out of the streamlib engine (#675)
     "packages/h265",             # @tatolab/h265 — H.265 encoder + decoder via Vulkan Video carved out of the streamlib engine (#676)
     "packages/opus",             # @tatolab/opus — Opus audio encoder + decoder via libopus carved out of the streamlib engine (#677)
+    "packages/api-server",       # @tatolab/api-server — HTTP control-plane processor carved out of the streamlib engine (#681)
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
     # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
     "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)

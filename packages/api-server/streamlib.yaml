@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+package:
+  org: tatolab
+  name: api-server
+  version: 1.0.0
+  description: "HTTP control-plane processor for streamlib runtimes"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  ApiServerConfig:
+    file: schemas/api_server_config.yaml
+
+processors:
+  - name: ApiServer
+    version: 1.0.0
+    description: "Runtime API server — HTTP + WebSocket control plane"
+    execution: manual
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: ApiServerConfig

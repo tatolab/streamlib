@@ -3,7 +3,6 @@
 
 //! Generated schema types. DO NOT EDIT.
 
-pub mod com_streamlib_api_server_config;
 pub mod com_streamlib_bgra_file_source_config;
 pub mod com_streamlib_clap_effect_config;
 pub mod com_streamlib_escalate_request;
@@ -20,7 +19,6 @@ pub mod com_tatolab_simple_passthrough_config;
 #[allow(non_snake_case)]
 pub mod tatolab__core;
 
-pub use com_streamlib_api_server_config::ApiServerConfig;
 pub use com_streamlib_bgra_file_source_config::BgraFileSourceConfig;
 pub use com_streamlib_clap_effect_config::EffectConfig;
 pub use com_streamlib_escalate_request::EscalateRequest;

@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 # Core library (bundles all Rust processors)
 streamlib = { path = "../streamlib-sdk" }
+streamlib-api-server = { path = "../../packages/api-server" }
 
 # Dynamic plugin loading
 libloading = "0.8"

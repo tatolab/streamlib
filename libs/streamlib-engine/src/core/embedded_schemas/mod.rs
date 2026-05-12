@@ -16,7 +16,7 @@
 //!    paths without the engine declaring them as deps.
 //!
 //! Canonical identifiers are stored unversioned:
-//! - Legacy reverse-DNS: `com.streamlib.api_server.config`
+//! - Legacy reverse-DNS: `com.streamlib.bgra_file_source.config`
 //! - New structured: `@tatolab/core/VideoFrame`
 //!
 //! Lookups tolerate either the unversioned form or the versioned suffix
@@ -112,8 +112,8 @@ pub fn list_embedded_schema_names() -> Vec<String> {
 /// Examples:
 /// - `@tatolab/core/VideoFrame@1.0.0` → `@tatolab/core/VideoFrame`
 /// - `@tatolab/core/VideoFrame` → unchanged
-/// - `com.streamlib.api_server.config@1.0.0` → `com.streamlib.api_server.config`
-/// - `com.streamlib.api_server.config` → unchanged
+/// - `com.streamlib.bgra_file_source.config@1.0.0` → `com.streamlib.bgra_file_source.config`
+/// - `com.streamlib.bgra_file_source.config` → unchanged
 pub(crate) fn strip_semver_suffix(name: &str) -> &str {
     if let Some(at_pos) = name.rfind('@') {
         let suffix = &name[at_pos + 1..];

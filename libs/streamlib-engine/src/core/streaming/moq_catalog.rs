@@ -57,7 +57,7 @@ impl MoqBroadcastCatalog {
     /// Add a track entry to the catalog. Both `schema` and
     /// `source_processor_type` are structured `SchemaIdent` references
     /// — `None` when not declared. Producers with no source-processor
-    /// attribution (e.g. raw track names from `api_server::get_moq_catalog`)
+    /// attribution (e.g. catalog endpoints that iterate raw track names)
     /// pass `None` for both.
     pub fn add_track(
         &mut self,

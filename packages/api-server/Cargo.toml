@@ -1,0 +1,45 @@
+[package]
+name = "streamlib-api-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "HTTP control-plane processor for streamlib runtimes — graph mutation, registry browsing, WebSocket event streaming, OpenAPI spec."
+keywords = ["api-server", "http", "websocket", "openapi", "streamlib"]
+categories = ["multimedia", "web-programming::http-server"]
+
+[lib]
+name = "streamlib_api_server"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "generate_openapi"
+path = "src/bin/generate_openapi.rs"
+
+[features]
+default = []
+moq = ["streamlib/moq"]
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+axum.workspace = true
+tower-http = { version = "0.6", features = ["trace"] }
+futures-util = "0.3"
+
+utoipa = { version = "5.3", features = ["axum_extras"] }
+utoipa-axum = "0.2"
+
+serde.workspace = true
+serde_json.workspace = true
+
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "sync"] }
+parking_lot = "0.12"
+
+anyhow.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

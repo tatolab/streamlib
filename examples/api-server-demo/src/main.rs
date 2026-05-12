@@ -8,10 +8,10 @@
 
 use futures_util::StreamExt;
 use std::sync::Arc;
-use streamlib::sdk::_generated_::ApiServerConfig;
-use streamlib::sdk::processors::ApiServerProcessor;
-use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
+use streamlib_api_server::{ApiServerConfig, ApiServerProcessor};
+
+use streamlib::sdk::error::Result;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
