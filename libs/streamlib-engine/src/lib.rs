@@ -139,10 +139,7 @@ pub(crate) mod linux;
 pub(crate) mod apple;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use apple::{
-    AppleMp4WriterProcessor as Mp4WriterProcessor,
-    AppleScreenCaptureProcessor as ScreenCaptureProcessor,
-};
+pub use apple::AppleScreenCaptureProcessor as ScreenCaptureProcessor;
 
 /// Per-runtime surface-share service primitives. Exposed for adapter
 /// integration tests and 3rd-party tooling that needs to drive the
@@ -171,13 +168,9 @@ pub use core::streaming::{WebRtcSession, WhepClient, WhepConfig, WhipClient, Whi
 pub use core::processors::{WebRtcWhepProcessor, WebRtcWhipProcessor};
 
 #[cfg(target_os = "linux")]
-pub use linux::processors::mp4_writer::LinuxMp4WriterProcessor;
-#[cfg(target_os = "linux")]
 pub use linux::processors::bgra_file_source::BgraFileSourceProcessor;
 #[cfg(target_os = "linux")]
-pub use _generated_::{
-    LinuxMp4WriterConfig, BgraFileSourceConfig,
-};
+pub use _generated_::BgraFileSourceConfig;
 
 // MoQ streaming (cross-platform)
 #[cfg(feature = "moq")]
@@ -290,13 +283,10 @@ pub mod sdk {
         pub use crate::core::descriptors::PortSchemaSpec;
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        pub use crate::{ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor};
+        pub use crate::{ClapEffectProcessor, ScreenCaptureProcessor};
 
         #[cfg(target_os = "linux")]
-        pub use crate::{
-            BgraFileSourceProcessor,
-            LinuxMp4WriterProcessor,
-        };
+        pub use crate::BgraFileSourceProcessor;
 
         #[cfg(feature = "moq")]
         pub use crate::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};

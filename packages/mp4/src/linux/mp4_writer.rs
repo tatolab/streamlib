@@ -7,9 +7,10 @@
 // encoding + muxing into an MP4 container with a silent audio track.
 // The writer knows nothing about codecs — ffmpeg handles encoding.
 
-use crate::_generated_::VideoFrame;
-use crate::core::context::GpuContextLimitedAccess;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
+use streamlib::sdk::_generated_::VideoFrame;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::processors::ReactiveProcessor;
 
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
@@ -18,7 +19,7 @@ use std::process::{Child, Command, Stdio};
 // PROCESSOR
 // ============================================================================
 
-#[crate::processor("LinuxMp4Writer")]
+#[streamlib::sdk::processor("LinuxMp4Writer")]
 pub struct LinuxMp4WriterProcessor {
     /// GPU context for resolving VideoFrame pixel buffers.
     gpu_context: Option<GpuContextLimitedAccess>,
@@ -30,7 +31,7 @@ pub struct LinuxMp4WriterProcessor {
     frames_received: u64,
 }
 
-impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
+impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
     async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
@@ -81,12 +82,17 @@ impl crate::core::ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             .as_ref()
             .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
 
-        // Resolve VideoFrame to pixel buffer for decoded NV12 data.
-        // Decoder outputs NV12 (Y + UV = W*H*3/2). ffmpeg converts to display RGB
-        // internally — same as any consumer video player.
+        // Resolve the VideoFrame to its host pixel buffer. The mp4 writer
+        // reads plane 0 (RGBA, single plane) through the tier-1 SDK pixel
+        // buffer API — no host-RHI extension trait needed.
         let pixel_buffer = gpu_ctx.resolve_video_frame_buffer(&frame)?;
-        let raw_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
-        let frame_byte_size = (frame.width * frame.height * 4) as usize;
+        let raw_ptr = pixel_buffer.plane_base_address(0);
+        let frame_byte_size = pixel_buffer.plane_size(0) as usize;
+        if raw_ptr.is_null() || frame_byte_size == 0 {
+            return Err(Error::Runtime(
+                "VideoFrame pixel buffer has no mapped plane data".into(),
+            ));
+        }
         let raw_data = unsafe { std::slice::from_raw_parts(raw_ptr, frame_byte_size) };
 
         // Lazy init: spawn ffmpeg on first frame so we know width/height/fps.

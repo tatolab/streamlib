@@ -1,0 +1,24 @@
+[package]
+name = "streamlib-mp4"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "MP4 file writer processors — Linux ffmpeg-driven (active) and Apple AVAssetWriter-driven (preserved but gated off pending an Apple SDK surface)."
+keywords = ["mp4", "video", "writer", "ffmpeg", "streamlib"]
+categories = ["multimedia::video", "multimedia"]
+
+[lib]
+name = "streamlib_mp4"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+serde.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -35,7 +35,6 @@ pub use pixel_transfer::PixelTransferSession;
 
 pub use processors::{
     AppleDisplayProcessor,
-    AppleMp4WriterProcessor,
     AppleScreenCaptureProcessor,
 };
 

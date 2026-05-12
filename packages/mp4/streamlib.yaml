@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/mp4 — MP4 file writer processors carved out of the streamlib
+# engine substrate. Linux today is the only platform with a working
+# `Mp4Writer` processor exposed; the Apple AVAssetWriter implementation
+# is preserved in `src/_apple_impl_pending_/` but is not declared here
+# because the SDK does not yet expose the Apple platform surface
+# (e.g. `PixelTransferSession`) it depends on. The carve-out's purpose
+# in part is to make that gap visible — see the `_apple_impl_pending_`
+# module's docs and the follow-up tracking the Apple SDK design.
+package:
+  org: tatolab
+  name: mp4
+  version: 1.0.0
+  description: "MP4 file writer processors"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  # Wire types imported from @tatolab/core (#767).
+  VideoFrame:
+    package: "@tatolab/core"
+  # Local config schema this package owns.
+  LinuxMp4WriterConfig:
+    file: schemas/linux_mp4_writer_config.yaml
+
+processors:
+  - name: LinuxMp4Writer
+    version: 1.0.0
+    description: "Writes video frames to MP4 via ffmpeg encode + mux with silent audio track"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: LinuxMp4WriterConfig
+    inputs:
+      - name: video_in
+        schema: VideoFrame
+        description: Decoded video frames (raw pixels) to encode and write
+        read_mode: skip_to_latest
+        buffer_size: 4

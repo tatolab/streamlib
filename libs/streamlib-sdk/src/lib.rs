@@ -119,15 +119,12 @@ pub mod sdk {
         // Apple-only processors.
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         pub use streamlib_engine::{
-            ClapEffectProcessor, Mp4WriterProcessor, ScreenCaptureProcessor,
+            ClapEffectProcessor, ScreenCaptureProcessor,
         };
 
         // Linux-only processors.
         #[cfg(target_os = "linux")]
-        pub use streamlib_engine::{
-            BgraFileSourceProcessor,
-            LinuxMp4WriterProcessor,
-        };
+        pub use streamlib_engine::BgraFileSourceProcessor;
 
         // MoQ feature-gated processors.
         #[cfg(feature = "moq")]
