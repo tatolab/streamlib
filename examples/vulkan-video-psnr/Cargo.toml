@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-display = { path = "../../packages/display" }
+streamlib-h264 = { path = "../../packages/h264" }
 anyhow = "1.0.100"

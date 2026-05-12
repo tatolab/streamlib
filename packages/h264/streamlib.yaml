@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/h264 — H.264 encoder + decoder carved out of the streamlib
+# engine substrate. Owns the encoder/decoder config schemas and the two
+# processor declarations. Linux-only today (Vulkan Video extensions);
+# macOS VideoToolbox is a future cross-platform addition.
+package:
+  org: tatolab
+  name: h264
+  version: 1.0.0
+  description: "H.264 encoder + decoder processors via Vulkan Video"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  - schemas/h264_encoder_config.yaml
+  - schemas/h264_decoder_config.yaml
+
+processors:
+  - name: H264Encoder
+    version: 1.0.0
+    description: "Encodes VideoFrame to EncodedVideoFrame (H.264) via Vulkan Video"
+    execution: reactive
+    scheduling:
+      priority: high
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: "@tatolab/h264/H264EncoderConfig@1.0.0"
+    inputs:
+      - name: video_in
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        description: Raw video frames to encode
+        read_mode: read_next_in_order
+        buffer_size: 8
+    outputs:
+      - name: encoded_video_out
+        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+        description: H.264 encoded video frames
+
+  - name: H264Decoder
+    version: 1.0.0
+    description: "Decodes EncodedVideoFrame (H.264) to VideoFrame via Vulkan Video"
+    execution: reactive
+    scheduling:
+      priority: high
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: "@tatolab/h264/H264DecoderConfig@1.0.0"
+    inputs:
+      - name: encoded_video_in
+        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+        description: H.264 encoded video frames to decode
+        read_mode: read_next_in_order
+        buffer_size: 16
+    outputs:
+      - name: video_out
+        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        description: Decoded video frames

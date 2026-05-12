@@ -16,7 +16,7 @@
 //!    paths without the engine declaring them as deps.
 //!
 //! Canonical identifiers are stored unversioned:
-//! - Legacy reverse-DNS: `com.streamlib.h264_encoder.config`
+//! - Legacy reverse-DNS: `com.streamlib.api_server.config`
 //! - New structured: `@tatolab/core/VideoFrame`
 //!
 //! Lookups tolerate either the unversioned form or the versioned suffix
@@ -112,8 +112,8 @@ pub fn list_embedded_schema_names() -> Vec<String> {
 /// Examples:
 /// - `@tatolab/core/VideoFrame@1.0.0` → `@tatolab/core/VideoFrame`
 /// - `@tatolab/core/VideoFrame` → unchanged
-/// - `com.streamlib.h264_encoder.config@1.0.0` → `com.streamlib.h264_encoder.config`
-/// - `com.streamlib.h264_encoder.config` → unchanged
+/// - `com.streamlib.api_server.config@1.0.0` → `com.streamlib.api_server.config`
+/// - `com.streamlib.api_server.config` → unchanged
 pub(crate) fn strip_semver_suffix(name: &str) -> &str {
     if let Some(at_pos) = name.rfind('@') {
         let suffix = &name[at_pos + 1..];
@@ -168,10 +168,14 @@ mod tests {
 
     #[test]
     fn lookup_strips_legacy_version_suffix() {
-        // Legacy reverse-DNS form still works.
-        let unversioned = get_embedded_schema_definition("com.streamlib.h264_encoder.config");
-        let versioned =
-            get_embedded_schema_definition("com.streamlib.h264_encoder.config@1.0.0");
+        // Legacy reverse-DNS form still works. Registers a test-only
+        // fixture so the test doesn't depend on which production schemas
+        // happen to live in the engine — every domain schema migrates out
+        // into its own carve-out crate (#673, #674, #675, …).
+        let canonical = "com.tatolab.test_legacy_suffix.config";
+        register_schema(canonical, "metadata:\n  name: TestLegacySuffixConfig\n");
+        let unversioned = get_embedded_schema_definition(canonical);
+        let versioned = get_embedded_schema_definition(&format!("{canonical}@1.0.0"));
         assert!(unversioned.is_some());
         assert_eq!(unversioned.as_deref(), versioned.as_deref());
     }

@@ -42,7 +42,8 @@ content**.
 
 - Changes to `libs/vulkan-video/` (RHI coupling, session/DPB, NV12 conversion,
   rate control, etc.).
-- Changes to `libs/streamlib-engine/src/linux/processors/{h264,h265}_{encoder,decoder}.rs`.
+- Changes to `packages/h264/src/linux/{encoder,decoder}.rs` or
+  `libs/streamlib-engine/src/linux/processors/h265_{encoder,decoder}.rs`.
 - Changes to any GPU code that the encoder or decoder reaches through
   `GpuContext`, `VulkanDevice`, or the RHI.
 - Changes to the H.264/H.265 validator, MP4 writer, or anything consuming

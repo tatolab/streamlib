@@ -8,11 +8,14 @@
 //!
 //! Runs jtd-codegen for one representative schema across Rust, Python,
 //! and TypeScript, then parses the field-name order out of each emit and
-//! asserts all three match the JTD properties' lexicographic order. The
-//! representative schema is `com.streamlib.h264_encoder.config@1.0.0` —
-//! its eight `optionalProperties` are declared in non-alphabetical order
-//! in the YAML, so a regression that bypasses the ordering pass would
-//! show up as a mismatch.
+//! asserts all three match the JTD properties' lexicographic order.
+//!
+//! The representative schema is `tests/fixtures/jtd_codegen_test_fixture.yaml`
+//! — a test-only fixture with eight `optionalProperties` declared in
+//! non-alphabetical order. A regression that bypasses the ordering pass
+//! shows up as a mismatch. The fixture lives inside this crate (not in
+//! a domain package) so the test doesn't break when production schemas
+//! migrate into their own carve-out crates (#673, #674, #675, …).
 //!
 //! Skipped (with a clear stderr message) when `jtd-codegen` is not on PATH.
 
@@ -25,22 +28,22 @@ use streamlib_jtd_codegen::RuntimeTarget;
 use tempfile::TempDir;
 
 const REPRESENTATIVE_SCHEMA_REL: &str =
-    "libs/streamlib-engine/schemas/com.streamlib.h264_encoder.config@1.0.0.yaml";
+    "libs/streamlib-jtd-codegen/tests/fixtures/jtd_codegen_test_fixture.yaml";
 
 const EXPECTED_FIELDS: &[&str] = &[
-    "bitrate_bps",
-    "effort_level",
-    "fps",
-    "height",
-    "keyframe_interval",
-    "keyframe_interval_seconds",
-    "profile",
-    "width",
+    "alpha",
+    "beta",
+    "delta",
+    "epsilon",
+    "gamma",
+    "mu",
+    "nu",
+    "zeta",
 ];
 
 #[test]
-fn field_order_consistent_across_runtimes_for_h264_encoder_config() {
-    let test_name = "field_order_consistent_across_runtimes_for_h264_encoder_config";
+fn field_order_consistent_across_runtimes_for_jtd_codegen_test_fixture() {
+    let test_name = "field_order_consistent_across_runtimes_for_jtd_codegen_test_fixture";
     if skip_unless_jtd_codegen_available(test_name) {
         return;
     }
@@ -61,15 +64,15 @@ fn field_order_consistent_across_runtimes_for_h264_encoder_config() {
     run_single_schema_codegen(RuntimeTarget::Typescript, &schema_path, ts_dir.path());
 
     let rust_code = std::fs::read_to_string(
-        rust_dir.path().join("com_streamlib_h264_encoder_config.rs"),
+        rust_dir.path().join("jtd_codegen_test_fixture.rs"),
     )
     .expect("read generated Rust");
     let py_code = std::fs::read_to_string(
-        py_dir.path().join("com_streamlib_h264_encoder_config.py"),
+        py_dir.path().join("jtd_codegen_test_fixture.py"),
     )
     .expect("read generated Python");
     let ts_code = std::fs::read_to_string(
-        ts_dir.path().join("com_streamlib_h264_encoder_config.ts"),
+        ts_dir.path().join("jtd_codegen_test_fixture.ts"),
     )
     .expect("read generated TypeScript");
 
