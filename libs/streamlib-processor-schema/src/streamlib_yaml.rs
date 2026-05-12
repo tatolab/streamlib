@@ -21,8 +21,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
-use streamlib_idents::{DependencySpec, PackageMetadata, PackageRef};
+use streamlib_idents::{DependencySpec, PackageMetadata, PackageRef, SchemaEntry, TypeName};
 
 use crate::ProcessorSchema;
 
@@ -53,11 +52,15 @@ pub struct StreamlibYaml {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub patch: BTreeMap<PackageRef, DependencySpec>,
 
-    /// Explicit list of schema YAML files this package owns, relative to the
-    /// manifest's directory. When omitted, the resolver auto-discovers
-    /// `schemas/*.yaml` in the manifest dir.
+    /// Name-keyed declarations of the schemas this package surfaces — both
+    /// schemas it owns (`{ file: <path> }`) and types it imports from declared
+    /// dependencies (`{ package: "@org/name" }`). When omitted, the resolver
+    /// auto-discovers `schemas/*.yaml` under the manifest directory and treats
+    /// each as a Local entry. Use-site references (`processors[].config.schema`,
+    /// `processors[].inputs/outputs[].schema`) are bare PascalCase TypeNames
+    /// resolved against this map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schemas: Option<Vec<PathBuf>>,
+    pub schemas: Option<BTreeMap<TypeName, SchemaEntry>>,
 
     /// Inline processor definitions consumed by the runtime.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

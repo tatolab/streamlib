@@ -44,13 +44,13 @@
       }
     },
     "schemas": {
-      "description": "Explicit list of schema YAML files this package owns, relative to the manifest's directory. When omitted, the resolver auto-discovers `schemas/*.yaml` in the manifest dir.",
+      "description": "Name-keyed declarations of the schemas this package surfaces — both schemas it owns (`{ file: <path> }`) and types it imports from declared dependencies (`{ package: \"@org/name\" }`). When omitted, the resolver auto-discovers `schemas/*.yaml` under the manifest directory and treats each as a Local entry. Use-site references (`processors[].config.schema`, `processors[].inputs/outputs[].schema`) are bare PascalCase TypeNames resolved against this map.",
       "type": [
-        "array",
+        "object",
         "null"
       ],
-      "items": {
-        "type": "string"
+      "additionalProperties": {
+        "$ref": "#/definitions/SchemaEntry"
       }
     }
   },
@@ -128,6 +128,11 @@
       },
       "additionalProperties": false
     },
+    "PackageRef": {
+      "description": "Canonical package reference of the form `@org/name`.",
+      "type": "string",
+      "pattern": "^@[a-z][a-z0-9-]*/[a-z][a-z0-9-]*$"
+    },
     "PathDependency": {
       "type": "object",
       "required": [
@@ -141,7 +146,7 @@
       "additionalProperties": false
     },
     "PortSchemaSpec": {
-      "description": "Either the literal `any` (wildcard, accepts any payload) or a structured 4-field SchemaIdent map.",
+      "description": "Either the literal `any` (wildcard, accepts any payload) or a bare PascalCase TypeName resolved against the enclosing manifest's `schemas:` map.",
       "oneOf": [
         {
           "type": "string",
@@ -150,7 +155,8 @@
           ]
         },
         {
-          "$ref": "#/definitions/SchemaIdent"
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9]*$"
         }
       ]
     },
@@ -167,8 +173,12 @@
           "type": "string"
         },
         "schema": {
-          "description": "Schema reference with version (e.g., \"com.example.blur.config@1.0.0\").",
-          "type": "string"
+          "description": "Bare PascalCase TypeName (e.g. `H264EncoderConfig`). Resolved against the enclosing manifest's `schemas:` map at proc-macro expansion / runtime startup.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TypeName"
+            }
+          ]
         }
       },
       "additionalProperties": false
@@ -222,7 +232,7 @@
           ]
         },
         "schema": {
-          "description": "Structured schema spec — either `any` or a 4-field [`SchemaIdent`].",
+          "description": "Schema spec — either `any` or a bare PascalCase TypeName resolved against the enclosing manifest's `schemas:` map.",
           "allOf": [
             {
               "$ref": "#/definitions/PortSchemaSpec"
@@ -487,29 +497,35 @@
       },
       "additionalProperties": false
     },
-    "SchemaIdent": {
-      "description": "Structured schema identifier — the four-field map form of `@org/package/Type@version`.",
-      "type": "object",
-      "required": [
-        "org",
-        "package",
-        "type",
-        "version"
-      ],
-      "properties": {
-        "org": {
-          "$ref": "#/definitions/Org"
+    "SchemaEntry": {
+      "description": "Schema declaration: either `{ file: path }` (local schema this package owns) or `{ package: \"@org/name\" }` (imported from a declared dependency).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "file"
+          ],
+          "properties": {
+            "file": {
+              "description": "Path to the schema YAML, relative to this manifest's directory.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
         },
-        "package": {
-          "$ref": "#/definitions/Package"
-        },
-        "type": {
-          "$ref": "#/definitions/TypeName"
-        },
-        "version": {
-          "$ref": "#/definitions/SemVer"
+        {
+          "type": "object",
+          "required": [
+            "package"
+          ],
+          "properties": {
+            "package": {
+              "$ref": "#/definitions/PackageRef"
+            }
+          },
+          "additionalProperties": false
         }
-      }
+      ]
     },
     "SemVer": {
       "description": "Three-part semantic version `MAJOR.MINOR.PATCH` (no pre-release / build metadata).",
