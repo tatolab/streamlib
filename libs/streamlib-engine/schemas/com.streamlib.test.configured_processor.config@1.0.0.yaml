@@ -1,0 +1,16 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for `attribute_macro_test::ConfiguredProcessor`.
+# Mirrors the declared shape in `tests/attribute_macro_test.rs::ConfiguredProcessorConfig`.
+
+metadata:
+  name: com.streamlib.test.configured_processor.config
+  version: 1.0.0
+  description: "Test config schema for the attribute macro tests."
+
+properties:
+  threshold:
+    metadata:
+      description: "Threshold value for the test processor."
+    type: float32

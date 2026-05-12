@@ -3,12 +3,6 @@
 
 //! Generated schema types. DO NOT EDIT.
 
-pub mod audio_frame;
-pub mod encoded_audio_frame;
-pub mod encoded_video_frame;
 pub mod video_frame;
 
-pub use audio_frame::AudioFrame;
-pub use encoded_audio_frame::EncodedAudioFrame;
-pub use encoded_video_frame::EncodedVideoFrame;
 pub use video_frame::VideoFrame;

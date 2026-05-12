@@ -36,12 +36,26 @@ fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
 }
 
 /// Emit a `PortSchemaSpec` literal expression.
+///
+/// `PortSchemaSpec::Named` should never reach this function — the macro's
+/// `load_processor_schema` pre-resolves every `Named` reference against
+/// the manifest's `schemas:` map (#767) before handing the schema to
+/// codegen. A `Named` here means the resolution pass was skipped or
+/// returned an unresolved spec, which is a macro implementation bug.
 fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
     match spec {
         PortSchemaSpec::Any => quote! { ::streamlib::sdk::processors::PortSchemaSpec::Any },
         PortSchemaSpec::Specific(ident) => {
             let inner = schema_ident_tokens(ident);
             quote! { ::streamlib::sdk::processors::PortSchemaSpec::Specific(#inner) }
+        }
+        PortSchemaSpec::Named(name) => {
+            let msg = format!(
+                "internal error: PortSchemaSpec::Named(`{}`) reached codegen — \
+                 macro should have resolved this against the manifest's `schemas:` map",
+                name.as_str()
+            );
+            quote! { compile_error!(#msg) }
         }
     }
 }
@@ -53,10 +67,19 @@ fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
 /// Generate a processor module from a YAML ProcessorSchema and the resolved
 /// structured [`SchemaIdent`] (org/package/type/version composed from the
 /// enclosing `streamlib.yaml`'s `package:` block + processor short name).
+///
+/// `config_schema_id` is the canonical id string for the processor's
+/// config schema, pre-resolved by the macro entrypoint by walking the
+/// manifest's `schemas:` map (#767). `None` when the processor declares
+/// no config block. The string is one of two grammars (handled by
+/// [`derive_config_type_from_schema`]): new-shape
+/// `@<org>/<package>/<TypeName>@<version>` or legacy reverse-DNS
+/// `<segments>.config@<version>`.
 pub fn generate_from_processor_schema(
     item: &ItemStruct,
     schema: &ProcessorSchema,
     schema_ident: &SchemaIdent,
+    config_schema_id: Option<&str>,
 ) -> TokenStream {
     let module_name = &item.ident;
 
@@ -64,7 +87,20 @@ pub fn generate_from_processor_schema(
     let config_type = schema
         .config
         .as_ref()
-        .map(|c| derive_config_type_from_schema(&c.schema))
+        .map(|_| {
+            // The bare-name TypeName from the manifest was resolved at
+            // macro entry; always pass the canonical id string here.
+            let id = config_schema_id.unwrap_or_else(|| {
+                // schema.config.is_some() implies the macro entry
+                // resolved a canonical id and supplied it. Reaching here
+                // is an internal bug in the macro flow.
+                panic!(
+                    "internal error: ProcessorSchema declares config but no \
+                     resolved canonical id was supplied to codegen"
+                )
+            });
+            derive_config_type_from_schema(id)
+        })
         .unwrap_or_else(|| quote! { ::streamlib::sdk::processors::EmptyConfig });
 
     let config_field_name = schema
@@ -85,6 +121,7 @@ pub fn generate_from_processor_schema(
         &config_type,
         &config_field_name,
         &custom_fields,
+        config_schema_id,
     );
 
     let schema_ident_const = quote! {
@@ -439,6 +476,7 @@ fn generate_processor_impl_from_schema(
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
+    config_schema_id: Option<&str>,
 ) -> TokenStream {
     use streamlib_processor_schema::ProcessorSchemaExecution;
 
@@ -516,7 +554,8 @@ fn generate_processor_impl_from_schema(
 
     let from_config_body =
         generate_from_config_from_schema(schema, config_field_name, custom_fields);
-    let descriptor_impl = generate_descriptor_from_schema(schema, description, version);
+    let descriptor_impl =
+        generate_descriptor_from_schema(schema, description, version, config_schema_id);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     let update_config = config_field_name.as_ref().map(|name| {
@@ -713,10 +752,16 @@ fn generate_from_config_from_schema(
 }
 
 /// Generate descriptor method from schema.
+///
+/// `config_schema_id` is the canonical id string emitted into
+/// `with_config_schema(...)` — the bare-name `TypeName` from the manifest
+/// has been resolved by the macro entrypoint via the `schemas:` map
+/// (#767). `None` when the processor declares no config.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
     description: &str,
     version: &str,
+    config_schema_id: Option<&str>,
 ) -> TokenStream {
     let _name = &schema.name; // PascalCase short name retained for identifier checks elsewhere
     let repository = "https://github.com/tatolab/streamlib";
@@ -761,10 +806,17 @@ fn generate_descriptor_from_schema(
         })
         .collect();
 
-    // Config schema reference (if present) — config schemas keep the legacy
-    // reverse-DNS string form until #702 renames the schema files on disk.
-    let config_schema = schema.config.as_ref().map(|c| {
-        let schema_ref = &c.schema;
+    // Config schema reference (if present). The bare-name `TypeName`
+    // from the manifest was resolved to a canonical id string by the
+    // macro entrypoint (#767); we emit that string into
+    // `with_config_schema(...)` directly.
+    let config_schema = schema.config.as_ref().map(|_c| {
+        let schema_ref = config_schema_id.unwrap_or_else(|| {
+            panic!(
+                "internal error: ProcessorSchema declares config but no \
+                 resolved canonical id was supplied to descriptor codegen"
+            )
+        });
         quote! {
             .with_config_schema(#schema_ref)
         }

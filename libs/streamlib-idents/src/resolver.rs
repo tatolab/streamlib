@@ -19,9 +19,9 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{ResolverError, ResolverResult};
 use crate::git::fetch_git;
-use crate::ident::PackageRef;
+use crate::ident::{PackageRef, TypeName};
 use crate::lockfile::{compute_content_hash, Lockfile, LockfileEntry, LockfileSource};
-use crate::manifest::{DependencySpec, Manifest};
+use crate::manifest::{DependencySpec, Manifest, SchemaEntry};
 
 /// Outcome of resolving a `streamlib.yaml` graph: the root project + every
 /// transitive package, keyed by canonical `"@org/name"` lockfile key.
@@ -340,16 +340,23 @@ fn build_resolved_package(
 
 /// Discover the schema files this manifest owns. Two modes:
 ///
-/// 1. Explicit: `manifest.schemas: [path1, path2, ...]` — relative to root_dir.
-/// 2. Implicit: every `*.yaml` under `<root_dir>/schemas/` (sorted).
+/// 1. Explicit: `manifest.schemas: { Name: { file | package } }`. `Local`
+///    entries contribute their `file:` path; `External` entries do not (they
+///    declare imports, not files this package owns).
+/// 2. Implicit: every `*.yaml` under `<root_dir>/schemas/` (sorted) — used
+///    when `schemas:` is omitted, mostly for tests and as a back-compat
+///    convenience.
 fn discover_schema_files(manifest: &Manifest, root_dir: &Path) -> ResolverResult<Vec<PathBuf>> {
     if let Some(declared) = &manifest.schemas {
-        let mut files = Vec::with_capacity(declared.len());
-        for rel in declared {
-            let abs = if rel.is_absolute() {
-                rel.clone()
+        let mut files = Vec::new();
+        for (_name, entry) in declared {
+            let SchemaEntry::Local { file } = entry else {
+                continue;
+            };
+            let abs = if file.is_absolute() {
+                file.clone()
             } else {
-                root_dir.join(rel)
+                root_dir.join(file)
             };
             if !abs.exists() {
                 return Err(ResolverError::SchemaNotFound {
@@ -359,6 +366,7 @@ fn discover_schema_files(manifest: &Manifest, root_dir: &Path) -> ResolverResult
             }
             files.push(abs);
         }
+        files.sort();
         return Ok(files);
     }
 
@@ -384,6 +392,75 @@ fn discover_schema_files(manifest: &Manifest, root_dir: &Path) -> ResolverResult
     }
     files.sort();
     Ok(files)
+}
+
+/// Resolve a bare-name schema reference for a given root package.
+///
+/// Walks the manifest's `schemas:` map: `Local` entries point at this
+/// package's own schema files; `External { package }` entries delegate to
+/// the named dependency's `schemas:` map, recursively. Returns the
+/// owning [`ResolvedPackage`] plus the absolute path of the schema YAML.
+///
+/// Use this from build-time / startup-time consumers (codegen, validator,
+/// runtime registration). Do not call on the hot path.
+pub fn resolve_bare_schema_name<'a>(
+    packages: &'a ResolvedPackages,
+    root: &'a ResolvedPackage,
+    name: &TypeName,
+) -> ResolverResult<(&'a ResolvedPackage, PathBuf)> {
+    resolve_bare_schema_name_internal(packages, root, name, &mut Vec::new())
+}
+
+fn resolve_bare_schema_name_internal<'a>(
+    packages: &'a ResolvedPackages,
+    root: &'a ResolvedPackage,
+    name: &TypeName,
+    chain: &mut Vec<String>,
+) -> ResolverResult<(&'a ResolvedPackage, PathBuf)> {
+    let pkg_id = root
+        .manifest
+        .package_id()
+        .unwrap_or_else(|| "<root>".into());
+    chain.push(pkg_id.clone());
+
+    let declared = root
+        .manifest
+        .schemas
+        .as_ref()
+        .ok_or_else(|| ResolverError::BareSchemaNameUnresolved {
+            name: name.as_str().to_string(),
+            package: pkg_id.clone(),
+            chain: chain.clone(),
+        })?;
+    let entry = declared
+        .get(name)
+        .ok_or_else(|| ResolverError::BareSchemaNameUnresolved {
+            name: name.as_str().to_string(),
+            package: pkg_id.clone(),
+            chain: chain.clone(),
+        })?;
+
+    match entry {
+        SchemaEntry::Local { file } => {
+            let abs = if file.is_absolute() {
+                file.clone()
+            } else {
+                root.root_dir.join(file)
+            };
+            Ok((root, abs))
+        }
+        SchemaEntry::External { package } => {
+            let dep_id = package.to_string();
+            let dep = packages.packages.get(&dep_id).ok_or_else(|| {
+                ResolverError::BareSchemaNameDepMissing {
+                    name: name.as_str().to_string(),
+                    package: pkg_id.clone(),
+                    dep: dep_id.clone(),
+                }
+            })?;
+            resolve_bare_schema_name_internal(packages, dep, name, chain)
+        }
+    }
 }
 
 fn check_resolved_id_matches(
@@ -865,7 +942,7 @@ dependencies:
     }
 
     #[test]
-    fn explicit_schema_list_overrides_auto_discovery() {
+    fn explicit_schema_map_overrides_auto_discovery() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("project");
 
@@ -873,11 +950,11 @@ dependencies:
         write_yaml(
             &root.join("schemas"),
             "Implicit.yaml",
-            "metadata:\n  name: Implicit\n",
+            "metadata:\n  type: Implicit\n",
         );
         let custom = root.join("custom");
         std::fs::create_dir_all(&custom).unwrap();
-        write_yaml(&custom, "Explicit.yaml", "metadata:\n  name: Explicit\n");
+        write_yaml(&custom, "Explicit.yaml", "metadata:\n  type: Explicit\n");
 
         write_streamlib_yaml(
             &root,
@@ -887,12 +964,94 @@ package:
   name: core
   version: 1.0.0
 schemas:
-  - custom/Explicit.yaml
+  Explicit:
+    file: custom/Explicit.yaml
 "#,
         );
 
         let res = resolve(&root).unwrap();
         assert_eq!(res.root.schema_files.len(), 1);
         assert!(res.root.schema_files[0].ends_with("Explicit.yaml"));
+    }
+
+    #[test]
+    fn external_schema_entry_does_not_contribute_local_files() {
+        // External entries declare imported types; the file lives in the
+        // dep package, not this one. `schema_files` reflects only the
+        // Local entries this manifest owns.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        let core = tmp.path().join("core");
+
+        write_streamlib_yaml(
+            &core,
+            r#"
+package:
+  org: tatolab
+  name: core
+  version: 1.0.0
+schemas:
+  VideoFrame:
+    file: schemas/VideoFrame.yaml
+"#,
+        );
+        std::fs::create_dir_all(core.join("schemas")).unwrap();
+        write_yaml(
+            &core.join("schemas"),
+            "VideoFrame.yaml",
+            "metadata:\n  type: VideoFrame\n",
+        );
+
+        write_streamlib_yaml(
+            &root,
+            r#"
+package:
+  org: tatolab
+  name: consumer
+  version: 1.0.0
+dependencies:
+  "@tatolab/core":
+    path: ../core
+schemas:
+  VideoFrame:
+    package: "@tatolab/core"
+"#,
+        );
+
+        let res = resolve(&root).unwrap();
+        // Root package owns no Local schemas.
+        assert!(res.root.schema_files.is_empty());
+        // Core package owns one Local schema (VideoFrame.yaml).
+        let core_pkg = res.packages.get("@tatolab/core").unwrap();
+        assert_eq!(core_pkg.schema_files.len(), 1);
+
+        // Bare-name resolution walks the External edge to core.
+        let name = TypeName::new("VideoFrame").unwrap();
+        let (owner, file) = resolve_bare_schema_name(&res, &res.root, &name).unwrap();
+        assert_eq!(owner.manifest.package_id().as_deref(), Some("@tatolab/core"));
+        assert!(file.ends_with("VideoFrame.yaml"));
+    }
+
+    #[test]
+    fn bare_schema_name_unresolved_when_not_in_map() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(
+            &root,
+            r#"
+package:
+  org: tatolab
+  name: foo
+  version: 1.0.0
+schemas: {}
+"#,
+        );
+        let res = resolve(&root).unwrap();
+        let name = TypeName::new("Missing").unwrap();
+        let err = resolve_bare_schema_name(&res, &res.root, &name).unwrap_err();
+        assert!(matches!(
+            err,
+            ResolverError::BareSchemaNameUnresolved { .. }
+        ));
     }
 }

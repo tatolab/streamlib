@@ -22,9 +22,11 @@ fn main() {
     generate_embedded_schemas_table();
 }
 
-/// Walk `streamlib.yaml`'s `schemas:` list AND its `dependencies:` block
-/// (per #401) to emit `EMBEDDED_SCHEMAS: &[(canonical_identifier, yaml_body)]`
-/// in `OUT_DIR/embedded_schemas_table.rs`.
+/// Walk `streamlib.yaml`'s `schemas:` map (#767) — Local entries this package
+/// owns plus External entries imported by bare name from declared deps —
+/// to emit `EMBEDDED_SCHEMAS: &[(canonical_identifier, yaml_body)]` in
+/// `OUT_DIR/embedded_schemas_table.rs`. Tree-shaken: schemas in transitive
+/// deps that aren't named by an External entry of the root are NOT embedded.
 ///
 /// Canonical identifiers carry the unversioned form (no `@<semver>` suffix):
 /// - Legacy schemas declaring `metadata.name` (reverse-DNS): the
@@ -42,8 +44,9 @@ fn main() {
 /// `SchemaIdentWire::from_segments(...)` with structured fields directly,
 /// without any joined-string→segments lookup.
 fn generate_embedded_schemas_table() {
+    use std::collections::HashSet;
     use std::path::PathBuf;
-    use streamlib_idents::resolve;
+    use streamlib_idents::{resolve, resolve_bare_schema_name};
 
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let manifest_path = PathBuf::from(&manifest_dir).join("streamlib.yaml");
@@ -59,23 +62,56 @@ fn generate_embedded_schemas_table() {
     });
 
     let mut name_entries: Vec<(String, String)> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
 
-    for pkg in resolved.iter_all() {
-        for schema_path in &pkg.schema_files {
-            println!("cargo:rerun-if-changed={}", schema_path.display());
+    let root = &resolved.root;
 
-            let schema_text = std::fs::read_to_string(schema_path).unwrap_or_else(|e| {
-                panic!("Failed to read schema {}: {}", schema_path.display(), e)
-            });
-            let schema_yaml: serde_yaml::Value =
-                serde_yaml::from_str(&schema_text).unwrap_or_else(|e| {
-                    panic!("Failed to parse schema {}: {}", schema_path.display(), e)
+    // Tree-shaking: build the (owner, schema_file) pair list against the
+    // root's `schemas:` map. Local entries → owner=root; External entries →
+    // walk dep edges via resolve_bare_schema_name. When the root has no
+    // `schemas:` block at all, fall back to auto-discovery on the root's
+    // own schemas/ dir.
+    let pairs: Vec<(&streamlib_idents::ResolvedPackage, PathBuf)> = if let Some(declared) =
+        &root.manifest.schemas
+    {
+        let mut out = Vec::new();
+        for name in declared.keys() {
+            let (owner, file) = resolve_bare_schema_name(&resolved, root, name)
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to resolve schema `{}` declared in {}: {}",
+                        name.as_str(),
+                        manifest_path.display(),
+                        e
+                    )
                 });
-
-            let canonical = resolve_canonical_identifier(&schema_yaml, pkg, schema_path);
-            let include_path_literal = include_path_literal(&manifest_dir_path, schema_path);
-            name_entries.push((canonical, include_path_literal));
+            out.push((owner, file));
         }
+        out
+    } else {
+        root.schema_files
+            .iter()
+            .map(|p| (root, p.clone()))
+            .collect()
+    };
+
+    for (owner, schema_path) in pairs {
+        if !seen.insert(schema_path.clone()) {
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", schema_path.display());
+
+        let schema_text = std::fs::read_to_string(&schema_path).unwrap_or_else(|e| {
+            panic!("Failed to read schema {}: {}", schema_path.display(), e)
+        });
+        let schema_yaml: serde_yaml::Value =
+            serde_yaml::from_str(&schema_text).unwrap_or_else(|e| {
+                panic!("Failed to parse schema {}: {}", schema_path.display(), e)
+            });
+
+        let canonical = resolve_canonical_identifier(&schema_yaml, owner, &schema_path);
+        let include_path_literal = include_path_literal(&manifest_dir_path, &schema_path);
+        name_entries.push((canonical, include_path_literal));
     }
 
     name_entries.sort_by(|a, b| a.0.cmp(&b.0));

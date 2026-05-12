@@ -8,8 +8,6 @@ pub mod tatolab__core;
 #[allow(non_snake_case)]
 pub mod tatolab__h264;
 
-pub use tatolab__core::AudioFrame;
-pub use tatolab__core::EncodedAudioFrame;
 pub use tatolab__core::EncodedVideoFrame;
 pub use tatolab__core::VideoFrame;
 pub use tatolab__h264::H264DecoderConfig;

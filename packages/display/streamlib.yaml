@@ -21,7 +21,12 @@ patch:
     path: ../core
 
 schemas:
-  - schemas/display_config.yaml
+  # Wire types imported from @tatolab/core (#767).
+  VideoFrame:
+    package: "@tatolab/core"
+  # Local config schemas this package owns.
+  DisplayConfig:
+    file: schemas/display_config.yaml
 
 processors:
   - name: Display
@@ -32,10 +37,10 @@ processors:
       priority: high
     config:
       name: config
-      schema: "@tatolab/display/DisplayConfig@1.0.0"
+      schema: DisplayConfig
     inputs:
       - name: video
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Video frames to display in the window
         read_mode: skip_to_latest
         buffer_size: 4

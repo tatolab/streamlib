@@ -64,15 +64,11 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
         }
     }
 
-    // Validate config schema reference
-    if let Some(config) = &schema.config {
-        if config.schema.is_empty() {
-            return Err(SchemaError::InvalidName {
-                name: config.schema.clone(),
-                reason: "config schema cannot be empty".to_string(),
-            });
-        }
-    }
+    // Config schema reference: shape (non-empty bare PascalCase TypeName)
+    // is locked by `TypeName`'s typed deserializer in
+    // `streamlib_idents::TypeName`. Resolution against the enclosing
+    // manifest's `schemas:` map happens downstream (proc-macro expansion /
+    // runtime startup); the standalone parser doesn't have package context.
 
     // Validate input port schema references — port name presence + buffer
     // size sanity. Schema shape is locked by [`PortSchemaSpec`]'s typed
@@ -141,16 +137,16 @@ entrypoint: src.blur:BlurProcessor
 
 config:
   name: config
-  schema: com.example.blur.config@1.0.0
+  schema: BlurConfig
 
 inputs:
   - name: image_in
-    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
+    schema: Frame
     description: "Input video frame"
 
 outputs:
   - name: image_out
-    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
+    schema: Frame
     description: "Blurred video frame"
 "#;
 
@@ -169,14 +165,11 @@ outputs:
 
         let config = schema.config.as_ref().unwrap();
         assert_eq!(config.name, "config");
-        assert_eq!(config.schema, "com.example.blur.config@1.0.0");
+        assert_eq!(config.schema.as_str(), "BlurConfig");
 
         assert_eq!(schema.inputs.len(), 1);
         assert_eq!(schema.inputs[0].name, "image_in");
-        assert_eq!(
-            schema.inputs[0].schema.to_string(),
-            "@streamlib/video/Frame@1.0.0"
-        );
+        assert_eq!(schema.inputs[0].schema.to_string(), "Frame");
 
         assert_eq!(schema.outputs.len(), 1);
         assert_eq!(schema.outputs[0].name, "image_out");
@@ -192,11 +185,11 @@ entrypoint: detector:ObjectDetector
 
 inputs:
   - name: frame
-    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
+    schema: Frame
 
 outputs:
   - name: detections
-    schema: { org: example, package: detector, type: Detections, version: 1.0.0 }
+    schema: Detections
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
@@ -244,9 +237,10 @@ version: invalid
 
     #[test]
     fn test_processor_schema_rejects_joined_string_port_schema() {
-        // Joined-string `com.streamlib.video.frame` (and the @-versioned
-        // variant) must be rejected — only `any` or 4-field structured
-        // maps are accepted (`PortSchemaSpec`'s typed deserializer).
+        // Joined-string `com.streamlib.video.frame` is not a valid bare
+        // PascalCase TypeName — `PortSchemaSpec` only accepts `any` or a
+        // bare PascalCase TypeName resolved against the manifest's
+        // `schemas:` map.
         let yaml = r#"
 name: com.example.test
 version: 1.0.0
@@ -260,8 +254,26 @@ inputs:
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("4-field structured map") || err.contains("Joined-string"),
-            "expected structured-map rejection error, got: {err}"
+            err.contains("bare PascalCase TypeName") || err.contains("schemas: map"),
+            "expected bare-name guidance, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_processor_schema_rejects_structured_port_form() {
+        let yaml = r#"
+name: com.example.test
+version: 1.0.0
+inputs:
+  - name: video
+    schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+"#;
+        let result = parse_processor_yaml(yaml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("bare PascalCase TypeName") || err.contains("schemas: map"),
+            "expected bare-name guidance, got: {err}"
         );
     }
 
@@ -296,7 +308,7 @@ config:
         let result = parse_processor_yaml(yaml);
         assert!(result.is_ok());
         let schema = result.unwrap();
-        assert_eq!(schema.config.as_ref().unwrap().schema, "MyConfig");
+        assert_eq!(schema.config.as_ref().unwrap().schema.as_str(), "MyConfig");
     }
 
     #[test]
@@ -329,7 +341,7 @@ version: 1.0.0
 
 inputs:
   - name: encoded_video_in
-    schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+    schema: EncodedVideoFrame
     read_mode: read_next_in_order
     buffer_size: 16
 "#;
@@ -351,7 +363,7 @@ version: 1.0.0
 
 inputs:
   - name: video
-    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
+    schema: Frame
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
@@ -442,7 +454,7 @@ version: 1.0.0
 
 inputs:
   - name: video
-    schema: { org: streamlib, package: video, type: Frame, version: 1.0.0 }
+    schema: Frame
     buffer_size: 0
 "#;
 

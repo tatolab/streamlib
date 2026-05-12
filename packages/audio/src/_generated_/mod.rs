@@ -16,6 +16,3 @@ pub use tatolab__audio::AudioResamplerConfig;
 pub use tatolab__audio::BufferRechunkerConfig;
 pub use tatolab__audio::ChordGeneratorConfig;
 pub use tatolab__core::AudioFrame;
-pub use tatolab__core::EncodedAudioFrame;
-pub use tatolab__core::EncodedVideoFrame;
-pub use tatolab__core::VideoFrame;

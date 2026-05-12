@@ -9,7 +9,4 @@ pub mod tatolab__camera;
 pub mod tatolab__core;
 
 pub use tatolab__camera::CameraConfig;
-pub use tatolab__core::AudioFrame;
-pub use tatolab__core::EncodedAudioFrame;
-pub use tatolab__core::EncodedVideoFrame;
 pub use tatolab__core::VideoFrame;

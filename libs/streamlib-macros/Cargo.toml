@@ -20,6 +20,10 @@ serde_yaml = { workspace = true }
 
 # Execution types (shared with streamlib for code generation)
 streamlib-processor-schema = { path = "../streamlib-processor-schema" }
+# Manifest resolver — used to walk the enclosing manifest's `schemas:` map
+# and resolve bare-name `PortSchemaSpec::Named` references to fully-
+# qualified `SchemaIdent`s at proc-macro expansion time (#767).
+streamlib-idents = { path = "../streamlib-idents" }
 
 
 [dev-dependencies]

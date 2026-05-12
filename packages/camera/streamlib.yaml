@@ -21,7 +21,12 @@ patch:
     path: ../core
 
 schemas:
-  - schemas/camera_config.yaml
+  # Wire types imported from @tatolab/core (#767).
+  VideoFrame:
+    package: "@tatolab/core"
+  # Local config schemas this package owns.
+  CameraConfig:
+    file: schemas/camera_config.yaml
 
 processors:
   - name: Camera
@@ -32,8 +37,8 @@ processors:
       priority: high
     config:
       name: config
-      schema: "@tatolab/camera/CameraConfig@1.0.0"
+      schema: CameraConfig
     outputs:
       - name: video
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Live video frames from the camera

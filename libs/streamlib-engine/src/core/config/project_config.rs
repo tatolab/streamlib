@@ -6,9 +6,9 @@
 use crate::core::{Result, Error};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
-use streamlib_idents::{DependencySpec, PackageRef};
-use streamlib_processor_schema::{Org, Package, SemVer};
+use std::path::Path;
+use streamlib_idents::{DependencySpec, PackageRef, SchemaEntry};
+use streamlib_processor_schema::{Org, Package, SemVer, TypeName};
 
 /// Package-level metadata from `streamlib.yaml`. Structured fields per the
 /// architecture's "structured-everywhere" rule — every published streamlib
@@ -38,15 +38,17 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub env: HashMap<String, String>,
 
-    /// Schema YAML paths declared by this package, relative to its
-    /// manifest dir. The runtime reads each at `Runner::load_project`
-    /// time and registers the YAML body with the engine's schema
-    /// registry so `get_embedded_schema_definition` /
-    /// `max_payload_bytes_for_schema` / api-server `/schemas` discover
-    /// it. Absent from `streamlib.yaml` is fine — package may declare
-    /// only `processors:` without explicit schema files.
-    #[serde(default)]
-    pub schemas: Vec<PathBuf>,
+    /// Name-keyed schema declarations, mirroring
+    /// [`streamlib_idents::Manifest::schemas`]. Each entry is either a
+    /// `Local { file }` (schema file owned by this package) or
+    /// `External { package }` (bare-name import from a declared dep).
+    /// The runtime reads `Local` entries at `Runner::load_project` time
+    /// and registers their YAML bodies with the engine's schema
+    /// registry; `External` entries are import declarations only,
+    /// resolved at `schemas:`-map lookup time. Absent from
+    /// `streamlib.yaml` is fine — package may declare only `processors:`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schemas: Option<BTreeMap<TypeName, SchemaEntry>>,
 
     /// Inline processor definitions.
     #[serde(default)]
@@ -78,6 +80,13 @@ impl ProjectConfig {
 
     /// Load project configuration from a directory. Returns error if file is
     /// missing or cannot be parsed.
+    ///
+    /// Also runs the bare-name schema resolution pass (#767) on every
+    /// processor's port + config schemas: any `PortSchemaSpec::Named`
+    /// reference is resolved against the manifest's `schemas:` map and
+    /// rewritten in-place to `PortSchemaSpec::Specific(SchemaIdent)`.
+    /// Downstream consumers (graph wiring, iceoryx2 service open,
+    /// json-schema render) operate on `Specific` only.
     pub fn load(project_path: &Path) -> Result<Self> {
         let config_path = project_path.join(Self::FILE_NAME);
 
@@ -85,12 +94,76 @@ impl ProjectConfig {
             Error::Configuration(format!("Failed to read {}: {}", config_path.display(), e))
         })?;
 
-        let config: Self = serde_yaml::from_str(&content).map_err(|e| {
+        let mut config: Self = serde_yaml::from_str(&content).map_err(|e| {
             Error::Configuration(format!("Failed to parse {}: {}", config_path.display(), e))
         })?;
 
+        config.resolve_bare_schema_refs(project_path)?;
+
         tracing::info!("Loaded project config from {}", config_path.display());
         Ok(config)
+    }
+
+    /// Walk every processor's port + config schemas and resolve any
+    /// [`streamlib_processor_schema::PortSchemaSpec::Named`] reference
+    /// to its fully-qualified [`streamlib_processor_schema::SchemaIdent`]
+    /// against the manifest's `schemas:` map (#767). No-op when there
+    /// are no `Named` references in scope (saves the resolver invocation
+    /// cost on `any`-only / config-less manifests).
+    fn resolve_bare_schema_refs(&mut self, project_path: &Path) -> Result<()> {
+        use streamlib_processor_schema::PortSchemaSpec;
+
+        let needs_resolution = self.processors.iter().any(|p| {
+            p.config.is_some()
+                || p.inputs
+                    .iter()
+                    .chain(p.outputs.iter())
+                    .any(|port| matches!(port.schema, PortSchemaSpec::Named(_)))
+        });
+
+        if !needs_resolution {
+            return Ok(());
+        }
+
+        let resolved = streamlib_idents::resolve_with(
+            project_path,
+            &streamlib_idents::ResolverOptions::default(),
+        )
+        .map_err(|e| {
+            Error::Configuration(format!(
+                "failed to resolve manifest dependencies for bare-name \
+                 schema lookup at {}: {}",
+                project_path.display(),
+                e
+            ))
+        })?;
+
+        for proc in &mut self.processors {
+            for port in proc.inputs.iter_mut().chain(proc.outputs.iter_mut()) {
+                if let PortSchemaSpec::Named(name) = &port.schema {
+                    let ident = resolve_named_to_ident(&resolved, name).map_err(|msg| {
+                        Error::Configuration(format!(
+                            "processor `{}` port `{}`: {}",
+                            proc.name, port.name, msg
+                        ))
+                    })?;
+                    port.schema = PortSchemaSpec::Specific(ident);
+                }
+            }
+            // Config schemas hold `TypeName` (Stage 2). They flow into
+            // the runtime as canonical id strings via
+            // `with_config_schema(&config.schema)`. Rather than
+            // converting the field's type, we leave the `TypeName` in
+            // place — runtime code paths use `as_str()` on it for the
+            // descriptor field, and the canonical-id form is computed
+            // lazily by the dynamic-registration path below
+            // (`register_processor_descriptor` in runtime.rs) which
+            // joins org/package/type/version on the fly. The bare-name
+            // is sufficient at the descriptor layer; full resolution is
+            // a future-tightening concern tracked under #767.
+        }
+
+        Ok(())
     }
 
     /// Load project configuration from a directory, returning defaults if the
@@ -173,6 +246,50 @@ impl ProjectConfig {
 
         Ok(())
     }
+}
+
+/// Walk the resolved-packages graph for a bare TypeName reference and
+/// build the fully-qualified [`streamlib_processor_schema::SchemaIdent`]
+/// from the owning package's metadata. Reads the schema file's
+/// `metadata.type` (preferred) for the type segment; falls back to the
+/// bare name when the YAML lacks `metadata.type` (legacy reverse-DNS
+/// schemas with `metadata.name` only).
+fn resolve_named_to_ident(
+    resolved: &streamlib_idents::ResolvedPackages,
+    name: &TypeName,
+) -> std::result::Result<streamlib_processor_schema::SchemaIdent, String> {
+    let (owner, schema_path) =
+        streamlib_idents::resolve_bare_schema_name(resolved, &resolved.root, name)
+            .map_err(|e| format!("bare-name resolution failed: {}", e))?;
+
+    let owner_pkg = owner
+        .manifest
+        .package
+        .as_ref()
+        .ok_or_else(|| "owning package has no `package:` block".to_string())?;
+
+    // Prefer `metadata.type` from the schema file; fall back to the
+    // bare map-key name. Legacy reverse-DNS schemas with `metadata.name`
+    // only carry no separate type segment, so the bare-name lookup form
+    // is correct for them.
+    let type_segment = std::fs::read_to_string(&schema_path)
+        .ok()
+        .and_then(|body| serde_yaml::from_str::<serde_yaml::Value>(&body).ok())
+        .and_then(|value| {
+            value
+                .get("metadata")?
+                .get("type")?
+                .as_str()
+                .and_then(|s| TypeName::new(s).ok())
+        })
+        .unwrap_or_else(|| name.clone());
+
+    Ok(streamlib_processor_schema::SchemaIdent::new(
+        owner_pkg.org.clone(),
+        owner_pkg.name.clone(),
+        type_segment,
+        owner_pkg.version,
+    ))
 }
 
 /// Compare two semver strings. Returns -1, 0, or 1.
@@ -381,6 +498,12 @@ dependencies:
 
     #[test]
     fn test_load_with_processors() {
+        // Post-#767: port schemas at use-sites are bare PascalCase
+        // TypeNames resolved against the manifest's `schemas:` map.
+        // To keep this test self-contained (no on-disk dep package
+        // required), the processor uses `any`-shaped ports — the
+        // bare-name resolution pass is skipped entirely when no port
+        // declares a `Named` reference.
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("streamlib.yaml");
         let mut file = std::fs::File::create(&config_path).unwrap();
@@ -405,10 +528,10 @@ processors:
     entrypoint: "grayscale_processor:GrayscaleProcessor"
     inputs:
       - name: video_in
-        schema: {{ org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }}
+        schema: any
     outputs:
       - name: video_out
-        schema: {{ org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }}
+        schema: any
 "#
         )
         .unwrap();

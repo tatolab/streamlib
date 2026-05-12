@@ -19,30 +19,65 @@ patch:
   "@tatolab/core":
     path: ../../packages/core
 
-# Schema YAML files this package owns. Drives the JTD-codegen pipeline
+# Schema YAML files this package owns + bare-name imports from declared
+# dependencies. Drives the JTD-codegen pipeline
 # (`cargo xtask generate-schemas --project-dir libs/streamlib`) and the
-# build-script-generated embedded-schemas lookup. Replaces the legacy
-# `[package.metadata.streamlib].schemas` block in Cargo.toml (#402).
+# build-script-generated embedded-schemas lookup.
+#
+# `Local { file }` — schema this package owns; the file ships in the
+# slpkg archive. `External { package }` — bare type-name imported from
+# the named dep; resolution walks the dep's own `schemas:` map.
 schemas:
-  # Processor config schemas.
-  - schemas/com.streamlib.api_server.config@1.0.0.yaml
-  - schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
-  - schemas/com.streamlib.clap.effect.config@1.0.0.yaml
-  - schemas/com.streamlib.h265_decoder.config@1.0.0.yaml
-  - schemas/com.streamlib.h265_encoder.config@1.0.0.yaml
-  - schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml
-  - schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml
-  - schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml
-  - schemas/com.streamlib.opus_decoder.config@1.0.0.yaml
-  - schemas/com.streamlib.opus_encoder.config@1.0.0.yaml
-  - schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
-  - schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml
-  - schemas/com.tatolab.mp4_writer.config@1.0.0.yaml
-  - schemas/com.tatolab.screen_capture.config@1.0.0.yaml
-  - schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml
+  # Wire types imported from @tatolab/core (#767).
+  AudioFrame:
+    package: "@tatolab/core"
+  EncodedAudioFrame:
+    package: "@tatolab/core"
+  EncodedVideoFrame:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"
+  # Processor config schemas. Map keys are PascalCase aliases for the
+  # legacy reverse-DNS schema files; in-passing reverse-DNS migration is
+  # tracked per carve-out, not in #767.
+  ApiServerConfig:
+    file: schemas/com.streamlib.api_server.config@1.0.0.yaml
+  BgraFileSourceConfig:
+    file: schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
+  ClapEffectConfig:
+    file: schemas/com.streamlib.clap.effect.config@1.0.0.yaml
+  H265DecoderConfig:
+    file: schemas/com.streamlib.h265_decoder.config@1.0.0.yaml
+  H265EncoderConfig:
+    file: schemas/com.streamlib.h265_encoder.config@1.0.0.yaml
+  LinuxMp4WriterConfig:
+    file: schemas/com.streamlib.linux_mp4_writer.config@1.0.0.yaml
+  MoqPublishTrackConfig:
+    file: schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml
+  MoqSubscribeTrackConfig:
+    file: schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml
+  OpusDecoderConfig:
+    file: schemas/com.streamlib.opus_decoder.config@1.0.0.yaml
+  OpusEncoderConfig:
+    file: schemas/com.streamlib.opus_encoder.config@1.0.0.yaml
+  WebrtcWhepConfig:
+    file: schemas/com.streamlib.webrtc_whep.config@1.0.0.yaml
+  WebrtcWhipConfig:
+    file: schemas/com.streamlib.webrtc_whip.config@1.0.0.yaml
+  Mp4WriterConfig:
+    file: schemas/com.tatolab.mp4_writer.config@1.0.0.yaml
+  ScreenCaptureConfig:
+    file: schemas/com.tatolab.screen_capture.config@1.0.0.yaml
+  SimplePassthroughConfig:
+    file: schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml
   # Polyglot escalate IPC wire schemas (discriminator form).
-  - schemas/com.streamlib.escalate_request@1.0.0.yaml
-  - schemas/com.streamlib.escalate_response@1.0.0.yaml
+  EscalateRequest:
+    file: schemas/com.streamlib.escalate_request@1.0.0.yaml
+  EscalateResponse:
+    file: schemas/com.streamlib.escalate_response@1.0.0.yaml
+  # Test-only config schema for the attribute macro tests.
+  TestConfiguredProcessorConfig:
+    file: schemas/com.streamlib.test.configured_processor.config@1.0.0.yaml
 
 processors:
   # === Apple platform processors ===
@@ -58,15 +93,15 @@ processors:
         unsafe_send: true
     config:
       name: config
-      schema: com.tatolab.mp4_writer.config@1.0.0
+      schema: Mp4WriterConfig
     inputs:
       - name: audio
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Stereo audio frames to write to MP4
         read_mode: read_next_in_order
         buffer_size: 32
       - name: video
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Video frames to write to MP4
         read_mode: skip_to_latest
         buffer_size: 4
@@ -80,10 +115,10 @@ processors:
         unsafe_send: true
     config:
       name: config
-      schema: com.tatolab.screen_capture.config@1.0.0
+      schema: ScreenCaptureConfig
     outputs:
       - name: video
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Captured video frames from screen content
 
   # === Core processors ===
@@ -94,7 +129,7 @@ processors:
     execution: manual
     config:
       name: config
-      schema: com.streamlib.api_server.config@1.0.0
+      schema: ApiServerConfig
 
   - name: SimplePassthrough
     version: 1.0.0
@@ -102,16 +137,16 @@ processors:
     execution: manual
     config:
       name: config
-      schema: com.tatolab.simple_passthrough.config@1.0.0
+      schema: SimplePassthroughConfig
     inputs:
       - name: input
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Video frame input
         read_mode: skip_to_latest
         buffer_size: 4
     outputs:
       - name: output
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Video frame output (unchanged)
 
   - name: ClapEffect
@@ -120,16 +155,16 @@ processors:
     execution: manual
     config:
       name: config
-      schema: com.streamlib.clap.effect.config@1.0.0
+      schema: ClapEffectConfig
     inputs:
       - name: audio_in
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Stereo audio frame to process through CLAP plugin (2 channels)
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: audio_out
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Processed stereo audio frame from CLAP plugin (2 channels)
 
   - name: WebrtcWhep
@@ -140,13 +175,13 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.webrtc_whep.config@1.0.0
+      schema: WebrtcWhepConfig
     outputs:
       - name: encoded_video_out
-        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+        schema: EncodedVideoFrame
         description: H.264 encoded video frames from WHEP stream
       - name: encoded_audio_out
-        schema: { org: tatolab, package: core, type: EncodedAudioFrame, version: 1.0.0 }
+        schema: EncodedAudioFrame
         description: Opus encoded audio frames from WHEP stream
 
   - name: WebrtcWhip
@@ -157,15 +192,15 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.webrtc_whip.config@1.0.0
+      schema: WebrtcWhipConfig
     inputs:
       - name: encoded_video_in
-        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+        schema: EncodedVideoFrame
         description: H.264 encoded video frames to stream
         read_mode: read_next_in_order
         buffer_size: 16
       - name: encoded_audio_in
-        schema: { org: tatolab, package: core, type: EncodedAudioFrame, version: 1.0.0 }
+        schema: EncodedAudioFrame
         description: Opus encoded audio frames to stream
         read_mode: skip_to_latest
         buffer_size: 8
@@ -180,10 +215,10 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.bgra_file_source.config@1.0.0
+      schema: BgraFileSourceConfig
     outputs:
       - name: video
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Video frames read from the BGRA file
 
   # === Linux MP4 Writer ===
@@ -196,10 +231,10 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.linux_mp4_writer.config@1.0.0
+      schema: LinuxMp4WriterConfig
     inputs:
       - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Decoded video frames (raw pixels) to encode and write
         read_mode: skip_to_latest
         buffer_size: 4
@@ -217,16 +252,16 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.h265_encoder.config@1.0.0
+      schema: H265EncoderConfig
     inputs:
       - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Raw video frames to encode
         read_mode: read_next_in_order
         buffer_size: 8
     outputs:
       - name: encoded_video_out
-        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+        schema: EncodedVideoFrame
         description: H.265 encoded video frames
 
   - name: H265Decoder
@@ -239,16 +274,16 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.h265_decoder.config@1.0.0
+      schema: H265DecoderConfig
     inputs:
       - name: encoded_video_in
-        schema: { org: tatolab, package: core, type: EncodedVideoFrame, version: 1.0.0 }
+        schema: EncodedVideoFrame
         description: H.265 encoded video frames to decode
         read_mode: read_next_in_order
         buffer_size: 16
     outputs:
       - name: video_out
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Decoded video frames
 
   - name: OpusEncoder
@@ -267,16 +302,16 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.opus_encoder.config@1.0.0
+      schema: OpusEncoderConfig
     inputs:
       - name: audio_in
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Raw audio frames to encode
         read_mode: read_next_in_order
         buffer_size: 32
     outputs:
       - name: encoded_audio_out
-        schema: { org: tatolab, package: core, type: EncodedAudioFrame, version: 1.0.0 }
+        schema: EncodedAudioFrame
         description: Opus encoded audio frames
 
   - name: OpusDecoder
@@ -290,16 +325,16 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.opus_decoder.config@1.0.0
+      schema: OpusDecoderConfig
     inputs:
       - name: encoded_audio_in
-        schema: { org: tatolab, package: core, type: EncodedAudioFrame, version: 1.0.0 }
+        schema: EncodedAudioFrame
         description: Opus encoded audio frames to decode
         read_mode: skip_to_latest
         buffer_size: 8
     outputs:
       - name: audio_out
-        schema: { org: tatolab, package: core, type: AudioFrame, version: 1.0.0 }
+        schema: AudioFrame
         description: Decoded audio frames
 
   # === MoQ Streaming ===
@@ -312,7 +347,7 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.moq_publish_track.config@1.0.0
+      schema: MoqPublishTrackConfig
     inputs:
       - name: data_in
         schema: any
@@ -326,7 +361,7 @@ processors:
       language: rust
     config:
       name: config
-      schema: com.streamlib.moq_subscribe_track.config@1.0.0
+      schema: MoqSubscribeTrackConfig
     outputs:
       - name: data_out
         schema: any
@@ -340,17 +375,17 @@ processors:
     execution: manual
     inputs:
       - name: in1
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Test input port 1
       - name: in2
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Test input port 2
     outputs:
       - name: out1
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Test output port 1
       - name: out2
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Test output port 2
 
   - name: TestMockInputOnlyProcessor
@@ -359,10 +394,10 @@ processors:
     execution: manual
     inputs:
       - name: in1
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Test input port 1
       - name: in2
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Test input port 2
 
   - name: TestMockOutputOnlyProcessor
@@ -371,10 +406,10 @@ processors:
     execution: manual
     outputs:
       - name: out1
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Test output port 1
       - name: out2
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
         description: Test output port 2
 
   # === Test attribute macro processors ===
@@ -385,10 +420,10 @@ processors:
     execution: manual
     inputs:
       - name: video_in
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
     outputs:
       - name: video_out
-        schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+        schema: VideoFrame
 
   - name: TestConfiguredProcessor
     version: 1.0.0
@@ -396,4 +431,4 @@ processors:
     execution: continuous
     config:
       name: config
-      schema: com.streamlib.test.configured_processor.config@1.0.0
+      schema: TestConfiguredProcessorConfig

@@ -28,7 +28,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use streamlib_idents::{ResolvedPackage, ResolvedPackages, ResolverOptions, SemVer};
+use streamlib_idents::{
+    resolve_bare_schema_name, ResolvedPackage, ResolvedPackages, ResolverOptions, SemVer,
+};
 
 pub mod ordering;
 pub mod sentinel;
@@ -160,6 +162,19 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
 
 /// Direct entry: run codegen against an already-resolved package set.
 ///
+/// Tree-shakes against the **root** manifest's `schemas:` map (#767): only
+/// types the root explicitly declares — Local entries this manifest owns
+/// plus External entries it imports by bare name from declared dependencies
+/// — land in `_generated_/`. Schemas in transitive deps that aren't named
+/// by an External entry of the root are NOT emitted; the root's
+/// `_generated_/` carries only what the root references, no more.
+///
+/// Each emitted task carries the **owning** package's context (so
+/// External-imported types land under the dep's `<org>__<package>/`
+/// subdir, not the root's). When the root has no `schemas:` block
+/// declared, falls back to auto-discovery — emit everything in the root's
+/// `schemas/` directory under the root's own context.
+///
 /// The output layout is mixed: schemas in package-flavor manifests with
 /// new-shape `metadata.type` declarations land in
 /// `output/<org>__<package>/<snake_type>.<ext>`; legacy schemas with
@@ -173,9 +188,38 @@ pub fn generate_from_resolved(
 ) -> Result<()> {
     let mut tasks: Vec<SchemaTask> = Vec::new();
     let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-    for pkg in resolved.iter_all() {
-        let pkg_ctx = PackageContext::from_resolved(pkg);
-        for schema_path in &pkg.schema_files {
+
+    let root = &resolved.root;
+
+    if let Some(declared) = &root.manifest.schemas {
+        // Tree-shake: walk root's schemas: map. For each entry, resolve the
+        // bare name (Local → this package; External → walk dep edges) to the
+        // owning ResolvedPackage + absolute schema file path. Emit each
+        // schema under its OWNING package's context so per-package output
+        // subdirs land correctly.
+        for name in declared.keys() {
+            let (owner, file) =
+                resolve_bare_schema_name(resolved, root, name).with_context(|| {
+                    format!(
+                        "Failed to resolve schema `{}` declared in root's schemas: map",
+                        name.as_str()
+                    )
+                })?;
+            if !seen.insert(file.clone()) {
+                continue;
+            }
+            let pkg_ctx = PackageContext::from_resolved(owner);
+            tasks.push(SchemaTask {
+                schema_path: file,
+                package: pkg_ctx,
+            });
+        }
+    } else {
+        // No schemas: block in the root → auto-discovery: emit every yaml
+        // under root's schemas/ directory under the root's own context.
+        // Transitive-dep schema files are NOT emitted; only the root's own.
+        let pkg_ctx = PackageContext::from_resolved(root);
+        for schema_path in &root.schema_files {
             if !seen.insert(schema_path.clone()) {
                 continue;
             }
@@ -185,6 +229,7 @@ pub fn generate_from_resolved(
             });
         }
     }
+
     tasks.sort_by(|a, b| a.schema_path.cmp(&b.schema_path));
 
     if tasks.is_empty() {
