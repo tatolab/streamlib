@@ -108,10 +108,10 @@ class TestManifestReader:
               - name: Foo
                 inputs:
                   - name: video_in
-                    schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+                    schema: any
                 outputs:
                   - name: video_out
-                    schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
+                    schema: any
               - name: Bar
             """,
         )
