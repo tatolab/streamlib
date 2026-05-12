@@ -40,10 +40,6 @@ schemas:
     file: schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
   ClapEffectConfig:
     file: schemas/com.streamlib.clap.effect.config@1.0.0.yaml
-  MoqPublishTrackConfig:
-    file: schemas/com.streamlib.moq_publish_track.config@1.0.0.yaml
-  MoqSubscribeTrackConfig:
-    file: schemas/com.streamlib.moq_subscribe_track.config@1.0.0.yaml
   ScreenCaptureConfig:
     file: schemas/com.tatolab.screen_capture.config@1.0.0.yaml
   SimplePassthroughConfig:
@@ -128,36 +124,6 @@ processors:
       - name: video
         schema: VideoFrame
         description: Video frames read from the BGRA file
-
-  # === MoQ Streaming ===
-
-  - name: MoqPublishTrack
-    version: 1.0.0
-    description: "Publishes raw bytes from a single graph input to a named MoQ track"
-    execution: reactive
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: MoqPublishTrackConfig
-    inputs:
-      - name: data_in
-        schema: any
-        description: Input data to publish to MoQ track (any serialized type)
-
-  - name: MoqSubscribeTrack
-    version: 1.0.0
-    description: "Subscribes to a named MoQ track and outputs raw bytes to the graph"
-    execution: manual
-    runtime:
-      language: rust
-    config:
-      name: config
-      schema: MoqSubscribeTrackConfig
-    outputs:
-      - name: data_out
-        schema: any
-        description: Received data from MoQ track subscription (any serialized type)
 
   # === Test mock processors ===
 

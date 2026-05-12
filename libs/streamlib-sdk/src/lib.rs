@@ -90,7 +90,6 @@ pub mod sdk {
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
-    pub use streamlib_engine::core::streaming;
     pub use streamlib_engine::core::sync;
     pub use streamlib_engine::core::texture;
     pub use streamlib_engine::core::utils;
@@ -125,10 +124,6 @@ pub mod sdk {
         // Linux-only processors.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::BgraFileSourceProcessor;
-
-        // MoQ feature-gated processors.
-        #[cfg(feature = "moq")]
-        pub use streamlib_engine::{MoqPublishTrackProcessor, MoqSubscribeTrackProcessor};
     }
 
     // ---- Cross-cutting modules from engine top-level ----

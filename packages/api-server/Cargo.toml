@@ -19,11 +19,12 @@ path = "src/bin/generate_openapi.rs"
 
 [features]
 default = []
-moq = ["streamlib/moq"]
+moq = ["dep:streamlib-moq"]
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-macros = { path = "../../libs/streamlib-macros" }
+streamlib-moq = { path = "../moq", optional = true }
 
 axum.workspace = true
 tower-http = { version = "0.6", features = ["trace"] }

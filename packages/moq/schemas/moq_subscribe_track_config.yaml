@@ -4,8 +4,7 @@
 # JSON Type Definition (RFC 8927) schema for MoQ Subscribe Track config
 
 metadata:
-  name: com.streamlib.moq_subscribe_track.config
-  version: 1.0.0
+  type: MoqSubscribeTrackConfig
   description: "Configuration for subscribing to a single track from a MoQ relay"
 
 properties:

@@ -1,22 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// MoQ Catalog Generation
-//
-// Generates MoQ catalog tracks from StreamLib's processor registry.
-// Maps schema identifiers to MoQ track names so remote subscribers
-// can discover available data streams.
-//
-// Wire shape: every catalog field that names a schema or processor is
-// the structured 4-field record (`{ org, package, type, version: {
-// major, minor, patch } }`). Joined strings like `@org/pkg/Type@v` are
-// `Display` form only — they never round-trip through a parser at the
-// structured boundary.
+//! MoQ catalog generation.
+//!
+//! Maps StreamLib schema identifiers to MoQ track names so remote
+//! subscribers can discover available data streams. Every catalog field
+//! that names a schema or processor is the structured 4-field record
+//! (`{ org, package, type, version: { major, minor, patch } }`).
+//! Joined strings like `@org/pkg/Type@v` are `Display` form only —
+//! they never round-trip through a parser at the structured boundary.
 
 use serde::{Deserialize, Serialize};
-
-use crate::core::descriptors::SchemaIdent;
-use crate::core::json_schema::SchemaIdentOutput;
+use streamlib::sdk::descriptors::SchemaIdent;
+use streamlib::sdk::json_schema::SchemaIdentOutput;
 
 /// A catalog entry describing a single MoQ track and its StreamLib schema.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +42,6 @@ pub struct MoqBroadcastCatalog {
 }
 
 impl MoqBroadcastCatalog {
-    /// Create an empty catalog.
     pub fn new() -> Self {
         Self {
             version: 1,
@@ -54,11 +49,9 @@ impl MoqBroadcastCatalog {
         }
     }
 
-    /// Add a track entry to the catalog. Both `schema` and
-    /// `source_processor_type` are structured `SchemaIdent` references
-    /// — `None` when not declared. Producers with no source-processor
-    /// attribution (e.g. catalog endpoints that iterate raw track names)
-    /// pass `None` for both.
+    /// Add a track entry. Both `schema` and `source_processor_type`
+    /// are structured `SchemaIdent` references — `None` when not
+    /// declared.
     pub fn add_track(
         &mut self,
         track_name: &str,
@@ -74,12 +67,10 @@ impl MoqBroadcastCatalog {
         });
     }
 
-    /// Serialize the catalog to JSON bytes for publishing as a MoQ track.
     pub fn to_json_bytes(&self) -> Vec<u8> {
         serde_json::to_vec(self).expect("catalog serialization should not fail")
     }
 
-    /// Deserialize a catalog from JSON bytes received from a MoQ track.
     pub fn from_json_bytes(data: &[u8]) -> Result<Self, serde_json::Error> {
         serde_json::from_slice(data)
     }
@@ -117,7 +108,7 @@ pub fn catalog_entry_for_output_port(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::descriptors::{Org, Package, SemVer, TypeName};
+    use streamlib::sdk::descriptors::{Org, Package, SemVer, TypeName};
 
     fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
         SchemaIdent::new(
@@ -184,10 +175,9 @@ mod tests {
 
     #[test]
     fn catalog_json_shape_is_structured_not_joined_string() {
-        // Wire-format lock: the schema and source_processor_type fields
-        // on the wire are structured objects, never joined strings. If a
-        // future change accidentally adds a custom Serialize impl that
-        // flattens to the joined form, this test catches it.
+        // Wire-format lock: schema + source_processor_type on the wire
+        // are structured objects, never joined strings. A future
+        // accidental flatten via custom Serialize would trip this test.
         let mut catalog = MoqBroadcastCatalog::new();
         let schema = ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0));
         let proc_type = ident("tatolab", "streamlib", "CameraProcessor", SemVer::new(1, 0, 0));

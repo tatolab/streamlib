@@ -43,7 +43,7 @@ use crate::state::{
 /// Build the full router with shared state and trace layer attached.
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
-    #[cfg(feature = "moq")] moq_sessions: streamlib::sdk::streaming::SharedMoqSessions,
+    #[cfg(feature = "moq")] runtime_id: String,
 ) -> Router {
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health))
@@ -60,7 +60,7 @@ pub(crate) fn build_router(
     let state = AppState {
         runtime,
         #[cfg(feature = "moq")]
-        moq_sessions,
+        runtime_id,
         openapi,
     };
 
@@ -374,13 +374,19 @@ pub(crate) async fn get_openapi_spec(
 }
 
 /// MoQ broadcast catalog with currently-published tracks.
+///
+/// Returns an empty catalog when no MoQ publish processor has touched this
+/// runtime yet — the package-global session registry in `@tatolab/moq` is
+/// populated lazily on first publish.
 #[cfg(feature = "moq")]
 pub(crate) async fn get_moq_catalog(
     State(state): State<AppState>,
-) -> Json<streamlib::sdk::streaming::MoqBroadcastCatalog> {
-    let mut catalog = streamlib::sdk::streaming::MoqBroadcastCatalog::new();
-    for track_name in state.moq_sessions.published_track_names() {
-        catalog.add_track(&track_name, None, None, &track_name);
+) -> Json<streamlib_moq::MoqBroadcastCatalog> {
+    let mut catalog = streamlib_moq::MoqBroadcastCatalog::new();
+    if let Some(sessions) = streamlib_moq::try_sessions_for_runtime(&state.runtime_id) {
+        for track_name in sessions.published_track_names() {
+            catalog.add_track(&track_name, None, None, &track_name);
+        }
     }
     Json(catalog)
 }

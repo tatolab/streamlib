@@ -13,8 +13,10 @@ use utoipa::OpenApi;
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub runtime: Arc<dyn RuntimeOperations>,
+    /// Runtime id — used to look up the matching MoQ session registry
+    /// inside `@tatolab/moq` when the `moq` feature is enabled.
     #[cfg(feature = "moq")]
-    pub moq_sessions: streamlib::sdk::streaming::SharedMoqSessions,
+    pub runtime_id: String,
     pub openapi: utoipa::openapi::OpenApi,
 }
 

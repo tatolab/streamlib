@@ -1,55 +1,44 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// MoQ Publish Track
-//
-// Forwards raw bytes from a single graph input to a named MoQ track.
-// Type-agnostic: uses read_raw() to receive any serialized data type
-// and publishes the bytes as-is to the shared MoQ relay session.
+//! MoQ Publish Track — forwards raw bytes from a graph input to a named MoQ track.
 
-use crate::core::streaming::MoqPublishSession;
-use crate::core::{Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error};
+use crate::_generated_::EncodedVideoFrame;
+use crate::moq_session::{sessions_for_runtime, MoqPublishSession, SharedMoqSessions};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
 
-// ============================================================================
-// PROCESSOR
-// ============================================================================
-
-#[crate::processor("MoqPublishTrack")]
+#[streamlib::sdk::processor("MoqPublishTrack")]
 pub struct MoqPublishTrackProcessor {
-    /// Shared MoQ publish session (from RuntimeContext).
     shared_publish_session: Option<Arc<Mutex<MoqPublishSession>>>,
-
-    /// Resolved track name (from config or auto-generated).
+    sessions: Option<SharedMoqSessions>,
     track_name: String,
-
-    /// Frames published counter.
     frames_published: u64,
 }
 
-impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
+impl streamlib::sdk::processors::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
     async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Track name: use config value or auto-generate from processor ID
+        // Track name: explicit config, or auto-generate from processor id.
         self.track_name = self.config.track_name.clone().unwrap_or_else(|| {
             ctx.processor_id()
                 .map(|id| id.to_string())
                 .unwrap_or_else(|| "default".to_string())
         });
 
-        // Get the shared publish session from the runtime (one QUIC connection, N tracks)
-        let session = ctx.moq_sessions().get_publish_session().await?;
-
-        // Register this track in the catalog
-        ctx.moq_sessions().register_published_track(&self.track_name);
+        let sessions = sessions_for_runtime(&ctx.runtime_id().to_string());
+        let session = sessions.get_publish_session().await?;
+        sessions.register_published_track(&self.track_name);
 
         tracing::info!(
-            broadcast = %ctx.moq_sessions().broadcast_path(),
+            broadcast = %sessions.broadcast_path(),
             track = %self.track_name,
             "[MoqPublishTrack] Using shared session"
         );
 
         self.shared_publish_session = Some(session);
+        self.sessions = Some(sessions);
         Ok(())
     }
 
@@ -59,6 +48,7 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
             "[MoqPublishTrack] Shutting down"
         );
         self.shared_publish_session.take();
+        self.sessions.take();
         Ok(())
     }
 
@@ -81,17 +71,17 @@ impl crate::core::ReactiveProcessor for MoqPublishTrackProcessor::Processor {
             .ok_or_else(|| Error::Runtime("MoQ session not connected".into()))?
             .lock();
 
-        // Detect keyframe by checking the is_keyframe field in the serialized EncodedVideoFrame.
-        // The msgpack contains a boolean field "is_keyframe". Rather than scanning raw bytes
-        // for NAL patterns (which produces false positives on msgpack envelope bytes),
-        // deserialize just enough to check the keyframe flag.
+        // Detect keyframe on the "video" track by checking the
+        // `is_keyframe` field in the msgpack-encoded EncodedVideoFrame.
+        // Scanning for NAL patterns on raw bytes produces false positives
+        // on the msgpack envelope; deserializing just the flag is reliable.
         let is_keyframe = if self.track_name == "video" {
-            // Quick check: try to deserialize and check is_keyframe field
-            rmp_serde::from_slice::<crate::_generated_::EncodedVideoFrame>(&bytes)
+            rmp_serde::from_slice::<EncodedVideoFrame>(&bytes)
                 .map(|frame| frame.is_keyframe)
                 .unwrap_or(false)
         } else {
-            false // non-video tracks: all frames in one subgroup
+            // Non-video tracks: all frames go into one subgroup.
+            false
         };
 
         session.publish_frame(&self.track_name, &bytes, is_keyframe)?;

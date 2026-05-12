@@ -1,0 +1,56 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+package:
+  org: tatolab
+  name: moq
+  version: 1.0.0
+  description: "MoQ (Media over QUIC) publish/subscribe track processors (IETF moq-transport draft-14)"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  # Wire types imported from @tatolab/core.
+  EncodedVideoFrame:
+    package: "@tatolab/core"
+  # Local config schemas this package owns.
+  MoqPublishTrackConfig:
+    file: schemas/moq_publish_track_config.yaml
+  MoqSubscribeTrackConfig:
+    file: schemas/moq_subscribe_track_config.yaml
+
+processors:
+  - name: MoqPublishTrack
+    version: 1.0.0
+    description: "Publishes raw bytes from a single graph input to a named MoQ track"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: MoqPublishTrackConfig
+    inputs:
+      - name: data_in
+        schema: any
+        description: Input data to publish to MoQ track (any serialized type)
+
+  - name: MoqSubscribeTrack
+    version: 1.0.0
+    description: "Subscribes to a named MoQ track and outputs raw bytes to the graph"
+    execution: manual
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: MoqSubscribeTrackConfig
+    outputs:
+      - name: data_out
+        schema: any
+        description: Received data from MoQ track subscription (any serialized type)

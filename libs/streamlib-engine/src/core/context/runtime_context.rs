@@ -41,9 +41,6 @@ pub struct RuntimeContext {
     /// rather than an external daemon.
     #[cfg(target_os = "linux")]
     surface_socket_path: std::path::PathBuf,
-    /// Shared MoQ sessions (one publish + one subscribe per runtime).
-    #[cfg(feature = "moq")]
-    moq_sessions: crate::core::streaming::SharedMoqSessions,
 }
 
 impl RuntimeContext {
@@ -60,8 +57,6 @@ impl RuntimeContext {
         Self {
             gpu,
             time,
-            #[cfg(feature = "moq")]
-            moq_sessions: crate::core::streaming::SharedMoqSessions::new(&runtime_id.to_string()),
             runtime_id,
             processor_id: None,
             pause_gate: None,
@@ -154,12 +149,6 @@ impl RuntimeContext {
         &self.audio_clock
     }
 
-    /// Get the shared MoQ sessions for this runtime.
-    #[cfg(feature = "moq")]
-    pub fn moq_sessions(&self) -> &crate::core::streaming::SharedMoqSessions {
-        &self.moq_sessions
-    }
-
     /// Create a processor-specific context with a processor ID.
     pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
         Self {
@@ -174,8 +163,6 @@ impl RuntimeContext {
             audio_clock: Arc::clone(&self.audio_clock),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
-            #[cfg(feature = "moq")]
-            moq_sessions: self.moq_sessions.clone(),
         }
     }
 
@@ -193,8 +180,6 @@ impl RuntimeContext {
             audio_clock: Arc::clone(&self.audio_clock),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
-            #[cfg(feature = "moq")]
-            moq_sessions: self.moq_sessions.clone(),
         }
     }
 
@@ -694,10 +679,6 @@ impl<'a> RuntimeContextFullAccess<'a> {
     pub fn audio_clock(&self) -> &SharedAudioClock {
         self.base.audio_clock()
     }
-    #[cfg(feature = "moq")]
-    pub fn moq_sessions(&self) -> &crate::core::streaming::SharedMoqSessions {
-        self.base.moq_sessions()
-    }
     pub fn is_paused(&self) -> bool {
         self.base.is_paused()
     }
@@ -752,10 +733,6 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     }
     pub fn audio_clock(&self) -> &SharedAudioClock {
         self.base.audio_clock()
-    }
-    #[cfg(feature = "moq")]
-    pub fn moq_sessions(&self) -> &crate::core::streaming::SharedMoqSessions {
-        self.base.moq_sessions()
     }
     pub fn is_paused(&self) -> bool {
         self.base.is_paused()

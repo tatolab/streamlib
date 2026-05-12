@@ -1,0 +1,36 @@
+[package]
+name = "streamlib-moq"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "MoQ (Media over QUIC) publish/subscribe track processors for streamlib."
+keywords = ["moq", "media-over-quic", "streaming", "streamlib", "webtransport"]
+categories = ["multimedia::video", "multimedia"]
+
+[lib]
+name = "streamlib_moq"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot = "0.12"
+bytes = "1.5"
+rmp-serde = "1.3"
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros", "time"] }
+
+moq-transport = { workspace = true }
+web-transport = { workspace = true }
+quinn = { workspace = true }
+url = "2"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-native-certs = { workspace = true }
+
+[lints]
+workspace = true

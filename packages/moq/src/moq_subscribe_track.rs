@@ -1,84 +1,87 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// MoQ Subscribe Track
-//
-// Subscribes to a single named MoQ track on the shared relay session
-// and forwards received bytes to the graph output. Type-agnostic:
-// uses write_raw() to pass through raw bytes without deserialization.
-//
-// Automatically retries on connection loss with exponential backoff.
+//! MoQ Subscribe Track — subscribes to a named MoQ track and forwards bytes.
+//!
+//! Type-agnostic: uses `write_raw()` to pass through bytes without
+//! deserialization. Reconnects on connection loss with exponential backoff.
 
-use crate::core::media_clock::MediaClock;
-use crate::core::streaming::{MoqSubscribeSession, MoqTrackReader};
-use crate::core::{Result, RuntimeContextFullAccess, Error};
-use crate::iceoryx2::OutputWriter;
+use crate::moq_session::{sessions_for_runtime, MoqTrackReader};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib::sdk::media_clock::MediaClock;
 
-/// Maximum retry attempts before giving up.
 const MAX_RETRY_ATTEMPTS: u32 = 60;
-
-/// Initial retry delay (doubles each attempt, capped at 10s).
 const INITIAL_RETRY_DELAY_MS: u64 = 500;
-
-/// Maximum retry delay cap.
 const MAX_RETRY_DELAY_MS: u64 = 10_000;
 
-// ============================================================================
-// PROCESSOR
-// ============================================================================
-
-#[crate::processor("MoqSubscribeTrack")]
+#[streamlib::sdk::processor("MoqSubscribeTrack")]
 pub struct MoqSubscribeTrackProcessor {
-    /// Runtime context for tokio handle and shared sessions.
-    runtime_context: Option<RuntimeContext>,
-
-    /// Shutdown signaling for the async receive loop.
+    runtime_id: Option<String>,
+    tokio_handle: Option<tokio::runtime::Handle>,
     shutdown_signal_sender: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
-impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
-    fn setup(&mut self, ctx: RuntimeContext) -> impl Future<Output = Result<()>> + Send {
-        self.runtime_context = Some(ctx.clone());
+impl streamlib::sdk::processors::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
+    fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        self.runtime_id = Some(ctx.runtime_id().to_string());
+        self.tokio_handle = Some(ctx.tokio_handle().clone());
 
-        async move {
-            tracing::info!(
-                broadcast = %ctx.moq_sessions().broadcast_path(),
-                track = %self.config.track_name,
-                "[MoqSubscribeTrack] Configured (will connect on start)"
-            );
-            Ok(())
-        }
+        let sessions = sessions_for_runtime(self.runtime_id.as_ref().unwrap());
+        tracing::info!(
+            broadcast = %sessions.broadcast_path(),
+            track = %self.config.track_name,
+            "[MoqSubscribeTrack] Configured (will connect on start)"
+        );
+        std::future::ready(Ok(()))
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         tracing::info!("[MoqSubscribeTrack] Shutting down");
 
         if let Some(tx) = self.shutdown_signal_sender.take() {
             let _ = tx.send(());
         }
 
-        self.runtime_context.take();
+        self.runtime_id.take();
+        self.tokio_handle.take();
         tracing::info!("[MoqSubscribeTrack] Shutdown complete");
-        Ok(())
-    }
-
-    fn on_pause(&mut self) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
-    fn on_resume(&mut self) -> impl Future<Output = Result<()>> + Send {
+    fn on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
+        std::future::ready(Ok(()))
+    }
+
+    fn on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> impl Future<Output = Result<()>> + Send {
         std::future::ready(Ok(()))
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let ctx = self
-            .runtime_context
-            .as_ref()
-            .ok_or_else(|| Error::Runtime("RuntimeContext not available".into()))?
-            .clone();
+        let runtime_id = self
+            .runtime_id
+            .clone()
+            .ok_or_else(|| Error::Runtime("runtime_id not captured in setup()".into()))?;
+        let handle = self
+            .tokio_handle
+            .clone()
+            .ok_or_else(|| Error::Runtime("tokio handle not captured in setup()".into()))?;
 
         let outputs = self.outputs.clone();
         let track_name = self.config.track_name.clone();
@@ -86,10 +89,9 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         self.shutdown_signal_sender = Some(shutdown_tx);
 
-        let handle = ctx.tokio_handle().clone();
-        handle.spawn(async move {
+        handle.clone().spawn(async move {
             run_moq_subscribe_track_receive_loop_with_retry(
-                track_name, ctx, outputs, shutdown_rx,
+                track_name, runtime_id, outputs, shutdown_rx,
             )
             .await;
         });
@@ -110,14 +112,10 @@ impl crate::core::ManualProcessor for MoqSubscribeTrackProcessor::Processor {
     }
 }
 
-// ============================================================================
-// ASYNC RECEIVE LOOP WITH RETRY
-// ============================================================================
-
-/// Outer loop that handles connection/subscription failures with retry.
+/// Outer loop — opens / re-opens the subscribe session on failure.
 async fn run_moq_subscribe_track_receive_loop_with_retry(
     track_name: String,
-    ctx: RuntimeContext,
+    runtime_id: String,
     outputs: Arc<OutputWriter>,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
@@ -129,18 +127,17 @@ async fn run_moq_subscribe_track_receive_loop_with_retry(
         );
     }
 
+    let sessions = sessions_for_runtime(&runtime_id);
     let mut total_frames: u64 = 0;
     let mut retry_count: u32 = 0;
 
     loop {
-        // Check shutdown before attempting connection
         if shutdown_rx.try_recv().is_ok() {
             tracing::info!("[MoqSubscribeTrack] Shutdown during retry");
             break;
         }
 
-        // Get or create the shared subscribe session
-        let session = match ctx.moq_sessions().get_subscribe_session().await {
+        let session = match sessions.get_subscribe_session().await {
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(
@@ -163,7 +160,6 @@ async fn run_moq_subscribe_track_receive_loop_with_retry(
             }
         };
 
-        // Subscribe to the track
         let track_reader = match session.subscribe_track(&track_name) {
             Ok(reader) => {
                 if retry_count > 0 {
@@ -198,7 +194,6 @@ async fn run_moq_subscribe_track_receive_loop_with_retry(
             }
         };
 
-        // Run the receive loop — returns when the track ends or errors
         let result = run_receive_loop(
             &track_name,
             track_reader,
@@ -253,7 +248,7 @@ enum ReceiveLoopResult {
     Error(String),
 }
 
-/// Inner receive loop — reads frames until the track ends, errors, or shutdown.
+/// Inner loop — reads frames until the track ends, errors, or shutdown.
 async fn run_receive_loop(
     track_name: &str,
     mut track_reader: MoqTrackReader,
@@ -301,11 +296,12 @@ async fn run_receive_loop(
                                 }
                                 Ok(None) => break,
                                 Err(e) => {
+                                    // Skip to next subgroup; don't kill the connection.
                                     tracing::debug!(
                                         track = %track_name,
                                         "[MoqSubscribeTrack] Subgroup frame read error, moving to next: {e}"
                                     );
-                                    break; // skip to next subgroup, don't kill connection
+                                    break;
                                 }
                             }
                         }
@@ -320,9 +316,8 @@ async fn run_receive_loop(
                                 track = %track_name,
                                 "[MoqSubscribeTrack] Cancelled subgroup, skipping: {e}"
                             );
-                            continue; // skip cancelled subgroup, don't kill connection
+                            continue;
                         }
-                        // Non-cancelled errors (e.g., "closed") need a full reconnect
                         return ReceiveLoopResult::Error(err_str);
                     }
                 }
@@ -331,7 +326,6 @@ async fn run_receive_loop(
     }
 }
 
-/// Calculate retry delay with exponential backoff.
 fn retry_delay(attempt: u32) -> Duration {
     let delay_ms = INITIAL_RETRY_DELAY_MS * 2u64.pow(attempt.min(10));
     Duration::from_millis(delay_ms.min(MAX_RETRY_DELAY_MS))

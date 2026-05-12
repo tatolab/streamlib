@@ -34,6 +34,7 @@ members = [
     "packages/api-server",       # @tatolab/api-server — HTTP control-plane processor carved out of the streamlib engine (#681)
     "packages/mp4",              # @tatolab/mp4 — MP4 writer processors
     "packages/webrtc",           # @tatolab/webrtc — WebRTC WHIP/WHEP transport processors
+    "packages/moq",              # @tatolab/moq — MoQ publish/subscribe track processors carved out of the streamlib engine (#680)
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
     # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
     "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)
@@ -42,7 +43,7 @@ members = [
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
-    # "examples/moq-roundtrip",             # Example: MoQ roundtrip test — temporarily disabled pending H.264 processor rewrite in #254
+    "examples/moq-roundtrip",             # Example: MoQ camera/audio/sensor roundtrip — canonical E2E for @tatolab/moq
     # "examples/whep-player",     # Example: WHEP (WebRTC egress) player (uses WebRTC WHEP)
     # "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization (uses CameraProcessor, etc.)
     # "examples/graph-json-export",         # Example: Graph data structure JSON export (uses custom processors with old syntax)
