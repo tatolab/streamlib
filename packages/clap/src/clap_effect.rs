@@ -1,25 +1,34 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::AudioFrame;
-use crate::core::clap::ClapPluginHost;
-use crate::core::clap::{ParameterInfo, PluginInfo};
-use crate::core::utils::ProcessorAudioConverterTargetFormat;
-use crate::core::{Result, RuntimeContextFullAccess};
+//! CLAP audio plugin processor — wraps `ClapPluginHost` with a streamlib
+//! processor lifecycle. Polls the input mailbox on a dedicated audio
+//! thread and dispatches converted stereo frames into the plugin.
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::context::RuntimeContextFullAccess;
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::InputMailboxes;
+use streamlib::sdk::processors::ManualProcessor;
+use streamlib::sdk::utils::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
+
+use crate::host::ClapPluginHost;
+use crate::parameter_automation::ClapParameterControl;
+use crate::plugin_info::{ParameterInfo, PluginInfo};
 
 /// Wrapper for InputMailboxes pointer that is Send.
 /// SAFETY: InputMailboxes is Send, and we ensure the pointed-to data outlives
 /// any thread that uses this pointer (polling thread is joined in teardown()).
-struct SendableInputsPtr(*const crate::iceoryx2::InputMailboxes);
+struct SendableInputsPtr(*const InputMailboxes);
 
 // SAFETY: InputMailboxes is Send, and we control the lifetime
 unsafe impl Send for SendableInputsPtr {}
 
 impl SendableInputsPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid.
-    unsafe fn get(&self) -> &crate::iceoryx2::InputMailboxes {
+    unsafe fn get(&self) -> &InputMailboxes {
         &*self.0
     }
 }
@@ -27,7 +36,7 @@ impl SendableInputsPtr {
 /// Wrapper for ProcessorAudioConverter pointer that is Send.
 /// SAFETY: We ensure the pointed-to data outlives any thread that uses this pointer,
 /// and only one thread accesses it.
-struct SendableAudioConverterPtr(*mut crate::core::utils::ProcessorAudioConverter);
+struct SendableAudioConverterPtr(*mut ProcessorAudioConverter);
 
 // SAFETY: Only one thread accesses it, and we join before drop
 unsafe impl Send for SendableAudioConverterPtr {}
@@ -36,7 +45,7 @@ unsafe impl Send for SendableAudioConverterPtr {}
 impl SendableAudioConverterPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid
     /// and no other thread is accessing it.
-    unsafe fn get_mut(&self) -> &mut crate::core::utils::ProcessorAudioConverter {
+    unsafe fn get_mut(&self) -> &mut ProcessorAudioConverter {
         &mut *self.0
     }
 }
@@ -58,7 +67,7 @@ impl SendableClapHostPtr {
     }
 }
 
-#[crate::processor("ClapEffect")]
+#[streamlib::sdk::processor("ClapEffect")]
 pub struct ClapEffectProcessor {
     host: Option<ClapPluginHost>,
     buffer_size: usize,
@@ -68,7 +77,6 @@ pub struct ClapEffectProcessor {
 
 impl ClapEffectProcessor::Processor {
     pub fn plugin_info(&self) -> Result<&PluginInfo> {
-        use crate::core::Error;
         self.host
             .as_ref()
             .map(|h| h.plugin_info())
@@ -76,7 +84,6 @@ impl ClapEffectProcessor::Processor {
     }
 
     pub fn list_parameters(&self) -> Result<Vec<ParameterInfo>> {
-        use crate::core::Error;
         self.host
             .as_ref()
             .map(|h| h.list_parameters())
@@ -84,7 +91,6 @@ impl ClapEffectProcessor::Processor {
     }
 
     pub fn get_parameter(&self, id: u32) -> Result<f64> {
-        use crate::core::Error;
         self.host
             .as_ref()
             .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
@@ -92,7 +98,6 @@ impl ClapEffectProcessor::Processor {
     }
 
     pub fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
-        use crate::core::Error;
         self.host
             .as_mut()
             .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
@@ -100,7 +105,6 @@ impl ClapEffectProcessor::Processor {
     }
 
     pub fn begin_edit(&mut self, id: u32) -> Result<()> {
-        use crate::core::Error;
         self.host
             .as_mut()
             .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
@@ -108,7 +112,6 @@ impl ClapEffectProcessor::Processor {
     }
 
     pub fn end_edit(&mut self, id: u32) -> Result<()> {
-        use crate::core::Error;
         self.host
             .as_mut()
             .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
@@ -116,7 +119,6 @@ impl ClapEffectProcessor::Processor {
     }
 
     pub fn activate(&mut self, sample_rate: u32, max_frames: usize) -> Result<()> {
-        use crate::core::Error;
         self.host
             .as_mut()
             .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
@@ -124,7 +126,6 @@ impl ClapEffectProcessor::Processor {
     }
 
     pub fn deactivate(&mut self) -> Result<()> {
-        use crate::core::Error;
         self.host
             .as_mut()
             .ok_or_else(|| Error::Configuration("Plugin not initialized".into()))?
@@ -132,7 +133,7 @@ impl ClapEffectProcessor::Processor {
     }
 }
 
-impl crate::core::ManualProcessor for ClapEffectProcessor::Processor {
+impl ManualProcessor for ClapEffectProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,
@@ -296,7 +297,7 @@ impl crate::core::ManualProcessor for ClapEffectProcessor::Processor {
     }
 }
 
-impl crate::core::clap::ClapParameterControl for ClapEffectProcessor::Processor {
+impl ClapParameterControl for ClapEffectProcessor::Processor {
     fn set_parameter(&mut self, id: u32, value: f64) -> Result<()> {
         ClapEffectProcessor::Processor::set_parameter(self, id, value)
     }
@@ -309,5 +310,3 @@ impl crate::core::clap::ClapParameterControl for ClapEffectProcessor::Processor 
         ClapEffectProcessor::Processor::end_edit(self, id)
     }
 }
-
-pub use crate::core::clap::{ClapPluginInfo, ClapScanner};

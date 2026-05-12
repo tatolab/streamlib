@@ -38,8 +38,6 @@ schemas:
   # reverse-DNS schema file names.
   BgraFileSourceConfig:
     file: schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
-  ClapEffectConfig:
-    file: schemas/com.streamlib.clap.effect.config@1.0.0.yaml
   ScreenCaptureConfig:
     file: schemas/com.tatolab.screen_capture.config@1.0.0.yaml
   SimplePassthroughConfig:
@@ -90,24 +88,6 @@ processors:
       - name: output
         schema: VideoFrame
         description: Video frame output (unchanged)
-
-  - name: ClapEffect
-    version: 1.0.0
-    description: "CLAP audio plugin processor with parameter control and automation"
-    execution: manual
-    config:
-      name: config
-      schema: ClapEffectConfig
-    inputs:
-      - name: audio_in
-        schema: AudioFrame
-        description: Stereo audio frame to process through CLAP plugin (2 channels)
-        read_mode: read_next_in_order
-        buffer_size: 32
-    outputs:
-      - name: audio_out
-        schema: AudioFrame
-        description: Processed stereo audio frame from CLAP plugin (2 channels)
 
   # === Linux File Source ===
 

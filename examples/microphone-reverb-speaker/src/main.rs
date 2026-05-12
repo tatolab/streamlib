@@ -18,13 +18,13 @@ fn main() {
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::sdk::permissions::request_audio_permission;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::processors::ClapEffectProcessor;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-use streamlib::sdk::ClapScanner;
 use streamlib::sdk::error::Result;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib::sdk::runtime::Runner;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 use streamlib_audio::{AudioCaptureProcessor, AudioOutputProcessor};
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use streamlib_clap::{ClapEffectProcessor, ClapScanner};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn main() -> Result<()> {

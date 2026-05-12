@@ -3,8 +3,8 @@
 
 use clack_host::entry::PluginEntry;
 
-use crate::core::{Result, Error};
 use std::path::{Path, PathBuf};
+use streamlib::sdk::error::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct ClapPluginInfo {
@@ -51,25 +51,6 @@ impl ClapScanner {
                 paths.push(PathBuf::from(home).join("Library/Audio/Plug-Ins/CLAP"));
             }
             paths.push(PathBuf::from("/Library/Audio/Plug-Ins/CLAP"));
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            if let Some(home) = std::env::var_os("HOME") {
-                paths.push(PathBuf::from(home).join(".clap"));
-            }
-            paths.push(PathBuf::from("/usr/lib/clap"));
-            paths.push(PathBuf::from("/usr/local/lib/clap"));
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(common_files) = std::env::var_os("CommonProgramFiles") {
-                paths.push(PathBuf::from(common_files).join("CLAP"));
-            }
-            if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
-                paths.push(PathBuf::from(local_app_data).join("Programs/Common/CLAP"));
-            }
         }
 
         paths

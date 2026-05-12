@@ -17,14 +17,14 @@ use clack_host::{
 
 use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 
-use super::scanner::ClapScanner;
-use crate::_generated_::AudioFrame;
-use crate::core::clap::{ParameterInfo, PluginInfo};
-use crate::core::{Result, Error};
-
 use parking_lot::Mutex as ParkingLotMutex;
 use std::path::Path;
 use std::sync::Arc;
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::error::{Error, Result};
+
+use crate::plugin_info::{ParameterInfo, PluginInfo};
+use crate::scanner::ClapScanner;
 
 struct SharedState {
     parameters: std::collections::HashMap<u32, f64>,

@@ -35,6 +35,7 @@ members = [
     "packages/mp4",              # @tatolab/mp4 — MP4 writer processors
     "packages/webrtc",           # @tatolab/webrtc — WebRTC WHIP/WHEP transport processors
     "packages/moq",              # @tatolab/moq — MoQ publish/subscribe track processors carved out of the streamlib engine (#680)
+    "packages/clap",             # @tatolab/clap — CLAP audio plugin host processor (Apple-only)
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
     # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
     "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)

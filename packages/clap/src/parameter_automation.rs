@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::parameter_modulation::ParameterModulator;
-use crate::core::Result;
+use crate::parameter_modulation::ParameterModulator;
 use std::collections::HashMap;
+use streamlib::sdk::error::Result;
 
 pub trait ClapParameterControl {
     fn set_parameter(&mut self, id: u32, value: f64) -> Result<()>;
@@ -168,8 +168,8 @@ impl Default for ParameterAutomation {
 
 #[cfg(test)]
 mod tests {
-    use super::super::parameter_modulation::LfoWaveform;
     use super::*;
+    use crate::parameter_modulation::LfoWaveform;
 
     #[allow(dead_code)]
     struct MockProcessor {
