@@ -1,12 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Test-only config schema for `attribute_macro_test::ConfiguredProcessor`.
-# Mirrors the declared shape in `tests/attribute_macro_test.rs::ConfiguredProcessorConfig`.
+# Test-only config schema for the attribute-macro test fixture
+# `TestConfiguredProcessor`. Verifies the `#[streamlib::sdk::processor]`
+# macro emits the correct config-binding code against a real schema.
 
 metadata:
-  name: com.streamlib.test.configured_processor.config
-  version: 1.0.0
+  type: TestConfiguredProcessorConfig
   description: "Test config schema for the attribute macro tests."
 
 properties:

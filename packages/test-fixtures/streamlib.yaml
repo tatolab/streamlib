@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+package:
+  org: tatolab
+  name: test-fixtures
+  version: 1.0.0
+  description: "Attribute-macro test fixtures (TestConfiguredProcessor) for streamlib SDK macro contract tests"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  # Local config schema this package owns.
+  TestConfiguredProcessorConfig:
+    file: schemas/test_configured_processor_config.yaml
+
+processors:
+  - name: TestConfiguredProcessor
+    version: 1.0.0
+    description: "Attribute-macro test fixture verifying config-emit against a streamlib.yaml package block"
+    execution: continuous
+    config:
+      name: config
+      schema: TestConfiguredProcessorConfig

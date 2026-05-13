@@ -48,9 +48,6 @@ schemas:
     package: "@tatolab/escalate"
   EscalateResponse:
     package: "@tatolab/escalate"
-  # Test-only config schema for the attribute macro tests.
-  TestConfiguredProcessorConfig:
-    file: schemas/com.streamlib.test.configured_processor.config@1.0.0.yaml
 
 processors:
   # === Core processors ===
@@ -146,11 +143,3 @@ processors:
     outputs:
       - name: video_out
         schema: VideoFrame
-
-  - name: TestConfiguredProcessor
-    version: 1.0.0
-    description: "Test processor with config for attribute macro tests"
-    execution: continuous
-    config:
-      name: config
-      schema: TestConfiguredProcessorConfig
