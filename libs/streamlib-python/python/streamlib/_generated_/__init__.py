@@ -7,7 +7,6 @@ from .com_streamlib_bgra_file_source_config import BgraFileSourceConfig
 from .com_streamlib_escalate_request import EscalateRequest
 from .com_streamlib_escalate_response import EscalateResponse
 from .com_streamlib_test_configured_processor_config import ConfiguredProcessorConfig
-from .com_tatolab_screen_capture_config import ScreenCaptureConfig
 from .com_tatolab_simple_passthrough_config import SimplePassthroughConfig
 from .tatolab__core import AudioFrame
 from .tatolab__core import EncodedAudioFrame
@@ -19,7 +18,6 @@ __all__ = [
     "EscalateRequest",
     "EscalateResponse",
     "ConfiguredProcessorConfig",
-    "ScreenCaptureConfig",
     "SimplePassthroughConfig",
     "AudioFrame",
     "EncodedAudioFrame",

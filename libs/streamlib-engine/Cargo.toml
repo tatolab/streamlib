@@ -106,13 +106,10 @@ objc2-core-foundation.workspace = true
 objc2-core-video.workspace = true
 objc2-foundation.workspace = true
 objc2-av-foundation = { workspace = true, features = ["objc2-core-media", "objc2-core-video"] }
-objc2-core-media.workspace = true
 objc2-app-kit.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true
 objc2-core-graphics.workspace = true
-objc2-screen-capture-kit = "0.3.2"
-block2 = "0.6"
 libc.workspace = true
 
 # Apple-specific crates

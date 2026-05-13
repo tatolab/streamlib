@@ -127,9 +127,6 @@ pub(crate) mod linux;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod apple;
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub use apple::AppleScreenCaptureProcessor as ScreenCaptureProcessor;
-
 /// Per-runtime surface-share service primitives. Exposed for adapter
 /// integration tests and 3rd-party tooling that needs to drive the
 /// service in isolation; production callers go through [`Runner`].
@@ -257,9 +254,6 @@ pub mod sdk {
         // Port schema spec — semantically processor-related; lives in
         // `core::descriptors`.
         pub use crate::core::descriptors::PortSchemaSpec;
-
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        pub use crate::ScreenCaptureProcessor;
 
         #[cfg(target_os = "linux")]
         pub use crate::BgraFileSourceProcessor;

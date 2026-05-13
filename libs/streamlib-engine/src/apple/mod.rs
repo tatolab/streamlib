@@ -31,11 +31,6 @@ pub mod thread_priority;
 pub use audio_clock::CoreAudioClock;
 pub use pixel_transfer::PixelTransferSession;
 
-pub use processors::{
-    AppleDisplayProcessor,
-    AppleScreenCaptureProcessor,
-};
-
 // TODO: Re-export when processors are migrated to iceoryx2
 // pub use crate::metal::MetalDevice;
 // pub use videotoolbox::VideoToolboxEncoder;

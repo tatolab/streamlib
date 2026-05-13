@@ -7,6 +7,5 @@ export * from "./com_streamlib_bgra_file_source_config.ts";
 export * from "./com_streamlib_escalate_request.ts";
 export * from "./com_streamlib_escalate_response.ts";
 export * from "./com_streamlib_test_configured_processor_config.ts";
-export * from "./com_tatolab_screen_capture_config.ts";
 export * from "./com_tatolab_simple_passthrough_config.ts";
 export * from "./tatolab__core/index.ts";
