@@ -88,7 +88,8 @@ the subprocess can `lock` / read / `unlock` / `release`.
 
 `libs/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
 typed by JTD schemas at
-`libs/streamlib-engine/schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`.
+`packages/escalate/schemas/escalate_{request,response}.yaml` (the
+`@tatolab/escalate` peer protocol package).
 Length-prefixed JSON request/response over the subprocess's
 stdin/stdout pipes, with discriminator-tagged op enum:
 

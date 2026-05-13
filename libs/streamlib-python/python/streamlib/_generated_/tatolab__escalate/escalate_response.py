@@ -8,7 +8,8 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
+from typing import Any, ClassVar, Dict, List, Optional, Type, Union, get_args, get_origin
+from streamlib.schema_ident import SchemaIdent
 
 
 @dataclass
@@ -16,6 +17,12 @@ class EscalateResponse:
     """
     Polyglot subprocess escalate-on-behalf response (host → subprocess)
     """
+    __streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent(
+        org="tatolab",
+        package="escalate",
+        type_="EscalateResponse",
+        version="1.0.0",
+    )
 
     result: 'str'
 

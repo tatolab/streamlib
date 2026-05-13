@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/escalate — JSON-RPC wire types for subprocess → host IPC.
+# Pure wire-schemas package (no processors, no platform code). Peer to
+# @tatolab/core: where core ships the data-plane wire vocabulary
+# (VideoFrame / AudioFrame / Encoded*), escalate ships the control-plane
+# wire vocabulary (the request/response envelopes used by the polyglot
+# SDKs to reach GpuContextFullAccess through the LimitedAccess capability
+# boundary).
+package:
+  org: tatolab
+  name: escalate
+  version: 1.0.0
+  description: "Escalate IPC wire types (subprocess → host JSON-RPC envelopes)"
+
+schemas:
+  EscalateRequest:
+    file: schemas/escalate_request.yaml
+  EscalateResponse:
+    file: schemas/escalate_response.yaml

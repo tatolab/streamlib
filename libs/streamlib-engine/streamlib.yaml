@@ -10,11 +10,14 @@ package:
 
 dependencies:
   "@tatolab/core": "^1.0.0"
+  "@tatolab/escalate": "^1.0.0"
 
 # Dev-time path override; `streamlib pack` rejects this.
 patch:
   "@tatolab/core":
     path: ../../packages/core
+  "@tatolab/escalate":
+    path: ../../packages/escalate
 
 # Schema YAML files this package owns + bare-name imports from declared
 # dependencies. Drives the JTD-codegen pipeline
@@ -40,11 +43,11 @@ schemas:
     file: schemas/com.streamlib.bgra_file_source.config@1.0.0.yaml
   SimplePassthroughConfig:
     file: schemas/com.tatolab.simple_passthrough.config@1.0.0.yaml
-  # Polyglot escalate IPC wire schemas (discriminator form).
+  # Polyglot escalate IPC wire schemas imported from @tatolab/escalate.
   EscalateRequest:
-    file: schemas/com.streamlib.escalate_request@1.0.0.yaml
+    package: "@tatolab/escalate"
   EscalateResponse:
-    file: schemas/com.streamlib.escalate_response@1.0.0.yaml
+    package: "@tatolab/escalate"
   # Test-only config schema for the attribute macro tests.
   TestConfiguredProcessorConfig:
     file: schemas/com.streamlib.test.configured_processor.config@1.0.0.yaml

@@ -11,8 +11,9 @@
  * with `escalate_response` on stdin.
  *
  * Wire types (`EscalateRequest`, `EscalateResponse`, …) are generated
- * from `schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`
- * via `cargo xtask generate-schemas --runtime typescript`. This file
+ * from `@tatolab/escalate`
+ * (`packages/escalate/schemas/escalate_{request,response}.yaml`) via
+ * `cargo xtask generate-schemas --runtime typescript`. This file
  * owns only the channel coordination logic (request-id bookkeeping,
  * lifecycle-message deferral, promise plumbing).
  */
@@ -46,18 +47,18 @@ import type {
   EscalateRequestRunRayTracingKernel,
   EscalateRequestRunRayTracingKernelBinding,
   EscalateRequestTryRunCpuReadbackCopy,
-} from "./_generated_/com_streamlib_escalate_request.ts";
+} from "./_generated_/tatolab__escalate/escalate_request.ts";
 import {
   EscalateRequestRunCpuReadbackCopyDirection,
   EscalateRequestRunGraphicsDrawDrawKind,
   EscalateRequestTryRunCpuReadbackCopyDirection,
-} from "./_generated_/com_streamlib_escalate_request.ts";
+} from "./_generated_/tatolab__escalate/escalate_request.ts";
 import type {
   EscalateResponse,
   EscalateResponseContended,
   EscalateResponseErr,
   EscalateResponseOk,
-} from "./_generated_/com_streamlib_escalate_response.ts";
+} from "./_generated_/tatolab__escalate/escalate_response.ts";
 import { monotonicNowNs } from "./clock.ts";
 
 export type {
