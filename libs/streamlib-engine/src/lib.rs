@@ -69,7 +69,6 @@ pub use core::{
     video_audio_delta_ms,
     video_audio_synchronized,
     video_audio_synchronized_with_tolerance,
-    AudioCodec,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
@@ -77,11 +76,8 @@ pub use core::{
     GlTextureBinding,
     GpuContext,
     GraphFileDefinition,
-    H264Profile,
     InputPortMarker,
     ManualProcessor,
-    Mp4Muxer,
-    Mp4MuxerConfig,
     NativeTextureHandle,
     OutputPortMarker,
     PooledTextureHandle,
@@ -101,9 +97,7 @@ pub use core::{
     TexturePoolDescriptor,
     TextureUsages,
     TimeContext,
-    VideoCodec,
     DEFAULT_SYNC_TOLERANCE_MS,
-    FOURCC_H264,
     PROCESSOR_REGISTRY,
 };
 

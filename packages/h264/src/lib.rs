@@ -15,3 +15,10 @@ pub mod linux;
 pub use linux::{H264DecoderProcessor, H264EncoderProcessor};
 
 pub use _generated_::{H264DecoderConfig, H264EncoderConfig};
+
+// `_apple_impl_pending_` holds the VideoToolbox encoder/decoder + the
+// cross-platform Apple-flavored codec wrappers parked out of the engine
+// in #786. Gated so it never compiles; re-enable + rewire imports to
+// the public SDK surface once Apple support is activated.
+#[cfg(any())]
+mod _apple_impl_pending_;

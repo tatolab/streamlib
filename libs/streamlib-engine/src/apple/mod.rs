@@ -8,11 +8,12 @@ pub mod audio_clock;
 pub mod corevideo_ffi;
 pub mod iosurface;
 pub mod media_clock;
-pub mod muxer;
+// AppleMp4Muxer + VideoToolboxEncoder/Decoder live in their domain
+// packages' `_apple_impl_pending_/` directories (#786): muxer in
+// packages/mp4, videotoolbox in packages/h264.
 pub mod pixel_transfer;
 pub mod texture;
 pub mod texture_pool_macos;
-pub mod videotoolbox;
 pub mod vimage_ffi;
 pub mod xpc_ffi;
 
@@ -31,7 +32,6 @@ pub use pixel_transfer::PixelTransferSession;
 
 // TODO: Re-export when processors are migrated to iceoryx2
 // pub use crate::metal::MetalDevice;
-// pub use videotoolbox::VideoToolboxEncoder;
 
 #[cfg(test)]
 mod tests {
