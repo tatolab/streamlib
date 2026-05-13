@@ -18,10 +18,6 @@ use serial_test::serial;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
-// Force-link a processor crate so `Runner::new()` finds at least one
-// entry in PROCESSOR_REGISTRY.
-#[allow(unused_imports)]
-use streamlib_test_fixtures::SimplePassthroughProcessor;
 
 fn unknown_ident() -> streamlib::sdk::descriptors::SchemaIdent {
     streamlib::sdk::schema_ident!(

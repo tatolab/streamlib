@@ -22,11 +22,6 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib_engine::core::PortDirection;
-// Force-link a processor crate so `Runner::new()` finds at least one
-// entry in PROCESSOR_REGISTRY (registry-empty would otherwise fail
-// `register_all_processors`).
-#[allow(unused_imports)]
-use streamlib_test_fixtures::SimplePassthroughProcessor;
 
 fn unknown_ident() -> streamlib::sdk::descriptors::SchemaIdent {
     streamlib::sdk::schema_ident!(

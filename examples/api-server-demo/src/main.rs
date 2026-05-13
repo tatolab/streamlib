@@ -10,10 +10,10 @@ use futures_util::StreamExt;
 use std::sync::Arc;
 use streamlib::sdk::runtime::Runner;
 use streamlib_api_server::{ApiServerConfig, ApiServerProcessor};
-// Force-link `streamlib-test-fixtures` so the `inventory::submit!` for
-// `SimplePassthroughProcessor` runs and the demo's POST /api/processor body
-// resolves through PROCESSOR_REGISTRY. The macro-emitted module name
-// `SimplePassthroughProcessor` is what carries the inventory submit.
+// The demo POSTs `"processor_type": "SimplePassthroughProcessor"` through the
+// API server's dynamic-registry endpoint, so the processor's
+// `inventory::submit!` must run at link time. Pulling the module into scope
+// keeps the rlib in the dep graph.
 #[allow(unused_imports)]
 use streamlib_test_fixtures::SimplePassthroughProcessor;
 

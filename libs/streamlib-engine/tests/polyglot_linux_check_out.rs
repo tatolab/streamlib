@@ -38,9 +38,6 @@ use std::process::{Command, Stdio};
 
 use streamlib_engine::core::runtime::Runner;
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
-// Force-link so PROCESSOR_REGISTRY is non-empty for `Runner::new()`.
-#[allow(unused_imports)]
-use streamlib_test_fixtures::SimplePassthroughProcessor;
 
 #[path = "common/polyglot_dma_buf_producer.rs"]
 mod polyglot_dma_buf_producer;

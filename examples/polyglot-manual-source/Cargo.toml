@@ -9,8 +9,4 @@ publish = false
 
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
-# Force-link so PROCESSOR_REGISTRY is non-empty when `Runner::new()`
-# runs — the example's own processors arrive via load_project /
-# load_package, but the registry is checked at Runner construction.
-streamlib-test-fixtures = { path = "../../packages/test-fixtures" }
 serde_json = "1.0"

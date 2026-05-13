@@ -158,9 +158,6 @@ core-graphics = "0.24"
 # paths through the SDK (which transitively re-exports engine items).
 # Dev-dep cycles are permitted by Cargo because they don't propagate.
 streamlib = { path = "../streamlib-sdk" }
-# Pulls in SimplePassthroughProcessor (and friends) so engine integration
-# tests that construct a Runner see a non-empty PROCESSOR_REGISTRY.
-streamlib-test-fixtures = { path = "../../packages/test-fixtures" }
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
