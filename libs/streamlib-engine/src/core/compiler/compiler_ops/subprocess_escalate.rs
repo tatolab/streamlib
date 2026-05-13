@@ -11,8 +11,9 @@
 //! Wire format is the existing length-prefixed JSON stdio bridge used for
 //! lifecycle commands (see `SubprocessBridge`). Requests and responses are
 //! discriminated by `op` and `result` fields respectively; the shape is
-//! owned by `schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`
-//! and the generated Rust types live in `_generated_`.
+//! owned by `@tatolab/escalate`
+//! (`packages/escalate/schemas/escalate_{request,response}.yaml`) and the
+//! generated Rust types live under `crate::_generated_::tatolab__escalate`.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};

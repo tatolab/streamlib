@@ -11,8 +11,9 @@
  * with `escalate_response` on stdin.
  *
  * Wire types (`EscalateRequest`, `EscalateResponse`, …) are generated
- * from `schemas/com.streamlib.escalate_{request,response}@1.0.0.yaml`
- * via `cargo xtask generate-schemas --runtime typescript`. This file
+ * from `@tatolab/escalate`
+ * (`packages/escalate/schemas/escalate_{request,response}.yaml`) via
+ * `cargo xtask generate-schemas --runtime typescript`. This file
  * owns only the channel coordination logic (request-id bookkeeping,
  * lifecycle-message deferral, promise plumbing).
  */
