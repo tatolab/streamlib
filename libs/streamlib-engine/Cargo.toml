@@ -43,6 +43,12 @@ streamlib-macros = { path = "../streamlib-macros" }
 # Shared iceoryx2 payload types (for cross-process IPC)
 streamlib-ipc-types = { path = "../streamlib-ipc-types" }
 
+# Polyglot escalate IPC wire types — request/response envelope for
+# subprocess→host RPC. Peer protocol package alongside @tatolab/core;
+# the engine compiles EscalateRequest / EscalateResponse as Rust types
+# (the subprocess_escalate handler pattern-matches over every variant).
+streamlib-escalate = { path = "../../packages/escalate" }
+
 # Consumer-side carve-out — owns the format primitives
 # (TextureFormat / TextureUsages / PixelFormat), the trait machinery
 # (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the

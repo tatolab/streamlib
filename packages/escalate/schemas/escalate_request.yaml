@@ -12,8 +12,7 @@
 # is written back.
 
 metadata:
-  name: com.streamlib.escalate_request
-  version: 1.0.0
+  type: EscalateRequest
   description: "Polyglot subprocess escalate-on-behalf request (subprocess → host)"
 
 discriminator: op

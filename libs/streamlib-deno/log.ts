@@ -33,7 +33,7 @@ import type {
   EscalateRequestLog,
   EscalateRequestLogLevel,
   EscalateRequestLogSource,
-} from "./_generated_/com_streamlib_escalate_request.ts";
+} from "./_generated_/tatolab__escalate/escalate_request.ts";
 
 // ============================================================================
 // Public constants

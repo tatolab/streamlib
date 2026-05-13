@@ -15,3 +15,9 @@ packages:
       kind: path
       path: ../../packages/core
     content_hash: sha256:42929566e77db3311b1bcf576124ee36d5505f1cd1a2e70ccca50ffcba431ec5
+  '@tatolab/escalate':
+    version: 1.0.0
+    source:
+      kind: path
+      path: ../../packages/escalate
+    content_hash: sha256:49ae3f3175d983a0b72cf5666e565b8bf0deec67a90cf30fd20b7c03dce6607b

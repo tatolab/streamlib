@@ -1,0 +1,23 @@
+[package]
+name = "streamlib-escalate"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Polyglot escalate IPC wire types for streamlib — request/response envelope for subprocess→host RPC."
+keywords = ["streamlib", "ipc", "polyglot", "subprocess", "rpc"]
+categories = ["multimedia", "api-bindings"]
+
+[lib]
+name = "streamlib_escalate"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Generated dataclasses derive Serialize/Deserialize; some variant fields
+# carry free-form JSON payloads (typed as `serde_json::Value`).
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

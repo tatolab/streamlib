@@ -9,7 +9,8 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type, Union, get_args, get_origin
+from typing import Any, ClassVar, Dict, List, Optional, Type, Union, get_args, get_origin
+from streamlib.schema_ident import SchemaIdent
 
 
 @dataclass
@@ -17,6 +18,12 @@ class EscalateRequest:
     """
     Polyglot subprocess escalate-on-behalf request (subprocess → host)
     """
+    __streamlib_schema_ident__: ClassVar[SchemaIdent] = SchemaIdent(
+        org="tatolab",
+        package="escalate",
+        type_="EscalateRequest",
+        version="1.0.0",
+    )
 
     op: 'str'
 

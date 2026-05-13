@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/escalate — polyglot escalate IPC wire types.
+#
+# Peer protocol package alongside @tatolab/core: where @tatolab/core is
+# wire vocabulary for the data plane (VideoFrame, AudioFrame, ...),
+# @tatolab/escalate is wire vocabulary for the control plane
+# (request/response envelope for subprocess→host RPC).
+#
+# Customer-facing SDKs do not import these types at runtime — the wire
+# format is JSON over stdin/stdout and the Python/Deno SDKs construct
+# / parse dicts directly. The generated dataclasses ship as IDE / test
+# decoration only.
+package:
+  org: tatolab
+  name: escalate
+  version: 1.0.0
+  description: "Polyglot escalate IPC wire types — subprocess→host RPC envelope"
+
+schemas:
+  EscalateRequest:
+    file: schemas/escalate_request.yaml
+  EscalateResponse:
+    file: schemas/escalate_response.yaml
