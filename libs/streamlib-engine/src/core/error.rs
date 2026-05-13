@@ -81,9 +81,6 @@ pub enum Error {
     #[error("Runtime error: {0}")]
     Runtime(String),
 
-    #[error("Processor registry failed: {0}")]
-    RegistryFailed(String),
-
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

@@ -4,11 +4,11 @@
 //! Linux-specific implementations.
 
 pub mod audio_clock;
-pub mod processors;
 pub mod rtkit;
 pub mod surface_share;
 pub mod thread_priority;
 
 pub use audio_clock::LinuxTimerFdAudioClock;
 
-// Display processor lives in `@tatolab/display` (#674).
+// Domain processors (camera, display, codecs, debug utilities, etc.)
+// live in their own `packages/<name>/` carve-outs.

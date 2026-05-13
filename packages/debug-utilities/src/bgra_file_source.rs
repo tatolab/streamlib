@@ -7,21 +7,19 @@
 // VideoFrame through the processor graph. Used for testing encode/decode
 // pipelines with pre-generated fixture files.
 
-use crate::_generated_::VideoFrame;
-use crate::core::context::GpuContextLimitedAccess;
-use crate::core::rhi::PixelFormat;
-use crate::core::{Result, RuntimeContextFullAccess, Error};
-use crate::iceoryx2::OutputWriter;
+use streamlib::sdk::_generated_::VideoFrame;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::engine::HostPixelBufferRefExt;
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib::sdk::processors::ManualProcessor;
+use streamlib::sdk::rhi::PixelFormat;
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-// ============================================================================
-// PROCESSOR
-// ============================================================================
-
-#[crate::processor("BgraFileSource")]
+#[streamlib::sdk::processor("BgraFileSource")]
 pub struct BgraFileSourceProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     is_running: Arc<AtomicBool>,
@@ -29,7 +27,7 @@ pub struct BgraFileSourceProcessor {
     source_thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
-impl crate::core::ManualProcessor for BgraFileSourceProcessor::Processor {
+impl ManualProcessor for BgraFileSourceProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -144,7 +142,6 @@ fn source_thread_loop(
             break;
         }
 
-        // Acquire pixel buffer and write BGRA data
         let (pool_id, pixel_buffer) =
             match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32) {
                 Ok(result) => result,
@@ -154,7 +151,7 @@ fn source_thread_loop(
                 }
             };
 
-        let dst_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
+        let dst_ptr = pixel_buffer.buffer_ref().vulkan_inner().mapped_ptr();
         unsafe {
             std::ptr::copy_nonoverlapping(frame_buf.as_ptr(), dst_ptr, frame_size);
         }
@@ -198,8 +195,6 @@ fn source_thread_loop(
         frame_counter.store(frame_idx as u64 + 1, Ordering::Relaxed);
 
         // Throttle to real-time FPS to avoid overflowing downstream mailboxes.
-        // The encoder processes frames reactively — if we blast faster than it
-        // can encode, the mailbox fills and frames are lost.
         let target_elapsed =
             std::time::Duration::from_nanos((frame_idx as u64 + 1) * frame_interval_ns as u64);
         let actual_elapsed = clock_start.elapsed();
@@ -209,7 +204,7 @@ fn source_thread_loop(
 
         if frame_idx == 0 {
             tracing::info!("[BgraFileSource] First frame published");
-        } else if (frame_idx + 1) % (fps * 1) == 0 {
+        } else if (frame_idx + 1) % fps == 0 {
             tracing::info!(
                 "[BgraFileSource] {}/{} frames ({:.1}s)",
                 frame_idx + 1,

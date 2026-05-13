@@ -35,8 +35,4 @@ pub struct EmptyConfig;
 
 // Audio processors (capture, output, mixer, channel converter, resampler,
 // buffer rechunker, chord generator) live in `@tatolab/audio` (#672).
-
-// Transformers
-pub mod simple_passthrough;
-
-pub use simple_passthrough::SimplePassthroughProcessor;
+// SimplePassthrough lives in `@tatolab/debug-utilities` (#783).

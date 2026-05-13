@@ -38,6 +38,7 @@ members = [
     "packages/clap",             # @tatolab/clap — CLAP audio plugin host processor (Apple-only)
     "packages/screen-capture",   # @tatolab/screen-capture — screen capture processor (Apple-only today; Linux follows in #374)
     "packages/test-fixtures",    # @tatolab/test-fixtures — attribute-macro test fixtures (TestConfiguredProcessor)
+    "packages/debug-utilities",  # @tatolab/debug-utilities — utility processors for development, demos, and rigorous-input testing (BgraFileSource, SimplePassthrough)
     # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
     # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
     "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)

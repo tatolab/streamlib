@@ -10,6 +10,12 @@ use futures_util::StreamExt;
 use std::sync::Arc;
 use streamlib::sdk::runtime::Runner;
 use streamlib_api_server::{ApiServerConfig, ApiServerProcessor};
+// Force-link so SimplePassthroughProcessor's `inventory::submit!` fires
+// at link time; the demo POSTs `"processor_type": "SimplePassthroughProcessor"`
+// through the API server's dynamic-registry endpoint and that resolution
+// only succeeds if the processor is present in PROCESSOR_REGISTRY.
+#[allow(unused_imports)]
+use streamlib_debug_utilities::SimplePassthroughProcessor;
 
 use streamlib::sdk::error::Result;
 use tokio::sync::Mutex;

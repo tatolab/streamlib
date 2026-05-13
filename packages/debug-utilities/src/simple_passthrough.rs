@@ -1,17 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::VideoFrame;
-use crate::core::{Result, RuntimeContextFullAccess};
+use streamlib::sdk::_generated_::VideoFrame;
+use streamlib::sdk::context::RuntimeContextFullAccess;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::processors::ManualProcessor;
 
-#[crate::processor("SimplePassthrough")]
+#[streamlib::sdk::processor("SimplePassthrough")]
 pub struct SimplePassthroughProcessor;
 
-impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
+impl ManualProcessor for SimplePassthroughProcessor::Processor {
     // Uses default setup() and teardown() implementations from Processor trait
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Read from iceoryx2 input mailbox and write to output
         if self.inputs.has_data("input") {
             let frame: VideoFrame = self.inputs.read("input")?;
             self.outputs.write("output", &frame)?;

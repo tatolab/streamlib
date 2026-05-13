@@ -86,19 +86,16 @@ impl ProcessorInstanceFactory {
     }
 
     /// Register all processors collected via inventory at link time.
-    /// Safe to call multiple times - duplicates are skipped.
-    /// Returns registration result with count, or an error if registration failed.
-    pub fn register_all_processors(&self) -> crate::Result<RegisterResult> {
+    /// Safe to call multiple times - duplicates are skipped. Empty
+    /// inventory is a valid state: apps that compose processors via
+    /// `load_project()` instead of compile-time inventory have an
+    /// empty registry at construction and populate it later.
+    pub fn register_all_processors(&self) -> RegisterResult {
         for registration in inventory::iter::<macro_codegen::FactoryRegistration> {
             (registration.register_fn)(self);
         }
         let count = self.constructors.read().len();
-        if count == 0 {
-            return Err(crate::core::Error::RegistryFailed(
-                "No processors registered. Ensure processor crates are linked and use #[streamlib::sdk::processor]".into()
-            ));
-        }
-        Ok(RegisterResult { count })
+        RegisterResult { count }
     }
 
     /// Register a processor type with its constructor.
