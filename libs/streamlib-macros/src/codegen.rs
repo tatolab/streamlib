@@ -922,3 +922,64 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
         #get_input_mailboxes_impl
     }
 }
+
+#[cfg(test)]
+mod processor_struct_emit_tests {
+    use super::*;
+    use streamlib_processor_schema::ProcessorSchema;
+
+    fn minimal_schema() -> ProcessorSchema {
+        ProcessorSchema {
+            name: "MinimalProbe".to_string(),
+            version: "0.1.0".to_string(),
+            description: None,
+            runtime: Default::default(),
+            entrypoint: None,
+            execution: Default::default(),
+            scheduling: None,
+            config: None,
+            state: Vec::new(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+
+    /// Locks #734: the macro must NOT emit a `pub audio:
+    /// ProcessorAudioConverter` field on the generated `Processor` struct.
+    /// Mentally revert the codegen.rs deletion and this assertion flips.
+    #[test]
+    fn processor_struct_does_not_carry_audio_field() {
+        let schema = minimal_schema();
+        let rendered = generate_processor_struct_from_schema(&schema, &None, &[]).to_string();
+        assert!(
+            !rendered.contains("audio"),
+            "generated Processor struct must not declare an `audio` field — got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("ProcessorAudioConverter"),
+            "generated Processor struct must not reference ProcessorAudioConverter — got: {}",
+            rendered
+        );
+    }
+
+    /// Locks #734: the macro's `from_config` initializer must NOT initialize
+    /// an `audio` field via `ProcessorAudioConverter::new()`. Mentally revert
+    /// the codegen.rs deletion and this assertion flips.
+    #[test]
+    fn from_config_initializer_does_not_construct_audio_converter() {
+        let schema = minimal_schema();
+        let rendered =
+            generate_from_config_from_schema(&schema, &None, &[]).to_string();
+        assert!(
+            !rendered.contains("ProcessorAudioConverter"),
+            "from_config must not reference ProcessorAudioConverter — got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("audio :"),
+            "from_config must not initialize an `audio` field — got: {}",
+            rendered
+        );
+    }
+}
