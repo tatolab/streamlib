@@ -85,7 +85,8 @@ use streamlib::sdk::engine::host_rhi::{
     VulkanGraphicsKernel,
     VulkanTextureReadback,
 };
-use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
+use streamlib::sdk::processors::ProcessorSpec;
+use streamlib_test_fixtures::BgraFileSourceProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 

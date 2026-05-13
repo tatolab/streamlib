@@ -7,7 +7,7 @@
 //! with YAML schema definitions.
 
 use streamlib_engine::core::GeneratedProcessor;
-use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
 // Define a simple processor using YAML schema
 #[streamlib::sdk::processor("TestProcessor")]
@@ -119,68 +119,3 @@ fn test_processor_schema_ident_renders_canonical_joined_form() {
     );
 }
 
-// Test with config field
-#[derive(
-    Debug,
-    Clone,
-    Default,
-    PartialEq,
-    serde::Serialize,
-    serde::Deserialize,
-    streamlib_engine::ConfigDescriptor,
-)]
-pub struct ConfiguredProcessorConfig {
-    pub threshold: f32,
-}
-
-// The processor macro generates `crate::_generated_::ConfiguredProcessorConfig`.
-// In integration tests, `crate` refers to this test binary, so we need a bridge module.
-mod _generated_ {
-    pub use super::ConfiguredProcessorConfig;
-}
-
-#[streamlib::sdk::processor("TestConfiguredProcessor")]
-pub struct ConfiguredProcessor;
-
-impl streamlib_engine::ContinuousProcessor for ConfiguredProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
-    }
-
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
-    }
-
-    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        // Access config
-        let _threshold = self.config.threshold;
-        Ok(())
-    }
-}
-
-#[test]
-fn test_config_field_access() {
-    let config = ConfiguredProcessorConfig { threshold: 0.5 };
-    let processor = ConfiguredProcessor::Processor::from_config(config).unwrap();
-
-    // Config should be stored
-    assert_eq!(processor.config.threshold, 0.5);
-}
-
-#[test]
-fn test_config_update() {
-    let config = ConfiguredProcessorConfig { threshold: 0.5 };
-    let mut processor = ConfiguredProcessor::Processor::from_config(config).unwrap();
-
-    // Update config
-    let new_config = ConfiguredProcessorConfig { threshold: 0.8 };
-    processor.update_config(new_config).unwrap();
-
-    assert_eq!(processor.config.threshold, 0.8);
-}

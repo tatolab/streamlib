@@ -46,6 +46,9 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
+// Force-link so PROCESSOR_REGISTRY is non-empty for `Runner::new()`.
+#[allow(unused_imports)]
+use streamlib_test_fixtures::SimplePassthroughProcessor;
 
 const RUN_DURATION: Duration = Duration::from_secs(2);
 const INTERVAL_MS: u32 = 33;

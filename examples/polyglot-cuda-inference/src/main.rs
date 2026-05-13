@@ -60,7 +60,8 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer,
     HostVulkanTimelineSemaphore,
 };
-use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
+use streamlib::sdk::processors::ProcessorSpec;
+use streamlib_test_fixtures::BgraFileSourceProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 use streamlib_adapter_abi::SurfaceId;

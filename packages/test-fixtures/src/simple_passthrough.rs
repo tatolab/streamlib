@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::VideoFrame;
-use crate::core::{Result, RuntimeContextFullAccess};
+use streamlib::sdk::context::RuntimeContextFullAccess;
+use streamlib::sdk::error::Result;
 
-#[crate::processor("SimplePassthrough")]
+#[streamlib::sdk::processor("SimplePassthrough")]
 pub struct SimplePassthroughProcessor;
 
-impl crate::core::ManualProcessor for SimplePassthroughProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for SimplePassthroughProcessor::Processor {
     // Uses default setup() and teardown() implementations from Processor trait
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

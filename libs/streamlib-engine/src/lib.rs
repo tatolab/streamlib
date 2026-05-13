@@ -147,11 +147,6 @@ pub mod host_rhi;
 ))]
 pub use host_rhi::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
 
-#[cfg(target_os = "linux")]
-pub use linux::processors::bgra_file_source::BgraFileSourceProcessor;
-#[cfg(target_os = "linux")]
-pub use _generated_::BgraFileSourceConfig;
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{
     request_audio_permission, request_camera_permission, request_display_permission,
@@ -254,9 +249,6 @@ pub mod sdk {
         // Port schema spec — semantically processor-related; lives in
         // `core::descriptors`.
         pub use crate::core::descriptors::PortSchemaSpec;
-
-        #[cfg(target_os = "linux")]
-        pub use crate::BgraFileSourceProcessor;
     }
 
     pub use crate::iceoryx2;

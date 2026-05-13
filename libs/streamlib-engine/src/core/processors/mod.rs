@@ -32,11 +32,3 @@ pub use processor_spec::ProcessorSpec;
 /// Empty config type for processors that don't need configuration.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EmptyConfig;
-
-// Audio processors (capture, output, mixer, channel converter, resampler,
-// buffer rechunker, chord generator) live in `@tatolab/audio` (#672).
-
-// Transformers
-pub mod simple_passthrough;
-
-pub use simple_passthrough::SimplePassthroughProcessor;

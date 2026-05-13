@@ -114,10 +114,6 @@ pub mod sdk {
         // `core::descriptors` in engine source (re-exported from
         // `streamlib-processor-schema`).
         pub use streamlib_engine::core::descriptors::PortSchemaSpec;
-
-        // Linux-only processors.
-        #[cfg(target_os = "linux")]
-        pub use streamlib_engine::BgraFileSourceProcessor;
     }
 
     // ---- Cross-cutting modules from engine top-level ----

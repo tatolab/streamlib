@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Test config schema for the attribute macro tests.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConfiguredProcessorConfig {
+pub struct TestConfiguredProcessorConfig {
     /// Threshold value for the test processor.
     #[serde(rename = "threshold")]
     pub threshold: f32,

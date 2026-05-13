@@ -4,7 +4,6 @@
 //! Linux-specific implementations.
 
 pub mod audio_clock;
-pub mod processors;
 pub mod rtkit;
 pub mod surface_share;
 pub mod thread_priority;

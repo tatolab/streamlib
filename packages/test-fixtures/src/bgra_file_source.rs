@@ -8,20 +8,15 @@
 // pipelines with pre-generated fixture files.
 
 use crate::_generated_::VideoFrame;
-use crate::core::context::GpuContextLimitedAccess;
-use crate::core::rhi::PixelFormat;
-use crate::core::{Result, RuntimeContextFullAccess, Error};
-use crate::iceoryx2::OutputWriter;
-
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::OutputWriter;
+use streamlib::sdk::rhi::PixelFormat;
 
-// ============================================================================
-// PROCESSOR
-// ============================================================================
-
-#[crate::processor("BgraFileSource")]
+#[streamlib::sdk::processor("BgraFileSource")]
 pub struct BgraFileSourceProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     is_running: Arc<AtomicBool>,
@@ -29,7 +24,7 @@ pub struct BgraFileSourceProcessor {
     source_thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
-impl crate::core::ManualProcessor for BgraFileSourceProcessor::Processor {
+impl streamlib::sdk::processors::ManualProcessor for BgraFileSourceProcessor::Processor {
     fn setup(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -154,7 +149,7 @@ fn source_thread_loop(
                 }
             };
 
-        let dst_ptr = pixel_buffer.buffer_ref().inner.mapped_ptr();
+        let dst_ptr = pixel_buffer.plane_base_address(0);
         unsafe {
             std::ptr::copy_nonoverlapping(frame_buf.as_ptr(), dst_ptr, frame_size);
         }

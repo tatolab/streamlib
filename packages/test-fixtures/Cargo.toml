@@ -1,0 +1,32 @@
+[package]
+name = "streamlib-test-fixtures"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Test and example fixture processors for streamlib (BgraFileSource, SimplePassthrough, TestConfiguredProcessor)."
+keywords = ["test", "fixture", "video", "streaming"]
+categories = ["multimedia::video", "multimedia"]
+
+[lib]
+name = "streamlib_test_fixtures"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated wire
+# types under `streamlib::sdk::_generated_::*` (VideoFrame), RHI primitives.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+# Logging.
+tracing.workspace = true
+
+[lints]
+workspace = true
