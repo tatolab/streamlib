@@ -180,7 +180,9 @@ impl Runner {
 
         // Register all processors from inventory before any add_processor calls.
         // This populates the global registry with link-time registered processors.
-        let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors()?;
+        // Empty inventory is valid — apps that compose processors via `load_project()`
+        // start with `count == 0` and populate the registry afterwards.
+        let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors();
         tracing::debug!("Registered {} processors from inventory", result.count);
 
         // Create iceoryx2 Node early so PUBSUB can initialize before start().

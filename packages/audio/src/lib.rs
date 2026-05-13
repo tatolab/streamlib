@@ -22,6 +22,12 @@ pub mod linux;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod apple;
 
+// `_apple_impl_pending_` holds the cross-platform Apple-flavored audio
+// codec types parked out of the engine in #786. Gated so it never
+// compiles; re-enable + rewire imports once Apple support is activated.
+#[cfg(any())]
+mod _apple_impl_pending_;
+
 pub use audio_capture::{AudioCaptureProcessor, AudioInputDevice};
 pub use audio_channel_converter::AudioChannelConverterProcessor;
 pub use audio_mixer::AudioMixerProcessor;

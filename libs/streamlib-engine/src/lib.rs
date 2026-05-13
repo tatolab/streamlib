@@ -69,7 +69,6 @@ pub use core::{
     video_audio_delta_ms,
     video_audio_synchronized,
     video_audio_synchronized_with_tolerance,
-    AudioCodec,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
@@ -77,11 +76,8 @@ pub use core::{
     GlTextureBinding,
     GpuContext,
     GraphFileDefinition,
-    H264Profile,
     InputPortMarker,
     ManualProcessor,
-    Mp4Muxer,
-    Mp4MuxerConfig,
     NativeTextureHandle,
     OutputPortMarker,
     PooledTextureHandle,
@@ -101,9 +97,7 @@ pub use core::{
     TexturePoolDescriptor,
     TextureUsages,
     TimeContext,
-    VideoCodec,
     DEFAULT_SYNC_TOLERANCE_MS,
-    FOURCC_H264,
     PROCESSOR_REGISTRY,
 };
 
@@ -146,11 +140,6 @@ pub mod host_rhi;
     all(target_os = "linux", not(feature = "backend-metal"))
 ))]
 pub use host_rhi::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
-
-#[cfg(target_os = "linux")]
-pub use linux::processors::bgra_file_source::BgraFileSourceProcessor;
-#[cfg(target_os = "linux")]
-pub use _generated_::BgraFileSourceConfig;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub use apple::permissions::{
@@ -255,8 +244,6 @@ pub mod sdk {
         // `core::descriptors`.
         pub use crate::core::descriptors::PortSchemaSpec;
 
-        #[cfg(target_os = "linux")]
-        pub use crate::BgraFileSourceProcessor;
     }
 
     pub use crate::iceoryx2;

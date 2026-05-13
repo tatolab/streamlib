@@ -1,0 +1,65 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/debug-utilities — utility processors for development, demos,
+# and rigorous-input testing. Consumed by real examples (the fixture
+# PSNR rig, the polyglot scenario binaries, api-server-demo's dynamic-
+# registry POST) — distinct from @tatolab/test-fixtures which carries
+# the attribute-macro contract test fixture.
+package:
+  org: tatolab
+  name: debug-utilities
+  version: 1.0.0
+  description: "Utility processors for development, demos, and rigorous-input testing"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  # Wire types imported from @tatolab/core.
+  VideoFrame:
+    package: "@tatolab/core"
+  # Local config schemas this package owns.
+  BgraFileSourceConfig:
+    file: schemas/bgra_file_source_config.yaml
+  SimplePassthroughConfig:
+    file: schemas/simple_passthrough_config.yaml
+
+processors:
+  - name: SimplePassthrough
+    version: 1.0.0
+    description: "Passes video frames through unchanged (for testing)"
+    execution: manual
+    config:
+      name: config
+      schema: SimplePassthroughConfig
+    inputs:
+      - name: input
+        schema: VideoFrame
+        description: Video frame input
+        read_mode: skip_to_latest
+        buffer_size: 4
+    outputs:
+      - name: output
+        schema: VideoFrame
+        description: Video frame output (unchanged)
+
+  - name: BgraFileSource
+    version: 1.0.0
+    description: "Streams raw BGRA frames from a file as Videoframes"
+    execution: manual
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: BgraFileSourceConfig
+    outputs:
+      - name: video
+        schema: VideoFrame
+        description: Video frames read from the BGRA file

@@ -6,6 +6,7 @@ mod data_structure;
 
 mod edges;
 mod nodes;
+mod processor_state_ecs_component;
 mod traits;
 mod traversal;
 mod validation;
@@ -15,6 +16,7 @@ mod graph_tests;
 
 // top level
 pub use data_structure::{Graph, GraphState};
+pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};
 pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
 

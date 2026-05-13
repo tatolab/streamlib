@@ -1,0 +1,33 @@
+[package]
+name = "streamlib-debug-utilities"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Utility processors for development, demos, and rigorous-input testing (BgraFileSource, SimplePassthrough)."
+keywords = ["streamlib", "debug", "demo"]
+categories = ["development-tools"]
+
+[lib]
+name = "streamlib_debug_utilities"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated config
+# types under `streamlib::_generated_::tatolab__debug_utilities::*`, the
+# VideoFrame wire type, RHI primitives.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+# tracing for processor lifecycle logs.
+tracing.workspace = true
+
+[lints]
+workspace = true

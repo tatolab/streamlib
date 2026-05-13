@@ -66,14 +66,13 @@ pub mod sdk {
 
     // ---- Engine `core::*` sub-modules that are SDK-public ----
     //
-    // Engine internals (`codec`, `compiler`, `config`,
-    // `embedded_schemas`, `logging`, `observability`, `runtime_hooks`,
-    // `signals`, `streamlib_home`) are `pub(crate)` in the engine
-    // crate (see `core/mod.rs`) — those module paths are not
-    // reachable here OR via `engine_internal::*` (Tier 3) by
-    // construction. Items inside that ARE customer-facing (e.g.
-    // `H264Profile` from `codec`) are re-exported by the engine at
-    // its crate root and travel into the SDK via the top-level
+    // Engine internals (`compiler`, `config`, `embedded_schemas`,
+    // `logging`, `observability`, `runtime_hooks`, `signals`,
+    // `streamlib_home`) are `pub(crate)` in the engine crate (see
+    // `core/mod.rs`) — those module paths are not reachable here OR
+    // via `engine_internal::*` (Tier 3) by construction. Items inside
+    // that ARE customer-facing are re-exported by the engine at its
+    // crate root and travel into the SDK via the top-level
     // `pub use streamlib_engine::*` items below and the Tier-3
     // `engine_internal` namespace.
 
@@ -114,10 +113,6 @@ pub mod sdk {
         // `core::descriptors` in engine source (re-exported from
         // `streamlib-processor-schema`).
         pub use streamlib_engine::core::descriptors::PortSchemaSpec;
-
-        // Linux-only processors.
-        #[cfg(target_os = "linux")]
-        pub use streamlib_engine::BgraFileSourceProcessor;
     }
 
     // ---- Cross-cutting modules from engine top-level ----

@@ -57,7 +57,8 @@ use streamlib::sdk::rhi::{
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::engine::host_rhi::{HostVulkanTimelineSemaphore, VulkanTextureReadback};
-use streamlib::sdk::processors::{BgraFileSourceProcessor, ProcessorSpec};
+use streamlib::sdk::processors::ProcessorSpec;
+use streamlib_debug_utilities::BgraFileSourceProcessor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::runtime::Runner;
 
