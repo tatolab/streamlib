@@ -16,8 +16,6 @@ pub mod videotoolbox;
 pub mod vimage_ffi;
 pub mod xpc_ffi;
 
-pub mod processors;
-
 pub mod permissions;
 
 pub mod main_thread;
