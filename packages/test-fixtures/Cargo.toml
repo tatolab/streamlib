@@ -1,0 +1,29 @@
+[package]
+name = "streamlib-test-fixtures"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Attribute-macro test fixtures (TestConfiguredProcessor) for streamlib SDK macro contract tests."
+keywords = ["streamlib", "test-fixtures", "macros"]
+categories = ["development-tools::testing"]
+
+[lib]
+name = "streamlib_test_fixtures"
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated config
+# types under `streamlib::_generated_::tatolab__test_fixtures::*`.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclass ships as serde-derived).
+serde.workspace = true
+
+[lints]
+workspace = true
