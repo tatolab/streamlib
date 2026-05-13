@@ -9,8 +9,10 @@ code, IOSurface, Metal RHI, AVFoundation, or CoreAudio paths.
   `libs/streamlib-engine/src/` — `apple/` and `linux/`. Platform `cfg` gates
   inside those directories are redundant; don't add them.
 - The `surface_store.rs`, `gl_interop.rs`, and IOSurface-related code
-  are slated for removal as part of the *Polyglot SDK Realignment*
-  milestone. Don't extend them without checking that milestone's plan.
+  are legacy GPU plumbing being retired in favor of escalate IPC →
+  host `GpuContext` → RHI. Don't extend them; if you think you need
+  to, escalate to the user — that's a sign the change belongs in the
+  retirement track, not the macOS workflow.
 - Metal RHI is the macOS equivalent of Vulkan RHI on Linux. The RHI
   boundary rule applies identically — only `apple/rhi/` may call Metal
   directly; processors use `GpuContext`.
@@ -27,8 +29,7 @@ run macOS E2E directly. Two options:
 
 2. **Defer the runtime check to a CI job or human tester** — file the
    runtime verification as a follow-up issue (using the issue
-   template) and assign it to *Post-Typed-Ctx Verification* or a
-   similar milestone. Note the gap explicitly in the PR body.
+   template). Note the gap explicitly in the PR body.
 
 Prefer option 1 for every PR touching macOS code; option 2 is the
 fallback when a real device test is needed and no macOS CI exists yet.
@@ -36,12 +37,13 @@ fallback when a real device test is needed and no macOS CI exists yet.
 ## Rules specific to macOS issues
 
 - **Never edit Apple processor files on Linux without compile
-  verification.** PR #322 did this and required the *Post-Typed-Ctx
-  Verification* milestone to clean up; don't repeat that.
-- **Don't add new IOSurface / CGL / XPC surface-share code.** If the issue
-  seems to require it, escalate to the user — it's a sign the issue
-  belongs in the *Polyglot SDK Realignment* milestone, not wherever it
-  currently sits.
+  verification.** A past cleanup arc exists precisely because this
+  shortcut was taken — don't repeat that.
+- **Don't add new IOSurface / CGL / XPC surface-share code.** If the
+  issue seems to require it, escalate to the user — that legacy GPU
+  plumbing is being retired in favor of escalate IPC → host
+  `GpuContext` → RHI, and new code there fights the direction of
+  travel.
 - **Respect the Metal RHI boundary** — the same rule as Vulkan RHI on
   Linux. No Metal API calls outside `apple/rhi/`.
 
@@ -51,7 +53,7 @@ fallback when a real device test is needed and no macOS CI exists yet.
 ## macOS verification
 
 - **Cross-compile**: `cargo check --target aarch64-apple-darwin` result
-- **Runtime verified**: yes on <hardware> | no — follow-up #<N> filed
+- **Runtime verified**: yes on <hardware> | no — follow-up filed
 - **Apple paths touched**: <list>
 - **RHI boundary preserved**: yes (no Metal calls outside apple/rhi/)
 ```
