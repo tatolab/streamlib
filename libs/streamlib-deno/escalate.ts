@@ -46,18 +46,18 @@ import type {
   EscalateRequestRunRayTracingKernel,
   EscalateRequestRunRayTracingKernelBinding,
   EscalateRequestTryRunCpuReadbackCopy,
-} from "./_generated_/com_streamlib_escalate_request.ts";
+} from "./_generated_/tatolab__escalate/escalate_request.ts";
 import {
   EscalateRequestRunCpuReadbackCopyDirection,
   EscalateRequestRunGraphicsDrawDrawKind,
   EscalateRequestTryRunCpuReadbackCopyDirection,
-} from "./_generated_/com_streamlib_escalate_request.ts";
+} from "./_generated_/tatolab__escalate/escalate_request.ts";
 import type {
   EscalateResponse,
   EscalateResponseContended,
   EscalateResponseErr,
   EscalateResponseOk,
-} from "./_generated_/com_streamlib_escalate_response.ts";
+} from "./_generated_/tatolab__escalate/escalate_response.ts";
 import { monotonicNowNs } from "./clock.ts";
 
 export type {

@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 
-use crate::_generated_::com_streamlib_escalate_request::{
+use crate::_generated_::tatolab__escalate::escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
     EscalateRequestRegisterAccelerationStructureBlas,
@@ -53,7 +53,7 @@ use crate::_generated_::com_streamlib_escalate_request::{
     EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopy,
     EscalateRequestTryRunCpuReadbackCopyDirection,
 };
-use crate::_generated_::com_streamlib_escalate_response::{
+use crate::_generated_::tatolab__escalate::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
 };
 use crate::_generated_::{EscalateRequest, EscalateResponse};
@@ -3288,7 +3288,7 @@ mod tests {
         use super::EscalateHandleRegistry;
         use std::sync::{Arc, Mutex};
 
-        use crate::_generated_::com_streamlib_escalate_request::{
+        use crate::_generated_::tatolab__escalate::escalate_request::{
             EscalateRequestRegisterGraphicsKernelBinding,
             EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute,
             EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding,
@@ -4095,7 +4095,7 @@ mod tests {
         use super::EscalateHandleRegistry;
         use std::sync::{Arc, Mutex};
 
-        use crate::_generated_::com_streamlib_escalate_request::{
+        use crate::_generated_::tatolab__escalate::escalate_request::{
             EscalateRequestRegisterAccelerationStructureTlasInstance,
             EscalateRequestRegisterRayTracingKernelBinding,
             EscalateRequestRegisterRayTracingKernelGroup,
