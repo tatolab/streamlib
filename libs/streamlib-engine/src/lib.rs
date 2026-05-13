@@ -84,7 +84,6 @@ pub use core::{
     ProcessorDefinition,
     ProcessorSpec,
     ReactiveProcessor,
-    ResamplingQuality,
     Result,
     RuntimeContext,
     RuntimeContextFullAccess,

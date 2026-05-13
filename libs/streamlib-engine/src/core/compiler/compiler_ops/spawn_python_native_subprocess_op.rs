@@ -505,13 +505,6 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }
-
-    fn get_audio_converter_status_arc(
-        &self,
-    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::core::utils::ProcessorAudioConverterStatus>>>
-    {
-        None
-    }
 }
 
 // ============================================================================

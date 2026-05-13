@@ -14,9 +14,9 @@ use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Result, Error};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, ProcessorAudioConverterComponent, ProcessorInstanceComponent,
-    ProcessorPauseGateComponent, ProcessorReadyBarrierComponent, ProcessorUniqueId,
-    ShutdownChannelComponent, StateComponent, SubprocessHandleComponent, ThreadHandleComponent,
+    Graph, GraphNodeWithComponents, ProcessorInstanceComponent, ProcessorPauseGateComponent,
+    ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
+    SubprocessHandleComponent, ThreadHandleComponent,
 };
 use crate::core::processors::{ProcessorInstanceFactory, ProcessorState, PROCESSOR_REGISTRY};
 
@@ -143,14 +143,13 @@ fn spawn_dedicated_thread(
     let proc_id_clone = processor_id.clone();
 
     // Create processor instance now (with lock) since factory needs node reference
-    let (processor_arc, audio_converter_status_arc) = {
+    let processor_arc = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
         let processor = factory.create(node)?;
-        let audio_status = processor.get_audio_converter_status_arc();
-        (Arc::new(Mutex::new(processor)), audio_status)
+        Arc::new(Mutex::new(processor))
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
@@ -236,11 +235,6 @@ fn spawn_dedicated_thread(
                 let mut graph = graph_arc_clone.write();
                 if let Some(node) = graph.traversal_mut().v(&proc_id_clone).first_mut() {
                     node.insert(ProcessorInstanceComponent(processor_arc_clone.clone()));
-                    if let Some(status_arc) = &audio_converter_status_arc {
-                        node.insert(ProcessorAudioConverterComponent(std::sync::Arc::clone(
-                            status_arc,
-                        )));
-                    }
                 }
             }
             tracing::trace!("[{}] ProcessorInstanceComponent attached", proc_id_clone);

@@ -12,7 +12,7 @@ use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::utils::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
+use streamlib_audio::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
 
 use crate::host::ClapPluginHost;
 use crate::parameter_automation::ClapParameterControl;
@@ -73,6 +73,7 @@ pub struct ClapEffectProcessor {
     buffer_size: usize,
     polling_thread: Option<std::thread::JoinHandle<()>>,
     stop_polling: Arc<AtomicBool>,
+    audio: ProcessorAudioConverter,
 }
 
 impl ClapEffectProcessor::Processor {

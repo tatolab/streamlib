@@ -91,7 +91,6 @@ pub mod sdk {
     pub use streamlib_engine::core::runtime;
     pub use streamlib_engine::core::sync;
     pub use streamlib_engine::core::texture;
-    pub use streamlib_engine::core::utils;
 
     // ---- Processors namespace ----
     //

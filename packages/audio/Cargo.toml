@@ -26,6 +26,7 @@ streamlib-macros = { path = "../../libs/streamlib-macros" }
 # Cross-platform deps used by every audio processor.
 parking_lot = "0.12"
 rtrb = "0.3.2"
+rubato = "0.16"  # SincFixedIn resampler powering ProcessorAudioConverter / AudioResamplerProcessor
 tracing.workspace = true
 
 # Serialization (config dataclasses ship as serde-derived).

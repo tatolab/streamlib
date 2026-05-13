@@ -432,7 +432,6 @@ fn generate_processor_struct_from_schema(
             #ipc_output_field
             #config_field
             #(#custom_field_defs)*
-            pub audio: ::streamlib::sdk::utils::ProcessorAudioConverter,
         }
     }
 }
@@ -654,12 +653,6 @@ fn generate_processor_impl_from_schema(
             #descriptor_impl
             #iceoryx2_accessors
 
-            fn get_audio_converter_status_arc(
-                &self,
-            ) -> Option<std::sync::Arc<std::sync::Mutex<::streamlib::sdk::utils::ProcessorAudioConverterStatus>>> {
-                Some(self.audio.status_arc())
-            }
-
             fn __generated_setup(
                 &mut self,
                 ctx: &::streamlib::sdk::context::RuntimeContextFullAccess<'_>,
@@ -761,7 +754,6 @@ fn generate_from_config_from_schema(
                 #ipc_output_init
                 #config_init
                 #(#custom_field_inits)*
-                audio: ::streamlib::sdk::utils::ProcessorAudioConverter::new(),
             })
         }
     }

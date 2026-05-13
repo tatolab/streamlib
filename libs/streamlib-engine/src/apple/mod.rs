@@ -3,8 +3,6 @@
 
 pub mod arkit;
 pub mod audio_clock;
-// TODO: Migrate to iceoryx2 API (depends on AudioDevice)
-// pub mod audio_utils;
 pub mod corevideo_ffi;
 pub mod iosurface;
 pub mod media_clock;
