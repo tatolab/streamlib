@@ -80,6 +80,39 @@ pub struct SurfaceMetadata {
     /// because producer-release and consumer-acquire can race; load with
     /// `Acquire`, store with `Release`.
     pub current_image_layout: AtomicI32,
+    /// `VkImageType` (raw `i32`): `_1D = 0`, `_2D = 1`, `_3D = 2`. Carries
+    /// the host's `VkImageCreateInfo::imageType` across the wire so the
+    /// consumer can reconstruct a matching `VkImage` for OPAQUE_FD import
+    /// — `cudaExternalMemoryGetMappedMipmappedArray` requires the
+    /// consumer-side `VkImageCreateInfo` to match the host's byte-for-byte.
+    /// Defaults to `1` (`_2D`) when absent — the only flavor every
+    /// in-tree allocator emits today.
+    pub vk_image_type: i32,
+    /// `VkImageCreateInfo::mipLevels`. Defaults to `1` when absent.
+    pub vk_image_mip_levels: u32,
+    /// `VkImageCreateInfo::arrayLayers`. Defaults to `1` when absent.
+    pub vk_image_array_layers: u32,
+    /// `VkSampleCountFlagBits` (raw `i32`): `_1 = 1`, `_2 = 2`, `_4 = 4`,
+    /// `_8 = 8`, etc. Defaults to `1` (`_1`) when absent.
+    pub vk_image_samples: i32,
+    /// `VkImageTiling` (raw `i32`): `OPTIMAL = 0`, `LINEAR = 1`,
+    /// `DRM_FORMAT_MODIFIER_EXT = 1000158000`. Defaults to `0` (`OPTIMAL`)
+    /// when absent — the OPAQUE_FD image flavor the new field set
+    /// primarily serves.
+    pub vk_image_tiling: i32,
+    /// `VkImageUsageFlags` (raw `u32` bitfield). Defaults to
+    /// `TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE = 0x0F` when
+    /// absent — the usage set [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]
+    /// emits and the consumer side hardcodes today.
+    pub vk_image_usage: u32,
+    /// Host-side `VkMemoryRequirements::size` (i.e. `vmaGetAllocationInfo().size`)
+    /// of the imported VkImage's backing memory. Required for the
+    /// consumer's `vkAllocateMemory(VkImportMemoryFdInfoKHR)` size
+    /// argument; cross-device size mismatches reject the import.
+    /// Defaults to `0` ("unknown — consumer computes from width / height
+    /// / format") when absent — preserves the existing
+    /// pixel-buffer / DMA-BUF behavior where size is derived consumer-side.
+    pub vk_image_allocation_size: u64,
 }
 
 // The atomic field makes `SurfaceMetadata` not `Clone`-by-derive. Hand-roll
@@ -104,9 +137,31 @@ impl Clone for SurfaceMetadata {
             current_image_layout: AtomicI32::new(
                 self.current_image_layout.load(Ordering::Acquire),
             ),
+            vk_image_type: self.vk_image_type,
+            vk_image_mip_levels: self.vk_image_mip_levels,
+            vk_image_array_layers: self.vk_image_array_layers,
+            vk_image_samples: self.vk_image_samples,
+            vk_image_tiling: self.vk_image_tiling,
+            vk_image_usage: self.vk_image_usage,
+            vk_image_allocation_size: self.vk_image_allocation_size,
         }
     }
 }
+
+/// Documented defaults for the `vk_image_*` fields when the wire
+/// payload omits them. Match
+/// [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]'s
+/// hardcoded shape so a daemon serving these defaults produces a
+/// `VkImageCreateInfo` byte-equal to what the existing consumer-side
+/// `from_opaque_fd` constructor already builds.
+pub const VK_IMAGE_TYPE_DEFAULT: i32 = 1; // VK_IMAGE_TYPE_2D
+pub const VK_IMAGE_MIP_LEVELS_DEFAULT: u32 = 1;
+pub const VK_IMAGE_ARRAY_LAYERS_DEFAULT: u32 = 1;
+pub const VK_IMAGE_SAMPLES_DEFAULT: i32 = 1; // VK_SAMPLE_COUNT_1_BIT
+pub const VK_IMAGE_TILING_DEFAULT: i32 = 0; // VK_IMAGE_TILING_OPTIMAL
+/// `TRANSFER_SRC (0x01) | TRANSFER_DST (0x02) | SAMPLED (0x04) | STORAGE (0x08)`.
+pub const VK_IMAGE_USAGE_DEFAULT: u32 = 0x0F;
+pub const VK_IMAGE_ALLOCATION_SIZE_DEFAULT: u64 = 0;
 
 /// Thread-safe surface table for the runtime-internal surface-share service.
 #[derive(Clone, Default)]
@@ -146,6 +201,21 @@ pub struct SurfacePlaneCheckout {
     /// (UNDEFINED) when no producer has declared a layout — the
     /// back-compat default for surfaces registered before issue #633.
     pub current_image_layout: i32,
+    /// Snapshot of [`SurfaceMetadata::vk_image_type`] at lookup time.
+    pub vk_image_type: i32,
+    /// Snapshot of [`SurfaceMetadata::vk_image_mip_levels`] at lookup time.
+    pub vk_image_mip_levels: u32,
+    /// Snapshot of [`SurfaceMetadata::vk_image_array_layers`] at lookup time.
+    pub vk_image_array_layers: u32,
+    /// Snapshot of [`SurfaceMetadata::vk_image_samples`] at lookup time.
+    pub vk_image_samples: i32,
+    /// Snapshot of [`SurfaceMetadata::vk_image_tiling`] at lookup time.
+    pub vk_image_tiling: i32,
+    /// Snapshot of [`SurfaceMetadata::vk_image_usage`] at lookup time.
+    pub vk_image_usage: u32,
+    /// Snapshot of [`SurfaceMetadata::vk_image_allocation_size`] at
+    /// lookup time.
+    pub vk_image_allocation_size: u64,
 }
 
 /// Arguments to [`SurfaceShareState::register_surface`]. Grouped so the
@@ -183,6 +253,30 @@ pub struct SurfaceRegistration<'a> {
     /// `oldLayout=UNDEFINED` (content-discard permitted) when no producer
     /// has declared a layout.
     pub current_image_layout: i32,
+    /// `VkImageCreateInfo::imageType` (raw `i32`). See
+    /// [`SurfaceMetadata::vk_image_type`]. Pass [`VK_IMAGE_TYPE_DEFAULT`]
+    /// when the surface isn't an OPAQUE_FD `VkImage` or when the consumer
+    /// can rely on the default `_2D` shape.
+    pub vk_image_type: i32,
+    /// `VkImageCreateInfo::mipLevels`. Pass [`VK_IMAGE_MIP_LEVELS_DEFAULT`]
+    /// (= 1) for the back-compat shape.
+    pub vk_image_mip_levels: u32,
+    /// `VkImageCreateInfo::arrayLayers`. Pass
+    /// [`VK_IMAGE_ARRAY_LAYERS_DEFAULT`] (= 1) for the back-compat shape.
+    pub vk_image_array_layers: u32,
+    /// `VkSampleCountFlagBits` (raw `i32`). Pass [`VK_IMAGE_SAMPLES_DEFAULT`]
+    /// (= 1) for the back-compat shape.
+    pub vk_image_samples: i32,
+    /// `VkImageTiling` (raw `i32`). Pass [`VK_IMAGE_TILING_DEFAULT`]
+    /// (= `OPTIMAL`) for OPAQUE_FD images.
+    pub vk_image_tiling: i32,
+    /// `VkImageUsageFlags` (raw `u32` bitfield). Pass
+    /// [`VK_IMAGE_USAGE_DEFAULT`] for the back-compat OPAQUE_FD usage set.
+    pub vk_image_usage: u32,
+    /// Host-side `VkMemoryRequirements::size`. Pass
+    /// [`VK_IMAGE_ALLOCATION_SIZE_DEFAULT`] (= 0) when the consumer
+    /// derives the size from `width * height * bytes_per_pixel`.
+    pub vk_image_allocation_size: u64,
 }
 
 impl SurfaceShareState {
@@ -227,6 +321,13 @@ impl SurfaceShareState {
                 sync_fd: reg.sync_fd,
                 checkout_count: 0,
                 current_image_layout: AtomicI32::new(reg.current_image_layout),
+                vk_image_type: reg.vk_image_type,
+                vk_image_mip_levels: reg.vk_image_mip_levels,
+                vk_image_array_layers: reg.vk_image_array_layers,
+                vk_image_samples: reg.vk_image_samples,
+                vk_image_tiling: reg.vk_image_tiling,
+                vk_image_usage: reg.vk_image_usage,
+                vk_image_allocation_size: reg.vk_image_allocation_size,
             },
         );
         Ok(())
@@ -274,6 +375,13 @@ impl SurfaceShareState {
                 current_image_layout: metadata
                     .current_image_layout
                     .load(Ordering::Acquire),
+                vk_image_type: metadata.vk_image_type,
+                vk_image_mip_levels: metadata.vk_image_mip_levels,
+                vk_image_array_layers: metadata.vk_image_array_layers,
+                vk_image_samples: metadata.vk_image_samples,
+                vk_image_tiling: metadata.vk_image_tiling,
+                vk_image_usage: metadata.vk_image_usage,
+                vk_image_allocation_size: metadata.vk_image_allocation_size,
             }
         })
     }
@@ -332,6 +440,13 @@ mod tests {
             drm_format_modifier: 0,
             sync_fd: None,
             current_image_layout: 0,
+            vk_image_type: VK_IMAGE_TYPE_DEFAULT,
+            vk_image_mip_levels: VK_IMAGE_MIP_LEVELS_DEFAULT,
+            vk_image_array_layers: VK_IMAGE_ARRAY_LAYERS_DEFAULT,
+            vk_image_samples: VK_IMAGE_SAMPLES_DEFAULT,
+            vk_image_tiling: VK_IMAGE_TILING_DEFAULT,
+            vk_image_usage: VK_IMAGE_USAGE_DEFAULT,
+            vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
         }
     }
 
@@ -443,6 +558,59 @@ mod tests {
         assert!(!state.update_image_layout("missing", 0));
     }
 
+    /// The seven `vk_image_*` fields round-trip through register → lookup:
+    /// the producer's declared `VkImageCreateInfo` shape (#800) must
+    /// survive verbatim so an OPAQUE_FD `VkImage` consumer can rebuild a
+    /// matching `VkImage` whose `cudaExternalMemoryMipmappedArrayDesc`
+    /// equals the host's byte-for-byte. Mentally revert the
+    /// `register_surface` body (drop the seven assignments) and this test
+    /// fails on the first field — locking the contract end-to-end through
+    /// the typed `SurfaceShareState` API.
+    #[test]
+    fn vk_image_create_info_fields_round_trip_through_register_lookup() {
+        let state = SurfaceShareState::new();
+        // Pick a deliberately non-default value for every field — so a
+        // regression that silently zeroes one is visible against the
+        // assert. Values are spec-realistic (mipmapped 3D image with
+        // multisample + multi-layer + custom usage).
+        state
+            .register_surface(SurfaceRegistration {
+                surface_id: "vk-image-rt",
+                runtime_id: "rt",
+                dma_buf_fds: vec![-1],
+                plane_sizes: vec![0],
+                plane_offsets: vec![0],
+                plane_strides: vec![0],
+                width: 256,
+                height: 256,
+                format: "Rgba16Float",
+                resource_type: "texture",
+                handle_type: "opaque_fd",
+                drm_format_modifier: 0,
+                sync_fd: None,
+                current_image_layout: 0,
+                vk_image_type: 2,        // VK_IMAGE_TYPE_3D
+                vk_image_mip_levels: 9,  // 256 = 2^8, plus base = 9 levels
+                vk_image_array_layers: 6,
+                vk_image_samples: 4,                // _4
+                vk_image_tiling: 1000158000,        // DRM_FORMAT_MODIFIER_EXT
+                vk_image_usage: 0x4F,               // 0x0F | COLOR_ATTACHMENT (0x40)
+                vk_image_allocation_size: 16_777_216,
+            })
+            .expect("register vk-image-rt");
+
+        let checkout = state
+            .get_surface_planes("vk-image-rt")
+            .expect("lookup after register");
+        assert_eq!(checkout.vk_image_type, 2);
+        assert_eq!(checkout.vk_image_mip_levels, 9);
+        assert_eq!(checkout.vk_image_array_layers, 6);
+        assert_eq!(checkout.vk_image_samples, 4);
+        assert_eq!(checkout.vk_image_tiling, 1000158000);
+        assert_eq!(checkout.vk_image_usage, 0x4F);
+        assert_eq!(checkout.vk_image_allocation_size, 16_777_216);
+    }
+
     /// Releasing a surface registered with multiple plane fds must close
     /// every fd — the state is the last owner of the table's fd dups and
     /// leaking any plane would leak the whole DMA-BUF. Verified via pipes:
@@ -483,6 +651,13 @@ mod tests {
                 drm_format_modifier: 0,
                 sync_fd: None,
                 current_image_layout: 0,
+                vk_image_type: VK_IMAGE_TYPE_DEFAULT,
+                vk_image_mip_levels: VK_IMAGE_MIP_LEVELS_DEFAULT,
+                vk_image_array_layers: VK_IMAGE_ARRAY_LAYERS_DEFAULT,
+                vk_image_samples: VK_IMAGE_SAMPLES_DEFAULT,
+                vk_image_tiling: VK_IMAGE_TILING_DEFAULT,
+                vk_image_usage: VK_IMAGE_USAGE_DEFAULT,
+                vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
             })
             .expect("register multi-plane");
 

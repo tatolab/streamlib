@@ -21,7 +21,11 @@ use streamlib_surface_client::{
     recv_message_with_fds, send_message_with_fds, MAX_DMA_BUF_PLANES, MAX_SCM_RIGHTS_FDS,
 };
 
-use super::state::{SurfaceShareState, SurfaceRegistration};
+use super::state::{
+    SurfaceRegistration, SurfaceShareState, VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
+    VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT, VK_IMAGE_SAMPLES_DEFAULT,
+    VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT, VK_IMAGE_USAGE_DEFAULT,
+};
 
 pub struct UnixSocketSurfaceService {
     state: SurfaceShareState,
@@ -248,6 +252,59 @@ fn handle_client_connection(
     }
 }
 
+/// Parsed view of the seven optional `vk_image_*` fields a producer of an
+/// OPAQUE_FD `VkImage` ships across the wire so the consumer can rebuild a
+/// matching `VkImageCreateInfo` (required for
+/// `cudaExternalMemoryGetMappedMipmappedArray` byte-for-byte parity, and
+/// for the consumer-side `vkAllocateMemory(VkImportMemoryFdInfoKHR)` size
+/// argument).
+///
+/// Each field is absent-defaultable to the documented constants in
+/// [`super::state`], so a register payload that omits the section behaves
+/// exactly like the pre-#800 wire — the existing DMA-BUF and OPAQUE_FD
+/// VkBuffer callers ride the defaults transparently.
+struct VkImageCreateInfoFields {
+    vk_image_type: i32,
+    vk_image_mip_levels: u32,
+    vk_image_array_layers: u32,
+    vk_image_samples: i32,
+    vk_image_tiling: i32,
+    vk_image_usage: u32,
+    vk_image_allocation_size: u64,
+}
+
+fn parse_vk_image_create_info_fields(request: &serde_json::Value) -> VkImageCreateInfoFields {
+    let as_i32 = |key: &str, default: i32| -> i32 {
+        request
+            .get(key)
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
+            .unwrap_or(default)
+    };
+    let as_u32 = |key: &str, default: u32| -> u32 {
+        request
+            .get(key)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(default)
+    };
+    let as_u64 = |key: &str, default: u64| -> u64 {
+        request.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
+    };
+    VkImageCreateInfoFields {
+        vk_image_type: as_i32("vk_image_type", VK_IMAGE_TYPE_DEFAULT),
+        vk_image_mip_levels: as_u32("vk_image_mip_levels", VK_IMAGE_MIP_LEVELS_DEFAULT),
+        vk_image_array_layers: as_u32("vk_image_array_layers", VK_IMAGE_ARRAY_LAYERS_DEFAULT),
+        vk_image_samples: as_i32("vk_image_samples", VK_IMAGE_SAMPLES_DEFAULT),
+        vk_image_tiling: as_i32("vk_image_tiling", VK_IMAGE_TILING_DEFAULT),
+        vk_image_usage: as_u32("vk_image_usage", VK_IMAGE_USAGE_DEFAULT),
+        vk_image_allocation_size: as_u64(
+            "vk_image_allocation_size",
+            VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
+        ),
+    }
+}
+
 /// Extract `plane_sizes`, `plane_offsets`, and `plane_strides` from a JSON
 /// request body. Returns vecs whose length matches `expected_plane_count`,
 /// falling back to `[0]` for single-plane registrations that omit the arrays.
@@ -384,6 +441,11 @@ fn handle_register(
         .and_then(|v| v.as_i64())
         .map(|v| v as i32)
         .unwrap_or(0);
+    // OPAQUE_FD VkImage carries the full VkImageCreateInfo shape so a
+    // CUDA-importable consumer can rebuild a matching VkImage; every
+    // field absent-defaults to the OPAQUE_FD constructor's hardcoded
+    // shape so legacy callers see no behavior change.
+    let vk_image = parse_vk_image_create_info_fields(request);
 
     let mut dup_plane_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
     for fd in plane_fds {
@@ -432,6 +494,13 @@ fn handle_register(
         drm_format_modifier,
         sync_fd: dup_sync_fd,
         current_image_layout,
+        vk_image_type: vk_image.vk_image_type,
+        vk_image_mip_levels: vk_image.vk_image_mip_levels,
+        vk_image_array_layers: vk_image.vk_image_array_layers,
+        vk_image_samples: vk_image.vk_image_samples,
+        vk_image_tiling: vk_image.vk_image_tiling,
+        vk_image_usage: vk_image.vk_image_usage,
+        vk_image_allocation_size: vk_image.vk_image_allocation_size,
     }) {
         Ok(()) => {
             tracing::debug!(
@@ -530,6 +599,16 @@ fn handle_lookup(
             "drm_format_modifier": checkout.drm_format_modifier,
             "has_sync_fd": has_sync_fd,
             "current_image_layout": checkout.current_image_layout,
+            // VkImageCreateInfo round-trip for OPAQUE_FD VkImage
+            // consumers. Always echoed; absent producers see the
+            // documented defaults from `super::state`.
+            "vk_image_type": checkout.vk_image_type,
+            "vk_image_mip_levels": checkout.vk_image_mip_levels,
+            "vk_image_array_layers": checkout.vk_image_array_layers,
+            "vk_image_samples": checkout.vk_image_samples,
+            "vk_image_tiling": checkout.vk_image_tiling,
+            "vk_image_usage": checkout.vk_image_usage,
+            "vk_image_allocation_size": checkout.vk_image_allocation_size,
         }),
         dup_fds,
     )
@@ -638,6 +717,12 @@ fn handle_check_in(
         .get("handle_type")
         .and_then(|v| v.as_str())
         .unwrap_or("dma_buf");
+    // Parse the optional VkImageCreateInfo block. `check_in` is the
+    // subprocess-registers-pixel-buffer path that legacy DMA-BUF /
+    // OPAQUE_FD buffer consumers ride; every field absent-defaults to
+    // the OPAQUE_FD constructor's hardcoded shape so legacy callers
+    // see no behavior change.
+    let vk_image = parse_vk_image_create_info_fields(request);
 
     let surface_id = uuid::Uuid::new_v4().to_string();
 
@@ -678,6 +763,13 @@ fn handle_check_in(
         // image layout. Seed UNDEFINED; the field is unused for buffer
         // surfaces but must be populated for the wire format.
         current_image_layout: 0,
+        vk_image_type: vk_image.vk_image_type,
+        vk_image_mip_levels: vk_image.vk_image_mip_levels,
+        vk_image_array_layers: vk_image.vk_image_array_layers,
+        vk_image_samples: vk_image.vk_image_samples,
+        vk_image_tiling: vk_image.vk_image_tiling,
+        vk_image_usage: vk_image.vk_image_usage,
+        vk_image_allocation_size: vk_image.vk_image_allocation_size,
     }) {
         for fd in &leftover_planes {
             unsafe { libc::close(*fd) };
@@ -1254,6 +1346,13 @@ mod tests {
                     drm_format_modifier: 0,
                     sync_fd: None,
                     current_image_layout: 0,
+                    vk_image_type: VK_IMAGE_TYPE_DEFAULT,
+                    vk_image_mip_levels: VK_IMAGE_MIP_LEVELS_DEFAULT,
+                    vk_image_array_layers: VK_IMAGE_ARRAY_LAYERS_DEFAULT,
+                    vk_image_samples: VK_IMAGE_SAMPLES_DEFAULT,
+                    vk_image_tiling: VK_IMAGE_TILING_DEFAULT,
+                    vk_image_usage: VK_IMAGE_USAGE_DEFAULT,
+                    vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
                 })
                 .expect("register");
         }
@@ -1399,6 +1498,226 @@ mod tests {
             unsafe { libc::close(*fd) };
         }
 
+        drop(stream);
+        service.stop();
+    }
+
+    /// Full `VkImageCreateInfo` round-trip through the wire (#800): a
+    /// producer ships every `vk_image_*` field on register; the consumer
+    /// reads them off lookup. Locks the OPAQUE_FD VkImage consumer's
+    /// ability to rebuild a matching `VkImage` whose
+    /// `cudaExternalMemoryMipmappedArrayDesc` equals the host's
+    /// byte-for-byte. Mentally revert any of the seven echo writes in
+    /// `handle_lookup` and this test fails — the seven assertions are
+    /// independent and field-specific.
+    #[test]
+    fn vk_image_create_info_round_trip_through_register_lookup() {
+        let state = SurfaceShareState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        let send_fd = make_memfd_with(b"opaque-fd-vkimage-fixture");
+        // Non-default values for every field so a regression that zeroes
+        // one is caught against a deliberate non-zero assert.
+        let register_req = serde_json::json!({
+            "op": "register",
+            "surface_id": "vk-image-wire-rt",
+            "runtime_id": "test-runtime",
+            "width": 256,
+            "height": 256,
+            "format": "Rgba16Float",
+            "resource_type": "texture",
+            "handle_type": "opaque_fd",
+            "vk_image_type": 2,               // VK_IMAGE_TYPE_3D
+            "vk_image_mip_levels": 9,
+            "vk_image_array_layers": 6,
+            "vk_image_samples": 4,            // _4
+            "vk_image_tiling": 1000158000,    // DRM_FORMAT_MODIFIER_EXT
+            "vk_image_usage": 0x4Fu32,
+            "vk_image_allocation_size": 16_777_216u64,
+        });
+        let (register_resp, _) = send_request_with_fds(&stream, &register_req, &[send_fd], 0)
+            .expect("register request");
+        unsafe { libc::close(send_fd) };
+        assert_eq!(
+            register_resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "register must succeed: {:?}",
+            register_resp
+        );
+
+        let lookup_req = serde_json::json!({
+            "op": "lookup",
+            "surface_id": "vk-image-wire-rt",
+        });
+        let (lookup_resp, lookup_fds) =
+            send_request_with_fds(&stream, &lookup_req, &[], MAX_DMA_BUF_PLANES)
+                .expect("lookup request");
+        for fd in &lookup_fds {
+            unsafe { libc::close(*fd) };
+        }
+
+        assert_eq!(
+            lookup_resp.get("vk_image_type").and_then(|v| v.as_i64()),
+            Some(2),
+        );
+        assert_eq!(
+            lookup_resp
+                .get("vk_image_mip_levels")
+                .and_then(|v| v.as_u64()),
+            Some(9),
+        );
+        assert_eq!(
+            lookup_resp
+                .get("vk_image_array_layers")
+                .and_then(|v| v.as_u64()),
+            Some(6),
+        );
+        assert_eq!(
+            lookup_resp.get("vk_image_samples").and_then(|v| v.as_i64()),
+            Some(4),
+        );
+        assert_eq!(
+            lookup_resp.get("vk_image_tiling").and_then(|v| v.as_i64()),
+            Some(1000158000),
+        );
+        assert_eq!(
+            lookup_resp.get("vk_image_usage").and_then(|v| v.as_u64()),
+            Some(0x4F),
+        );
+        assert_eq!(
+            lookup_resp
+                .get("vk_image_allocation_size")
+                .and_then(|v| v.as_u64()),
+            Some(16_777_216),
+        );
+
+        let _ = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": "release",
+                "surface_id": "vk-image-wire-rt",
+                "runtime_id": "test-runtime",
+            }),
+            &[],
+            0,
+        );
+        drop(stream);
+        service.stop();
+    }
+
+    /// Back-compat sibling of [`vk_image_create_info_round_trip_through_register_lookup`]:
+    /// a register payload that omits the seven `vk_image_*` fields must
+    /// surface the documented defaults on lookup. This is the contract
+    /// every legacy producer (DMA-BUF VkImage, OPAQUE_FD VkBuffer)
+    /// relies on — without the defaults, a daemon serving an old client
+    /// would echo zero / unknown values and break the consumer's
+    /// VkImageCreateInfo reconstruction. Mentally revert one of the
+    /// `unwrap_or(...)` defaults in `parse_vk_image_create_info_fields`
+    /// and this test fails on the corresponding assertion.
+    ///
+    /// Default constants live in `super::state::VK_IMAGE_*_DEFAULT` —
+    /// the test mirrors their literal values so a default change
+    /// surfaces here too.
+    #[test]
+    fn vk_image_create_info_absent_fields_surface_documented_defaults() {
+        let state = SurfaceShareState::new();
+        let socket_path = tmp_socket_path();
+        let mut service = UnixSocketSurfaceService::new(state, socket_path.clone());
+        service.start().expect("service start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+
+        let send_fd = make_memfd_with(b"legacy-no-vk-image-fields");
+        let register_req = serde_json::json!({
+            "op": "register",
+            "surface_id": "legacy-defaults",
+            "runtime_id": "test-runtime",
+            "width": 64,
+            "height": 64,
+            "format": "Rgba8Unorm",
+            "resource_type": "texture",
+            // No vk_image_* fields — exercise the defaults path.
+        });
+        let (register_resp, _) = send_request_with_fds(&stream, &register_req, &[send_fd], 0)
+            .expect("register request");
+        unsafe { libc::close(send_fd) };
+        assert_eq!(
+            register_resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "legacy register must succeed: {:?}",
+            register_resp
+        );
+
+        let lookup_req = serde_json::json!({
+            "op": "lookup",
+            "surface_id": "legacy-defaults",
+        });
+        let (lookup_resp, lookup_fds) =
+            send_request_with_fds(&stream, &lookup_req, &[], MAX_DMA_BUF_PLANES)
+                .expect("lookup request");
+        for fd in &lookup_fds {
+            unsafe { libc::close(*fd) };
+        }
+
+        // VK_IMAGE_TYPE_2D = 1, mip = 1, layers = 1, samples = 1,
+        // tiling = OPTIMAL = 0,
+        // usage = TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE = 0x0F,
+        // allocation_size = 0 (consumer derives from width * height * bpp).
+        assert_eq!(
+            lookup_resp.get("vk_image_type").and_then(|v| v.as_i64()),
+            Some(1),
+            "absent vk_image_type defaults to VK_IMAGE_TYPE_2D",
+        );
+        assert_eq!(
+            lookup_resp
+                .get("vk_image_mip_levels")
+                .and_then(|v| v.as_u64()),
+            Some(1),
+        );
+        assert_eq!(
+            lookup_resp
+                .get("vk_image_array_layers")
+                .and_then(|v| v.as_u64()),
+            Some(1),
+        );
+        assert_eq!(
+            lookup_resp.get("vk_image_samples").and_then(|v| v.as_i64()),
+            Some(1),
+        );
+        assert_eq!(
+            lookup_resp.get("vk_image_tiling").and_then(|v| v.as_i64()),
+            Some(0),
+            "absent vk_image_tiling defaults to VK_IMAGE_TILING_OPTIMAL",
+        );
+        assert_eq!(
+            lookup_resp.get("vk_image_usage").and_then(|v| v.as_u64()),
+            Some(0x0F),
+            "absent vk_image_usage defaults to TRANSFER_SRC|TRANSFER_DST|SAMPLED|STORAGE",
+        );
+        assert_eq!(
+            lookup_resp
+                .get("vk_image_allocation_size")
+                .and_then(|v| v.as_u64()),
+            Some(0),
+            "absent vk_image_allocation_size defaults to 0 (consumer-derived)",
+        );
+
+        let _ = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": "release",
+                "surface_id": "legacy-defaults",
+                "runtime_id": "test-runtime",
+            }),
+            &[],
+            0,
+        );
         drop(stream);
         service.stop();
     }
