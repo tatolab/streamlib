@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::core::{Result, Error};
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::error::{Error, Result};
 
 /// Quality presets for audio resampling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

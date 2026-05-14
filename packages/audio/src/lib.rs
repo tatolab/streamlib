@@ -5,6 +5,13 @@
 
 pub mod _generated_;
 
+// Audio DSP utilities reach-for by processors that need conversion / resampling /
+// rechunking. Engine no longer hosts these; consumers (this package, packages/clap)
+// instantiate `ProcessorAudioConverter` directly as a struct field.
+pub mod audio_resample;
+pub mod audio_utils;
+pub mod processor_audio_converter;
+
 // Cross-platform processors
 pub mod audio_channel_converter;
 pub mod audio_mixer;
@@ -32,6 +39,11 @@ pub use audio_capture::{AudioCaptureProcessor, AudioInputDevice};
 pub use audio_channel_converter::AudioChannelConverterProcessor;
 pub use audio_mixer::AudioMixerProcessor;
 pub use audio_output::{AudioDevice, AudioOutputProcessor};
+pub use audio_resample::{AudioResampler, ResamplingQuality, StereoResampler};
 pub use audio_resampler::AudioResamplerProcessor;
+pub use audio_utils::{convert_audio_frame, convert_channels, resample_frame, AudioRechunker};
 pub use buffer_rechunker::BufferRechunkerProcessor;
 pub use chord_generator::ChordGeneratorProcessor;
+pub use processor_audio_converter::{
+    ProcessorAudioConverter, ProcessorAudioConverterStatus, ProcessorAudioConverterTargetFormat,
+};

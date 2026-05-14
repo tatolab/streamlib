@@ -432,7 +432,6 @@ fn generate_processor_struct_from_schema(
             #ipc_output_field
             #config_field
             #(#custom_field_defs)*
-            pub audio: ::streamlib::sdk::utils::ProcessorAudioConverter,
         }
     }
 }
@@ -654,12 +653,6 @@ fn generate_processor_impl_from_schema(
             #descriptor_impl
             #iceoryx2_accessors
 
-            fn get_audio_converter_status_arc(
-                &self,
-            ) -> Option<std::sync::Arc<std::sync::Mutex<::streamlib::sdk::utils::ProcessorAudioConverterStatus>>> {
-                Some(self.audio.status_arc())
-            }
-
             fn __generated_setup(
                 &mut self,
                 ctx: &::streamlib::sdk::context::RuntimeContextFullAccess<'_>,
@@ -761,7 +754,6 @@ fn generate_from_config_from_schema(
                 #ipc_output_init
                 #config_init
                 #(#custom_field_inits)*
-                audio: ::streamlib::sdk::utils::ProcessorAudioConverter::new(),
             })
         }
     }
@@ -928,5 +920,66 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
         #has_inputs_impl
         #get_output_writer_impl
         #get_input_mailboxes_impl
+    }
+}
+
+#[cfg(test)]
+mod processor_struct_emit_tests {
+    use super::*;
+    use streamlib_processor_schema::ProcessorSchema;
+
+    fn minimal_schema() -> ProcessorSchema {
+        ProcessorSchema {
+            name: "MinimalProbe".to_string(),
+            version: "0.1.0".to_string(),
+            description: None,
+            runtime: Default::default(),
+            entrypoint: None,
+            execution: Default::default(),
+            scheduling: None,
+            config: None,
+            state: Vec::new(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+
+    /// Locks #734: the macro must NOT emit a `pub audio:
+    /// ProcessorAudioConverter` field on the generated `Processor` struct.
+    /// Mentally revert the codegen.rs deletion and this assertion flips.
+    #[test]
+    fn processor_struct_does_not_carry_audio_field() {
+        let schema = minimal_schema();
+        let rendered = generate_processor_struct_from_schema(&schema, &None, &[]).to_string();
+        assert!(
+            !rendered.contains("audio"),
+            "generated Processor struct must not declare an `audio` field — got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("ProcessorAudioConverter"),
+            "generated Processor struct must not reference ProcessorAudioConverter — got: {}",
+            rendered
+        );
+    }
+
+    /// Locks #734: the macro's `from_config` initializer must NOT initialize
+    /// an `audio` field via `ProcessorAudioConverter::new()`. Mentally revert
+    /// the codegen.rs deletion and this assertion flips.
+    #[test]
+    fn from_config_initializer_does_not_construct_audio_converter() {
+        let schema = minimal_schema();
+        let rendered =
+            generate_from_config_from_schema(&schema, &None, &[]).to_string();
+        assert!(
+            !rendered.contains("ProcessorAudioConverter"),
+            "from_config must not reference ProcessorAudioConverter — got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("audio :"),
+            "from_config must not initialize an `audio` field — got: {}",
+            rendered
+        );
     }
 }

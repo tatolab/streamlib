@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use super::audio_resample::{AudioResampler, ResamplingQuality};
-use crate::_generated_::AudioFrame;
-use crate::core::Result;
+use crate::audio_resample::{AudioResampler, ResamplingQuality};
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::error::Result;
 
 /// Convert audio frame to a different channel count.
 pub fn convert_channels(frame: &AudioFrame, target_channels: u8) -> AudioFrame {

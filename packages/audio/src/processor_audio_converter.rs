@@ -3,10 +3,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use crate::_generated_::AudioFrame;
-use crate::core::utils::audio_resample::{AudioResampler, ResamplingQuality};
-use crate::core::utils::audio_utils::{convert_channels, AudioRechunker};
-use crate::core::Result;
+use crate::audio_resample::{AudioResampler, ResamplingQuality};
+use crate::audio_utils::{convert_channels, AudioRechunker};
+use streamlib::sdk::_generated_::AudioFrame;
+use streamlib::sdk::error::Result;
 
 /// Target audio format for conversion.
 pub struct ProcessorAudioConverterTargetFormat {
@@ -64,7 +64,7 @@ impl ProcessorAudioConverter {
         }
     }
 
-    /// Returns the shared status Arc for the ECS component.
+    /// Returns the shared status Arc.
     pub fn status_arc(&self) -> Arc<Mutex<ProcessorAudioConverterStatus>> {
         Arc::clone(&self.status)
     }

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::processor_audio_converter::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Stream, StreamConfig};
 use rtrb::{Producer, RingBuffer};
@@ -8,7 +9,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use streamlib::sdk::_generated_::AudioFrame;
-use streamlib::sdk::utils::ProcessorAudioConverterTargetFormat;
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 
@@ -26,7 +26,7 @@ impl SendableInputsPtr {
 }
 
 /// Wrapper for ProcessorAudioConverter pointer that is Send.
-struct SendableAudioConverterPtr(*mut streamlib::sdk::utils::ProcessorAudioConverter);
+struct SendableAudioConverterPtr(*mut ProcessorAudioConverter);
 
 // SAFETY: Only one thread accesses it, and we join before drop
 unsafe impl Send for SendableAudioConverterPtr {}
@@ -35,7 +35,7 @@ unsafe impl Send for SendableAudioConverterPtr {}
 impl SendableAudioConverterPtr {
     /// SAFETY: Caller must ensure the pointed-to data is still valid
     /// and no other thread is accessing it.
-    unsafe fn get_mut(&self) -> &mut streamlib::sdk::utils::ProcessorAudioConverter {
+    unsafe fn get_mut(&self) -> &mut ProcessorAudioConverter {
         &mut *self.0
     }
 }
@@ -62,6 +62,7 @@ pub struct AppleAudioOutputProcessor {
     frame_producer: Arc<Mutex<Option<Producer<AudioFrame>>>>,
     polling_thread: Option<thread::JoinHandle<()>>,
     stop_polling: Arc<AtomicBool>,
+    audio: Option<ProcessorAudioConverter>,
 }
 
 impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::Processor {
@@ -74,6 +75,7 @@ impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::
             .device_id
             .as_ref()
             .and_then(|s| s.parse::<usize>().ok());
+        self.audio = Some(ProcessorAudioConverter::new());
         tracing::info!(
             "AudioOutput: start() called (Pull mode - will query device for native config)"
         );
@@ -212,8 +214,13 @@ impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::
         // 1. The polling thread is stopped in teardown() before self is dropped
         // 2. Only the polling thread accesses these after start() returns
         // 3. In Manual mode, no other code touches self between start() and teardown()
+        let audio = self.audio.as_mut().ok_or_else(|| {
+            Error::Configuration(
+                "audio converter not initialized — setup() must run before start()".into(),
+            )
+        })?;
         let inputs_ptr = SendableInputsPtr(&self.inputs as *const _);
-        let audio_ptr = SendableAudioConverterPtr(&mut self.audio as *mut _);
+        let audio_ptr = SendableAudioConverterPtr(audio as *mut _);
         let producer_clone = Arc::clone(&self.frame_producer);
         let stop_clone = Arc::clone(&stop_flag);
         let target_sample_rate = device_sample_rate;

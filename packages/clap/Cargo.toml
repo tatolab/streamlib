@@ -18,6 +18,11 @@ crate-type = ["rlib", "cdylib"]
 # types under `streamlib::sdk::_generated_::*` (AudioFrame).
 streamlib = { path = "../../libs/streamlib-sdk" }
 
+# Audio domain package — owns `ProcessorAudioConverter` + `AudioResampler`
+# (carved out of the engine in #734). Consumers that need channel /
+# sample-rate / rechunk conversion reach for them here.
+streamlib-audio = { path = "../audio" }
+
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = { path = "../../libs/streamlib-macros" }

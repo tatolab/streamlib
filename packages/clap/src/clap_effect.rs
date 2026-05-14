@@ -12,7 +12,7 @@ use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::InputMailboxes;
 use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::utils::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
+use streamlib_audio::{ProcessorAudioConverter, ProcessorAudioConverterTargetFormat};
 
 use crate::host::ClapPluginHost;
 use crate::parameter_automation::ClapParameterControl;
@@ -73,6 +73,7 @@ pub struct ClapEffectProcessor {
     buffer_size: usize,
     polling_thread: Option<std::thread::JoinHandle<()>>,
     stop_polling: Arc<AtomicBool>,
+    audio: Option<ProcessorAudioConverter>,
 }
 
 impl ClapEffectProcessor::Processor {
@@ -140,6 +141,7 @@ impl ManualProcessor for ClapEffectProcessor::Processor {
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         let result = (|| {
             self.buffer_size = self.config.buffer_size as usize;
+            self.audio = Some(ProcessorAudioConverter::new());
 
             // Load CLAP plugin with placeholder sample_rate — activate() will set the real rate
             // when the first input frame arrives in the polling thread
@@ -207,8 +209,13 @@ impl ManualProcessor for ClapEffectProcessor::Processor {
         // 2. Only the polling thread accesses these after start() returns
         // 3. In Manual mode, no other code touches self.inputs/self.audio/self.host
         //    between start() and teardown()
+        let audio = self.audio.as_mut().ok_or_else(|| {
+            Error::Configuration(
+                "audio converter not initialized — setup() must run before start()".into(),
+            )
+        })?;
         let inputs_ptr = SendableInputsPtr(&self.inputs as *const _);
-        let audio_ptr = SendableAudioConverterPtr(&mut self.audio as *mut _);
+        let audio_ptr = SendableAudioConverterPtr(audio as *mut _);
         let host_ptr = SendableClapHostPtr(&mut self.host as *mut _);
         let outputs = Arc::clone(&self.outputs);
         let buffer_size = self.buffer_size;
