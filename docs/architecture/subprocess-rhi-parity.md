@@ -93,11 +93,22 @@ Every surface adapter rides the same shape:
 The single-pattern principle is the engine-model rule
 ([CLAUDE.md "The StreamLib Engine Model"](../../CLAUDE.md#the-streamlib-engine-model))
 applied to the surface-adapter layer: there is ONE way to expose a
-host-allocated GPU resource to a subprocess customer, and every adapter
-uses it. RHI bug fixes (e.g. import-side memory-type selection,
-layout-transition pipeline-stage masks, timeline-semaphore wait
-timeouts) propagate to every adapter automatically because all flow
-through the same `consumer-rhi` types.
+host-allocated GPU resource to a subprocess customer, and every
+subprocess-wired adapter uses it. RHI bug fixes (e.g. import-side
+memory-type selection, layout-transition pipeline-stage masks,
+timeline-semaphore wait timeouts) propagate to every adapter
+automatically because all flow through the same `consumer-rhi` types.
+
+`streamlib-adapter-skia` is host-side only — it composes on the
+Vulkan and OpenGL adapters (per the cross-process composition
+section in [`adapter-authoring.md`](adapter-authoring.md)) and
+isn't a runtime dep of either cdylib. Its subprocess customers
+reach Skia surfaces through the wrapped adapter's cdylib path,
+which is the canonical "compose, don't rederive" shape; the
+single-pattern principle still holds at the layer that matters
+(subprocess-side imports) because every cross-process customer
+still reaches consumer-rhi through one of the four wired
+adapters.
 
 ## Per-pattern decisions
 
@@ -142,20 +153,23 @@ through the same `consumer-rhi` types.
 │  │ TextureFormat / TextureUsages / PixelFormat, VulkanLayout     │   │
 │  │ ✓ Capability boundary TYPE-SYSTEM enforced                    │   │
 │  └───────────────────────────────────────────────────────────────┘   │
-│       ▲      ▲      ▲      ▲      ▲                                  │
-│  ┌────┴──┬───┴──┬───┴────┬─┴────┬─┴────┐                             │
-│  │ vk-   │ gl-  │cpu-rb- │cuda- │skia- │ All adapters ride           │
-│  │ adptr │adptr │adptr   │adptr │adptr │ consumer-rhi. Each is       │
-│  │       │      │        │      │      │ generic over                │
-│  │       │      │        │      │      │ D: VulkanRhiDevice; host    │
-│  │       │      │        │      │      │ uses HostVulkanDevice,      │
-│  │       │      │        │      │      │ cdylib uses                 │
-│  │       │      │        │      │      │ ConsumerVulkanDevice.       │
-│  └───────┴──────┴────────┴──────┴──────┘                             │
-│       ▲      ▲      ▲      ▲      ▲     Pre-registered surfaces via  │
+│       ▲      ▲      ▲      ▲                                         │
+│  ┌────┴──┬───┴──┬───┴────┬─┴────┐                                    │
+│  │ vk-   │ gl-  │cpu-rb- │cuda- │ Subprocess-wired adapters ride     │
+│  │ adptr │adptr │adptr   │adptr │ consumer-rhi. Each is generic over │
+│  │       │      │        │      │ D: VulkanRhiDevice; host uses      │
+│  │       │      │        │      │ HostVulkanDevice, cdylib uses      │
+│  │       │      │        │      │ ConsumerVulkanDevice.              │
+│  └───────┴──────┴────────┴──────┘                                    │
+│       ▲      ▲      ▲      ▲           Pre-registered surfaces via   │
 │       │ surface-share check_in (one-shot DMA-BUF / OPAQUE_FD +       │
 │       │ timeline FD passing); per-acquire IPC reduces to a thin      │
 │       │ trigger when host work is required.                          │
+│                                                                      │
+│  streamlib-adapter-skia is host-side only (composes on the OpenGL    │
+│  / Vulkan adapter per adapter-authoring's cross-process composition  │
+│  section); its subprocess customers reach it through the wrapped     │
+│  adapter's cdylib path and it isn't in either cdylib's Cargo deps.   │
 └───────┼──────────────────────────────────────────────────────────────┘
         ▼
 ┌──────────────────────┐         ┌──────────────────────┐
@@ -164,7 +178,7 @@ through the same `consumer-rhi` types.
 │  + adapter-{abi,     │         │  + adapter-{abi,     │
 │   vulkan, opengl,    │         │   vulkan, opengl,    │
 │   cpu-readback,      │         │   cpu-readback,      │
-│   cuda, skia};       │         │   cuda, skia};       │
+│   cuda};             │         │   cuda};             │
 │  NOT full streamlib  │         │  NOT full streamlib  │
 └──────────────────────┘         └──────────────────────┘
 ```
