@@ -107,12 +107,9 @@ fn test_processor_schema_ident_resolves_from_package_block() {
 fn test_processor_schema_ident_renders_canonical_joined_form() {
     // The structured SchemaIdent's Display impl produces the canonical
     // `@<org>/<package>/<Type>@<major.minor.patch>` joined form used by
-    // `max_payload_bytes_for_schema` and other lookup paths.
+    // `max_payload_bytes_for_port_spec` and other lookup paths.
     //
-    // Package name is `streamlib-engine` post-#731 (was `streamlib` before
-    // the SDK extraction). Reverse-DNS schema names in `core/streaming/`,
-    // `linux/processors/`, etc. retain the `com.streamlib.*` namespace —
-    // those are independent of the package's `name:` field.
+    // Package name is `streamlib-engine`.
     assert_eq!(
         TestProcessor::schema_ident().to_string(),
         "@tatolab/streamlib-engine/TestProcessor@0.4.28"

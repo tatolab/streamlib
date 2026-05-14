@@ -322,7 +322,7 @@ fn open_iceoryx2_pubsub(
     );
 
     // Look up schema for the output port before creating the publisher so we can size
-    // the shared memory slot correctly via max_payload_bytes_for_schema.
+    // the shared memory slot correctly via max_payload_bytes_for_port_spec.
     let output_schema = {
         let source_proc_type = graph
             .traversal_mut()

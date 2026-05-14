@@ -150,6 +150,11 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    //! Tests mutate the global `SCHEMA_REGISTRY` and do NOT clean up
+    //! after themselves — every registration uses a canonical id
+    //! unique to its test. The `register_core_wire_vocabulary()` setup
+    //! helper is `Once`-guarded, so wire-vocabulary entries are
+    //! registered at most once per test process.
     use super::*;
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
     use streamlib_processor_schema::PortSchemaSpec;
@@ -191,6 +196,27 @@ mod tests {
     fn lookup_returns_none_for_unknown_schema() {
         assert!(get_embedded_schema_definition("@nonexistent/pkg/Type").is_none());
         assert!(get_embedded_schema_definition("@nonexistent/pkg/Type@1.0.0").is_none());
+    }
+
+    #[test]
+    fn registry_starts_empty_until_explicit_registration() {
+        // The engine's `streamlib.yaml` declares `@tatolab/escalate/*`
+        // as an External dep, so a resurrected `EMBEDDED_SCHEMAS` const
+        // walking the manifest at build time would seed
+        // `@tatolab/escalate/EscalateRequest` into the registry.
+        // No test in this crate's test binary registers it (the
+        // wire-vocabulary setup helper only covers `@tatolab/core/*`,
+        // and the `load_project` regression tests build fresh tempdir
+        // packages with no `@tatolab/escalate` dep). So if this lookup
+        // ever returns Some, someone has reintroduced a build-time
+        // seeding path.
+        assert!(
+            get_embedded_schema_definition("@tatolab/escalate/EscalateRequest").is_none(),
+            "registry must start empty — `@tatolab/escalate/EscalateRequest` would only \
+             be present if a build-time seed path were reintroduced. Reverting the \
+             `EMBEDDED_SCHEMAS` const + `generate_embedded_schemas_table` deletion \
+             would make this test fail."
+        );
     }
 
     #[test]

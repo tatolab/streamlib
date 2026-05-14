@@ -386,12 +386,13 @@ impl Runner {
         // Register every schema declared in `streamlib.yaml`'s
         // `schemas:` list with the engine's runtime schema registry so
         // `get_embedded_schema_definition` /
-        // `max_payload_bytes_for_schema` / api-server `/schemas`
-        // discover this package's schemas (#729). The engine's
-        // compile-time `EMBEDDED_SCHEMAS` const seeds the registry
-        // lazily on first lookup; this call is the runtime path that
-        // makes domain-package schemas reachable without the engine
-        // declaring them as deps.
+        // `max_payload_bytes_for_port_spec` / api-server `/schemas`
+        // discover this package's schemas. The registry starts empty
+        // and is populated exclusively through this path — apps wire
+        // the packages they need (`@tatolab/core` for wire vocabulary,
+        // `@tatolab/audio` / etc. for domain processors) and
+        // `load_project` walks the dependency graph and registers each
+        // package's schemas as it traverses.
         register_package_schemas(project_path, &config)?;
 
         if config.processors.is_empty() {
@@ -1933,8 +1934,8 @@ package:
     /// `Runner::load_project` reads each entry in `streamlib.yaml`'s
     /// `schemas:` list and registers the YAML body with the engine's
     /// runtime schema registry, so `get_embedded_schema_definition`
-    /// resolves the body and `max_payload_bytes_for_schema` returns
-    /// the value declared in `metadata.max_payload_bytes` (#729).
+    /// resolves the body and `max_payload_bytes_for_port_spec` returns
+    /// the value declared in `metadata.max_payload_bytes`.
     /// Mentally reverting the `register_package_schemas(...)` call in
     /// `load_project` would make this test fail because the registered
     /// schema would be invisible to the lookup paths.

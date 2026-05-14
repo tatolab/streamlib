@@ -119,8 +119,8 @@ impl Iceoryx2Service {
     /// Create a publisher for this service.
     ///
     /// `max_payload_bytes` sets the per-slot shared memory capacity (data only, header is added
-    /// internally). Use [`crate::core::embedded_schemas::max_payload_bytes_for_schema`] to derive
-    /// this value from the output port's schema declaration.
+    /// internally). Use `embedded_schemas::max_payload_bytes_for_port_spec` to derive this value
+    /// from the output port's schema declaration.
     pub fn create_publisher(
         &self,
         max_payload_bytes: usize,
