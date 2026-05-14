@@ -58,8 +58,8 @@ cpu-readback, cuda, …).
   imported handles + sync wait/signal. Anything beyond that
   escalates to the host.
 - **Don't author SPIR-V kernels in subprocess code.** Use
-  `RegisterComputeKernel` + `RunComputeKernel` (#550) to dispatch
-  through the host's `VulkanComputeKernel`.
+  `RegisterComputeKernel` + `RunComputeKernel` to dispatch through
+  the host's `VulkanComputeKernel`.
 - **Adapter crate runtime dep graph excludes `streamlib`.**
   Test-only deps go in `[dev-dependencies]`; test-helper bins
   that need `streamlib` go in a sibling `streamlib-adapter-<name>-helpers`
