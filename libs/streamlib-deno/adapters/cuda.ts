@@ -672,6 +672,7 @@ export class CudaContext {
 
     const view = this.parseImageView(buf, write);
     const surfaceIdSnapshot = surfaceId;
+    const handleSnapshot = view.handle;
     const symbols = this.symbols;
     const rt = this.rt;
     const writeMode = write;
@@ -679,10 +680,21 @@ export class CudaContext {
     return {
       view,
       [Symbol.dispose]: () => {
+        // Thread the customer's handle back so the cdylib destroys
+        // this view's cudaTextureObject_t / cudaSurfaceObject_t —
+        // not some other concurrent reader's.
         if (writeMode) {
-          symbols.sldn_cuda_release_surface(rt, surfaceIdSnapshot);
+          symbols.sldn_cuda_release_surface(
+            rt,
+            surfaceIdSnapshot,
+            handleSnapshot,
+          );
         } else {
-          symbols.sldn_cuda_release_texture(rt, surfaceIdSnapshot);
+          symbols.sldn_cuda_release_texture(
+            rt,
+            surfaceIdSnapshot,
+            handleSnapshot,
+          );
         }
       },
     };

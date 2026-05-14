@@ -5040,7 +5040,7 @@ mod cpu_readback {
 
 #[cfg(target_os = "linux")]
 mod cuda {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::ffi::c_void;
     use std::mem::MaybeUninit;
     use std::os::unix::io::RawFd;
@@ -6059,27 +6059,36 @@ mod cuda {
     /// (the CUDA-side handle yielded by
     /// `cudaExternalMemoryGetMappedMipmappedArray`), the per-surface
     /// stream, plus the same imported timeline + the host
-    /// `Arc<ConsumerVulkanTexture>` for Drop-order keepalive.
+    /// `Arc<ConsumerVulkanTexture>` for keepalive across CUDA-side
+    /// teardown.
     ///
     /// Per-acquire `cudaTextureObject_t` / `cudaSurfaceObject_t`
-    /// handles live on `live_objects` — push on acquire, pop on
-    /// release. LIFO mirrors the scope-bound `with` / `using` pattern
-    /// at the SDK layer.
+    /// handles live in `live_textures` / `live_surfaces` (sets keyed
+    /// by handle value). Each release call passes its handle back so
+    /// the cdylib destroys the exact object the customer used — not
+    /// whichever was last constructed. This makes concurrent reads
+    /// (the adapter supports N read holders) safe: R1's release
+    /// destroys R1's handle even when R2 is mid-acquire.
     struct RegisteredCudaImageSurface {
-        // CUDA-side imports — Drop runs in declaration order, so list
-        // these first to ensure they're torn down before the Vulkan
-        // Arcs below release the underlying memory.
+        // CUDA-side imports — the manual `Drop` impl below tears them
+        // down in the correct order explicitly. Field declaration
+        // order doesn't matter for teardown correctness; the explicit
+        // Drop runs first and field drops fire afterward (with the
+        // Vulkan-side Arcs dropping last so the CUDA imports never
+        // outlive their backing memory).
         ext_mem: sys::cudaExternalMemory_t,
         ext_sem: sys::cudaExternalSemaphore_t,
         stream: sys::cudaStream_t,
         mipmapped_array: sys::cudaMipmappedArray_t,
-        /// Stack of live `cudaTextureObject_t` / `cudaSurfaceObject_t`
-        /// handles — one entry per outstanding acquire. Both types are
-        /// `c_ulonglong` so a single `u64` discriminator-less stack
-        /// covers either flavor (read-side pushes texture objects,
-        /// write-side pushes surface objects; releases pop the
-        /// matching flavor by FFI entry-point selection).
-        live_objects: Mutex<Vec<u64>>,
+        /// Outstanding `cudaTextureObject_t` handles. The release
+        /// FFI removes the specific handle the customer passes back;
+        /// `Drop` drains anything left over (orphan from a leak).
+        live_textures: Mutex<HashSet<u64>>,
+        /// Symmetric to [`Self::live_textures`] but for
+        /// `cudaSurfaceObject_t`. Two sets (rather than one
+        /// flavor-tagged set) so the destroy call dispatches without
+        /// a lookup.
+        live_surfaces: Mutex<HashSet<u64>>,
         width: u32,
         height: u32,
         format: TextureFormat,
@@ -6098,29 +6107,31 @@ mod cuda {
     impl Drop for RegisteredCudaImageSurface {
         fn drop(&mut self) {
             unsafe {
-                // Destroy any texture / surface objects still outstanding.
-                // Customers SHOULD release every acquire before unregister,
-                // but a forced unregister mid-flight shouldn't leak handles.
-                let drained: Vec<u64> = self
-                    .live_objects
+                // Destroy any outstanding texture / surface objects.
+                // Customers SHOULD release every acquire before
+                // unregister, but a forced teardown mid-flight
+                // shouldn't leak handles. Per-flavor sets mean we
+                // dispatch to the right CUDA destroy call without
+                // trial-and-error.
+                let textures: Vec<u64> = self
+                    .live_textures
                     .lock()
-                    .expect("RegisteredCudaImageSurface live_objects: poisoned")
-                    .drain(..)
+                    .expect("RegisteredCudaImageSurface live_textures: poisoned")
+                    .drain()
                     .collect();
-                for handle in drained {
-                    // Texture and surface objects use the same destroy
-                    // signature — pick by trial since we don't track
-                    // flavor on the stack. `cudaDestroyTextureObject`
-                    // returns `cudaErrorInvalidValue` on a surface
-                    // object (and vice-versa), so attempt one then the
-                    // other.
-                    if sys::cudaDestroyTextureObject(handle as sys::cudaTextureObject_t)
-                        .result()
-                        .is_err()
-                    {
-                        let _ = sys::cudaDestroySurfaceObject(handle as sys::cudaSurfaceObject_t)
-                            .result();
-                    }
+                for handle in textures {
+                    let _ =
+                        sys::cudaDestroyTextureObject(handle as sys::cudaTextureObject_t).result();
+                }
+                let surfaces: Vec<u64> = self
+                    .live_surfaces
+                    .lock()
+                    .expect("RegisteredCudaImageSurface live_surfaces: poisoned")
+                    .drain()
+                    .collect();
+                for handle in surfaces {
+                    let _ =
+                        sys::cudaDestroySurfaceObject(handle as sys::cudaSurfaceObject_t).result();
                 }
                 if !self.mipmapped_array.is_null() {
                     let _ = sys::cudaFreeMipmappedArray(self.mipmapped_array).result();
@@ -6451,7 +6462,8 @@ mod cuda {
             ext_sem,
             stream,
             mipmapped_array,
-            live_objects: Mutex::new(Vec::new()),
+            live_textures: Mutex::new(HashSet::new()),
+            live_surfaces: Mutex::new(HashSet::new()),
             width: gpu.width,
             height: gpu.height,
             format: texture_format,
@@ -6714,10 +6726,10 @@ mod cuda {
                     }
                 };
                 entry
-                    .live_objects
+                    .live_textures
                     .lock()
-                    .expect("slpn_cuda live_objects: poisoned")
-                    .push(tex_obj as u64);
+                    .expect("slpn_cuda live_textures: poisoned")
+                    .insert(tex_obj as u64);
                 populate_image_view(&entry, tex_obj as u64, out)
             }
             Err(e) => {
@@ -6778,10 +6790,10 @@ mod cuda {
                     }
                 };
                 entry
-                    .live_objects
+                    .live_surfaces
                     .lock()
-                    .expect("slpn_cuda live_objects: poisoned")
-                    .push(surf_obj as u64);
+                    .expect("slpn_cuda live_surfaces: poisoned")
+                    .insert(surf_obj as u64);
                 populate_image_view(&entry, surf_obj as u64, out)
             }
             Err(e) => {
@@ -6835,10 +6847,10 @@ mod cuda {
                     }
                 };
                 entry
-                    .live_objects
+                    .live_textures
                     .lock()
-                    .expect("slpn_cuda live_objects: poisoned")
-                    .push(tex_obj as u64);
+                    .expect("slpn_cuda live_textures: poisoned")
+                    .insert(tex_obj as u64);
                 populate_image_view(&entry, tex_obj as u64, out)
             }
             Ok(None) => SLPN_CUDA_CONTENDED,
@@ -6893,10 +6905,10 @@ mod cuda {
                     }
                 };
                 entry
-                    .live_objects
+                    .live_surfaces
                     .lock()
-                    .expect("slpn_cuda live_objects: poisoned")
-                    .push(surf_obj as u64);
+                    .expect("slpn_cuda live_surfaces: poisoned")
+                    .insert(surf_obj as u64);
                 populate_image_view(&entry, surf_obj as u64, out)
             }
             Ok(None) => SLPN_CUDA_CONTENDED,
@@ -6907,29 +6919,45 @@ mod cuda {
         }
     }
 
-    /// Release one outstanding texture-flavored acquire — pops the
-    /// LIFO stack of live `cudaTextureObject_t` handles for this
-    /// surface, destroys the popped handle, and decrements the
+    /// Release one outstanding texture-flavored acquire. Removes the
+    /// specific `handle` (the `cudaTextureObject_t` the customer was
+    /// handed from the matching acquire) from the live set, destroys
+    /// it with `cudaDestroyTextureObject`, and decrements the
     /// adapter's read-holder counter.
+    ///
+    /// Taking the handle as an explicit parameter (rather than popping
+    /// the most recently acquired one) is what makes the FFI safe
+    /// under concurrent reads: the adapter allows N read holders, and
+    /// each acquire constructs a unique handle — releases must
+    /// destroy the caller's handle, not whichever was last
+    /// constructed.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_cuda_release_texture(
         rt: *mut CudaRuntimeHandle,
         surface_id: u64,
+        handle: u64,
     ) -> i32 {
         let rt = match unsafe { rt.as_ref() } {
             Some(r) => r,
             None => return SLPN_CUDA_ERR,
         };
         if let Some(entry) = lookup_image_entry(rt, surface_id) {
-            if let Some(handle) = entry
-                .live_objects
+            let removed = entry
+                .live_textures
                 .lock()
-                .expect("slpn_cuda live_objects: poisoned")
-                .pop()
-            {
+                .expect("slpn_cuda live_textures: poisoned")
+                .remove(&handle);
+            if removed {
                 let _ = unsafe {
                     sys::cudaDestroyTextureObject(handle as sys::cudaTextureObject_t).result()
                 };
+            } else {
+                tracing::warn!(
+                    "slpn_cuda_release_texture({}, handle={:#x}): handle not in the \
+                     live set — double-release or wrong-flavor release?",
+                    surface_id,
+                    handle
+                );
             }
         }
         rt.adapter.end_read_access(surface_id);
@@ -6937,26 +6965,35 @@ mod cuda {
     }
 
     /// Release one outstanding surface-flavored acquire — symmetric
-    /// counterpart to [`slpn_cuda_release_texture`].
+    /// counterpart to [`slpn_cuda_release_texture`]. Same handle-keyed
+    /// semantics so concurrent acquires are safe.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_cuda_release_surface(
         rt: *mut CudaRuntimeHandle,
         surface_id: u64,
+        handle: u64,
     ) -> i32 {
         let rt = match unsafe { rt.as_ref() } {
             Some(r) => r,
             None => return SLPN_CUDA_ERR,
         };
         if let Some(entry) = lookup_image_entry(rt, surface_id) {
-            if let Some(handle) = entry
-                .live_objects
+            let removed = entry
+                .live_surfaces
                 .lock()
-                .expect("slpn_cuda live_objects: poisoned")
-                .pop()
-            {
+                .expect("slpn_cuda live_surfaces: poisoned")
+                .remove(&handle);
+            if removed {
                 let _ = unsafe {
                     sys::cudaDestroySurfaceObject(handle as sys::cudaSurfaceObject_t).result()
                 };
+            } else {
+                tracing::warn!(
+                    "slpn_cuda_release_surface({}, handle={:#x}): handle not in the \
+                     live set — double-release or wrong-flavor release?",
+                    surface_id,
+                    handle
+                );
             }
         }
         rt.adapter.end_write_access(surface_id);
@@ -7300,6 +7337,7 @@ mod cuda {
     pub unsafe extern "C" fn slpn_cuda_release_texture(
         _rt: *mut c_void,
         _surface_id: u64,
+        _handle: u64,
     ) -> i32 {
         SLPN_CUDA_ERR
     }
@@ -7308,6 +7346,7 @@ mod cuda {
     pub unsafe extern "C" fn slpn_cuda_release_surface(
         _rt: *mut c_void,
         _surface_id: u64,
+        _handle: u64,
     ) -> i32 {
         SLPN_CUDA_ERR
     }

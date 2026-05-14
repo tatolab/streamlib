@@ -426,12 +426,17 @@ const symbols = {
     parameters: ["pointer", "u64", "pointer"] as const,
     result: "i32" as const,
   },
+  // Release takes the handle back as `u64` so the cdylib destroys the
+  // exact `cudaTextureObject_t` / `cudaSurfaceObject_t` the customer
+  // used — not "whichever was last constructed". The adapter supports
+  // N concurrent read holders; popping a LIFO stack would destroy the
+  // wrong reader's handle.
   sldn_cuda_release_texture: {
-    parameters: ["pointer", "u64"] as const,
+    parameters: ["pointer", "u64", "u64"] as const,
     result: "i32" as const,
   },
   sldn_cuda_release_surface: {
-    parameters: ["pointer", "u64"] as const,
+    parameters: ["pointer", "u64", "u64"] as const,
     result: "i32" as const,
   },
 } as const;

@@ -249,6 +249,82 @@ def test_cuda_texture_and_surface_views_round_trip_dataclass_construction():
     assert sv.format is c.CudaImageFormat.RGBA32_FLOAT
 
 
+def test_image_path_release_ffi_takes_handle_parameter():
+    """Lock the handle-keyed release semantics at the FFI layer.
+
+    The cdylib's `slpn_cuda_release_texture` / `_release_surface` take
+    the customer's `cudaTextureObject_t` / `cudaSurfaceObject_t` back
+    as a `u64` parameter. This is what makes the FFI safe under
+    concurrent reads: the underlying adapter allows N read holders,
+    each `acquire_texture` constructs a unique handle, and releases
+    must destroy *the caller's* handle — not whichever was most
+    recently constructed.
+
+    A regression that drops the handle parameter (e.g. reverting to a
+    LIFO pop strategy) would trip this test by making the SDK's
+    `_wire_signatures` set up a 2-arg argtypes list. The wire-ABI
+    shape is the load-bearing invariant; pin it explicitly.
+    """
+    class _StubFn:
+        argtypes: list = []  # type: ignore[type-arg]
+        restype = None
+
+    class _FakeLib:
+        def __init__(self) -> None:
+            # Every symbol `_wire_signatures` reaches via getattr needs
+            # to exist on this fake so the wiring runs end-to-end.
+            for name in (
+                "slpn_cuda_runtime_new",
+                "slpn_cuda_runtime_free",
+                "slpn_cuda_register_surface",
+                "slpn_cuda_unregister_surface",
+                "slpn_cuda_acquire_read",
+                "slpn_cuda_acquire_write",
+                "slpn_cuda_try_acquire_read",
+                "slpn_cuda_try_acquire_write",
+                "slpn_cuda_release_read",
+                "slpn_cuda_release_write",
+                "slpn_cuda_register_image_surface",
+                "slpn_cuda_unregister_image_surface",
+                "slpn_cuda_acquire_texture",
+                "slpn_cuda_acquire_surface",
+                "slpn_cuda_try_acquire_texture",
+                "slpn_cuda_try_acquire_surface",
+                "slpn_cuda_release_texture",
+                "slpn_cuda_release_surface",
+            ):
+                setattr(self, name, _StubFn())
+
+    class _FakeGpu:
+        native_lib = _FakeLib()
+
+    class _Probe(c.CudaContext):
+        """Override __init__ to skip the cdylib runtime bring-up
+        (which needs Vulkan + CUDA installed). The only behavior
+        under test is the argtypes wiring."""
+
+        def __init__(self, gpu) -> None:  # type: ignore[no-untyped-def]
+            self._gpu = gpu
+            self._lib = gpu.native_lib
+            self._wire_signatures()
+
+    fake = _FakeGpu()
+    _Probe(fake)
+
+    # The cdylib expects (rt, surface_id, handle) for both releases.
+    # A regression to (rt, surface_id) is the LIFO-pop anti-pattern
+    # this test exists to catch.
+    expected = [ctypes.c_void_p, ctypes.c_uint64, ctypes.c_uint64]
+    assert fake.native_lib.slpn_cuda_release_texture.argtypes == expected, (
+        "slpn_cuda_release_texture must take (rt, surface_id, handle); "
+        f"got {fake.native_lib.slpn_cuda_release_texture.argtypes}. "
+        "Reverting to a 2-arg shape is the LIFO-pop anti-pattern that "
+        "breaks under concurrent reads — see the cdylib's "
+        "`slpn_cuda_release_texture` doc-comment."
+    )
+    assert fake.native_lib.slpn_cuda_release_surface.argtypes == expected
+
+
 def test_release_for_cross_process_signature_takes_no_vulkan_ctx():
     """Pin the CUDA shim's signature explicitly — it must NOT take a
     `vulkan_ctx` parameter (unlike the OpenGL shim's). The design

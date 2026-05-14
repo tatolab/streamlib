@@ -85,6 +85,47 @@ Deno.test("CudaTextureView / CudaSurfaceView shapes round-trip dataclass-style",
   assertEquals(sv.format, CudaImageFormat.Rgba32Float);
 });
 
+Deno.test(
+  "image-path release FFI declares (pointer, u64, u64) — handle-keyed",
+  async () => {
+    // The cdylib's `sldn_cuda_release_texture` / `_surface` take the
+    // customer's `cudaTextureObject_t` / `cudaSurfaceObject_t` back
+    // as a `u64`. This is what makes the FFI safe under concurrent
+    // reads (N read holders, each with a unique handle, releases
+    // must destroy the caller's handle — not LIFO pop). Pin the
+    // declared argtypes here so a regression to a 2-arg shape
+    // surfaces at unit-test time.
+    //
+    // Source-level check rather than runtime introspection because
+    // the `symbols` object in `native.ts` is not exported (it's
+    // `const symbols`, used only by `loadNativeLib`). The `as const`
+    // shape is the load-bearing invariant; reading the source text
+    // is the simplest way to lock it.
+    // `import.meta.url` is the test file's URL; resolve `../native.ts`
+    // relative to it so the test runs regardless of cwd.
+    const nativeUrl = new URL("../native.ts", import.meta.url);
+    const src = await Deno.readTextFile(nativeUrl);
+    const releaseTexture =
+      /sldn_cuda_release_texture:\s*\{\s*parameters:\s*\["pointer",\s*"u64",\s*"u64"\]\s+as const/;
+    const releaseSurface =
+      /sldn_cuda_release_surface:\s*\{\s*parameters:\s*\["pointer",\s*"u64",\s*"u64"\]\s+as const/;
+    if (!releaseTexture.test(src)) {
+      throw new Error(
+        "sldn_cuda_release_texture FFI declaration must take " +
+          '["pointer", "u64", "u64"] — a regression to ["pointer", "u64"] ' +
+          "is the LIFO-pop anti-pattern that breaks under concurrent " +
+          "reads. See the cdylib's `sldn_cuda_release_texture` doc-comment.",
+      );
+    }
+    if (!releaseSurface.test(src)) {
+      throw new Error(
+        "sldn_cuda_release_surface FFI declaration must take " +
+          '["pointer", "u64", "u64"] — same regression check.',
+      );
+    }
+  },
+);
+
 Deno.test("releaseForCrossProcess signature takes no vulkanCtx parameter", () => {
   // The CUDA shim must NOT take a `vulkanCtx` parameter — unlike the
   // OpenGL shim. Per the design clarification comment on #802:

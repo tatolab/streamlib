@@ -589,13 +589,21 @@ class CudaContext:
                 ctypes.POINTER(_SlpnCudaImageView),
             ]
 
+        # Release takes the handle back so the cdylib destroys the
+        # exact `cudaTextureObject_t` / `cudaSurfaceObject_t` the
+        # customer used — see the cdylib's `slpn_cuda_release_texture`
+        # doc-comment for the concurrent-read rationale.
         for name in (
             "slpn_cuda_release_texture",
             "slpn_cuda_release_surface",
         ):
             fn = getattr(lib, name)
             fn.restype = ctypes.c_int32
-            fn.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+            fn.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint64,
+                ctypes.c_uint64,
+            ]
 
     def _resolve_and_register(self, pool_id: str) -> int:
         """Resolve `pool_id` via surface-share, register with the cuda
@@ -844,15 +852,24 @@ class CudaContext:
                 f"acquire_{'surface' if write else 'texture'}: rc={rc} for "
                 f"surface '{pool_id}'"
             )
+        view = self._build_image_view(view_struct, writable=write)
         try:
-            yield self._build_image_view(view_struct, writable=write)
+            yield view
         finally:
             release_fn = (
                 self._lib.slpn_cuda_release_surface
                 if write
                 else self._lib.slpn_cuda_release_texture
             )
-            release_fn(self._rt, ctypes.c_uint64(surface_id))
+            # Thread the customer's handle back so the cdylib
+            # destroys this view's cudaTextureObject_t /
+            # cudaSurfaceObject_t — not some other concurrent
+            # reader's.
+            release_fn(
+                self._rt,
+                ctypes.c_uint64(surface_id),
+                ctypes.c_uint64(view.handle),
+            )
 
     def _build_image_view(
         self, view_struct: _SlpnCudaImageView, *, writable: bool
