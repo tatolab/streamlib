@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../../../schemas/streamlib.schema.json
+package:
+  org: tatolab
+  name: cuda-fisheye-python
+  version: "0.1.0"
+  description: "Polyglot CUDA texture-interop — Python imports an OPAQUE_FD VkImage as cudaTextureObject_t, undistorts a fisheye warp via cupy.RawKernel hardware bilinear sampling, runs YOLOv8n detection"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+patch:
+  "@tatolab/core":
+    path: ../../../packages/core
+
+schemas:
+  VideoFrame:
+    package: "@tatolab/core"
+
+processors:
+  - name: CudaFisheyeUndistortion
+    version: "1.0.0"
+    description: "Acquires the host-pre-registered OPAQUE_FD VkImage as a cudaTextureObject_t, runs a cupy.RawKernel undistortion + YOLOv8n detection, writes annotated PNG"
+    runtime: python
+    execution: reactive
+    entrypoint: "cuda_fisheye.processor:CudaFisheyeUndistortionProcessor"
+    inputs:
+      - name: video_in
+        schema: VideoFrame
