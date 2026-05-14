@@ -316,8 +316,8 @@ pub(crate) async fn get_registry() -> Json<RegistryResponse> {
     let schemas: Vec<SchemaDescriptorOutput> = PROCESSOR_REGISTRY
         .known_schemas()
         .into_iter()
-        .map(|name| SchemaDescriptorOutput {
-            name,
+        .map(|spec| SchemaDescriptorOutput {
+            name: spec.to_string(),
             version: SemanticVersionOutput {
                 major: 1,
                 minor: 0,

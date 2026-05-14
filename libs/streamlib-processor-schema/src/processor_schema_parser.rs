@@ -29,14 +29,25 @@ pub fn parse_processor_yaml_file(path: &Path) -> SchemaResult<ProcessorSchema> {
 
 /// Validate a parsed processor schema.
 fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
-    // Name must be present. Both reverse-DNS (`com.example.foo`, used by
-    // legacy CLI inputs) and PascalCase short names (`Camera`, the new
-    // canonical shape resolved by the macro from `streamlib.yaml`'s
-    // `package:` block) are accepted — the standalone CLI validator
-    // doesn't have package context to enforce the new shape.
+    // Name must be a bare PascalCase short name (`Camera`, `BlurFilter`)
+    // matching the macro's contract — `(org, package)` come from the
+    // enclosing `streamlib.yaml`'s `package:` block, not from the
+    // processor schema itself. Legacy reverse-DNS shapes
+    // (`com.example.foo`) are rejected at parse time.
     if schema.name.is_empty() {
         return Err(SchemaError::MissingField {
             field: "name".to_string(),
+        });
+    }
+    if streamlib_idents::TypeName::new(schema.name.as_str()).is_err() {
+        return Err(SchemaError::InvalidName {
+            name: schema.name.clone(),
+            reason: "processor `name:` must be a bare PascalCase short name \
+                     (`^[A-Z][A-Za-z0-9]*$`) — the `(org, package)` come from \
+                     the enclosing `streamlib.yaml`'s `package:` block. Legacy \
+                     reverse-DNS shapes (`com.example.foo`) are no longer \
+                     accepted; see docs/architecture/schema-identity-and-packaging.md."
+                .to_string(),
         });
     }
 
@@ -111,12 +122,12 @@ mod tests {
     #[test]
     fn test_parse_processor_schema_minimal() {
         let yaml = r#"
-name: com.example.passthrough
+name: Passthrough
 version: 1.0.0
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
-        assert_eq!(schema.name, "com.example.passthrough");
+        assert_eq!(schema.name, "Passthrough");
         assert_eq!(schema.version, "1.0.0");
         assert!(schema.description.is_none());
         assert!(schema.entrypoint.is_none());
@@ -128,7 +139,7 @@ version: 1.0.0
     #[test]
     fn test_parse_processor_schema_full() {
         let yaml = r#"
-name: com.example.blur
+name: Blur
 version: 1.0.0
 description: "Gaussian blur filter"
 
@@ -151,7 +162,7 @@ outputs:
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
-        assert_eq!(schema.name, "com.example.blur");
+        assert_eq!(schema.name, "Blur");
         assert_eq!(schema.version, "1.0.0");
         assert_eq!(schema.description, Some("Gaussian blur filter".to_string()));
         assert_eq!(
@@ -178,7 +189,7 @@ outputs:
     #[test]
     fn test_parse_processor_schema_python_runtime() {
         let yaml = r#"
-name: com.example.detector
+name: ObjectDetector
 version: 1.0.0
 runtime: python
 entrypoint: detector:ObjectDetector
@@ -201,9 +212,8 @@ outputs:
 
     #[test]
     fn test_processor_schema_accepts_pascal_case_short_name() {
-        // The CLI validator accepts both legacy reverse-DNS names and the
-        // new PascalCase short-name shape. Package-context validation is
-        // the macro's job; the standalone parser stays permissive.
+        // The CLI validator requires PascalCase short names; the
+        // `(org, package)` come from the enclosing `streamlib.yaml`.
         let yaml = r#"
 name: Camera
 version: 1.0.0
@@ -211,6 +221,36 @@ version: 1.0.0
 
         let schema = parse_processor_yaml(yaml).unwrap();
         assert_eq!(schema.name, "Camera");
+    }
+
+    #[test]
+    fn test_processor_schema_rejects_reverse_dns_name() {
+        // Legacy reverse-DNS shapes are no longer accepted on the
+        // `name:` field — the macro contract requires a bare
+        // PascalCase short name.
+        let yaml = r#"
+name: com.example.legacy_processor
+version: 1.0.0
+"#;
+
+        let result = parse_processor_yaml(yaml);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("PascalCase") || err.contains("bare"),
+            "expected PascalCase guidance, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_processor_schema_rejects_snake_case_name() {
+        let yaml = r#"
+name: blur_filter
+version: 1.0.0
+"#;
+
+        let result = parse_processor_yaml(yaml);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -227,7 +267,7 @@ version: 1.0.0
     #[test]
     fn test_processor_schema_invalid_version() {
         let yaml = r#"
-name: com.example.test
+name: Test
 version: invalid
 "#;
 
@@ -242,7 +282,7 @@ version: invalid
         // bare PascalCase TypeName resolved against the manifest's
         // `schemas:` map.
         let yaml = r#"
-name: com.example.test
+name: Test
 version: 1.0.0
 
 inputs:
@@ -262,7 +302,7 @@ inputs:
     #[test]
     fn test_processor_schema_rejects_structured_port_form() {
         let yaml = r#"
-name: com.example.test
+name: Test
 version: 1.0.0
 inputs:
   - name: video
@@ -282,7 +322,7 @@ inputs:
         // `any` is the wildcard for ports that accept arbitrary serialized
         // payloads (e.g. MoQ tracks).
         let yaml = r#"
-name: com.example.test
+name: Test
 version: 1.0.0
 
 inputs:
@@ -297,7 +337,7 @@ inputs:
     #[test]
     fn test_processor_schema_config_local_type() {
         let yaml = r#"
-name: com.example.test
+name: Test
 version: 1.0.0
 
 config:
@@ -314,18 +354,18 @@ config:
     #[test]
     fn test_processor_schema_full_name() {
         let yaml = r#"
-name: com.example.blur
+name: Blur
 version: 1.0.0
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
-        assert_eq!(schema.full_name(), "com.example.blur@1.0.0");
+        assert_eq!(schema.full_name(), "Blur@1.0.0");
     }
 
     #[test]
-    fn test_processor_schema_rust_struct_name() {
+    fn test_processor_schema_rust_struct_name_is_identity_for_pascal_case() {
         let yaml = r#"
-name: com.example.blur_filter
+name: BlurFilter
 version: 1.0.0
 "#;
 
@@ -336,7 +376,7 @@ version: 1.0.0
     #[test]
     fn test_input_port_read_mode_and_buffer_size() {
         let yaml = r#"
-name: com.example.decoder
+name: Decoder
 version: 1.0.0
 
 inputs:
@@ -358,7 +398,7 @@ inputs:
     #[test]
     fn test_input_port_defaults_without_read_mode_and_buffer_size() {
         let yaml = r#"
-name: com.example.passthrough
+name: Passthrough
 version: 1.0.0
 
 inputs:
@@ -375,7 +415,7 @@ inputs:
     #[test]
     fn scheduling_block_round_trips_priority() {
         let yaml = r#"
-name: com.example.audio
+name: Audio
 version: 1.0.0
 
 scheduling:
@@ -389,7 +429,7 @@ scheduling:
     #[test]
     fn scheduling_block_absent_yields_none() {
         let yaml = r#"
-name: com.example.passthrough
+name: Passthrough
 version: 1.0.0
 "#;
         let schema = parse_processor_yaml(yaml).unwrap();
@@ -399,7 +439,7 @@ version: 1.0.0
     #[test]
     fn scheduling_block_rejects_invalid_priority() {
         let yaml = r#"
-name: com.example.bogus
+name: Bogus
 version: 1.0.0
 
 scheduling:
@@ -418,7 +458,7 @@ scheduling:
     #[test]
     fn scheduling_block_rejects_unknown_field() {
         let yaml = r#"
-name: com.example.bogus
+name: Bogus
 version: 1.0.0
 
 scheduling:
@@ -435,7 +475,7 @@ scheduling:
     #[test]
     fn thread_priority_accepts_legacy_pascal_case_aliases() {
         let yaml = r#"
-name: com.example.audio
+name: Audio
 version: 1.0.0
 
 scheduling:
@@ -449,7 +489,7 @@ scheduling:
     #[test]
     fn test_input_port_buffer_size_zero_rejected() {
         let yaml = r#"
-name: com.example.test
+name: Test
 version: 1.0.0
 
 inputs:

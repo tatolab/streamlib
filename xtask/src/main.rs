@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use streamlib_jtd_codegen::{generate, GenerateOptions, RuntimeTarget};
 
 pub mod check_boundaries;
+pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
@@ -80,6 +81,14 @@ enum Commands {
     /// `docs/architecture/schema-identity-and-packaging.md` (anti-pattern 4).
     CheckNoStreamlibMetadata,
 
+    /// CI gate for milestone-10's structured-identifier rule. Fails on
+    /// legacy reverse-DNS schema literals (`com.tatolab.*`,
+    /// `com.streamlib.*`) anywhere in live workspace code. Apple
+    /// platform code (`*/apple/*`), test code (`#[cfg(test)]`,
+    /// `tests/`, `*_test{s}.rs`), and Rust comments are allowed. See
+    /// `docs/architecture/schema-identity-and-packaging.md`.
+    CheckNoReverseDns,
+
     /// CI gate for the structured-everywhere `ProcessorSpec` rule from
     /// #707. Fails on `ProcessorSpec::new("PascalCase", ...)` — every
     /// call site must take a structured `SchemaIdent` (built via
@@ -134,6 +143,7 @@ fn main() -> Result<()> {
         Commands::CheckNoStreamlibMetadata => {
             check_no_streamlib_metadata::run(&workspace_root()?)?
         }
+        Commands::CheckNoReverseDns => check_no_reverse_dns::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,

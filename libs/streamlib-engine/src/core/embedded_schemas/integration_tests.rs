@@ -8,21 +8,33 @@
 //! A) Direct iceoryx2 — validates the slice loan limit behavior independently of
 //!    the schema system.  These are the boundary tests that prove the problem and the fix.
 //!
-//! B) Schema parser — validates that `max_payload_bytes_for_schema` returns the values
+//! B) Schema parser — validates that `max_payload_bytes_for_port_spec` returns the values
 //!    declared in the schema YAML metadata.
 //!
 //! C) Schema-driven publish/subscribe — creates a publisher via the production
-//!    `Iceoryx2Node::create_publisher(max_payload_bytes_for_schema(...))` path and
+//!    `Iceoryx2Node::create_publisher(max_payload_bytes_for_port_spec(...))` path and
 //!    verifies that large payloads (which would fail with the old hardcoded 64 KB limit)
 //!    are sent and received correctly.
 
 use std::time::{Duration, Instant};
 
-use super::max_payload_bytes_for_schema;
+use super::{max_payload_bytes_for_port_spec, test_support};
 use crate::iceoryx2::{
     FrameHeader, Iceoryx2Node, SchemaIdentWire, FRAME_HEADER_SIZE, MAX_PAYLOAD_SIZE,
 };
 use iceoryx2::prelude::*;
+use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib_processor_schema::PortSchemaSpec;
+
+/// Build a `PortSchemaSpec::Specific` for a `@tatolab/core/<Type>@1.0.0` lookup.
+fn core_spec(type_name: &str) -> PortSchemaSpec {
+    PortSchemaSpec::Specific(SchemaIdent::new(
+        Org::new("tatolab").unwrap(),
+        Package::new("core").unwrap(),
+        TypeName::new(type_name).unwrap(),
+        SemVer::new(1, 0, 0),
+    ))
+}
 
 // =============================================================================
 // A) Direct iceoryx2 slice limit tests
@@ -110,29 +122,21 @@ fn test_loan_256kb_succeeds_with_512kb_publisher_limit() {
 // =============================================================================
 // B) Schema parser tests
 //
-// Verify max_payload_bytes_for_schema() returns the values declared in the
+// Verify max_payload_bytes_for_port_spec() returns the values declared in the
 // schema YAML metadata section.
 // =============================================================================
 
 #[test]
 fn test_schema_max_payload_bytes_audioframe() {
-    let bytes = max_payload_bytes_for_schema("@tatolab/core/AudioFrame");
+    test_support::register_core_wire_vocabulary();
+    let bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame"));
     assert_eq!(bytes, 65536, "audioframe should declare 64 KB");
 }
 
 #[test]
-fn test_schema_max_payload_bytes_audioframe_with_version_suffix() {
-    // Schema names arrive from PROCESSOR_REGISTRY with a version like "@1.0.0" appended.
-    let bytes = max_payload_bytes_for_schema("@tatolab/core/AudioFrame@1.0.0");
-    assert_eq!(
-        bytes, 65536,
-        "version suffix should be stripped before lookup"
-    );
-}
-
-#[test]
 fn test_schema_max_payload_bytes_encodedvideoframe() {
-    let bytes = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
+    test_support::register_core_wire_vocabulary();
+    let bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
     assert_eq!(
         bytes,
         512 * 1024,
@@ -142,7 +146,8 @@ fn test_schema_max_payload_bytes_encodedvideoframe() {
 
 #[test]
 fn test_schema_max_payload_bytes_videoframe() {
-    let bytes = max_payload_bytes_for_schema("@tatolab/core/VideoFrame");
+    test_support::register_core_wire_vocabulary();
+    let bytes = max_payload_bytes_for_port_spec(&core_spec("VideoFrame"));
     assert_eq!(
         bytes, 65536,
         "videoframe carries surface IDs only — 64 KB default is correct"
@@ -151,7 +156,13 @@ fn test_schema_max_payload_bytes_videoframe() {
 
 #[test]
 fn test_schema_max_payload_bytes_unknown_schema_returns_default() {
-    let bytes = max_payload_bytes_for_schema("com.unknown.does.not.exist");
+    let spec = PortSchemaSpec::Specific(SchemaIdent::new(
+        Org::new("unknown").unwrap(),
+        Package::new("does-not-exist").unwrap(),
+        TypeName::new("Nothing").unwrap(),
+        SemVer::new(1, 0, 0),
+    ));
+    let bytes = max_payload_bytes_for_port_spec(&spec);
     assert_eq!(
         bytes,
         MAX_PAYLOAD_SIZE as usize,
@@ -161,8 +172,9 @@ fn test_schema_max_payload_bytes_unknown_schema_returns_default() {
 
 #[test]
 fn test_encodedvideoframe_larger_than_audioframe() {
-    let audio = max_payload_bytes_for_schema("@tatolab/core/AudioFrame");
-    let video = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
+    test_support::register_core_wire_vocabulary();
+    let audio = max_payload_bytes_for_port_spec(&core_spec("AudioFrame"));
+    let video = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
     assert!(
         video > audio,
         "encodedvideoframe ({} bytes) should declare more capacity than audioframe ({} bytes)",
@@ -175,7 +187,7 @@ fn test_encodedvideoframe_larger_than_audioframe() {
 // C) Schema-driven publish/subscribe
 //
 // These tests use the production path:
-//   Iceoryx2Node -> create_publisher(max_payload_bytes_for_schema(...))
+//   Iceoryx2Node -> create_publisher(max_payload_bytes_for_port_spec(...))
 // and verify that large payloads actually transit end-to-end.
 // =============================================================================
 
@@ -183,12 +195,13 @@ fn test_encodedvideoframe_larger_than_audioframe() {
 /// This mirrors the pre-fix failure mode for any connection carrying audioframes.
 #[test]
 fn test_audioframe_schema_publisher_rejects_256kb() {
+    test_support::register_core_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service("streamlib/test/schema-audio-reject")
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_schema("@tatolab/core/AudioFrame");
+    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame"));
     let publisher = service.create_publisher(max_bytes).unwrap();
 
     // 256 KB exceeds the 64 KB audioframe limit.
@@ -204,12 +217,13 @@ fn test_audioframe_schema_publisher_rejects_256kb() {
 /// This is the GREEN-after-fix test: before the fix all publishers used ~64 KB.
 #[test]
 fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
+    test_support::register_core_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service("streamlib/test/schema-video-ok")
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
+    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
     let publisher = service.create_publisher(max_bytes).unwrap();
 
     let result = publisher.loan_slice_uninit(256 * 1024);
@@ -230,13 +244,14 @@ fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
 /// have been silently truncated on receipt.
 #[test]
 fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
+    test_support::register_core_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service("streamlib/test/frame-header-256kb")
         .unwrap();
 
     let data_size = 256 * 1024;
-    let max_bytes = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
+    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
     // Publisher sized like the FFI layer: schema max + header.
     let publisher = service.create_publisher(max_bytes).unwrap();
     let subscriber = service.create_subscriber().unwrap();
@@ -299,12 +314,13 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 /// 256 KB payload written and received on the same service.
 #[test]
 fn test_encodedvideoframe_schema_publisher_subscriber_roundtrip_256kb() {
+    test_support::register_core_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service("streamlib/test/schema-video-roundtrip")
         .unwrap();
 
-    let max_bytes = max_payload_bytes_for_schema("@tatolab/core/EncodedVideoFrame");
+    let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
     let publisher = service.create_publisher(max_bytes).unwrap();
     let subscriber = service.create_subscriber().unwrap();
 
