@@ -114,6 +114,18 @@ pub struct HostVulkanDevice {
     /// DEVICE_LOCAL types differ from HOST_VISIBLE ones.
     #[cfg(target_os = "linux")]
     opaque_fd_buffer_pool_device_local: Option<vma::Pool>,
+    /// VMA pool for OPAQUE_FD exportable DEVICE_LOCAL **images** —
+    /// `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier. CUDA's
+    /// `cudaExternalMemoryGetMappedMipmappedArray` consumes the
+    /// underlying memory by OPAQUE_FD and treats it as a tiled mipmapped
+    /// array; LINEAR returns `CUDA_ERROR_INVALID_VALUE` and OPAQUE_FD
+    /// is not compatible with `DRM_FORMAT_MODIFIER_EXT` on NVIDIA, so
+    /// OPTIMAL is the only valid combination. Separate from the
+    /// buffer-flavored OPAQUE_FD pools because a VMA pool can chain
+    /// only one `VkExportMemoryAllocateInfo` per pool — same reason
+    /// the DMA-BUF image pool is split from the DMA-BUF buffer pool.
+    #[cfg(target_os = "linux")]
+    opaque_fd_image_pool: Option<vma::Pool>,
     /// Backing storage for the buffer pool's VkExportMemoryAllocateInfo. VMA stores
     /// a raw pointer to this struct via pMemoryAllocateNext, so we must keep it
     /// alive for the pool's entire lifetime.
@@ -132,6 +144,10 @@ pub struct HostVulkanDevice {
     /// VkExportMemoryAllocateInfo.
     #[cfg(target_os = "linux")]
     _opaque_fd_buffer_export_info_device_local: Option<Box<vk::ExportMemoryAllocateInfo>>,
+    /// Backing storage for the OPAQUE_FD image pool's
+    /// VkExportMemoryAllocateInfo.
+    #[cfg(target_os = "linux")]
+    _opaque_fd_image_export_info: Option<Box<vk::ExportMemoryAllocateInfo>>,
     /// `VkPhysicalDeviceIDProperties::deviceUUID` queried at construction.
     /// Required by CUDA-Vulkan interop on multi-GPU rigs to match the
     /// CUDA device whose `cudaDeviceProp::uuid` equals this value;
@@ -210,18 +226,54 @@ pub struct RayTracingPipelineProperties {
 
 /// Internal anti-decay sentinel for an export-capable VMA pool.
 ///
-/// Holds raw `vk::Buffer` + `vma::Allocation` (no `Arc<HostVulkanDevice>`
-/// back-reference) so it can be stored on the device itself without
-/// creating a reference cycle. Freed by [`HostVulkanDevice`]'s `Drop`
-/// impl before the allocator is torn down.
+/// Holds raw `vk::Buffer` / `vk::Image` + `vma::Allocation` (no
+/// `Arc<HostVulkanDevice>` back-reference) so it can be stored on the
+/// device itself without creating a reference cycle. Freed by
+/// [`HostVulkanDevice`]'s `Drop` impl before the allocator is torn down.
 #[cfg(target_os = "linux")]
-struct ExportPoolSentinel {
-    buffer: vk::Buffer,
-    allocation: vma::Allocation,
-    /// Diagnostic label for the pool this sentinel covers.
-    label: &'static str,
-    /// Allocation size in bytes (for the tracing log at init).
-    size: vk::DeviceSize,
+enum ExportPoolSentinel {
+    Buffer {
+        buffer: vk::Buffer,
+        allocation: vma::Allocation,
+        /// Diagnostic label for the pool this sentinel covers.
+        label: &'static str,
+        /// Allocation size in bytes (for the tracing log at init).
+        size: vk::DeviceSize,
+    },
+    Image {
+        image: vk::Image,
+        allocation: vma::Allocation,
+        label: &'static str,
+        size: vk::DeviceSize,
+    },
+}
+
+#[cfg(target_os = "linux")]
+impl ExportPoolSentinel {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Buffer { label, .. } | Self::Image { label, .. } => label,
+        }
+    }
+
+    fn size(&self) -> vk::DeviceSize {
+        match self {
+            Self::Buffer { size, .. } | Self::Image { size, .. } => *size,
+        }
+    }
+
+    /// Free the underlying VMA-allocated resource through `allocator`.
+    /// Must be called before the allocator is destroyed.
+    unsafe fn destroy(self, allocator: &vma::Allocator) {
+        match self {
+            Self::Buffer { buffer, allocation, .. } => unsafe {
+                allocator.destroy_buffer(buffer, allocation);
+            },
+            Self::Image { image, allocation, .. } => unsafe {
+                allocator.destroy_image(image, allocation);
+            },
+        }
+    }
 }
 
 impl HostVulkanDevice {
@@ -1073,6 +1125,29 @@ impl HostVulkanDevice {
                 (None, None)
             };
 
+        // OPAQUE_FD image pool (issue #799) — DEVICE_LOCAL, OPTIMAL
+        // tiling. Image-flavored sibling of the buffer pools above;
+        // unblocks `cudaExternalMemoryGetMappedMipmappedArray` for the
+        // tiled-image zero-copy Vulkan → CUDA path. Pool construction
+        // failure is non-fatal: callers (`HostVulkanTexture::new_opaque_fd_export`)
+        // refuse the allocation when the pool isn't available. Older
+        // drivers without external-memory support skip this entirely.
+        #[cfg(target_os = "linux")]
+        let (opaque_fd_image_pool, opaque_fd_image_export_info) = if supports_external_memory {
+            match Self::create_opaque_fd_image_pool(&allocator) {
+                Ok((pool, export_info)) => (Some(pool), Some(export_info)),
+                Err(e) => {
+                    tracing::warn!(
+                        "OPAQUE_FD image pool creation failed — CUDA `VkImage` interop \
+                         (mipmapped-array import) will be unavailable: {e}"
+                    );
+                    (None, None)
+                }
+            }
+        } else {
+            (None, None)
+        };
+
         // Build DMA-BUF export pools on Linux when external memory is supported.
         // The tiled pool is built only when the EGL probe found at least one
         // RT-capable modifier for BGRA — that's the probe shape.
@@ -1169,10 +1244,14 @@ impl HostVulkanDevice {
             #[cfg(target_os = "linux")]
             opaque_fd_buffer_pool_device_local,
             #[cfg(target_os = "linux")]
+            opaque_fd_image_pool,
+            #[cfg(target_os = "linux")]
             _opaque_fd_buffer_export_info: opaque_fd_buffer_export_info,
             #[cfg(target_os = "linux")]
             _opaque_fd_buffer_export_info_device_local:
                 opaque_fd_buffer_export_info_device_local,
+            #[cfg(target_os = "linux")]
+            _opaque_fd_image_export_info: opaque_fd_image_export_info,
             physical_device_uuid,
             #[cfg(target_os = "linux")]
             drm_modifier_table,
@@ -1357,11 +1436,45 @@ impl HostVulkanDevice {
             sentinels.push(sentinel);
         }
 
+        // 6. OPAQUE_FD image pool — retained sentinel (issue #799).
+        //
+        //    Why a separate sentinel from the DEVICE_LOCAL buffer pool above:
+        //    DMA-BUF and OPAQUE_FD share *handle types*, but the post-
+        //    swapchain cap NVIDIA enforces is keyed on (handle_type ×
+        //    resource_kind × memory_type_index) — observed empirically
+        //    across the existing 5-pool DMA-BUF + buffer pre-warm.
+        //    The image-side memory-type index can legitimately differ
+        //    from any buffer pool's (CUDA-mappable formats may require
+        //    a different VkMemoryType than HOST_VISIBLE or generic
+        //    DEVICE_LOCAL buffer allocations), so an image-flavored
+        //    sentinel covers a strictly larger surface than just
+        //    keeping a DEVICE_LOCAL buffer alive. If empirical
+        //    measurement against Cam Link 4K (see
+        //    `docs/learnings/nvidia-opaque-fd-after-swapchain.md`)
+        //    later shows the image sentinel is redundant, the
+        //    learning's "Pre-warm-removed protocol" section is the
+        //    place to record the decision and the change is one line
+        //    here.
+        //
+        //    Same tiny-sentinel rule as the DEVICE_LOCAL buffer
+        //    sentinel: 8×8×4 = 256 bytes for R8G8B8A8 keeps the kernel
+        //    state pinned without competing with consumer-class
+        //    allocations on NVIDIA's cumulative OPAQUE_FD byte budget.
+        if let Some(pool) = device.opaque_fd_image_pool() {
+            let sentinel = make_opaque_fd_image_sentinel(
+                pool,
+                "opaque_fd_image",
+                PROBE_W,
+                PROBE_H,
+            )?;
+            sentinels.push(sentinel);
+        }
+
         for s in &sentinels {
             tracing::info!(
                 "HostVulkanDevice export pool sentinel retained: {} ({} bytes)",
-                s.label,
-                s.size,
+                s.label(),
+                s.size(),
             );
         }
         tracing::info!("HostVulkanDevice export pools pre-warmed");
@@ -1421,8 +1534,84 @@ fn make_opaque_fd_buffer_sentinel(
             ))
         })?;
 
-    Ok(ExportPoolSentinel {
+    Ok(ExportPoolSentinel::Buffer {
         buffer,
+        allocation,
+        label,
+        size,
+    })
+}
+
+/// Allocate one OPAQUE_FD-exportable image through the given VMA pool
+/// and wrap it in an [`ExportPoolSentinel::Image`]. The image-flavored
+/// counterpart to [`make_opaque_fd_buffer_sentinel`]: pins the
+/// per-handle-type kernel state for OPAQUE_FD `VkImage` allocations
+/// (issue #799) the same way the buffer sentinels pin the state for
+/// OPAQUE_FD `VkBuffer` allocations.
+///
+/// The image probe shape matches the consumer-class allocations
+/// [`super::HostVulkanTexture::new_opaque_fd_export`] performs:
+/// OPTIMAL tiling, no DRM modifier, `VkExternalMemoryImageCreateInfo::OPAQUE_FD`,
+/// `DEDICATED_MEMORY` + `DEVICE_LOCAL`. Format `R8G8B8A8_UNORM` is the
+/// canonical CUDA-mappable 8-bit-RGBA layout — picking it here keeps
+/// the sentinel's memory-type-bits aligned with what consumers will
+/// request later.
+///
+/// Sentinels are intentionally tiny (8×8 = 256 bytes for R8G8B8A8) to
+/// avoid competing with consumer-class allocations on NVIDIA's
+/// cumulative OPAQUE_FD byte budget — see issue #637 and the
+/// `nvidia-opaque-fd-after-swapchain` learning's "tiny sentinels"
+/// rationale.
+#[cfg(target_os = "linux")]
+fn make_opaque_fd_image_sentinel(
+    pool: &vma::Pool,
+    label: &'static str,
+    width: u32,
+    height: u32,
+) -> Result<ExportPoolSentinel> {
+    let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
+        .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+        .build();
+
+    let image_info = vk::ImageCreateInfo::builder()
+        .image_type(vk::ImageType::_2D)
+        .format(vk::Format::R8G8B8A8_UNORM)
+        .extent(vk::Extent3D {
+            width,
+            height,
+            depth: 1,
+        })
+        .mip_levels(1)
+        .array_layers(1)
+        .samples(vk::SampleCountFlags::_1)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(
+            vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::STORAGE,
+        )
+        .sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .initial_layout(vk::ImageLayout::UNDEFINED)
+        .push_next(&mut external_image_info);
+
+    let alloc_opts = vma::AllocationOptions {
+        flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
+        required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        ..Default::default()
+    };
+
+    let (image, allocation) = unsafe { pool.create_image(image_info, &alloc_opts) }
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "OPAQUE_FD image export pool '{label}' sentinel allocation failed \
+                 ({width}x{height}): {e}"
+            ))
+        })?;
+
+    let size: vk::DeviceSize = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
+    Ok(ExportPoolSentinel::Image {
+        image,
         allocation,
         label,
         size,
@@ -1831,6 +2020,96 @@ impl HostVulkanDevice {
 
         tracing::info!(
             "OPAQUE_FD VMA buffer pool (DEVICE_LOCAL) created — mem_type={}",
+            mem_type_idx
+        );
+        Ok((pool, export_info))
+    }
+
+    /// Build a VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL
+    /// **images** — issue #799, the image-flavored sibling of
+    /// [`Self::create_opaque_fd_buffer_pool_device_local`].
+    ///
+    /// Probe shape matches [`super::HostVulkanTexture::new_opaque_fd_export`]
+    /// exactly so the pool's `memoryTypeBits` matches the real
+    /// allocations' bind requirements (VUID-vkBindImageMemory-memory-01047):
+    ///
+    /// - `vk::Format::R8G8B8A8_UNORM` — the canonical CUDA-mappable
+    ///   8-bit RGBA format. Other CUDA-mappable variants (`R16G16B16A16_SFLOAT`,
+    ///   `R32G32B32A32_SFLOAT`) share the same DEVICE_LOCAL memory-type
+    ///   bits on every Vulkan driver shipping today.
+    /// - `vk::ImageTiling::OPTIMAL` — LINEAR returns
+    ///   `CUDA_ERROR_INVALID_VALUE` from `cuExternalMemoryGetMappedMipmappedArray`;
+    ///   no DRM modifier (OPAQUE_FD + `DRM_FORMAT_MODIFIER_EXT` is not
+    ///   a valid combination on NVIDIA).
+    /// - `VkExternalMemoryImageCreateInfo::OPAQUE_FD` — the export handle
+    ///   type that pairs with `cudaImportExternalMemory(OPAQUE_FD)` on
+    ///   the consumer side.
+    /// - `DEDICATED_MEMORY` allocation flag — CUDA's
+    ///   `cudaExternalMemoryGetMappedMipmappedArray` imports the whole
+    ///   `VkDeviceMemory` block.
+    ///
+    /// VMA's `find_memory_type_index_for_image_info` works for OPTIMAL
+    /// tiling (unlike `DRM_FORMAT_MODIFIER_EXT`, which requires the
+    /// raw `vkCreateImage` + `vkGetImageMemoryRequirements` probe used
+    /// in `probe_tiled_dma_buf_memory_type`).
+    #[cfg(target_os = "linux")]
+    fn create_opaque_fd_image_pool(
+        allocator: &Arc<vma::Allocator>,
+    ) -> Result<(vma::Pool, Box<vk::ExportMemoryAllocateInfo>)> {
+        let mut probe_external_info = vk::ExternalMemoryImageCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+        let probe_image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .extent(vk::Extent3D {
+                width: 64,
+                height: 64,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(
+                vk::ImageUsageFlags::TRANSFER_SRC
+                    | vk::ImageUsageFlags::TRANSFER_DST
+                    | vk::ImageUsageFlags::SAMPLED
+                    | vk::ImageUsageFlags::STORAGE,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut probe_external_info);
+        let probe_alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+        let mem_type_idx = unsafe {
+            allocator.find_memory_type_index_for_image_info(
+                probe_image_info,
+                &probe_alloc_opts,
+            )
+        }
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "find memory type for OPAQUE_FD image pool: {e}"
+            ))
+        })?;
+
+        let mut export_info = Box::new(
+            vk::ExportMemoryAllocateInfo::builder()
+                .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+                .build(),
+        );
+        let mut pool_options = vma::PoolOptions::default();
+        pool_options = pool_options.push_next(export_info.as_mut());
+        pool_options.memory_type_index = mem_type_idx;
+        let pool = allocator
+            .create_pool(&pool_options)
+            .map_err(|e| Error::GpuError(format!("create OPAQUE_FD image pool: {e}")))?;
+
+        tracing::info!(
+            "OPAQUE_FD VMA image pool created — mem_type={}",
             mem_type_idx
         );
         Ok((pool, export_info))
@@ -2636,6 +2915,19 @@ impl HostVulkanDevice {
         self.opaque_fd_buffer_pool_device_local.as_ref()
     }
 
+    /// VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL **images**
+    /// (image-flavored sibling of [`Self::opaque_fd_buffer_pool_device_local`];
+    /// issue #799). `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier.
+    ///
+    /// Returns `None` when external memory isn't supported or the
+    /// image-side probe failed at construction. Used by CUDA's
+    /// `cudaExternalMemoryGetMappedMipmappedArray` import path — see
+    /// [`super::HostVulkanTexture::new_opaque_fd_export`].
+    #[cfg(target_os = "linux")]
+    pub fn opaque_fd_image_pool(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_image_pool.as_ref()
+    }
+
     /// `VkPhysicalDeviceIDProperties::deviceUUID` queried at construction.
     ///
     /// 16-byte big-endian UUID identifying this physical device.
@@ -2715,9 +3007,7 @@ impl Drop for HostVulkanDevice {
         {
             if let Some(allocator) = self.allocator.as_ref() {
                 for sentinel in self.opaque_fd_export_sentinels.drain(..) {
-                    unsafe {
-                        allocator.destroy_buffer(sentinel.buffer, sentinel.allocation);
-                    }
+                    unsafe { sentinel.destroy(allocator) };
                 }
             }
             drop(self.dma_buf_buffer_pool.take());
@@ -2725,6 +3015,7 @@ impl Drop for HostVulkanDevice {
             drop(self.dma_buf_image_pool_tiled.take());
             drop(self.opaque_fd_buffer_pool.take());
             drop(self.opaque_fd_buffer_pool_device_local.take());
+            drop(self.opaque_fd_image_pool.take());
         }
 
         drop(self.allocator.take());
@@ -2736,6 +3027,7 @@ impl Drop for HostVulkanDevice {
             drop(self._dma_buf_image_tiled_export_info.take());
             drop(self._opaque_fd_buffer_export_info.take());
             drop(self._opaque_fd_buffer_export_info_device_local.take());
+            drop(self._opaque_fd_image_export_info.take());
         }
 
         unsafe {
@@ -2912,6 +3204,9 @@ mod tests {
         if device.opaque_fd_buffer_pool_device_local().is_some() {
             expected_labels.push("opaque_fd_device_local");
         }
+        if device.opaque_fd_image_pool().is_some() {
+            expected_labels.push("opaque_fd_image");
+        }
         if expected_labels.is_empty() {
             println!(
                 "Skipping — no OPAQUE_FD pools on this driver, so no sentinels expected"
@@ -2922,7 +3217,7 @@ mod tests {
         let actual_labels: Vec<&'static str> = device
             .opaque_fd_export_sentinels
             .iter()
-            .map(|s| s.label)
+            .map(|s| s.label())
             .collect();
         assert_eq!(
             actual_labels, expected_labels,
@@ -2931,39 +3226,54 @@ mod tests {
              between init and the consumer's allocation (issue #637)"
         );
 
-        // The DEVICE_LOCAL sentinel must be SMALL — sentinels at
-        // the consumer's full size deterministically block the
-        // consumer's allocation post-swapchain (empirically: #637
-        // E2E on Cam Link 4K), pointing at a cumulative byte budget
-        // on NVIDIA's side. The sentinel exists only to pin the
-        // per-handle-type kernel state, so it must not compete with
-        // consumer-class allocations. Reverting to a realistic-size
-        // sentinel here would re-introduce that regression.
-        if let Some(s) = device
-            .opaque_fd_export_sentinels
-            .iter()
-            .find(|s| s.label == "opaque_fd_device_local")
-        {
-            let max_acceptable: vk::DeviceSize = 64 * 1024;
-            assert!(
-                s.size <= max_acceptable,
-                "DEVICE_LOCAL OPAQUE_FD sentinel must be small (≤ 64 KiB) to \
-                 avoid competing with consumer allocations on NVIDIA's \
-                 cumulative OPAQUE_FD byte budget (got {} bytes, max {})",
-                s.size,
-                max_acceptable,
-            );
+        // Every OPAQUE_FD sentinel must be SMALL — sentinels at the
+        // consumer's full size deterministically block the consumer's
+        // allocation post-swapchain (empirically: #637 E2E on Cam Link 4K),
+        // pointing at a cumulative byte budget on NVIDIA's side. The
+        // sentinel exists only to pin the per-handle-type kernel state,
+        // so it must not compete with consumer-class allocations.
+        // Reverting to a realistic-size sentinel here would re-introduce
+        // that regression. Applies to both buffer-flavored DEVICE_LOCAL
+        // and image-flavored sentinels (the image-flavored one is
+        // 8×8×4 = 256 bytes for R8G8B8A8, well below the 64 KiB cap).
+        let max_acceptable: vk::DeviceSize = 64 * 1024;
+        for label in ["opaque_fd_device_local", "opaque_fd_image"] {
+            if let Some(s) = device
+                .opaque_fd_export_sentinels
+                .iter()
+                .find(|s| s.label() == label)
+            {
+                assert!(
+                    s.size() <= max_acceptable,
+                    "OPAQUE_FD sentinel '{label}' must be small (≤ 64 KiB) to \
+                     avoid competing with consumer allocations on NVIDIA's \
+                     cumulative OPAQUE_FD byte budget (got {} bytes, max {})",
+                    s.size(),
+                    max_acceptable,
+                );
+            }
         }
 
-        // The buffer + allocation handles must be non-null (a sentinel
-        // that never actually allocated would not pin any kernel state).
+        // The underlying handle must be non-null (a sentinel that never
+        // actually allocated would not pin any kernel state). Switch on
+        // the variant so a future Image-sentinel addition is locked too.
         for s in device.opaque_fd_export_sentinels.iter() {
-            assert_ne!(
-                s.buffer,
-                vk::Buffer::null(),
-                "sentinel '{}' has null VkBuffer",
-                s.label,
-            );
+            match s {
+                ExportPoolSentinel::Buffer { buffer, label, .. } => {
+                    assert_ne!(
+                        *buffer,
+                        vk::Buffer::null(),
+                        "sentinel '{label}' has null VkBuffer",
+                    );
+                }
+                ExportPoolSentinel::Image { image, label, .. } => {
+                    assert_ne!(
+                        *image,
+                        vk::Image::null(),
+                        "sentinel '{label}' has null VkImage",
+                    );
+                }
+            }
         }
     }
 

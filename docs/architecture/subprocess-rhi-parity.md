@@ -29,7 +29,10 @@ carve-out exists to make that bind possible and nothing more:
 - OPAQUE_FD memory import for Vulkan-aware peer importers (CUDA via
   `cudaImportExternalMemory(OPAQUE_FD)`, peer `VkInstance`s); the wire
   format carries `handle_type: "dma_buf" | "opaque_fd"` so surface-share
-  lookup picks the right import path.
+  lookup picks the right import path. Covers both `VkBuffer` (the
+  flat-tensor path the CUDA adapter rides for DLPack) and `VkImage`
+  (OPTIMAL tiling, no DRM modifier — `ConsumerVulkanTexture::from_opaque_fd`,
+  the image-flavored sibling that unblocks `cudaExternalMemoryGetMappedMipmappedArray`).
 - Tiled-image import via `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT` (the
   modifier comes from the host descriptor).
 - Layout transitions on imported handles (single-shot at acquire/release
@@ -130,6 +133,7 @@ adapters.
 | Tiled-image import (`VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`) | **Carve-out** | Same crate |
 | HOST_VISIBLE staging-buffer import (cpu-readback) | **Carve-out** | Same crate (`ConsumerVulkanBuffer`) |
 | OPAQUE_FD VkBuffer import (cuda) | **Carve-out** | Same crate (`ConsumerVulkanDevice::import_opaque_fd_memory` + `ConsumerVulkanBuffer::from_opaque_fd`). The cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedBuffer`. OPAQUE_FD is not interchangeable with DMA-BUF: DLPack consumers (PyTorch / JAX / NumPy `from_dlpack`) require a flat `void*` device pointer, and only `cudaExternalMemoryGetMappedBuffer` produces one — and that requires the source memory to be a `VkBuffer` exported as OPAQUE_FD, not DMA-BUF |
+| OPAQUE_FD VkImage import (cuda, image path) | **Carve-out** | Same crate (`ConsumerVulkanDevice::import_opaque_fd_memory` + `ConsumerVulkanTexture::from_opaque_fd`). Image-flavored sibling of the VkBuffer entry; tiling fixed `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier (OPAQUE_FD + `DRM_FORMAT_MODIFIER_EXT` is invalid on NVIDIA), format restricted to the CUDA-mappable subset (`Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`). The cdylib re-exports the same FD into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedMipmappedArray` for the texture / surface-object backing — the tiled-image zero-copy path that's complementary to `cudaExternalMemoryGetMappedBuffer`'s flat-tensor / DLPack path |
 
 ## Layered architecture
 
