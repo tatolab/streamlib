@@ -1991,10 +1991,21 @@ schemas:
         let body = crate::core::embedded_schemas::get_embedded_schema_definition(canonical)
             .expect("registered schema must be discoverable post-load");
         assert!(body.contains("MyTestConfig"));
+        let port_spec = streamlib_processor_schema::PortSchemaSpec::Specific(
+            streamlib_idents::SchemaIdent::new(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new(
+                    "test-load-project-registers-schemas",
+                )
+                .unwrap(),
+                streamlib_idents::TypeName::new("MyTestConfig").unwrap(),
+                streamlib_idents::SemVer::new(1, 0, 0),
+            ),
+        );
         assert_eq!(
-            crate::core::embedded_schemas::max_payload_bytes_for_schema(canonical),
+            crate::core::embedded_schemas::max_payload_bytes_for_port_spec(&port_spec),
             8192,
-            "max_payload_bytes_for_schema must read metadata declared by the loaded package"
+            "max_payload_bytes_for_port_spec must read metadata declared by the loaded package"
         );
     }
 
