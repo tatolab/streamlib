@@ -163,10 +163,9 @@ serial-dispatch contract).
    a Vulkan device. See `vulkan_graphics_kernel.rs::tests` for the
    parameterized pattern.
 
-## What's deliberately not covered (yet)
+## What's deliberately not covered
 
-These are out of scope for the v1 surface and are tracked as
-follow-ups under the **Graphics Kernel Buildout** milestone:
+These are out of scope for the public surface today:
 
 - **Optional shader stages** — geometry, tessellation control /
   evaluation, mesh, task. The `GraphicsShaderStage` enum is open;
@@ -190,10 +189,10 @@ follow-ups under the **Graphics Kernel Buildout** milestone:
   public API is shaped so the backend can migrate later without
   breaking callers; the descriptor pool is an internal detail today.
 - **Depth attachment allocation.** Depth `TextureFormat` variants
-  and `Texture` allocation for depth attachments are not yet
-  in `streamlib-consumer-rhi` — depth-stencil pipeline-creation is
-  validated by unit test, but depth-correctness rendering tests are
-  pending depth-format support.
+  and `Texture` allocation for depth attachments do not live in
+  `streamlib-consumer-rhi` today — depth-stencil pipeline-creation is
+  validated by unit test, but depth-correctness rendering tests need
+  depth-format support before they can run.
 
 ## Why this shape
 
@@ -210,8 +209,4 @@ dispatch) is the single asymmetry between the two kernels — it
 exists because graphics dispatches are integrated into a render
 loop with multiple frames in flight, where compute dispatches in
 streamlib are typically synchronous (format conversion, blending,
-etc.). The asymmetry is documented at trait birth rather than
-papered over.
-
-The relevant trade-off discussion lives on issue
-[#609](https://github.com/tatolab/streamlib/issues/609).
+etc.).

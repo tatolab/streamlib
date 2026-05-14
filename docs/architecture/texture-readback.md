@@ -161,4 +161,3 @@ violation message points back here.
   (`libs/streamlib-engine/src/core/context/gpu_context.rs`)
 - Engine precedent: `compute-kernel.md` and
   `libs/streamlib-engine/src/vulkan/rhi/vulkan_compute_kernel.rs`
-- Trade-off discussion: issue #583

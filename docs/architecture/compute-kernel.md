@@ -40,6 +40,12 @@ Given a SPIR-V blob and a small typed declaration, the kernel:
 4. **Flushes + dispatches + waits** in `dispatch(x, y, z)`. The fence is
    pre-signaled so the first dispatch doesn't block, and consecutive
    dispatches against the same kernel are serial (one in flight at a time).
+   For callers that want to inline a compute dispatch into their own
+   command buffer (e.g. inside an `RhiCommandRecorder` scope alongside
+   other work), `record(command_buffer, x, y, z)` records the bind +
+   push + dispatch without owning the submit; the caller is responsible
+   for ensuring no concurrent `record`/`dispatch` is in flight against
+   the same kernel.
 
 ## Adding a new compute kernel — the recipe
 
@@ -121,6 +127,3 @@ SPIR-V reflection layer lifts the abstraction above "user must mirror
 the shader's binding layout in code" (the wgpu/raw-Vulkan model) into
 "the shader is the source of truth and the kernel refuses to load if
 you got the layout wrong." That's the engine-grade invariant.
-
-The relevant trade-off discussion lives on issue
-[#480](https://github.com/tatolab/streamlib/issues/480).

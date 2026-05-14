@@ -464,13 +464,6 @@ own the processor's Rust module):
   expansion. Reach for it only when the call site has a deliberate
   reason to refuse newer-but-compatible versions.
 
-> ~~"is the **only** shorthand mechanism in the architecture"~~ —
-> Superseded 2026-05-10 (PR #745). The original claim predates both
-> reference-side macros — `schema_ident!` (the strict-pin form) and
-> `schema_ident_any_version!` (the canonical, runtime-resolving form).
-> All three mechanisms coexist; their roles split along
-> own-vs-reference lines.
-
 Cross-package references in graph JSON, IPC envelopes, generated
 code, and lockfiles still carry a fully-qualified
 `SchemaIdent { org, package, type, version }` structured record. The
@@ -499,13 +492,16 @@ set into each language's codegen pipeline. A CI lint
 
 ### 5. Hand-curated `embedded_schemas.rs`-style match statements
 
-The embedded-schemas table at `libs/streamlib-engine/src/core/embedded_schemas.rs`
-is build-script-driven: `build.rs` walks the resolver's full dependency
-graph and emits the `(canonical_identifier, yaml_body)` pairs into
-`OUT_DIR/embedded_schemas_table.rs`. Adding a schema means declaring
-it in your `streamlib.yaml`; nothing else. Hand-curated match arms
-mapping schema IDs to embedded YAML strings are not allowed — they
-silently drift when a schema renames or is added.
+The schema registry at
+`libs/streamlib-engine/src/core/embedded_schemas/mod.rs` is a runtime
+`LazyLock<RwLock<HashMap<String, Arc<str>>>>` populated by
+`Runner::load_project`: for every package the project depends on,
+`load_project` walks the package's `schemas:` declarations and calls
+`register_schema(canonical_id, yaml_body)`. Adding a schema means
+declaring it in your `streamlib.yaml` and depending on the owning
+package; nothing else. Hand-curated match arms mapping schema IDs to
+embedded YAML strings are not allowed — they silently drift when a
+schema renames or is added.
 
 ## Polyglot SchemaIdent parity
 
@@ -570,24 +566,21 @@ crate functionality (range matching, lockfile, codegen) is
 "language-specific by construction" while basic identity
 validation is mirrored across runtimes that need it.
 
-### Codegen-emitted `SCHEMA_IDENT` (Python today; Rust + TS pending)
+### Codegen-emitted `SCHEMA_IDENT`
 
 Decision 2 above lists "codegen-emitted const records
 (`SCHEMA_IDENT: SchemaIdent { … }`)" as a structured-everywhere
-surface. To the best of our current knowledge as of issue #704,
-the Python post-processor in `streamlib-jtd-codegen` is the only
-one that emits the structured ident on generated types
+surface. To the best of our current knowledge, the Python
+post-processor in `streamlib-jtd-codegen` is the only one that
+emits the structured ident on generated types
 (`__streamlib_schema_ident__: ClassVar[SchemaIdent]`). The Rust
 and TypeScript post-processors emit the dataclass / struct /
-interface body but no `SCHEMA_IDENT` const yet. Python is the
+interface body but no `SCHEMA_IDENT` const. Python is the
 load-bearing case because `@streamlib.input(schema=...)` /
 `@streamlib.output(schema=...)` resolves the structured ident
 *off the class* via `__streamlib_schema_ident__`; Rust and TS
 have no analogous runtime resolution path that requires the
-const today. Bringing those backends to parity (so `Generated
-struct VideoFrame { … }` carries a `pub const SCHEMA_IDENT:
-SchemaIdent = …` and the TS interface analogue) is filed as a
-follow-up to #704.
+const today.
 
 ## Reference
 
@@ -606,8 +599,11 @@ follow-up to #704.
     drives `streamlib.yaml`-mode end-to-end; `generate_from_resolved`
     is the lower-level entry for callers that already ran the
     resolver.
-  - `libs/streamlib-engine/build.rs` — generates `embedded_schemas_table.rs`
-    in `OUT_DIR` from `streamlib.yaml`'s `schemas:` list.
+  - `libs/streamlib-engine/src/core/embedded_schemas/mod.rs` — runtime
+    `LazyLock<RwLock<HashMap<…>>>` registry; `register_schema` /
+    `get_embedded_schema_definition` / `list_embedded_schema_names`
+    public surface. Populated by `Runner::load_project` walking each
+    loaded package's `schemas:` declarations.
   - `xtask/src/check_schema_versions.rs` — CI lint (no per-schema
     `version` keys in YAML).
   - `xtask/src/check_no_streamlib_metadata.rs` — CI lint
@@ -641,8 +637,9 @@ follow-up to #704.
     — pre-pass / post-pass coverage for sentinel substitution,
     deterministic property ordering, and per-language restore
     (Rust / Python / TypeScript).
-  - `libs/streamlib-engine/src/core/embedded_schemas.rs::tests` — table
-    populated from `streamlib.yaml`, no duplicate names, sorted output.
+  - `libs/streamlib-engine/src/core/embedded_schemas/mod.rs::tests` —
+    register / lookup round-trip, version-suffix stripping, empty-
+    registry behavior, sorted listing, no duplicate names.
   - `xtask/src/check_schema_versions.rs::tests` — schema-version
     lint fixtures.
   - `xtask/src/check_no_streamlib_metadata.rs::tests` —

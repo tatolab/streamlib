@@ -14,9 +14,8 @@ for the implementation contract.
 Surface sharing is split into:
 
 1. **Backing** — host-owned. A `VkImage` allocated with a
-   render-target-capable DRM modifier on Linux (or an `IOSurface` on
-   macOS, in a future milestone). Owned by the StreamLib runtime;
-   refcounted host-side.
+   render-target-capable DRM modifier on Linux. Owned by the
+   StreamLib runtime; refcounted host-side.
 2. **Per-API representation** — what the customer sees. Obtained by
    calling `acquire_read` / `acquire_write` on a `SurfaceAdapter`.
    The adapter takes the host backing and hands back the framework's
@@ -142,14 +141,15 @@ runtime error.
 ## Subprocess lifetime
 
 Polyglot subprocesses (Python, Deno) hold an `OwnedFd`-bound
-`StreamlibSurface`. When the subprocess exits cleanly, `Drop` runs
-the `streamlib-surface-client::release_surface` request. When the
-subprocess crashes mid-write, the kernel closes the per-subprocess
-Unix socket; the host's surface-share watchdog observes the
-disconnect (kernel-side equivalent of `EPOLLHUP`) and releases every
-surface registered under that subprocess's `runtime_id`. The
-double-release case is idempotent — a polite `release` followed by a
-crash leaves nothing for the watchdog to do.
+`StreamlibSurface`. When the subprocess exits cleanly, `Drop` sends
+a `release` (a.k.a. `unregister`) request through
+`streamlib-surface-client`. When the subprocess crashes mid-write,
+the kernel closes the per-subprocess Unix socket; the host's
+surface-share watchdog observes the disconnect (kernel-side
+equivalent of `EPOLLHUP`) and releases every surface registered
+under that subprocess's `runtime_id`. The double-release case is
+idempotent — a polite `release` followed by a crash leaves nothing
+for the watchdog to do.
 
 Subprocess Python/Deno code MUST NOT create its own `VkDevice` —
 dual `VkDevice` on NVIDIA Linux SIGSEGVs (see
@@ -168,10 +168,9 @@ signature or `#[repr(C)]` field, is a major bump.
 The trait does not carry a `trait_version()` method — Rust's vtable
 layout already enforces in-process compatibility at compile time. A
 mismatched `streamlib-adapter-abi` rlib version cannot link into the
-runtime in the first place. The constant becomes load-bearing only
-at the cdylib boundary, where it'll be checked from a `#[repr(C)]
-AdapterDeclaration` shape (mirroring `streamlib-plugin-abi`'s
-`PluginDeclaration`) when dynamic adapter loading lands.
+runtime in the first place. The constant is load-bearing at any
+future cdylib boundary; `streamlib-plugin-abi`'s `PluginDeclaration`
+is the precedent shape for that check.
 
 ## Where the code lives
 
@@ -186,5 +185,5 @@ AdapterDeclaration` shape (mirroring `streamlib-plugin-abi`'s
   subprocesses.
 
 In-tree adapter implementations live in their own crates
-(`streamlib-adapter-vulkan`, `-opengl`, `-skia`, `-cpu-readback`),
-landing in #511–#514.
+(`streamlib-adapter-vulkan`, `-opengl`, `-skia`, `-cpu-readback`,
+`-cuda`).
