@@ -5056,10 +5056,12 @@ mod cuda {
         self, CapsuleOwner, Device as DlpackDevice, DeviceType as DlpackDeviceType,
         ManagedTensor as DlpackManagedTensor,
     };
-    use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
+    use streamlib_adapter_cuda::{
+        CudaSurfaceAdapter, HostImageSurfaceRegistration, HostSurfaceRegistration, VulkanLayout,
+    };
     use streamlib_consumer_rhi::{
-        ConsumerVulkanDevice, ConsumerVulkanBuffer, ConsumerVulkanTimelineSemaphore,
-        PixelFormat,
+        ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
+        ConsumerVulkanTimelineSemaphore, TextureFormat,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -5074,6 +5076,17 @@ mod cuda {
     /// without re-importing the dlpark spec.
     pub const SLPN_CUDA_DEVICE_TYPE_CUDA: i32 = DlpackDeviceType::Cuda as i32;
     pub const SLPN_CUDA_DEVICE_TYPE_CUDA_HOST: i32 = DlpackDeviceType::CudaHost as i32;
+
+    /// CUDA-mappable [`TextureFormat`] discriminants surfaced on
+    /// [`SlpnCudaImageView::format`]. The host's
+    /// `register_host_image_surface` validates that the registered
+    /// `VkImage` is in this subset; the cdylib mirrors the check on
+    /// import. Three variants only: `cudaExternalMemoryGetMappedMipmappedArray`
+    /// accepts `cudaChannelFormatDesc` shapes for `R8/R16/R32` integer
+    /// or 16/32-bit float, no sRGB, no BGR, no 3-channel.
+    pub const SLPN_CUDA_FORMAT_RGBA8_UNORM: i32 = 0;
+    pub const SLPN_CUDA_FORMAT_RGBA16_FLOAT: i32 = 1;
+    pub const SLPN_CUDA_FORMAT_RGBA32_FLOAT: i32 = 2;
 
     /// Per-acquire timeline-wait timeout (nanoseconds). Long enough to
     /// cover any realistic GPU queue depth; short enough that a deadlock
@@ -5131,6 +5144,7 @@ mod cuda {
         adapter: Arc<CudaSurfaceAdapter<ConsumerVulkanDevice>>,
         cuda_device_ordinal: i32,
         registered: Mutex<HashMap<u64, Arc<RegisteredCudaSurface>>>,
+        registered_images: Mutex<HashMap<u64, Arc<RegisteredCudaImageSurface>>>,
     }
 
     /// Per-surface registered state. The adapter's registry holds
@@ -5239,6 +5253,7 @@ mod cuda {
             adapter,
             cuda_device_ordinal,
             registered: Mutex::new(HashMap::new()),
+            registered_images: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -5917,6 +5932,1037 @@ mod cuda {
         SLPN_CUDA_OK
     }
 
+    // ========================================================================
+    // Image-flavored path — OPAQUE_FD `VkImage` + `cudaMipmappedArray_t` +
+    // `cudaTextureObject_t` / `cudaSurfaceObject_t`
+    //
+    // Sibling of the buffer-flavored path above. The Rust adapter at
+    // `streamlib-adapter-cuda::CudaSurfaceAdapter` exposes two registration
+    // paths (`register_host_surface` for `VkBuffer`,
+    // `register_host_image_surface` for `VkImage`); this section is the
+    // cdylib bring-up for the image flavor.
+    //
+    // Customer-facing surface: a raw `uint64_t` handle (the
+    // `cudaTextureObject_t` or `cudaSurfaceObject_t`) plus image dimensions
+    // and format on [`SlpnCudaImageView`]. No DLPack capsule — the mapped
+    // mipmapped array handle is opaque and not DLPack-shaped.
+    // Customers carry the handle into a framework-native CUDA extension
+    // (`torch.utils.cpp_extension`, `cupy.RawKernel`, Triton, ...) and
+    // sample the texture / write the surface inside their own kernel.
+    //
+    // Per-acquire texture / surface object construction matches the
+    // first-cut design recorded on the issue body: each acquire calls
+    // `cudaCreateTextureObject` / `cudaCreateSurfaceObject` with the
+    // hard-coded defaults (linear filter, clamp-to-edge, non-normalized
+    // coords, `cudaReadModeElementType`, no sRGB). Profile-driven
+    // construct-once-reuse-many is a future concern if real workloads
+    // demand it.
+    // ========================================================================
+
+    /// View handed back on every successful image-flavored acquire.
+    /// Layout pinned by the regression test below — Python ctypes /
+    /// Deno DataView readers depend on these offsets.
+    #[repr(C)]
+    pub struct SlpnCudaImageView {
+        /// `cudaTextureObject_t` (read path) or `cudaSurfaceObject_t`
+        /// (write path) — both are typedef'd to `c_ulonglong` in the
+        /// CUDA Runtime API, so a single wire shape covers either.
+        pub cuda_object_handle: u64,
+        /// Image width in pixels — surfaced for kernels that need to
+        /// thread the dimensions into a launch config.
+        pub width: u32,
+        /// Image height in pixels.
+        pub height: u32,
+        /// CUDA-mappable format discriminant — one of
+        /// [`SLPN_CUDA_FORMAT_RGBA8_UNORM`] / `_RGBA16_FLOAT` /
+        /// `_RGBA32_FLOAT`. The cdylib has already validated the
+        /// registration; the field is informational for customer kernels
+        /// that need to know element size for sampling.
+        pub format: i32,
+        /// Reserved padding — keeps the struct 32-byte aligned and gives
+        /// room for additive future fields (mip-level count, layer
+        /// count, etc.) without breaking the wire ABI. Must be zero on
+        /// write.
+        pub _reserved: [u8; 12],
+    }
+
+    /// Map a [`TextureFormat`] from the CUDA-mappable subset onto its
+    /// [`SLPN_CUDA_FORMAT_*`] FFI discriminant. Returns `None` for
+    /// formats outside the subset — the caller surfaces a
+    /// `BackendRejected` style error.
+    fn texture_format_to_slpn(format: TextureFormat) -> Option<i32> {
+        match format {
+            TextureFormat::Rgba8Unorm => Some(SLPN_CUDA_FORMAT_RGBA8_UNORM),
+            TextureFormat::Rgba16Float => Some(SLPN_CUDA_FORMAT_RGBA16_FLOAT),
+            TextureFormat::Rgba32Float => Some(SLPN_CUDA_FORMAT_RGBA32_FLOAT),
+            _ => None,
+        }
+    }
+
+    /// Parse the surface-share format string (e.g. `"Rgba8Unorm"`) onto
+    /// the CUDA-mappable [`TextureFormat`] subset. Returns `None` for
+    /// any format outside the subset; the cuda image path's accepted
+    /// set is intentionally narrower than `texture_format_from_str`
+    /// (defined below for the Vulkan adapter) so reject reasons are
+    /// specific to CUDA.
+    fn cuda_image_texture_format_from_str(format: &str) -> Option<TextureFormat> {
+        match format {
+            "Rgba8Unorm" => Some(TextureFormat::Rgba8Unorm),
+            "Rgba16Float" => Some(TextureFormat::Rgba16Float),
+            "Rgba32Float" => Some(TextureFormat::Rgba32Float),
+            _ => None,
+        }
+    }
+
+    /// Build the `cudaChannelFormatDesc` that
+    /// `cudaExternalMemoryGetMappedMipmappedArray` expects for a given
+    /// CUDA-mappable format. The mapping is fixed by the subset:
+    /// `Rgba8Unorm`  → 4× 8-bit unsigned,
+    /// `Rgba16Float` → 4× 16-bit float,
+    /// `Rgba32Float` → 4× 32-bit float.
+    fn cuda_channel_format_desc_for(format: TextureFormat) -> sys::cudaChannelFormatDesc {
+        match format {
+            TextureFormat::Rgba8Unorm => sys::cudaChannelFormatDesc {
+                x: 8,
+                y: 8,
+                z: 8,
+                w: 8,
+                f: sys::cudaChannelFormatKind::cudaChannelFormatKindUnsigned,
+            },
+            TextureFormat::Rgba16Float => sys::cudaChannelFormatDesc {
+                x: 16,
+                y: 16,
+                z: 16,
+                w: 16,
+                f: sys::cudaChannelFormatKind::cudaChannelFormatKindFloat,
+            },
+            TextureFormat::Rgba32Float => sys::cudaChannelFormatDesc {
+                x: 32,
+                y: 32,
+                z: 32,
+                w: 32,
+                f: sys::cudaChannelFormatKind::cudaChannelFormatKindFloat,
+            },
+            // `register` validates the format up-front; unreachable here.
+            _ => sys::cudaChannelFormatDesc {
+                x: 0,
+                y: 0,
+                z: 0,
+                w: 0,
+                f: sys::cudaChannelFormatKind::cudaChannelFormatKindNone,
+            },
+        }
+    }
+
+    /// Per-surface registered state for the image flavor — parallels
+    /// [`RegisteredCudaSurface`]. Holds the imported mipmapped array
+    /// (the CUDA-side handle yielded by
+    /// `cudaExternalMemoryGetMappedMipmappedArray`), the per-surface
+    /// stream, plus the same imported timeline + the host
+    /// `Arc<ConsumerVulkanTexture>` for Drop-order keepalive.
+    ///
+    /// Per-acquire `cudaTextureObject_t` / `cudaSurfaceObject_t`
+    /// handles live on `live_objects` — push on acquire, pop on
+    /// release. LIFO mirrors the scope-bound `with` / `using` pattern
+    /// at the SDK layer.
+    struct RegisteredCudaImageSurface {
+        // CUDA-side imports — Drop runs in declaration order, so list
+        // these first to ensure they're torn down before the Vulkan
+        // Arcs below release the underlying memory.
+        ext_mem: sys::cudaExternalMemory_t,
+        ext_sem: sys::cudaExternalSemaphore_t,
+        stream: sys::cudaStream_t,
+        mipmapped_array: sys::cudaMipmappedArray_t,
+        /// Stack of live `cudaTextureObject_t` / `cudaSurfaceObject_t`
+        /// handles — one entry per outstanding acquire. Both types are
+        /// `c_ulonglong` so a single `u64` discriminator-less stack
+        /// covers either flavor (read-side pushes texture objects,
+        /// write-side pushes surface objects; releases pop the
+        /// matching flavor by FFI entry-point selection).
+        live_objects: Mutex<Vec<u64>>,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        // Vulkan-side imports — held to outlive the CUDA imports above.
+        #[allow(dead_code)] // Arc held for lifetime; never read after register.
+        texture: Arc<ConsumerVulkanTexture>,
+        timeline: Arc<ConsumerVulkanTimelineSemaphore>,
+    }
+
+    // SAFETY: same rationale as [`RegisteredCudaSurface`] — CUDA Runtime
+    // API handles are opaque pointer-shaped and threading-safe for use
+    // and teardown after creation.
+    unsafe impl Send for RegisteredCudaImageSurface {}
+    unsafe impl Sync for RegisteredCudaImageSurface {}
+
+    impl Drop for RegisteredCudaImageSurface {
+        fn drop(&mut self) {
+            unsafe {
+                // Destroy any texture / surface objects still outstanding.
+                // Customers SHOULD release every acquire before unregister,
+                // but a forced unregister mid-flight shouldn't leak handles.
+                let drained: Vec<u64> = self
+                    .live_objects
+                    .lock()
+                    .expect("RegisteredCudaImageSurface live_objects: poisoned")
+                    .drain(..)
+                    .collect();
+                for handle in drained {
+                    // Texture and surface objects use the same destroy
+                    // signature — pick by trial since we don't track
+                    // flavor on the stack. `cudaDestroyTextureObject`
+                    // returns `cudaErrorInvalidValue` on a surface
+                    // object (and vice-versa), so attempt one then the
+                    // other.
+                    if sys::cudaDestroyTextureObject(handle as sys::cudaTextureObject_t)
+                        .result()
+                        .is_err()
+                    {
+                        let _ = sys::cudaDestroySurfaceObject(handle as sys::cudaSurfaceObject_t)
+                            .result();
+                    }
+                }
+                if !self.mipmapped_array.is_null() {
+                    let _ = sys::cudaFreeMipmappedArray(self.mipmapped_array).result();
+                }
+                if !self.stream.is_null() {
+                    let _ = sys::cudaStreamDestroy(self.stream).result();
+                }
+                if !self.ext_sem.is_null() {
+                    let _ = sys::cudaDestroyExternalSemaphore(self.ext_sem).result();
+                }
+                if !self.ext_mem.is_null() {
+                    let _ = external_memory::destroy_external_memory(self.ext_mem);
+                }
+            }
+        }
+    }
+
+    /// Register a host image-flavored cuda surface — imports the
+    /// OPAQUE_FD `VkImage` and timeline semaphore via
+    /// [`streamlib_consumer_rhi`], then re-imports the same FDs into
+    /// CUDA via `cudaImportExternalMemory` +
+    /// `cudaExternalMemoryGetMappedMipmappedArray` +
+    /// `cudaImportExternalSemaphore`.
+    ///
+    /// Sibling of [`slpn_cuda_register_surface`] (the buffer-flavored
+    /// DLPack path). The two registration paths are exclusive — a
+    /// given `surface_id` can be registered as one flavor, not both.
+    ///
+    /// Format is parsed from `gpu_handle.format`; accepted subset is
+    /// `Rgba8Unorm` / `Rgba16Float` / `Rgba32Float` — the rest of the
+    /// [`TextureFormat`] variants are rejected by
+    /// `cudaExternalMemoryGetMappedMipmappedArray`'s
+    /// `cudaChannelFormatDesc` acceptance.
+    #[unsafe(no_mangle)]
+    #[tracing::instrument(level = "info", skip(rt, gpu_handle))]
+    pub unsafe extern "C" fn slpn_cuda_register_image_surface(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        gpu_handle: *mut SurfaceHandle,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => {
+                tracing::error!("slpn_cuda_register_image_surface: null runtime");
+                return SLPN_CUDA_ERR;
+            }
+        };
+        let gpu = match unsafe { gpu_handle.as_mut() } {
+            Some(g) => g,
+            None => {
+                tracing::error!("slpn_cuda_register_image_surface: null gpu_handle");
+                return SLPN_CUDA_ERR;
+            }
+        };
+        if gpu.fds.len() != 1 {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: cuda image flavor requires \
+                 exactly 1 OPAQUE_FD; gpu_handle has {} fd(s)",
+                gpu.fds.len()
+            );
+            return SLPN_CUDA_ERR;
+        }
+        if gpu.width == 0 || gpu.height == 0 {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: width/height must be > 0 \
+                 (got {}x{})",
+                gpu.width,
+                gpu.height
+            );
+            return SLPN_CUDA_ERR;
+        }
+        let texture_format = match cuda_image_texture_format_from_str(&gpu.format) {
+            Some(f) => f,
+            None => {
+                tracing::error!(
+                    "slpn_cuda_register_image_surface: format '{}' is not \
+                     CUDA-mappable; allowed: Rgba8Unorm, Rgba16Float, Rgba32Float",
+                    gpu.format
+                );
+                return SLPN_CUDA_ERR;
+            }
+        };
+        let allocation_size = gpu
+            .plane_sizes
+            .first()
+            .copied()
+            .filter(|s| *s > 0)
+            .unwrap_or(gpu.size);
+        if allocation_size == 0 {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: surface '{}' has zero size",
+                surface_id
+            );
+            return SLPN_CUDA_ERR;
+        }
+
+        // ── Step 1: import the OPAQUE_FD `VkImage` into Vulkan ──────────
+        let vk_fd = unsafe { libc::dup(gpu.fds[0]) };
+        if vk_fd < 0 {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: dup vk_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            return SLPN_CUDA_ERR;
+        }
+        let texture = match ConsumerVulkanTexture::from_opaque_fd(
+            &rt.device,
+            vk_fd,
+            gpu.width,
+            gpu.height,
+            texture_format,
+            allocation_size,
+        ) {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cuda_register_image_surface: ConsumerVulkanTexture::from_opaque_fd \
+                     failed: {} — verify the host registered this surface with \
+                     handle_type=opaque_fd, OPTIMAL tiling, no DRM modifier",
+                    e
+                );
+                unsafe { libc::close(vk_fd) };
+                return SLPN_CUDA_ERR;
+            }
+        };
+
+        // ── Step 2: import the timeline semaphore into Vulkan ───────────
+        let raw_sync_fd: RawFd = match gpu.sync_fd.take() {
+            Some(fd) => fd,
+            None => {
+                tracing::error!(
+                    "slpn_cuda_register_image_surface: surface '{}' has no sync_fd — \
+                     the host must register an exportable timeline semaphore so \
+                     cross-API sync (Vulkan ↔ CUDA) is well-defined",
+                    surface_id
+                );
+                return SLPN_CUDA_ERR;
+            }
+        };
+        let vk_sync_fd = unsafe { libc::dup(raw_sync_fd) };
+        if vk_sync_fd < 0 {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: dup sync_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            gpu.sync_fd = Some(raw_sync_fd);
+            return SLPN_CUDA_ERR;
+        }
+        let timeline = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &rt.device,
+            vk_sync_fd,
+        ) {
+            Ok(s) => Arc::new(s),
+            Err(e) => {
+                tracing::error!(
+                    "slpn_cuda_register_image_surface: timeline from_imported_opaque_fd: {}",
+                    e
+                );
+                unsafe { libc::close(vk_sync_fd) };
+                gpu.sync_fd = Some(raw_sync_fd);
+                return SLPN_CUDA_ERR;
+            }
+        };
+
+        // ── Step 3: import the OPAQUE_FD memory into CUDA ───────────────
+        let cuda_mem_fd = unsafe { libc::dup(gpu.fds[0]) };
+        if cuda_mem_fd < 0 {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: dup cuda_mem_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            gpu.sync_fd = Some(raw_sync_fd);
+            return SLPN_CUDA_ERR;
+        }
+        // SAFETY: see notes on the buffer path's import_external_memory_opaque_fd
+        // call — ownership of `cuda_mem_fd` transfers on success.
+        let ext_mem = unsafe {
+            match external_memory::import_external_memory_opaque_fd(cuda_mem_fd, allocation_size) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!(
+                        "slpn_cuda_register_image_surface: cudaImportExternalMemory: {:?}",
+                        e
+                    );
+                    libc::close(cuda_mem_fd);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLPN_CUDA_ERR;
+                }
+            }
+        };
+
+        // ── Step 4: map the imported memory as a mipmapped array ────────
+        // Single-level mip (`numLevels = 1`) — multi-level mip chains
+        // would require the host to export a corresponding pyramid, a
+        // future concern. `flags = 0` (no `cudaArrayColorAttachment` —
+        // surface-write is enabled by `cudaArraySurfaceLoadStore` flag
+        // which the host's `HostVulkanTexture::new_opaque_fd_export`
+        // applies by including `STORAGE` usage in the VkImage).
+        let mipmap_desc = sys::cudaExternalMemoryMipmappedArrayDesc {
+            offset: 0,
+            formatDesc: cuda_channel_format_desc_for(texture_format),
+            extent: sys::cudaExtent {
+                width: gpu.width as usize,
+                height: gpu.height as usize,
+                depth: 0, // 2-D — depth=0 per CUDA spec for non-3D arrays
+            },
+            flags: 0,
+            numLevels: 1,
+        };
+        let mut mipmapped_array = MaybeUninit::<sys::cudaMipmappedArray_t>::uninit();
+        let mipmapped_array = unsafe {
+            match sys::cudaExternalMemoryGetMappedMipmappedArray(
+                mipmapped_array.as_mut_ptr(),
+                ext_mem,
+                &mipmap_desc,
+            )
+            .result()
+            {
+                Ok(()) => mipmapped_array.assume_init(),
+                Err(e) => {
+                    tracing::error!(
+                        "slpn_cuda_register_image_surface: \
+                         cudaExternalMemoryGetMappedMipmappedArray failed: {:?} — \
+                         common cause: host's VkImage usage flags don't include \
+                         SAMPLED/STORAGE, or format outside the CUDA-mappable subset",
+                        e
+                    );
+                    let _ = external_memory::destroy_external_memory(ext_mem);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLPN_CUDA_ERR;
+                }
+            }
+        };
+
+        // ── Step 5: import the timeline semaphore into CUDA ─────────────
+        let cuda_sync_fd = unsafe { libc::dup(raw_sync_fd) };
+        if cuda_sync_fd < 0 {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: dup cuda_sync_fd failed: {}",
+                std::io::Error::last_os_error()
+            );
+            unsafe {
+                let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
+                let _ = external_memory::destroy_external_memory(ext_mem);
+            };
+            gpu.sync_fd = Some(raw_sync_fd);
+            return SLPN_CUDA_ERR;
+        }
+        let mut sem_desc = MaybeUninit::<sys::cudaExternalSemaphoreHandleDesc>::zeroed();
+        let sem_desc = unsafe {
+            let p = sem_desc.as_mut_ptr();
+            (&raw mut (*p).type_).write(
+                sys::cudaExternalSemaphoreHandleType::cudaExternalSemaphoreHandleTypeTimelineSemaphoreFd,
+            );
+            (&raw mut (*p).handle).write(
+                sys::cudaExternalSemaphoreHandleDesc__bindgen_ty_1 { fd: cuda_sync_fd },
+            );
+            (&raw mut (*p).flags).write(0);
+            sem_desc.assume_init()
+        };
+        let mut ext_sem = MaybeUninit::<sys::cudaExternalSemaphore_t>::uninit();
+        let ext_sem = unsafe {
+            match sys::cudaImportExternalSemaphore(ext_sem.as_mut_ptr(), &sem_desc).result() {
+                Ok(()) => ext_sem.assume_init(),
+                Err(e) => {
+                    tracing::error!(
+                        "slpn_cuda_register_image_surface: cudaImportExternalSemaphore: {:?}",
+                        e
+                    );
+                    libc::close(cuda_sync_fd);
+                    let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
+                    let _ = external_memory::destroy_external_memory(ext_mem);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLPN_CUDA_ERR;
+                }
+            }
+        };
+
+        // ── Step 6: per-surface CUDA stream ─────────────────────────────
+        let mut stream = MaybeUninit::<sys::cudaStream_t>::uninit();
+        let stream = unsafe {
+            match sys::cudaStreamCreate(stream.as_mut_ptr()).result() {
+                Ok(()) => stream.assume_init(),
+                Err(e) => {
+                    tracing::error!(
+                        "slpn_cuda_register_image_surface: cudaStreamCreate: {:?}",
+                        e
+                    );
+                    let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
+                    let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
+                    let _ = external_memory::destroy_external_memory(ext_mem);
+                    gpu.sync_fd = Some(raw_sync_fd);
+                    return SLPN_CUDA_ERR;
+                }
+            }
+        };
+
+        // ── Step 7: hand the registration to the Rust adapter ──────────
+        let registration = HostImageSurfaceRegistration {
+            texture: Arc::clone(&texture),
+            timeline: Arc::clone(&timeline),
+            initial_layout: VulkanLayout::UNDEFINED,
+        };
+        if let Err(e) = rt
+            .adapter
+            .register_host_image_surface(surface_id, registration)
+        {
+            tracing::error!(
+                "slpn_cuda_register_image_surface: \
+                 adapter.register_host_image_surface({}): {:?}",
+                surface_id,
+                e
+            );
+            unsafe {
+                let _ = sys::cudaStreamDestroy(stream).result();
+                let _ = sys::cudaDestroyExternalSemaphore(ext_sem).result();
+                let _ = sys::cudaFreeMipmappedArray(mipmapped_array).result();
+                let _ = external_memory::destroy_external_memory(ext_mem);
+            };
+            gpu.sync_fd = Some(raw_sync_fd);
+            return SLPN_CUDA_ERR;
+        }
+
+        gpu.sync_fd = Some(raw_sync_fd);
+
+        let entry = Arc::new(RegisteredCudaImageSurface {
+            ext_mem,
+            ext_sem,
+            stream,
+            mipmapped_array,
+            live_objects: Mutex::new(Vec::new()),
+            width: gpu.width,
+            height: gpu.height,
+            format: texture_format,
+            texture,
+            timeline,
+        });
+        rt.registered_images
+            .lock()
+            .expect("slpn_cuda registered_images: poisoned")
+            .insert(surface_id, entry);
+        SLPN_CUDA_OK
+    }
+
+    /// Unregister a previously-registered image-flavored cuda surface.
+    /// Mirrors [`slpn_cuda_unregister_surface`] but targets the image
+    /// map. Returns `SLPN_CUDA_ERR` if the `surface_id` isn't an image
+    /// registration on this runtime.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_unregister_image_surface(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CUDA_ERR,
+        };
+        let removed = rt
+            .registered_images
+            .lock()
+            .expect("slpn_cuda registered_images: poisoned")
+            .remove(&surface_id);
+        if removed.is_none() {
+            return SLPN_CUDA_ERR;
+        }
+        if rt.adapter.unregister_host_surface(surface_id) {
+            SLPN_CUDA_OK
+        } else {
+            SLPN_CUDA_ERR
+        }
+    }
+
+    fn lookup_image_entry(
+        rt: &CudaRuntimeHandle,
+        surface_id: u64,
+    ) -> Option<Arc<RegisteredCudaImageSurface>> {
+        rt.registered_images
+            .lock()
+            .expect("slpn_cuda registered_images: poisoned")
+            .get(&surface_id)
+            .cloned()
+    }
+
+    /// Build a `cudaTextureDesc` with the AI-Agent-Notes defaults from
+    /// the issue body: linear filter, clamp-to-edge addressing across
+    /// all three dimensions, non-normalized coordinates,
+    /// `cudaReadModeElementType`, no sRGB, no mipmap clamping. Customer-
+    /// overridable defaults are a future concern when a real consumer
+    /// surfaces; ship the standard sampler shape now.
+    fn default_texture_desc() -> sys::cudaTextureDesc {
+        sys::cudaTextureDesc {
+            addressMode: [
+                sys::cudaTextureAddressMode::cudaAddressModeClamp,
+                sys::cudaTextureAddressMode::cudaAddressModeClamp,
+                sys::cudaTextureAddressMode::cudaAddressModeClamp,
+            ],
+            filterMode: sys::cudaTextureFilterMode::cudaFilterModeLinear,
+            readMode: sys::cudaTextureReadMode::cudaReadModeElementType,
+            sRGB: 0,
+            borderColor: [0.0, 0.0, 0.0, 0.0],
+            normalizedCoords: 0,
+            maxAnisotropy: 0,
+            mipmapFilterMode: sys::cudaTextureFilterMode::cudaFilterModePoint,
+            mipmapLevelBias: 0.0,
+            minMipmapLevelClamp: 0.0,
+            maxMipmapLevelClamp: 0.0,
+            disableTrilinearOptimization: 0,
+            seamlessCubemap: 0,
+        }
+    }
+
+    /// Per-acquire `cudaTextureObject_t` construction. Bound to
+    /// `cudaResourceTypeMipmappedArray` against the imported handle.
+    fn create_texture_object_for(
+        entry: &RegisteredCudaImageSurface,
+    ) -> Result<sys::cudaTextureObject_t, String> {
+        let mut res_desc = MaybeUninit::<sys::cudaResourceDesc>::zeroed();
+        // SAFETY: we initialize every field; zeroed gives a valid
+        // starting state for the union since `cudaResourceTypeArray = 0`
+        // and the union variants are pointer-shaped.
+        let res_desc = unsafe {
+            let p = res_desc.as_mut_ptr();
+            (&raw mut (*p).resType).write(sys::cudaResourceType::cudaResourceTypeMipmappedArray);
+            (&raw mut (*p).res.mipmap.mipmap).write(entry.mipmapped_array);
+            res_desc.assume_init()
+        };
+        let tex_desc = default_texture_desc();
+        let mut tex_obj = MaybeUninit::<sys::cudaTextureObject_t>::uninit();
+        unsafe {
+            sys::cudaCreateTextureObject(
+                tex_obj.as_mut_ptr(),
+                &res_desc,
+                &tex_desc,
+                std::ptr::null(),
+            )
+            .result()
+            .map_err(|e| format!("cudaCreateTextureObject: {e:?}"))?;
+            Ok(tex_obj.assume_init())
+        }
+    }
+
+    /// Per-acquire `cudaSurfaceObject_t` construction. Bound to
+    /// `cudaResourceTypeArray` against level-0 of the imported
+    /// mipmapped array (`cudaCreateSurfaceObject` does not accept
+    /// `cudaResourceTypeMipmappedArray` directly — it requires a
+    /// `cudaArray_t`).
+    fn create_surface_object_for(
+        entry: &RegisteredCudaImageSurface,
+    ) -> Result<sys::cudaSurfaceObject_t, String> {
+        let mut level0 = MaybeUninit::<sys::cudaArray_t>::uninit();
+        let level0 = unsafe {
+            sys::cudaGetMipmappedArrayLevel(level0.as_mut_ptr(), entry.mipmapped_array, 0)
+                .result()
+                .map_err(|e| format!("cudaGetMipmappedArrayLevel: {e:?}"))?;
+            level0.assume_init()
+        };
+        let mut res_desc = MaybeUninit::<sys::cudaResourceDesc>::zeroed();
+        let res_desc = unsafe {
+            let p = res_desc.as_mut_ptr();
+            (&raw mut (*p).resType).write(sys::cudaResourceType::cudaResourceTypeArray);
+            (&raw mut (*p).res.array.array).write(level0);
+            res_desc.assume_init()
+        };
+        let mut surf_obj = MaybeUninit::<sys::cudaSurfaceObject_t>::uninit();
+        unsafe {
+            sys::cudaCreateSurfaceObject(surf_obj.as_mut_ptr(), &res_desc)
+                .result()
+                .map_err(|e| format!("cudaCreateSurfaceObject: {e:?}"))?;
+            Ok(surf_obj.assume_init())
+        }
+    }
+
+    fn cuda_sync_after_image_acquire(entry: &RegisteredCudaImageSurface) -> Result<(), String> {
+        let wait_value = entry
+            .timeline
+            .current_value()
+            .map_err(|e| format!("get_semaphore_counter_value: {e}"))?;
+
+        let mut wait_params = MaybeUninit::<sys::cudaExternalSemaphoreWaitParams>::zeroed();
+        let wait_params = unsafe {
+            let p = wait_params.as_mut_ptr();
+            (&raw mut (*p).params.fence.value).write(wait_value);
+            (&raw mut (*p).flags).write(0);
+            wait_params.assume_init()
+        };
+
+        let wait_result = unsafe {
+            sys::cudaWaitExternalSemaphoresAsync_v2(
+                &entry.ext_sem,
+                &wait_params,
+                1,
+                entry.stream,
+            )
+            .result()
+        };
+        if let Err(e) = wait_result {
+            return Err(format!("cudaWaitExternalSemaphoresAsync: {e:?}"));
+        }
+        if let Err(e) = unsafe { sys::cudaStreamSynchronize(entry.stream) }.result() {
+            return Err(format!("cudaStreamSynchronize: {e:?}"));
+        }
+        Ok(())
+    }
+
+    fn populate_image_view(
+        entry: &Arc<RegisteredCudaImageSurface>,
+        cuda_object_handle: u64,
+        out: &mut SlpnCudaImageView,
+    ) -> i32 {
+        let format = match texture_format_to_slpn(entry.format) {
+            Some(f) => f,
+            None => {
+                tracing::error!(
+                    "slpn_cuda: registered image format {:?} is not in the \
+                     CUDA-mappable subset — registration should have rejected this",
+                    entry.format
+                );
+                return SLPN_CUDA_ERR;
+            }
+        };
+        out.cuda_object_handle = cuda_object_handle;
+        out.width = entry.width;
+        out.height = entry.height;
+        out.format = format;
+        out._reserved = [0u8; 12];
+        SLPN_CUDA_OK
+    }
+
+    fn descriptor_for_image_surface(surface_id: u64) -> StreamlibSurface {
+        StreamlibSurface::new(
+            surface_id,
+            0,
+            0,
+            SurfaceFormat::Bgra8,
+            SurfaceUsage::SAMPLED,
+            SurfaceTransportHandle::empty(),
+            SurfaceSyncState::default(),
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_acquire_texture(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SlpnCudaImageView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CUDA_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLPN_CUDA_ERR,
+        };
+        let entry = match lookup_image_entry(rt, surface_id) {
+            Some(e) => e,
+            None => {
+                tracing::error!(
+                    "slpn_cuda_acquire_texture: surface_id {} not registered \
+                     as image flavor",
+                    surface_id
+                );
+                return SLPN_CUDA_ERR;
+            }
+        };
+        let surface = descriptor_for_image_surface(surface_id);
+        match rt.adapter.acquire_texture(&surface) {
+            Ok(g) => {
+                std::mem::forget(g);
+                if let Err(e) = cuda_sync_after_image_acquire(&entry) {
+                    tracing::error!(
+                        "slpn_cuda_acquire_texture({}): cuda sync failed: {} — \
+                         releasing the adapter guard so the timeline can advance",
+                        surface_id,
+                        e
+                    );
+                    rt.adapter.end_read_access(surface_id);
+                    return SLPN_CUDA_ERR;
+                }
+                let tex_obj = match create_texture_object_for(&entry) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        tracing::error!(
+                            "slpn_cuda_acquire_texture({}): create_texture_object failed: {} — \
+                             releasing the adapter guard",
+                            surface_id,
+                            e
+                        );
+                        rt.adapter.end_read_access(surface_id);
+                        return SLPN_CUDA_ERR;
+                    }
+                };
+                entry
+                    .live_objects
+                    .lock()
+                    .expect("slpn_cuda live_objects: poisoned")
+                    .push(tex_obj as u64);
+                populate_image_view(&entry, tex_obj as u64, out)
+            }
+            Err(e) => {
+                tracing::error!("slpn_cuda_acquire_texture({}): {:?}", surface_id, e);
+                SLPN_CUDA_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_acquire_surface(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SlpnCudaImageView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CUDA_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLPN_CUDA_ERR,
+        };
+        let entry = match lookup_image_entry(rt, surface_id) {
+            Some(e) => e,
+            None => {
+                tracing::error!(
+                    "slpn_cuda_acquire_surface: surface_id {} not registered \
+                     as image flavor",
+                    surface_id
+                );
+                return SLPN_CUDA_ERR;
+            }
+        };
+        let surface = descriptor_for_image_surface(surface_id);
+        match rt.adapter.acquire_surface(&surface) {
+            Ok(g) => {
+                std::mem::forget(g);
+                if let Err(e) = cuda_sync_after_image_acquire(&entry) {
+                    tracing::error!(
+                        "slpn_cuda_acquire_surface({}): cuda sync failed: {}",
+                        surface_id,
+                        e
+                    );
+                    rt.adapter.end_write_access(surface_id);
+                    return SLPN_CUDA_ERR;
+                }
+                let surf_obj = match create_surface_object_for(&entry) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        tracing::error!(
+                            "slpn_cuda_acquire_surface({}): create_surface_object failed: {}",
+                            surface_id,
+                            e
+                        );
+                        rt.adapter.end_write_access(surface_id);
+                        return SLPN_CUDA_ERR;
+                    }
+                };
+                entry
+                    .live_objects
+                    .lock()
+                    .expect("slpn_cuda live_objects: poisoned")
+                    .push(surf_obj as u64);
+                populate_image_view(&entry, surf_obj as u64, out)
+            }
+            Err(e) => {
+                tracing::error!("slpn_cuda_acquire_surface({}): {:?}", surface_id, e);
+                SLPN_CUDA_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_try_acquire_texture(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SlpnCudaImageView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CUDA_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLPN_CUDA_ERR,
+        };
+        let entry = match lookup_image_entry(rt, surface_id) {
+            Some(e) => e,
+            None => return SLPN_CUDA_ERR,
+        };
+        let surface = descriptor_for_image_surface(surface_id);
+        match rt.adapter.try_acquire_texture(&surface) {
+            Ok(Some(g)) => {
+                std::mem::forget(g);
+                if let Err(e) = cuda_sync_after_image_acquire(&entry) {
+                    tracing::error!(
+                        "slpn_cuda_try_acquire_texture({}): cuda sync: {}",
+                        surface_id,
+                        e
+                    );
+                    rt.adapter.end_read_access(surface_id);
+                    return SLPN_CUDA_ERR;
+                }
+                let tex_obj = match create_texture_object_for(&entry) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        tracing::error!(
+                            "slpn_cuda_try_acquire_texture({}): create_texture_object: {}",
+                            surface_id,
+                            e
+                        );
+                        rt.adapter.end_read_access(surface_id);
+                        return SLPN_CUDA_ERR;
+                    }
+                };
+                entry
+                    .live_objects
+                    .lock()
+                    .expect("slpn_cuda live_objects: poisoned")
+                    .push(tex_obj as u64);
+                populate_image_view(&entry, tex_obj as u64, out)
+            }
+            Ok(None) => SLPN_CUDA_CONTENDED,
+            Err(e) => {
+                tracing::error!("slpn_cuda_try_acquire_texture({}): {:?}", surface_id, e);
+                SLPN_CUDA_ERR
+            }
+        }
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_try_acquire_surface(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+        out_view: *mut SlpnCudaImageView,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CUDA_ERR,
+        };
+        let out = match unsafe { out_view.as_mut() } {
+            Some(v) => v,
+            None => return SLPN_CUDA_ERR,
+        };
+        let entry = match lookup_image_entry(rt, surface_id) {
+            Some(e) => e,
+            None => return SLPN_CUDA_ERR,
+        };
+        let surface = descriptor_for_image_surface(surface_id);
+        match rt.adapter.try_acquire_surface(&surface) {
+            Ok(Some(g)) => {
+                std::mem::forget(g);
+                if let Err(e) = cuda_sync_after_image_acquire(&entry) {
+                    tracing::error!(
+                        "slpn_cuda_try_acquire_surface({}): cuda sync: {}",
+                        surface_id,
+                        e
+                    );
+                    rt.adapter.end_write_access(surface_id);
+                    return SLPN_CUDA_ERR;
+                }
+                let surf_obj = match create_surface_object_for(&entry) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        tracing::error!(
+                            "slpn_cuda_try_acquire_surface({}): create_surface_object: {}",
+                            surface_id,
+                            e
+                        );
+                        rt.adapter.end_write_access(surface_id);
+                        return SLPN_CUDA_ERR;
+                    }
+                };
+                entry
+                    .live_objects
+                    .lock()
+                    .expect("slpn_cuda live_objects: poisoned")
+                    .push(surf_obj as u64);
+                populate_image_view(&entry, surf_obj as u64, out)
+            }
+            Ok(None) => SLPN_CUDA_CONTENDED,
+            Err(e) => {
+                tracing::error!("slpn_cuda_try_acquire_surface({}): {:?}", surface_id, e);
+                SLPN_CUDA_ERR
+            }
+        }
+    }
+
+    /// Release one outstanding texture-flavored acquire — pops the
+    /// LIFO stack of live `cudaTextureObject_t` handles for this
+    /// surface, destroys the popped handle, and decrements the
+    /// adapter's read-holder counter.
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_release_texture(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CUDA_ERR,
+        };
+        if let Some(entry) = lookup_image_entry(rt, surface_id) {
+            if let Some(handle) = entry
+                .live_objects
+                .lock()
+                .expect("slpn_cuda live_objects: poisoned")
+                .pop()
+            {
+                let _ = unsafe {
+                    sys::cudaDestroyTextureObject(handle as sys::cudaTextureObject_t).result()
+                };
+            }
+        }
+        rt.adapter.end_read_access(surface_id);
+        SLPN_CUDA_OK
+    }
+
+    /// Release one outstanding surface-flavored acquire — symmetric
+    /// counterpart to [`slpn_cuda_release_texture`].
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_release_surface(
+        rt: *mut CudaRuntimeHandle,
+        surface_id: u64,
+    ) -> i32 {
+        let rt = match unsafe { rt.as_ref() } {
+            Some(r) => r,
+            None => return SLPN_CUDA_ERR,
+        };
+        if let Some(entry) = lookup_image_entry(rt, surface_id) {
+            if let Some(handle) = entry
+                .live_objects
+                .lock()
+                .expect("slpn_cuda live_objects: poisoned")
+                .pop()
+            {
+                let _ = unsafe {
+                    sys::cudaDestroySurfaceObject(handle as sys::cudaSurfaceObject_t).result()
+                };
+            }
+        }
+        rt.adapter.end_write_access(surface_id);
+        SLPN_CUDA_OK
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -5950,6 +6996,120 @@ mod cuda {
             assert_eq!(SLPN_CUDA_OK, 0);
             assert_eq!(SLPN_CUDA_ERR, -1);
             assert_eq!(SLPN_CUDA_CONTENDED, 1);
+            // Image-path format discriminants — wire ABI between
+            // cdylib and the Python/Deno SDK mirrors.
+            assert_eq!(SLPN_CUDA_FORMAT_RGBA8_UNORM, 0);
+            assert_eq!(SLPN_CUDA_FORMAT_RGBA16_FLOAT, 1);
+            assert_eq!(SLPN_CUDA_FORMAT_RGBA32_FLOAT, 2);
+        }
+
+        // Layout regression for the image-flavored view — same wire
+        // ABI guarantees as the buffer flavor. Python ctypes and Deno
+        // DataView readers in the SDK layers depend on these offsets.
+        #[test]
+        fn slpn_cuda_image_view_layout_matches_spec_64bit() {
+            // SlpnCudaImageView fields in declaration order:
+            //   cuda_object_handle: u64    @ 0
+            //   width             : u32    @ 8
+            //   height            : u32    @ 12
+            //   format            : i32    @ 16
+            //   _reserved         : [u8;12]@ 20
+            // Total: 32 bytes — same wire size as `SlpnCudaView` so the
+            // SDK can reuse 32-byte staging buffers across flavors.
+            assert_eq!(size_of::<SlpnCudaImageView>(), 32);
+            assert_eq!(offset_of!(SlpnCudaImageView, cuda_object_handle), 0);
+            assert_eq!(offset_of!(SlpnCudaImageView, width), 8);
+            assert_eq!(offset_of!(SlpnCudaImageView, height), 12);
+            assert_eq!(offset_of!(SlpnCudaImageView, format), 16);
+            assert_eq!(offset_of!(SlpnCudaImageView, _reserved), 20);
+        }
+
+        #[test]
+        fn cuda_image_texture_format_from_str_accepts_cuda_mappable_subset() {
+            assert_eq!(
+                cuda_image_texture_format_from_str("Rgba8Unorm"),
+                Some(TextureFormat::Rgba8Unorm)
+            );
+            assert_eq!(
+                cuda_image_texture_format_from_str("Rgba16Float"),
+                Some(TextureFormat::Rgba16Float)
+            );
+            assert_eq!(
+                cuda_image_texture_format_from_str("Rgba32Float"),
+                Some(TextureFormat::Rgba32Float)
+            );
+            // Non-CUDA-mappable variants are explicitly rejected so the
+            // register flow surfaces them with a specific error message
+            // rather than silently letting cudaExternalMemoryGetMappedMipmappedArray
+            // fail with a less actionable code.
+            assert_eq!(cuda_image_texture_format_from_str("Bgra8Unorm"), None);
+            assert_eq!(cuda_image_texture_format_from_str("Rgba8UnormSrgb"), None);
+            assert_eq!(cuda_image_texture_format_from_str("Nv12"), None);
+        }
+
+        #[test]
+        fn cuda_channel_format_desc_for_matches_format_byte_layout() {
+            // Wire contract for cudaExternalMemoryGetMappedMipmappedArray —
+            // Rgba8Unorm  = 4× 8-bit unsigned,
+            // Rgba16Float = 4× 16-bit float,
+            // Rgba32Float = 4× 32-bit float.
+            let d8 = cuda_channel_format_desc_for(TextureFormat::Rgba8Unorm);
+            assert_eq!((d8.x, d8.y, d8.z, d8.w), (8, 8, 8, 8));
+            assert_eq!(
+                d8.f,
+                sys::cudaChannelFormatKind::cudaChannelFormatKindUnsigned
+            );
+            let d16 = cuda_channel_format_desc_for(TextureFormat::Rgba16Float);
+            assert_eq!((d16.x, d16.y, d16.z, d16.w), (16, 16, 16, 16));
+            assert_eq!(
+                d16.f,
+                sys::cudaChannelFormatKind::cudaChannelFormatKindFloat
+            );
+            let d32 = cuda_channel_format_desc_for(TextureFormat::Rgba32Float);
+            assert_eq!((d32.x, d32.y, d32.z, d32.w), (32, 32, 32, 32));
+            assert_eq!(
+                d32.f,
+                sys::cudaChannelFormatKind::cudaChannelFormatKindFloat
+            );
+        }
+
+        #[test]
+        fn default_texture_desc_matches_issue_body_ai_notes() {
+            // AI-Agent-Notes defaults from #802: linear filter,
+            // clamp-to-edge x3, non-normalized coords,
+            // ReadElementType, no sRGB. Locking these here so a future
+            // change to the defaults is intentional rather than drift.
+            let d = default_texture_desc();
+            assert_eq!(
+                d.filterMode,
+                sys::cudaTextureFilterMode::cudaFilterModeLinear
+            );
+            assert_eq!(
+                d.readMode,
+                sys::cudaTextureReadMode::cudaReadModeElementType
+            );
+            assert_eq!(d.sRGB, 0);
+            assert_eq!(d.normalizedCoords, 0);
+            for mode in d.addressMode {
+                assert_eq!(mode, sys::cudaTextureAddressMode::cudaAddressModeClamp);
+            }
+        }
+
+        #[test]
+        fn texture_format_to_slpn_roundtrips_cuda_mappable_subset() {
+            assert_eq!(
+                texture_format_to_slpn(TextureFormat::Rgba8Unorm),
+                Some(SLPN_CUDA_FORMAT_RGBA8_UNORM)
+            );
+            assert_eq!(
+                texture_format_to_slpn(TextureFormat::Rgba16Float),
+                Some(SLPN_CUDA_FORMAT_RGBA16_FLOAT)
+            );
+            assert_eq!(
+                texture_format_to_slpn(TextureFormat::Rgba32Float),
+                Some(SLPN_CUDA_FORMAT_RGBA32_FLOAT)
+            );
+            assert_eq!(texture_format_to_slpn(TextureFormat::Bgra8Unorm), None);
         }
 
         // Runtime-construction smoke test: bring up + tear down the
@@ -5983,6 +7143,9 @@ mod cuda {
     pub const SLPN_CUDA_CONTENDED: i32 = 1;
     pub const SLPN_CUDA_DEVICE_TYPE_CUDA: i32 = 2;
     pub const SLPN_CUDA_DEVICE_TYPE_CUDA_HOST: i32 = 3;
+    pub const SLPN_CUDA_FORMAT_RGBA8_UNORM: i32 = 0;
+    pub const SLPN_CUDA_FORMAT_RGBA16_FLOAT: i32 = 1;
+    pub const SLPN_CUDA_FORMAT_RGBA32_FLOAT: i32 = 2;
 
     #[repr(C)]
     pub struct SlpnCudaView {
@@ -5991,6 +7154,15 @@ mod cuda {
         pub device_type: i32,
         pub device_id: i32,
         pub dlpack_managed_tensor: *mut c_void,
+    }
+
+    #[repr(C)]
+    pub struct SlpnCudaImageView {
+        pub cuda_object_handle: u64,
+        pub width: u32,
+        pub height: u32,
+        pub format: i32,
+        pub _reserved: [u8; 12],
     }
 
     #[unsafe(no_mangle)]
@@ -6065,6 +7237,75 @@ mod cuda {
 
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn slpn_cuda_release_write(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        SLPN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_register_image_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _gpu_handle: *mut c_void,
+    ) -> i32 {
+        SLPN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_unregister_image_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        SLPN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_acquire_texture(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SlpnCudaImageView,
+    ) -> i32 {
+        SLPN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_acquire_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SlpnCudaImageView,
+    ) -> i32 {
+        SLPN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_try_acquire_texture(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SlpnCudaImageView,
+    ) -> i32 {
+        SLPN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_try_acquire_surface(
+        _rt: *mut c_void,
+        _surface_id: u64,
+        _out_view: *mut SlpnCudaImageView,
+    ) -> i32 {
+        SLPN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_release_texture(
+        _rt: *mut c_void,
+        _surface_id: u64,
+    ) -> i32 {
+        SLPN_CUDA_ERR
+    }
+
+    #[unsafe(no_mangle)]
+    pub unsafe extern "C" fn slpn_cuda_release_surface(
         _rt: *mut c_void,
         _surface_id: u64,
     ) -> i32 {

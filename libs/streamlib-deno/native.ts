@@ -398,6 +398,42 @@ const symbols = {
     parameters: ["pointer", "u64"] as const,
     result: "i32" as const,
   },
+  // Image-flavored path — OPAQUE_FD `VkImage` import +
+  // `cudaMipmappedArray_t` + per-acquire `cudaTextureObject_t` /
+  // `cudaSurfaceObject_t` construction. Sibling of the buffer-flavored
+  // symbols above.
+  sldn_cuda_register_image_surface: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_unregister_image_surface: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_acquire_texture: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_acquire_surface: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_try_acquire_texture: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_try_acquire_surface: {
+    parameters: ["pointer", "u64", "pointer"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_release_texture: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
+  sldn_cuda_release_surface: {
+    parameters: ["pointer", "u64"] as const,
+    result: "i32" as const,
+  },
 } as const;
 
 export type NativeLib = Deno.DynamicLibrary<typeof symbols>;

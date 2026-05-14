@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import ctypes
 
+import inspect
+
 from streamlib.adapters import cuda as c
 from streamlib.surface_adapter import STREAMLIB_ADAPTER_ABI_VERSION, SurfaceFormat
 
@@ -182,6 +184,102 @@ def test_cuda_context_class_exposes_expected_method_set():
     assert hasattr(c.CudaContext, "try_acquire_read")
     assert hasattr(c.CudaContext, "try_acquire_write")
     assert hasattr(c.CudaContext, "from_runtime")
+    # Image-flavored methods — sibling of acquire_read / acquire_write
+    # for the `cudaTextureObject_t` / `cudaSurfaceObject_t` path.
+    assert hasattr(c.CudaContext, "acquire_texture")
+    assert hasattr(c.CudaContext, "acquire_surface")
+    assert hasattr(c.CudaContext, "try_acquire_texture")
+    assert hasattr(c.CudaContext, "try_acquire_surface")
+    # Cross-process release shim — present per the design clarification
+    # comment on #802 (NOT vulkan_ctx-bearing; see the signature test).
+    assert hasattr(c.CudaContext, "release_for_cross_process")
+
+
+def test_slpn_cuda_image_view_layout_matches_cdylib():
+    # Mirrors `slpn_cuda_image_view_layout_matches_spec_64bit` in the
+    # cdylib's tests — these offsets / sizes are part of the wire ABI
+    # between the cdylib's `SlpnCudaImageView` and Python's
+    # `_SlpnCudaImageView`.
+    assert ctypes.sizeof(c._SlpnCudaImageView) == 32
+    fields = {
+        name: c._SlpnCudaImageView.__dict__[name].offset
+        for name, _ in c._SlpnCudaImageView._fields_
+    }
+    assert fields == {
+        "cuda_object_handle": 0,
+        "width": 8,
+        "height": 12,
+        "format": 16,
+        "_reserved": 20,
+    }
+
+
+def test_cuda_image_format_enum_matches_cdylib_discriminants():
+    # Wire ABI mirror of the cdylib's `SLPN_CUDA_FORMAT_*` constants.
+    # The CUDA image path is restricted to the four-channel R8/R16/R32
+    # subset accepted by `cudaExternalMemoryGetMappedMipmappedArray`.
+    assert int(c.CudaImageFormat.RGBA8_UNORM) == 0
+    assert int(c.CudaImageFormat.RGBA16_FLOAT) == 1
+    assert int(c.CudaImageFormat.RGBA32_FLOAT) == 2
+    assert c._FORMAT_RGBA8_UNORM == 0
+    assert c._FORMAT_RGBA16_FLOAT == 1
+    assert c._FORMAT_RGBA32_FLOAT == 2
+
+
+def test_cuda_texture_and_surface_views_round_trip_dataclass_construction():
+    tv = c.CudaTextureView(
+        handle=0xDEADBEEFCAFE0000,
+        width=1920,
+        height=1080,
+        format=c.CudaImageFormat.RGBA8_UNORM,
+    )
+    sv = c.CudaSurfaceView(
+        handle=0xCAFEBABE1234ABCD,
+        width=640,
+        height=480,
+        format=c.CudaImageFormat.RGBA32_FLOAT,
+    )
+    assert tv.handle == 0xDEADBEEFCAFE0000
+    assert tv.width == 1920
+    assert tv.height == 1080
+    assert tv.format is c.CudaImageFormat.RGBA8_UNORM
+    assert sv.handle == 0xCAFEBABE1234ABCD
+    assert sv.width == 640
+    assert sv.height == 480
+    assert sv.format is c.CudaImageFormat.RGBA32_FLOAT
+
+
+def test_release_for_cross_process_signature_takes_no_vulkan_ctx():
+    """Pin the CUDA shim's signature explicitly — it must NOT take a
+    `vulkan_ctx` parameter (unlike the OpenGL shim's). The design
+    clarification comment on #802 records the reasoning:
+
+        CUDA writes via `cudaSurfaceObject_t` against the imported
+        mipmapped array — the underlying VkImage memory is touched
+        but the Vulkan layout tracker is unchanged (and the cdylib
+        has no host VkDevice to barrier on anyway, per the
+        consumer-rhi carve-out). The pairwise sync runs entirely on
+        `cudaSignalExternalSemaphoresAsync` /
+        `cudaWaitExternalSemaphoresAsync` against the imported
+        timeline.
+
+    The CUDA shim's job is just the layout publish via
+    `update_image_layout`. Any future regression that adds
+    `vulkan_ctx` back as a parameter (e.g. copying the OpenGL shape
+    reflexively) trips this test.
+    """
+    sig = inspect.signature(c.CudaContext.release_for_cross_process)
+    params = list(sig.parameters)
+    # `self`, `surface`, `post_release_layout` — exactly three.
+    assert params == ["self", "surface", "post_release_layout"], (
+        f"release_for_cross_process must take (surface, post_release_layout) "
+        f"only — no vulkan_ctx. Got params={params}. See the design "
+        "clarification comment on #802."
+    )
+    # Annotation on `post_release_layout` is `int` (Vulkan VkImageLayout
+    # enumerant). cuda.py uses `from __future__ import annotations` so
+    # annotations are stored as strings — match against the literal.
+    assert sig.parameters["post_release_layout"].annotation == "int"
 
 
 def test_capsule_destructor_registry_survives_concurrent_create_drop():

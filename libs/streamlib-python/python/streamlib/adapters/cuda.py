@@ -45,6 +45,7 @@ Customer-facing shapes:
 from __future__ import annotations
 
 import ctypes
+import enum
 import itertools
 import threading
 from contextlib import contextmanager
@@ -60,6 +61,9 @@ __all__ = [
     "STREAMLIB_ADAPTER_ABI_VERSION",
     "CudaReadView",
     "CudaWriteView",
+    "CudaTextureView",
+    "CudaSurfaceView",
+    "CudaImageFormat",
     "CudaContext",
 ]
 
@@ -75,6 +79,16 @@ _RC_CONTENDED = 1
 # ``SLPN_CUDA_DEVICE_TYPE_*`` constants).
 _DEVICE_TYPE_CUDA = 2
 _DEVICE_TYPE_CUDA_HOST = 3
+
+# Image-path format discriminants — wire ABI between the cdylib
+# (``SLPN_CUDA_FORMAT_RGBA8_UNORM`` / `_RGBA16_FLOAT` / `_RGBA32_FLOAT`)
+# and this SDK. The cuda image flavor is constrained to the
+# CUDA-mappable subset (4× R8/R16/R32 channel formats) by
+# ``cudaExternalMemoryGetMappedMipmappedArray`` —
+# sRGB, BGR, and 3-channel variants are not supported on this path.
+_FORMAT_RGBA8_UNORM = 0
+_FORMAT_RGBA16_FLOAT = 1
+_FORMAT_RGBA32_FLOAT = 2
 
 # Surface-id namespace inside this subprocess. The host's pool_id (a
 # string) is mapped to a u64 the cdylib uses internally; customers
@@ -97,6 +111,37 @@ class _SlpnCudaView(ctypes.Structure):
         ("device_id", ctypes.c_int32),
         ("dlpack_managed_tensor", ctypes.c_void_p),
     ]
+
+
+class _SlpnCudaImageView(ctypes.Structure):
+    """C struct matching
+    ``streamlib_python_native::cuda::SlpnCudaImageView``.
+
+    Layout pinned by ``slpn_cuda_image_view_layout_matches_spec_64bit``
+    in the cdylib's tests. Same 32-byte total width as
+    [`_SlpnCudaView`] so the SDK can reuse staging-buffer sizing if it
+    ever needs to.
+    """
+
+    _fields_ = [
+        ("cuda_object_handle", ctypes.c_uint64),
+        ("width", ctypes.c_uint32),
+        ("height", ctypes.c_uint32),
+        ("format", ctypes.c_int32),
+        ("_reserved", ctypes.c_uint8 * 12),
+    ]
+
+
+class CudaImageFormat(int, enum.Enum):
+    """Discriminant for [`CudaTextureView.format`] /
+    [`CudaSurfaceView.format`]. Values mirror the cdylib's
+    ``SLPN_CUDA_FORMAT_*`` constants and are the CUDA-mappable subset
+    accepted by ``cudaExternalMemoryGetMappedMipmappedArray``.
+    """
+
+    RGBA8_UNORM = _FORMAT_RGBA8_UNORM
+    RGBA16_FLOAT = _FORMAT_RGBA16_FLOAT
+    RGBA32_FLOAT = _FORMAT_RGBA32_FLOAT
 
 
 # DLPack capsule machinery
@@ -339,6 +384,54 @@ class CudaWriteView:
     dlpack: object  # PyCapsule
 
 
+@dataclass(frozen=True)
+class CudaTextureView:
+    """View handed back inside an [`CudaContext.acquire_texture`] scope.
+
+    Customer-facing surface for read-only CUDA texture interop. The
+    ``handle`` field is a raw ``cudaTextureObject_t`` (typedef'd to
+    ``c_ulonglong`` in the CUDA Runtime API) — pass it to a
+    framework-native CUDA extension (``torch.utils.cpp_extension``,
+    ``cupy.RawKernel``, Triton, ...) and sample the texture inside
+    your own kernel.
+
+    There's no DLPack capsule on the image path — the underlying
+    ``cudaMipmappedArray_t`` is opaque and not DLPack-shaped (no AI
+    framework's ``from_dlpack`` accepts a texture-object handle, per
+    the issue body's ecosystem survey).
+
+    The view is valid only inside the ``with`` block. After the block
+    exits, the cdylib calls ``cudaDestroyTextureObject`` on
+    ``handle`` and releases the adapter's read guard. Do NOT retain
+    ``handle`` past the scope.
+    """
+
+    handle: int
+    width: int
+    height: int
+    format: CudaImageFormat
+
+
+@dataclass(frozen=True)
+class CudaSurfaceView:
+    """View handed back inside an [`CudaContext.acquire_surface`] scope.
+
+    Same shape as [`CudaTextureView`] but ``handle`` is a raw
+    ``cudaSurfaceObject_t`` (writeable surface-object interop).
+    Kernels that produce new frames (e.g. compositing or filtering)
+    can ``surf2Dwrite`` against this handle and the writes land in the
+    host-shared OPAQUE_FD ``VkImage``'s backing memory.
+
+    Same lifetime rules as [`CudaTextureView`] — ``handle`` is
+    destroyed at scope exit.
+    """
+
+    handle: int
+    width: int
+    height: int
+    format: CudaImageFormat
+
+
 def _surface_pool_id(surface) -> str:
     """Extract the surface-share pool id (string) from either a
     ``StreamlibSurface``-shaped object or a bare string / int."""
@@ -396,8 +489,15 @@ class CudaContext:
             )
         self._rt = ctypes.c_void_p(rt)
 
-        # pool_id (host-side string) → local u64 surface_id.
+        # pool_id (host-side string) → local u64 surface_id. Buffer-
+        # flavored registrations (DLPack path).
         self._surface_ids: dict[str, int] = {}
+        # Same shape for image-flavored registrations (texture / surface
+        # object path). Separate map because the underlying cdylib FFI
+        # is keyed by flavor — `slpn_cuda_register_image_surface` vs
+        # `slpn_cuda_register_surface` — and a given pool_id is one or
+        # the other, not both.
+        self._image_surface_ids: dict[str, int] = {}
         # Pin resolved SurfaceHandle objects so the OPAQUE_FD plane and
         # sync FDs stay alive for the surface's lifetime. The cdylib
         # already dups before each Vulkan / CUDA import, but the
@@ -455,6 +555,43 @@ class CudaContext:
         for name in (
             "slpn_cuda_release_read",
             "slpn_cuda_release_write",
+        ):
+            fn = getattr(lib, name)
+            fn.restype = ctypes.c_int32
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
+
+        # Image-path FFI surface — register / acquire / release for
+        # `cudaTextureObject_t` (read) and `cudaSurfaceObject_t` (write).
+        lib.slpn_cuda_register_image_surface.restype = ctypes.c_int32
+        lib.slpn_cuda_register_image_surface.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+            ctypes.c_void_p,
+        ]
+
+        lib.slpn_cuda_unregister_image_surface.restype = ctypes.c_int32
+        lib.slpn_cuda_unregister_image_surface.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint64,
+        ]
+
+        for name in (
+            "slpn_cuda_acquire_texture",
+            "slpn_cuda_acquire_surface",
+            "slpn_cuda_try_acquire_texture",
+            "slpn_cuda_try_acquire_surface",
+        ):
+            fn = getattr(lib, name)
+            fn.restype = ctypes.c_int32
+            fn.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_uint64,
+                ctypes.POINTER(_SlpnCudaImageView),
+            ]
+
+        for name in (
+            "slpn_cuda_release_texture",
+            "slpn_cuda_release_surface",
         ):
             fn = getattr(lib, name)
             fn.restype = ctypes.c_int32
@@ -598,3 +735,198 @@ class CudaContext:
             device_type=int(view_struct.device_type),
             dlpack=capsule,
         )
+
+    # ----- Image-flavored API ----------------------------------------
+
+    def _resolve_and_register_image(self, pool_id: str) -> int:
+        """Resolve `pool_id` via surface-share, register with the
+        cuda adapter's image flavor, and return the local u64
+        surface_id. Idempotent — repeat calls return the cached id.
+
+        Image-flavored registration is exclusive with buffer-flavored:
+        the cdylib will reject mixing acquire paths against the same
+        surface, and this method's separate id map mirrors that.
+        Customers must pick one flavor per surface.
+        """
+        cached = self._image_surface_ids.get(pool_id)
+        if cached is not None:
+            return cached
+        handle = self._gpu.resolve_surface(pool_id)
+        handle_ptr = handle.native_handle_ptr
+        if not handle_ptr:
+            raise RuntimeError(
+                f"CudaContext: resolve_surface('{pool_id}') returned a "
+                "handle with a null native pointer"
+            )
+        surface_id = next(_CUDA_SURFACE_ID_COUNTER)
+        rc = self._lib.slpn_cuda_register_image_surface(
+            self._rt,
+            ctypes.c_uint64(surface_id),
+            ctypes.c_void_p(handle_ptr),
+        )
+        if rc != _RC_OK:
+            raise RuntimeError(
+                f"CudaContext: register_image_surface failed for pool_id "
+                f"'{pool_id}' (rc={rc}). Common causes: host registered "
+                f"the surface as a buffer (DLPack path), not an image "
+                "(`register_host_image_surface`); host's image format is "
+                "outside the CUDA-mappable subset (Rgba8Unorm / "
+                "Rgba16Float / Rgba32Float); host did not attach an "
+                "exportable timeline semaphore. See the subprocess log "
+                "for specifics."
+            )
+        self._image_surface_ids[pool_id] = surface_id
+        self._resolved_handles[pool_id] = handle
+        return surface_id
+
+    @contextmanager
+    def acquire_texture(self, surface) -> "Iterator[CudaTextureView]":
+        """Block until the host has signaled the timeline; hand back a
+        [`CudaTextureView`] wrapping a freshly-constructed
+        ``cudaTextureObject_t``. On scope exit, the texture object is
+        destroyed and the adapter's read guard is released."""
+        with self._acquire_image(surface, write=False, blocking=True) as view:
+            yield view  # type: ignore[misc]
+
+    @contextmanager
+    def acquire_surface(self, surface) -> "Iterator[CudaSurfaceView]":
+        """Block until the host has signaled the timeline; hand back a
+        [`CudaSurfaceView`] wrapping a freshly-constructed
+        ``cudaSurfaceObject_t``. On scope exit, the surface object is
+        destroyed and the adapter's write guard is released."""
+        with self._acquire_image(surface, write=True, blocking=True) as view:
+            yield view  # type: ignore[misc]
+
+    @contextmanager
+    def try_acquire_texture(
+        self, surface
+    ) -> "Iterator[Optional[CudaTextureView]]":
+        """Non-blocking texture acquire. Yields a [`CudaTextureView`] on
+        success or ``None`` on contention."""
+        with self._acquire_image(surface, write=False, blocking=False) as view:
+            yield view  # type: ignore[misc]
+
+    @contextmanager
+    def try_acquire_surface(
+        self, surface
+    ) -> "Iterator[Optional[CudaSurfaceView]]":
+        """Non-blocking surface acquire. Yields a [`CudaSurfaceView`] on
+        success or ``None`` on contention."""
+        with self._acquire_image(surface, write=True, blocking=False) as view:
+            yield view  # type: ignore[misc]
+
+    @contextmanager
+    def _acquire_image(
+        self, surface, write: bool, blocking: bool
+    ) -> "Iterator[object]":
+        pool_id = _surface_pool_id(surface)
+        surface_id = self._resolve_and_register_image(pool_id)
+        view_struct = _SlpnCudaImageView()
+        if blocking:
+            fn = (
+                self._lib.slpn_cuda_acquire_surface
+                if write
+                else self._lib.slpn_cuda_acquire_texture
+            )
+        else:
+            fn = (
+                self._lib.slpn_cuda_try_acquire_surface
+                if write
+                else self._lib.slpn_cuda_try_acquire_texture
+            )
+        rc = fn(self._rt, ctypes.c_uint64(surface_id), ctypes.byref(view_struct))
+        if rc == _RC_CONTENDED:
+            yield None
+            return
+        if rc != _RC_OK:
+            raise RuntimeError(
+                f"CudaContext.{'try_' if not blocking else ''}"
+                f"acquire_{'surface' if write else 'texture'}: rc={rc} for "
+                f"surface '{pool_id}'"
+            )
+        try:
+            yield self._build_image_view(view_struct, writable=write)
+        finally:
+            release_fn = (
+                self._lib.slpn_cuda_release_surface
+                if write
+                else self._lib.slpn_cuda_release_texture
+            )
+            release_fn(self._rt, ctypes.c_uint64(surface_id))
+
+    def _build_image_view(
+        self, view_struct: _SlpnCudaImageView, *, writable: bool
+    ):
+        handle = int(view_struct.cuda_object_handle)
+        if handle == 0:
+            raise RuntimeError(
+                "CudaContext: cdylib returned null cuda object handle — "
+                "the cuda runtime is in a bad state"
+            )
+        try:
+            format_ = CudaImageFormat(int(view_struct.format))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"CudaContext: cdylib returned unexpected format "
+                f"discriminant {int(view_struct.format)} on the image "
+                "view — the wire ABI may have drifted"
+            ) from exc
+        klass = CudaSurfaceView if writable else CudaTextureView
+        return klass(
+            handle=handle,
+            width=int(view_struct.width),
+            height=int(view_struct.height),
+            format=format_,
+        )
+
+    def release_for_cross_process(
+        self, surface, post_release_layout: int
+    ) -> None:
+        """Publish the post-release ``VkImageLayout`` to surface-share
+        so the next cross-process consumer's
+        ``acquire_from_foreign`` sees the right source layout.
+
+        Unlike
+        :meth:`streamlib.adapters.opengl.OpenGLContext.release_for_cross_process`
+        — which takes a ``VulkanContext`` and delegates to its
+        ``release_for_cross_process`` because OpenGL writes don't touch
+        the underlying ``VkImage``'s Vulkan tracker — the CUDA shim
+        takes **no** ``VulkanContext`` parameter. CUDA writes via
+        ``cudaSurfaceObject_t`` against the imported mipmapped array;
+        the cdylib has no host ``VkDevice`` to issue a QFOT release
+        barrier against (per the consumer-rhi carve-out), and the
+        pairwise sync runs entirely on
+        ``cudaSignalExternalSemaphoresAsync`` /
+        ``cudaWaitExternalSemaphoresAsync`` against the imported
+        timeline. The host consumer's
+        ``GpuContext::resolve_videoframe_registration`` Path 2 acquire
+        handles its own barriers via QFOT-acquire (Mesa) or
+        bridging-from-UNDEFINED (NVIDIA) — independent of what the
+        CUDA producer did.
+
+        What this shim does, then, is just the **layout publish**:
+        update the surface-share daemon's per-surface
+        ``current_image_layout`` field so the next consumer sees the
+        right source layout. The timeline signal happens naturally on
+        scope exit (the cdylib's adapter advances the timeline as part
+        of releasing the write guard).
+
+        Call this *after* the matching :meth:`acquire_surface` ``with``
+        block has exited so the CUDA stream's writes have drained
+        through to the GPU and the timeline has been signaled.
+
+        Customers running scenario (a) from the issue body's design
+        clarification (pure-CUDA AI consumer that just reads, drops
+        the guard) do NOT call this method — the host is the producer
+        and handles its own release barriers via
+        ``VulkanSurfaceAdapter``.
+
+        ``post_release_layout`` is a Vulkan ``VkImageLayout`` enumerant
+        as an integer (use
+        :class:`streamlib.adapters.vulkan.VkImageLayout` constants).
+        ``GENERAL`` is the safest default for cross-process handoffs
+        — the consumer's ``acquire_from_foreign`` re-transitions to
+        whatever layout it actually needs.
+        """
+        pool_id = _surface_pool_id(surface)
+        self._gpu.update_image_layout(pool_id, int(post_release_layout))
