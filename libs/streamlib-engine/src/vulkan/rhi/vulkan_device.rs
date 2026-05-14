@@ -1438,28 +1438,34 @@ impl HostVulkanDevice {
 
         // 6. OPAQUE_FD image pool — retained sentinel (issue #799).
         //
-        //    Why a separate sentinel from the DEVICE_LOCAL buffer pool above:
-        //    DMA-BUF and OPAQUE_FD share *handle types*, but the post-
-        //    swapchain cap NVIDIA enforces is keyed on (handle_type ×
-        //    resource_kind × memory_type_index) — observed empirically
-        //    across the existing 5-pool DMA-BUF + buffer pre-warm.
-        //    The image-side memory-type index can legitimately differ
-        //    from any buffer pool's (CUDA-mappable formats may require
-        //    a different VkMemoryType than HOST_VISIBLE or generic
-        //    DEVICE_LOCAL buffer allocations), so an image-flavored
-        //    sentinel covers a strictly larger surface than just
-        //    keeping a DEVICE_LOCAL buffer alive. If empirical
-        //    measurement against Cam Link 4K (see
-        //    `docs/learnings/nvidia-opaque-fd-after-swapchain.md`)
-        //    later shows the image sentinel is redundant, the
-        //    learning's "Pre-warm-removed protocol" section is the
-        //    place to record the decision and the change is one line
-        //    here.
+        //    Provisional retention pending consumer. To the best of our
+        //    current knowledge the buffer-side evidence (the existing
+        //    HOST_VISIBLE + DEVICE_LOCAL buffer sentinels are both
+        //    load-bearing on NVIDIA — issue #637) extrapolates to the
+        //    image side: the cap mechanism is spec-level "per-handle-
+        //    type kernel state," and the image-side memory-type index
+        //    can legitimately differ from any buffer pool's
+        //    (CUDA-mappable formats may pick a different VkMemoryType
+        //    than HOST_VISIBLE or generic DEVICE_LOCAL buffer
+        //    allocations). The image-flavored sentinel covers a
+        //    strictly larger surface than keeping a DEVICE_LOCAL
+        //    buffer alive if that extrapolation holds.
         //
-        //    Same tiny-sentinel rule as the DEVICE_LOCAL buffer
-        //    sentinel: 8×8×4 = 256 bytes for R8G8B8A8 keeps the kernel
-        //    state pinned without competing with consumer-class
-        //    allocations on NVIDIA's cumulative OPAQUE_FD byte budget.
+        //    The empirical pre-warm-removed protocol per
+        //    `docs/learnings/nvidia-opaque-fd-after-swapchain.md`
+        //    can't be run today — `camera-python-display` and the
+        //    other reproducers allocate OPAQUE_FD *buffers*, not
+        //    images. The protocol becomes runnable when the CUDA
+        //    adapter VkImage path (#800) + verification example
+        //    (#801) provide a real consumer-class OPAQUE_FD VkImage
+        //    allocator, and the retention should be re-validated
+        //    there. Dropping the sentinel if it turns out redundant
+        //    is a one-line change here.
+        //
+        //    Same tiny-sentinel rule as the buffer sentinels: 8×8×4 =
+        //    256 bytes for R8G8B8A8 keeps the kernel state pinned
+        //    without competing with consumer-class allocations on
+        //    NVIDIA's cumulative OPAQUE_FD byte budget.
         if let Some(pool) = device.opaque_fd_image_pool() {
             let sentinel = make_opaque_fd_image_sentinel(
                 pool,
