@@ -39,18 +39,14 @@ members = [
     "packages/screen-capture",   # @tatolab/screen-capture — screen capture processor (Apple-only today; Linux follows in #374)
     "packages/test-fixtures",    # @tatolab/test-fixtures — attribute-macro test fixtures (TestConfiguredProcessor)
     "packages/debug-utilities",  # @tatolab/debug-utilities — utility processors for development, demos, and rigorous-input testing (BgraFileSource, SimplePassthrough)
-    # TODO: Migrate to iceoryx2 API - these examples depend on processors that haven't been migrated yet
-    # "examples/simple-pipeline", # Example: Basic processing pipeline (uses AudioOutputProcessor)
+    # Disabled examples blocked on Apple codec/display impls parked in `_apple_impl_pending_/`:
+    #   - camera-audio-recorder, screen-recorder, runtime-graph-json-demo (Apple Mp4WriterProcessor)
+    #   - whep-player (Apple VideoToolbox + DisplayProcessor)
     "examples/camera-display",  # Example: Camera capture and display (uses CameraProcessor, DisplayProcessor)
-    # "examples/camera-audio-recorder", # Example: Record camera + audio to MP4 (Apple Mp4WriterProcessor not currently shipped)
-    # "examples/screen-recorder",       # Example: Screen recording to MP4 (Apple Mp4WriterProcessor not currently shipped)
     "examples/microphone-reverb-speaker", # Example: Audio processing with CLAP (uses audio capture, clap, audio output)
     "examples/audio-mixer-demo", # Example: Mixing multiple audio streams (uses AudioOutputProcessor)
     "examples/webrtc-cloudflare-stream", # Example: WebRTC streaming to Cloudflare (uses WebRTC WHIP)
     "examples/moq-roundtrip",             # Example: MoQ camera/audio/sensor roundtrip — canonical E2E for @tatolab/moq
-    # "examples/whep-player",     # Example: WHEP (WebRTC egress) player (uses WebRTC WHEP)
-    # "examples/runtime-graph-json-demo",   # Example: Runtime graph JSON serialization (uses CameraProcessor, etc.)
-    # "examples/graph-json-export",         # Example: Graph data structure JSON export (uses custom processors with old syntax)
     "examples/api-server",                # Example: Minimal API server (runtime + wait_for_signal)
     "examples/api-server-demo",           # Example: API server processor demo
     "examples/tokio-integration",         # Example: StreamRuntime with existing tokio runtime
