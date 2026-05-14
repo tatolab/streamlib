@@ -8,7 +8,7 @@
 //! the surface adapters already use (see
 //! `streamlib-adapter-vulkan::SurfaceState::current_layout`) but lifted
 //! to the engine-wide cache so consumers reaching textures via
-//! `resolve_video_frame_registration` get the same lifecycle metadata
+//! `resolve_texture_registration_by_surface_id` get the same lifecycle metadata
 //! adapter consumers do.
 //!
 //! On Linux the registration carries the texture's last-known

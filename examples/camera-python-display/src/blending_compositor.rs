@@ -8,7 +8,7 @@
 //! display's refresh rate (60 Hz fallback). Each tick reads the latest
 //! frame from each input port (older queued frames are dropped by the
 //! port's `SkipToLatest` read mode), resolves the input frames'
-//! [`Texture`]s via `GpuContext::resolve_video_frame_registration`
+//! [`Texture`]s via `GpuContext::resolve_texture_registration_by_surface_id`
 //! (Path 1 — same-process texture cache), picks the next slot in a
 //! ring of pre-allocated render-target output `Texture`s,
 //! dispatches the compositor's graphics kernel into it, and emits the
@@ -468,7 +468,7 @@ fn compose_one_frame(
     backend: &GpuBackend,
 ) -> Result<()> {
     // Resolve each upstream layer's texture + current layout via the
-    // engine's `resolve_video_frame_registration` (Path 1 same-process
+    // engine's `resolve_texture_registration_by_surface_id` (Path 1 same-process
     // texture cache). When a port has no new frame this tick (the
     // producer's clock didn't align with ours), reuse the prior
     // tick's resolved layer — see [`LoopState`] for the rationale.
@@ -506,7 +506,7 @@ fn compose_one_frame(
     // (left there by the prior render's post-barrier).
     let output_registration = {
         let synth = slot_videoframe(&slot.surface_id, width, height);
-        gpu_ctx.resolve_video_frame_registration(
+        gpu_ctx.resolve_texture_registration_by_surface_id(
             &synth.surface_id,
             synth.texture_layout,
             synth.width,
@@ -605,7 +605,7 @@ fn refresh_layer(
         return Ok(());
     }
     let frame: VideoFrame = inputs.read(port)?;
-    let registration = gpu_ctx.resolve_video_frame_registration(
+    let registration = gpu_ctx.resolve_texture_registration_by_surface_id(
         &frame.surface_id,
         frame.texture_layout,
         frame.width,

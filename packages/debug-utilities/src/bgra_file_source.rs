@@ -157,7 +157,7 @@ fn source_thread_loop(
         }
 
         // Upload the pixel buffer as a GPU texture so downstream encoder
-        // processors (which read via `resolve_video_frame_texture`) can
+        // processors (which read via `resolve_texture_by_surface_id`) can
         // consume the frame. `upload_pixel_buffer_as_texture` allocates a
         // new DEVICE_LOCAL texture so it's FullAccess-only and must be
         // escalated.

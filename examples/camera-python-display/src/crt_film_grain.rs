@@ -156,7 +156,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
         // Resolve input texture + its current_layout via Path 1 / Path 2
         // (the upstream BlendingCompositor publishes a texture-backed
         // surface_id dual-registered in texture_cache + surface_store).
-        let input_registration = gpu_ctx.resolve_video_frame_registration(
+        let input_registration = gpu_ctx.resolve_texture_registration_by_surface_id(
             &frame.surface_id,
             frame.texture_layout,
             frame.width,
@@ -180,7 +180,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
             slot.texture.width(),
             slot.texture.height(),
         );
-        let slot_registration = gpu_ctx.resolve_video_frame_registration(
+        let slot_registration = gpu_ctx.resolve_texture_registration_by_surface_id(
             &slot_videoframe.surface_id,
             slot_videoframe.texture_layout,
             slot_videoframe.width,

@@ -260,7 +260,7 @@ impl CameraToCudaCopyProcessor::Processor {
         // current ring slot's UUID.
         let texture = backend
             .gpu_ctx
-            .resolve_video_frame_texture(
+            .resolve_texture_by_surface_id(
                 &frame.surface_id,
                 frame.texture_layout,
                 frame.width,
@@ -268,7 +268,7 @@ impl CameraToCudaCopyProcessor::Processor {
             )
             .map_err(|e| {
             Error::Configuration(format!(
-                "CameraToCudaCopy: resolve_video_frame_texture('{}'): {e}",
+                "CameraToCudaCopy: resolve_texture_by_surface_id('{}'): {e}",
                 frame.surface_id
             ))
         })?;

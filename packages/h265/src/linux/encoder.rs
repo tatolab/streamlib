@@ -135,7 +135,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265EncoderProcessor::Pro
             .as_mut()
             .ok_or_else(|| Error::Runtime("H.265 encoder not initialized".into()))?;
 
-        let texture = gpu_ctx.resolve_video_frame_texture(
+        let texture = gpu_ctx.resolve_texture_by_surface_id(
             &frame.surface_id,
             frame.texture_layout,
             frame.width,
