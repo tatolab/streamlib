@@ -221,6 +221,142 @@ impl ConsumerVulkanTexture {
         })
     }
 
+    /// Import a host-allocated OPAQUE_FD `VkImage` as a
+    /// DEVICE_LOCAL OPTIMAL tiled image on the consumer device —
+    /// the Vulkan → CUDA interop carve-out.
+    ///
+    /// Pairs with the host's
+    /// [`streamlib::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`] —
+    /// the host allocates the image via the OPAQUE_FD image pool,
+    /// `vkGetMemoryFdKHR` with `OPAQUE_FD` produces a kernel fd, and
+    /// this constructor reproduces the consumer-side `VkImage` bound
+    /// to the imported memory. The same FD can subsequently be passed
+    /// to `cudaImportExternalMemory(OPAQUE_FD)` →
+    /// `cudaExternalMemoryGetMappedMipmappedArray` for the actual
+    /// CUDA texture / surface object — that step lives in the cuda
+    /// adapter, not in this crate.
+    ///
+    /// Constraints (mirror the host constructor exactly):
+    ///
+    /// - `format` must be CUDA-mappable: `Rgba8Unorm`, `Rgba16Float`,
+    ///   or `Rgba32Float`. The other [`TextureFormat`] variants are
+    ///   rejected by `cudaExternalMemoryGetMappedMipmappedArray`.
+    /// - Tiling is forced `VK_IMAGE_TILING_OPTIMAL`; no DRM modifier
+    ///   chain (OPAQUE_FD has no portable layout descriptor —
+    ///   vendor-private interpretation only). For DRM-modifier
+    ///   tiled DMA-BUF imports, use
+    ///   [`Self::import_render_target_dma_buf`].
+    /// - Usage flags match the host: `TRANSFER_SRC | TRANSFER_DST |
+    ///   SAMPLED | STORAGE`. No COLOR_ATTACHMENT — rendering into a
+    ///   CUDA-imported image is not a supported flow.
+    /// - Single FD (no plane vec, no plane layouts). OPAQUE_FD is
+    ///   opaque to the importing API; multi-plane semantics don't
+    ///   apply.
+    ///
+    /// `allocation_size` must be ≥ the consumer's
+    /// `vkGetImageMemoryRequirements(image).size`; pass the host's
+    /// `HostVulkanTexture::vma_allocation_size()` to avoid bind
+    /// failures across the boundary.
+    ///
+    /// fd ownership: the consumer transfers ownership to Vulkan on
+    /// success (the driver dups internally and releases on
+    /// `vkFreeMemory`). On error the caller still owns `fd`.
+    pub fn from_opaque_fd(
+        vulkan_device: &Arc<ConsumerVulkanDevice>,
+        fd: std::os::unix::io::RawFd,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        allocation_size: vk::DeviceSize,
+    ) -> Result<Self> {
+        // CUDA-mappable subset — mirrors the host-side constructor.
+        match format {
+            TextureFormat::Rgba8Unorm
+            | TextureFormat::Rgba16Float
+            | TextureFormat::Rgba32Float => {}
+            other => {
+                return Err(ConsumerRhiError::Gpu(format!(
+                    "ConsumerVulkanTexture::from_opaque_fd: format {other:?} is not \
+                     CUDA-mappable. Supported: Rgba8Unorm, Rgba16Float, Rgba32Float."
+                )));
+            }
+        }
+        if width == 0 || height == 0 {
+            return Err(ConsumerRhiError::Gpu(
+                "ConsumerVulkanTexture::from_opaque_fd: width and height must be > 0".into(),
+            ));
+        }
+
+        let device = vulkan_device.device();
+        let vk_format = texture_format_to_vk(format);
+        // Must match the host's `new_opaque_fd_export` usage flags so
+        // both sides build images with identical bind requirements.
+        let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::STORAGE;
+
+        let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD);
+
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk_format)
+            .extent(vk::Extent3D { width, height, depth: 1 })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage_flags)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut external_image_info);
+
+        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
+            ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanTexture::from_opaque_fd: create_image failed: {e}"
+            ))
+        })?;
+
+        let mem_requirements = unsafe { device.get_image_memory_requirements(image) };
+        let alloc_size = allocation_size.max(mem_requirements.size);
+
+        let memory = vulkan_device
+            .import_opaque_fd_memory(
+                fd,
+                alloc_size,
+                mem_requirements.memory_type_bits,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .map_err(|e| {
+                unsafe { device.destroy_image(image, None) };
+                e
+            })?;
+
+        unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
+            vulkan_device.free_imported_memory(memory);
+            unsafe { device.destroy_image(image, None) };
+            ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanTexture::from_opaque_fd: bind_image_memory failed: {e}"
+            ))
+        })?;
+
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            image,
+            imported_memory: memory,
+            imported_memory_size: alloc_size,
+            vk_image_tiling: vk::ImageTiling::OPTIMAL,
+            vk_image_usage_flags: usage_flags,
+            cached_image_view: OnceLock::new(),
+            // OPAQUE_FD has no DRM modifier — zero is "not applicable".
+            drm_format_modifier: 0,
+            width,
+            height,
+            format,
+        })
+    }
+
     /// Import a single-plane LINEAR DMA-BUF as a sampler-only image.
     ///
     /// Use [`Self::import_render_target_dma_buf`] when the consumer

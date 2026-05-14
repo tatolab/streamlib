@@ -133,6 +133,15 @@ pub struct HostVulkanTexture {
     /// Whether this texture was imported from a DMA-BUF fd (uses imported_memory path).
     #[cfg(target_os = "linux")]
     imported_from_dma_buf: bool,
+    /// Whether this texture was allocated from the OPAQUE_FD image
+    /// pool. Gates `export_opaque_fd_memory`: callers that
+    /// allocated via [`Self::new`] / `_render_target_dma_buf` / `_device_local`
+    /// must NOT call the OPAQUE_FD export accessor because the underlying
+    /// memory carries `DMA_BUF_EXT` (or no) export handle types, and
+    /// `vkGetMemoryFdKHR` with `OPAQUE_FD` would fail at the driver.
+    /// Mirrors `HostVulkanBuffer::is_opaque_fd_export`.
+    #[cfg(target_os = "linux")]
+    is_opaque_fd_export: bool,
     /// DRM format modifier the driver picked for this image. Zero means
     /// `DRM_FORMAT_MOD_LINEAR` or "not applicable" (image was not created
     /// with [`vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT`]). Render-target
@@ -227,6 +236,8 @@ impl HostVulkanTexture {
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
             #[cfg(target_os = "linux")]
+            is_opaque_fd_export: false,
+            #[cfg(target_os = "linux")]
             chosen_drm_format_modifier: 0,
             width: desc.width,
             height: desc.height,
@@ -291,6 +302,8 @@ impl HostVulkanTexture {
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]
             chosen_drm_format_modifier: 0,
             width: desc.width,
@@ -433,12 +446,165 @@ impl HostVulkanTexture {
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: false,
+            is_opaque_fd_export: false,
             chosen_drm_format_modifier: chosen,
             width: desc.width,
             height: desc.height,
             format: desc.format,
             vk_image_meta: HostVkImageMeta {
                 vk_image_tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
+                vk_image_usage_flags: usage_flags,
+            },
+        })
+    }
+
+    /// Allocate an OPAQUE_FD-exportable DEVICE_LOCAL `VkImage` for
+    /// Vulkan → CUDA `cudaImportExternalMemory` /
+    /// `cudaExternalMemoryGetMappedMipmappedArray` interop.
+    ///
+    /// Engine-layer foundation for the cuda adapter's image-flavored
+    /// registration path. Pairs with
+    /// [`Self::export_opaque_fd_memory`] (host export side) and
+    /// [`streamlib_consumer_rhi::ConsumerVulkanTexture::from_opaque_fd`]
+    /// (consumer / subprocess import side).
+    ///
+    /// CUDA's mipmapped-array import drives every non-negotiable
+    /// constraint here:
+    ///
+    /// - **Format** must be one of
+    ///   [`TextureFormat::Rgba8Unorm`] / [`TextureFormat::Rgba16Float`]
+    ///   / [`TextureFormat::Rgba32Float`]. CUDA's external-memory
+    ///   mapping accepts only R8 / R8G8 / R8G8B8A8 / R16 / R16G16 /
+    ///   R16G16B16A16 / R32 / R32G32 / R32G32B32A32 (unsigned, signed,
+    ///   float) — closed list. Streamlib's `TextureFormat` enum
+    ///   exposes only the 4-channel members of that family today; the
+    ///   sRGB, BGR-channel-order, and NV12 variants are CUDA-incompatible
+    ///   and rejected at construction.
+    /// - **Tiling** is `VK_IMAGE_TILING_OPTIMAL`. LINEAR returns
+    ///   `CUDA_ERROR_INVALID_VALUE` from
+    ///   `cuExternalMemoryGetMappedMipmappedArray`. No DRM modifier
+    ///   chain — OPAQUE_FD + `DRM_FORMAT_MODIFIER_EXT` is not a valid
+    ///   combination on NVIDIA.
+    /// - **Usage** is `TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE`.
+    ///   Fixed by the constructor: TRANSFER_* covers host-side
+    ///   `vkCmdCopyBufferToImage` / `vkCmdCopyImageToBuffer` for content
+    ///   population and consumer-side round-trip readback;
+    ///   SAMPLED + STORAGE cover the CUDA texture-object /
+    ///   surface-object backings (`cudaSurfaceObject_t` writes).
+    ///   `COLOR_ATTACHMENT` is intentionally absent — rendering into a
+    ///   CUDA-imported image isn't a use case the engine supports;
+    ///   producers blit / copy into the image instead.
+    /// - **Memory** comes from
+    ///   [`HostVulkanDevice::opaque_fd_image_pool`] with VMA's
+    ///   `DEDICATED_MEMORY` flag set. `cudaExternalMemoryGetMappedMipmappedArray`
+    ///   imports the whole `VkDeviceMemory` block, so a non-dedicated
+    ///   allocation would be unimportable.
+    ///
+    /// Returns `Err` when the OPAQUE_FD image pool is unavailable
+    /// (external memory unsupported or pool construction failed at
+    /// device init) or when the format is outside the CUDA-mappable
+    /// subset. Callers must NOT silently fall back to a non-exportable
+    /// allocation — the resulting texture would be unusable for CUDA
+    /// interop and the failure would surface only at
+    /// `vkGetMemoryFdKHR` time.
+    #[cfg(target_os = "linux")]
+    #[tracing::instrument(level = "trace", skip(vulkan_device), fields(width = desc.width, height = desc.height, format = ?desc.format))]
+    pub fn new_opaque_fd_export(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        desc: &TextureDescriptor,
+    ) -> Result<Self> {
+        // CUDA-mappable subset of TextureFormat. The check is at
+        // construction so misuse fails fast rather than at
+        // `cudaImportExternalMemory` time on the subprocess side.
+        match desc.format {
+            TextureFormat::Rgba8Unorm
+            | TextureFormat::Rgba16Float
+            | TextureFormat::Rgba32Float => {}
+            other => {
+                return Err(Error::Configuration(format!(
+                    "HostVulkanTexture::new_opaque_fd_export: format {other:?} is not \
+                     CUDA-mappable. Supported: Rgba8Unorm, Rgba16Float, Rgba32Float. \
+                     sRGB-transfer / BGR-channel-order / NV12 variants are rejected by \
+                     `cudaExternalMemoryGetMappedMipmappedArray`."
+                )));
+            }
+        }
+        if desc.width == 0 || desc.height == 0 {
+            return Err(Error::Configuration(
+                "HostVulkanTexture::new_opaque_fd_export: width and height must be > 0".into(),
+            ));
+        }
+
+        let vk_format = texture_format_to_vk(desc.format);
+        // Fixed usage set (see doc-comment): TRANSFER_* + SAMPLED + STORAGE.
+        // No COLOR_ATTACHMENT.
+        let usage_flags = vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::STORAGE;
+
+        // Declare OPAQUE_FD handle type on the image create info; the
+        // matching ExportMemoryAllocateInfo lives on the pool's
+        // pNext chain.
+        let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
+            .handle_types(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .build();
+
+        let image_info = vk::ImageCreateInfo::builder()
+            .image_type(vk::ImageType::_2D)
+            .format(vk_format)
+            .extent(vk::Extent3D {
+                width: desc.width,
+                height: desc.height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage_flags)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .push_next(&mut external_image_info);
+
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
+            required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            ..Default::default()
+        };
+
+        let pool = vulkan_device.opaque_fd_image_pool().ok_or_else(|| {
+            Error::GpuError(
+                "OPAQUE_FD image pool unavailable — external memory unsupported \
+                 or pool construction failed; CUDA `VkImage` interop requires this pool"
+                    .into(),
+            )
+        })?;
+        let (image, allocation) = unsafe { pool.create_image(image_info, &alloc_opts) }
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "Failed to create OPAQUE_FD exportable image ({}x{} {:?}): {e}",
+                    desc.width, desc.height, desc.format,
+                ))
+            })?;
+
+        Ok(Self {
+            vulkan_device: Some(Arc::clone(vulkan_device)),
+            image: Some(image),
+            allocation: Some(allocation),
+            imported_memory: None,
+            imported_memory_size: 0,
+            cached_dma_buf_fd: OnceLock::new(),
+            cached_image_view: OnceLock::new(),
+            imported_from_iosurface: false,
+            imported_from_dma_buf: false,
+            is_opaque_fd_export: true,
+            chosen_drm_format_modifier: 0,
+            width: desc.width,
+            height: desc.height,
+            format: desc.format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::OPTIMAL,
                 vk_image_usage_flags: usage_flags,
             },
         })
@@ -546,6 +712,8 @@ impl HostVulkanTexture {
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]
             chosen_drm_format_modifier: 0,
             width: 0,
@@ -822,6 +990,76 @@ impl HostVulkanTexture {
         Ok(planes)
     }
 
+    /// True iff this texture was allocated via
+    /// [`Self::new_opaque_fd_export`]. Gates the OPAQUE_FD export
+    /// accessor; the buffer-side mirror is
+    /// `HostVulkanBuffer::is_opaque_fd_export`.
+    pub fn is_opaque_fd_export(&self) -> bool {
+        self.is_opaque_fd_export
+    }
+
+    /// Allocation size in bytes from VMA, used to thread the
+    /// `allocation_size` argument across to
+    /// [`streamlib_consumer_rhi::ConsumerVulkanTexture::from_opaque_fd`]
+    /// on the consumer side. Returns 0 for placeholders / imported
+    /// images (where the allocation lives on the foreign side).
+    pub fn vma_allocation_size(&self) -> vk::DeviceSize {
+        let Some(allocation) = self.allocation.as_ref() else {
+            return 0;
+        };
+        let Some(vk_dev) = self.vulkan_device.as_ref() else {
+            return 0;
+        };
+        vk_dev
+            .allocator()
+            .get_allocation_info(*allocation)
+            .size as vk::DeviceSize
+    }
+
+    /// Export the texture's OPAQUE_FD memory as a file descriptor.
+    ///
+    /// Only valid for textures created via [`Self::new_opaque_fd_export`];
+    /// returns `Err` for DMA-BUF-flavored allocations (call
+    /// [`Self::export_dma_buf_fd`] instead). Each call returns a fresh
+    /// kernel fd (the driver dups internally) — the caller owns it and
+    /// is responsible for closing it (or for transferring ownership via
+    /// SCM_RIGHTS / `cudaImportExternalMemory`, both of which `dup`
+    /// again on receipt).
+    ///
+    /// Mirrors `HostVulkanBuffer::export_opaque_fd_memory` for images.
+    pub fn export_opaque_fd_memory(&self) -> Result<std::os::unix::io::RawFd> {
+        if !self.is_opaque_fd_export {
+            return Err(Error::GpuError(
+                "HostVulkanTexture::export_opaque_fd_memory: texture was not created \
+                 with `new_opaque_fd_export`; the underlying memory carries DMA_BUF_EXT \
+                 (or no) export flags and OPAQUE_FD export will fail at the driver"
+                    .into(),
+            ));
+        }
+        let vk_dev = self.vulkan_device.as_ref().ok_or_else(|| {
+            Error::GpuError(
+                "HostVulkanTexture::export_opaque_fd_memory: no HostVulkanDevice stored".into(),
+            )
+        })?;
+        let allocation = self.allocation.as_ref().ok_or_else(|| {
+            Error::GpuError(
+                "HostVulkanTexture::export_opaque_fd_memory: texture has no VMA allocation".into(),
+            )
+        })?;
+        let alloc_info = vk_dev.allocator().get_allocation_info(*allocation);
+        let memory = alloc_info.deviceMemory;
+
+        let get_fd_info = vk::MemoryGetFdInfoKHR::builder()
+            .memory(memory)
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD)
+            .build();
+
+        use vulkanalia::vk::KhrExternalMemoryFdExtensionDeviceCommands;
+        let fd = unsafe { vk_dev.device().get_memory_fd_khr(&get_fd_info) }
+            .map_err(|e| Error::GpuError(format!("Failed to export OPAQUE_FD memory fd: {e}")))?;
+        Ok(fd)
+    }
+
     /// Export the texture's memory as a DMA-BUF file descriptor.
     pub fn export_dma_buf_fd(&self) -> Result<std::os::unix::io::RawFd> {
         if let Some(&fd) = self.cached_dma_buf_fd.get() {
@@ -1009,6 +1247,7 @@ impl HostVulkanTexture {
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: true,
+            is_opaque_fd_export: false,
             chosen_drm_format_modifier: drm_format_modifier,
             width,
             height,
@@ -1092,6 +1331,7 @@ impl HostVulkanTexture {
             cached_image_view: OnceLock::new(),
             imported_from_iosurface: false,
             imported_from_dma_buf: true,
+            is_opaque_fd_export: false,
             chosen_drm_format_modifier: 0,
             width,
             height,
@@ -1120,6 +1360,8 @@ impl Clone for HostVulkanTexture {
             imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
+            #[cfg(target_os = "linux")]
+            is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]
             chosen_drm_format_modifier: 0,
             width: self.width,
@@ -1725,5 +1967,169 @@ mod tests {
         drop(t0);
         drop(t1);
         println!("Ring textures dropped cleanly");
+    }
+
+    /// `new_opaque_fd_export` allocates from the OPAQUE_FD image pool,
+    /// reports `is_opaque_fd_export() == true`, exports a valid kernel
+    /// fd, and the consumer-rhi import side accepts the same fd (alloc-
+    /// size round-trip). Cross-flavor export is rejected (calling
+    /// `export_opaque_fd_memory` on a DMA-BUF-allocated texture
+    /// produces an error).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn opaque_fd_image_export_round_trip_and_cross_flavor_rejection() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_image_pool().is_none() {
+            println!("Skipping - OPAQUE_FD image pool unavailable on this driver");
+            return;
+        }
+
+        // Positive: OPAQUE_FD-allocated image exports an OPAQUE_FD fd.
+        let desc = TextureDescriptor::new(128, 128, TextureFormat::Rgba8Unorm);
+        let texture = HostVulkanTexture::new_opaque_fd_export(&device, &desc)
+            .expect("new_opaque_fd_export failed");
+        assert!(
+            texture.is_opaque_fd_export(),
+            "is_opaque_fd_export() must report true for OPAQUE_FD-allocated images"
+        );
+        assert_eq!(texture.width(), 128);
+        assert_eq!(texture.height(), 128);
+        assert_eq!(texture.format(), TextureFormat::Rgba8Unorm);
+        let alloc_size = texture.vma_allocation_size();
+        assert!(
+            alloc_size >= (128 * 128 * 4) as vk::DeviceSize,
+            "VMA allocation size {alloc_size} must cover at least 128x128x4 bytes"
+        );
+        let fd = texture
+            .export_opaque_fd_memory()
+            .expect("export_opaque_fd_memory failed");
+        assert!(fd >= 0, "OPAQUE_FD fd must be non-negative");
+        unsafe { libc::close(fd) };
+
+        // Negative: DMA-BUF-allocated texture rejects OPAQUE_FD export.
+        let dma_buf_desc = TextureDescriptor::new(64, 64, TextureFormat::Bgra8Unorm)
+            .with_usage(TextureUsages::TEXTURE_BINDING);
+        let dma_buf_tex = HostVulkanTexture::new(&device, &dma_buf_desc)
+            .expect("DMA-BUF texture creation failed");
+        assert!(
+            !dma_buf_tex.is_opaque_fd_export(),
+            "is_opaque_fd_export() must be false for DMA-BUF-allocated images"
+        );
+        match dma_buf_tex.export_opaque_fd_memory() {
+            Err(crate::core::Error::GpuError(msg)) => {
+                assert!(
+                    msg.contains("not created with `new_opaque_fd_export`"),
+                    "error must call out the cross-flavor mismatch, got: {msg}"
+                );
+            }
+            other => panic!(
+                "expected cross-flavor rejection on DMA-BUF texture, got {other:?}"
+            ),
+        }
+    }
+
+    /// Format validation: only the CUDA-mappable subset
+    /// (`Rgba8Unorm`, `Rgba16Float`, `Rgba32Float`) is accepted;
+    /// every other `TextureFormat` variant is rejected at
+    /// construction with a message naming the bad format. Locks
+    /// the closed-list invariant from
+    /// `cudaExternalMemoryGetMappedMipmappedArray`.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn opaque_fd_image_rejects_non_cuda_mappable_formats() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_image_pool().is_none() {
+            println!("Skipping - OPAQUE_FD image pool unavailable on this driver");
+            return;
+        }
+
+        for bad_format in [
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Nv12,
+        ] {
+            let desc = TextureDescriptor::new(64, 64, bad_format);
+            match HostVulkanTexture::new_opaque_fd_export(&device, &desc) {
+                Err(crate::core::Error::Configuration(msg)) => {
+                    assert!(
+                        msg.contains("CUDA-mappable"),
+                        "error must explain the CUDA-mappable constraint, got: {msg}"
+                    );
+                    assert!(
+                        msg.contains(&format!("{bad_format:?}")),
+                        "error must name the rejected format {bad_format:?}, got: {msg}"
+                    );
+                }
+                Err(e) => panic!(
+                    "format {bad_format:?} must be rejected with Configuration error; \
+                     got {e}"
+                ),
+                Ok(_) => panic!(
+                    "format {bad_format:?} must be rejected for OPAQUE_FD; got Ok"
+                ),
+            }
+        }
+
+        // Positive controls: every CUDA-mappable format must succeed.
+        for good_format in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+        ] {
+            let desc = TextureDescriptor::new(64, 64, good_format);
+            let texture = HostVulkanTexture::new_opaque_fd_export(&device, &desc)
+                .unwrap_or_else(|e| {
+                    panic!("CUDA-mappable format {good_format:?} must succeed, got: {e:?}")
+                });
+            assert!(texture.is_opaque_fd_export());
+        }
+    }
+
+    /// Zero width/height is rejected — these aren't CUDA-specific
+    /// constraints but mirror the buffer-side input validation.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
+    #[test]
+    fn opaque_fd_image_rejects_zero_dimensions() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping - no Vulkan device available");
+                return;
+            }
+        };
+        if device.opaque_fd_image_pool().is_none() {
+            println!("Skipping - OPAQUE_FD image pool unavailable on this driver");
+            return;
+        }
+
+        for (w, h) in [(0, 64), (64, 0), (0, 0)] {
+            let desc = TextureDescriptor::new(w, h, TextureFormat::Rgba8Unorm);
+            match HostVulkanTexture::new_opaque_fd_export(&device, &desc) {
+                Err(crate::core::Error::Configuration(_)) => {}
+                Err(e) => panic!(
+                    "dimensions {w}x{h} must be rejected with Configuration error; \
+                     got {e}"
+                ),
+                Ok(_) => panic!(
+                    "dimensions {w}x{h} must be rejected for OPAQUE_FD; got Ok"
+                ),
+            }
+        }
     }
 }

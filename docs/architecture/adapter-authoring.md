@@ -619,23 +619,40 @@ Both options put Vulkan responsibilities on the OpenGL adapter,
 which is wrong-shaped per the engine-model rule. Composition is
 free; rederivation is expensive.
 
-### CUDA exclusion
+### CUDA two-flavor split
 
-The CUDA adapter (`streamlib-adapter-cuda`) does NOT need this
-pattern. CUDA's interop is buffer-only by structural constraint:
+The CUDA adapter (`streamlib-adapter-cuda`) carries two resource
+flavors with different QFOT requirements.
+
+**Flat-tensor DLPack path (`VkBuffer`)** — does NOT need this
+pattern. The interop is buffer-only by structural constraint:
 DLPack requires a flat `void*` device pointer, which forces
 `cudaImportExternalMemory(OPAQUE_FD)` →
 `cudaExternalMemoryGetMappedBuffer`, which only accepts a
 `VkBuffer`. `VkBuffer`s have no `VkImageLayout`, so QFOT-for-layout
-is structurally meaningless for CUDA. Cross-process correctness
-is provided by the timeline-semaphore alone (the cuda.py
+is structurally meaningless. Cross-process correctness for this
+path is provided by the timeline-semaphore alone (the cuda.py
 docstring: *"there is no per-acquire IPC — the host's pipeline is
 expected to write into the OPAQUE_FD buffer and signal the shared
 timeline ambiently."*).
 
-If a future CUDA-on-VkImage path lands (currently unscoped — no
-open issue contemplates it), it would inherit this dual-
-registration pattern from this section automatically.
+**Tiled-image path (`VkImage`)** — inherits this dual-registration
+pattern. CUDA's
+`cudaExternalMemoryGetMappedMipmappedArray` consumes an OPAQUE_FD
+`VkImage` (`HostVulkanTexture::new_opaque_fd_export` on the host,
+`ConsumerVulkanTexture::from_opaque_fd` on the cdylib) and produces
+a mipmapped-array handle backing `cudaSurfaceObject_t` /
+`cudaTextureObject_t` for hardware-bilinear sampling and surface
+writes. `VkImage` *does* have a `VkImageLayout`, so the same
+cross-process layout coordination story applies as for the
+OpenGL / Vulkan adapters: the cdylib's consumer-side acquire
+either chains `VkExternalMemoryAcquireUnmodifiedEXT` on a QFOT
+acquire (Mesa drivers exposing the extension) or bridges
+`UNDEFINED → target` (NVIDIA — empirically content-preserving via
+the DMA-BUF / OPAQUE_FD kernel cache). The dual-registration
+pattern (cross-process publish + same-process Path-1 entry when an
+in-process hot-path consumer also reads the surface) applies
+unchanged.
 
 ### Reference
 

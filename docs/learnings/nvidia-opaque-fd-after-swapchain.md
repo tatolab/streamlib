@@ -71,8 +71,8 @@ provides a live OPAQUE_FD allocation to anchor the kernel state.
 
 `HostVulkanDevice::new()` pre-warms every export-capable VMA pool —
 DMA-BUF buffer, DMA-BUF image linear, DMA-BUF image tiled, OPAQUE_FD
-HOST_VISIBLE buffer, OPAQUE_FD DEVICE_LOCAL buffer — strictly before
-any caller can build a `VkSwapchainKHR`.
+HOST_VISIBLE buffer, OPAQUE_FD DEVICE_LOCAL buffer, OPAQUE_FD image —
+strictly before any caller can build a `VkSwapchainKHR`.
 
 DMA-BUF probes are **allocate-and-drop** through the standard host
 RHI constructors. This still works because the compositor's
@@ -80,16 +80,42 @@ swapchain DMA-BUF imports provide a continuous live consumer for
 the DMA-BUF kernel state.
 
 OPAQUE_FD probes are **retained as long-lived sentinels** on the
-device (`HostVulkanDevice::opaque_fd_export_sentinels`). Both
-sentinels are intentionally **tiny** (8×8×4 = 256 bytes): empirical
-E2E on Cam Link 4K (run during PR `fix/opaque-fd-export-sentinels-637`)
-showed a consumer-resolution sentinel (1920×1080×4 ≈ 8 MiB)
+device (`HostVulkanDevice::opaque_fd_export_sentinels`). All three
+sentinels (HOST_VISIBLE buffer, DEVICE_LOCAL buffer, image) are
+intentionally **tiny** (8×8×4 = 256 bytes; the image one allocates an
+`R8G8B8A8_UNORM` `VkImage` with the same byte budget): empirical E2E
+on Cam Link 4K (run during PR `fix/opaque-fd-export-sentinels-637`)
+showed a consumer-resolution buffer sentinel (1920×1080×4 ≈ 8 MiB)
 *deterministically* blocked the consumer's same-size post-swapchain
 allocation, indicating NVIDIA tracks a cumulative byte budget on
-top of the per-handle-type state. The sentinel exists only to pin
-the per-handle-type kernel state, so it must not compete with
+top of the per-handle-type state. Sentinels exist only to pin the
+per-handle-type kernel state, so they must not compete with
 consumer-class allocations. Sentinels are freed in
 `HostVulkanDevice::Drop` before the allocator is torn down.
+
+**Image-flavored sentinel — provisional retention pending consumer.**
+The OPAQUE_FD image pool ships a matching retained sentinel that
+uses the same "tiny, per-handle-type" shape as the buffer sentinels.
+To the best of our current knowledge the empirical verification
+protocol (sections A/B/C below) cannot be run for the image sentinel
+today: `HostVulkanTexture::new_opaque_fd_export` is the engine
+primitive but no in-tree consumer of OPAQUE_FD `VkImage`s
+post-swapchain exists yet — `camera-python-display` and the existing
+reproducer examples allocate OPAQUE_FD *buffers*, not images. The
+image sentinel is retained out of conservatism: the cap mechanism
+is spec-level "per-handle-type kernel state", the buffer-side
+evidence makes the same argument for the image side, and a tiny
+sentinel costs ~256 bytes for the device's lifetime. When a real
+consumer-class OPAQUE_FD `VkImage` allocator lands in-tree, the
+sentinels-dropped protocol (Section C below, adapted for images)
+becomes runnable and the retention should be re-validated. If the
+empirical run shows the image sentinel is redundant given the
+already-retained buffer sentinels, dropping it is a one-line change
+in `prewarm_export_pools`. If it's load-bearing, the existing
+data-structure-level test
+(`opaque_fd_export_sentinels_retained_for_each_supported_pool`,
+which already includes `opaque_fd_image` in its expected-labels
+list when the pool is constructed) becomes the regression lock.
 
 > ~~**Residual flake.** The small-sentinel fix improved the Cam Link 4K
 > cold-shell pass rate to 9/10 in PR `fix/opaque-fd-export-sentinels-637`'s
