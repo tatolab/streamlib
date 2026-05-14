@@ -56,6 +56,9 @@ mod view;
 
 pub use adapter::CudaSurfaceAdapter;
 pub use context::CudaContext;
-pub use state::HostSurfaceRegistration;
+pub use state::{HostImageSurfaceRegistration, HostSurfaceRegistration};
 pub use streamlib_consumer_rhi::VulkanLayout;
-pub use view::{CudaReadView, CudaWriteView};
+pub use view::{
+    CudaReadView, CudaSurfaceGuard, CudaSurfaceView, CudaTextureGuard, CudaTextureView,
+    CudaWriteView,
+};

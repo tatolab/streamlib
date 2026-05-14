@@ -3,26 +3,34 @@
 
 //! Per-surface adapter state.
 //!
-//! `CudaSurfaceAdapter<D>` is generic over the device flavor (`HostMarker`
-//! today; future cdylib work will add a consumer flavor). The structs in
-//! this module carry the privilege parameter through so the pixel-buffer
-//! and timeline-semaphore types resolve to the matching flavor (`Host*`
-//! or, eventually, `Consumer*`) at instantiation.
+//! `CudaSurfaceAdapter<D>` is generic over the device flavor and
+//! registers two resource flavors at the same scope:
 //!
-//! The CUDA adapter mirrors the *crate split* of
-//! `streamlib-adapter-cpu-readback` (adapter crate + helpers crate) and
-//! the *struct shape* of `streamlib-adapter-vulkan` (no per-acquire
-//! trigger or bridge — the host registers the OPAQUE_FD-exportable
-//! resource and the carve-out test imports it into CUDA directly,
-//! because GPU-resident inference dispatches inside the CUDA context
-//! without needing per-acquire host work).
+//! - **Buffer** ([`HostSurfaceRegistration`]) — OPAQUE_FD-exportable
+//!   `VkBuffer` for the DLPack flat-tensor path
+//!   (`cudaExternalMemoryGetMappedBuffer` → flat `void*` consumed by
+//!   `from_dlpack`-compatible AI frameworks).
+//! - **Image** ([`HostImageSurfaceRegistration`]) — OPAQUE_FD-exportable
+//!   `VkImage` for the texture / surface-object path
+//!   (`cudaExternalMemoryGetMappedMipmappedArray` → tiled mipmapped
+//!   array consumed by `cudaCreateTextureObject` /
+//!   `cudaCreateSurfaceObject` for hardware-bilinear sampling and
+//!   surface-write writes from CUDA kernels).
+//!
+//! Both flavors share the same per-surface bookkeeping (timeline,
+//! holder counters, release value, layout); the [`SurfaceResource`]
+//! enum is the discriminator. The OpenGL adapter uses the same shape
+//! at a different scope — one `SurfaceState` with a `target: u32`
+//! discriminator covers both `GL_TEXTURE_2D` and
+//! `GL_TEXTURE_EXTERNAL_OES`.
 
 use std::sync::Arc;
 
 use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 
-/// Inputs handed to [`crate::CudaSurfaceAdapter::register_host_surface`].
+/// Buffer-flavored registration — handed to
+/// [`crate::CudaSurfaceAdapter::register_host_surface`].
 ///
 /// On the host side `pixel_buffer` is a fresh `Arc<HostVulkanBuffer>`
 /// allocated via either `HostVulkanBuffer::new_opaque_fd_export`
@@ -45,12 +53,59 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// [`streamlib_consumer_rhi::VulkanTimelineSemaphoreLike`] so the
     /// adapter's wait + signal calls work uniformly.
     pub timeline: Arc<P::TimelineSemaphore>,
-    /// Initial layout the resource is in at registration time. For
-    /// pixel buffers this is unused (buffers don't have layouts), but
-    /// the field is kept for shape parity with `streamlib-adapter-vulkan`
-    /// so the future #589/#590 work can add VkImage support without
-    /// breaking the registration shape. Pass [`VulkanLayout::UNDEFINED`].
+    /// Unused on the buffer path (buffers have no `VkImageLayout`); kept
+    /// for shape parity with [`HostImageSurfaceRegistration`]. Pass
+    /// [`VulkanLayout::UNDEFINED`].
     pub initial_layout: VulkanLayout,
+}
+
+/// Image-flavored registration — handed to
+/// [`crate::CudaSurfaceAdapter::register_host_image_surface`].
+///
+/// `texture` is a fresh `Arc<HostVulkanTexture>` allocated via
+/// `HostVulkanTexture::new_opaque_fd_export` — DEVICE_LOCAL,
+/// `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier, format restricted to the
+/// CUDA-mappable subset (`Rgba8Unorm`, `Rgba16Float`, `Rgba32Float`).
+/// The CUDA cdylib imports this image via `cudaImportExternalMemory`
+/// + `cudaExternalMemoryGetMappedMipmappedArray` and constructs
+/// `cudaTextureObject_t` / `cudaSurfaceObject_t` handles per acquire.
+pub struct HostImageSurfaceRegistration<P: DevicePrivilege> {
+    /// OPAQUE_FD-exportable image — the resource CUDA imports as a
+    /// tiled mipmapped array. Host- or consumer-flavored per `P`.
+    pub texture: Arc<P::Texture>,
+    /// Timeline semaphore — same role and constraints as
+    /// [`HostSurfaceRegistration::timeline`].
+    pub timeline: Arc<P::TimelineSemaphore>,
+    /// Vulkan image layout the image is in at registration time. The
+    /// cross-process release path (a `CudaContext.release_for_cross_process`
+    /// SDK shim that delegates to `VulkanSurfaceAdapter::release_to_foreign`,
+    /// per `docs/architecture/adapter-authoring.md` → "Cross-process
+    /// producer composition") reads this when running the producer-side
+    /// QFOT release barrier. The cuda adapter itself does NOT issue any
+    /// Vulkan-side barriers on the imported image — CUDA's sync runs
+    /// pairwise via `cudaWaitExternalSemaphoresAsync` /
+    /// `cudaSignalExternalSemaphoresAsync` on the timeline.
+    pub initial_layout: VulkanLayout,
+}
+
+/// Resource discriminator stored on every [`SurfaceState`].
+///
+/// The cuda adapter holds both `Buffer` and `Image` registrations in
+/// the same [`streamlib_adapter_abi::Registry`]; the variant identifies
+/// which acquire path (`acquire_read`/`acquire_write` for buffers,
+/// `acquire_texture`/`acquire_surface` for images) is valid for a
+/// given surface_id. Mixing paths (e.g. calling `acquire_read` on an
+/// image surface) returns
+/// [`streamlib_adapter_abi::AdapterError::BackendRejected`] with a
+/// usage-correction hint, the same shape the OpenGL adapter uses for
+/// its EXTERNAL_OES read-only restriction.
+pub(crate) enum SurfaceResource<P: DevicePrivilege> {
+    Buffer {
+        pixel_buffer: Arc<P::Buffer>,
+    },
+    Image {
+        texture: Arc<P::Texture>,
+    },
 }
 
 /// Per-surface state held inside the adapter's `Registry<...>`.
@@ -61,9 +116,13 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
 pub(crate) struct SurfaceState<P: DevicePrivilege> {
     #[allow(dead_code)] // kept for tracing / debug output, not read in hot paths
     pub(crate) surface_id: SurfaceId,
-    pub(crate) pixel_buffer: Arc<P::Buffer>,
+    pub(crate) resource: SurfaceResource<P>,
     pub(crate) timeline: Arc<P::TimelineSemaphore>,
-    #[allow(dead_code)] // shape-parity with the Vulkan adapter; read by future image support
+    /// Vulkan image layout the resource is in. Load-bearing for image
+    /// surfaces (consumed by the cross-process release shim that
+    /// composes `VulkanSurfaceAdapter::release_to_foreign`); ignored on
+    /// the buffer path.
+    #[allow(dead_code)] // consumed by the cross-process release shim (see HostImageSurfaceRegistration::initial_layout)
     pub(crate) current_layout: VulkanLayout,
     pub(crate) read_holders: u64,
     pub(crate) write_held: bool,

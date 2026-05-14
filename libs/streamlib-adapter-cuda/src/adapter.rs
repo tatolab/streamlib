@@ -42,15 +42,20 @@ use streamlib_adapter_abi::{
     SurfaceRegistration, WriteGuard,
 };
 use streamlib_consumer_rhi::{
-    DevicePrivilege, VulkanLayout, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
-    VulkanTimelineSemaphoreLike,
+    DevicePrivilege, TextureFormat, VulkanLayout, VulkanRhiBuffer, VulkanRhiDevice,
+    VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 #[cfg(target_os = "linux")]
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::state::{HostSurfaceRegistration, SurfaceState};
-use crate::view::{CudaReadView, CudaWriteView};
+use crate::state::{
+    HostImageSurfaceRegistration, HostSurfaceRegistration, SurfaceResource, SurfaceState,
+};
+use crate::view::{
+    CudaReadView, CudaSurfaceGuard, CudaSurfaceView, CudaTextureGuard, CudaTextureView,
+    CudaWriteView,
+};
 
 /// Default per-acquire timeline-wait timeout. Long enough to cover any
 /// realistic GPU queue depth; short enough that a deadlock turns into
@@ -136,7 +141,9 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
             id,
             SurfaceState {
                 surface_id: id,
-                pixel_buffer: registration.pixel_buffer,
+                resource: SurfaceResource::Buffer {
+                    pixel_buffer: registration.pixel_buffer,
+                },
                 timeline: registration.timeline,
                 current_layout: registration.initial_layout,
                 read_holders: 0,
@@ -150,9 +157,63 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         Ok(())
     }
 
-    /// Drop a registered surface. Pending guards keep the underlying
-    /// `Arc<TimelineSemaphore>` and `Arc<PixelBuffer>` alive; the next
-    /// acquire returns [`AdapterError::SurfaceNotFound`].
+    /// Register an image-flavored surface for the CUDA texture / surface
+    /// object path.
+    ///
+    /// Validates that the texture's format is in the CUDA-mappable
+    /// subset (`Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`) at
+    /// registration time so the cdylib's later
+    /// `cudaExternalMemoryGetMappedMipmappedArray` call doesn't trip on
+    /// `CUDA_ERROR_INVALID_VALUE` for an unmappable format. The
+    /// host-side allocator (`HostVulkanTexture::new_opaque_fd_export`)
+    /// enforces the same check at construction; the adapter's check is
+    /// defense in depth and produces a typed
+    /// [`AdapterError::BackendRejected`] with a usage-correction hint
+    /// for the surface_id.
+    ///
+    /// Errors:
+    /// - [`AdapterError::SurfaceAlreadyRegistered`] — `id` is already
+    ///   registered (either flavor).
+    /// - [`AdapterError::BackendRejected`] — the texture's format isn't
+    ///   in the CUDA-mappable subset.
+    pub fn register_host_image_surface(
+        &self,
+        id: SurfaceId,
+        registration: HostImageSurfaceRegistration<D::Privilege>,
+    ) -> Result<(), AdapterError> {
+        let format = registration.texture.format();
+        if !is_cuda_mappable_format(format) {
+            return Err(AdapterError::BackendRejected {
+                reason: format!(
+                    "register_host_image_surface: surface_id={id}: format {format:?} is not \
+                     CUDA-mappable; allowed: Rgba8Unorm, Rgba16Float, Rgba32Float \
+                     (cudaExternalMemoryGetMappedMipmappedArray accepts only this subset)"
+                ),
+            });
+        }
+        let inserted = self.surfaces.register(
+            id,
+            SurfaceState {
+                surface_id: id,
+                resource: SurfaceResource::Image {
+                    texture: registration.texture,
+                },
+                timeline: registration.timeline,
+                current_layout: registration.initial_layout,
+                read_holders: 0,
+                write_held: false,
+                current_release_value: 0,
+            },
+        );
+        if !inserted {
+            return Err(AdapterError::SurfaceAlreadyRegistered { surface_id: id });
+        }
+        Ok(())
+    }
+
+    /// Drop a registered surface (either flavor). Pending guards keep
+    /// the underlying `Arc<TimelineSemaphore>` and resource `Arc` alive;
+    /// the next acquire returns [`AdapterError::SurfaceNotFound`].
     pub fn unregister_host_surface(&self, id: SurfaceId) -> bool {
         self.surfaces.unregister(id).is_some()
     }
@@ -164,21 +225,44 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
     }
 
     /// Power-user accessor: the registered pixel-buffer Arc for a
-    /// surface, if registered. Used by the carve-out test in
+    /// buffer-flavored surface. Used by the carve-out test in
     /// `streamlib-adapter-cuda-helpers` to call
     /// `export_opaque_fd_memory()` on the underlying buffer; future
     /// cdylib work will route this through the surface-share service
-    /// instead. Returns `None` when the surface isn't registered.
+    /// instead. Returns `None` when the surface isn't registered OR
+    /// when the surface was registered with an image-flavored
+    /// registration (use [`Self::surface_texture`] for those).
     pub fn surface_pixel_buffer(
         &self,
         id: SurfaceId,
     ) -> Option<Arc<<D::Privilege as DevicePrivilege>::Buffer>> {
         self.surfaces
-            .with(id, |state| Arc::clone(&state.pixel_buffer))
+            .with(id, |state| match &state.resource {
+                SurfaceResource::Buffer { pixel_buffer } => Some(Arc::clone(pixel_buffer)),
+                SurfaceResource::Image { .. } => None,
+            })
+            .flatten()
+    }
+
+    /// Power-user accessor: the registered texture Arc for an
+    /// image-flavored surface. Symmetric counterpart to
+    /// [`Self::surface_pixel_buffer`]. Returns `None` when the surface
+    /// isn't registered OR when the surface was registered with a
+    /// buffer-flavored registration.
+    pub fn surface_texture(
+        &self,
+        id: SurfaceId,
+    ) -> Option<Arc<<D::Privilege as DevicePrivilege>::Texture>> {
+        self.surfaces
+            .with(id, |state| match &state.resource {
+                SurfaceResource::Image { texture } => Some(Arc::clone(texture)),
+                SurfaceResource::Buffer { .. } => None,
+            })
+            .flatten()
     }
 
     /// Power-user accessor: the registered timeline-semaphore Arc for
-    /// a surface. Used by the carve-out test to call
+    /// a surface (either flavor). Used by the carve-out test to call
     /// `export_opaque_fd()` on the underlying timeline; cdylib work
     /// will route this through the surface-share service.
     pub fn surface_timeline(
@@ -259,7 +343,19 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         let session: HostCopySession<D::Privilege> = self
             .surfaces
             .try_begin_write(id, |state| {
-                let buffer_size = state.pixel_buffer.size();
+                let pixel_buffer = match &state.resource {
+                    SurfaceResource::Buffer { pixel_buffer } => pixel_buffer,
+                    SurfaceResource::Image { .. } => {
+                        return Err(AdapterError::BackendRejected {
+                            reason: format!(
+                                "submit_host_copy_image_to_buffer: surface_id={id} was \
+                                 registered as an image-flavored surface; this host-pipeline \
+                                 copy targets a buffer-flavored surface only"
+                            ),
+                        });
+                    }
+                };
+                let buffer_size = pixel_buffer.size();
                 if buffer_size < required_bytes {
                     return Err(AdapterError::BackendRejected {
                         reason: format!(
@@ -276,7 +372,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                 let signal_value = state.next_release_value();
                 Ok(HostCopySession {
                     timeline: Arc::clone(&state.timeline),
-                    buffer: state.pixel_buffer.buffer(),
+                    buffer: pixel_buffer.buffer(),
                     signal_value,
                 })
             })?
@@ -326,17 +422,19 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface: &StreamlibSurface,
     ) -> Result<Option<ReadAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
-        self.surfaces.try_begin_read(id, |state| {
-            let timeline = Arc::clone(&state.timeline);
-            let wait_value = state.current_release_value;
-            let buffer = state.pixel_buffer.buffer();
-            let size = state.pixel_buffer.size();
-            Ok(ReadAcquired {
-                timeline,
-                wait_value,
-                buffer,
-                size,
-            })
+        self.surfaces.try_begin_read(id, |state| match &state.resource {
+            SurfaceResource::Buffer { pixel_buffer } => Ok(ReadAcquired {
+                timeline: Arc::clone(&state.timeline),
+                wait_value: state.current_release_value,
+                buffer: pixel_buffer.buffer(),
+                size: pixel_buffer.size(),
+            }),
+            SurfaceResource::Image { .. } => Err(AdapterError::BackendRejected {
+                reason: format!(
+                    "acquire_read: surface_id={id} was registered as an image-flavored \
+                     surface; use acquire_texture (for cudaTextureObject_t) instead"
+                ),
+            }),
         })
     }
 
@@ -345,18 +443,213 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         surface: &StreamlibSurface,
     ) -> Result<Option<WriteAcquired<D::Privilege>>, AdapterError> {
         let id = surface.id;
-        self.surfaces.try_begin_write(id, |state| {
-            let timeline = Arc::clone(&state.timeline);
-            let wait_value = state.current_release_value;
-            let buffer = state.pixel_buffer.buffer();
-            let size = state.pixel_buffer.size();
-            Ok(WriteAcquired {
-                timeline,
-                wait_value,
-                buffer,
-                size,
-            })
+        self.surfaces.try_begin_write(id, |state| match &state.resource {
+            SurfaceResource::Buffer { pixel_buffer } => Ok(WriteAcquired {
+                timeline: Arc::clone(&state.timeline),
+                wait_value: state.current_release_value,
+                buffer: pixel_buffer.buffer(),
+                size: pixel_buffer.size(),
+            }),
+            SurfaceResource::Image { .. } => Err(AdapterError::BackendRejected {
+                reason: format!(
+                    "acquire_write: surface_id={id} was registered as an image-flavored \
+                     surface; use acquire_surface (for cudaSurfaceObject_t) instead"
+                ),
+            }),
         })
+    }
+
+    fn try_begin_image_read(
+        &self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<ImageReadAcquired<D::Privilege>>, AdapterError> {
+        let id = surface.id;
+        self.surfaces.try_begin_read(id, |state| match &state.resource {
+            SurfaceResource::Image { texture } => {
+                let image = texture.image().ok_or_else(|| AdapterError::BackendRejected {
+                    reason: format!(
+                        "acquire_texture: surface_id={id} texture has no VkImage (placeholder?)"
+                    ),
+                })?;
+                Ok(ImageReadAcquired {
+                    timeline: Arc::clone(&state.timeline),
+                    wait_value: state.current_release_value,
+                    image,
+                    width: texture.width(),
+                    height: texture.height(),
+                    format: texture.format(),
+                })
+            }
+            SurfaceResource::Buffer { .. } => Err(AdapterError::BackendRejected {
+                reason: format!(
+                    "acquire_texture: surface_id={id} was registered as a buffer-flavored \
+                     surface; use acquire_read (for DLPack capsules) instead"
+                ),
+            }),
+        })
+    }
+
+    fn try_begin_image_write(
+        &self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<ImageWriteAcquired<D::Privilege>>, AdapterError> {
+        let id = surface.id;
+        self.surfaces.try_begin_write(id, |state| match &state.resource {
+            SurfaceResource::Image { texture } => {
+                let image = texture.image().ok_or_else(|| AdapterError::BackendRejected {
+                    reason: format!(
+                        "acquire_surface: surface_id={id} texture has no VkImage (placeholder?)"
+                    ),
+                })?;
+                Ok(ImageWriteAcquired {
+                    timeline: Arc::clone(&state.timeline),
+                    wait_value: state.current_release_value,
+                    image,
+                    width: texture.width(),
+                    height: texture.height(),
+                    format: texture.format(),
+                })
+            }
+            SurfaceResource::Buffer { .. } => Err(AdapterError::BackendRejected {
+                reason: format!(
+                    "acquire_surface: surface_id={id} was registered as a buffer-flavored \
+                     surface; use acquire_write (for DLPack capsules) instead"
+                ),
+            }),
+        })
+    }
+
+    fn finalize_image_read(
+        &self,
+        surface_id: SurfaceId,
+        acquired: ImageReadAcquired<D::Privilege>,
+    ) -> Result<CudaTextureView<'_>, AdapterError> {
+        if acquired
+            .timeline
+            .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
+            .is_err()
+        {
+            self.surfaces.rollback_read(surface_id);
+            return Err(AdapterError::SyncTimeout {
+                duration: self.acquire_timeout,
+            });
+        }
+        Ok(CudaTextureView {
+            image: acquired.image,
+            width: acquired.width,
+            height: acquired.height,
+            format: acquired.format,
+            _marker: PhantomData,
+        })
+    }
+
+    fn finalize_image_write(
+        &self,
+        surface_id: SurfaceId,
+        acquired: ImageWriteAcquired<D::Privilege>,
+    ) -> Result<CudaSurfaceView<'_>, AdapterError> {
+        if acquired
+            .timeline
+            .wait(acquired.wait_value, self.acquire_timeout.as_nanos() as u64)
+            .is_err()
+        {
+            self.surfaces.rollback_write(surface_id);
+            return Err(AdapterError::SyncTimeout {
+                duration: self.acquire_timeout,
+            });
+        }
+        Ok(CudaSurfaceView {
+            image: acquired.image,
+            width: acquired.width,
+            height: acquired.height,
+            format: acquired.format,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Blocking acquire of read-only image access — the
+    /// `cudaTextureObject_t` side of CUDA's texture interop.
+    /// Returns a [`CudaTextureGuard`] scoped to the acquire window;
+    /// drop releases the read holder and signals the timeline.
+    pub fn acquire_texture<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<CudaTextureGuard<'g, D>, AdapterError> {
+        let acquired = match self.try_begin_image_read(surface)? {
+            Some(a) => a,
+            None => {
+                return Err(AdapterError::WriteContended {
+                    surface_id: surface.id,
+                    holder: "writer".to_string(),
+                });
+            }
+        };
+        let view = self.finalize_image_read(surface.id, acquired)?;
+        Ok(CudaTextureGuard {
+            adapter: self,
+            surface_id: surface.id,
+            view,
+        })
+    }
+
+    /// Non-blocking variant of [`Self::acquire_texture`]. Returns
+    /// `Ok(None)` on contention rather than blocking.
+    pub fn try_acquire_texture<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<CudaTextureGuard<'g, D>>, AdapterError> {
+        let acquired = match self.try_begin_image_read(surface)? {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        let view = self.finalize_image_read(surface.id, acquired)?;
+        Ok(Some(CudaTextureGuard {
+            adapter: self,
+            surface_id: surface.id,
+            view,
+        }))
+    }
+
+    /// Blocking acquire of read-write image access — the
+    /// `cudaSurfaceObject_t` side of CUDA's texture interop. Returns
+    /// a [`CudaSurfaceGuard`] scoped to the acquire window; drop
+    /// releases the write hold and signals the timeline.
+    pub fn acquire_surface<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<CudaSurfaceGuard<'g, D>, AdapterError> {
+        let acquired = match self.try_begin_image_write(surface)? {
+            Some(a) => a,
+            None => {
+                return Err(AdapterError::WriteContended {
+                    surface_id: surface.id,
+                    holder: self.surfaces.describe_contention(surface.id),
+                });
+            }
+        };
+        let view = self.finalize_image_write(surface.id, acquired)?;
+        Ok(CudaSurfaceGuard {
+            adapter: self,
+            surface_id: surface.id,
+            view,
+        })
+    }
+
+    /// Non-blocking variant of [`Self::acquire_surface`].
+    pub fn try_acquire_surface<'g>(
+        &'g self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<CudaSurfaceGuard<'g, D>>, AdapterError> {
+        let acquired = match self.try_begin_image_write(surface)? {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+        let view = self.finalize_image_write(surface.id, acquired)?;
+        Ok(Some(CudaSurfaceGuard {
+            adapter: self,
+            surface_id: surface.id,
+            view,
+        }))
     }
 
     fn finalize_read(
@@ -689,6 +982,46 @@ struct WriteAcquired<P: DevicePrivilege> {
     size: vk::DeviceSize,
 }
 
+/// Image-flavored read snapshot — sibling of [`ReadAcquired`] for the
+/// `acquire_texture` path. Carries the `vk::Image` handle + the
+/// dimensions / format the cdylib needs to build a
+/// `cudaTextureObject_t`.
+struct ImageReadAcquired<P: DevicePrivilege> {
+    timeline: Arc<P::TimelineSemaphore>,
+    wait_value: u64,
+    image: vk::Image,
+    width: u32,
+    height: u32,
+    format: TextureFormat,
+}
+
+/// Image-flavored write snapshot — sibling of [`WriteAcquired`] for
+/// the `acquire_surface` path.
+struct ImageWriteAcquired<P: DevicePrivilege> {
+    timeline: Arc<P::TimelineSemaphore>,
+    wait_value: u64,
+    image: vk::Image,
+    width: u32,
+    height: u32,
+    format: TextureFormat,
+}
+
+/// Format gate enforced at [`CudaSurfaceAdapter::register_host_image_surface`]
+/// time. The CUDA-mappable subset is fixed by
+/// `cudaExternalMemoryGetMappedMipmappedArray`'s accepted
+/// `cudaChannelFormatDesc`: 1/2/4-channel `R8/R16/R32` integer or
+/// 16/32-bit float, no sRGB, no `BGR*`, no three-channel formats.
+/// Mapped to `TextureFormat` variants the streamlib RHI exposes today:
+/// `Rgba8Unorm`, `Rgba16Float`, `Rgba32Float`. Other variants
+/// (`Rgba8UnormSrgb`, `Bgra8Unorm`, `Bgra8UnormSrgb`, `Nv12`) are
+/// rejected.
+fn is_cuda_mappable_format(format: TextureFormat) -> bool {
+    matches!(
+        format,
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba16Float | TextureFormat::Rgba32Float
+    )
+}
+
 impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
     type ReadView<'g> = CudaReadView<'g>;
     type WriteView<'g> = CudaWriteView<'g>;
@@ -836,5 +1169,28 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CudaSurfaceAdapter<D> {
         if let Err(e) = timeline.signal_host(value) {
             tracing::error!(?surface_id, %value, %e, "timeline signal failed on write release");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locks the CUDA-mappable format gate. Mentally revert
+    /// `is_cuda_mappable_format` to `|_| true` (or remove the
+    /// `matches!` arm) and the second assertion fires.
+    #[test]
+    fn cuda_mappable_format_accepts_supported_subset() {
+        assert!(is_cuda_mappable_format(TextureFormat::Rgba8Unorm));
+        assert!(is_cuda_mappable_format(TextureFormat::Rgba16Float));
+        assert!(is_cuda_mappable_format(TextureFormat::Rgba32Float));
+    }
+
+    #[test]
+    fn cuda_mappable_format_rejects_other_variants() {
+        assert!(!is_cuda_mappable_format(TextureFormat::Rgba8UnormSrgb));
+        assert!(!is_cuda_mappable_format(TextureFormat::Bgra8Unorm));
+        assert!(!is_cuda_mappable_format(TextureFormat::Bgra8UnormSrgb));
+        assert!(!is_cuda_mappable_format(TextureFormat::Nv12));
     }
 }

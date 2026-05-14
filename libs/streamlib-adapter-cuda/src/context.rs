@@ -28,6 +28,7 @@ use streamlib_adapter_abi::{
 use streamlib_consumer_rhi::VulkanRhiDevice;
 
 use crate::adapter::CudaSurfaceAdapter;
+use crate::view::{CudaSurfaceGuard, CudaTextureGuard};
 
 /// Customer-facing handle bound to a single runtime, generic over the
 /// device flavor. Holds a shared reference to a [`CudaSurfaceAdapter`]
@@ -83,5 +84,41 @@ impl<D: VulkanRhiDevice + 'static> CudaContext<D> {
         surface: &StreamlibSurface,
     ) -> Result<Option<WriteGuard<'a, CudaSurfaceAdapter<D>>>, AdapterError> {
         self.adapter.try_acquire_write(surface)
+    }
+
+    /// Blocking acquire of read-only image access — produces a
+    /// [`CudaTextureGuard`] whose view carries the `vk::Image` the
+    /// cdylib uses to construct a `cudaTextureObject_t`.
+    pub fn acquire_texture<'a>(
+        &'a self,
+        surface: &StreamlibSurface,
+    ) -> Result<CudaTextureGuard<'a, D>, AdapterError> {
+        self.adapter.acquire_texture(surface)
+    }
+
+    /// Non-blocking variant of [`Self::acquire_texture`].
+    pub fn try_acquire_texture<'a>(
+        &'a self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<CudaTextureGuard<'a, D>>, AdapterError> {
+        self.adapter.try_acquire_texture(surface)
+    }
+
+    /// Blocking acquire of read-write image access — produces a
+    /// [`CudaSurfaceGuard`] whose view carries the `vk::Image` the
+    /// cdylib uses to construct a `cudaSurfaceObject_t`.
+    pub fn acquire_surface<'a>(
+        &'a self,
+        surface: &StreamlibSurface,
+    ) -> Result<CudaSurfaceGuard<'a, D>, AdapterError> {
+        self.adapter.acquire_surface(surface)
+    }
+
+    /// Non-blocking variant of [`Self::acquire_surface`].
+    pub fn try_acquire_surface<'a>(
+        &'a self,
+        surface: &StreamlibSurface,
+    ) -> Result<Option<CudaSurfaceGuard<'a, D>>, AdapterError> {
+        self.adapter.try_acquire_surface(surface)
     }
 }
