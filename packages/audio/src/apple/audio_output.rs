@@ -62,7 +62,7 @@ pub struct AppleAudioOutputProcessor {
     frame_producer: Arc<Mutex<Option<Producer<AudioFrame>>>>,
     polling_thread: Option<thread::JoinHandle<()>>,
     stop_polling: Arc<AtomicBool>,
-    audio: ProcessorAudioConverter,
+    audio: Option<ProcessorAudioConverter>,
 }
 
 impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::Processor {
@@ -75,6 +75,7 @@ impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::
             .device_id
             .as_ref()
             .and_then(|s| s.parse::<usize>().ok());
+        self.audio = Some(ProcessorAudioConverter::new());
         tracing::info!(
             "AudioOutput: start() called (Pull mode - will query device for native config)"
         );
@@ -213,8 +214,13 @@ impl streamlib::sdk::processors::ManualProcessor for AppleAudioOutputProcessor::
         // 1. The polling thread is stopped in teardown() before self is dropped
         // 2. Only the polling thread accesses these after start() returns
         // 3. In Manual mode, no other code touches self between start() and teardown()
+        let audio = self.audio.as_mut().ok_or_else(|| {
+            Error::Configuration(
+                "audio converter not initialized — setup() must run before start()".into(),
+            )
+        })?;
         let inputs_ptr = SendableInputsPtr(&self.inputs as *const _);
-        let audio_ptr = SendableAudioConverterPtr(&mut self.audio as *mut _);
+        let audio_ptr = SendableAudioConverterPtr(audio as *mut _);
         let producer_clone = Arc::clone(&self.frame_producer);
         let stop_clone = Arc::clone(&stop_flag);
         let target_sample_rate = device_sample_rate;
