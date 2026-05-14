@@ -12,6 +12,7 @@ use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{DynGeneratedProcessor, GeneratedProcessor};
 use crate::core::pubsub::{topics, Event, RuntimeEvent, PUBSUB};
 use crate::core::ProcessorDescriptor;
+use streamlib_processor_schema::PortSchemaSpec;
 
 /// A created processor instance for runtime use.
 pub type ProcessorInstance = Box<dyn DynGeneratedProcessor + Send>;
@@ -51,11 +52,11 @@ pub struct ProcessorInstanceFactory {
     constructors: RwLock<HashMap<SchemaIdent, private::ConstructorFn>>,
     port_info: RwLock<HashMap<SchemaIdent, (Vec<PortInfo>, Vec<PortInfo>)>>,
     descriptors: RwLock<HashMap<SchemaIdent, ProcessorDescriptor>>,
-    /// Set of port-data-type schema strings (`PortSchemaSpec` rendered as
-    /// `Display`). Orthogonal to the processor-identity HashMaps above —
-    /// tracks the universe of port schemas any registered processor exposes,
-    /// for `known_schemas()` / `is_schema_known()` debugging surface only.
-    schemas: RwLock<HashSet<String>>,
+    /// Set of port-data-type schema specs ([`PortSchemaSpec`]).
+    /// Orthogonal to the processor-identity HashMaps above — tracks the
+    /// universe of port schemas any registered processor exposes, for
+    /// `known_schemas()` / `is_schema_known()` debugging surface only.
+    schemas: RwLock<HashSet<PortSchemaSpec>>,
 }
 
 /// Global processor registry for runtime lookups.
@@ -144,7 +145,7 @@ impl ProcessorInstanceFactory {
         {
             let mut schemas = self.schemas.write();
             for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.to_string());
+                schemas.insert(port.data_type.clone());
             }
         }
 
@@ -243,7 +244,7 @@ impl ProcessorInstanceFactory {
         {
             let mut schemas = self.schemas.write();
             for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.to_string());
+                schemas.insert(port.data_type.clone());
             }
         }
 
@@ -312,7 +313,7 @@ impl ProcessorInstanceFactory {
         {
             let mut schemas = self.schemas.write();
             for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.to_string());
+                schemas.insert(port.data_type.clone());
             }
         }
 
@@ -409,15 +410,16 @@ impl ProcessorInstanceFactory {
         })
     }
 
-    /// All known schema strings from registered processor ports, sorted.
-    pub fn known_schemas(&self) -> Vec<String> {
-        let mut schemas: Vec<String> = self.schemas.read().iter().cloned().collect();
-        schemas.sort();
+    /// All known port-schema specs from registered processor ports,
+    /// sorted by Display rendering for diff-stable output.
+    pub fn known_schemas(&self) -> Vec<PortSchemaSpec> {
+        let mut schemas: Vec<PortSchemaSpec> = self.schemas.read().iter().cloned().collect();
+        schemas.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
         schemas
     }
 
-    /// Check if a schema string is known from any registered processor port.
-    pub fn is_schema_known(&self, schema: &str) -> bool {
+    /// Check if a port-schema spec is known from any registered processor port.
+    pub fn is_schema_known(&self, schema: &PortSchemaSpec) -> bool {
         self.schemas.read().contains(schema)
     }
 }

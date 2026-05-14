@@ -39,7 +39,7 @@ use crate::ThreadPriority;
 /// shape. Used by callers that build a `PortInfo` before the routing tag
 /// is known (e.g. graph-builder fallbacks); a default `Any` carries no
 /// false specificity.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum PortSchemaSpec {
     #[default]
     Any,
