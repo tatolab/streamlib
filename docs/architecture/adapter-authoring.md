@@ -2,14 +2,12 @@
 
 > **Living document.** Validate, update, and critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
-> Reflects code state as of 2026-04-30 (post-#560, #562, #587, #588).
 > Verify against current code before generalizing.
 
 This doc is the implementation contract for writing a new
 `SurfaceAdapter`. It codifies the patterns the in-tree adapters
-(`-vulkan`, `-opengl`, `-cpu-readback`, `-cuda`; `-skia` in flight)
-landed on so a new adapter author can land on the right shape
-mechanically.
+(`-vulkan`, `-opengl`, `-cpu-readback`, `-cuda`, `-skia`) landed on
+so a new adapter author can land on the right shape mechanically.
 
 **If you're a customer using an existing adapter**, read
 [`surface-adapter.md`](surface-adapter.md) instead — that's the
@@ -65,10 +63,11 @@ The canonical recipe:
 4. **Per-acquire is timeline-wait + layout-transition**. Both run
    through traits the carve-out exposes — no privileged ops. If
    the host has work to do per acquire (cpu-readback's
-   `vkCmdCopyImageToBuffer`, escalated compute via #550), it's a
-   **thin trigger** — IPC publishes a timeline value, the
-   subprocess waits on the imported timeline through the carve-
-   out. No fresh FD-passing payload per acquire.
+   `vkCmdCopyImageToBuffer`, escalated compute / graphics /
+   ray-tracing dispatch), it's a **thin trigger** — IPC publishes
+   a timeline value, the subprocess waits on the imported
+   timeline through the carve-out. No fresh FD-passing payload
+   per acquire.
 
 5. **Runtime wiring is a single `install_setup_hook` call** at app
    startup (see [Runtime wiring](#runtime-wiring) below). The hook
@@ -425,7 +424,7 @@ use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib_adapter_<name>::<Name>SurfaceAdapter;
 
-let runtime = StreamRuntime::new()?;
+let runtime = Runner::new()?;
 
 runtime.install_setup_hook(move |gpu| {
     let host_device = Arc::clone(gpu.device().vulkan_device());
@@ -477,11 +476,16 @@ subprocesses (which is the default for any new adapter), follow
   streamlib-python-native | grep -c "^streamlib v"` should return
   `0`. CI enforces this via `cargo xtask check-boundaries` (see
   CLAUDE.md → Vulkan RHI Boundary).
-- The Python wrapper at `libs/streamlib-python/python/streamlib/`
-  and the Deno wrapper at `libs/streamlib-deno/` mirror the trait
-  shape using the language's idiomatic scope binding (`with` for
-  Python, `using` for Deno). Schemas at
-  `libs/streamlib-engine/schemas/` cover any new escalate ops.
+- The Python adapter mirror at
+  `libs/streamlib-python/python/streamlib/adapters/` and the Deno
+  mirror at `libs/streamlib-deno/adapters/` carry the per-adapter
+  context types (`VulkanContext`, `OpenGLContext`, etc.); the
+  base `SurfaceAdapter` Protocol/interface lives in
+  `libs/streamlib-python/python/streamlib/surface_adapter.py` and
+  `libs/streamlib-deno/surface_adapter.ts`. Both runtimes mirror
+  the trait shape using the language's idiomatic scope binding
+  (`with` for Python, `using` for Deno). Escalate-op schemas live
+  in `packages/escalate/schemas/`.
 - Polyglot coverage is **both Python AND Deno together** (per
   `polyglot.md`). The only legitimate split is schema-only /
   language-specific by construction; document the reason in the
@@ -491,7 +495,7 @@ subprocesses (which is the default for any new adapter), follow
 
 When the producer side (subprocess writing into a host-allocated
 surface) needs spec-correct cross-process layout coordination
-(#633) AND the adapter is **not** the Vulkan adapter, **don't** add
+AND the adapter is **not** the Vulkan adapter, **don't** add
 a Vulkan device handle to the adapter. Compose: the customer
 dual-registers the same surface with the producer adapter (e.g.
 `OpenGlSurfaceAdapter`, `streamlib-adapter-skia` GL backend) AND
@@ -641,9 +645,6 @@ runtimes. The host main.rs allocates and registers the timeline;
 the python/deno scenario binaries dual-register and call
 `release_for_cross_process` after each GL write block.
 
-Sibling tickets: #644 (OpenGL, this section's source), #645
-(Skia GL, inherits the pattern when its host crate ships).
-
 ## Conformance & tests
 
 Every adapter passes the conformance suite. The entry point is
@@ -693,11 +694,12 @@ shape but **don't**:
    out. See [`subprocess-rhi-parity.md`](subprocess-rhi-parity.md).
 
 2. **"My adapter needs its own SPIR-V compute kernel on the
-   subprocess side."** No, it doesn't. Use `RegisterComputeKernel`
-   + `RunComputeKernel` (#550) to dispatch through the host's
-   `VulkanComputeKernel`. The SPIR-V reflection / descriptor-set
-   layout / pipeline cache machinery is a single host-side win;
-   mirroring it in subprocess code re-introduces every problem
+   subprocess side."** No, it doesn't. Use the
+   `register_compute_kernel` + `run_compute_kernel` escalate ops
+   to dispatch through the host's `VulkanComputeKernel`. The
+   SPIR-V reflection / descriptor-set layout / pipeline cache
+   machinery is a single host-side win; mirroring it in
+   subprocess code re-introduces every problem
    `core::rhi::ComputeKernelDescriptor` solved once.
 
 3. **"My adapter is a GPU adapter so it can't use surface-share —
@@ -825,9 +827,7 @@ Read these, in this order, when authoring:
 | [`streamlib-adapter-opengl`](../../libs/streamlib-adapter-opengl/) | Composing on Vulkan via EGL DMA-BUF import; framework-binding shim in its own module. |
 | [`streamlib-adapter-cpu-readback`](../../libs/streamlib-adapter-cpu-readback/) | Bridge / escalate-trigger pattern. Multi-plane staging buffers. |
 | [`streamlib-adapter-cuda`](../../libs/streamlib-adapter-cuda/) | OPAQUE_FD handle type. DLPack-flavored framework-native handle (no `VulkanWritable`-style marker). |
-
-`-skia` (#513) lands on the same shape; check its source once it
-ships.
+| [`streamlib-adapter-skia`](../../libs/streamlib-adapter-skia/) | Composes on the Vulkan adapter (Skia Vulkan backend); also offers a GL backend that composes on the OpenGL adapter. |
 
 ## Related
 
@@ -840,7 +840,7 @@ ships.
   trade-off.
 - [`compute-kernel.md`](compute-kernel.md) — host's
   `VulkanComputeKernel`, the dispatch primitive any adapter that
-  needs compute reaches through (post-#550 via escalate IPC from
+  needs compute reaches through (via escalate IPC from
   subprocess).
 - [`.claude/workflows/polyglot.md`](../../.claude/workflows/polyglot.md)
   — polyglot rules including the import-side carve-out.

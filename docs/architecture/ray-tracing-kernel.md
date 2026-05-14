@@ -191,8 +191,10 @@ binding declaration, the kernel:
   actually uses libraries.
 - **Subprocess support.** The kernel is host-only; subprocess
   customers (Python / Deno cdylibs) escalate via IPC, mirroring the
-  compute / graphics escalate ops. The follow-up issue captures
-  the IPC surface.
+  compute / graphics escalate ops (the
+  `register_acceleration_structure_blas` / `_tlas`,
+  `register_ray_tracing_kernel`, and `run_ray_tracing_kernel`
+  request shapes carry the dispatch from cdylib to host).
 
 ## Why this shape
 
@@ -203,6 +205,3 @@ backed by SBT machinery the engine owns. The kernel surfaces only the
 slot-based binding API and the four-region trace dispatch; SBT
 alignment, handle fetch, and pipeline build live below the public
 API.
-
-The relevant trade-off discussion lives on issue
-[#610](https://github.com/tatolab/streamlib/issues/610).

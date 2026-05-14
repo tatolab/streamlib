@@ -2,48 +2,20 @@
 
 > **Living document.** Validate, update, and critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation):
-> use Opus, show your work, preserve disagreed-with content with
-> reasoning rather than silently deleting. Treat this academically,
-> not dogmatically.
->
-> **2026-04-28 — Architectural correction.** Earlier revisions of
-> this doc recommended a "hybrid" shape: GPU adapters (Vulkan /
-> OpenGL / Skia) ride the surface-share seam, cpu-readback rides
-> escalate IPC. That bucketing was wrong-shaped. **Every surface
-> adapter rides the same single-pattern shape**: pre-registered
-> resources via surface-share + `consumer-rhi` import, plus thin
-> per-acquire IPC triggers when the host has work to do. See
-> [Single-pattern principle](../../docs/architecture/subprocess-rhi-parity.md#single-pattern-principle-2026-04-28)
-> in `subprocess-rhi-parity.md` and the cpu-readback rewire (Path E)
-> issue under milestone *Surface Adapter Architecture*. The
-> recommendation section below is preserved with crossed-out content
-> per the markdown-editing rules so future readers can see the
-> dead-end and why.
+> use Opus, show your work, treat this academically, not dogmatically.
 
-## Question
+## Overview
 
-How does a subprocess customer (Python, Deno, future others) obtain
-a usable `VulkanContext` / `OpenGlContext` / `SkiaContext` /
-`CpuReadbackContext` instance against StreamLib's host-side surface
-adapters, without re-implementing host RHI patterns and without
-breaking the [`LimitedAccess` / `FullAccess` capability
-typestate](../../libs/streamlib-engine/src/core/context/)?
+A subprocess customer (Python, Deno) obtains a usable
+`VulkanContext` / `OpenGlContext` / `SkiaContext` /
+`CpuReadbackContext` / `CudaContext` instance against StreamLib's
+host-side surface adapters via two IPC seams plus the
+`streamlib-consumer-rhi` carve-out — without re-implementing host
+RHI patterns and without breaking the `LimitedAccess` /
+`FullAccess` capability typestate split in
+`libs/streamlib-engine/src/core/context/`.
 
-## Context
-
-After the Surface Adapter Architecture milestone shipped four
-adapter crates — `streamlib-adapter-vulkan` (#511),
-`streamlib-adapter-opengl` (#512), `streamlib-adapter-skia` (#513,
-host crate still in flight), `streamlib-adapter-cpu-readback`
-(#514) — the customer-facing trait is in place but no subprocess
-runtime constructs a usable instance. The polyglot wrappers in
-`streamlib-python` and `streamlib-deno` carry only Protocol /
-interface type stubs.
-
-The bar this design must clear (paraphrased from the PR #527 review
-of #514): *"the milestone is complete only if a downstream issue
-can use the adapter from day one."* That means a Python customer
-writing
+A Python customer writing
 
 ```python
 with skia_adapter.acquire_write(surface) as guard:
@@ -51,14 +23,13 @@ with skia_adapter.acquire_write(surface) as guard:
     # draw stuff
 ```
 
-must work the same way it works in-process Rust — same trait shape,
+works the same way it works in-process Rust — same trait shape,
 same resource semantics, same scope-bound synchronization.
 
-## What's already shipped (so the doc isn't speculating)
+## The two IPC seams
 
-Two IPC seams already exist in tree, both wired through
-`GpuContextLimitedAccess` so subprocess code never crosses into
-`FullAccess`:
+Both seams are wired through `GpuContextLimitedAccess` so subprocess
+code never crosses into `FullAccess`:
 
 ### Seam 1 — surface-share registry
 
@@ -91,17 +62,13 @@ typed by JTD schemas at
 `packages/escalate/schemas/escalate_{request,response}.yaml` (the
 `@tatolab/escalate` peer protocol package).
 Length-prefixed JSON request/response over the subprocess's
-stdin/stdout pipes, with discriminator-tagged op enum:
-
-```rust
-pub enum EscalateRequest {
-    AcquireImage(EscalateRequestAcquireImage),
-    AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer),
-    AcquireTexture(EscalateRequestAcquireTexture),
-    Log(EscalateRequestLog),
-    ReleaseHandle(EscalateRequestReleaseHandle),
-}
-```
+stdin/stdout pipes, with a discriminator-tagged op enum covering
+the surface-acquire ops (`AcquireImage`, `AcquirePixelBuffer`,
+`AcquireTexture`), `Log`, `ReleaseHandle`, the cpu-readback
+trigger (`RunCpuReadbackCopy`, `TryRunCpuReadbackCopy`), the
+compute / graphics / ray-tracing register + run ops, and
+`RegisterAccelerationStructureBlas` / `Tlas`. See
+`escalate_request.yaml` for the canonical list.
 
 Each request carries a UUID `request_id`; responses echo it.
 Adding a new op is a schema change → `cargo xtask generate-schemas`
@@ -109,99 +76,37 @@ Adding a new op is a schema change → `cargo xtask generate-schemas`
 holds resources alive on behalf of the subprocess via
 `EscalateHandleRegistry`; subprocess crash drops them.
 
-The current acquire-style ops (`AcquireImage`, etc.) are how the
+The acquire-style ops (`AcquireImage`, etc.) are how the
 surface-share registry gets populated in the first place — host
 allocates a backing, registers it under a UUID, returns the UUID
 to the subprocess, which then `check_out`s the FDs from
 surface-share.
 
-## Three architectural directions considered
+## The single-pattern shape
 
-### Option A — escalate IPC op per adapter
+Every surface adapter rides the same shape, per the engine-model
+principle in CLAUDE.md ("the RHI is the single gateway"):
+pre-register resources via surface-share, import them through
+`consumer-rhi`, run the adapter generic over
+`D: VulkanRhiDevice`. Per-acquire IPC, when host work is needed
+(cpu-readback's copy, escalated compute / graphics / ray-tracing
+dispatch), is a thin trigger that publishes a timeline value the
+consumer waits on through the carve-out — not a fresh FD-passing
+payload.
 
-Subprocess JSON-RPCs the host on every `acquire_*` call. Host
-runs the adapter's `acquire_*` against its in-tree implementation,
-blocks on the per-surface timeline, and returns the framework-native
-handle metadata (or, for cpu-readback, a freshly-populated staging
-FD).
-
-- **Pros** — All synchronization, layout transitions, and
-  adapter-specific state stays on the host. Bug fixes land once.
-  Polyglot SDKs stay tiny. Host's queue mutex / fence pool /
-  submit instrumentation cover every dispatch.
-- **Cons** — IPC roundtrip latency on every acquire. Per-adapter
-  JTD schema regen + 3-runtime rebuild. The escalate seam wasn't
-  designed for hot-path acquire/release traffic.
-
-### Option B — surface-share registry extension
-
-Extend the surface-share registry so a registered surface also
-carries an "adapter handle" entry. Subprocess SDK looks up the
-entry and constructs the right `*Context` from the looked-up data.
-cpu-readback's staging buffer becomes a separately-registered
-surface in the same registry; vulkan/opengl/skia just use the
-existing FD.
-
-- **Pros** — Reuses the `polyglot-dma-buf-consumer` plumbing.
-  One IPC seam, not per-op. No per-acquire roundtrip for GPU
-  adapters.
-- **Cons** — cpu-readback semantically wants a host-driven copy
-  on every `acquire_read` (`vkCmdCopyImageToBuffer`), not a
-  one-shot FD handoff. Forcing it through the registry means
-  re-registering on every acquire — that's an escalate op in
-  registry clothing.
-
-### Option C — hybrid
-
-GPU adapters (Vulkan, OpenGL, Skia) ride the surface-share
-registry path: host pre-allocates the backing with the right
-DRM modifier (NVIDIA EGL trap solved once, on host); subprocess
-does a one-shot FD lookup and wraps it as the framework-native
-handle. cpu-readback rides the escalate-IPC path: each
-`acquire_read` is a JSON-RPC ping that triggers the host's
-`vkCmdCopyImageToBuffer`, after which the subprocess mmaps the
-freshly-populated staging FD.
-
-- **Pros** — Each adapter takes the seam that matches its
-  data-flow shape. No per-acquire IPC roundtrip for GPU adapters.
-  Host-driven copy semantics preserved for cpu-readback.
-- **Cons** — Two integration paths to understand instead of one.
-  Future adapter authors must consciously pick which seam fits.
-
-## Recommendation
-
-> ~~**Option C — hybrid.** GPU adapters ride surface-share;
-> cpu-readback rides escalate IPC.~~ — **Superseded 2026-04-28.**
-> The hybrid framing was an architectural drift: it conflated
-> "host has per-acquire work" (true for cpu-readback's copy) with
-> "host must per-acquire-pass FDs back to the subprocess" (false —
-> staging buffers + timeline can be pre-registered through the
-> same surface-share seam vulkan/opengl use). Earlier reviews
-> didn't separate those concerns.
->
-> The actual rule, per the engine-model principle in CLAUDE.md
-> ("the RHI is the single gateway"): **every surface adapter
-> rides the same shape**. Pre-register resources via surface-share,
-> import them through `consumer-rhi`, run the adapter generic over
-> `D: VulkanRhiDevice`. Per-acquire IPC, when host work is needed
-> (cpu-readback's copy, escalated compute via #550), is a thin
-> trigger that publishes a timeline value the consumer waits on
-> through the carve-out — not a fresh FD-passing payload.
->
-> Concretely:
+Concretely:
 
 | Adapter | Pattern (single shape) |
 |---|---|
 | `streamlib-adapter-vulkan` | Generic over `D: VulkanRhiDevice`. Host pre-registers `VkImage` + timeline via surface-share; subprocess imports through `ConsumerVulkanTexture` + `ConsumerVulkanTimelineSemaphore`. Per-acquire is layout-transition + timeline wait, no IPC. |
 | `streamlib-adapter-opengl` | Same shape; subprocess imports the `VkImage` and binds it as a `GL_TEXTURE_2D` via EGL DMA-BUF import. |
-| `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path. |
+| `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path (and also offers a GL backend that composes on the opengl adapter). |
 | `streamlib-adapter-cpu-readback` | Same shape: host pre-registers a HOST_VISIBLE staging `VkBuffer` + a timeline semaphore via surface-share; subprocess imports through `ConsumerVulkanBuffer` + `ConsumerVulkanTimelineSemaphore`. Per-acquire is a thin `RunCpuReadbackCopy(surface_id)` IPC that triggers the host's `vkCmdCopyImageToBuffer` and returns the timeline value to wait on. Subprocess waits on the imported timeline through the carve-out, then mmaps the pre-imported staging buffer. |
-| `streamlib-adapter-cuda` (#587 / #588) | Same shape with one twist on the FD wire: host pre-registers a HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` (`HostVulkanBuffer::new_opaque_fd_export`) + an OPAQUE_FD-exportable timeline semaphore via surface-share; subprocess imports through `ConsumerVulkanBuffer::from_opaque_fd` + `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`, then maps the same FDs into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` + `cudaImportExternalSemaphore(TimelineSemaphoreFd)`. The OPAQUE_FD handle type (rather than DMA-BUF) is forced by the DLPack zero-copy contract: PyTorch / JAX / NumPy `from_dlpack` consume `DLTensor.data` as a flat `void*`, and only `cudaExternalMemoryGetMappedBuffer` (which requires the source memory to be a `VkBuffer` exported as OPAQUE_FD) yields the flat pointer; `cudaExternalMemoryGetMappedMipmappedArray` returns an opaque texture-array handle that has no DLPack flavor. Per-acquire is timeline wait + (optionally, when the host pipeline produces frames into a tiled `VkImage`) a host-pipeline `vkCmdCopyImageToBuffer` step that signals the next timeline value — no per-acquire IPC, no CUDA bridge trait. |
+| `streamlib-adapter-cuda` | Same shape with one twist on the FD wire: host pre-registers a HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` (`HostVulkanBuffer::new_opaque_fd_export`) + an OPAQUE_FD-exportable timeline semaphore via surface-share; subprocess imports through `ConsumerVulkanBuffer::from_opaque_fd` + `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`, then maps the same FDs into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` + `cudaImportExternalSemaphore(TimelineSemaphoreFd)`. The OPAQUE_FD handle type (rather than DMA-BUF) is forced by the DLPack zero-copy contract: PyTorch / JAX / NumPy `from_dlpack` consume `DLTensor.data` as a flat `void*`, and only `cudaExternalMemoryGetMappedBuffer` (which requires the source memory to be a `VkBuffer` exported as OPAQUE_FD) yields the flat pointer; `cudaExternalMemoryGetMappedMipmappedArray` returns an opaque texture-array handle that has no DLPack flavor. Per-acquire is timeline wait + (optionally, when the host pipeline produces frames into a tiled `VkImage`) a host-pipeline `vkCmdCopyImageToBuffer` step that signals the next timeline value — no per-acquire IPC, no CUDA bridge trait. |
 
-All five adapters (vulkan, opengl, cpu-readback after #562, cuda
-after #588; skia once #513 lands) follow this shape — no outliers.
+All adapters follow this shape — no outliers.
 
-## Customer-facing surface — unchanged
+## Customer-facing surface
 
 The seam choice is **internal to the adapter implementation**.
 From the customer's perspective the API is identical regardless
@@ -229,24 +134,24 @@ with adapter.acquire_write(surface) as guard:
 
 The customer never sees DMA-BUF FDs, DRM modifiers, timeline
 semaphores, queue family ownership transitions, or escalate
-request IDs. That's the whole point of the adapter pattern, and
-this design preserves it.
+request IDs. That's the whole point of the adapter pattern.
 
 ## Layered architecture
 
 ```
 Customer code (Rust processor / Python script / Deno script)
-  └── adapter.acquire_write(surface)              ← public API, unchanged
+  └── adapter.acquire_write(surface)              ← public API, uniform
       └── streamlib-{python,deno} adapter Protocol ← type stub
           └── streamlib-{python,deno}-native FFI   ← runtime impl
-              └── streamlib-adapter-* (vulkan, opengl, skia, cpu-readback)
+              └── streamlib-adapter-* (vulkan, opengl, skia,
+                                       cpu-readback, cuda)
                   ↳ generic over D: VulkanRhiDevice
                   ↳ pre-registered resources via surface-share
                   ↳ imports via streamlib-consumer-rhi (Consumer*)
                   ↳ per-acquire: layout transitions + timeline waits;
                     thin escalate-IPC trigger when host work needed
-                    (cpu-readback's vkCmdCopyImageToBuffer, escalated
-                    compute via #550)
+                    (cpu-readback's vkCmdCopyImageToBuffer; escalated
+                    compute / graphics / ray-tracing dispatch)
                       └── host RHI                ← FullAccess, only here
 ```
 
@@ -286,13 +191,14 @@ address space.
 ### Escalate-IPC path (cpu-readback)
 
 The crossing **is** the IPC wire. Subprocess holds
-`LimitedAccess`, sends a JSON-RPC request with a `surface_id`
-and `mode=read`. Host receives it on a worker holding
-`FullAccess`, runs `vkCmdCopyImageToBuffer` on the host VkDevice
-+ queue (queue mutex, fence pool, submit instrumentation all
-covered), exports the resulting staging-buffer FD via
-surface-share, returns the FD reference. Subprocess mmaps and
-reads bytes.
+`LimitedAccess`, sends a `run_cpu_readback_copy` request with a
+`surface_id`. Host receives it on a worker holding `FullAccess`,
+runs `vkCmdCopyImageToBuffer` on the host VkDevice + queue
+(queue mutex, fence pool, submit instrumentation all covered)
+into the staging buffer that was pre-registered via surface-share
+at setup time, and returns the timeline value to wait on. The
+subprocess waits on the imported timeline through the carve-out,
+then reads the pre-imported staging buffer it already mmapped.
 
 There is no in-process `LimitedAccess → FullAccess` upgrade ever.
 The typestate split is enforced by the IPC boundary itself, the
@@ -335,27 +241,10 @@ this design — the working hypothesis may not fit:
    acquires (one escalate op covering N frames) before reaching
    for shared memory or a third seam.
 
-## Open questions for the user
-
-- **Hot-path cpu-readback.** If a future scenario reads back
-  every frame at 60fps, is per-acquire JSON-RPC acceptable, or
-  do we want a "subscribe to readbacks" escalate op that
-  populates a shared-memory ring? Filing as a follow-up if/when
-  it becomes load-bearing; not blocking the initial
-  cpu-readback runtime.
-- **Skia (#513) is still in flight.** This doc specifies the
-  seam Skia should ride (surface-share, transitively via
-  Vulkan). If #513's host-side implementation lands with a
-  different shape, this section needs updating. Marked as a
-  trip-wire above.
-
 ## Runtime wiring — `install_setup_hook`
 
-> Added 2026-04-27 (#529). All adapter integrations register their
-> host-side state through this single API.
-
 Every surface adapter's host-side wiring runs through
-[`StreamRuntime::install_setup_hook`][hook]. The hook fires exactly
+[`Runner::install_setup_hook`][hook]. The hook fires exactly
 once per `start()`, after `GpuContext::init_for_platform_sync` has
 created the live `GpuContext` but before any processor's `setup()`
 runs — the window where adapter bridges and pre-allocated host
@@ -370,10 +259,10 @@ The shape of what the hook does varies by seam:
   `gpu.acquire_render_target_dma_buf_image` for render-target-capable
   DMA-BUF), registers it in surface-share with a known UUID via
   `gpu.surface_store().register_texture(uuid, &texture, timeline,
-  current_image_layout)` (4-arg signature post-#633: `timeline` is
-  an `Option<&HostVulkanTimelineSemaphore>` for cross-process sync,
+  current_image_layout)` — `timeline` is an
+  `Option<&HostVulkanTimelineSemaphore>` for cross-process sync,
   `current_image_layout` is the producer's post-write `VulkanLayout`
-  consumed by Path 2 QFOT acquire), and stashes any per-runtime
+  consumed by Path 2 QFOT acquire — and stashes any per-runtime
   sync state the adapter needs (timeline semaphores, DRM modifier
   records). When the same surface flows downstream to an
   **in-process** Rust consumer on the hot path, the hook also calls
@@ -387,9 +276,9 @@ The shape of what the hook does varies by seam:
   implementation on the GpuContext via
   `gpu.set_cpu_readback_bridge(...)`. The bridge is the dispatch
   target the escalate handler reaches when a subprocess sends
-  `acquire_cpu_readback`.
-- **Surface-share seam with OPAQUE_FD** (cuda — #588). The hook
-  allocates a HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` via
+  `run_cpu_readback_copy`.
+- **Surface-share seam with OPAQUE_FD** (cuda). The hook allocates a
+  HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` via
   `HostVulkanBuffer::new_opaque_fd_export` (rather than
   `acquire_render_target_dma_buf_image`) plus an OPAQUE_FD-exportable
   timeline via `HostVulkanTimelineSemaphore::new_exportable`,
@@ -404,38 +293,36 @@ The shape of what the hook does varies by seam:
   pipeline step authored by whoever wired the runtime — not by the
   adapter.
 
+The compute / graphics / ray-tracing kernel bridges follow the same
+shape (`gpu.set_compute_kernel_bridge`, `set_graphics_kernel_bridge`,
+`set_ray_tracing_kernel_bridge`) for adapters that escalate kernel
+dispatch through the host RHI.
+
 Reference implementation:
 `examples/polyglot-cpu-readback-blur/src/main.rs`. That example shows
 the cpu-readback case (which exercises the bridge path); the GPU
 adapters use the same hook but skip the `set_*_bridge` step.
 
-The hook is the canonical opt-in registration point. Future adapters
-that need pre-start GpuContext access should use it; adapters that
-need per-acquire host work should also expose a `set_*_bridge` setter
-on `GpuContext` mirroring `set_cpu_readback_bridge`. Application
+The hook is the canonical opt-in registration point. Adapters that
+need pre-start GpuContext access use it; adapters that need
+per-acquire host work also expose a `set_*_bridge` setter on
+`GpuContext` mirroring `set_cpu_readback_bridge`. Application
 authors call `install_setup_hook` exactly once per adapter they want
 to expose to subprocesses.
 
 ### Dual-registration for in-process consumers
 
-> Added 2026-05-03 (#614). Originally framed as a silent-failure
-> bug from the #484 debugging session. Path 2 (`gpu_context.rs:689-705`)
-> resolves surface_store-only registrations now (#633), so the
-> failure mode no longer reproduces — but the dual-registration
-> rule survives with a different rationale: **performance**.
-
 `gpu.surface_store().register_texture(...)` publishes the surface
 to the cross-process surface-share daemon. It does NOT populate
 `GpuContext`'s in-process `texture_cache`. Same-process consumers
-calling `gpu.resolve_videoframe_registration(&frame)` therefore
-miss Path 1 (`texture_cache` HashMap lookup) and fall through to
-Path 2 (`surface_store.lookup_texture` + DMA-BUF FD import + QFOT
-acquire submit per call). Path 2 explicitly does NOT cache its
-synthesized `TextureRegistration` (`gpu_context.rs:658-660`:
-*"Synthesized registration is not cached — Path 2 reimports
-per-call by design"*) — so an in-process consumer reading the
-same surface every frame would pay a fresh import + QFOT acquire
-on every render.
+calling `gpu.resolve_texture_registration_by_surface_id(...)`
+therefore miss Path 1 (`texture_cache` HashMap lookup) and fall
+through to Path 2 (`surface_store.lookup_texture` + DMA-BUF FD
+import + QFOT acquire submit per call). Path 2 explicitly does NOT
+cache its synthesized `TextureRegistration` — it reimports per-call
+by design — so an in-process consumer reading the same surface
+every frame would pay a fresh import + QFOT acquire on every
+render.
 
 For hot-path in-process consumers (e.g. `LinuxDisplayProcessor`,
 the `BlendingCompositor`, video encoders), populate Path 1 by
@@ -517,11 +404,7 @@ calls.
 
 ### Trade-off — explicit registration vs. Cargo-feature ambient availability
 
-The pre-#529 mental model was implicit: a Cargo feature like
-`streamlib/adapter-cpu-readback` would compile the adapter in and
-the runtime would discover it ambiently (via `inventory` registration
-or similar). That's not how this works anymore. With
-`install_setup_hook` the model is:
+With `install_setup_hook` the model is:
 
 1. Add the adapter crate as a Cargo dep.
 2. Call `runtime.install_setup_hook(...)` exactly once at app
@@ -529,12 +412,12 @@ or similar). That's not how this works anymore. With
    host surfaces, register in surface-share, set bridge if needed).
 
 The cost: one extra line of wiring per adapter at the application's
-`main.rs`. Compile-time presence is no longer enough — you have to
+`main.rs`. Compile-time presence is not enough — you have to
 explicitly hand the adapter the resources it manages. Embedded /
 headless deployments that just want "everything that compiled in to
 be available" pay a real, if small, ergonomic cost here.
 
-What we get for that cost (and why it was the right call):
+What that cost buys:
 
 - **Explicit and greppable.** `git grep install_setup_hook` tells
   you exactly which adapters this runtime exposes to subprocesses
@@ -544,7 +427,7 @@ What we get for that cost (and why it was the right call):
   application owns when the adapter is destroyed. A Cargo feature
   can't express lifetime — it'd either leak per-process state for
   the whole binary's life, or hand-roll a separate teardown path.
-- **Per-runtime configuration.** Multiple `StreamRuntime` instances
+- **Per-runtime configuration.** Multiple `Runner` instances
   in the same process can wire different adapter sets, or wire the
   same adapter against different surface dimensions / DRM modifiers
   / quality knobs. Cargo features are per-binary; this is per-runtime.
@@ -559,36 +442,13 @@ What we get for that cost (and why it was the right call):
   are a compile error. A feature-flag-driven registration would
   funnel everything through a generic registry and lose that.
 
-When this trade-off becomes painful and what to do about it: if
-applications start writing the same five-line adapter setup
-boilerplate over and over, the right answer is a per-adapter
-`install_default` convenience helper (e.g.
+A per-adapter `install_default` convenience helper (e.g.
 `streamlib_adapter_cpu_readback::install_default(&runtime, surface_size)`)
-that internally calls `install_setup_hook` with sensible defaults.
-The convenience helper is opt-in and additive; the underlying
-explicit API stays as the escape hatch. Don't replace explicit
+that internally calls `install_setup_hook` with sensible defaults
+is a clean opt-in escape from the boilerplate; the underlying
+explicit API stays as the explicit form. Don't replace explicit
 registration with implicit feature-flag discovery — the auditability
 property is load-bearing.
-
-## Implementation issues
-
-The subprocess runtimes for all three already-shipped adapters flow
-through the single-pattern shape post-#560 / #562:
-
-- `#530` — `feat(adapter-opengl): subprocess OpenGlContext
-  runtime + scenario binary` — single-pattern shape, lives in
-  consumer-rhi.
-- `#531` — `feat(adapter-vulkan): subprocess VulkanContext
-  runtime + scenario binary` — single-pattern shape, lives in
-  consumer-rhi.
-- `#562` — `refactor(adapter-cpu-readback): rewire to ride
-  consumer-rhi import path (Path E)` — folds cpu-readback under
-  the single-pattern shape. Replaces the per-acquire FD-passing
-  framing in the now-superseded #529.
-
-`#513` (Skia host crate) is not yet implemented; its subprocess
-runtime issue should be filed once #513 lands and inherits this
-doc's recommendation.
 
 ## Related
 
@@ -597,6 +457,10 @@ doc's recommendation.
 - `docs/architecture/adapter-authoring.md` — implementation
   contract for new surface adapters (checklist, crate skeleton,
   trip-wires, hypothetical walkthrough)
+- `docs/architecture/subprocess-rhi-parity.md` — how the
+  subprocess obtains a usable RHI surface beyond the import-side
+  carve-out (the integration-shape view of how the carve-out
+  works alongside this doc's adapter-runtime-shape view)
 - `.claude/workflows/polyglot.md` — the polyglot rule, including
   the import-side carve-out
 - `.claude/workflows/adapter.md` — auto-loaded by `/amos:next` for
@@ -606,9 +470,3 @@ doc's recommendation.
   host
 - `docs/learnings/nvidia-dual-vulkan-device-crash.md` — why
   subprocess Vulkan code stays consumer-only
-- `#525` — separate research on subprocess-side RHI pattern
-  parity (escalate vs per-language). Orthogonal to this doc:
-  #525 is about *implementation parity* (does the subprocess
-  reimplement RHI patterns), this doc is about *integration
-  shape* (how does the subprocess obtain a usable adapter
-  context).

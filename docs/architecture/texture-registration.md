@@ -2,14 +2,6 @@
 
 > **Living document.** Validate, update, critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
-> Reflects code state as of 2026-05-02 (PR #632, issue #616).
-> Cross-process section + scope clarification revised 2026-05-02
-> (issue #634) based on Vulkan spec, Khronos guidance, and
-> sandboxed-host precedent research.
-> Cross-process limitation section superseded 2026-05-03 (issue
-> #633) — per-surface IPC + per-frame Videoframe + QFOT acquire
-> machinery now ships; original "barrier defensively from UNDEFINED"
-> guidance no longer applies. See [Cross-process coordination](#cross-process-coordination-633).
 
 ## What this is
 
@@ -25,39 +17,29 @@ to read/write across the surface_id handoff:
   image layout. Producers update on transitions; consumers read for
   barrier source layouts.
 
-Future additive fields go on this record (see [What goes in / what
-stays out](#what-goes-in--what-stays-out) below). The shape mirrors
-the per-surface state pattern surface adapters already use
-(`streamlib-adapter-vulkan::SurfaceState`,
-`streamlib-adapter-cuda::SurfaceState`,
-`streamlib-adapter-cpu-readback::SurfaceState`) — `TextureRegistration`
-is the same shape lifted from adapter-scope to engine-wide scope.
+Additive fields go on this record (see [What goes in / what stays
+out](#what-goes-in--what-stays-out) below). The shape mirrors the
+per-surface state pattern surface adapters already use (every
+in-tree adapter — vulkan, opengl, cuda, cpu-readback — carries its
+own adapter-scope `SurfaceState<P>`) — `TextureRegistration` is the
+same shape lifted from adapter-scope to engine-wide scope.
 
 ## Why it exists
 
-Before `TextureRegistration` (pre-#632), `GpuContext::texture_cache`
-was `HashMap<String, Texture>` — a thin lookup with no
-lifecycle metadata. Per-surface state lived in two disjoint places:
-
-- Adapter-scoped `Registry<SurfaceState>` per adapter — visible only
-  to adapter code.
-- Implicit conventions encoded in producer/consumer code — invisible
-  to anyone reading just the engine.
-
-The implicit-convention path broke when a new producer (the OpenGL
-adapter, in #484) shipped an output texture whose Vulkan layout
-didn't match the convention display assumed (`SHADER_READ_ONLY_OPTIMAL`
-from camera). Display's descriptor binding then claimed a layout that
-didn't match reality. NVIDIA tolerated the mismatch; AMD/Intel
-behavior was unverified; Vulkan validation layers warned. See #616
-for the full diagnosis.
-
 The engine-model fix (per
 [CLAUDE.md "Engine-wide bugs get fixed at the engine
-layer"](../../CLAUDE.md#core-operating-principles--read-first)) was to
-make the handoff contract **explicit and typed at the engine
-layer**, not patched at the consumer that surfaced the symptom. That's
-what `TextureRegistration` is.
+layer"](../../CLAUDE.md#core-operating-principles--read-first)) makes
+the handoff contract between producers and consumers **explicit and
+typed at the engine layer**. The alternative — implicit conventions
+encoded in producer/consumer code — breaks the moment a new producer
+ships a texture in a layout the consumer doesn't expect (the
+descriptor binding claims a layout that doesn't match reality;
+NVIDIA tolerates the mismatch silently, Vulkan validation layers
+warn). Adapter-scoped `Registry<SurfaceState>` records are visible
+only to adapter code, so they can't carry handoff state for
+disjoint producers and consumers that go through `texture_cache`.
+`TextureRegistration` is the engine-scope record that closes that
+gap.
 
 ## Scope: this record vs. adapter-internal `SurfaceState<P>`
 
@@ -71,7 +53,7 @@ for different consumers:
 
 | Scope | Record | What it carries | Who reads it |
 |---|---|---|---|
-| Engine-wide | `TextureRegistration` | Same-process handoff state for disjoint producers/consumers (camera → display, OpenGL adapter → display): texture handle, last-known layout. | In-tree pipeline code via `resolve_videoframe_registration`. |
+| Engine-wide | `TextureRegistration` | Same-process handoff state for disjoint producers/consumers (camera → display, OpenGL adapter → display): texture handle, last-known layout. | In-tree pipeline code via `resolve_texture_registration_by_surface_id`. |
 | Adapter-internal | `SurfaceState<P>` | Adapter's acquire/release state machine: `read_holders`, `write_held`, timeline values, framework-specific handles (e.g. EGL image, GL texture id, CUDA external memory mapping). | Only the adapter's own `acquire_*` / `release_*` paths. |
 
 This mirrors Unreal Engine 5's deliberate scope split between
@@ -96,14 +78,14 @@ to prevent.
 
 ```
 producer:                  consumer:
-  register_texture_with_      resolve_videoframe_
-    layout(id, tex, L)          registration(frame)
+  register_texture_with_      resolve_texture_registration_
+    layout(id, tex, L)          by_surface_id(...)
        │                            │
        ▼                            ▼
   ┌─────────────────────────────────────────┐
   │ GpuContext::texture_cache               │
   │   HashMap<surface_id, Arc<TexReg>>      │
-  │     ├── texture: Texture          │
+  │     ├── texture: Texture                │
   │     └── current_layout: AtomicI32       │
   └─────────────────────────────────────────┘
        ▲                            │
@@ -132,7 +114,7 @@ A field belongs in `TextureRegistration` when **all three** are true:
    per-frame data.
 3. Both producers and consumers run on the same in-process address
    space, OR the cross-process IPC layer round-trips the field
-   (see [Cross-process limitation](#cross-process-limitation)).
+   (see [Cross-process coordination](#cross-process-coordination)).
 
 Examples that fit:
 
@@ -154,27 +136,28 @@ Examples that fit:
   handle). Stays in the adapter's own `SurfaceState`. Engine doesn't
   need to see it; other consumers don't either.
 - ✗ **Per-frame transient state** (the timestamp of *this* frame, the
-  encoder's `is_keyframe` bit, etc.). These belong on the `Videoframe`
+  encoder's `is_keyframe` bit, etc.). These belong on the `VideoFrame`
   IPC message, not on the surface registration. The registration
   outlives any single frame.
 - ✗ **RDG-style declared-usage hints** ("I'll read this as a SAMPLED_READ
-  in pass N+1"). That's a different layer entirely — see
-  [Boundary with RDG](#boundary-with-rdg-631) below. Adding declared
-  usage here without the graph compiler to interpret it is just dead
-  metadata.
+  in pass N+1"). Adding declared usage here without a graph compiler
+  to interpret it is just dead metadata that producers and consumers
+  can both lie about.
 - ✗ **Cross-process-only state without a same-process consumer.** Use
   the surface-share daemon's own state or extend its IPC schema. The
   `texture_cache` is for in-process consumers reaching textures via
-  `resolve_videoframe_registration` Path 1.
+  `resolve_texture_registration_by_surface_id` Path 1.
 
 When you find yourself wanting to add a field that doesn't fit cleanly,
 **stop and ask**:
 
 - "Is this really per-surface, or is it per-frame?" → if per-frame, use
-  `Videoframe` IPC fields.
+  `VideoFrame` IPC fields.
 - "Does the engine need to see this, or only the adapter?" → if only
   the adapter, keep it in `SurfaceState`.
-- "Am I tracking declared usage?" → if so, that's RDG territory (#631).
+- "Am I tracking declared usage?" → if so, that's automatic-barrier-
+  inference territory; it lives in a layer above this one, not on
+  `TextureRegistration` itself.
 
 ## Producer rules
 
@@ -235,13 +218,18 @@ When you find yourself wanting to add a field that doesn't fit cleanly,
 
 1. **Resolve the registration, not just the texture.**
    ```rust
-   let reg = gpu.resolve_videoframe_registration(&frame)?;
+   let reg = gpu.resolve_texture_registration_by_surface_id(
+       surface_id,
+       texture_layout,
+       width,
+       height,
+   )?;
    let texture = reg.texture();
    let current = reg.current_layout();
    ```
-   `resolve_videoframe_texture` is back-compat for callers that don't
-   need the metadata — but if you're issuing a barrier, use the
-   registration form.
+   `resolve_texture_by_surface_id` is the thin projection for callers
+   that don't need the metadata — but if you're issuing a barrier, use
+   the registration form.
 
 2. **Barrier from `current_layout` to your target.**
    ```rust
@@ -280,12 +268,12 @@ that future agents would attempt without this doc.
    above — adapter-internal `SurfaceState<P>` lives at a different
    scope and does not violate this rule.)
 
-2. **Descriptor-side claims that don't match registration.** Display's
-   pre-#632 bug was claiming `SHADER_READ_ONLY_OPTIMAL` in a
-   `VkDescriptorImageInfo::imageLayout` field while the actual texture
-   was in `GENERAL`. The fix is to barrier first, not to claim
-   something else and hope the driver tolerates it. Never use the
-   descriptor's `imageLayout` field as a workaround for an unknown
+2. **Descriptor-side claims that don't match registration.** Claiming
+   `SHADER_READ_ONLY_OPTIMAL` in a `VkDescriptorImageInfo::imageLayout`
+   field while the actual texture is in `GENERAL` is the failure mode
+   this record exists to prevent. The fix is to barrier first, not to
+   claim something else and hope the driver tolerates it. Never use
+   the descriptor's `imageLayout` field as a workaround for an unknown
    source layout — barrier the texture into the layout you're going
    to claim.
 
@@ -301,40 +289,17 @@ that future agents would attempt without this doc.
    `TextureRegistration` itself.
 
 5. **"Just unconditionally barrier from `GENERAL`"** as a way to dodge
-   tracking. This was considered for #616 (Option A in the design
-   discussion) and rejected: it trades one validation warning class
-   for another (camera-display now warns instead of AvatarCharacter).
-   The right answer is typed tracking.
+   tracking. Trades one validation warning class for another. The
+   right answer is typed tracking.
 
 6. **Adding declared-usage hints onto `TextureRegistration`.** "I'll
-   need this as SAMPLED_READ next" is RDG-shape information; without
-   the graph compiler to read it, it's dead metadata that producers
-   and consumers can both lie about. See next section.
-
-## Boundary with RDG (#631)
-
-`TextureRegistration` is **typed state that consumers manually read +
-typed transitions consumers manually issue**. RDG-style automatic
-barrier inference would be **consumers declaratively name their
-access type and the engine derives transitions** from a graph of
-read/write edges. They are different layers:
-
-| Layer | What consumers do | What the engine does |
-|---|---|---|
-| Direct RHI (today) | Issue explicit `cmd_pipeline_barrier2` calls | Nothing |
-| `TextureRegistration` (this doc) | Read `current_layout`, issue barrier, update | Track typed state per surface_id |
-| RDG (#631 — future) | Declare access type via pass parameters | Build graph, derive barriers, schedule async-compute, alias memory |
-
-If you find yourself wanting consumers to declare "I want this as a
-SAMPLED_READ" *without* writing a barrier, that's an RDG-shape need.
-Don't bolt declared usage onto `TextureRegistration` — escalate to
-#631. The engine doesn't have a graph layer to interpret the
-declaration, so the field would be dead metadata that masks rather
-than solves the problem.
-
-The substrate `TextureRegistration` provides (typed per-surface state
-keyed by stable id) is exactly what an eventual RDG layer would build
-on top of — but RDG is a new layer above this one, not a replacement.
+   need this as SAMPLED_READ next" is automatic-barrier-inference-shape
+   information; without a graph compiler to read it, it's dead
+   metadata that producers and consumers can both lie about. The
+   substrate `TextureRegistration` provides (typed per-surface state
+   keyed by stable id) is the right shape for an eventual barrier-
+   inference layer to build on top of — not the place to bolt
+   declared-usage hints onto.
 
 ## Race model
 
@@ -357,33 +322,18 @@ writes. The Arc itself is `Send + Sync`. Consequences:
   coordinate out-of-band.
 
 The race model is good enough today because streamlib pipelines are
-predominantly single-consumer-per-frame. If a future pipeline genuinely
-needs multi-consumer coordination beyond what queue serialization
-provides, escalate to RDG (#631) — that's the layer where coordination
-is the engine's job, not the consumer's.
+predominantly single-consumer-per-frame. Multi-consumer coordination
+beyond what queue serialization provides would belong in an
+automatic-barrier-inference layer above this one, where coordination
+is the engine's job rather than the consumer's.
 
-## Cross-process coordination (#633)
-
-> ~~`TextureRegistration` solves the same-process handoff. **It does
-> not yet propagate to cross-process / cross-language consumers.**
-> Today, when a subprocess producer registers a texture via
-> `surface-share`, the host consumer's
-> `resolve_videoframe_registration` hits Path 2 which synthesizes a
-> fresh `Arc<TextureRegistration>` with `current_layout = UNDEFINED`.
-> The host consumer barriers from UNDEFINED → its target, which is
-> correct but conservative.~~ — **Superseded 2026-05-03** (issue
-> #633). Cross-process layout coordination now flows through three
-> coordinated layers; a fresh Path 2 import barriers from the
-> producer's published layout (with
-> `VK_EXT_external_memory_acquire_unmodified` chained when available)
-> instead of conservatively from UNDEFINED. The original "barrier
-> defensively from UNDEFINED" guidance no longer applies.
+## Cross-process coordination
 
 `TextureRegistration` is the same-process record. Cross-process
 producers and consumers coordinate layout via three layers, in
 priority order at consumer-side resolution:
 
-1. **Per-frame `Videoframe.texture_layout` (optional)** — for
+1. **Per-frame `VideoFrame.texture_layout` (optional)** — for
    producers that vary layout per frame. Carried on the IPC message
    itself; serialized as the raw `int32 VkImageLayout` enumerant;
    absent when the producer relies on the per-surface default.
@@ -393,10 +343,10 @@ priority order at consumer-side resolution:
    Carried in surface-share IPC `register` / `lookup` /
    `update_layout` messages.
 3. **Default `UNDEFINED`** — back-compat for surface-share daemons /
-   producers that haven't been updated yet; the consumer's acquire
+   producers that haven't published a layout; the consumer's acquire
    barrier short-circuits as a no-op when target is UNDEFINED.
 
-The host consumer's `GpuContext::resolve_videoframe_registration`
+The host consumer's `GpuContext::resolve_texture_registration_by_surface_id`
 Path 2 reads (1) when present, falls back to (2), and runs
 `HostVulkanDevice::acquire_from_foreign` with the resolved layout.
 The producer-side equivalent is `HostVulkanDevice::release_to_foreign`
@@ -425,16 +375,15 @@ camera→Path-2-display flow; Mesa iris/radeonsi follow the same
 convention).
 
 **The bridging fallback is structurally permanent on NVIDIA Linux,
-not interim.** Per the NVIDIA driver support list as of 2026-05-03
-(production 570.211.01 and developer betas 595.44 / 596.46),
-`VK_EXT_external_memory_acquire_unmodified` is not on the roadmap
-even though NVIDIA engineers contributed to the extension. NVIDIA
-exposes adjacent extensions (`VK_EXT_external_memory_dma_buf`,
+not interim.** To the best of our current knowledge,
+`VK_EXT_external_memory_acquire_unmodified` is not on NVIDIA's
+roadmap even though NVIDIA engineers contributed to the extension.
+NVIDIA exposes adjacent extensions (`VK_EXT_external_memory_dma_buf`,
 `VK_EXT_external_memory_host`) but not the acquire-unmodified one.
 Cross-process content preservation on NVIDIA therefore depends on
 the empirical DMA-BUF kernel-cache behavior, not the spec. Mesa is
 the eventual landing point for the QFOT-acquire path; NVIDIA
-consumers will continue to ride the bridging fallback indefinitely.
+consumers ride the bridging fallback indefinitely.
 
 ### Producer-side adoption is incremental
 
@@ -442,43 +391,14 @@ The producer-side QFOT release machinery
 (`HostVulkanDevice::release_to_foreign` and
 `VulkanSurfaceAdapter::release_to_foreign`) is in place; in-tree
 producers and cdylib FFI release paths adopt it as their
-cross-process correctness story requires (the bridging-fallback's
-empirical content preservation on NVIDIA covers the validated
-environment today). Adapter-cuda and -cpu-readback are out of scope
-by construction (CUDA imports use `cudaImportExternalMemory`
-ownership semantics; cpu-readback is buffer-only with no Vulkan
-layout). Adapter-opengl and -skia producer-side release wiring is
-deferred — the existing acquire-side QFOT fallback covers correctness
-on the validated environment, and proper producer-side release in
-those adapters requires architectural decisions about where their
-Vulkan device handle lives.
-
-> ~~The wire-format gap is mechanical, not architectural. Two
-> extension shapes are possible (and probably both belong long-term):
-> per-surface schema extension and per-frame `Videoframe` extension —
-> tracked as #633.~~ — Both extension shapes shipped with #633; the
-> "right shape is both" prediction proved correct.
-
-> ~~There's also a quieter constraint: cdylibs depend on
-> `streamlib-consumer-rhi`, NOT the full `streamlib`, so they can't
-> construct `TextureRegistration` directly (it lives in
-> `streamlib::core::context`). To give subprocess producers the
-> same typed contract, the registration record itself probably
-> needs to live in `consumer-rhi`. Separate ticket.~~ —
-> **Superseded 2026-05-02** (issue #634, closed without code
-> change). The speculation that subprocess producers need to
-> construct `TextureRegistration` themselves doesn't survive the
-> spec evidence: layouts across DMA-BUF imports into a second
-> `VkDevice` are independent state machines by Vulkan
-> construction, not stale mirrors of the host's record. The
-> architecturally correct cross-process work is the IPC schema
-> lift (#633), not a type relocation. See [Why no sandbox-side
-> mirror](#why-no-sandbox-side-mirror) below.
+cross-process correctness story requires. Adapter-cuda and
+-cpu-readback are out of scope by construction (CUDA imports use
+`cudaImportExternalMemory` ownership semantics; cpu-readback is
+buffer-only with no Vulkan layout).
 
 ### Why no sandbox-side mirror
 
-Three independent lines of evidence converged in the #634
-research and pointed the same way:
+Three independent lines of evidence point the same way:
 
 1. **Vulkan spec.** `VkImageCreateInfo::initialLayout` must be
    `UNDEFINED` or `PREINITIALIZED`. There is no "import this
@@ -517,29 +437,23 @@ research and pointed the same way:
      via `GPUError`).
 
    Verify the patterns against current upstream source if
-   revisiting — these are pinned to the snapshot evaluated in
-   the #634 research.
+   revisiting.
 
 3. **In-tree evidence.** No subprocess code constructs
    `TextureRegistration` today. Cdylibs use
    `HostSurfaceRegistration<P>` (an adapter-scope record at the
    adapter crate, generic over `DevicePrivilege`) plus the
-   `VulkanLayout` enum (already in `streamlib-consumer-rhi`).
+   `VulkanLayout` enum (in `streamlib-consumer-rhi`).
    The "subprocess needs typed-contract for layout" concern is
-   already covered at the adapter scope, where it belongs per
+   covered at the adapter scope, where it belongs per
    the [Scope](#scope-this-record-vs-adapter-internal-surfacestatep)
    section.
 
 The architecturally correct cross-process work is the **IPC
-schema lift (#633)**: the producer's *published layout* travels
-in the surface-share / `Videoframe` schema as a typed protocol
-field; the host consumer reads it once at acquire time and
-barriers from there. No mirror, no shared mutable record across
-the boundary.
-
-**Until #633 lands, cross-process consumers should keep
-barriering defensively from `UNDEFINED`** — don't paper over the
-gap consumer-side.
+schema lift**: the producer's *published layout* travels in the
+surface-share / `VideoFrame` schema as a typed protocol field;
+the host consumer reads it once at acquire time and barriers from
+there. No mirror, no shared mutable record across the boundary.
 
 ## Tests
 
@@ -550,7 +464,7 @@ When a new field lands on `TextureRegistration`:
    torn values), and any field-specific invariants.
 2. **Unit test in `gpu_context.rs::tests`**: exercise the resolve
    path — register with the new field, resolve via
-   `resolve_videoframe_registration`, assert visibility.
+   `resolve_texture_registration_by_surface_id`, assert visibility.
 3. **Mentally revert the field's update logic** — does the test still
    pass? If yes, the test is feel-good and doesn't lock the contract.
    Strengthen it: a test that doesn't fail when the impl is reverted
@@ -563,31 +477,22 @@ When a new field lands on `TextureRegistration`:
 
 - **Implementation**: `libs/streamlib-engine/src/core/context/texture_registration.rs`,
   `GpuContext::register_texture_with_layout` /
-  `GpuContext::resolve_videoframe_registration` in
+  `GpuContext::resolve_texture_registration_by_surface_id` in
   `libs/streamlib-engine/src/core/context/gpu_context.rs`.
 - **First consumer**: `LinuxDisplayProcessor::render_frame` in
-  `libs/streamlib-engine/src/linux/processors/display.rs`.
-- **First adapter-output producer**: `register_opengl_output_surface`
+  `packages/display/src/linux/display.rs`.
+- **First adapter-output producer**: `register_render_target_surface`
   in `examples/camera-python-display/src/linux.rs`.
 - **First in-tree producer**: `LinuxCameraProcessor` in the
   `streamlib-camera` package —
   `packages/camera/src/linux/camera.rs`.
-- **Adapter-scope sibling**: `streamlib-adapter-vulkan::SurfaceState`
-  in `libs/streamlib-adapter-vulkan/src/state.rs:48` (and the
-  same-shape cuda + cpu-readback adapter state structs). These are
-  at adapter scope, **not** parallel maps to `texture_cache` — see
-  the [Scope](#scope-this-record-vs-adapter-internal-surfacestatep)
+- **Adapter-scope sibling**: `SurfaceState` in
+  `libs/streamlib-adapter-vulkan/src/state.rs` (and the same-shape
+  opengl + cuda + cpu-readback adapter state structs). These are at
+  adapter scope, **not** parallel maps to `texture_cache` — see the
+  [Scope](#scope-this-record-vs-adapter-internal-surfacestatep)
   section.
-- **PR**: #632.
-- **Issue**: #616.
-- **Closed without code change**: #634 (lift `TextureRegistration`
-  into `streamlib-consumer-rhi`) — see [Why no sandbox-side
-  mirror](#why-no-sandbox-side-mirror) for the spec + precedent
-  evidence.
-- **Cross-process follow-up**: #633 (IPC schema lift for
-  producer-published layout).
-- **Future research**: #631 (RDG / automatic barrier inference).
-- **External references** (consulted during the #634 research):
+- **External references**:
   - [Khronos `VK_EXT_external_memory_acquire_unmodified` proposal](https://docs.vulkan.org/features/latest/features/proposals/VK_EXT_external_memory_acquire_unmodified.html)
   - [Vulkan synchronization & queue-transfer chapter](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)
   - [Dawn wire client Texture.h](https://dawn.googlesource.com/dawn/+/refs/heads/main/src/dawn/wire/client/Texture.h)
