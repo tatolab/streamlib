@@ -58,6 +58,17 @@ const RC_CONTENDED = 1;
 const DEVICE_TYPE_CUDA = 2;
 const DEVICE_TYPE_CUDA_HOST = 3;
 
+/** Image-path format discriminants on
+ * [`SldnCudaImageView::format`] — wire ABI mirroring the cdylib's
+ * `SLDN_CUDA_FORMAT_*` constants. The CUDA image flavor is constrained
+ * to the four-channel R8/R16/R32 subset accepted by
+ * `cudaExternalMemoryGetMappedMipmappedArray`. */
+export enum CudaImageFormat {
+  Rgba8Unorm = 0,
+  Rgba16Float = 1,
+  Rgba32Float = 2,
+}
+
 /** `SlpnCudaView` `#[repr(C)]` layout, pinned by the cdylib's
  * `sldn_cuda_view_layout_matches_spec_64bit` test:
  *   size                 : u64    @ 0   (8 bytes)
@@ -127,6 +138,59 @@ export interface CudaWriteView {
   consume(): void;
 }
 
+/** `SldnCudaImageView` `#[repr(C)]` layout, pinned by the cdylib's
+ * `sldn_cuda_image_view_layout_matches_spec_64bit` test:
+ *   cuda_object_handle: u64    @ 0   (8 bytes)
+ *   width             : u32    @ 8   (4)
+ *   height            : u32    @ 12  (4)
+ *   format            : i32    @ 16  (4)
+ *   _reserved         : [u8;12]@ 20  (12 bytes)
+ * Total = 32 bytes — same wire width as `SldnCudaView`. */
+const IMAGE_VIEW_STRUCT_SIZE = 32;
+
+/** Read-side view inside an `acquireTexture` scope.
+ *
+ * `handle` is a raw `cudaTextureObject_t` — pass it to a native module
+ * (a separate `dlopen`'d cdylib that knows how to sample CUDA
+ * textures) or drive host-side validation. There's no DLPack capsule
+ * on this path because the underlying `cudaMipmappedArray_t` is opaque
+ * and not DLPack-shaped.
+ *
+ * The view is valid only inside the `using` scope. After scope exit,
+ * the cdylib calls `cudaDestroyTextureObject` on `handle` and
+ * releases the adapter's read guard — do NOT retain `handle` past
+ * the scope.
+ */
+export interface CudaTextureView {
+  /** Raw `cudaTextureObject_t` (typedef'd to `c_ulonglong`). */
+  readonly handle: bigint;
+  /** Image width in pixels. */
+  readonly width: number;
+  /** Image height in pixels. */
+  readonly height: number;
+  /** Format discriminant from [`CudaImageFormat`] — the cdylib has
+   * already validated the registration; this is informational for
+   * customer kernels that need to know element size for sampling. */
+  readonly format: CudaImageFormat;
+}
+
+/** Write-side view inside an `acquireSurface` scope.
+ *
+ * Same shape as [`CudaTextureView`] but `handle` is a raw
+ * `cudaSurfaceObject_t`. Kernels that produce new frames can
+ * `surf2Dwrite` against this handle and the writes land in the
+ * host-shared OPAQUE_FD `VkImage`'s backing memory.
+ *
+ * Same lifetime rules as [`CudaTextureView`] — `handle` is destroyed
+ * at scope exit.
+ */
+export interface CudaSurfaceView {
+  readonly handle: bigint;
+  readonly width: number;
+  readonly height: number;
+  readonly format: CudaImageFormat;
+}
+
 /** Disposable guard returned by `acquireRead` / `acquireWrite`.
  * `using` runs `[Symbol.dispose]` at scope exit, which releases the
  * adapter guard (so the timeline can advance) and conditionally calls
@@ -147,6 +211,12 @@ export interface CudaGpuLimitedAccess {
     readonly nativeHandlePtr: Deno.PointerObject | null;
     release(): void;
   };
+  /** Publish the producer-side post-release `VkImageLayout` for
+   * `poolId` via the surface-share `update_layout` op. Called by
+   * [`CudaContext.releaseForCrossProcess`] after a CUDA-side write
+   * cycle to publish the next layout so the host consumer's
+   * `acquire_from_foreign` Path 2 sees the right source. */
+  updateImageLayout(poolId: string, layout: number): void;
   // deno-lint-ignore no-explicit-any
   readonly nativeLib: { readonly symbols: any };
 }
@@ -224,6 +294,11 @@ export class CudaContext {
   private readonly symbols: any;
   private readonly rt: Deno.PointerObject;
   private readonly surfaceIds = new Map<string, bigint>();
+  /** Image-flavored registration map. Separate from
+   * [`surfaceIds`] because a given pool_id is exclusively one
+   * flavor — the cdylib's adapter rejects mixing acquire paths
+   * against a single surface. */
+  private readonly imageSurfaceIds = new Map<string, bigint>();
   private readonly resolvedHandles = new Map<
     string,
     ReturnType<CudaGpuLimitedAccess["resolveSurface"]>
@@ -441,5 +516,222 @@ export class CudaContext {
     return writable
       ? (view as unknown as CudaWriteView)
       : (view as unknown as CudaReadView);
+  }
+
+  // ----- Image-flavored API ----------------------------------------
+
+  /** Acquire read access to an image-flavored CUDA surface as a
+   * `cudaTextureObject_t`. The texture object is constructed fresh
+   * inside the cdylib on every call (per-acquire — first-cut design
+   * per the issue body's AI-Agent-Notes) and destroyed on scope exit.
+   *
+   *     using guard = ctx.acquireTexture(surface);
+   *     const handle = guard.view.handle; // pass into a native module
+   */
+  acquireTexture(
+    surface: StreamlibSurface | string | bigint | number,
+  ): CudaAccessGuard<CudaTextureView> {
+    return this._acquireImage(surface, false, true) as CudaAccessGuard<
+      CudaTextureView
+    >;
+  }
+
+  /** Acquire write access to an image-flavored CUDA surface as a
+   * `cudaSurfaceObject_t`. */
+  acquireSurface(
+    surface: StreamlibSurface | string | bigint | number,
+  ): CudaAccessGuard<CudaSurfaceView> {
+    return this._acquireImage(surface, true, true) as CudaAccessGuard<
+      CudaSurfaceView
+    >;
+  }
+
+  /** Non-blocking variant of [`acquireTexture`] — returns `null` on
+   * contention rather than blocking. */
+  tryAcquireTexture(
+    surface: StreamlibSurface | string | bigint | number,
+  ): CudaAccessGuard<CudaTextureView> | null {
+    return this._acquireImage(surface, false, false) as
+      | CudaAccessGuard<CudaTextureView>
+      | null;
+  }
+
+  /** Non-blocking variant of [`acquireSurface`]. */
+  tryAcquireSurface(
+    surface: StreamlibSurface | string | bigint | number,
+  ): CudaAccessGuard<CudaSurfaceView> | null {
+    return this._acquireImage(surface, true, false) as
+      | CudaAccessGuard<CudaSurfaceView>
+      | null;
+  }
+
+  /** Publish the post-release `VkImageLayout` to surface-share so the
+   * next cross-process consumer's `acquire_from_foreign` Path 2 sees
+   * the right source layout.
+   *
+   * Unlike `OpenGLContext.releaseForCrossProcess` — which takes a
+   * `VulkanContext` and delegates to its `releaseForCrossProcess`
+   * because OpenGL writes don't touch the underlying `VkImage`'s
+   * Vulkan tracker — the CUDA shim takes **no** `vulkanCtx`
+   * parameter. CUDA writes via `cudaSurfaceObject_t` against the
+   * imported mipmapped array; the cdylib has no host `VkDevice` to
+   * issue a QFOT release barrier against (per the consumer-rhi
+   * carve-out), and the pairwise sync runs entirely on
+   * `cudaSignalExternalSemaphoresAsync` /
+   * `cudaWaitExternalSemaphoresAsync` against the imported timeline.
+   * The host consumer's
+   * `GpuContext::resolve_videoframe_registration` Path 2 acquire
+   * handles its own barriers via QFOT-acquire (Mesa) or
+   * bridging-from-UNDEFINED (NVIDIA) — independent of what the CUDA
+   * producer did.
+   *
+   * What this shim does is just the **layout publish**: update the
+   * surface-share daemon's per-surface `current_image_layout` field
+   * so the next consumer sees the right source layout. The timeline
+   * signal happens naturally on scope exit (the cdylib's adapter
+   * advances the timeline as part of releasing the write guard).
+   *
+   * Call this *after* the matching `acquireSurface` `using` scope
+   * has exited so the CUDA stream's writes have drained through to
+   * the GPU and the timeline has been signaled.
+   *
+   * Customers running scenario (a) from the issue body's design
+   * clarification (pure-CUDA AI consumer that just reads, drops the
+   * guard) do NOT call this method — the host is the producer and
+   * handles its own release barriers via `VulkanSurfaceAdapter`.
+   *
+   * `postReleaseLayout` is a Vulkan `VkImageLayout` enumerant as a
+   * number. `GENERAL` is the safest default for cross-process
+   * handoffs — the consumer's `acquire_from_foreign` re-transitions
+   * to whatever layout it actually needs. */
+  releaseForCrossProcess(
+    surface: StreamlibSurface | string | bigint | number,
+    postReleaseLayout: number,
+  ): void {
+    const poolId = surfacePoolId(surface);
+    this.gpu.updateImageLayout(poolId, postReleaseLayout);
+  }
+
+  private resolveAndRegisterImage(poolId: string): bigint {
+    const cached = this.imageSurfaceIds.get(poolId);
+    if (cached !== undefined) return cached;
+    const handle = this.gpu.resolveSurface(poolId);
+    const handlePtr = handle.nativeHandlePtr;
+    if (handlePtr === null) {
+      throw new Error(
+        `CudaContext: resolveSurface('${poolId}') returned a handle with a null native pointer`,
+      );
+    }
+    const surfaceId = nextSurfaceId();
+    const rc: number = this.symbols.sldn_cuda_register_image_surface(
+      this.rt,
+      surfaceId,
+      handlePtr,
+    );
+    if (rc !== RC_OK) {
+      throw new Error(
+        `CudaContext: register_image_surface failed for pool_id ` +
+          `'${poolId}' (rc=${rc}). Common causes: host registered the ` +
+          `surface as a buffer (DLPack path), not an image; host's ` +
+          `image format is outside the CUDA-mappable subset ` +
+          `(Rgba8Unorm / Rgba16Float / Rgba32Float); host did not ` +
+          `attach an exportable timeline semaphore.`,
+      );
+    }
+    this.imageSurfaceIds.set(poolId, surfaceId);
+    this.resolvedHandles.set(poolId, handle);
+    return surfaceId;
+  }
+
+  private _acquireImage(
+    surface: StreamlibSurface | string | bigint | number,
+    write: boolean,
+    blocking: boolean,
+  ): CudaAccessGuard<CudaTextureView | CudaSurfaceView> | null {
+    const poolId = surfacePoolId(surface);
+    const surfaceId = this.resolveAndRegisterImage(poolId);
+    const buf = new Uint8Array(IMAGE_VIEW_STRUCT_SIZE);
+    const fn = blocking
+      ? (write
+        ? this.symbols.sldn_cuda_acquire_surface
+        : this.symbols.sldn_cuda_acquire_texture)
+      : (write
+        ? this.symbols.sldn_cuda_try_acquire_surface
+        : this.symbols.sldn_cuda_try_acquire_texture);
+    const rc: number = fn(this.rt, surfaceId, Deno.UnsafePointer.of(buf));
+    if (rc === RC_CONTENDED) {
+      return null;
+    }
+    if (rc !== RC_OK) {
+      throw new Error(
+        `CudaContext.${blocking ? "" : "try_"}acquire_${
+          write ? "surface" : "texture"
+        }: rc=${rc} for surface '${poolId}'`,
+      );
+    }
+
+    const view = this.parseImageView(buf, write);
+    const surfaceIdSnapshot = surfaceId;
+    const handleSnapshot = view.handle;
+    const symbols = this.symbols;
+    const rt = this.rt;
+    const writeMode = write;
+
+    return {
+      view,
+      [Symbol.dispose]: () => {
+        // Thread the customer's handle back so the cdylib destroys
+        // this view's cudaTextureObject_t / cudaSurfaceObject_t —
+        // not some other concurrent reader's.
+        if (writeMode) {
+          symbols.sldn_cuda_release_surface(
+            rt,
+            surfaceIdSnapshot,
+            handleSnapshot,
+          );
+        } else {
+          symbols.sldn_cuda_release_texture(
+            rt,
+            surfaceIdSnapshot,
+            handleSnapshot,
+          );
+        }
+      },
+    };
+  }
+
+  private parseImageView(
+    buf: Uint8Array,
+    writable: boolean,
+  ): CudaTextureView | CudaSurfaceView {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const handle = dv.getBigUint64(0, true);
+    const width = dv.getUint32(8, true);
+    const height = dv.getUint32(12, true);
+    const format = dv.getInt32(16, true);
+    if (handle === 0n) {
+      throw new Error(
+        "CudaContext: cdylib returned null cuda object handle",
+      );
+    }
+    if (
+      format !== CudaImageFormat.Rgba8Unorm &&
+      format !== CudaImageFormat.Rgba16Float &&
+      format !== CudaImageFormat.Rgba32Float
+    ) {
+      throw new Error(
+        `CudaContext: cdylib returned unexpected format discriminant ` +
+          `${format} on the image view — the wire ABI may have drifted`,
+      );
+    }
+    const view = {
+      handle,
+      width,
+      height,
+      format: format as CudaImageFormat,
+    };
+    return writable
+      ? (view as unknown as CudaSurfaceView)
+      : (view as unknown as CudaTextureView);
   }
 }
