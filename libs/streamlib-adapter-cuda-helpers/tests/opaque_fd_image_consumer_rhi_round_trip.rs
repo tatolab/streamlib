@@ -1,21 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Engine-only round-trip for the OPAQUE_FD `VkImage` carve-out
-//! (issue #799) — host → consumer-rhi import → consumer-side
+//! Engine-only round-trip for the OPAQUE_FD `VkImage` carve-out —
+//! host → consumer-rhi import → consumer-side
 //! `vkCmdCopyImageToBuffer` → byte-equal vs the known host-uploaded
 //! pattern.
 //!
 //! Sibling of [`opaque_fd_consumer_rhi_round_trip.rs`] (which covers
 //! OPAQUE_FD `VkBuffer`s); this one covers the image-flavored path
-//! that #800 (`streamlib-adapter-cuda` extension) and #801
-//! (verification example) build on top of.
+//! the CUDA adapter's tiled-image registration builds on top of.
 //!
 //! The CUDA-kernel byte-equal assertion through the mapped mipmapped
-//! array is **out of scope** here — it requires the CUDA adapter
-//! extension + `cudarc` plumbing, which lives in #800. This test
-//! asserts the OPAQUE_FD `VkImage` primitive plumbing only, end-to-
-//! end through two separate `VkDevice`s.
+//! array is **out of scope** here — that requires the CUDA adapter's
+//! `cudarc` plumbing, exercised by the adapter-cuda VkImage carve-out
+//! test (which depends on these primitives). This test asserts the
+//! OPAQUE_FD `VkImage` primitive plumbing only, end-to-end through
+//! two separate `VkDevice`s.
 //!
 //! Test shape:
 //!
@@ -138,20 +138,20 @@ fn opaque_fd_image_carve_out_round_trip() {
     let host_device = match HostVulkanDevice::new() {
         Ok(d) => d,
         Err(e) => {
-            println!("#799 carve-out: no Vulkan host device — skipping ({e})");
+            println!("opaque_fd image carve-out: no Vulkan host device — skipping ({e})");
             return;
         }
     };
     if host_device.opaque_fd_image_pool().is_none() {
         println!(
-            "#799 carve-out: OPAQUE_FD image pool unavailable — driver doesn't \
+            "opaque_fd image carve-out: OPAQUE_FD image pool unavailable — driver doesn't \
              support external memory; skipping"
         );
         return;
     }
     if host_device.opaque_fd_buffer_pool().is_none() {
         println!(
-            "#799 carve-out: OPAQUE_FD HOST_VISIBLE buffer pool unavailable — \
+            "opaque_fd image carve-out: OPAQUE_FD HOST_VISIBLE buffer pool unavailable — \
              needed for the staging buffers; skipping"
         );
         return;
@@ -300,7 +300,7 @@ fn opaque_fd_image_carve_out_round_trip() {
                 libc::close(dest_fd);
             }
             println!(
-                "#799 carve-out: ConsumerVulkanDevice::new failed: {e:?} — skipping \
+                "opaque_fd image carve-out: ConsumerVulkanDevice::new failed: {e:?} — skipping \
                  (likely a UUID mismatch on a multi-GPU rig)"
             );
             return;

@@ -94,19 +94,19 @@ consumer-class allocations. Sentinels are freed in
 `HostVulkanDevice::Drop` before the allocator is torn down.
 
 **Image-flavored sentinel — provisional retention pending consumer.**
-Issue #799 added the OPAQUE_FD image pool and a matching retained
-sentinel, using the same "tiny, per-handle-type" shape as the buffer
-sentinels. To the best of our current knowledge the empirical
-verification protocol (sections A/B/C below) cannot be run for the
-image sentinel today because no consumer-class OPAQUE_FD `VkImage`
-allocator exists in-tree yet — `HostVulkanTexture::new_opaque_fd_export`
-is the engine primitive but `camera-python-display` and the existing
+The OPAQUE_FD image pool ships a matching retained sentinel that
+uses the same "tiny, per-handle-type" shape as the buffer sentinels.
+To the best of our current knowledge the empirical verification
+protocol (sections A/B/C below) cannot be run for the image sentinel
+today: `HostVulkanTexture::new_opaque_fd_export` is the engine
+primitive but no in-tree consumer of OPAQUE_FD `VkImage`s
+post-swapchain exists yet — `camera-python-display` and the existing
 reproducer examples allocate OPAQUE_FD *buffers*, not images. The
-image sentinel is retained out of conservatism: the cap mechanism is
-spec-level "per-handle-type kernel state", the buffer-side evidence
-makes the same argument for the image side, and a tiny sentinel
-costs ~256 bytes for the device's lifetime. When the CUDA adapter
-VkImage path (#800) and its verification example (#801) land, the
+image sentinel is retained out of conservatism: the cap mechanism
+is spec-level "per-handle-type kernel state", the buffer-side
+evidence makes the same argument for the image side, and a tiny
+sentinel costs ~256 bytes for the device's lifetime. When a real
+consumer-class OPAQUE_FD `VkImage` allocator lands in-tree, the
 sentinels-dropped protocol (Section C below, adapted for images)
 becomes runnable and the retention should be re-validated. If the
 empirical run shows the image sentinel is redundant given the

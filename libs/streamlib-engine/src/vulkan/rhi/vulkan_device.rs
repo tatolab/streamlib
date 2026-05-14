@@ -1125,8 +1125,8 @@ impl HostVulkanDevice {
                 (None, None)
             };
 
-        // OPAQUE_FD image pool (issue #799) — DEVICE_LOCAL, OPTIMAL
-        // tiling. Image-flavored sibling of the buffer pools above;
+        // OPAQUE_FD image pool — DEVICE_LOCAL, OPTIMAL tiling.
+        // Image-flavored sibling of the buffer pools above;
         // unblocks `cudaExternalMemoryGetMappedMipmappedArray` for the
         // tiled-image zero-copy Vulkan → CUDA path. Pool construction
         // failure is non-fatal: callers (`HostVulkanTexture::new_opaque_fd_export`)
@@ -1436,31 +1436,30 @@ impl HostVulkanDevice {
             sentinels.push(sentinel);
         }
 
-        // 6. OPAQUE_FD image pool — retained sentinel (issue #799).
+        // 6. OPAQUE_FD image pool — retained sentinel.
         //
         //    Provisional retention pending consumer. To the best of our
         //    current knowledge the buffer-side evidence (the existing
         //    HOST_VISIBLE + DEVICE_LOCAL buffer sentinels are both
-        //    load-bearing on NVIDIA — issue #637) extrapolates to the
-        //    image side: the cap mechanism is spec-level "per-handle-
-        //    type kernel state," and the image-side memory-type index
-        //    can legitimately differ from any buffer pool's
-        //    (CUDA-mappable formats may pick a different VkMemoryType
-        //    than HOST_VISIBLE or generic DEVICE_LOCAL buffer
-        //    allocations). The image-flavored sentinel covers a
-        //    strictly larger surface than keeping a DEVICE_LOCAL
-        //    buffer alive if that extrapolation holds.
+        //    load-bearing on NVIDIA) extrapolates to the image side:
+        //    the cap mechanism is spec-level "per-handle-type kernel
+        //    state," and the image-side memory-type index can
+        //    legitimately differ from any buffer pool's (CUDA-mappable
+        //    formats may pick a different VkMemoryType than
+        //    HOST_VISIBLE or generic DEVICE_LOCAL buffer allocations).
+        //    The image-flavored sentinel covers a strictly larger
+        //    surface than keeping a DEVICE_LOCAL buffer alive if that
+        //    extrapolation holds.
         //
         //    The empirical pre-warm-removed protocol per
         //    `docs/learnings/nvidia-opaque-fd-after-swapchain.md`
         //    can't be run today — `camera-python-display` and the
         //    other reproducers allocate OPAQUE_FD *buffers*, not
-        //    images. The protocol becomes runnable when the CUDA
-        //    adapter VkImage path (#800) + verification example
-        //    (#801) provide a real consumer-class OPAQUE_FD VkImage
-        //    allocator, and the retention should be re-validated
-        //    there. Dropping the sentinel if it turns out redundant
-        //    is a one-line change here.
+        //    images. The protocol becomes runnable when a real
+        //    consumer-class OPAQUE_FD `VkImage` allocator lands
+        //    in-tree, and the retention should be re-validated there.
+        //    Dropping the sentinel if it turns out redundant is a
+        //    one-line change here.
         //
         //    Same tiny-sentinel rule as the buffer sentinels: 8×8×4 =
         //    256 bytes for R8G8B8A8 keeps the kernel state pinned
@@ -1552,8 +1551,8 @@ fn make_opaque_fd_buffer_sentinel(
 /// and wrap it in an [`ExportPoolSentinel::Image`]. The image-flavored
 /// counterpart to [`make_opaque_fd_buffer_sentinel`]: pins the
 /// per-handle-type kernel state for OPAQUE_FD `VkImage` allocations
-/// (issue #799) the same way the buffer sentinels pin the state for
-/// OPAQUE_FD `VkBuffer` allocations.
+/// the same way the buffer sentinels pin the state for OPAQUE_FD
+/// `VkBuffer` allocations.
 ///
 /// The image probe shape matches the consumer-class allocations
 /// [`super::HostVulkanTexture::new_opaque_fd_export`] performs:
@@ -1565,7 +1564,7 @@ fn make_opaque_fd_buffer_sentinel(
 ///
 /// Sentinels are intentionally tiny (8×8 = 256 bytes for R8G8B8A8) to
 /// avoid competing with consumer-class allocations on NVIDIA's
-/// cumulative OPAQUE_FD byte budget — see issue #637 and the
+/// cumulative OPAQUE_FD byte budget — see the
 /// `nvidia-opaque-fd-after-swapchain` learning's "tiny sentinels"
 /// rationale.
 #[cfg(target_os = "linux")]
@@ -2032,7 +2031,7 @@ impl HostVulkanDevice {
     }
 
     /// Build a VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL
-    /// **images** — issue #799, the image-flavored sibling of
+    /// **images** — image-flavored sibling of
     /// [`Self::create_opaque_fd_buffer_pool_device_local`].
     ///
     /// Probe shape matches [`super::HostVulkanTexture::new_opaque_fd_export`]
@@ -2922,8 +2921,8 @@ impl HostVulkanDevice {
     }
 
     /// VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL **images**
-    /// (image-flavored sibling of [`Self::opaque_fd_buffer_pool_device_local`];
-    /// issue #799). `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier.
+    /// (image-flavored sibling of [`Self::opaque_fd_buffer_pool_device_local`]).
+    /// `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier.
     ///
     /// Returns `None` when external memory isn't supported or the
     /// image-side probe failed at construction. Used by CUDA's
@@ -3229,15 +3228,15 @@ mod tests {
             actual_labels, expected_labels,
             "every constructed OPAQUE_FD pool must have a retained sentinel; \
              missing sentinels would let NVIDIA's kernel-side state decay \
-             between init and the consumer's allocation (issue #637)"
+             between init and the consumer's allocation"
         );
 
         // Every OPAQUE_FD sentinel must be SMALL — sentinels at the
         // consumer's full size deterministically block the consumer's
-        // allocation post-swapchain (empirically: #637 E2E on Cam Link 4K),
-        // pointing at a cumulative byte budget on NVIDIA's side. The
-        // sentinel exists only to pin the per-handle-type kernel state,
-        // so it must not compete with consumer-class allocations.
+        // allocation post-swapchain on NVIDIA Linux, pointing at a
+        // cumulative byte budget on top of the per-handle-type state.
+        // The sentinel exists only to pin the per-handle-type kernel
+        // state, so it must not compete with consumer-class allocations.
         // Reverting to a realistic-size sentinel here would re-introduce
         // that regression. Applies to both buffer-flavored DEVICE_LOCAL
         // and image-flavored sentinels (the image-flavored one is

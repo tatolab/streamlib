@@ -636,8 +636,8 @@ docstring: *"there is no per-acquire IPC — the host's pipeline is
 expected to write into the OPAQUE_FD buffer and signal the shared
 timeline ambiently."*).
 
-**Tiled-image path (`VkImage`, issue #799 / #800 / #801)** —
-inherits this dual-registration pattern. CUDA's
+**Tiled-image path (`VkImage`)** — inherits this dual-registration
+pattern. CUDA's
 `cudaExternalMemoryGetMappedMipmappedArray` consumes an OPAQUE_FD
 `VkImage` (`HostVulkanTexture::new_opaque_fd_export` on the host,
 `ConsumerVulkanTexture::from_opaque_fd` on the cdylib) and produces

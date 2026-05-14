@@ -222,8 +222,8 @@ impl ConsumerVulkanTexture {
     }
 
     /// Import a host-allocated OPAQUE_FD `VkImage` as a
-    /// DEVICE_LOCAL OPTIMAL tiled image on the consumer device
-    /// (issue #799 — Vulkan → CUDA interop carve-out).
+    /// DEVICE_LOCAL OPTIMAL tiled image on the consumer device —
+    /// the Vulkan → CUDA interop carve-out.
     ///
     /// Pairs with the host's
     /// [`streamlib::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`] —

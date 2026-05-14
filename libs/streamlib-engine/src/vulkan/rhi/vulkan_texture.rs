@@ -133,8 +133,8 @@ pub struct HostVulkanTexture {
     /// Whether this texture was imported from a DMA-BUF fd (uses imported_memory path).
     #[cfg(target_os = "linux")]
     imported_from_dma_buf: bool,
-    /// Whether this texture was allocated from the OPAQUE_FD image pool
-    /// (issue #799). Gates `export_opaque_fd_memory`: callers that
+    /// Whether this texture was allocated from the OPAQUE_FD image
+    /// pool. Gates `export_opaque_fd_memory`: callers that
     /// allocated via [`Self::new`] / `_render_target_dma_buf` / `_device_local`
     /// must NOT call the OPAQUE_FD export accessor because the underlying
     /// memory carries `DMA_BUF_EXT` (or no) export handle types, and
@@ -460,7 +460,7 @@ impl HostVulkanTexture {
 
     /// Allocate an OPAQUE_FD-exportable DEVICE_LOCAL `VkImage` for
     /// Vulkan → CUDA `cudaImportExternalMemory` /
-    /// `cudaExternalMemoryGetMappedMipmappedArray` interop (issue #799).
+    /// `cudaExternalMemoryGetMappedMipmappedArray` interop.
     ///
     /// Engine-layer foundation for the cuda adapter's image-flavored
     /// registration path. Pairs with
@@ -991,8 +991,8 @@ impl HostVulkanTexture {
     }
 
     /// True iff this texture was allocated via
-    /// [`Self::new_opaque_fd_export`] (issue #799). Gates the
-    /// OPAQUE_FD export accessor; the buffer-side mirror is
+    /// [`Self::new_opaque_fd_export`]. Gates the OPAQUE_FD export
+    /// accessor; the buffer-side mirror is
     /// `HostVulkanBuffer::is_opaque_fd_export`.
     pub fn is_opaque_fd_export(&self) -> bool {
         self.is_opaque_fd_export
@@ -1974,7 +1974,7 @@ mod tests {
     /// fd, and the consumer-rhi import side accepts the same fd (alloc-
     /// size round-trip). Cross-flavor export is rejected (calling
     /// `export_opaque_fd_memory` on a DMA-BUF-allocated texture
-    /// produces an error). Issue #799.
+    /// produces an error).
     #[cfg(target_os = "linux")]
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
@@ -2040,7 +2040,7 @@ mod tests {
     /// every other `TextureFormat` variant is rejected at
     /// construction with a message naming the bad format. Locks
     /// the closed-list invariant from
-    /// `cudaExternalMemoryGetMappedMipmappedArray`. Issue #799.
+    /// `cudaExternalMemoryGetMappedMipmappedArray`.
     #[cfg(target_os = "linux")]
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
@@ -2102,7 +2102,6 @@ mod tests {
 
     /// Zero width/height is rejected — these aren't CUDA-specific
     /// constraints but mirror the buffer-side input validation.
-    /// Issue #799.
     #[cfg(target_os = "linux")]
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
