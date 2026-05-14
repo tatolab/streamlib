@@ -14,7 +14,7 @@ import {
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import type { VideoFrame } from "../../../libs/streamlib-deno/_generated_/tatolab__core/video_frame.ts";
+import type { VideoFrame } from "./_generated_/tatolab__core/video_frame.ts";
 
 @processor("GrayscaleProcessor", import.meta.url)
 export default class GrayscaleProcessor implements ReactiveProcessor {

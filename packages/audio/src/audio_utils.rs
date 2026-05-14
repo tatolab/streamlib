@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::audio_resample::{AudioResampler, ResamplingQuality};
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::error::Result;
 
 /// Convert audio frame to a different channel count.

@@ -20,7 +20,7 @@ import {
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import type { VideoFrame } from "../../../libs/streamlib-deno/_generated_/tatolab__core/video_frame.ts";
+import type { VideoFrame } from "./_generated_/tatolab__core/video_frame.ts";
 
 const HALFTONE_WGSL = /* wgsl */`
 @group(0) @binding(0) var<storage, read> inputPixels: array<u32>;

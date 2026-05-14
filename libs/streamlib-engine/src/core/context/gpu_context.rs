@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::VideoFrame;
 use crate::core::context::TextureRegistration;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
@@ -625,8 +624,8 @@ impl GpuContext {
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
-    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<PixelBuffer> {
-        let pool_id = PixelBufferPoolId::from_str(&frame.surface_id);
+    pub fn resolve_video_frame_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
+        let pool_id = PixelBufferPoolId::from_str(surface_id);
         self.get_pixel_buffer(&pool_id)
     }
 
@@ -688,12 +687,18 @@ impl GpuContext {
     /// see `vulkan_device.rs`); the registration declares it.
     pub fn resolve_video_frame_registration(
         &self,
-        frame: &VideoFrame,
+        surface_id: &str,
+        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+        texture_layout: Option<i32>,
+        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+        width: u32,
+        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+        height: u32,
     ) -> Result<Arc<TextureRegistration>> {
         // Path 1: same-process texture cache (fastest)
         {
             let cache = self.texture_cache.lock().unwrap();
-            if let Some(reg) = cache.get(&frame.surface_id) {
+            if let Some(reg) = cache.get(surface_id) {
                 return Ok(Arc::clone(reg));
             }
         }
@@ -731,9 +736,8 @@ impl GpuContext {
         {
             let surface_store = self.surface_store.lock().unwrap();
             if let Some(store) = surface_store.as_ref() {
-                if let Ok((texture, ipc_layout)) = store.lookup_texture(&frame.surface_id) {
-                    let resolved_layout = frame
-                        .texture_layout
+                if let Ok((texture, ipc_layout)) = store.lookup_texture(surface_id) {
+                    let resolved_layout = texture_layout
                         .map(VulkanLayout)
                         .unwrap_or(ipc_layout);
                     if resolved_layout != VulkanLayout::UNDEFINED {
@@ -759,14 +763,14 @@ impl GpuContext {
                 let surface_store = self.surface_store.lock().unwrap();
                 surface_store
                     .as_ref()
-                    .and_then(|store| store.lookup_buffer(&frame.surface_id).ok())
+                    .and_then(|store| store.lookup_buffer(surface_id).ok())
             };
             if let Some(buffer) = buffer {
                 let texture = self.refresh_pixel_buffer_texture(
-                    &frame.surface_id,
+                    surface_id,
                     &buffer,
-                    frame.width,
-                    frame.height,
+                    width,
+                    height,
                 )?;
                 // upload_buffer_to_image leaves the texture in
                 // SHADER_READ_ONLY_OPTIMAL (see vulkan_device.rs:1851).
@@ -779,7 +783,7 @@ impl GpuContext {
 
         Err(Error::GpuError(format!(
             "No texture or pixel buffer found for surface_id '{}'",
-            frame.surface_id
+            surface_id
         )))
     }
 
@@ -790,8 +794,17 @@ impl GpuContext {
     /// Layout-aware consumers (display, future encoders) should call
     /// `resolve_video_frame_registration` directly so they can issue
     /// correct barriers.
-    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<Texture> {
-        Ok(self.resolve_video_frame_registration(frame)?.texture().clone())
+    pub fn resolve_video_frame_texture(
+        &self,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
+    ) -> Result<Texture> {
+        Ok(self
+            .resolve_video_frame_registration(surface_id, texture_layout, width, height)?
+            .texture()
+            .clone())
     }
 
     /// Acquire a new output texture with a UUID, register it in the cache.
@@ -1913,9 +1926,9 @@ impl GpuContextLimitedAccess {
         self.inner.get_pixel_buffer(pool_id)
     }
 
-    /// Resolve a [`VideoFrame`]'s buffer from its surface_id.
-    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<PixelBuffer> {
-        self.inner.resolve_video_frame_buffer(frame)
+    /// Resolve a VideoFrame's buffer from its surface_id.
+    pub fn resolve_video_frame_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
+        self.inner.resolve_video_frame_buffer(surface_id)
     }
 
     /// Register a texture in the same-process texture cache.
@@ -1936,17 +1949,28 @@ impl GpuContextLimitedAccess {
             .register_texture_with_layout(id, texture, initial_layout);
     }
 
-    /// Resolve a [`VideoFrame`]'s full registration record (texture + layout).
+    /// Resolve a VideoFrame's full registration record (texture + layout).
     pub fn resolve_video_frame_registration(
         &self,
-        frame: &VideoFrame,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
     ) -> Result<Arc<TextureRegistration>> {
-        self.inner.resolve_video_frame_registration(frame)
+        self.inner
+            .resolve_video_frame_registration(surface_id, texture_layout, width, height)
     }
 
-    /// Resolve a [`VideoFrame`]'s texture (Split: cache hit).
-    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<Texture> {
-        self.inner.resolve_video_frame_texture(frame)
+    /// Resolve a VideoFrame's texture (Split: cache hit).
+    pub fn resolve_video_frame_texture(
+        &self,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
+    ) -> Result<Texture> {
+        self.inner
+            .resolve_video_frame_texture(surface_id, texture_layout, width, height)
     }
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].
@@ -2106,9 +2130,9 @@ impl GpuContextFullAccess {
         self.inner.get_pixel_buffer(pool_id)
     }
 
-    /// Resolve a [`VideoFrame`]'s buffer from its surface_id.
-    pub fn resolve_video_frame_buffer(&self, frame: &VideoFrame) -> Result<PixelBuffer> {
-        self.inner.resolve_video_frame_buffer(frame)
+    /// Resolve a VideoFrame's buffer from its surface_id.
+    pub fn resolve_video_frame_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
+        self.inner.resolve_video_frame_buffer(surface_id)
     }
 
     /// Register a texture in the same-process texture cache.
@@ -2129,17 +2153,28 @@ impl GpuContextFullAccess {
             .register_texture_with_layout(id, texture, initial_layout);
     }
 
-    /// Resolve a [`VideoFrame`]'s full registration record (texture + layout).
+    /// Resolve a VideoFrame's full registration record (texture + layout).
     pub fn resolve_video_frame_registration(
         &self,
-        frame: &VideoFrame,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
     ) -> Result<Arc<TextureRegistration>> {
-        self.inner.resolve_video_frame_registration(frame)
+        self.inner
+            .resolve_video_frame_registration(surface_id, texture_layout, width, height)
     }
 
-    /// Resolve a [`VideoFrame`]'s texture.
-    pub fn resolve_video_frame_texture(&self, frame: &VideoFrame) -> Result<Texture> {
-        self.inner.resolve_video_frame_texture(frame)
+    /// Resolve a VideoFrame's texture.
+    pub fn resolve_video_frame_texture(
+        &self,
+        surface_id: &str,
+        texture_layout: Option<i32>,
+        width: u32,
+        height: u32,
+    ) -> Result<Texture> {
+        self.inner
+            .resolve_video_frame_texture(surface_id, texture_layout, width, height)
     }
 
     /// Acquire a new output texture with a UUID and register it in the cache.
@@ -2423,7 +2458,9 @@ mod tests {
             texture_layout: None,
         };
 
-        let resolved = gpu.resolve_video_frame_texture(&frame).expect("texture cache miss");
+        let resolved = gpu
+            .resolve_video_frame_texture(&frame.surface_id, frame.texture_layout, frame.width, frame.height)
+            .expect("texture cache miss");
         assert_eq!(resolved.width(), 640);
         assert_eq!(resolved.height(), 480);
 
@@ -2466,7 +2503,7 @@ mod tests {
         };
 
         let registration = gpu
-            .resolve_video_frame_registration(&frame)
+            .resolve_video_frame_registration(&frame.surface_id, frame.texture_layout, frame.width, frame.height)
             .expect("registration cache miss");
         assert_eq!(
             registration.current_layout(),
@@ -2477,7 +2514,7 @@ mod tests {
         // Update flow — consumer barriers transition + advance layout.
         registration.update_layout(VulkanLayout::TRANSFER_SRC_OPTIMAL);
         let registration2 = gpu
-            .resolve_video_frame_registration(&frame)
+            .resolve_video_frame_registration(&frame.surface_id, frame.texture_layout, frame.width, frame.height)
             .expect("second resolve");
         assert_eq!(
             registration2.current_layout(),
@@ -2496,7 +2533,7 @@ mod tests {
             ..frame
         };
         let registration3 = gpu
-            .resolve_video_frame_registration(&frame2)
+            .resolve_video_frame_registration(&frame2.surface_id, frame2.texture_layout, frame2.width, frame2.height)
             .expect("default-layout resolve");
         assert_eq!(
             registration3.current_layout(),
@@ -2581,7 +2618,9 @@ mod tests {
             fps: None,
             texture_layout: None,
         };
-        assert!(gpu.resolve_video_frame_texture(&frame).is_err());
+        assert!(gpu
+            .resolve_video_frame_texture(&frame.surface_id, frame.texture_layout, frame.width, frame.height)
+            .is_err());
 
         // Timeline semaphore publication slot is shared across Clones.
         #[cfg(target_os = "linux")]

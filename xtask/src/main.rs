@@ -3,8 +3,10 @@
 
 //! Build tasks for StreamLib development.
 //!
-//! Usage:
-//!   cargo xtask generate-schemas --runtime rust --project-dir libs/streamlib --output libs/streamlib/src/_generated_
+//! For routine codegen, each Rust crate's `build.rs` invokes
+//! `streamlib_jtd_codegen::build_rs::run_for_rust_crate` automatically.
+//! This subcommand exists for ad-hoc generation and the Python / Deno
+//! triggers (`setup.py` + `deno task setup`) that shell out to the CLI.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};

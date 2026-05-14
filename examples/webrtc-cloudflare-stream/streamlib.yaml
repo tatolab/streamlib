@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+package:
+  org: tatolab
+  name: webrtc-cloudflare-stream
+  version: 0.1.0
+  description: "WebRTC WHIP publisher example streaming to Cloudflare Stream"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+  "@tatolab/audio": "^1.0.0"
+  "@tatolab/camera": "^1.0.0"
+  "@tatolab/h264": "^1.0.0"
+  "@tatolab/opus": "^1.0.0"
+  "@tatolab/webrtc": "^1.0.0"
+
+patch:
+  "@tatolab/core":
+    path: ../../packages/core
+  "@tatolab/audio":
+    path: ../../packages/audio
+  "@tatolab/camera":
+    path: ../../packages/camera
+  "@tatolab/h264":
+    path: ../../packages/h264
+  "@tatolab/opus":
+    path: ../../packages/opus
+  "@tatolab/webrtc":
+    path: ../../packages/webrtc
+
+schemas:
+  AudioFrame:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"
+  AudioCaptureConfig:
+    package: "@tatolab/audio"
+  AudioResamplerConfig:
+    package: "@tatolab/audio"
+  AudioChannelConverterConfig:
+    package: "@tatolab/audio"
+  BufferRechunkerConfig:
+    package: "@tatolab/audio"
+  CameraConfig:
+    package: "@tatolab/camera"
+  H264EncoderConfig:
+    package: "@tatolab/h264"
+  OpusEncoderConfig:
+    package: "@tatolab/opus"
+  WebrtcWhipConfig:
+    package: "@tatolab/webrtc"

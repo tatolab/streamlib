@@ -173,6 +173,9 @@ path = "tests/bin/surface_share_crash_helper.rs"
 # (libs/streamlib-engine/tests/surface_share_subprocess_crash.rs). Linux only.
 required-features = []
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../streamlib-jtd-codegen" }
+
 # Build dependencies for protobuf compilation (surface-share service gRPC)
 [target.'cfg(target_os = "macos")'.build-dependencies]
 tonic-build = "0.12"

@@ -7,11 +7,16 @@
 // tracked as a follow-up to issue #358.
 #![cfg(any(target_os = "macos", target_os = "ios"))]
 
+#[allow(non_snake_case, unused_imports, dead_code, clippy::all)]
+mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
+
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use streamlib::sdk::_generated_::VideoFrame;
+use crate::_generated_::VideoFrame;
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::processors::ManualProcessor;

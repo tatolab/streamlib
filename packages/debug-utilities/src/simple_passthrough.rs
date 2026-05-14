@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use streamlib::sdk::_generated_::VideoFrame;
+use crate::_generated_::VideoFrame;
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ManualProcessor;

@@ -31,7 +31,7 @@ use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::_generated_::VideoFrame;
+use crate::_generated_::VideoFrame;
 
 use crate::crt_film_grain_kernel::{
     CrtFilmGrainInput, CrtFilmGrainInputs, CrtFilmGrainOutput, SandboxedCrtFilmGrain,
@@ -156,7 +156,12 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
         // Resolve input texture + its current_layout via Path 1 / Path 2
         // (the upstream BlendingCompositor publishes a texture-backed
         // surface_id dual-registered in texture_cache + surface_store).
-        let input_registration = gpu_ctx.resolve_video_frame_registration(&frame)?;
+        let input_registration = gpu_ctx.resolve_video_frame_registration(
+            &frame.surface_id,
+            frame.texture_layout,
+            frame.width,
+            frame.height,
+        )?;
         let input_texture = input_registration.texture().clone();
         let input_layout = input_registration.current_layout();
 
@@ -175,7 +180,12 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
             slot.texture.width(),
             slot.texture.height(),
         );
-        let slot_registration = gpu_ctx.resolve_video_frame_registration(&slot_videoframe)?;
+        let slot_registration = gpu_ctx.resolve_video_frame_registration(
+            &slot_videoframe.surface_id,
+            slot_videoframe.texture_layout,
+            slot_videoframe.width,
+            slot_videoframe.height,
+        )?;
         let slot_current_layout = slot_registration.current_layout();
 
         backend.kernel.dispatch(CrtFilmGrainInputs {

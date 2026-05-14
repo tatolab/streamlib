@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use streamlib::sdk::_generated_::VideoFrame;
+use crate::_generated_::VideoFrame;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
@@ -71,7 +71,7 @@ impl ReactiveProcessor for LinuxMp4WriterProcessor::Processor {
             .as_ref()
             .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
 
-        let pixel_buffer = gpu_ctx.resolve_video_frame_buffer(&frame)?;
+        let pixel_buffer = gpu_ctx.resolve_video_frame_buffer(&frame.surface_id)?;
         let raw_ptr = pixel_buffer.plane_base_address(0);
         let frame_byte_size = pixel_buffer.plane_size(0) as usize;
         if raw_ptr.is_null() || frame_byte_size == 0 {

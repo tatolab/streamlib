@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 

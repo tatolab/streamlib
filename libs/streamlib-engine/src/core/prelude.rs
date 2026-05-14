@@ -17,5 +17,3 @@ pub use crate::core::{
     runtime::Runner,
 };
 
-// Re-export generated IPC types
-pub use crate::_generated_::{AudioFrame, VideoFrame};

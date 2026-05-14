@@ -20,7 +20,7 @@ use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 use parking_lot::Mutex as ParkingLotMutex;
 use std::path::Path;
 use std::sync::Arc;
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::error::{Error, Result};
 
 use crate::plugin_info::{ParameterInfo, PluginInfo};

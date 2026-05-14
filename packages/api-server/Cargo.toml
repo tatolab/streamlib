@@ -21,6 +21,9 @@ path = "src/bin/generate_openapi.rs"
 default = []
 moq = ["dep:streamlib-moq"]
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-macros = { path = "../../libs/streamlib-macros" }

@@ -7,7 +7,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::InputMailboxes;

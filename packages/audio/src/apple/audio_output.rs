@@ -8,7 +8,7 @@ use rtrb::{Producer, RingBuffer};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 

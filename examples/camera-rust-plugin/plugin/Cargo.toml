@@ -10,6 +10,9 @@ publish = false
 [lib]
 crate-type = ["cdylib"]
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../../libs/streamlib-jtd-codegen" }
+
 [dependencies]
 streamlib = { path = "../../../libs/streamlib-sdk" }
 streamlib-plugin-abi = { path = "../../../libs/streamlib-plugin-abi" }

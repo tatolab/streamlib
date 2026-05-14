@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use streamlib::sdk::_generated_::{EncodedVideoFrame, VideoFrame};
+use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
@@ -135,7 +135,12 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264EncoderProcessor::Pro
             .as_mut()
             .ok_or_else(|| Error::Runtime("H.264 encoder not initialized".into()))?;
 
-        let texture = gpu_ctx.resolve_video_frame_texture(&frame)?;
+        let texture = gpu_ctx.resolve_video_frame_texture(
+            &frame.surface_id,
+            frame.texture_layout,
+            frame.width,
+            frame.height,
+        )?;
         let image_view = texture.vulkan_inner().image_view().map_err(|e| {
             Error::GpuError(format!("Failed to get image view: {e}"))
         })?;

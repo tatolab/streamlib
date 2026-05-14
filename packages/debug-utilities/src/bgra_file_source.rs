@@ -7,7 +7,7 @@
 // VideoFrame through the processor graph. Used for testing encode/decode
 // pipelines with pre-generated fixture files.
 
-use streamlib::sdk::_generated_::VideoFrame;
+use crate::_generated_::VideoFrame;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::HostPixelBufferRefExt;
 use streamlib::sdk::error::{Error, Result};

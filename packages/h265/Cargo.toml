@@ -13,9 +13,12 @@ categories = ["multimedia::video", "multimedia"]
 name = "streamlib_h265"
 crate-type = ["rlib", "cdylib"]
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
-# types under `streamlib::_generated_::tatolab__h265::*`, EncodedVideoFrame /
+# types under `crate::_generated_::tatolab__h265::*`, EncodedVideoFrame /
 # VideoFrame wire types, host RHI bridge for queue handles + allocator.
 streamlib = { path = "../../libs/streamlib-sdk" }
 

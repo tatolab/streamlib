@@ -31,12 +31,12 @@ pub mod logging {
     pub use crate::core::logging::*;
 }
 
-/// Generated types from JTD schemas.
-/// Run `cargo xtask generate-schemas` to regenerate.
-pub mod _generated_;
-
-// Re-export commonly used generated config types
-pub use _generated_::{EncodedAudioFrame, EncodedVideoFrame, VideoFrame};
+/// Generated types from JTD schemas. Regenerated at build time from
+/// `streamlib.yaml` via `build.rs` + `streamlib_jtd_codegen::build_rs`.
+#[allow(non_snake_case, unused_imports, clippy::all)]
+pub mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
 
 /// Schemas currently registered with the runtime.
 pub mod schemas {
@@ -66,9 +66,6 @@ pub use core::{
     media_clock::MediaClock,
     output,
     timestamp_delta_ms,
-    video_audio_delta_ms,
-    video_audio_synchronized,
-    video_audio_synchronized_with_tolerance,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
@@ -250,7 +247,6 @@ pub mod sdk {
     pub use crate::inventory;
     pub use crate::serde_json;
     pub use crate::crossbeam_channel;
-    pub use crate::_generated_;
 
     pub use streamlib_macros::{processor, schema_ident, schema_ident_any_version, ConfigDescriptor};
 

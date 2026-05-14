@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::_generated_::VideoFrame;
+use crate::_generated_::VideoFrame;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
 #[cfg(target_os = "linux")]
@@ -258,7 +258,15 @@ impl CameraToCudaCopyProcessor::Processor {
         // produces RGBA8 ring textures registered under fresh UUIDs
         // and rotates through them; `frame.surface_id` carries the
         // current ring slot's UUID.
-        let texture = backend.gpu_ctx.resolve_video_frame_texture(frame).map_err(|e| {
+        let texture = backend
+            .gpu_ctx
+            .resolve_video_frame_texture(
+                &frame.surface_id,
+                frame.texture_layout,
+                frame.width,
+                frame.height,
+            )
+            .map_err(|e| {
             Error::Configuration(format!(
                 "CameraToCudaCopy: resolve_video_frame_texture('{}'): {e}",
                 frame.surface_id

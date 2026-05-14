@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 

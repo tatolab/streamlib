@@ -3,7 +3,10 @@
 
 //! `@tatolab/display` — display processor carved out of the streamlib engine.
 
-pub mod _generated_;
+#[allow(non_snake_case, unused_imports, clippy::all)]
+pub mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
 
 // Cross-platform shim that re-exports the per-platform impl under a unified name.
 pub mod display;

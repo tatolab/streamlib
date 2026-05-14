@@ -13,9 +13,12 @@ categories = ["multimedia::audio", "multimedia"]
 name = "streamlib_opus"
 crate-type = ["rlib", "cdylib"]
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated wire
-# types under `streamlib::sdk::_generated_::*` (AudioFrame,
+# types under `crate::_generated_::*` (AudioFrame,
 # EncodedAudioFrame from `@tatolab/core`), error/result types.
 streamlib = { path = "../../libs/streamlib-sdk" }
 

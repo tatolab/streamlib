@@ -13,9 +13,12 @@ categories = ["development-tools::testing"]
 name = "streamlib_test_fixtures"
 crate-type = ["rlib", "cdylib"]
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
-# types under `streamlib::_generated_::tatolab__test_fixtures::*`.
+# types under `crate::_generated_::tatolab__test_fixtures::*`.
 streamlib = { path = "../../libs/streamlib-sdk" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
