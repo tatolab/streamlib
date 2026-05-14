@@ -13,6 +13,9 @@ categories = ["multimedia::video", "multimedia"]
 name = "streamlib_webrtc"
 crate-type = ["rlib", "cdylib"]
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-macros = { path = "../../libs/streamlib-macros" }

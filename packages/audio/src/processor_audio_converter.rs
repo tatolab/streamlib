@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::audio_resample::{AudioResampler, ResamplingQuality};
 use crate::audio_utils::{convert_channels, AudioRechunker};
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::error::Result;
 
 /// Target audio format for conversion.

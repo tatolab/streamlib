@@ -453,7 +453,7 @@ fn register_render_target_surface(
 
     // Mirror the texture into the GpuContext's local same-process cache
     // so downstream processors (BlendingCompositor here) hit Path 1 in
-    // `GpuContext::resolve_video_frame_registration` instead of the cross-
+    // `GpuContext::resolve_texture_registration_by_surface_id` instead of the cross-
     // process daemon lookup. This matches what `LinuxCameraProcessor`
     // does for its own ring textures (see `linux/processors/camera.rs`)
     // — without it, same-process consumers can't find the texture by

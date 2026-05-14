@@ -131,9 +131,6 @@ pub mod sdk {
     /// `crossbeam_channel` re-export — required by macro-emitted paths.
     pub use streamlib_engine::crossbeam_channel;
 
-    /// Generated schema types (config types, wire vocabulary types).
-    pub use streamlib_engine::_generated_;
-
     /// Schemas currently registered with the runtime.
     pub use streamlib_engine::schemas;
 

@@ -18,8 +18,13 @@
 
 #![cfg(target_os = "linux")]
 
+#[allow(non_snake_case, unused_imports, dead_code, clippy::all)]
+mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
+
 use std::path::PathBuf;
-use streamlib::sdk::_generated_::VideoFrame;
+use crate::_generated_::VideoFrame;
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_abi::export_plugin;

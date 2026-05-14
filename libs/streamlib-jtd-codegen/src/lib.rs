@@ -32,6 +32,7 @@ use streamlib_idents::{
     resolve_bare_schema_name, ResolvedPackage, ResolvedPackages, ResolverOptions, SemVer,
 };
 
+pub mod build_rs;
 pub mod ordering;
 pub mod sentinel;
 

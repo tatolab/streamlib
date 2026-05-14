@@ -79,3 +79,9 @@ plan.md
 # In-flight task handoff notes (working files for cross-session pickup,
 # not part of any PR). Pattern matches TASK-401.md, TASK-NNN.md, etc.
 TASK-*.md
+
+# Generated bindings — each consuming package/crate regenerates from its
+# own streamlib.yaml at build time (build.rs for Rust crates; setup.py
+# build hook for the Python SDK; `deno task setup` for Deno projects).
+# See docs/architecture/schema-identity-and-packaging.md.
+_generated_/

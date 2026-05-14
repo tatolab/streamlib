@@ -3,7 +3,7 @@
 
 use crate::_generated_::tatolab__audio::audio_resampler_config::Quality;
 use crate::audio_resample::{AudioResampler, ResamplingQuality};
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 

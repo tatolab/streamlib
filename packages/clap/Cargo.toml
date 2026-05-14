@@ -13,9 +13,12 @@ categories = ["multimedia::audio", "multimedia"]
 name = "streamlib_clap"
 crate-type = ["rlib", "cdylib"]
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated wire
-# types under `streamlib::sdk::_generated_::*` (AudioFrame).
+# types under `crate::_generated_::*` (AudioFrame).
 streamlib = { path = "../../libs/streamlib-sdk" }
 
 # Audio domain package — owns `ProcessorAudioConverter` + `AudioResampler`

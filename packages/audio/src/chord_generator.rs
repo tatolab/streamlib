@@ -4,7 +4,7 @@
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib::sdk::_generated_::AudioFrame;
+use crate::_generated_::AudioFrame;
 use streamlib::sdk::context::AudioTickContext;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::context::RuntimeContextFullAccess;

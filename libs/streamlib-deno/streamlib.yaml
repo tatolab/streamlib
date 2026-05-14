@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+package:
+  org: tatolab
+  name: streamlib-deno
+  version: 0.1.0
+  description: "Deno subprocess SDK — wire-vocabulary regen target"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+  "@tatolab/escalate": "^1.0.0"
+
+patch:
+  "@tatolab/core":
+    path: ../../packages/core
+  "@tatolab/escalate":
+    path: ../../packages/escalate
+
+schemas:
+  AudioFrame:
+    package: "@tatolab/core"
+  EncodedAudioFrame:
+    package: "@tatolab/core"
+  EncodedVideoFrame:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"
+  EscalateRequest:
+    package: "@tatolab/escalate"
+  EscalateResponse:
+    package: "@tatolab/escalate"

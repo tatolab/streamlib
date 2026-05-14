@@ -41,6 +41,11 @@ fn main() {
     std::process::exit(2);
 }
 
+#[allow(non_snake_case, unused_imports, dead_code, clippy::all)]
+mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
+
 #[cfg(target_os = "linux")]
 mod blending_compositor;
 // Sandboxed kernel wrapper for [`blending_compositor`] — was in

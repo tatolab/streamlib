@@ -6,7 +6,10 @@
 //! Cross-platform Rust gated to macOS / iOS / Linux (no Windows — the
 //! upstream `opus` crate isn't available there).
 
-pub mod _generated_;
+#[allow(non_snake_case, unused_imports, clippy::all)]
+pub mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
 
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
 pub mod opus_encoder;

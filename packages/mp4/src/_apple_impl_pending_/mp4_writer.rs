@@ -885,7 +885,7 @@ impl AppleMp4WriterProcessor::Processor {
             .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
 
         // Resolve buffer from surface_id
-        let buffer = gpu_context.resolve_video_frame_buffer(frame)?;
+        let buffer = gpu_context.resolve_pixel_buffer_by_surface_id(frame)?;
 
         // Step 1: GPU-accelerated conversion to NV12 using VTPixelTransferSession
         let nv12_pixel_buffer_ptr = pixel_transfer.convert_buffer_to_nv12(&buffer)?;

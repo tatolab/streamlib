@@ -169,7 +169,7 @@ impl AppleAudioCaptureProcessor::Processor {
                     let timestamp_ns =
                         streamlib::sdk::media_clock::MediaClock::now().as_nanos() as i64;
 
-                    let ipc_frame = streamlib::sdk::_generated_::AudioFrame {
+                    let ipc_frame = crate::_generated_::AudioFrame {
                         samples: data.to_vec(),
                         channels: 1,
                         sample_rate: sample_rate_clone,

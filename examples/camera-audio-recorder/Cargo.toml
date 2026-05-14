@@ -3,6 +3,9 @@ name = "camera-audio-recorder"
 version = "0.1.0"
 edition = "2024"
 
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
 [dependencies]
 streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-audio = { path = "../../packages/audio" }
@@ -10,3 +13,5 @@ streamlib-camera = { path = "../../packages/camera" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
 libc = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }

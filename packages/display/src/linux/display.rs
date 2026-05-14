@@ -496,7 +496,7 @@ impl DisplayEventLoopHandler {
             return;
         };
 
-        let ipc_frame: streamlib::sdk::_generated_::VideoFrame = match self.inputs.read("video") {
+        let ipc_frame: crate::_generated_::VideoFrame = match self.inputs.read("video") {
             Ok(frame) => frame,
             Err(e) => {
                 tracing::warn!("Display {}: Failed to read frame: {}", self.window_id, e);
@@ -505,7 +505,12 @@ impl DisplayEventLoopHandler {
         };
 
         // Resolve the texture + registration via the engine's blessed API.
-        let registration = match self.gpu_context.resolve_video_frame_registration(&ipc_frame) {
+        let registration = match self.gpu_context.resolve_texture_registration_by_surface_id(
+            &ipc_frame.surface_id,
+            ipc_frame.texture_layout,
+            ipc_frame.width,
+            ipc_frame.height,
+        ) {
             Ok(reg) => reg,
             Err(e) => {
                 tracing::warn!(
@@ -656,7 +661,7 @@ impl DisplayEventLoopHandler {
                     "display_{:03}_frame_{:06}_input_{:06}.png",
                     self.window_id, frame_idx, input_frame_index
                 ));
-                if let Ok(buf) = self.gpu_context.resolve_video_frame_buffer(&ipc_frame) {
+                if let Ok(buf) = self.gpu_context.resolve_pixel_buffer_by_surface_id(&ipc_frame.surface_id) {
                     use streamlib::sdk::engine::HostPixelBufferRefExt;
                     let vk_buf = buf.buffer_ref().vulkan_inner();
                     let mapped_ptr = vk_buf.mapped_ptr();

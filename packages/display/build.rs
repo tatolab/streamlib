@@ -8,6 +8,7 @@
 //! display processor `include_bytes!`'s them at compile time.
 
 fn main() {
+    streamlib_jtd_codegen::build_rs::run_for_rust_crate();
     #[cfg(target_os = "linux")]
     compile_shaders();
 }

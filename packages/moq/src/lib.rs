@@ -3,7 +3,10 @@
 
 //! `@tatolab/moq` — MoQ (Media over QUIC) publish/subscribe track processors.
 
-pub mod _generated_;
+#[allow(non_snake_case, unused_imports, clippy::all)]
+pub mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
 
 pub mod moq_catalog;
 pub mod moq_publish_track;

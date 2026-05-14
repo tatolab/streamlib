@@ -8,7 +8,7 @@
 //! display's refresh rate (60 Hz fallback). Each tick reads the latest
 //! frame from each input port (older queued frames are dropped by the
 //! port's `SkipToLatest` read mode), resolves the input frames'
-//! [`Texture`]s via `GpuContext::resolve_video_frame_registration`
+//! [`Texture`]s via `GpuContext::resolve_texture_registration_by_surface_id`
 //! (Path 1 — same-process texture cache), picks the next slot in a
 //! ring of pre-allocated render-target output `Texture`s,
 //! dispatches the compositor's graphics kernel into it, and emits the
@@ -40,7 +40,7 @@ use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
-use streamlib::sdk::_generated_::VideoFrame;
+use crate::_generated_::VideoFrame;
 
 // Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
 // the transitional rationale (this kernel previously lived in the
@@ -468,7 +468,7 @@ fn compose_one_frame(
     backend: &GpuBackend,
 ) -> Result<()> {
     // Resolve each upstream layer's texture + current layout via the
-    // engine's `resolve_video_frame_registration` (Path 1 same-process
+    // engine's `resolve_texture_registration_by_surface_id` (Path 1 same-process
     // texture cache). When a port has no new frame this tick (the
     // producer's clock didn't align with ours), reuse the prior
     // tick's resolved layer — see [`LoopState`] for the rationale.
@@ -504,12 +504,15 @@ fn compose_one_frame(
     // very first dispatch into a slot the layout is UNDEFINED (initial
     // declaration); on subsequent cycles it is SHADER_READ_ONLY_OPTIMAL
     // (left there by the prior render's post-barrier).
-    let output_registration =
-        gpu_ctx.resolve_video_frame_registration(&slot_videoframe(
-            &slot.surface_id,
-            width,
-            height,
-        ))?;
+    let output_registration = {
+        let synth = slot_videoframe(&slot.surface_id, width, height);
+        gpu_ctx.resolve_texture_registration_by_surface_id(
+            &synth.surface_id,
+            synth.texture_layout,
+            synth.width,
+            synth.height,
+        )?
+    };
     let output_current_layout = output_registration.current_layout();
 
     // Borrow each cached layer immutably for the dispatch — `state`
@@ -602,7 +605,12 @@ fn refresh_layer(
         return Ok(());
     }
     let frame: VideoFrame = inputs.read(port)?;
-    let registration = gpu_ctx.resolve_video_frame_registration(&frame)?;
+    let registration = gpu_ctx.resolve_texture_registration_by_surface_id(
+        &frame.surface_id,
+        frame.texture_layout,
+        frame.width,
+        frame.height,
+    )?;
     let texture = registration.texture().clone();
     *last = Some(ResolvedLayer {
         registration,

@@ -32,7 +32,7 @@ import {
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
 } from "../../../libs/streamlib-deno/mod.ts";
-import type { VideoFrame } from "../../../libs/streamlib-deno/_generated_/tatolab__core/video_frame.ts";
+import type { VideoFrame } from "./_generated_/tatolab__core/video_frame.ts";
 
 const BOGUS_SURFACE_ID = "00000000-0000-0000-0000-000000000000";
 

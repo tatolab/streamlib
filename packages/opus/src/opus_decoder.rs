@@ -3,7 +3,7 @@
 
 //! Opus audio decoder — libopus codec + reactive processor wrapper.
 
-use streamlib::sdk::_generated_::{AudioFrame, EncodedAudioFrame};
+use crate::_generated_::{AudioFrame, EncodedAudioFrame};
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 

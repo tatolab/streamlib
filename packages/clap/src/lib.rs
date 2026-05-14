@@ -5,7 +5,10 @@
 //!
 //! Apple-only today (macOS / iOS). Linux CLAP support is a future ticket.
 
-pub mod _generated_;
+#[allow(non_snake_case, unused_imports, clippy::all)]
+pub mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub mod clap_effect;

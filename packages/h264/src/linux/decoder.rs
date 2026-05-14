@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use streamlib::sdk::_generated_::{EncodedVideoFrame, VideoFrame};
+use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };

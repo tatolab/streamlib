@@ -4,7 +4,10 @@
 //! `@tatolab/debug-utilities` — utility processors for development,
 //! demos, and rigorous-input testing (BgraFileSource, SimplePassthrough).
 
-pub mod _generated_;
+#[allow(non_snake_case, unused_imports, clippy::all)]
+pub mod _generated_ {
+    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
+}
 
 pub mod simple_passthrough;
 

@@ -2419,7 +2419,7 @@ impl HostVulkanDevice {
     ///
     /// No-op when `target == UNDEFINED` (nothing to transition into).
     /// Path 2 of
-    /// [`crate::core::context::GpuContext::resolve_video_frame_registration`]
+    /// [`crate::core::context::GpuContext::resolve_texture_registration_by_surface_id`]
     /// calls this to align the consumer-side VkImage tracker with the
     /// surface-share IPC's `current_image_layout` (#633).
     pub fn acquire_from_foreign(

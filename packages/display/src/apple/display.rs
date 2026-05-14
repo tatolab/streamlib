@@ -290,7 +290,7 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
                     };
 
                     // Resolve buffer from surface_id using GpuContext
-                    let buffer = match gpu_context.resolve_video_frame_buffer(&ipc_frame) {
+                    let buffer = match gpu_context.resolve_pixel_buffer_by_surface_id(&ipc_frame) {
                         Ok(buf) => buf,
                         Err(e) => {
                             tracing::warn!(
