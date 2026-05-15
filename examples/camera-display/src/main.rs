@@ -46,14 +46,30 @@ fn main() -> Result<()> {
 fn run_typed_mode() -> Result<()> {
     let runtime = Runner::new()?;
 
+    // Register the `@tatolab/core` wire vocabulary so iceoryx2 publishers
+    // honor each schema's `max_payload_bytes` instead of falling back to
+    // the 64 KiB default.
+    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
+
     // =========================================================================
     // Add processors using typed API
     // =========================================================================
 
     println!("📷 Adding camera processor...");
     let device_id = std::env::var("STREAMLIB_CAMERA_DEVICE").ok();
+    // STREAMLIB_CAMERA_MAX_WIDTH / STREAMLIB_CAMERA_MAX_HEIGHT cap V4L2
+    // negotiation below the camera's advertised maximum. Useful for
+    // exercising non-1080p paths on devices that prefer 1080p.
+    let max_width = std::env::var("STREAMLIB_CAMERA_MAX_WIDTH")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    let max_height = std::env::var("STREAMLIB_CAMERA_MAX_HEIGHT")
+        .ok()
+        .and_then(|s| s.parse().ok());
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
         device_id,
+        max_width,
+        max_height,
         ..Default::default()
     }))?;
     println!("✓ Camera added: {}\n", camera);
@@ -97,6 +113,11 @@ fn run_typed_mode() -> Result<()> {
 /// String mode - simulates REST API with string-based processor names and JSON configs
 fn run_string_mode() -> Result<()> {
     let runtime = Runner::new()?;
+
+    // Register the `@tatolab/core` wire vocabulary so iceoryx2 publishers
+    // honor each schema's `max_payload_bytes` instead of falling back to
+    // the 64 KiB default.
+    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
 
     // =========================================================================
     // Add processors using string-based API (REST API style)
