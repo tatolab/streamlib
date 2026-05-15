@@ -39,7 +39,8 @@ def _bt2020_pq_color_info() -> ColorInfo:
     """Reference HDR10 stream tag — BT.2020 primaries + PQ transfer +
     BT.2020 NCL matrix + limited range. Matches the Rust + Deno
     fixtures so a wire-format drift on any axis surfaces in all three
-    suites."""
+    suites. Each axis is `Optional[Enum]`; the None case is exercised
+    by `test_color_info_all_none_serializes_as_empty_object`."""
     return ColorInfo(
         primaries=ColorInfoPrimaries.BT2020,
         transfer=ColorInfoTransfer.SMPTE2084,
@@ -94,6 +95,22 @@ def test_content_light_round_trip():
     assert payload == {"max_cll": 1000, "max_fall": 400}
     parsed = ContentLight.from_json_data(payload)
     assert parsed == cll
+
+
+def test_color_info_all_none_serializes_as_empty_object():
+    """Locks the foot-gun fix: a `ColorInfo` with every axis None
+    serializes as `{}` (no axis fields on the wire), matching Rust
+    `ColorInfo::default()` and Deno `{}`. Mentally revert the
+    `optionalProperties:` shape in the schema and the JSON gains
+    four `null` axis fields."""
+    info = ColorInfo(primaries=None, transfer=None, matrix=None, range=None)
+    payload = info.to_json_data()
+    assert payload == {}, (
+        f"ColorInfo with all-None axes must serialize to empty object, "
+        f"not {payload!r} — every axis is in optionalProperties and absence is unspecified"
+    )
+    parsed = ColorInfo.from_json_data(payload)
+    assert parsed == info
 
 
 def test_video_frame_with_full_color_metadata_round_trips():

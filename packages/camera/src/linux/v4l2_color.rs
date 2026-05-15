@@ -10,6 +10,11 @@
 //! `quantization`. When any sub-field is `*_DEFAULT` (= 0), V4L2's
 //! `V4L2_MAP_*_DEFAULT` macros derive the value from `colorspace`.
 //! We do the same here.
+//!
+//! Each axis returns `Option<T>` — `None` is the canonical "unknown"
+//! representation per `ColorInfo`'s `optionalProperties` shape.
+//! `V4L2_COLORSPACE_DEFAULT` and any unrecognized enumerant
+//! propagate as `None`.
 
 use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Transfer};
 use crate::_generated_::ColorInfo;
@@ -55,39 +60,42 @@ const V4L2_QUANTIZATION_LIM_RANGE: u32 = 2;
 /// Translate a V4L2 colorspace report to a `ColorInfo`. Sub-fields
 /// reported as `*_DEFAULT` are resolved from the `colorspace` field
 /// per the V4L2 mapping macros. `V4L2_COLORSPACE_DEFAULT` propagates
-/// as `unspecified` across the board.
+/// as `None` across the board.
 pub fn v4l2_color_to_color_info(
     colorspace: u32,
     xfer_func: u32,
     ycbcr_enc: u32,
     quantization: u32,
 ) -> ColorInfo {
-    let primaries = primaries_from_v4l2(colorspace);
-    let transfer = transfer_from_v4l2(xfer_func, colorspace);
-    let matrix = matrix_from_v4l2(ycbcr_enc, colorspace);
-    let range = range_from_v4l2(quantization, colorspace);
-    ColorInfo { primaries, transfer, matrix, range }
-}
-
-fn primaries_from_v4l2(colorspace: u32) -> Primaries {
-    match colorspace {
-        V4L2_COLORSPACE_DEFAULT => Primaries::Unspecified,
-        V4L2_COLORSPACE_SMPTE170M | V4L2_COLORSPACE_BT878 => Primaries::Smpte170m,
-        V4L2_COLORSPACE_SMPTE240M => Primaries::Smpte240m,
-        V4L2_COLORSPACE_REC709 => Primaries::Bt709,
-        V4L2_COLORSPACE_470_SYSTEM_M => Primaries::Bt470M,
-        V4L2_COLORSPACE_470_SYSTEM_BG => Primaries::Bt470Bg,
-        // V4L2_COLORSPACE_JPEG is "shorthand for SRGB primaries +
-        // BT.601 matrix + full range" per kernel comment.
-        V4L2_COLORSPACE_JPEG | V4L2_COLORSPACE_SRGB | V4L2_COLORSPACE_OPRGB => Primaries::Bt709,
-        V4L2_COLORSPACE_BT2020 => Primaries::Bt2020,
-        V4L2_COLORSPACE_DCI_P3 => Primaries::Smpte431,
-        // RAW, anything unrecognized: don't guess.
-        _ => Primaries::Unspecified,
+    ColorInfo {
+        primaries: primaries_from_v4l2(colorspace),
+        transfer: transfer_from_v4l2(xfer_func, colorspace),
+        matrix: matrix_from_v4l2(ycbcr_enc, colorspace),
+        range: range_from_v4l2(quantization, colorspace),
     }
 }
 
-fn transfer_from_v4l2(xfer_func: u32, colorspace: u32) -> Transfer {
+fn primaries_from_v4l2(colorspace: u32) -> Option<Primaries> {
+    match colorspace {
+        V4L2_COLORSPACE_DEFAULT => None,
+        V4L2_COLORSPACE_SMPTE170M | V4L2_COLORSPACE_BT878 => Some(Primaries::Smpte170m),
+        V4L2_COLORSPACE_SMPTE240M => Some(Primaries::Smpte240m),
+        V4L2_COLORSPACE_REC709 => Some(Primaries::Bt709),
+        V4L2_COLORSPACE_470_SYSTEM_M => Some(Primaries::Bt470M),
+        V4L2_COLORSPACE_470_SYSTEM_BG => Some(Primaries::Bt470Bg),
+        // V4L2_COLORSPACE_JPEG is "shorthand for SRGB primaries +
+        // BT.601 matrix + full range" per kernel comment.
+        V4L2_COLORSPACE_JPEG | V4L2_COLORSPACE_SRGB | V4L2_COLORSPACE_OPRGB => {
+            Some(Primaries::Bt709)
+        }
+        V4L2_COLORSPACE_BT2020 => Some(Primaries::Bt2020),
+        V4L2_COLORSPACE_DCI_P3 => Some(Primaries::Smpte431),
+        // RAW, anything unrecognized: don't guess.
+        _ => None,
+    }
+}
+
+fn transfer_from_v4l2(xfer_func: u32, colorspace: u32) -> Option<Transfer> {
     let resolved = if xfer_func == V4L2_XFER_FUNC_DEFAULT {
         // V4L2_MAP_XFER_FUNC_DEFAULT: derive from colorspace.
         match colorspace {
@@ -96,49 +104,49 @@ fn transfer_from_v4l2(xfer_func: u32, colorspace: u32) -> Transfer {
             V4L2_COLORSPACE_DCI_P3 => V4L2_XFER_FUNC_DCI_P3,
             V4L2_COLORSPACE_RAW => V4L2_XFER_FUNC_NONE,
             V4L2_COLORSPACE_SRGB | V4L2_COLORSPACE_JPEG => V4L2_XFER_FUNC_SRGB,
-            V4L2_COLORSPACE_DEFAULT => return Transfer::Unspecified,
+            V4L2_COLORSPACE_DEFAULT => return None,
             _ => V4L2_XFER_FUNC_709,
         }
     } else {
         xfer_func
     };
     match resolved {
-        V4L2_XFER_FUNC_709 => Transfer::Bt709,
-        V4L2_XFER_FUNC_SRGB => Transfer::Srgb,
-        // OPRGB / DCI_P3 have no direct H.273 mapping; report
-        // unspecified rather than misrepresent.
-        V4L2_XFER_FUNC_OPRGB | V4L2_XFER_FUNC_DCI_P3 => Transfer::Unspecified,
-        V4L2_XFER_FUNC_SMPTE240M => Transfer::Smpte240m,
-        V4L2_XFER_FUNC_NONE => Transfer::Linear,
-        V4L2_XFER_FUNC_SMPTE2084 => Transfer::Smpte2084,
-        _ => Transfer::Unspecified,
+        V4L2_XFER_FUNC_709 => Some(Transfer::Bt709),
+        V4L2_XFER_FUNC_SRGB => Some(Transfer::Srgb),
+        // OPRGB / DCI_P3 have no direct H.273 mapping; report None
+        // rather than misrepresent.
+        V4L2_XFER_FUNC_OPRGB | V4L2_XFER_FUNC_DCI_P3 => None,
+        V4L2_XFER_FUNC_SMPTE240M => Some(Transfer::Smpte240m),
+        V4L2_XFER_FUNC_NONE => Some(Transfer::Linear),
+        V4L2_XFER_FUNC_SMPTE2084 => Some(Transfer::Smpte2084),
+        _ => None,
     }
 }
 
-fn matrix_from_v4l2(ycbcr_enc: u32, colorspace: u32) -> Matrix {
+fn matrix_from_v4l2(ycbcr_enc: u32, colorspace: u32) -> Option<Matrix> {
     let resolved = if ycbcr_enc == V4L2_YCBCR_ENC_DEFAULT {
         // V4L2_MAP_YCBCR_ENC_DEFAULT: derive from colorspace.
         match colorspace {
             V4L2_COLORSPACE_REC709 | V4L2_COLORSPACE_DCI_P3 => V4L2_YCBCR_ENC_709,
             V4L2_COLORSPACE_BT2020 => V4L2_YCBCR_ENC_BT2020,
             V4L2_COLORSPACE_SMPTE240M => V4L2_YCBCR_ENC_SMPTE240M,
-            V4L2_COLORSPACE_DEFAULT => return Matrix::Unspecified,
+            V4L2_COLORSPACE_DEFAULT => return None,
             _ => V4L2_YCBCR_ENC_601,
         }
     } else {
         ycbcr_enc
     };
     match resolved {
-        V4L2_YCBCR_ENC_601 | V4L2_YCBCR_ENC_XV601 | V4L2_YCBCR_ENC_SYCC => Matrix::Smpte170m,
-        V4L2_YCBCR_ENC_709 | V4L2_YCBCR_ENC_XV709 => Matrix::Bt709,
-        V4L2_YCBCR_ENC_BT2020 => Matrix::Bt2020Ncl,
-        V4L2_YCBCR_ENC_BT2020_CONST_LUM => Matrix::Bt2020Cl,
-        V4L2_YCBCR_ENC_SMPTE240M => Matrix::Smpte240m,
-        _ => Matrix::Unspecified,
+        V4L2_YCBCR_ENC_601 | V4L2_YCBCR_ENC_XV601 | V4L2_YCBCR_ENC_SYCC => Some(Matrix::Smpte170m),
+        V4L2_YCBCR_ENC_709 | V4L2_YCBCR_ENC_XV709 => Some(Matrix::Bt709),
+        V4L2_YCBCR_ENC_BT2020 => Some(Matrix::Bt2020Ncl),
+        V4L2_YCBCR_ENC_BT2020_CONST_LUM => Some(Matrix::Bt2020Cl),
+        V4L2_YCBCR_ENC_SMPTE240M => Some(Matrix::Smpte240m),
+        _ => None,
     }
 }
 
-fn range_from_v4l2(quantization: u32, colorspace: u32) -> Range {
+fn range_from_v4l2(quantization: u32, colorspace: u32) -> Option<Range> {
     let resolved = if quantization == V4L2_QUANTIZATION_DEFAULT {
         // V4L2_MAP_QUANTIZATION_DEFAULT: full for JPEG / SRGB / OPRGB,
         // limited for everything else.
@@ -146,16 +154,16 @@ fn range_from_v4l2(quantization: u32, colorspace: u32) -> Range {
             V4L2_COLORSPACE_JPEG | V4L2_COLORSPACE_SRGB | V4L2_COLORSPACE_OPRGB => {
                 V4L2_QUANTIZATION_FULL_RANGE
             }
-            V4L2_COLORSPACE_DEFAULT => return Range::Unspecified,
+            V4L2_COLORSPACE_DEFAULT => return None,
             _ => V4L2_QUANTIZATION_LIM_RANGE,
         }
     } else {
         quantization
     };
     match resolved {
-        V4L2_QUANTIZATION_FULL_RANGE => Range::Full,
-        V4L2_QUANTIZATION_LIM_RANGE => Range::Limited,
-        _ => Range::Unspecified,
+        V4L2_QUANTIZATION_FULL_RANGE => Some(Range::Full),
+        V4L2_QUANTIZATION_LIM_RANGE => Some(Range::Limited),
+        _ => None,
     }
 }
 
@@ -171,10 +179,10 @@ mod tests {
             V4L2_YCBCR_ENC_709,
             V4L2_QUANTIZATION_LIM_RANGE,
         );
-        assert_eq!(info.primaries, Primaries::Bt709);
-        assert_eq!(info.transfer, Transfer::Bt709);
-        assert_eq!(info.matrix, Matrix::Bt709);
-        assert_eq!(info.range, Range::Limited);
+        assert_eq!(info.primaries, Some(Primaries::Bt709));
+        assert_eq!(info.transfer, Some(Transfer::Bt709));
+        assert_eq!(info.matrix, Some(Matrix::Bt709));
+        assert_eq!(info.range, Some(Range::Limited));
     }
 
     #[test]
@@ -187,10 +195,10 @@ mod tests {
             V4L2_YCBCR_ENC_DEFAULT,
             V4L2_QUANTIZATION_DEFAULT,
         );
-        assert_eq!(info.primaries, Primaries::Smpte170m);
-        assert_eq!(info.transfer, Transfer::Bt709);
-        assert_eq!(info.matrix, Matrix::Smpte170m);
-        assert_eq!(info.range, Range::Limited);
+        assert_eq!(info.primaries, Some(Primaries::Smpte170m));
+        assert_eq!(info.transfer, Some(Transfer::Bt709));
+        assert_eq!(info.matrix, Some(Matrix::Smpte170m));
+        assert_eq!(info.range, Some(Range::Limited));
     }
 
     #[test]
@@ -204,10 +212,10 @@ mod tests {
             V4L2_YCBCR_ENC_DEFAULT,
             V4L2_QUANTIZATION_DEFAULT,
         );
-        assert_eq!(info.primaries, Primaries::Bt709);
-        assert_eq!(info.transfer, Transfer::Srgb);
-        assert_eq!(info.matrix, Matrix::Smpte170m);
-        assert_eq!(info.range, Range::Full);
+        assert_eq!(info.primaries, Some(Primaries::Bt709));
+        assert_eq!(info.transfer, Some(Transfer::Srgb));
+        assert_eq!(info.matrix, Some(Matrix::Smpte170m));
+        assert_eq!(info.range, Some(Range::Full));
     }
 
     #[test]
@@ -218,24 +226,24 @@ mod tests {
             V4L2_YCBCR_ENC_DEFAULT,
             V4L2_QUANTIZATION_DEFAULT,
         );
-        assert_eq!(info.primaries, Primaries::Bt2020);
-        assert_eq!(info.transfer, Transfer::Bt709);
-        assert_eq!(info.matrix, Matrix::Bt2020Ncl);
-        assert_eq!(info.range, Range::Limited);
+        assert_eq!(info.primaries, Some(Primaries::Bt2020));
+        assert_eq!(info.transfer, Some(Transfer::Bt709));
+        assert_eq!(info.matrix, Some(Matrix::Bt2020Ncl));
+        assert_eq!(info.range, Some(Range::Limited));
     }
 
     #[test]
-    fn colorspace_default_propagates_unspecified() {
+    fn colorspace_default_propagates_none_on_every_axis() {
         let info = v4l2_color_to_color_info(
             V4L2_COLORSPACE_DEFAULT,
             V4L2_XFER_FUNC_DEFAULT,
             V4L2_YCBCR_ENC_DEFAULT,
             V4L2_QUANTIZATION_DEFAULT,
         );
-        assert_eq!(info.primaries, Primaries::Unspecified);
-        assert_eq!(info.transfer, Transfer::Unspecified);
-        assert_eq!(info.matrix, Matrix::Unspecified);
-        assert_eq!(info.range, Range::Unspecified);
+        assert_eq!(info.primaries, None);
+        assert_eq!(info.transfer, None);
+        assert_eq!(info.matrix, None);
+        assert_eq!(info.range, None);
     }
 
     #[test]
@@ -248,9 +256,21 @@ mod tests {
             V4L2_YCBCR_ENC_BT2020,
             V4L2_QUANTIZATION_LIM_RANGE,
         );
-        assert_eq!(info.primaries, Primaries::Bt2020);
-        assert_eq!(info.transfer, Transfer::Smpte2084);
-        assert_eq!(info.matrix, Matrix::Bt2020Ncl);
-        assert_eq!(info.range, Range::Limited);
+        assert_eq!(info.primaries, Some(Primaries::Bt2020));
+        assert_eq!(info.transfer, Some(Transfer::Smpte2084));
+        assert_eq!(info.matrix, Some(Matrix::Bt2020Ncl));
+        assert_eq!(info.range, Some(Range::Limited));
+    }
+
+    #[test]
+    fn default_color_info_is_all_none() {
+        // Locks the foot-gun fix: ColorInfo::default() must be the
+        // semantic "unknown" state, not whatever the codegen puts on
+        // an alphabetically-first variant.
+        let info = ColorInfo::default();
+        assert_eq!(info.primaries, None);
+        assert_eq!(info.transfer, None);
+        assert_eq!(info.matrix, None);
+        assert_eq!(info.range, None);
     }
 }

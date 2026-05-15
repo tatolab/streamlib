@@ -10,21 +10,34 @@
 # MediaFoundation): primaries, transfer, matrix, range. Values align
 # with ITU-T H.273 / ISO/IEC 23091-2 enum identifiers so encoder /
 # decoder / muxer code hands them through verbatim — no translation
-# tables. Numeric H.273 values are mapped from / to these string
-# discriminants by helpers in `packages/core/src/color_info_ext.rs`.
+# tables.
+#
+# Each axis is an `optionalProperties` field — **absence on the wire
+# IS the unknown state.** The H.273 "Unspecified" enumerant (value 2
+# on every axis) maps to `None` here, matching what every consumer
+# already does in practice (V4L2 detect collapses unknown values into
+# absence; FFmpeg's encoder treats `AVCOL_PRI_UNSPECIFIED` as "skip
+# the colour_description block"). This shape mirrors the W3C
+# WebCodecs `VideoColorSpace` interface, which uses nullable enum
+# fields with no explicit "unspecified" variant for the same reason —
+# JSON-spec peers in this problem space converge on Option-wrapping
+# rather than sentinel enum values, because the wrapper makes
+# `ColorInfo::default()` semantically correct (all axes absent =
+# unknown) without relying on a per-variant default attribute the
+# generator cannot reorder.
 
 metadata:
   type: ColorInfo
   description: "Per-frame color description (H.273 / ITU-T VUI 4-tuple)"
 
-properties:
+optionalProperties:
   primaries:
     metadata:
       description: >
         Color primaries (chromaticities). Maps to H.273
-        `ColourPrimaries` enumerant.
+        `ColourPrimaries` enumerant. Absent = unspecified
+        (H.273 value 2).
     enum:
-      - unspecified           # H.273 value 2
       - bt709                 # H.273 value 1 — Rec.709, sRGB primaries
       - bt470_m               # H.273 value 4 — System M, NTSC 1953
       - bt470_bg              # H.273 value 5 — System B/G, EBU
@@ -40,9 +53,9 @@ properties:
     metadata:
       description: >
         Transfer characteristic (EOTF / OETF). Maps to H.273
-        `TransferCharacteristics` enumerant.
+        `TransferCharacteristics` enumerant. Absent = unspecified
+        (H.273 value 2).
     enum:
-      - unspecified           # H.273 value 2
       - bt709                 # H.273 value 1 — Rec.709 OETF
       - gamma22               # H.273 value 4
       - gamma28               # H.273 value 5
@@ -63,9 +76,9 @@ properties:
     metadata:
       description: >
         YCbCr matrix coefficients. Maps to H.273
-        `MatrixCoefficients` enumerant.
+        `MatrixCoefficients` enumerant. Absent = unspecified
+        (H.273 value 2).
     enum:
-      - unspecified           # H.273 value 2
       - identity              # H.273 value 0 — RGB / GBR (no matrix)
       - bt709                 # H.273 value 1
       - fcc                   # H.273 value 4 — FCC 73.682
@@ -84,7 +97,7 @@ properties:
       description: >
         Quantization range. Maps to H.264/H.265 VUI
         `video_full_range_flag` (`limited` = 0, `full` = 1).
+        Absent = unspecified.
     enum:
-      - unspecified
       - limited
       - full

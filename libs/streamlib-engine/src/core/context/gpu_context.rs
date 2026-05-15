@@ -2632,10 +2632,10 @@ mod tests {
             fps: None,
             texture_layout: None,
             color_info: Some(ColorInfo {
-                primaries: Primaries::Bt2020,
-                transfer: Transfer::Smpte2084,
-                matrix: Matrix::Bt2020Ncl,
-                range: Range::Limited,
+                primaries: Some(Primaries::Bt2020),
+                transfer: Some(Transfer::Smpte2084),
+                matrix: Some(Matrix::Bt2020Ncl),
+                range: Some(Range::Limited),
             }),
             mastering_display: Some(MasteringDisplay {
                 // BT.2020 primaries in 1/50000 increments — round-trip
@@ -2670,10 +2670,26 @@ mod tests {
         let serialized = serde_json::to_string(&with_color).unwrap();
         let parsed: VideoFrame = serde_json::from_str(&serialized).unwrap();
         let parsed_color = parsed.color_info.expect("color_info round-trips");
-        assert_eq!(parsed_color.primaries, Primaries::Bt2020);
-        assert_eq!(parsed_color.transfer, Transfer::Smpte2084);
-        assert_eq!(parsed_color.matrix, Matrix::Bt2020Ncl);
-        assert_eq!(parsed_color.range, Range::Limited);
+        assert_eq!(parsed_color.primaries, Some(Primaries::Bt2020));
+        assert_eq!(parsed_color.transfer, Some(Transfer::Smpte2084));
+        assert_eq!(parsed_color.matrix, Some(Matrix::Bt2020Ncl));
+        assert_eq!(parsed_color.range, Some(Range::Limited));
+
+        // ColorInfo with all axes None — wire-format-correct
+        // representation of "I have a ColorInfo record but every
+        // axis is unspecified." Lock the per-axis skip-on-None
+        // behavior; mentally revert `optionalProperties` in the
+        // schema and the JSON gains four `null` axis fields.
+        let info_all_none = ColorInfo::default();
+        let json_info_none = serde_json::to_value(&info_all_none).expect("serialize");
+        assert_eq!(
+            json_info_none,
+            serde_json::json!({}),
+            "ColorInfo::default() serializes as empty object — every axis is None and skipped",
+        );
+        let parsed_info_none: ColorInfo =
+            serde_json::from_value(json_info_none).expect("deserialize empty");
+        assert_eq!(parsed_info_none, ColorInfo::default());
         let parsed_mdcv = parsed.mastering_display.expect("mastering_display round-trips");
         assert_eq!(parsed_mdcv.display_primaries_r_x, 35400);
         assert_eq!(parsed_mdcv.max_luminance, 10_000_000);

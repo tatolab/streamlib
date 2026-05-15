@@ -83,6 +83,17 @@ Deno.test("ContentLight round-trips with cd/m^2 values", () => {
   assertEquals(parsed, cll);
 });
 
+Deno.test("ColorInfo with no axes set serializes as empty object", () => {
+  // Locks the foot-gun fix: every axis is optional in the schema, so
+  // a ColorInfo with no axes set serializes to `{}` (no axis fields
+  // on the wire). Mirrors Rust `ColorInfo::default()` and the Python
+  // empty-dict invariant. Mentally revert `optionalProperties:` in
+  // the schema and the JSON gains four `null` axis fields.
+  const info: ColorInfo = {};
+  const json = JSON.parse(JSON.stringify(info));
+  assertEquals(json, {}, "ColorInfo with no axes must round-trip as empty object");
+});
+
 Deno.test("VideoFrame with all color metadata round-trips", () => {
   const frame: VideoFrame = {
     surface_id: "s",
