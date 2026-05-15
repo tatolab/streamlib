@@ -75,15 +75,16 @@ impl ColorConverterPushConstants {
 
     /// Build push-constants from a resolved color description.
     ///
-    /// `src_kind` disambiguates RGB-encoded sources (no matrix step
-    /// needed; the resolver collapses matrix → `Identity`) from
-    /// YCbCr-encoded sources (matrix + range expansion).
+    /// RGB vs YCbCr source-kind disambiguation lives upstream of this
+    /// call in [`crate::core::color::resolve_color_defaults`] — RGB
+    /// sources arrive with matrix collapsed to `Identity` and range
+    /// resolved to `Full`, so the same decomposition path handles
+    /// both without a separate kind parameter.
     ///
     /// `dst_transfer` is the output curve the shader encodes to. When
     /// it matches `info.transfer`, the transfer path is bypassed.
     pub fn from_resolved(
         info: &ResolvedColorInfo,
-        src_kind: ColorSpaceKind,
         dst_transfer: TransferId,
         width: u32,
         height: u32,
@@ -99,7 +100,6 @@ impl ColorConverterPushConstants {
         // matched curves leave it off — saves a pow() per channel.
         // Also skip when both ends are Linear (passthrough).
         let mut flags = 0u32;
-        let _ = src_kind; // kind is implicit in resolver-collapsed matrix
         if transfer_in != transfer_out {
             flags |= Self::FLAG_APPLY_TRANSFER;
         }
@@ -180,13 +180,22 @@ pub const COLOR_CONVERTER_PUSH_CONSTANT_SIZE: u32 =
 
 /// Whether `format` denotes RGB-encoded pixel data (input is already
 /// in RGB linear-or-encoded form and skips the YCbCr→RGB matrix step).
+///
+/// Exhaustive over [`PixelFormat`] — adding a new YUV variant without
+/// extending this match is a compile-time error rather than a silent
+/// route through the RGB code path.
 pub fn pixel_format_color_kind(format: PixelFormat) -> ColorSpaceKind {
     match format {
-        PixelFormat::Rgba32 | PixelFormat::Bgra32 => ColorSpaceKind::Rgb,
-        PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange | PixelFormat::Yuyv422 => {
-            ColorSpaceKind::Yuv
-        }
-        _ => ColorSpaceKind::Rgb,
+        PixelFormat::Rgba32
+        | PixelFormat::Bgra32
+        | PixelFormat::Argb32
+        | PixelFormat::Rgba64
+        | PixelFormat::Gray8
+        | PixelFormat::Unknown => ColorSpaceKind::Rgb,
+        PixelFormat::Nv12VideoRange
+        | PixelFormat::Nv12FullRange
+        | PixelFormat::Uyvy422
+        | PixelFormat::Yuyv422 => ColorSpaceKind::Yuv,
     }
 }
 
@@ -366,7 +375,6 @@ mod tests {
         };
         let pc = ColorConverterPushConstants::from_resolved(
             &info,
-            ColorSpaceKind::Yuv,
             TransferId::Bt709,
             1920,
             1080,
@@ -392,7 +400,6 @@ mod tests {
         };
         let pc = ColorConverterPushConstants::from_resolved(
             &info,
-            ColorSpaceKind::Yuv,
             TransferId::Srgb,
             640,
             480,
@@ -415,7 +422,6 @@ mod tests {
         };
         let pc = ColorConverterPushConstants::from_resolved(
             &info,
-            ColorSpaceKind::Yuv,
             TransferId::Srgb,
             1920,
             1080,

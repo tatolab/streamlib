@@ -16,9 +16,8 @@ use parking_lot::Mutex;
 
 use crate::core::color::{ResolvedColorInfo, TransferId};
 use crate::core::rhi::{
-    pixel_format_color_kind, ColorConverterPushConstants, ComputeBindingSpec,
-    ComputeKernelDescriptor, PixelFormat, SourceLayoutInfo, Texture,
-    COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+    ColorConverterPushConstants, ComputeBindingSpec, ComputeKernelDescriptor, PixelFormat,
+    SourceLayoutInfo, Texture, COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
 };
 use crate::core::{Error, Result};
 
@@ -97,7 +96,6 @@ impl VulkanColorConverter {
         kernel.set_storage_image(1, dst)?;
         let push = ColorConverterPushConstants::from_resolved(
             info,
-            pixel_format_color_kind(self.src_format),
             dst_transfer,
             width,
             height,
