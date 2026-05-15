@@ -217,6 +217,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Proc
                     scaling_mode,
                     present_target: None,
                     graphics_kernel: None,
+                    current_frame_color_info: None,
                     frame_limit,
                     png_sample_dir,
                     png_sample_every,
@@ -323,6 +324,12 @@ struct DisplayEventLoopHandler {
     scaling_mode: ScalingMode,
     present_target: Option<VulkanPresentTarget>,
     graphics_kernel: Option<Arc<VulkanGraphicsKernel>>,
+    /// Last-applied frame `color_info` (package-local serialized form).
+    /// When a new frame arrives with a different value the swapchain is
+    /// recreated against the new `VkColorSpaceKHR` priority pick. `None`
+    /// covers both "no frame seen yet" and "every frame so far has had
+    /// `color_info: None`" — both stay on the legacy SDR pick.
+    current_frame_color_info: Option<crate::_generated_::ColorInfo>,
     frame_limit: Option<u64>,
     png_sample_dir: Option<std::path::PathBuf>,
     png_sample_every: u64,
@@ -358,12 +365,16 @@ impl ApplicationHandler for DisplayEventLoopHandler {
         };
 
         // Build the present target + graphics kernel for steady-state rendering.
+        // Initial colorspace pick is `None` — the legacy SDR pick. The first
+        // frame's `color_info`, if non-`None`, drives a recreate in
+        // `render_frame` once a frame actually arrives.
         let present_target = match VulkanPresentTarget::new(
             &self.vulkan_device,
             &window,
             self.width,
             self.height,
             self.vsync,
+            None,
         ) {
             Ok(pt) => pt,
             Err(e) => {
@@ -436,7 +447,14 @@ impl ApplicationHandler for DisplayEventLoopHandler {
                 self.height = new_size.height;
 
                 if let Some(pt) = self.present_target.as_mut() {
-                    if let Err(e) = pt.recreate(new_size.width, new_size.height) {
+                    // Resize-driven recreate keeps the current colorspace pick.
+                    let engine_color_info =
+                        package_color_info_to_engine(self.current_frame_color_info.as_ref());
+                    if let Err(e) = pt.recreate(
+                        new_size.width,
+                        new_size.height,
+                        engine_color_info.as_ref(),
+                    ) {
                         tracing::error!(
                             "Display {}: Failed to recreate present target: {}",
                             self.window_id,
@@ -503,6 +521,84 @@ impl DisplayEventLoopHandler {
                 return;
             }
         };
+
+        // Colorspace negotiation — recreate the swapchain if this frame's
+        // `color_info` differs from the last-applied value. First-frame
+        // inspection: when the very first frame arrives with non-`None`
+        // color_info, the present target was constructed in `resumed()`
+        // with `None` (legacy SDR pick) and is now upgraded to whatever
+        // the priority walk picks for the frame's color description.
+        // On NVIDIA + X11 (today's dev box) the surface only exposes
+        // SRGB_NONLINEAR so the pick stays SDR regardless — the recreate
+        // is a no-op-cost path that only fires when the WSI exposes
+        // wider colorspaces.
+        if ipc_frame.color_info != self.current_frame_color_info {
+            let new_engine_color_info =
+                package_color_info_to_engine(ipc_frame.color_info.as_ref());
+            let new_extent = present_target.current_extent();
+            let prior_color_format = present_target.color_format();
+            if let Err(e) = present_target.recreate(
+                new_extent.0,
+                new_extent.1,
+                new_engine_color_info.as_ref(),
+            ) {
+                tracing::warn!(
+                    "Display {}: ColorInfo recreate failed (keeping previous swapchain): {}",
+                    self.window_id, e
+                );
+            } else {
+                self.current_frame_color_info = ipc_frame.color_info.clone();
+                // If the recreate landed on a new color format (e.g.
+                // SDR BGRA8_UNORM → HDR10 A2B10G10R10_UNORM_PACK32),
+                // the cached graphics kernel was built against the
+                // prior attachment format and must be rebuilt before
+                // the next draw.
+                let new_color_format = present_target.color_format();
+                if new_color_format != prior_color_format {
+                    match build_display_kernel(&self.vulkan_device, new_color_format) {
+                        Ok(new_kernel) => {
+                            tracing::info!(
+                                "Display {}: rebuilt display blit kernel for new color format \
+                                 {:?} (was {:?})",
+                                self.window_id, new_color_format, prior_color_format
+                            );
+                            self.graphics_kernel = Some(Arc::new(new_kernel));
+                            // Skip this frame's draw — the cloned
+                            // `graphics_kernel` Arc above matches the
+                            // old format. The next frame uses the new
+                            // kernel.
+                            self.frame_counter.fetch_add(1, Ordering::Relaxed);
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Display {}: failed to rebuild display blit kernel: {}",
+                                self.window_id, e
+                            );
+                            self.frame_counter.fetch_add(1, Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // HDR static metadata push — fires only when the picked
+        // colorspace is one of the PQ/HLG variants (gated by
+        // `set_hdr_metadata` itself) and the frame carries the
+        // sidecar metadata. Subsequent frames with byte-identical
+        // payload short-circuit inside the present target.
+        if let (Some(md), Some(cl)) = (
+            package_mastering_display_to_engine(ipc_frame.mastering_display.as_ref()),
+            package_content_light_to_engine(ipc_frame.content_light.as_ref()),
+        ) {
+            if let Err(e) = present_target.set_hdr_metadata(&md, &cl) {
+                tracing::warn!(
+                    "Display {}: vkSetHdrMetadataEXT failed: {}",
+                    self.window_id, e
+                );
+            }
+        }
 
         // Resolve the texture + registration via the engine's blessed API.
         let registration = match self.gpu_context.resolve_texture_registration_by_surface_id(
@@ -798,6 +894,64 @@ impl DisplayEventLoopHandler {
             }
         }
     }
+}
+
+/// Convert a package-local `_generated_::ColorInfo` (or HDR sidecar) into
+/// the engine-facade equivalent. Both types are codegen-generated from
+/// the same JTD schema with identical serde rename names, so a one-shot
+/// JSON round-trip converts cleanly. Returns `None` on serde failure
+/// (logged, treated as no-color-info — keeps SDR behavior).
+///
+/// Same pattern + rationale as `LinuxCameraProcessor`'s
+/// `engine_cached_color_info` round-trip; see `packages/camera/src/linux/camera.rs`.
+fn package_color_info_to_engine(
+    pkg: Option<&crate::_generated_::ColorInfo>,
+) -> Option<streamlib::engine_internal::_generated_::ColorInfo> {
+    let pkg = pkg?;
+    match streamlib::sdk::serde_json::to_value(pkg)
+        .and_then(streamlib::sdk::serde_json::from_value)
+    {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::warn!(
+                "display: ColorInfo schema round-trip failed (treating as None): {}",
+                e
+            );
+            None
+        }
+    }
+}
+
+fn package_mastering_display_to_engine(
+    pkg: Option<&crate::_generated_::MasteringDisplay>,
+) -> Option<streamlib::engine_internal::_generated_::MasteringDisplay> {
+    let pkg = pkg?;
+    streamlib::sdk::serde_json::to_value(pkg)
+        .and_then(streamlib::sdk::serde_json::from_value)
+        .map_err(|e| {
+            tracing::warn!(
+                "display: MasteringDisplay schema round-trip failed (skipping HDR metadata): {}",
+                e
+            );
+            e
+        })
+        .ok()
+}
+
+fn package_content_light_to_engine(
+    pkg: Option<&crate::_generated_::ContentLight>,
+) -> Option<streamlib::engine_internal::_generated_::ContentLight> {
+    let pkg = pkg?;
+    streamlib::sdk::serde_json::to_value(pkg)
+        .and_then(streamlib::sdk::serde_json::from_value)
+        .map_err(|e| {
+            tracing::warn!(
+                "display: ContentLight schema round-trip failed (skipping HDR metadata): {}",
+                e
+            );
+            e
+        })
+        .ok()
 }
 
 fn build_display_kernel(

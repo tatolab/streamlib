@@ -55,6 +55,13 @@ pub struct HostVulkanDevice {
     /// available; this acquire-side extension is the only meaningful
     /// gate.
     has_acquire_unmodified: bool,
+    /// Whether `VK_EXT_hdr_metadata` was enabled at device creation.
+    /// Gates `vkSetHdrMetadataEXT`, the per-swapchain HDR static metadata
+    /// (mastering display + content light) attachment that drives the
+    /// driver's tone-mapping / color-volume signaling on transition into
+    /// a PQ/HLG colorspace. Useful only alongside `VK_KHR_swapchain` and
+    /// the instance-level `VK_EXT_swapchain_colorspace`.
+    has_hdr_metadata: bool,
     /// Whether the `VK_KHR_ray_tracing_pipeline` extension chain
     /// (acceleration_structure + ray_tracing_pipeline +
     /// deferred_host_operations + pipeline_library) was enabled at
@@ -371,6 +378,18 @@ impl HostVulkanDevice {
             if available_ext_names.contains(&headless_ext) {
                 instance_extensions.push(headless_ext.as_ptr());
                 tracing::info!("VK_EXT_headless_surface available");
+            }
+
+            // VK_EXT_swapchain_colorspace — exposes the wide-gamut + HDR
+            // VkColorSpaceKHR enumerants (HDR10_ST2084_EXT,
+            // EXTENDED_SRGB_LINEAR_EXT, DISPLAY_P3_*, BT709_*, etc.)
+            // through `vkGetPhysicalDeviceSurfaceFormatsKHR`. Without it,
+            // every WSI surface advertises only `SRGB_NONLINEAR_KHR` and
+            // the swapchain colorspace priority walk has nothing to walk.
+            let swapchain_colorspace_ext = c"VK_EXT_swapchain_colorspace";
+            if available_ext_names.contains(&swapchain_colorspace_ext) {
+                instance_extensions.push(swapchain_colorspace_ext.as_ptr());
+                tracing::info!("VK_EXT_swapchain_colorspace enabled");
             }
         }
 
@@ -765,7 +784,7 @@ impl HostVulkanDevice {
 
         // On Linux, enable VK_KHR_swapchain for windowed display rendering
         #[cfg(target_os = "linux")]
-        {
+        let has_hdr_metadata = {
             let swapchain_ext = c"VK_KHR_swapchain";
             if available_device_ext_names.contains(&swapchain_ext) {
                 device_extensions.push(swapchain_ext.as_ptr());
@@ -774,7 +793,22 @@ impl HostVulkanDevice {
 
             // VK_KHR_dynamic_rendering is core since Vulkan 1.3 — no extension string needed.
             // Feature struct (PhysicalDeviceDynamicRenderingFeatures) is still enabled below.
-        }
+
+            // VK_EXT_hdr_metadata — gates `vkSetHdrMetadataEXT`, which
+            // attaches `VkHdrMetadataEXT` (mastering display + content
+            // light) to a swapchain on transition into a PQ/HLG
+            // colorspace. Only useful alongside `VK_KHR_swapchain` and
+            // the instance-level `VK_EXT_swapchain_colorspace`.
+            let hdr_metadata_ext = c"VK_EXT_hdr_metadata";
+            let probe = available_device_ext_names.contains(&hdr_metadata_ext);
+            if probe {
+                device_extensions.push(hdr_metadata_ext.as_ptr());
+                tracing::info!("VK_EXT_hdr_metadata enabled");
+            }
+            probe
+        };
+        #[cfg(not(target_os = "linux"))]
+        let has_hdr_metadata = false;
 
         // On Linux, check for Vulkan Video encode extensions
         // VK_KHR_synchronization2 is core since Vulkan 1.3 — no extension string needed.
@@ -1186,13 +1220,14 @@ impl HostVulkanDevice {
         };
 
         tracing::info!(
-            "Vulkan device initialized: {} (queue family {}, {} memory types, external_memory={}, cross_device_dma_buf_probe={}, acquire_unmodified={}, ray_tracing={}, vma=enabled, dma_buf_pools={})",
+            "Vulkan device initialized: {} (queue family {}, {} memory types, external_memory={}, cross_device_dma_buf_probe={}, acquire_unmodified={}, hdr_metadata={}, ray_tracing={}, vma=enabled, dma_buf_pools={})",
             device_name,
             queue_family_index,
             memory_properties.memory_type_count,
             supports_external_memory,
             supports_cross_device_dma_buf_probe,
             has_acquire_unmodified,
+            has_hdr_metadata,
             has_ray_tracing_pipeline,
             {
                 #[cfg(target_os = "linux")]
@@ -1216,6 +1251,7 @@ impl HostVulkanDevice {
             supports_external_memory,
             supports_cross_device_dma_buf_probe,
             has_acquire_unmodified,
+            has_hdr_metadata,
             has_ray_tracing_pipeline,
             ray_tracing_properties,
             supports_video_encode,
@@ -2622,6 +2658,16 @@ impl HostVulkanDevice {
     /// list as of 2026-05-03); Mesa is the eventual landing point.
     pub fn supports_qfot_acquire_unmodified(&self) -> bool {
         self.has_acquire_unmodified
+    }
+
+    /// Whether `VK_EXT_hdr_metadata` was enabled at device construction.
+    /// Gates `vkSetHdrMetadataEXT` — the per-swapchain HDR static metadata
+    /// (mastering display + content light) attachment that signals
+    /// driver-side tone-mapping / color-volume on transition into a
+    /// PQ/HLG colorspace. Useful only alongside `VK_KHR_swapchain` and
+    /// the instance-level `VK_EXT_swapchain_colorspace`.
+    pub fn supports_hdr_metadata(&self) -> bool {
+        self.has_hdr_metadata
     }
 
     /// Whether the `VK_KHR_ray_tracing_pipeline` extension chain
