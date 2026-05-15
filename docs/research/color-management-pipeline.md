@@ -189,8 +189,12 @@ when the WSI list under-reports. EDID is reference-only: if the WSI
 list is suspiciously short and EDID claims HDR, log the discrepancy
 and stay on the WSI answer. EDID is signal, not authority.
 
-Read EDID from `/sys/class/drm/card*-*/edid` directly (world-readable
-on every mainstream distro; no DRM master required).
+Read EDID from `/sys/class/drm/card*-*/edid` directly. To the best of
+our current knowledge this is world-readable on the mainstream distros
+the dev box runs (no DRM master required); confirm permissions at
+pickup time on the target deployment environment, and fall back to the
+WSI-only path when the file isn't readable rather than failing
+startup.
 
 **`VkColorSpaceKHR` selection — priority walk** over the WSI-returned
 list. Match against the frame's `ColorInfo`:
@@ -208,7 +212,9 @@ list. Match against the frame's `ColorInfo`:
 4. Frame `ColorInfo` says sRGB → unconditionally pick
    `SRGB_NONLINEAR_KHR`. Don't promote to HDR.
 
-**Driver-exposed reality (2025/2026):**
+**Driver-exposed reality.** To the best of our current knowledge as
+of this research, the picture is:
+
 - NVIDIA production 570.x on X11: `SRGB_NONLINEAR` + (when a real
   HDMI 2.1 / DP HDR sink is present) `HDR10_ST2084_EXT`. Wayland is
   gappy until nvidia-open 595.58.03+.
@@ -217,6 +223,11 @@ list. Match against the frame's `ColorInfo`:
   KWin 6.2+).
 - Mesa on X11: sRGB variants only — wide-gamut + HDR is Wayland-only
   on Mesa.
+
+These are concrete driver/compositor version numbers — verify against
+current driver behavior at pickup time. The picking strategy works
+unchanged when versions shift; only the fallback paths get exercised
+differently.
 
 **HDR metadata.** Chain `vkSetHdrMetadataEXT` per-frame on transition
 (not every frame — the driver caches it). Materialize
@@ -308,21 +319,34 @@ Known gaps:
   cameras may output Limited range while claiming `_DEFAULT`. No way
   to know without empirical testing per device.
 
-Small follow-up; can ride alongside the resolution-propagation
-issue.
+These gaps only matter once consumers introduce mid-stream format
+changes — today's first-frame-inspection architecture (per the
+resolution-propagation work) doesn't do that. No separate ticket
+filed; future format-renegotiation work picks this up as a natural
+sub-concern.
 
-## Open questions for the user
+## Decisions taken
 
-- **312.8 (RHI shader library for color math) is subsumed by 312.3**
-  (the engine-layer converter owns the kernel set). Close 312.8 as
-  duplicate, or keep it as a tracking bucket for follow-on shader
-  work?
-- **Filing order**: 312.3 first (foundation), 312.4 + 312.5 in
-  parallel (codec VUI parse / write), 312.6 (display), 312.7 (tone
-  mapper) blocked-by 312.3, 312.2 small camera follow-up alongside
-  the resolution-propagation work. Confirm.
-- **AV1 milestone**: file as a new milestone or fold into the
-  existing Vulkan Video coupling milestone?
+- **312.8 (RHI shader library for color math) is subsumed by
+  312.3.** The engine-layer color converter owns the kernel set
+  already; no separate "shader library" surface is needed. 312.8
+  doesn't get filed as its own issue — it was a sub-bullet in the
+  closed scoping issue, and the work is captured in 312.3's exit
+  criteria.
+- **Filing order.** 312.3 first (foundation, engine-tier sweep);
+  312.4+312.5 (codec VUI parse + write) merged into a single issue,
+  no blocking dependency on 312.3; 312.6 (display swapchain + HDR
+  metadata) independent; 312.7 (tone mapper) `blocked by` 312.3 —
+  composes with its push-constant struct + 3D-LUT binding. 312.2
+  (camera V4L2 gap) does not get filed — the gaps identified
+  (mid-stream format renegotiation, multi-plane query path, UVC
+  quirks) only matter once consumers introduce mid-stream format
+  changes, which today's first-frame-inspection architecture (per
+  the resolution-propagation work) doesn't do.
+- **AV1 VUI deferred.** No AV1 codec processor exists in `packages/`
+  today; the dev box (RTX 3090) has AV1 decode but not AV1 encode
+  hardware. AV1 VUI lands naturally alongside any future AV1 codec
+  buildout, not as a separate ticket today.
 
 ## References
 
