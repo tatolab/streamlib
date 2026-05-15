@@ -5,11 +5,21 @@ document or decision, not implementation code.
 
 ## Deliverable shape
 
-A research issue is done when it produces a reviewable artifact that
-lets the user (or a future agent) make a decision. Concretely:
+**The primary deliverable is the set of implementation issues the
+research generates — the work the team picks up next.** A research
+issue earns its keep by emitting concrete, well-scoped follow-up
+issues with native `Blocked by` / `Blocks` edges, not by producing a
+document.
 
-- A markdown file under `docs/research/` or the appropriate `docs/`
-  subfolder.
+A reference markdown file under `docs/research/` (or the appropriate
+`docs/` subfolder) is **optional** — useful when the synthesis is
+large enough that consolidating it into a single document is cheaper
+to read than scattering the same content across every generated
+issue body. When the synthesis fits cleanly inside the issue bodies,
+skip the doc.
+
+In every case the research should also produce:
+
 - A question list for the user to review if consensus isn't reached.
 - An unambiguous recommendation when the data supports one.
 
@@ -64,9 +74,9 @@ the question(s) that would break the tie.>
 ```markdown
 ## Research outcome
 
-- **Artifact**: <path to the doc created>
+- **Implementation issues filed**: #<N1>, #<N2>, … (primary deliverable)
 - **Recommendation**: <one-line summary>
-- **Follow-up implementation issue**: #<N> or "not yet filed"
+- **Reference doc** (optional): <path, or "none — content lives in the issue bodies">
 - **Open questions**: <list, or "none">
 ```
 
