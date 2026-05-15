@@ -182,9 +182,15 @@ fn source_thread_loop(
             timestamp_ns: timestamp_ns.to_string(),
             frame_index: frame_idx.to_string(),
             fps: Some(fps),
-            // Per-frame override is opt-in (#633); per-surface
+            // Per-frame override is opt-in; per-surface
             // `current_image_layout` from surface-share is the default.
             texture_layout: None,
+            // Fixture frames are RGB sRGB by construction; leaving
+            // `color_info` absent (== unknown) is the conservative
+            // choice — downstream consumers default-as-they-do today.
+            color_info: None,
+            mastering_display: None,
+            content_light: None,
         };
 
         if let Err(e) = outputs.write("video", &video_frame) {

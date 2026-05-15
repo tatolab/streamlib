@@ -40,7 +40,8 @@ use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
-use crate::_generated_::VideoFrame;
+use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Transfer};
+use crate::_generated_::{ColorInfo, VideoFrame};
 
 // Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
 // the transitional rationale (this kernel previously lived in the
@@ -562,10 +563,24 @@ fn compose_one_frame(
         timestamp_ns: timestamp_ns.to_string(),
         frame_index: count.to_string(),
         fps: None,
-        // Per-frame override is opt-in (#633); the per-surface
+        // Per-frame override is opt-in; the per-surface
         // `current_image_layout` published via surface-share / Path 1
         // is the default.
         texture_layout: None,
+        // The compositor's RGBA8 output is sRGB-encoded by convention
+        // (the input layers are sampled as-is and blended in the
+        // shader's working space). Stamp the canonical sRGB color
+        // description so downstream consumers see the correct
+        // characteristics. Identity matrix because the output is
+        // RGB, not YCbCr.
+        color_info: Some(ColorInfo {
+            primaries: Some(Primaries::Bt709),
+            transfer: Some(Transfer::Srgb),
+            matrix: Some(Matrix::Identity),
+            range: Some(Range::Full),
+        }),
+        mastering_display: None,
+        content_light: None,
     };
     outputs.write("video_out", &output_frame)?;
 
@@ -631,6 +646,9 @@ fn slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFrame {
         frame_index: "0".into(),
         fps: None,
         texture_layout: None,
+        color_info: None,
+        mastering_display: None,
+        content_light: None,
     }
 }
 

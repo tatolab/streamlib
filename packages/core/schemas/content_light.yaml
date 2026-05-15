@@ -1,0 +1,24 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for HDR10 content light level
+# information (CTA-861.3 / CEA-861.3). Carried in H.265 / H.266 SEI
+# `content_light_level_info` messages, MP4 `clli` boxes, AV1 OBU
+# `metadata_hdr_cll`. Reports the maximum light levels actually
+# present in the content (as opposed to the display capability
+# captured by `MasteringDisplay`).
+#
+# Units are cd/m^2 as integers (1 = 1 cd/m^2). Matches the wire
+# format byte-for-byte.
+
+metadata:
+  type: ContentLight
+  description: "HDR10 content light level info (MaxCLL / MaxFALL)"
+
+properties:
+  max_cll:
+    metadata: { description: "Maximum content light level in cd/m^2 (peak single-pixel light level)" }
+    type: uint32
+  max_fall:
+    metadata: { description: "Maximum frame-average light level in cd/m^2" }
+    type: uint32

@@ -191,6 +191,13 @@ async fn run_whep_receive_loop(
                             timestamp_ns: timestamp_ns.to_string(),
                             is_keyframe,
                             frame_number: video_frame_count.to_string(),
+                            // WHEP receives RTP without container-level
+                            // color metadata; populating ColorInfo
+                            // requires VUI parsing from the bitstream
+                            // (a follow-up).
+                            color_info: None,
+                            mastering_display: None,
+                            content_light: None,
                         };
 
                         if let Err(e) = outputs.write("encoded_video_out", &encoded) {

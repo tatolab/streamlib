@@ -147,6 +147,13 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265EncoderProcessor::Pro
 
         let timestamp_ns: Option<i64> = frame.timestamp_ns.parse().ok();
         let frame_fps = frame.fps;
+        // Pass color metadata through input → encoded so the muxer /
+        // downstream consumer can populate VUI / colr without re-
+        // deriving from the bitstream. VUI write-back from encoder
+        // config lands in a follow-up.
+        let frame_color_info = frame.color_info.clone();
+        let frame_mastering_display = frame.mastering_display.clone();
+        let frame_content_light = frame.content_light.clone();
 
         let packets = encoder.encode_image(image_view, timestamp_ns).map_err(|e| {
             Error::Runtime(format!("H.265 encode failed: {e}"))
@@ -159,6 +166,9 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265EncoderProcessor::Pro
                 is_keyframe: packet.is_keyframe,
                 timestamp_ns: packet.timestamp_ns.unwrap_or(0).to_string(),
                 frame_number: self.frames_encoded.to_string(),
+                color_info: frame_color_info.clone(),
+                mastering_display: frame_mastering_display.clone(),
+                content_light: frame_content_light.clone(),
             };
             self.outputs.write("encoded_video_out", &encoded)?;
         }

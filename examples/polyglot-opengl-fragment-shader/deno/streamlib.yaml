@@ -15,6 +15,12 @@ patch:
 
 schemas:
   # Wire types imported from @tatolab/core (#767).
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
   VideoFrame:
     package: "@tatolab/core"
 

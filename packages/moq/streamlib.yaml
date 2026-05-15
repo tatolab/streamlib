@@ -18,7 +18,13 @@ patch:
 
 schemas:
   # Wire types imported from @tatolab/core.
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
   EncodedVideoFrame:
+    package: "@tatolab/core"
+  MasteringDisplay:
     package: "@tatolab/core"
   # Local config schemas this package owns.
   MoqPublishTrackConfig:

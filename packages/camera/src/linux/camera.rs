@@ -467,6 +467,64 @@ fn capture_thread_loop(
         }
     };
 
+    // Query V4L2 colorspace once at processor start. V4L2 contract is
+    // that colorspace doesn't change during streaming, so we cache the
+    // resolved ColorInfo and clone it into every emitted frame. Vivid
+    // reports SMPTE170M (BT.601 525); UVC webcams typically report
+    // SRGB (BT.709 primaries + sRGB transfer + BT.601 matrix + full
+    // range — V4L2 convention). See `v4l2_color::v4l2_color_to_color_info`.
+    let cached_color_info: crate::_generated_::ColorInfo = unsafe {
+        let mut v4l2_fmt: v4l::v4l_sys::v4l2_format = std::mem::zeroed();
+        v4l2_fmt.type_ = v4l::buffer::Type::VideoCapture as u32;
+        if libc::ioctl(
+            device_fd,
+            v4l::v4l2::vidioc::VIDIOC_G_FMT as libc::c_ulong,
+            &mut v4l2_fmt,
+        ) == 0
+        {
+            crate::linux::v4l2_color::v4l2_color_to_color_info(
+                v4l2_fmt.fmt.pix.colorspace,
+                v4l2_fmt.fmt.pix.xfer_func,
+                // ycbcr_enc shares an anonymous union with hsv_enc;
+                // use the YCbCr field since this code path is YUV-only
+                // (NV12 / YUYV — guarded by the SPV match above).
+                //
+                // `__bindgen_anon_1` is the bindgen-generated name for
+                // the inner `union { ycbcr_enc; hsv_enc }`. Stable on
+                // v4l2-sys-mit 0.3.x as long as the C struct keeps a
+                // single anonymous union at this position; an upstream
+                // bump that adds a second anonymous union to the parent
+                // struct would shift the suffix to `_2` and this access
+                // would stop compiling — caught at build time, not
+                // runtime.
+                v4l2_fmt.fmt.pix.__bindgen_anon_1.ycbcr_enc,
+                v4l2_fmt.fmt.pix.quantization,
+            )
+        } else {
+            // ioctl failed — emit "all unknown" rather than guessing.
+            // `ColorInfo::default()` is structurally `{ primaries: None,
+            // transfer: None, matrix: None, range: None }` per the
+            // schema's `optionalProperties` shape.
+            crate::_generated_::ColorInfo::default()
+        }
+    };
+    {
+        // Render unspecified axes as the literal string "unspecified"
+        // rather than `None` so the structured log reads cleanly for
+        // operators (and matches the H.273 wire-level term).
+        fn axis<T: std::fmt::Debug>(v: &Option<T>) -> String {
+            v.as_ref().map(|v| format!("{:?}", v)).unwrap_or_else(|| "unspecified".to_string())
+        }
+        tracing::info!(
+            camera = camera_name,
+            primaries = %axis(&cached_color_info.primaries),
+            transfer = %axis(&cached_color_info.transfer),
+            matrix = %axis(&cached_color_info.matrix),
+            range = %axis(&cached_color_info.range),
+            "V4L2 colorspace detected",
+        );
+    }
+
     const KERNEL_BINDINGS: &[ComputeBindingSpec] = &[
         ComputeBindingSpec::storage_buffer(0),
         ComputeBindingSpec::storage_image(1),
@@ -1112,9 +1170,14 @@ fn capture_thread_loop(
             timestamp_ns: timestamp_ns.to_string(),
             frame_index: timeline_signal_value.to_string(),
             fps: capture_fps,
-            // Per-frame override is opt-in (#633); per-surface
+            // Per-frame override is opt-in; per-surface
             // `current_image_layout` from surface-share is the default.
             texture_layout: None,
+            color_info: Some(cached_color_info.clone()),
+            // HDR static metadata: V4L2 doesn't surface ST.2086 / CLLI;
+            // populated by HDR-aware sources only.
+            mastering_display: None,
+            content_light: None,
         };
 
         if let Err(e) = outputs.write("video", &ipc_frame) {
