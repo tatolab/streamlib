@@ -34,9 +34,26 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
+    // Register the `@tatolab/core` wire vocabulary so iceoryx2 publishers
+    // honor `EncodedVideoFrame.max_payload_bytes` instead of falling back
+    // to the 64 KiB default (which would drop the first IDR via
+    // ExceedsMaxLoanSize and starve the decoder of SPS/PPS).
+    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
+
     // --- Camera ---
+    // STREAMLIB_CAMERA_MAX_WIDTH / STREAMLIB_CAMERA_MAX_HEIGHT cap V4L2
+    // negotiation below the camera's advertised maximum. Useful for
+    // exercising non-1080p paths on devices that prefer 1080p.
+    let max_width = std::env::var("STREAMLIB_CAMERA_MAX_WIDTH")
+        .ok()
+        .and_then(|s| s.parse().ok());
+    let max_height = std::env::var("STREAMLIB_CAMERA_MAX_HEIGHT")
+        .ok()
+        .and_then(|s| s.parse().ok());
     let camera = runtime.add_processor(CameraProcessor::node(CameraProcessor::Config {
         device_id: Some(device.to_string()),
+        max_width,
+        max_height,
         ..Default::default()
     }))?;
     println!("+ Camera: {camera}");
@@ -48,11 +65,12 @@ fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok());
 
+    // Encoder dimensions come from the first VideoFrame the camera produces,
+    // so the example runs at whatever resolution V4L2 negotiates (capped by
+    // CameraConfig::max_width / max_height; default 1920×1080).
     let encoder = if is_h265 {
         runtime.add_processor(H265EncoderProcessor::node(
             H265EncoderProcessor::Config {
-                width: Some(1920),
-                height: Some(1080),
                 effort_level,
                 ..Default::default()
             },
@@ -60,8 +78,6 @@ fn main() -> Result<()> {
     } else {
         runtime.add_processor(H264EncoderProcessor::node(
             H264EncoderProcessor::Config {
-                width: Some(1920),
-                height: Some(1080),
                 effort_level,
                 ..Default::default()
             },

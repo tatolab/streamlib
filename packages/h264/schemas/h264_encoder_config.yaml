@@ -10,11 +10,11 @@ metadata:
 optionalProperties:
   width:
     metadata:
-      description: "Video width in pixels (default: 1280)."
+      description: "Optional override / guardrail for video width in pixels. Unset = the encoder takes the width from the first VideoFrame it receives. Set values that disagree with the frame width log a warning and the frame still wins, matching the FPS pattern."
     type: uint32
   height:
     metadata:
-      description: "Video height in pixels (default: 720)."
+      description: "Optional override / guardrail for video height in pixels. Unset = the encoder takes the height from the first VideoFrame it receives. Set values that disagree with the frame height log a warning and the frame still wins, matching the FPS pattern."
     type: uint32
   bitrate_bps:
     metadata:
