@@ -38,6 +38,12 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
+    // Register the `@tatolab/core` wire vocabulary so iceoryx2 publishers
+    // honor each schema's `max_payload_bytes` instead of falling back to
+    // the 64 KiB default (which drops the encoder's first IDR with
+    // ExceedsMaxLoanSize and starves the decoder of SPS/PPS).
+    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
+
     let source = runtime.add_processor(BgraFileSourceProcessor::node(
         BgraFileSourceProcessor::Config {
             file_path: bgra_path,

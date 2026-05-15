@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# moq-roundtrip example. Declares `@tatolab/core` so
+# `Runner::load_project(.)` registers the wire-vocabulary schemas
+# (VideoFrame, EncodedVideoFrame, AudioFrame, EncodedAudioFrame) with
+# the engine's runtime schema registry. Required so iceoryx2 publishers
+# size from each schema's declared `max_payload_bytes` instead of the
+# 64 KiB default — without it the encoder's first IDR is rejected as
+# ExceedsMaxLoanSize and the decoder never sees SPS/PPS.
+
+package:
+  org: tatolab
+  name: moq-roundtrip
+  version: "0.1.0"
+  description: "MoQ publish/subscribe roundtrip with H.264 video, Opus audio, and sensor data tracks"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+patch:
+  "@tatolab/core":
+    path: ../../packages/core
+
+schemas:
+  AudioFrame:
+    package: "@tatolab/core"
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  EncodedAudioFrame:
+    package: "@tatolab/core"
+  EncodedVideoFrame:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"

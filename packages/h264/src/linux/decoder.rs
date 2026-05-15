@@ -38,11 +38,15 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Pro
     async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
+        // Decoder dimensions come from H.264 SPS — leaving `max_width` /
+        // `max_height` at zero tells `SimpleDecoder` to size the DPB and
+        // video session from the first parsed SPS rather than pre-allocating
+        // for a hard-coded resolution cap.
         let decoder_config = SimpleDecoderConfig {
             codec: Codec::H264,
             rgba_output: true,
-            max_width: 1920,
-            max_height: 1080,
+            max_width: 0,
+            max_height: 0,
             ..Default::default()
         };
 
@@ -57,7 +61,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Pro
 
         let submitter: Arc<dyn vulkan_video::RhiQueueSubmitter> = vulkan_device.clone();
 
-        let mut decoder = SimpleDecoder::from_device(
+        let decoder = SimpleDecoder::from_device(
             decoder_config,
             vulkan_device.instance().clone(),
             vulkan_device.device().clone(),
@@ -72,19 +76,12 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Pro
             Error::Runtime(format!("Failed to create H.264 decoder: {e}"))
         })?;
 
-        // Pre-create the video session BEFORE the display swapchain.
-        // NVIDIA limits video session creation after swapchain exists.
-        decoder.pre_initialize_session().map_err(|e| {
-            Error::Runtime(format!("Failed to pre-initialize H.264 decoder session: {e}"))
-        })?;
-
-        // Eagerly allocate the NV12→RGBA converter. Decode-side resources
-        // are real allocations the decoder needs; the engine pre-warms the
-        // exportable VMA pools at `HostVulkanDevice` construction so this
-        // no longer races NVIDIA's post-swapchain exportable cap.
-        decoder.prepare_gpu_decode_resources().map_err(|e| {
-            Error::Runtime(format!("Failed to pre-allocate H.264 decode resources: {e}"))
-        })?;
+        // Session creation, DPB allocation, and the NV12→RGBA converter are
+        // built lazily inside `SimpleDecoder::feed()` once the first SPS
+        // arrives — at that point the actual coded extent is known and
+        // sized to match. The processor-setup mutex inside `escalate` and
+        // the RHI queue submitter coordinate device-side ordering, so the
+        // historical pre-swapchain pre-init is no longer required.
 
         tracing::info!("[H264Decoder] Initialized (shared RHI device, Vulkan Video hardware)");
 

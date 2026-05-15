@@ -20,3 +20,11 @@ optionalProperties:
     metadata:
       description: "Maximum frame rate. AVFoundation only; ignored on Linux. Defaults to the main display refresh rate."
     type: float64
+  max_width:
+    metadata:
+      description: "Upper bound on captured frame width in pixels. Caps V4L2 negotiation when the camera advertises a larger resolution (preserves real-time encoding guardrail). Default: 1920."
+    type: uint32
+  max_height:
+    metadata:
+      description: "Upper bound on captured frame height in pixels. Caps V4L2 negotiation when the camera advertises a larger resolution (preserves real-time encoding guardrail). Default: 1080."
+    type: uint32

@@ -42,6 +42,11 @@ fn main() -> Result<()> {
 
     let runtime = Runner::new()?;
 
+    // Register the `@tatolab/core` wire vocabulary so iceoryx2 publishers
+    // honor each schema's `max_payload_bytes` instead of falling back to
+    // the 64 KiB default (which drops the encoder's first IDR).
+    runtime.load_project(env!("CARGO_MANIFEST_DIR"))?;
+
     // ---- PUBLISH SIDE ----
 
     let camera = runtime.add_processor(CameraProcessor::node(Default::default()))?;

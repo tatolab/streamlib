@@ -25,7 +25,15 @@ metadata:
   description: "Encoded video frame with H.264/H.265 NAL unit data"
   read_mode: read_next_in_order
   buffer_size: 16
-  max_payload_bytes: 524288
+  # 16 MiB per slot accommodates a 4K H.264/H.265 IDR with prepended SPS+PPS
+  # under default rate control (uncapped CQP IDR at 1920x1080 ≈ 2–3 MiB; 4K
+  # ≈ 8–12 MiB). iceoryx2 pre-allocates buffer_size * max_payload_bytes of
+  # shared memory per publisher, so this commits ~256 MiB per encoder; that
+  # cost is the price of supporting up to 4K real-time encode end-to-end
+  # without dropping the first IDR (which carries SPS/PPS and is the only
+  # entry point for the decoder). Lower bitrate-capped streams stay well
+  # under this cap; the schema-level limit just bounds the worst case.
+  max_payload_bytes: 16777216
 
 properties:
   data:

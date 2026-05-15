@@ -228,11 +228,15 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
             negotiated.unwrap()
         };
 
-        // Cap capture resolution to 1920x1080 for real-time encoding performance.
-        let fmt = if fmt.width > 1920 || fmt.height > 1080 {
+        // Cap capture resolution at config.max_width / max_height (defaults
+        // 1920x1080 preserve the real-time-encoding guardrail; drone-racing
+        // and similar high-resolution use cases opt in by raising the cap).
+        let max_width = self.config.max_width.unwrap_or(1920);
+        let max_height = self.config.max_height.unwrap_or(1080);
+        let fmt = if fmt.width > max_width || fmt.height > max_height {
             let mut capped = fmt.clone();
-            capped.width = 1920;
-            capped.height = 1080;
+            capped.width = max_width;
+            capped.height = max_height;
             match dev.set_format(&capped) {
                 Ok(f) => {
                     tracing::info!(
@@ -247,8 +251,10 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "Camera {}: failed to cap resolution to 1920x1080 ({}), using {}x{}",
+                        "Camera {}: failed to cap resolution to {}x{} ({}), using {}x{}",
                         self.camera_name,
+                        max_width,
+                        max_height,
                         e,
                         fmt.width,
                         fmt.height
@@ -1314,6 +1320,8 @@ mod tests {
             device_id: None,
             min_fps: None,
             max_fps: None,
+            max_width: None,
+            max_height: None,
         };
 
         let result = LinuxCameraProcessor::Processor::from_config(config);
