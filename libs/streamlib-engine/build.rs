@@ -31,7 +31,16 @@ fn compile_shaders() {
     // consumed via `include_bytes!(concat!(env!("OUT_DIR"), …))`.
     // Add new kernels (compute, vertex, fragment) here.
     let shaders: &[(&str, &str, &str)] = &[
-        ("src/vulkan/rhi/shaders/nv12_to_bgra.comp", "nv12_to_bgra.spv", "compute"),
+        (
+            "src/vulkan/rhi/shaders/color_convert_nv12_buffer_to_rgba.comp",
+            "color_convert_nv12_buffer_to_rgba.spv",
+            "compute",
+        ),
+        (
+            "src/vulkan/rhi/shaders/color_convert_yuyv_buffer_to_rgba.comp",
+            "color_convert_yuyv_buffer_to_rgba.spv",
+            "compute",
+        ),
         (
             "src/vulkan/rhi/shaders/display_blit.vert",
             "display_blit.vert.spv",
@@ -45,6 +54,13 @@ fn compile_shaders() {
     ];
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+    // `-I` for the converter common header. New compute shaders share
+    // closed-form transfer / matrix math via `#include`.
+    let shader_include_dir = "src/vulkan/rhi/shaders";
+    println!(
+        "cargo:rerun-if-changed={}/color_convert_common.glsl",
+        shader_include_dir
+    );
 
     for (src, dst, stage) in shaders {
         let src_path = Path::new(src);
@@ -55,6 +71,8 @@ fn compile_shaders() {
         let status = Command::new("glslc")
             .arg(format!("-fshader-stage={stage}"))
             .arg("-O")
+            .arg("-I")
+            .arg(shader_include_dir)
             .arg(src_path)
             .arg("-o")
             .arg(&dst_path)

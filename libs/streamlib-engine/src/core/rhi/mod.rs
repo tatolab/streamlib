@@ -5,13 +5,12 @@
 
 mod backend;
 pub mod blitter;
+mod color_converter;
 mod command_buffer;
 mod command_queue;
 mod compute_kernel;
 mod device;
 mod external_handle;
-mod format_converter;
-mod format_converter_cache;
 mod gl_interop;
 mod graphics_kernel;
 mod index_buffer;
@@ -30,6 +29,10 @@ pub use backend::RhiBackend;
 pub use blitter::RhiBlitter;
 pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
+pub use color_converter::{
+    pixel_format_color_kind, ColorConverterPushConstants, RhiColorConverter, SourceLayoutInfo,
+    COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+};
 pub use compute_kernel::{
     derive_bindings_from_spirv, ComputeBindingKind, ComputeBindingSpec,
     ComputeKernelDescriptor,
@@ -51,8 +54,6 @@ pub use ray_tracing_kernel::{
     RayTracingKernelDescriptor, RayTracingPushConstants, RayTracingShaderGroup,
     RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
 };
-pub use format_converter::RhiFormatConverter;
-pub use format_converter_cache::RhiFormatConverterCache;
 pub use gl_interop::{gl_constants, GlContext, GlTextureBinding};
 pub use pixel_buffer::PixelBuffer;
 pub use pixel_buffer_pool::{PixelBufferDescriptor, PixelBufferPoolId};

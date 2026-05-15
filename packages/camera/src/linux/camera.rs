@@ -7,17 +7,18 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use streamlib::sdk::color::{resolve_color_defaults, ColorSpaceKind, TransferId};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
-    RhiCommandRecorder, VulkanAccess, VulkanComputeKernel, VulkanStage,
+    RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::OutputWriter;
 use streamlib::sdk::rhi::{
-    ComputeBindingSpec, ComputeKernelDescriptor, PixelFormat, StorageBuffer, Texture,
-    TextureDescriptor, TextureFormat, TextureUsages,
+    PixelFormat, RhiColorConverter, StorageBuffer, Texture, TextureDescriptor, TextureFormat,
+    TextureUsages,
 };
 use streamlib_consumer_rhi::VulkanLayout;
 
@@ -395,7 +396,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
 }
 
 struct CameraGpuResources {
-    kernel: Arc<VulkanComputeKernel>,
+    color_converter: Arc<RhiColorConverter>,
     recorder: RhiCommandRecorder,
     timeline: Arc<HostVulkanTimelineSemaphore>,
     input_storage_buffers: Vec<StorageBuffer>,
@@ -424,16 +425,10 @@ fn capture_thread_loop(
 ) {
     let fourcc_bytes = fourcc.repr;
 
-    // Determine input buffer size and select shader SPIR-V based on pixel format
-    let (input_byte_size, shader_spirv): (usize, &[u8]) = match &fourcc_bytes {
-        b"NV12" => (
-            (width as usize) * (height as usize) * 3 / 2,
-            include_bytes!("shaders/nv12_to_rgba.spv"),
-        ),
-        b"YUYV" => (
-            (width as usize) * (height as usize) * 2,
-            include_bytes!("shaders/yuyv_to_rgba.spv"),
-        ),
+    // Verify the FourCC is one of the YUV formats we support before
+    // querying V4L2 details.
+    match &fourcc_bytes {
+        b"NV12" | b"YUYV" => {}
         _ => {
             tracing::error!(
                 camera = camera_name,
@@ -442,10 +437,7 @@ fn capture_thread_loop(
             );
             return;
         }
-    };
-
-    // Pad input size to uint32 alignment for SSBO.
-    let input_alloc_size = ((input_byte_size + 3) / 4 * 4) as u64;
+    }
 
     let device_fd = stream.handle().fd();
 
@@ -473,13 +465,18 @@ fn capture_thread_loop(
         }
     };
 
-    // Query V4L2 colorspace once at processor start. V4L2 contract is
-    // that colorspace doesn't change during streaming, so we cache the
-    // resolved ColorInfo and clone it into every emitted frame. Vivid
-    // reports SMPTE170M (BT.601 525); UVC webcams typically report
-    // SRGB (BT.709 primaries + sRGB transfer + BT.601 matrix + full
-    // range — V4L2 convention). See `v4l2_color::v4l2_color_to_color_info`.
-    let cached_color_info: crate::_generated_::ColorInfo = unsafe {
+    // Query V4L2 format once at processor start. We need three things
+    // from this: (1) the colorspace 4-tuple for `ColorInfo`,
+    // (2) `bytesperline` for the source SSBO stride (vivid + some UVC
+    // drivers report stride > width even for NV12), (3) `sizeimage`
+    // for the SSBO allocation (must hold the full V4L2 frame including
+    // padding). V4L2 contract is that all three stay constant during
+    // streaming.
+    let (cached_color_info, v4l2_bytes_per_line, v4l2_size_image): (
+        crate::_generated_::ColorInfo,
+        u32,
+        u32,
+    ) = unsafe {
         let mut v4l2_fmt: v4l::v4l_sys::v4l2_format = std::mem::zeroed();
         v4l2_fmt.type_ = v4l::buffer::Type::VideoCapture as u32;
         if libc::ioctl(
@@ -488,12 +485,13 @@ fn capture_thread_loop(
             &mut v4l2_fmt,
         ) == 0
         {
-            crate::linux::v4l2_color::v4l2_color_to_color_info(
-                v4l2_fmt.fmt.pix.colorspace,
-                v4l2_fmt.fmt.pix.xfer_func,
+            let pix = v4l2_fmt.fmt.pix;
+            let color = crate::linux::v4l2_color::v4l2_color_to_color_info(
+                pix.colorspace,
+                pix.xfer_func,
                 // ycbcr_enc shares an anonymous union with hsv_enc;
                 // use the YCbCr field since this code path is YUV-only
-                // (NV12 / YUYV — guarded by the SPV match above).
+                // (NV12 / YUYV — guarded by the FourCC match above).
                 //
                 // `__bindgen_anon_1` is the bindgen-generated name for
                 // the inner `union { ycbcr_enc; hsv_enc }`. Stable on
@@ -503,17 +501,63 @@ fn capture_thread_loop(
                 // struct would shift the suffix to `_2` and this access
                 // would stop compiling — caught at build time, not
                 // runtime.
-                v4l2_fmt.fmt.pix.__bindgen_anon_1.ycbcr_enc,
-                v4l2_fmt.fmt.pix.quantization,
-            )
+                pix.__bindgen_anon_1.ycbcr_enc,
+                pix.quantization,
+            );
+            (color, pix.bytesperline, pix.sizeimage)
         } else {
-            // ioctl failed — emit "all unknown" rather than guessing.
-            // `ColorInfo::default()` is structurally `{ primaries: None,
-            // transfer: None, matrix: None, range: None }` per the
-            // schema's `optionalProperties` shape.
-            crate::_generated_::ColorInfo::default()
+            // ioctl failed — emit "all unknown" colors and fall back
+            // to tight-packed buffer sizing. `ColorInfo::default()` is
+            // structurally `{ primaries: None, transfer: None, matrix:
+            // None, range: None }` per the schema's `optionalProperties`
+            // shape.
+            let tight_bytes_per_line = match &fourcc_bytes {
+                b"NV12" => width,
+                b"YUYV" => width * 2,
+                _ => unreachable!("guarded by FourCC match above"),
+            };
+            let tight_size_image = match &fourcc_bytes {
+                b"NV12" => width * height * 3 / 2,
+                b"YUYV" => width * height * 2,
+                _ => unreachable!(),
+            };
+            (
+                crate::_generated_::ColorInfo::default(),
+                tight_bytes_per_line,
+                tight_size_image,
+            )
         }
     };
+
+    // SSBO must hold the full V4L2 frame including driver-side row
+    // padding (vivid reports 3840-byte stride for 1920-wide NV12).
+    // Truncating to tight-pack size (the pre-#815 behavior) memcpys
+    // only the first half of the Y plane and reads garbage for UV,
+    // producing the all-green "green vivid" symptom.
+    let input_byte_size = v4l2_size_image as usize;
+    let input_alloc_size = ((input_byte_size + 3) / 4 * 4) as u64;
+
+    // Source-buffer layout passed to the converter's push constants
+    // every frame. NV12 uses `bytesperline` for both Y and UV plane
+    // strides (V4L2 convention; both planes share stride for bi-planar
+    // formats). YUYV has a single packed plane.
+    let src_layout = match &fourcc_bytes {
+        b"NV12" => streamlib::sdk::rhi::SourceLayoutInfo::nv12(
+            v4l2_bytes_per_line,
+            v4l2_bytes_per_line,
+            v4l2_bytes_per_line * height,
+        ),
+        b"YUYV" => streamlib::sdk::rhi::SourceLayoutInfo::yuyv(v4l2_bytes_per_line),
+        _ => unreachable!("guarded by FourCC match above"),
+    };
+    tracing::info!(
+        camera = camera_name,
+        bytes_per_line = v4l2_bytes_per_line,
+        size_image = v4l2_size_image,
+        width,
+        height,
+        "V4L2 buffer layout"
+    );
     {
         // Render unspecified axes as the literal string "unspecified"
         // rather than `None` so the structured log reads cleanly for
@@ -531,21 +575,53 @@ fn capture_thread_loop(
         );
     }
 
-    const KERNEL_BINDINGS: &[ComputeBindingSpec] = &[
-        ComputeBindingSpec::storage_buffer(0),
-        ComputeBindingSpec::storage_image(1),
-    ];
+    // Resolve V4L2 ColorInfo to a fully-resolved description used by
+    // the color converter's per-frame push constants. Held for the
+    // life of the capture thread — V4L2 colorspace doesn't change
+    // mid-stream.
+    //
+    // `cached_color_info` is the camera-crate's `_generated_::ColorInfo`;
+    // `resolve_color_defaults` consumes the engine-crate's variant.
+    // Both are codegen-generated from the same JTD schema with
+    // identical serde rename names, so a one-shot JSON round-trip
+    // converts cleanly. Runs once at startup — perf irrelevant.
+    let engine_cached_color_info: streamlib::engine_internal::_generated_::ColorInfo =
+        match streamlib::sdk::serde_json::to_value(&cached_color_info)
+            .and_then(streamlib::sdk::serde_json::from_value)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    camera = camera_name,
+                    error = %e,
+                    "failed to convert camera-crate ColorInfo to engine-crate ColorInfo \
+                     — schema mismatch?"
+                );
+                return;
+            }
+        };
+    let resolved_color =
+        resolve_color_defaults(&engine_cached_color_info, ColorSpaceKind::Yuv);
+
+    // Map (fourcc, resolved range) to the canonical PixelFormat used
+    // as the converter cache key. The push-constant matrix bakes the
+    // range expansion in, so NV12 full vs limited end up in two
+    // converter instances sharing the same SPIR-V — a few KB of
+    // duplicated load, no correctness impact.
+    let src_pixel_format = match (&fourcc_bytes, &resolved_color.range) {
+        (b"NV12", streamlib::engine_internal::_generated_::tatolab__core::color_info::Range::Full) => {
+            PixelFormat::Nv12FullRange
+        }
+        (b"NV12", _) => PixelFormat::Nv12VideoRange,
+        (b"YUYV", _) => PixelFormat::Yuyv422,
+        _ => unreachable!("input_byte_size match above rejects other fourccs"),
+    };
 
     let setup_result = gpu_context.escalate(|full| {
         let vulkan_device = full.device().vulkan_device();
         let vulkan_device_name = vulkan_device.name().to_string();
 
-        let kernel = full.create_compute_kernel(&ComputeKernelDescriptor {
-            label: "camera_yuv_to_rgba",
-            spv: shader_spirv,
-            bindings: KERNEL_BINDINGS,
-            push_constant_size: 12,
-        })?;
+        let color_converter = full.color_converter(src_pixel_format, PixelFormat::Rgba32)?;
 
         let recorder = full.create_command_recorder("camera_capture")?;
 
@@ -682,7 +758,7 @@ fn capture_thread_loop(
         }
 
         Ok(CameraGpuResources {
-            kernel,
+            color_converter,
             recorder,
             timeline,
             input_storage_buffers,
@@ -698,7 +774,7 @@ fn capture_thread_loop(
     });
 
     let CameraGpuResources {
-        kernel,
+        color_converter,
         mut recorder,
         timeline: camera_timeline,
         input_storage_buffers,
@@ -945,79 +1021,44 @@ fn capture_thread_loop(
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         );
 
-        // ---- Step 3: Stage kernel bindings + push constants ----
-        // Push constants: width, height, flags (nv12 full-range bit).
-        let nv12_flags: u32 = if &fourcc_bytes == b"NV12" {
-            unsafe {
-                let mut v4l2_fmt: v4l::v4l_sys::v4l2_format = std::mem::zeroed();
-                v4l2_fmt.type_ = v4l::buffer::Type::VideoCapture as u32;
-                if libc::ioctl(
-                    device_fd,
-                    v4l::v4l2::vidioc::VIDIOC_G_FMT as libc::c_ulong,
-                    &mut v4l2_fmt,
-                ) == 0
-                {
-                    // V4L2_QUANTIZATION_FULL_RANGE = 1, LIM_RANGE = 2,
-                    // DEFAULT = 0. DEFAULT maps to limited-range for BT.601
-                    // (most cameras).
-                    if v4l2_fmt.fmt.pix.quantization == 1 {
-                        1
-                    } else {
-                        0
+        // ---- Step 3: Bind kernel via color converter ----
+        // `prepare_buffer_to_image` stages source SSBO, destination
+        // storage image, and the 96-byte `ColorConverterPushConstants`
+        // derived from `resolved_color`. Returns the underlying
+        // compute kernel for the recorder to dispatch. Range
+        // expansion + matrix coefficients are computed CPU-side from
+        // the resolved color; the shader applies them as a single
+        // 3×3 multiply.
+        let input_buffer = if use_dmabuf {
+            &dmabuf_imported_buffers[input_ssbo_index]
+        } else {
+            &input_storage_buffers[input_ssbo_index]
+        };
+        let kernel = match color_converter.prepare_buffer_to_image(
+            input_buffer,
+            src_layout,
+            &ring_textures[ring_index],
+            &resolved_color,
+            // Display path consumes RGBA8_UNORM treated as sRGB-
+            // encoded by the swapchain; #817 will replace this
+            // hardcode with the negotiated VkColorSpaceKHR.
+            TransferId::Srgb,
+        ) {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::error!(camera = camera_name, error = %e, "color_converter prepare failed");
+                if let Some(mut v4l2_buf) = v4l2_requeue_buf {
+                    unsafe {
+                        libc::ioctl(
+                            device_fd,
+                            v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
+                            &mut v4l2_buf,
+                        );
                     }
-                } else {
-                    1
                 }
+                continue;
             }
-        } else {
-            1
         };
-        let push_data: [u32; 3] = [width, height, nv12_flags];
-        if let Err(e) = kernel.set_push_constants_value(&push_data) {
-            tracing::error!(camera = camera_name, error = %e, "set_push_constants failed");
-            if let Some(mut v4l2_buf) = v4l2_requeue_buf {
-                unsafe {
-                    libc::ioctl(
-                        device_fd,
-                        v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
-                        &mut v4l2_buf,
-                    );
-                }
-            }
-            continue;
-        }
-
-        let bind_storage_result = if use_dmabuf {
-            kernel.set_storage_buffer(0, &dmabuf_imported_buffers[input_ssbo_index])
-        } else {
-            kernel.set_storage_buffer(0, &input_storage_buffers[input_ssbo_index])
-        };
-        if let Err(e) = bind_storage_result {
-            tracing::error!(camera = camera_name, error = %e, "set_storage_buffer failed");
-            if let Some(mut v4l2_buf) = v4l2_requeue_buf {
-                unsafe {
-                    libc::ioctl(
-                        device_fd,
-                        v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
-                        &mut v4l2_buf,
-                    );
-                }
-            }
-            continue;
-        }
-        if let Err(e) = kernel.set_storage_image(1, &ring_textures[ring_index]) {
-            tracing::error!(camera = camera_name, error = %e, "set_storage_image failed");
-            if let Some(mut v4l2_buf) = v4l2_requeue_buf {
-                unsafe {
-                    libc::ioctl(
-                        device_fd,
-                        v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
-                        &mut v4l2_buf,
-                    );
-                }
-            }
-            continue;
-        }
 
         // ---- Step 4: Record + submit via RhiCommandRecorder ----
         if let Err(e) = recorder.begin() {
@@ -1240,7 +1281,7 @@ fn capture_thread_loop(
     drop(ring_textures);
     drop(input_storage_buffers);
     drop(recorder);
-    drop(kernel);
+    drop(color_converter);
     drop(camera_timeline);
 }
 
