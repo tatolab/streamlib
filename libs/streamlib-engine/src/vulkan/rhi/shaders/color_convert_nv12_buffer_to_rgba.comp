@@ -1,0 +1,78 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+//
+// NV12 buffer-source → RGBA storage-image-dest color converter.
+//
+// Bindings:
+//   0 — `readonly buffer NV12Input` (Y plane then UV plane, packed in
+//       uint32 array, little-endian byte order). Honors source-side
+//       row stride padding via `plane0_stride_bytes` /
+//       `plane1_stride_bytes` / `plane1_offset_bytes` push constants
+//       — vivid + some UVC drivers report stride > width even for
+//       1-byte-per-pixel NV12 Y plane.
+//   1 — `writeonly image2D rgba_output` (RGBA8 storage image).
+//
+// Push constants — see `core::rhi::color_converter::ColorConverterPushConstants`.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "color_convert_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) readonly buffer NV12Input {
+    uint data[];
+} nv12_input;
+
+layout(rgba8, set = 0, binding = 1) writeonly uniform image2D rgba_output;
+
+layout(push_constant, std430) uniform PushConstants {
+    vec4 matrix_row0;  // .xyz = row of YCbCr→RGB matrix, .w = pad
+    vec4 matrix_row1;
+    vec4 matrix_row2;
+    vec4 range_offset; // .xyz = byte-domain (y, cb, cr) offset, .w = pad
+    uint width;
+    uint height;
+    uint transfer_in;
+    uint transfer_out;
+    uint flags;
+    uint plane0_stride_bytes;
+    uint plane1_stride_bytes;
+    uint plane1_offset_bytes;
+} pc;
+
+uint read_byte(uint byte_offset) {
+    return (nv12_input.data[byte_offset >> 2u] >> (8u * (byte_offset & 3u))) & 0xFFu;
+}
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    // Y plane: stride may exceed width (V4L2 `bytesperline` padding).
+    uint y_offset = pos.y * pc.plane0_stride_bytes + pos.x;
+    float Y = float(read_byte(y_offset));
+
+    // UV plane: interleaved (U, V) at half spatial resolution. Starts
+    // at `plane1_offset_bytes` and uses `plane1_stride_bytes` row
+    // stride — both come from V4L2, not derived from width.
+    uint uv_offset = pc.plane1_offset_bytes
+                   + (pos.y >> 1u) * pc.plane1_stride_bytes
+                   + (pos.x & ~1u);
+    float U = float(read_byte(uv_offset));
+    float V = float(read_byte(uv_offset + 1u));
+
+    vec3 rgb = convert_color(
+        vec3(Y, U, V),
+        pc.matrix_row0.xyz,
+        pc.matrix_row1.xyz,
+        pc.matrix_row2.xyz,
+        pc.range_offset.xyz,
+        pc.transfer_in,
+        pc.transfer_out,
+        pc.flags
+    );
+
+    imageStore(rgba_output, ivec2(pos), vec4(rgb, 1.0));
+}

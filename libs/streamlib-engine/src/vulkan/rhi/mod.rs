@@ -103,8 +103,8 @@ pub use vulkan_ray_tracing_kernel::VulkanRayTracingKernel;
 mod vulkan_texture_readback;
 pub use vulkan_texture_readback::VulkanTextureReadback;
 
-mod vulkan_format_converter;
-pub use vulkan_format_converter::VulkanFormatConverter;
+mod vulkan_color_converter;
+pub use vulkan_color_converter::VulkanColorConverter;
 
 #[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;

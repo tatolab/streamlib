@@ -1,0 +1,75 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+//
+// YUYV buffer-source → RGBA storage-image-dest color converter.
+//
+// YUYV (a.k.a. YUY2): 4:2:2 subsampling with `[Y0, U, Y1, V]` macro-
+// pixels packed into uint32. Two horizontally-adjacent pixels share
+// one (U, V) pair. Honors source-side row stride padding via
+// `plane0_stride_bytes` — must be a multiple of 4 (uint32 align).
+//
+// Bindings:
+//   0 — `readonly buffer YUYVInput` (uint32-per-macropixel).
+//   1 — `writeonly image2D rgba_output` (RGBA8 storage image).
+//
+// Push constants — see `core::rhi::color_converter::ColorConverterPushConstants`.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "color_convert_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) readonly buffer YUYVInput {
+    uint data[];
+} yuyv_input;
+
+layout(rgba8, set = 0, binding = 1) writeonly uniform image2D rgba_output;
+
+layout(push_constant, std430) uniform PushConstants {
+    vec4 matrix_row0;
+    vec4 matrix_row1;
+    vec4 matrix_row2;
+    vec4 range_offset;
+    uint width;
+    uint height;
+    uint transfer_in;
+    uint transfer_out;
+    uint flags;
+    uint plane0_stride_bytes; // row stride in bytes (multiple of 4)
+    uint plane1_stride_bytes; // unused for YUYV
+    uint plane1_offset_bytes; // unused for YUYV
+} pc;
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    // Each uint32 packs two adjacent pixels [Y0, U, Y1, V].
+    // Row stride in uint32: plane0_stride_bytes >> 2.
+    uint macro_uint_stride = pc.plane0_stride_bytes >> 2u;
+    uint macro_index = pos.y * macro_uint_stride + (pos.x >> 1u);
+    uint macro_pixel = yuyv_input.data[macro_index];
+
+    float Y0 = float(macro_pixel & 0xFFu);
+    float U  = float((macro_pixel >> 8u) & 0xFFu);
+    float Y1 = float((macro_pixel >> 16u) & 0xFFu);
+    float V  = float((macro_pixel >> 24u) & 0xFFu);
+
+    // Select Y0 for even pixels, Y1 for odd pixels; U/V shared.
+    float Y = ((pos.x & 1u) == 0u) ? Y0 : Y1;
+
+    vec3 rgb = convert_color(
+        vec3(Y, U, V),
+        pc.matrix_row0.xyz,
+        pc.matrix_row1.xyz,
+        pc.matrix_row2.xyz,
+        pc.range_offset.xyz,
+        pc.transfer_in,
+        pc.transfer_out,
+        pc.flags
+    );
+
+    imageStore(rgba_output, ivec2(pos), vec4(rgb, 1.0));
+}

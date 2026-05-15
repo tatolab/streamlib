@@ -4,14 +4,14 @@
 use crate::core::context::TextureRegistration;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
-    RhiCommandQueue, PixelBuffer, RhiPixelBufferPool, Texture, TextureDescriptor,
+    RhiColorConverter, RhiCommandQueue, PixelBuffer, RhiPixelBufferPool, Texture, TextureDescriptor,
     TextureFormat, TextureUsages,
 };
 use crate::core::{Result, Error};
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostTextureExt;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 #[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::VulkanLayout;
 
@@ -399,6 +399,14 @@ pub struct GpuContext {
     /// from `texture_cache` so a same-process cache hit can't shortcut the
     /// refresh.
     buffer_texture_cache: Arc<Mutex<HashMap<String, Texture>>>,
+    /// Engine-wide cache of `(src, dst)`-keyed color converters. Per-frame
+    /// `ResolvedColorInfo` lives in push constants, so a single cached
+    /// converter handles every variation of source color description.
+    /// Construction is rare; conversion is hot — RwLock with double-check
+    /// on miss matches that read/write skew.
+    #[cfg(target_os = "linux")]
+    color_converter_cache:
+        Arc<RwLock<HashMap<(PixelFormat, PixelFormat), Arc<RhiColorConverter>>>>,
     /// Engine-tier publication slot for an in-process producer's timeline
     /// semaphore. The producer (today: the camera; in principle any in-tree
     /// video source) publishes a typed handle here so an in-process consumer
@@ -464,6 +472,8 @@ impl GpuContext {
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
+            color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
             video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
             processor_setup_lock: Arc::new(Mutex::new(())),
             #[cfg(target_os = "linux")]
@@ -490,6 +500,8 @@ impl GpuContext {
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
             processor_setup_lock: Arc::new(Mutex::new(())),
@@ -1185,6 +1197,44 @@ impl GpuContext {
         );
         let vulkan_device = &self.device.inner;
         crate::core::rhi::IndexBuffer::new_host_visible(vulkan_device, byte_size)
+    }
+
+    /// Acquire a cached `(src, dst)`-keyed color converter.
+    ///
+    /// First call for a given pair builds the converter (lazy kernel
+    /// SPIR-V load + reflection); subsequent calls return the cached
+    /// handle. Per-frame `ResolvedColorInfo` lives in push constants,
+    /// so one cached converter handles every variation of source color
+    /// description without invalidating.
+    #[cfg(target_os = "linux")]
+    pub fn color_converter(
+        &self,
+        src: PixelFormat,
+        dst: PixelFormat,
+    ) -> Result<Arc<RhiColorConverter>> {
+        // Fast path: read lock.
+        {
+            let cache = self.color_converter_cache.read().unwrap();
+            if let Some(c) = cache.get(&(src, dst)) {
+                return Ok(Arc::clone(c));
+            }
+        }
+        // Slow path: build under write lock with double-check.
+        let mut cache = self.color_converter_cache.write().unwrap();
+        if let Some(c) = cache.get(&(src, dst)) {
+            return Ok(Arc::clone(c));
+        }
+        let vulkan_device = &self.device.inner;
+        let inner = crate::vulkan::rhi::VulkanColorConverter::new(vulkan_device, src, dst)?;
+        let converter = Arc::new(RhiColorConverter { inner });
+        cache.insert((src, dst), Arc::clone(&converter));
+        tracing::debug!(
+            rhi_op = "color_converter",
+            ?src,
+            ?dst,
+            "GpuContext::color_converter — converter constructed"
+        );
+        Ok(converter)
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
@@ -2249,6 +2299,18 @@ impl GpuContextFullAccess {
     /// Create a command buffer from the shared queue.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
         self.inner.create_command_buffer()
+    }
+
+    /// Acquire a cached `(src, dst)`-keyed color converter. See
+    /// [`GpuContext::color_converter`](crate::core::context::GpuContext::color_converter)
+    /// on the inner context for usage.
+    #[cfg(target_os = "linux")]
+    pub fn color_converter(
+        &self,
+        src: PixelFormat,
+        dst: PixelFormat,
+    ) -> Result<Arc<RhiColorConverter>> {
+        self.inner.color_converter(src, dst)
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.

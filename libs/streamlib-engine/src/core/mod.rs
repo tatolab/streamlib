@@ -24,6 +24,7 @@ pub(crate) mod streamlib_home;
 // Customer-facing modules. Module-path stays `pub` so consumers
 // can reach `streamlib::sdk::<name>` via the SDK's per-module
 // re-exports.
+pub mod color;
 pub mod context;
 pub mod descriptors;
 pub mod display_info;
