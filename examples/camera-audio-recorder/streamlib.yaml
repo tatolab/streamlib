@@ -24,6 +24,12 @@ patch:
 schemas:
   AudioFrame:
     package: "@tatolab/core"
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
   VideoFrame:
     package: "@tatolab/core"
   AudioCaptureConfig:

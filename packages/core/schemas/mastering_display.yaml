@@ -1,0 +1,57 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for SMPTE ST.2086 Mastering
+# Display Color Volume — the static HDR metadata describing the
+# display the content was mastered on. Carried in H.265 / H.266 SEI
+# messages (`mastering_display_colour_volume`), MP4 `mdcv` boxes, AV1
+# OBU metadata (`metadata_hdr_mdcv`), and WebM `MasteringMetadata`
+# elements.
+#
+# Field units match the wire format byte-for-byte so encoders /
+# decoders / muxers hand the values through verbatim:
+#
+# - Chromaticity values (`display_primaries_*`, `white_point_*`) are
+#   in increments of 0.00002 (1/50000), so 0.708 = 35400. Range
+#   [0, 50000].
+# - Luminance values (`min_luminance`, `max_luminance`) are in
+#   increments of 0.0001 cd/m², so 1000 cd/m² = 10000000.
+#
+# Primaries are listed in R, G, B order (matching SMPTE ST.2086 and
+# the H.265 / H.266 SEI ordering).
+
+metadata:
+  type: MasteringDisplay
+  description: "SMPTE ST.2086 mastering display color volume (HDR10 static metadata)"
+
+properties:
+  display_primaries_r_x:
+    metadata: { description: "Red primary x chromaticity in 1/50000 increments" }
+    type: uint32
+  display_primaries_r_y:
+    metadata: { description: "Red primary y chromaticity in 1/50000 increments" }
+    type: uint32
+  display_primaries_g_x:
+    metadata: { description: "Green primary x chromaticity in 1/50000 increments" }
+    type: uint32
+  display_primaries_g_y:
+    metadata: { description: "Green primary y chromaticity in 1/50000 increments" }
+    type: uint32
+  display_primaries_b_x:
+    metadata: { description: "Blue primary x chromaticity in 1/50000 increments" }
+    type: uint32
+  display_primaries_b_y:
+    metadata: { description: "Blue primary y chromaticity in 1/50000 increments" }
+    type: uint32
+  white_point_x:
+    metadata: { description: "White point x chromaticity in 1/50000 increments" }
+    type: uint32
+  white_point_y:
+    metadata: { description: "White point y chromaticity in 1/50000 increments" }
+    type: uint32
+  min_luminance:
+    metadata: { description: "Minimum mastering display luminance in 0.0001 cd/m^2 increments" }
+    type: uint32
+  max_luminance:
+    metadata: { description: "Maximum mastering display luminance in 0.0001 cd/m^2 increments" }
+    type: uint32

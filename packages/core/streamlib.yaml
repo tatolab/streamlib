@@ -17,9 +17,15 @@ package:
 schemas:
   AudioFrame:
     file: schemas/audio_frame.yaml
+  ColorInfo:
+    file: schemas/color_info.yaml
+  ContentLight:
+    file: schemas/content_light.yaml
   EncodedAudioFrame:
     file: schemas/encoded_audio_frame.yaml
   EncodedVideoFrame:
     file: schemas/encoded_video_frame.yaml
+  MasteringDisplay:
+    file: schemas/mastering_display.yaml
   VideoFrame:
     file: schemas/video_frame.yaml

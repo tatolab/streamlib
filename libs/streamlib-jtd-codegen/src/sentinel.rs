@@ -171,11 +171,16 @@ fn rewrite_refs(value: &mut Value, alias_to_sentinel: &BTreeMap<String, String>)
     }
 }
 
-/// Sentinel name for a [`SchemaIdent`]. Format: `__STREAMLIB_REF_<hex16>__`.
+/// Sentinel name for a [`SchemaIdent`]. Format: `__STREAMLIB_REF_h<hex16>__`.
 ///
 /// `<hex16>` is the first 16 hex chars of `sha256(@org/package/Type@version)`.
-/// Truncating yields a stable, deterministic identifier that fits comfortably
-/// in Rust/Python/TS identifier rules (`[A-Za-z_][A-Za-z0-9_]*`).
+/// The `h` prefix ensures the digest segment never starts with a digit —
+/// `jtd-codegen` strips leading digits when mangling identifiers into Rust /
+/// Python class names (Rust identifiers can't start with a digit), and a
+/// leading-digit hash slips past the post-pass strip / replace because the
+/// name in the generated output no longer matches the sentinel string.
+/// `h` is opaque, lowercase, and survives all three backends' PascalCase
+/// pass.
 pub fn sentinel_name(ident: &SchemaIdent) -> String {
     let canonical = format!(
         "@{}/{}/{}@{}",
@@ -185,7 +190,48 @@ pub fn sentinel_name(ident: &SchemaIdent) -> String {
         ident.version
     );
     let digest = sha256_hex(&canonical);
-    format!("__STREAMLIB_REF_{}__", &digest[..16])
+    format!("__STREAMLIB_REF_h{}__", &digest[..16])
+}
+
+/// PascalCase → snake_case (e.g. `ColorInfo` → `color_info`,
+/// `MasteringDisplay` → `mastering_display`). Insert an underscore before
+/// every uppercase letter that's not the first character, then lowercase
+/// the whole thing. Mirrors the same transform the codegen emits for
+/// per-type Python module file names.
+fn pascal_to_snake_simple(pascal: &str) -> String {
+    let mut out = String::with_capacity(pascal.len() + pascal.len() / 4);
+    for (i, c) in pascal.chars().enumerate() {
+        if i > 0 && c.is_ascii_uppercase() {
+            out.push('_');
+        }
+        out.push(c.to_ascii_lowercase());
+    }
+    out
+}
+
+/// PascalCase form a sentinel takes after `jtd-codegen` mangles it into a
+/// type identifier (e.g. `__STREAMLIB_REF_b6261594f80ea4d8__` →
+/// `StreamlibRefB6261594f80ea4d8`). Used by the language-specific
+/// post-passes — `jtd-codegen` rewrites the sentinel into PascalCase
+/// when it lands in a struct / class / interface name OR a field type
+/// reference, so the strip + replace passes have to look for the
+/// PascalCase form, not the original underscore-decorated sentinel.
+fn mangle_sentinel_pascal(sentinel: &str) -> String {
+    sentinel
+        .trim_matches('_')
+        .split('_')
+        .filter(|seg| !seg.is_empty())
+        .map(|seg| {
+            let mut chars = seg.chars();
+            match chars.next() {
+                Some(first) => first
+                    .to_uppercase()
+                    .chain(chars.flat_map(|c| c.to_lowercase()))
+                    .collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect()
 }
 
 fn sha256_hex(input: &str) -> String {
@@ -201,7 +247,15 @@ pub fn restore_rust(code: &str, table: &SentinelTable) -> String {
         return code.to_string();
     }
 
-    let stripped = strip_placeholder_decls_rust(code, &table.map.keys().cloned().collect());
+    // jtd-codegen writes the sentinel into Rust output PascalCase'd
+    // (`__STREAMLIB_REF_xxx__` → `StreamlibRefXxx`). The strip and
+    // replace passes have to search for the mangled form.
+    let mangled_sentinels: BTreeSet<String> = table
+        .map
+        .keys()
+        .map(|s| mangle_sentinel_pascal(s))
+        .collect();
+    let stripped = strip_placeholder_decls_rust(code, &mangled_sentinels);
 
     let mut imports_by_module: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut sentinel_replacements: Vec<(String, String)> = Vec::new();
@@ -216,7 +270,7 @@ pub fn restore_rust(code: &str, table: &SentinelTable) -> String {
             .entry(module_path)
             .or_default()
             .insert(type_name.clone());
-        sentinel_replacements.push((sentinel.clone(), type_name));
+        sentinel_replacements.push((mangle_sentinel_pascal(sentinel), type_name));
     }
 
     let mut substituted = stripped;
@@ -247,23 +301,38 @@ pub fn restore_python(code: &str, table: &SentinelTable) -> String {
         return code.to_string();
     }
 
-    let sentinels: BTreeSet<String> = table.map.keys().cloned().collect();
-    let stripped = strip_placeholder_decls_python(code, &sentinels);
+    // Same shape as Rust — `jtd-codegen` PascalCase's the sentinel
+    // for Python class names, so search for the mangled form.
+    let mangled_sentinels: BTreeSet<String> = table
+        .map
+        .keys()
+        .map(|s| mangle_sentinel_pascal(s))
+        .collect();
+    let stripped = strip_placeholder_decls_python(code, &mangled_sentinels);
 
     let mut imports_by_module: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut replacements: Vec<(String, String)> = Vec::new();
     for (sentinel, ident) in &table.map {
+        // Python: relative import directly from the per-type module
+        // (`from ..tatolab__core.color_info import ColorInfo`) so the
+        // codegen output is host-package-name agnostic AND avoids
+        // re-entering the per-package `__init__.py` — same-package
+        // imports otherwise loop through the package's own init while
+        // its own names are still being bound, causing a partial-module
+        // circular-import failure.
+        let snake_type = pascal_to_snake_simple(ident.r#type.as_str());
         let module_path = format!(
-            "_generated_.{}__{}",
+            "..{}__{}.{}",
             ident.org.as_str(),
-            ident.package.as_str().replace('-', "_")
+            ident.package.as_str().replace('-', "_"),
+            snake_type
         );
         let type_name = ident.r#type.as_str().to_string();
         imports_by_module
             .entry(module_path)
             .or_default()
             .insert(type_name.clone());
-        replacements.push((sentinel.clone(), type_name));
+        replacements.push((mangle_sentinel_pascal(sentinel), type_name));
     }
 
     let mut substituted = stripped;
@@ -290,8 +359,14 @@ pub fn restore_typescript(code: &str, table: &SentinelTable) -> String {
         return code.to_string();
     }
 
-    let sentinels: BTreeSet<String> = table.map.keys().cloned().collect();
-    let stripped = strip_placeholder_decls_typescript(code, &sentinels);
+    // Same shape as Rust / Python — `jtd-codegen` PascalCase's the
+    // sentinel for TypeScript interface / type names.
+    let mangled_sentinels: BTreeSet<String> = table
+        .map
+        .keys()
+        .map(|s| mangle_sentinel_pascal(s))
+        .collect();
+    let stripped = strip_placeholder_decls_typescript(code, &mangled_sentinels);
 
     let mut imports_by_module: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     let mut replacements: Vec<(String, String)> = Vec::new();
@@ -306,7 +381,7 @@ pub fn restore_typescript(code: &str, table: &SentinelTable) -> String {
             .entry(module_path)
             .or_default()
             .insert(type_name.clone());
-        replacements.push((sentinel.clone(), type_name));
+        replacements.push((mangle_sentinel_pascal(sentinel), type_name));
     }
 
     let mut substituted = stripped;

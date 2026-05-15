@@ -1,0 +1,90 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for video color information.
+#
+# Models the four-axis color description used by every modern codec
+# bitstream (H.264/H.265 VUI, AV1 OBU color_config), every container
+# (MP4 nclx, WebM Colour, AVIF, PNG cICP), and every production media
+# framework (FFmpeg, WebRTC, Chromium gfx::ColorSpace, NVENC,
+# MediaFoundation): primaries, transfer, matrix, range. Values align
+# with ITU-T H.273 / ISO/IEC 23091-2 enum identifiers so encoder /
+# decoder / muxer code hands them through verbatim — no translation
+# tables. Numeric H.273 values are mapped from / to these string
+# discriminants by helpers in `packages/core/src/color_info_ext.rs`.
+
+metadata:
+  type: ColorInfo
+  description: "Per-frame color description (H.273 / ITU-T VUI 4-tuple)"
+
+properties:
+  primaries:
+    metadata:
+      description: >
+        Color primaries (chromaticities). Maps to H.273
+        `ColourPrimaries` enumerant.
+    enum:
+      - unspecified           # H.273 value 2
+      - bt709                 # H.273 value 1 — Rec.709, sRGB primaries
+      - bt470_m               # H.273 value 4 — System M, NTSC 1953
+      - bt470_bg              # H.273 value 5 — System B/G, EBU
+      - smpte170m             # H.273 value 6 — SMPTE-C, BT.601 525-line
+      - smpte240m             # H.273 value 7
+      - film                  # H.273 value 8 — generic film
+      - bt2020                # H.273 value 9 — Rec.2020 / Rec.2100
+      - smpte428              # H.273 value 10 — XYZ
+      - smpte431              # H.273 value 11 — DCI-P3 (theatrical)
+      - smpte432              # H.273 value 12 — Display-P3 (D65)
+      - ebu3213               # H.273 value 22
+  transfer:
+    metadata:
+      description: >
+        Transfer characteristic (EOTF / OETF). Maps to H.273
+        `TransferCharacteristics` enumerant.
+    enum:
+      - unspecified           # H.273 value 2
+      - bt709                 # H.273 value 1 — Rec.709 OETF
+      - gamma22               # H.273 value 4
+      - gamma28               # H.273 value 5
+      - smpte170m             # H.273 value 6 — BT.601 OETF
+      - smpte240m             # H.273 value 7
+      - linear                # H.273 value 8
+      - log100                # H.273 value 9
+      - log100_sqrt10         # H.273 value 10
+      - xvycc                 # H.273 value 11 — IEC 61966-2-4 (extended xvYCC)
+      - bt1361                # H.273 value 12
+      - srgb                  # H.273 value 13 — IEC 61966-2-1 (sRGB / Display-P3)
+      - bt2020_ten_bit        # H.273 value 14 — Rec.2020 10-bit
+      - bt2020_twelve_bit     # H.273 value 15 — Rec.2020 12-bit
+      - smpte2084             # H.273 value 16 — PQ (HDR10)
+      - smpte428              # H.273 value 17 — XYZ
+      - arib_std_b67          # H.273 value 18 — HLG
+  matrix:
+    metadata:
+      description: >
+        YCbCr matrix coefficients. Maps to H.273
+        `MatrixCoefficients` enumerant.
+    enum:
+      - unspecified           # H.273 value 2
+      - identity              # H.273 value 0 — RGB / GBR (no matrix)
+      - bt709                 # H.273 value 1
+      - fcc                   # H.273 value 4 — FCC 73.682
+      - bt470_bg              # H.273 value 5 — BT.601 625-line
+      - smpte170m             # H.273 value 6 — BT.601 525-line
+      - smpte240m             # H.273 value 7
+      - ycgco                 # H.273 value 8
+      - bt2020_ncl            # H.273 value 9 — non-constant luminance
+      - bt2020_cl             # H.273 value 10 — constant luminance
+      - smpte2085             # H.273 value 11 — Y'D'zD'x
+      - chroma_ncl            # H.273 value 12 — chromaticity-derived NCL
+      - chroma_cl             # H.273 value 13 — chromaticity-derived CL
+      - ictcp                 # H.273 value 14 — Rec.2100 ICtCp
+  range:
+    metadata:
+      description: >
+        Quantization range. Maps to H.264/H.265 VUI
+        `video_full_range_flag` (`limited` = 0, `full` = 1).
+    enum:
+      - unspecified
+      - limited
+      - full

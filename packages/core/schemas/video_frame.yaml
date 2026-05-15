@@ -3,6 +3,23 @@
 #
 # JSON Type Definition (RFC 8927) schema for video frames.
 
+imports:
+  ColorInfo:
+    org: tatolab
+    package: core
+    type: ColorInfo
+    version: "1.0.0"
+  MasteringDisplay:
+    org: tatolab
+    package: core
+    type: MasteringDisplay
+    version: "1.0.0"
+  ContentLight:
+    org: tatolab
+    package: core
+    type: ContentLight
+    version: "1.0.0"
+
 metadata:
   type: VideoFrame
   description: "Video frame for IPC - references GPU surface by ID"
@@ -39,5 +56,17 @@ optionalProperties:
     type: uint32
   texture_layout:
     metadata:
-      description: "Producer's published VkImageLayout for this frame's texture (#633). Per-frame override of the per-surface current_image_layout published via surface-share register/update_layout. Encoded as the raw int32 VkImageLayout enumerant. Absent when the producer relies on the per-surface default."
+      description: "Producer's published VkImageLayout for this frame's texture. Per-frame override of the per-surface current_image_layout published via surface-share register/update_layout. Encoded as the raw int32 VkImageLayout enumerant. Absent when the producer relies on the per-surface default."
     type: int32
+  color_info:
+    metadata:
+      description: "H.273 / ITU-T VUI four-tuple describing this frame's color. Absent means unknown — every consumer treats absent the same as all-`unspecified`. Producers fill from V4L2 (camera), VUI (decoder), application config, or leave absent."
+    ref: ColorInfo
+  mastering_display:
+    metadata:
+      description: "SMPTE ST.2086 mastering display color volume (HDR10 static metadata). Absent for SDR streams."
+    ref: MasteringDisplay
+  content_light:
+    metadata:
+      description: "HDR10 content light level info (MaxCLL / MaxFALL). Absent for SDR streams or when not measured."
+    ref: ContentLight

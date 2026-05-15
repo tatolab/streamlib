@@ -161,9 +161,16 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
                 timestamp_ns,
                 frame_index: encoded.frame_number.clone(),
                 fps: encoded.fps,
-                // Per-frame override is opt-in (#633); per-surface
+                // Per-frame override is opt-in; per-surface
                 // `current_image_layout` from surface-share is the default.
                 texture_layout: None,
+                // Pass color metadata through encoded → decoded so
+                // downstream consumers see what the producer attested.
+                // VUI parsing for codec-attested color lands in a
+                // follow-up.
+                color_info: encoded.color_info.clone(),
+                mastering_display: encoded.mastering_display.clone(),
+                content_light: encoded.content_light.clone(),
             };
 
             self.outputs.write("video_out", &video_frame)?;

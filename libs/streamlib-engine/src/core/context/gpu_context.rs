@@ -2456,6 +2456,9 @@ mod tests {
             frame_index: "1".to_string(),
             fps: None,
             texture_layout: None,
+            color_info: None,
+            mastering_display: None,
+            content_light: None,
         };
 
         let resolved = gpu
@@ -2500,6 +2503,9 @@ mod tests {
             frame_index: "1".to_string(),
             fps: None,
             texture_layout: None,
+            color_info: None,
+            mastering_display: None,
+            content_light: None,
         };
 
         let registration = gpu
@@ -2564,6 +2570,9 @@ mod tests {
             fps: None,
             // SHADER_READ_ONLY_OPTIMAL = 5 per Vulkan spec.
             texture_layout: Some(5),
+            color_info: None,
+            mastering_display: None,
+            content_light: None,
         };
         let json = serde_json::to_value(&with_layout).expect("serialize");
         assert_eq!(
@@ -2580,6 +2589,9 @@ mod tests {
             frame_index: "1".to_string(),
             fps: None,
             texture_layout: None,
+            color_info: None,
+            mastering_display: None,
+            content_light: None,
         };
         let json_absent = serde_json::to_value(&absent).expect("serialize");
         assert!(
@@ -2596,6 +2608,101 @@ mod tests {
         let parsed_absent: crate::_generated_::VideoFrame =
             serde_json::from_str(&serialized_absent).unwrap();
         assert_eq!(parsed_absent.texture_layout, None);
+    }
+
+    /// Issue #811 — `VideoFrame.{color_info, mastering_display,
+    /// content_light}` are optional sidecar fields that producers
+    /// populate from V4L2 / VUI / EDID / HDR metadata. Lock the
+    /// serialization shape: present when set (with all sub-fields
+    /// round-tripping), absent when None. Mentally revert the
+    /// `skip_serializing_if = "Option::is_none"` on either field
+    /// in the generated `_generated_/tatolab__core/video_frame.rs` and
+    /// the absent assertions start failing.
+    #[test]
+    fn videoframe_color_metadata_round_trip() {
+        use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Transfer};
+        use crate::_generated_::{ColorInfo, ContentLight, MasteringDisplay, VideoFrame};
+
+        let with_color = VideoFrame {
+            surface_id: "s".to_string(),
+            width: 1920,
+            height: 1080,
+            timestamp_ns: "0".to_string(),
+            frame_index: "0".to_string(),
+            fps: None,
+            texture_layout: None,
+            color_info: Some(ColorInfo {
+                primaries: Primaries::Bt2020,
+                transfer: Transfer::Smpte2084,
+                matrix: Matrix::Bt2020Ncl,
+                range: Range::Limited,
+            }),
+            mastering_display: Some(MasteringDisplay {
+                // BT.2020 primaries in 1/50000 increments — round-trip
+                // proof, not a real mastering display.
+                display_primaries_r_x: 35400,
+                display_primaries_r_y: 14600,
+                display_primaries_g_x: 8500,
+                display_primaries_g_y: 39850,
+                display_primaries_b_x: 6550,
+                display_primaries_b_y: 2300,
+                white_point_x: 15635,
+                white_point_y: 16450,
+                min_luminance: 1, // 0.0001 cd/m^2
+                max_luminance: 10_000_000, // 1000 cd/m^2
+            }),
+            content_light: Some(ContentLight {
+                max_cll: 1000,
+                max_fall: 400,
+            }),
+        };
+        let json = serde_json::to_value(&with_color).expect("serialize");
+        assert!(json.get("color_info").is_some());
+        assert!(json.get("mastering_display").is_some());
+        assert!(json.get("content_light").is_some());
+        // Enums round-trip as snake_case strings (H.273 alignment).
+        assert_eq!(
+            json.pointer("/color_info/transfer").and_then(|v| v.as_str()),
+            Some("smpte2084"),
+            "transfer enum serializes as the snake_case discriminant"
+        );
+
+        let serialized = serde_json::to_string(&with_color).unwrap();
+        let parsed: VideoFrame = serde_json::from_str(&serialized).unwrap();
+        let parsed_color = parsed.color_info.expect("color_info round-trips");
+        assert_eq!(parsed_color.primaries, Primaries::Bt2020);
+        assert_eq!(parsed_color.transfer, Transfer::Smpte2084);
+        assert_eq!(parsed_color.matrix, Matrix::Bt2020Ncl);
+        assert_eq!(parsed_color.range, Range::Limited);
+        let parsed_mdcv = parsed.mastering_display.expect("mastering_display round-trips");
+        assert_eq!(parsed_mdcv.display_primaries_r_x, 35400);
+        assert_eq!(parsed_mdcv.max_luminance, 10_000_000);
+        let parsed_cll = parsed.content_light.expect("content_light round-trips");
+        assert_eq!(parsed_cll.max_cll, 1000);
+        assert_eq!(parsed_cll.max_fall, 400);
+
+        // Absent on the wire when None — the optional-field plumbing
+        // pattern (mirrors `texture_layout`'s shape).
+        let absent = VideoFrame {
+            surface_id: "s".to_string(),
+            width: 1920,
+            height: 1080,
+            timestamp_ns: "0".to_string(),
+            frame_index: "0".to_string(),
+            fps: None,
+            texture_layout: None,
+            color_info: None,
+            mastering_display: None,
+            content_light: None,
+        };
+        let json_absent = serde_json::to_value(&absent).unwrap();
+        assert!(json_absent.get("color_info").is_none());
+        assert!(json_absent.get("mastering_display").is_none());
+        assert!(json_absent.get("content_light").is_none());
+        let parsed_absent: VideoFrame = serde_json::from_str(&serde_json::to_string(&absent).unwrap()).unwrap();
+        assert!(parsed_absent.color_info.is_none());
+        assert!(parsed_absent.mastering_display.is_none());
+        assert!(parsed_absent.content_light.is_none());
     }
 
     #[test]
@@ -2617,6 +2724,9 @@ mod tests {
             frame_index: "1".to_string(),
             fps: None,
             texture_layout: None,
+            color_info: None,
+            mastering_display: None,
+            content_light: None,
         };
         assert!(gpu
             .resolve_texture_by_surface_id(&frame.surface_id, frame.texture_layout, frame.width, frame.height)

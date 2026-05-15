@@ -3,6 +3,23 @@
 #
 # JSON Type Definition (RFC 8927) schema for encoded video frames.
 
+imports:
+  ColorInfo:
+    org: tatolab
+    package: core
+    type: ColorInfo
+    version: "1.0.0"
+  MasteringDisplay:
+    org: tatolab
+    package: core
+    type: MasteringDisplay
+    version: "1.0.0"
+  ContentLight:
+    org: tatolab
+    package: core
+    type: ContentLight
+    version: "1.0.0"
+
 metadata:
   type: EncodedVideoFrame
   description: "Encoded video frame with H.264/H.265 NAL unit data"
@@ -34,3 +51,15 @@ optionalProperties:
     metadata:
       description: "Source frame rate in frames per second (pass-through from capture device)"
     type: uint32
+  color_info:
+    metadata:
+      description: "H.273 / ITU-T VUI four-tuple describing this frame's color. Encoder writes this so muxers / downstream consumers can populate VUI / colr boxes without re-deriving from the bitstream."
+    ref: ColorInfo
+  mastering_display:
+    metadata:
+      description: "SMPTE ST.2086 mastering display color volume (HDR10 static metadata). Absent for SDR streams."
+    ref: MasteringDisplay
+  content_light:
+    metadata:
+      description: "HDR10 content light level info (MaxCLL / MaxFALL). Absent for SDR streams or when not measured."
+    ref: ContentLight

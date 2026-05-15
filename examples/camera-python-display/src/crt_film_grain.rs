@@ -220,10 +220,15 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
             timestamp_ns: frame.timestamp_ns.clone(),
             frame_index: frame.frame_index.clone(),
             fps: frame.fps,
-            // Per-frame override is opt-in (#633); the per-surface
+            // Per-frame override is opt-in; the per-surface
             // `current_image_layout` published via surface-share is
             // the default.
             texture_layout: None,
+            // Pass through input color metadata — the CRT effect
+            // doesn't change the source's primaries/transfer/matrix.
+            color_info: frame.color_info.clone(),
+            mastering_display: frame.mastering_display.clone(),
+            content_light: frame.content_light.clone(),
         };
         self.outputs.write("video_out", &output_frame)?;
         self.frame_count.fetch_add(1, Ordering::Relaxed);
@@ -334,6 +339,9 @@ fn synth_slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFram
         frame_index: "0".into(),
         fps: None,
         texture_layout: None,
+        color_info: None,
+        mastering_display: None,
+        content_light: None,
     }
 }
 
