@@ -6516,13 +6516,40 @@ mod cuda {
             .cloned()
     }
 
-    /// Build a `cudaTextureDesc` with the AI-Agent-Notes defaults from
-    /// the issue body: linear filter, clamp-to-edge addressing across
-    /// all three dimensions, non-normalized coordinates,
-    /// `cudaReadModeElementType`, no sRGB, no mipmap clamping. Customer-
-    /// overridable defaults are a future concern when a real consumer
-    /// surfaces; ship the standard sampler shape now.
-    fn default_texture_desc() -> sys::cudaTextureDesc {
+    /// Build a `cudaTextureDesc` with the sampler defaults: linear
+    /// filter, clamp-to-edge addressing across all three dimensions,
+    /// non-normalized coordinates, no sRGB, no mipmap clamping.
+    ///
+    /// `readMode` dispatches on the texture's channel data type so
+    /// `cudaFilterModeLinear` always pairs with a sample-time type
+    /// CUDA's hardware filter unit accepts. CUDA spec: linear filtering
+    /// for unsigned- / signed-integer channels requires
+    /// `cudaReadModeNormalizedFloat`; float channels accept
+    /// `cudaReadModeElementType`. Mixing `Linear` + `ElementType` on
+    /// `Rgba8Unorm` trips `cudaErrorInvalidFilterSetting` at
+    /// `cudaCreateTextureObject` time.
+    ///
+    /// Consequence for kernel authors: read the texture via
+    /// `tex2D<float4>(...)` regardless of format. For `Rgba8Unorm` the
+    /// hardware unit normalizes 8-bit channels to `[0, 1]`; for
+    /// `Rgba16Float` / `Rgba32Float` it returns the raw float value.
+    /// Customer-overridable defaults are a future concern when a real
+    /// consumer surfaces; ship the standard sampler shape now.
+    fn default_texture_desc(format: TextureFormat) -> sys::cudaTextureDesc {
+        let read_mode = match format {
+            TextureFormat::Rgba8Unorm => {
+                sys::cudaTextureReadMode::cudaReadModeNormalizedFloat
+            }
+            TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => {
+                sys::cudaTextureReadMode::cudaReadModeElementType
+            }
+            // Image-flavor registration already gates the format
+            // subset; any other variant is unreachable here. Default to
+            // `ElementType` rather than panicking — the surrounding
+            // `cudaCreateTextureObject` call surfaces a typed error
+            // for unsupported combinations.
+            _ => sys::cudaTextureReadMode::cudaReadModeElementType,
+        };
         sys::cudaTextureDesc {
             addressMode: [
                 sys::cudaTextureAddressMode::cudaAddressModeClamp,
@@ -6530,7 +6557,7 @@ mod cuda {
                 sys::cudaTextureAddressMode::cudaAddressModeClamp,
             ],
             filterMode: sys::cudaTextureFilterMode::cudaFilterModeLinear,
-            readMode: sys::cudaTextureReadMode::cudaReadModeElementType,
+            readMode: read_mode,
             sRGB: 0,
             borderColor: [0.0, 0.0, 0.0, 0.0],
             normalizedCoords: 0,
@@ -6559,7 +6586,7 @@ mod cuda {
             (&raw mut (*p).res.mipmap.mipmap).write(entry.mipmapped_array);
             res_desc.assume_init()
         };
-        let tex_desc = default_texture_desc();
+        let tex_desc = default_texture_desc(entry.format);
         let mut tex_obj = MaybeUninit::<sys::cudaTextureObject_t>::uninit();
         unsafe {
             sys::cudaCreateTextureObject(
@@ -7111,24 +7138,47 @@ mod cuda {
         }
 
         #[test]
-        fn default_texture_desc_matches_issue_body_ai_notes() {
-            // AI-Agent-Notes defaults from #802: linear filter,
-            // clamp-to-edge x3, non-normalized coords,
-            // ReadElementType, no sRGB. Locking these here so a future
-            // change to the defaults is intentional rather than drift.
-            let d = default_texture_desc();
+        fn default_texture_desc_pairs_filter_mode_linear_with_compatible_read_mode() {
+            // Lock the CUDA spec gate: linear filtering for
+            // unsigned- / signed-integer channels MUST use
+            // `cudaReadModeNormalizedFloat`; float channels accept
+            // `cudaReadModeElementType`. Mentally revert the
+            // `format` dispatch in `default_texture_desc` to
+            // hardcoded `ElementType` and the unsigned-integer
+            // assertion fails — locking the constraint
+            // unconditionally rather than at runtime via
+            // `cudaErrorInvalidFilterSetting`.
+            let d8 = default_texture_desc(TextureFormat::Rgba8Unorm);
+            assert_eq!(d8.filterMode, sys::cudaTextureFilterMode::cudaFilterModeLinear);
             assert_eq!(
-                d.filterMode,
-                sys::cudaTextureFilterMode::cudaFilterModeLinear
+                d8.readMode,
+                sys::cudaTextureReadMode::cudaReadModeNormalizedFloat,
+                "Rgba8Unorm must use NormalizedFloat for hardware-bilinear sampling"
             );
+
+            let d16 = default_texture_desc(TextureFormat::Rgba16Float);
+            assert_eq!(d16.filterMode, sys::cudaTextureFilterMode::cudaFilterModeLinear);
             assert_eq!(
-                d.readMode,
-                sys::cudaTextureReadMode::cudaReadModeElementType
+                d16.readMode,
+                sys::cudaTextureReadMode::cudaReadModeElementType,
+                "Rgba16Float keeps ElementType — float channels accept linear filtering directly"
             );
-            assert_eq!(d.sRGB, 0);
-            assert_eq!(d.normalizedCoords, 0);
-            for mode in d.addressMode {
-                assert_eq!(mode, sys::cudaTextureAddressMode::cudaAddressModeClamp);
+
+            let d32 = default_texture_desc(TextureFormat::Rgba32Float);
+            assert_eq!(d32.filterMode, sys::cudaTextureFilterMode::cudaFilterModeLinear);
+            assert_eq!(
+                d32.readMode,
+                sys::cudaTextureReadMode::cudaReadModeElementType,
+                "Rgba32Float keeps ElementType — float channels accept linear filtering directly"
+            );
+
+            // Sampler-shape invariants — unchanged across formats.
+            for d in [d8, d16, d32] {
+                assert_eq!(d.sRGB, 0);
+                assert_eq!(d.normalizedCoords, 0);
+                for mode in d.addressMode {
+                    assert_eq!(mode, sys::cudaTextureAddressMode::cudaAddressModeClamp);
+                }
             }
         }
 

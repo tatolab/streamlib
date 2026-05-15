@@ -1085,6 +1085,20 @@ impl SurfaceStore {
     /// reusing the host adapter's timeline-wait + signal path (#531). `None`
     /// for adapters that don't need explicit Vulkan sync (OpenGL — its
     /// `glFinish` + DMA-BUF kernel-fence semantics carry visibility).
+    ///
+    /// Dispatches internally on the texture's underlying memory flavor:
+    ///
+    /// - **DMA-BUF** (the default; tiled `VkImage` with a DRM format
+    ///   modifier OR linear `VkBuffer`-backed surface) — exports a
+    ///   DMA-BUF FD and publishes with `handle_type: "dma_buf"`.
+    /// - **OPAQUE_FD** (`HostVulkanTexture::new_opaque_fd_export` —
+    ///   DEVICE_LOCAL `VkImage`, `VK_IMAGE_TILING_OPTIMAL`, no DRM
+    ///   modifier, format restricted to `Rgba8Unorm` / `Rgba16Float` /
+    ///   `Rgba32Float`) — exports the OPAQUE_FD memory handle and
+    ///   publishes with `handle_type: "opaque_fd"` plus the
+    ///   `vk_image_*` round-trip fields (#806) the consumer needs to
+    ///   rebuild a byte-for-byte matching `VkImageCreateInfo` for the
+    ///   CUDA `cudaExternalMemoryGetMappedMipmappedArray` import path.
     #[cfg(target_os = "linux")]
     pub fn register_texture(
         &self,
@@ -1093,8 +1107,18 @@ impl SurfaceStore {
         timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
         current_image_layout: streamlib_consumer_rhi::VulkanLayout,
     ) -> Result<()> {
-        // Export the DMA-BUF fd from the texture
-        let fd = texture.inner.export_dma_buf_fd()?;
+        let is_opaque_fd = texture.inner.is_opaque_fd_export();
+
+        // Export the memory FD per the texture's underlying memory
+        // flavor. OPAQUE_FD textures have no DMA-BUF export path on
+        // NVIDIA (and the call would fail at the driver); DMA-BUF
+        // textures have no OPAQUE_FD export path with VMA's
+        // per-pool memory configuration.
+        let fd = if is_opaque_fd {
+            texture.inner.export_opaque_fd_memory()?
+        } else {
+            texture.inner.export_dma_buf_fd()?
+        };
 
         // Optionally export the timeline-semaphore as an OPAQUE_FD. The host
         // retains ownership of the semaphore object; this fd is duplicated by
@@ -1113,39 +1137,88 @@ impl SurfaceStore {
             None => None,
         };
 
-        // Carry the DRM format modifier and per-plane row pitch so the
-        // consumer-side EGL or Vulkan import can pass them via
-        // EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT and EGL_DMA_BUF_PLANE{N}_PITCH_EXT
-        // (or VkImageDrmFormatModifierExplicitCreateInfoEXT). Zero modifier
-        // means LINEAR / not applicable; render-target consumers must refuse
-        // such surfaces because LINEAR DMA-BUFs are sampler-only on NVIDIA
-        // (see docs/learnings/nvidia-egl-dmabuf-render-target.md).
-        let drm_format_modifier = texture.inner.chosen_drm_format_modifier();
-        let plane_layout = texture
-            .inner
-            .dma_buf_plane_layout()
-            .unwrap_or_else(|_| vec![(0, 0)]);
-        let plane_offsets: Vec<u64> = plane_layout.iter().map(|(o, _)| *o).collect();
-        let plane_strides: Vec<u64> = plane_layout.iter().map(|(_, s)| *s).collect();
+        // Per-flavor wire fields. The DMA-BUF path carries the DRM
+        // modifier + per-plane layout the EGL / Vulkan import paths
+        // need. The OPAQUE_FD path carries the `vk_image_*` round-trip
+        // shape `cudaExternalMemoryGetMappedMipmappedArray` requires —
+        // matches the fixed shape `HostVulkanTexture::new_opaque_fd_export`
+        // hardcodes (2D, mipLevels=1, arrayLayers=1, samples=1,
+        // tiling=OPTIMAL, usage=TRANSFER_SRC|TRANSFER_DST|SAMPLED|STORAGE).
+        let request = if is_opaque_fd {
+            let allocation_size = texture.inner.vma_allocation_size() as u64;
+            const VK_IMAGE_TYPE_2D: i32 = 1;
+            const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
+            const VK_SAMPLE_COUNT_1: i32 = 1;
+            const VK_IMAGE_USAGE_TRANSFER_SRC_BIT: u32 = 0x0000_0001;
+            const VK_IMAGE_USAGE_TRANSFER_DST_BIT: u32 = 0x0000_0002;
+            const VK_IMAGE_USAGE_SAMPLED_BIT: u32 = 0x0000_0004;
+            const VK_IMAGE_USAGE_STORAGE_BIT: u32 = 0x0000_0008;
+            let vk_image_usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT
+                | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                | VK_IMAGE_USAGE_SAMPLED_BIT
+                | VK_IMAGE_USAGE_STORAGE_BIT;
 
-        let request = serde_json::json!({
-            "op": "register",
-            "surface_id": surface_id,
-            "runtime_id": self.inner.runtime_id,
-            "width": texture.width(),
-            "height": texture.height(),
-            "format": format!("{:?}", texture.format()),
-            "resource_type": "texture",
-            "plane_offsets": plane_offsets,
-            "plane_strides": plane_strides,
-            "drm_format_modifier": drm_format_modifier,
-            "has_sync_fd": sync_fd.is_some(),
-            // The producer's declared `VkImageLayout` (#633): the layout
-            // the texture lives in immediately after registration, fed to
-            // host consumers as the source layout of their first QFOT
-            // acquire barrier. Encoded as i32 per the Vulkan spec.
-            "current_image_layout": current_image_layout.as_vk().as_raw(),
-        });
+            serde_json::json!({
+                "op": "register",
+                "surface_id": surface_id,
+                "runtime_id": self.inner.runtime_id,
+                "width": texture.width(),
+                "height": texture.height(),
+                "format": format!("{:?}", texture.format()),
+                "resource_type": "texture",
+                "handle_type": "opaque_fd",
+                "plane_sizes": [allocation_size],
+                "plane_offsets": [0u64],
+                "plane_strides": [0u64],
+                "drm_format_modifier": 0u64,
+                "has_sync_fd": sync_fd.is_some(),
+                "current_image_layout": current_image_layout.as_vk().as_raw(),
+                "vk_image_type": VK_IMAGE_TYPE_2D,
+                "vk_image_mip_levels": 1u32,
+                "vk_image_array_layers": 1u32,
+                "vk_image_samples": VK_SAMPLE_COUNT_1,
+                "vk_image_tiling": VK_IMAGE_TILING_OPTIMAL,
+                "vk_image_usage": vk_image_usage,
+                "vk_image_allocation_size": allocation_size,
+            })
+        } else {
+            // Carry the DRM format modifier and per-plane row pitch so
+            // the consumer-side EGL or Vulkan import can pass them via
+            // EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT and
+            // EGL_DMA_BUF_PLANE{N}_PITCH_EXT (or
+            // VkImageDrmFormatModifierExplicitCreateInfoEXT). Zero
+            // modifier means LINEAR / not applicable; render-target
+            // consumers must refuse such surfaces because LINEAR
+            // DMA-BUFs are sampler-only on NVIDIA (see
+            // docs/learnings/nvidia-egl-dmabuf-render-target.md).
+            let drm_format_modifier = texture.inner.chosen_drm_format_modifier();
+            let plane_layout = texture
+                .inner
+                .dma_buf_plane_layout()
+                .unwrap_or_else(|_| vec![(0, 0)]);
+            let plane_offsets: Vec<u64> = plane_layout.iter().map(|(o, _)| *o).collect();
+            let plane_strides: Vec<u64> = plane_layout.iter().map(|(_, s)| *s).collect();
+
+            serde_json::json!({
+                "op": "register",
+                "surface_id": surface_id,
+                "runtime_id": self.inner.runtime_id,
+                "width": texture.width(),
+                "height": texture.height(),
+                "format": format!("{:?}", texture.format()),
+                "resource_type": "texture",
+                "plane_offsets": plane_offsets,
+                "plane_strides": plane_strides,
+                "drm_format_modifier": drm_format_modifier,
+                "has_sync_fd": sync_fd.is_some(),
+                // The producer's declared `VkImageLayout` (#633): the
+                // layout the texture lives in immediately after
+                // registration, fed to host consumers as the source
+                // layout of their first QFOT acquire barrier. Encoded
+                // as i32 per the Vulkan spec.
+                "current_image_layout": current_image_layout.as_vk().as_raw(),
+            })
+        };
 
         let connection = self.inner.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
