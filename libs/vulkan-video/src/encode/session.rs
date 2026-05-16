@@ -560,9 +560,15 @@ impl SimpleEncoder {
                     }
                 }
             }
+            // Decoders skip these fields entirely when
+            // `colour_description_present_flag = 0`, but emit H.273
+            // "Unspecified" (2) rather than "Reserved" (0) for
+            // spec-symmetry — the fields are part of the same byte
+            // budget the per-axis `_byte()` accessors already honor.
+            let unspec = crate::encode::color_vui::H273_UNSPECIFIED;
             let (vui_primaries, vui_transfer, vui_matrix) = color_vui
                 .map(|cv| (cv.primaries_byte(), cv.transfer_byte(), cv.matrix_byte()))
-                .unwrap_or((0, 0, 0));
+                .unwrap_or((unspec, unspec, unspec));
 
             h264_sps_vui = vk::video::StdVideoH264SequenceParameterSetVui {
                 flags: vui_flags,

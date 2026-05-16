@@ -254,8 +254,27 @@ fn build_encoder_lazily(
         color_vui = ?color_vui,
         "[H265Encoder] SPS VUI color metadata chained from first-frame color_info"
     );
+    // Debug: emit the cached VPS+SPS+PPS bytes as hex once at construction
+    // so E2E flows can `ffprobe` the parameter sets without saving a full
+    // MP4. One-shot trace; encoded packets at frame rate are not logged.
+    tracing::debug!(
+        header_hex = %hex_encode(encoder.header()),
+        header_len = encoder.header().len(),
+        "[H265Encoder] Cached VPS+SPS+PPS header"
+    );
 
     Ok(encoder)
+}
+
+/// Lowercase hex encoder for the one-shot VPS+SPS+PPS debug log. Returns an
+/// empty string on empty input.
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 #[cfg(test)]
