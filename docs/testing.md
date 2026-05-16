@@ -123,11 +123,27 @@ PSNR via ffmpeg and classifies against the pass bar below:
 libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h264 h264
 libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-h265 h265
 
-# Sanity check that the rig flags real regressions (swaps R↔B on every
-# decoded sample → Y PSNR drops below FAIL threshold on chroma-bearing
-# references):
-PSNR_INJECT_BUG=color-matrix \
-    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug h264
+# Sanity-check that the rig flags real regressions. Each PSNR_INJECT_BUG
+# variant post-processes the decoded samples through a different
+# regression class and is expected to drop Y PSNR below FAIL on the
+# references that carry the affected channels:
+#
+#   swap-channels — R↔B plane swap (catches wiring regressions where the
+#                   R and B planes are exchanged anywhere in the
+#                   pipeline; fails on red/blue/complex references).
+#   bt601-bt709   — encode RGB→YUV as bt601, decode YUV→RGB as bt709
+#                   (real matrix mis-interpretation; fails on chroma-
+#                   bearing references).
+#   range-swap    — encode RGB→YUV at PC range, decode pretending it
+#                   was TV range (range expansion mis-interpretation;
+#                   fails on the gradient references where mid-luma
+#                   variation is heaviest).
+PSNR_INJECT_BUG=swap-channels \
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-swap   h264
+PSNR_INJECT_BUG=bt601-bt709 \
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-matrix h264
+PSNR_INJECT_BUG=range-swap \
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr.sh /tmp/psnr-bug-range  h264
 ```
 
 Exit codes: `0` — all references at or above the WARN threshold, `1` —
@@ -141,7 +157,66 @@ harness prints a TSV report to `<output>/psnr_report.tsv`. Pass bar:
 ```
 
 Useful env overrides (see the script header for the full list): `FPS`,
-`FIXTURE_REPS`, `PNG_SAMPLE_EVERY`, `PSNR_INJECT_BUG`.
+`FIXTURE_REPS`, `PNG_SAMPLE_EVERY`, `PSNR_INJECT_BUG`. (Note: an
+earlier rig revision exposed a single `PSNR_INJECT_BUG=color-matrix`
+mode that was actually an R↔B swap, not a matrix swap; it has been
+renamed to `swap-channels`, and `bt601-bt709` is the real matrix-swap
+mode. Unknown `PSNR_INJECT_BUG` values now error out instead of
+silently no-op'ing.)
+
+**Vivid color regression gate**
+(`e2e_fixture_psnr_vivid.sh`,
+[`libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh`](../libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh)).
+Sister fixture that guards the V4L2 colorimetry path against the
+matrix mis-interpretation class (the historical green/magenta tint
+symptom). Forces vivid into a saturated single-color test pattern
+(`100% Red` by default), runs `vulkan-video-roundtrip` against it,
+computes the rig-wide mean of each RGB channel across the sampled
+decoded frames, and compares to the checked-in baseline TSV at
+[`libs/streamlib-engine/tests/fixtures/psnr_vivid_baseline.tsv`](../libs/streamlib-engine/tests/fixtures/psnr_vivid_baseline.tsv)
+with a fixed absolute tolerance (±0.05 on the `[0,1]` channel scale).
+The saturated pattern magnifies matrix mis-interpretations — a
+bt.601 vs bt.709 mis-conversion on `100% Red` lifts the G channel by
+~0.07, well above tolerance, whereas the same bug on the default
+color-balanced colorbar would only shift G by ~0.005 and slip
+through.
+
+```bash
+# Standard regression check against the checked-in baseline.
+libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-psnr h264
+
+# Re-capture the baseline (do this when the color-management code
+# legitimately moves and the post-fix vivid output is the new normal).
+BASELINE_CAPTURE=1 \
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-baseline h264
+
+# Negative test — proves the gate isn't vacuous.
+INJECT_BUG=bt601-bt709 \
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_vivid.sh /tmp/vivid-bug    h264
+```
+
+The range-swap class is intentionally NOT covered by this fixture —
+saturated single-color patterns are insensitive to range
+mis-interpretation. The main fixture rig's gradient references are
+where range-swap deterministically drops Y PSNR below FAIL.
+
+**Manual gate for color-management PRs.** Until the GPU CI runner
+milestone lands and CI can run the rigs automatically, treat both
+fixtures above as a mandatory manual gate on any PR that touches
+the color path (RHI color converter, encoder/decoder VUI / colorimetry,
+display swapchain color space, tone mapper, any sampler-conversion
+key). The gate is:
+
+1. Main fixture rig clean — `e2e_fixture_psnr.sh /tmp/psnr-baseline h264`
+   passes; same for `h265`.
+2. Vivid regression gate clean — `e2e_fixture_psnr_vivid.sh` passes
+   against the checked-in baseline TSV.
+3. At least one negative test from the matrix above runs as part of
+   PR validation and is shown to deterministically FAIL — proves the
+   gate is non-vacuous for this branch.
+
+Paste the verdicts plus the negative-test output into the PR
+description so reviewers can see the gate fired.
 
 **Fallback path: ad-hoc comparison.** When you need a one-off PSNR for a
 non-fixture scenario, run ffmpeg directly against a same-resolution

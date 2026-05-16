@@ -28,8 +28,18 @@
 #   WIDTH / HEIGHT     — frame dimensions (default 1920x1080, must
 #                         match the checked-in fixture PNGs)
 #   FPS                — BgraFileSource playback fps (default 30)
-#   PSNR_INJECT_BUG    — if set to "color-matrix", swaps BT.601↔BT.709
-#                         at decode time to verify the FAIL threshold trips
+#   PSNR_INJECT_BUG    — post-decode bug injection; verifies the FAIL
+#                         threshold trips for color-management regressions.
+#                         One of:
+#                           swap-channels  — R↔B channel swap (catches
+#                                            plane-order regressions)
+#                           bt601-bt709    — encode→YUV as bt601, decode→
+#                                            RGB as bt709 (real matrix
+#                                            mis-interpretation)
+#                           range-swap     — encode→YUV as PC range, decode
+#                                            as TV range (range expansion
+#                                            mis-interpretation)
+#                         Unknown values exit non-zero (no silent no-op).
 #
 # Exit codes: 0 = pass (all refs ≥ warn threshold), 1 = fail, 77 = skip.
 
@@ -159,17 +169,50 @@ if [ "$SAMPLE_COUNT" -eq 0 ]; then
     exit 1
 fi
 
-# Optional bug-injection: swap R↔B on every decoded sample before
-# comparing. Simulates a BT.601 ↔ BT.709 style color-space regression
-# at decode time and should drop Y PSNR below the FAIL threshold on
-# every non-gray reference, proving the rig flags quality regressions.
-if [ "$PSNR_INJECT_BUG" = "color-matrix" ]; then
-    echo "[psnr] INJECTING BUG: swapping R↔B on decoded samples"
+# Optional bug-injection: post-process every decoded sample with a
+# specific color-management regression class before PSNR comparison.
+# Each variant is expected to drop Y PSNR below the FAIL threshold on
+# the references that carry the affected channels — proving the rig
+# flags real quality regressions, not just smoke-test runs.
+if [ -n "$PSNR_INJECT_BUG" ]; then
+    case "$PSNR_INJECT_BUG" in
+        swap-channels)
+            # R↔B plane swap. Catches wiring regressions where R and B
+            # are exchanged anywhere in the pipeline (decoder plane
+            # ordering, RHI texture format mis-binding). Has no effect
+            # on grayscale references.
+            echo "[psnr] INJECTING BUG: swapping R↔B on decoded samples"
+            inject_filter="colorchannelmixer=rr=0:rb=1:bb=0:br=1:gg=1"
+            ;;
+        bt601-bt709)
+            # Encode RGB→YUV as bt601, decode YUV→RGB as bt709 — the
+            # canonical matrix mis-interpretation that produces the
+            # green/magenta tint regression class.
+            # Format insertions force an actual YUV intermediate so the
+            # matrix labels drive a real reinterpretation rather than a
+            # tagged-but-untransformed scale.
+            echo "[psnr] INJECTING BUG: BT.601→BT.709 matrix mis-interpretation"
+            inject_filter="scale=out_color_matrix=bt601:flags=accurate_rnd,format=yuv420p,scale=in_color_matrix=bt709:flags=accurate_rnd,format=rgba"
+            ;;
+        range-swap)
+            # Encode RGB→YUV at PC range (0–255), decode pretending it
+            # was TV range (16–235). Decoder expands the 16–235 chunk to
+            # fill 0–255, clipping highlights and shadows.
+            echo "[psnr] INJECTING BUG: PC→TV range mis-interpretation"
+            inject_filter="scale=out_range=pc:flags=accurate_rnd,format=yuv420p,scale=in_range=tv:flags=accurate_rnd,format=rgba"
+            ;;
+        *)
+            echo "[psnr] ERROR: unknown PSNR_INJECT_BUG=$PSNR_INJECT_BUG" >&2
+            echo "[psnr] valid: swap-channels | bt601-bt709 | range-swap" >&2
+            exit 1
+            ;;
+    esac
+
     for f in "$PNG_DIR"/display_*_frame_*_input_*.png; do
         ffmpeg -y -hide_banner -loglevel error -i "$f" \
-            -vf "colorchannelmixer=rr=0:rb=1:bb=0:br=1:gg=1" \
-            "${f}.swap.png"
-        mv "${f}.swap.png" "$f"
+            -vf "$inject_filter" \
+            "${f}.injected.png"
+        mv "${f}.injected.png" "$f"
     done
 fi
 
