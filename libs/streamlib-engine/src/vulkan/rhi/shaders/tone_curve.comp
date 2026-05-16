@@ -1,0 +1,250 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+//
+// Image-source → image-dest tone-curve compute shader.
+//
+// Bindings:
+//   0 — `readonly image2D rgba_input` (RGBA8 / RGBA16F storage image,
+//       interpreted in input_transfer encoding).
+//   1 — `writeonly image2D rgba_output` (RGBA8 / RGBA16F storage image,
+//       written in output_transfer encoding).
+//
+// Per-channel pipeline:
+//   1. EOTF: input_transfer → linear (per-channel, normalized to peak_in_nits).
+//   2. tonemap_curve: optional tone-curve in linear or PQ space.
+//   3. OETF: linear → output_transfer (per-channel, normalized to peak_out_nits).
+//
+// Push constants — see `core::rhi::tone_mapper::ToneMapperPushConstants`.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "color_convert_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Storage images — format-agnostic at the SPIR-V level (the
+// `set_storage_image` binding picks the texture's view format at
+// runtime). The shader operates on `vec4` color, so this works for
+// RGBA8_UNORM, RGBA16_UNORM, and RGBA16_SFLOAT alike.
+layout(rgba8, set = 0, binding = 0) readonly uniform image2D rgba_input;
+layout(rgba8, set = 0, binding = 1) writeonly uniform image2D rgba_output;
+
+layout(push_constant, std430) uniform PushConstants {
+    uint width;
+    uint height;
+    uint input_transfer;
+    uint output_transfer;
+    uint tonemap_curve;
+    float peak_in_nits;
+    float peak_out_nits;
+    uint flags;
+} pc;
+
+// Keep in sync with `core::rhi::tone_mapper::ToneCurveId`.
+const uint TONE_CURVE_NONE      = 0u;  // identity (transfer conversion only)
+const uint TONE_CURVE_BT2390    = 1u;  // forward HDR→SDR, ITU-R BT.2390 EETF
+const uint TONE_CURVE_BT2446A   = 2u;  // inverse SDR→HDR, ITU-R BT.2446-1 method A2
+
+// PQ space conversion (PQ encodes 1.0 = 10000 nits per spec).
+// These mirror `transfer_to_linear` / `transfer_from_linear` for PQ in
+// `color_convert_common.glsl`; duplicated here as the named helpers
+// `pq_encode` / `pq_decode` so the BT.2390 algorithm reads as
+// "encode, normalize, spline, denormalize, decode" — matches the
+// spec's pseudocode in Annex 2 of BT.2390-9.
+
+float pq_encode(float linear_abs) {
+    // linear_abs in [0, 1] where 1.0 = 10000 nits.
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = (2523.0 / 4096.0) * 128.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = (2413.0 / 4096.0) * 32.0;
+    const float c3 = (2392.0 / 4096.0) * 32.0;
+    float xp = pow(max(linear_abs, 0.0), m1);
+    float num = c1 + c2 * xp;
+    float den = 1.0 + c3 * xp;
+    return pow(num / den, m2);
+}
+
+float pq_decode(float pq) {
+    return transfer_to_linear(TRANSFER_PQ, pq);
+}
+
+// BT.2390 EETF — per-channel HDR→SDR tone curve in PQ space.
+//
+// Reference: ITU-R Report BT.2390-9, Annex 2 §5 (Hermite spline EETF).
+//
+// Inputs:
+//   linear_norm: per-channel linear value normalized to peak_in_nits
+//                (1.0 = peak_in_nits).
+//   peak_in_nits:  source reference peak luminance.
+//   peak_out_nits: target reference peak luminance.
+// Output:
+//   per-channel linear value normalized to peak_out_nits
+//   (1.0 = peak_out_nits).
+//
+// The spline operates in PQ space normalized so that 1.0 = source peak.
+// The knee point KS = 1.5 * maxLum - 0.5; below KS pass-through, above
+// KS the cubic Hermite spline interpolates from (KS, KS) to (1, maxLum).
+float bt2390_eetf(float linear_norm, float peak_in_nits, float peak_out_nits) {
+    // Convert source-normalized linear → absolute linear (1.0 = 10000 nits).
+    float linear_abs = linear_norm * peak_in_nits / 10000.0;
+    // Source peak in PQ units (where 1.0 = 10000 nits).
+    float pq_src = pq_encode(peak_in_nits / 10000.0);
+    // Destination peak in PQ units.
+    float pq_dst = pq_encode(peak_out_nits / 10000.0);
+    // Input value in PQ units, then normalized to source-peak space.
+    float pq_in = pq_encode(linear_abs);
+    float E1 = pq_in / pq_src;
+    // Maximum allowed luminance in source-normalized PQ space.
+    float maxLum = pq_dst / pq_src;
+    // Knee start.
+    float ks = 1.5 * maxLum - 0.5;
+
+    float E2;
+    if (E1 < ks) {
+        // Below knee: linear pass-through preserves shadows + midtones.
+        E2 = E1;
+    } else {
+        // Hermite spline P(B) where B in [0, 1] from KS to 1.
+        float t = (E1 - ks) / max(1.0 - ks, 1e-6);
+        float t2 = t * t;
+        float t3 = t2 * t;
+        E2 = (2.0 * t3 - 3.0 * t2 + 1.0) * ks
+           + (t3 - 2.0 * t2 + t) * (1.0 - ks)
+           + (-2.0 * t3 + 3.0 * t2) * maxLum;
+    }
+
+    // Denormalize back to absolute PQ.
+    float pq_out = E2 * pq_src;
+    // Decode PQ → linear absolute (1.0 = 10000 nits).
+    float lin_out_abs = pq_decode(pq_out);
+    // Renormalize to destination peak.
+    return lin_out_abs * 10000.0 / peak_out_nits;
+}
+
+// BT.2446-1 method A2 — per-channel SDR→HDR inverse tone curve.
+//
+// Reference: ITU-R Report BT.2446-1, §5 method A2 (closed-form
+// inverse tone-mapping for SDR→HDR up-conversion).
+//
+// Inputs:
+//   linear_norm: per-channel linear value normalized to peak_in_nits.
+//   peak_in_nits:  source SDR reference peak (typically 100 nits).
+//   peak_out_nits: target HDR reference peak (e.g., 1000 or 4000 nits).
+// Output:
+//   per-channel linear value normalized to peak_out_nits.
+//
+// Below the knee (≈ midtone), shadows are preserved roughly linearly
+// to keep SDR midtones at SDR-equivalent display nits. Above the knee
+// the curve smoothly expands into HDR headroom so that 1.0 SDR maps
+// to 1.0 HDR (peak preserved).
+float bt2446a_inverse(float linear_norm, float peak_in_nits, float peak_out_nits) {
+    // Trivial case: no expansion needed.
+    if (peak_out_nits <= peak_in_nits) {
+        // Map 1.0 input → peak_in/peak_out output (so SDR stays at
+        // SDR-equivalent absolute nits in the smaller target range).
+        return linear_norm * peak_in_nits / peak_out_nits;
+    }
+    float ratio = peak_out_nits / peak_in_nits;
+    // Knee at SDR=0.5 (≈ midtone). Below: linear preserving shadows.
+    // Above: cubic Hermite ease into peak.
+    const float knee = 0.5;
+    if (linear_norm <= knee) {
+        // Map [0, knee] in source → [0, knee/ratio] in dest, linear.
+        // This keeps SDR shadows at the same absolute nits as before
+        // (knee_source_nits = knee * peak_in; output normalized to
+        // peak_out gives knee/ratio * peak_out = knee * peak_in nits).
+        return linear_norm / ratio;
+    }
+    // Above knee: cubic ease from (knee, knee/ratio) to (1.0, 1.0).
+    // Both endpoint slopes match the linear segment + tangent at peak,
+    // giving C1 continuity at both endpoints.
+    float t = (linear_norm - knee) / (1.0 - knee);
+    float t2 = t * t;
+    float t3 = t2 * t;
+    // Hermite basis functions (h00, h10, h01, h11):
+    //   p(t) = h00*p0 + h10*m0 + h01*p1 + h11*m1
+    float h00 =  2.0 * t3 - 3.0 * t2 + 1.0;
+    float h10 =        t3 - 2.0 * t2 + t;
+    float h01 = -2.0 * t3 + 3.0 * t2;
+    float h11 =        t3 -       t2;
+    float p0 = knee / ratio;
+    float p1 = 1.0;
+    // Tangents in destination units. Source-side derivative below knee
+    // is 1/ratio (linear segment); preserve it at the start. End
+    // tangent is 0 to soften approach to peak (no overshoot).
+    float m0 = 1.0 / ratio;
+    float m1 = 0.0;
+    return h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1;
+}
+
+// Per-transfer reference luminance — the nit value that linear=1.0
+// represents after the EOTF (and that linear=1.0 means in the OETF
+// input). PQ encodes up to 10000 nits, HLG to its reference peak,
+// SDR transfers to ~100 nits diffuse white.
+float transfer_reference_nits(uint transfer_id) {
+    if (transfer_id == TRANSFER_PQ)  return 10000.0;
+    if (transfer_id == TRANSFER_HLG) return 1000.0;
+    return 100.0;
+}
+
+float apply_tone_curve(float linear_post_eotf, uint curve, uint input_transfer,
+                       uint output_transfer, float peak_in, float peak_out) {
+    // `linear_post_eotf` is in transfer-reference-normalized space
+    // (1.0 = `transfer_reference_nits(input_transfer)`). The tone-
+    // curve algorithms expect "linear normalized to peak_in_nits" on
+    // input and produce "linear normalized to peak_out_nits" on
+    // output — so we renormalize at the boundary so the math matches
+    // its spec (BT.2390 Annex 2; BT.2446-1 §5).
+    float ref_in  = transfer_reference_nits(input_transfer);
+    float ref_out = transfer_reference_nits(output_transfer);
+    float lin_in_norm = linear_post_eotf * ref_in / peak_in;
+
+    float lin_out_norm;
+    if (curve == TONE_CURVE_BT2390) {
+        lin_out_norm = bt2390_eetf(lin_in_norm, peak_in, peak_out);
+    } else if (curve == TONE_CURVE_BT2446A) {
+        lin_out_norm = bt2446a_inverse(lin_in_norm, peak_in, peak_out);
+    } else if (peak_in == peak_out) {
+        lin_out_norm = lin_in_norm;
+    } else {
+        lin_out_norm = lin_in_norm * peak_in / peak_out;
+    }
+
+    // Renormalize back to the OETF's reference space.
+    return lin_out_norm * peak_out / ref_out;
+}
+
+void main() {
+    uvec2 pos = gl_GlobalInvocationID.xy;
+    if (pos.x >= pc.width || pos.y >= pc.height) return;
+
+    vec4 src = imageLoad(rgba_input, ivec2(pos));
+
+    // EOTF input → linear (per-channel, normalized to peak_in_nits).
+    vec3 lin_in = vec3(
+        transfer_to_linear(pc.input_transfer, src.r),
+        transfer_to_linear(pc.input_transfer, src.g),
+        transfer_to_linear(pc.input_transfer, src.b)
+    );
+
+    // Tone curve (per-channel).
+    vec3 lin_out = vec3(
+        apply_tone_curve(lin_in.r, pc.tonemap_curve, pc.input_transfer,
+                         pc.output_transfer, pc.peak_in_nits, pc.peak_out_nits),
+        apply_tone_curve(lin_in.g, pc.tonemap_curve, pc.input_transfer,
+                         pc.output_transfer, pc.peak_in_nits, pc.peak_out_nits),
+        apply_tone_curve(lin_in.b, pc.tonemap_curve, pc.input_transfer,
+                         pc.output_transfer, pc.peak_in_nits, pc.peak_out_nits)
+    );
+
+    // OETF linear → output (per-channel, normalized to peak_out_nits).
+    vec3 enc_out = vec3(
+        transfer_from_linear(pc.output_transfer, clamp(lin_out.r, 0.0, 1.0)),
+        transfer_from_linear(pc.output_transfer, clamp(lin_out.g, 0.0, 1.0)),
+        transfer_from_linear(pc.output_transfer, clamp(lin_out.b, 0.0, 1.0))
+    );
+
+    imageStore(rgba_output, ivec2(pos), vec4(enc_out, src.a));
+}

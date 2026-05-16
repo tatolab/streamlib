@@ -89,6 +89,19 @@ pub struct BlendingCompositorConfig {
     /// for tests that need a deterministic cadence without a window.
     #[serde(default)]
     pub target_fps: Option<f64>,
+    /// `ColorInfo` stamped on the compositor's output `VideoFrame`.
+    /// When unset, falls back to the sRGB BT.709 / Identity / Full
+    /// stamp that previously was hardcoded (preserves back-compat for
+    /// pipelines that haven't opted in).
+    ///
+    /// Configuring this is the prerequisite for per-acquire input
+    /// conversion (per-input `RhiToneMapper` engaged on input
+    /// ColorInfo mismatch) — once the per-input wiring lands as a
+    /// follow-up, this value becomes the working-space ColorInfo all
+    /// inputs are converted into before the composite kernel reads
+    /// them.
+    #[serde(default)]
+    pub output_color: Option<ColorInfo>,
 }
 
 impl Default for BlendingCompositorConfig {
@@ -99,6 +112,7 @@ impl Default for BlendingCompositorConfig {
             pip_slide_duration: 0.5,
             pip_slide_delay: 2.5,
             target_fps: None,
+            output_color: None,
         }
     }
 }
@@ -556,6 +570,24 @@ fn compose_one_frame(
     // we registered it in the texture cache at setup time.
     let count = frame_count.fetch_add(1, Ordering::Relaxed);
     let timestamp_ns = (count as i64) * 16_666_667;
+    // Output ColorInfo: prefer config.output_color (the path forward
+    // for HDR working-space + per-acquire conversion); fall back to
+    // the canonical sRGB BT.709 / Identity / Full stamp the
+    // compositor's RGBA8 BGRA8 output kernel actually produces today.
+    // The fallback matches the previous unconditional hardcode so
+    // existing pipelines see unchanged behavior.
+    let output_color_info = state
+        .config
+        .output_color
+        .clone()
+        .or_else(|| {
+            Some(ColorInfo {
+                primaries: Some(Primaries::Bt709),
+                transfer: Some(Transfer::Srgb),
+                matrix: Some(Matrix::Identity),
+                range: Some(Range::Full),
+            })
+        });
     let output_frame = VideoFrame {
         surface_id: slot.surface_id.clone(),
         width,
@@ -567,18 +599,7 @@ fn compose_one_frame(
         // `current_image_layout` published via surface-share / Path 1
         // is the default.
         texture_layout: None,
-        // The compositor's RGBA8 output is sRGB-encoded by convention
-        // (the input layers are sampled as-is and blended in the
-        // shader's working space). Stamp the canonical sRGB color
-        // description so downstream consumers see the correct
-        // characteristics. Identity matrix because the output is
-        // RGB, not YCbCr.
-        color_info: Some(ColorInfo {
-            primaries: Some(Primaries::Bt709),
-            transfer: Some(Transfer::Srgb),
-            matrix: Some(Matrix::Identity),
-            range: Some(Range::Full),
-        }),
+        color_info: output_color_info,
         mastering_display: None,
         content_light: None,
     };

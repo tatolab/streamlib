@@ -42,6 +42,11 @@ fn compile_shaders() {
             "compute",
         ),
         (
+            "src/vulkan/rhi/shaders/tone_curve.comp",
+            "tone_curve.spv",
+            "compute",
+        ),
+        (
             "src/vulkan/rhi/shaders/display_blit.vert",
             "display_blit.vert.spv",
             "vertex",
