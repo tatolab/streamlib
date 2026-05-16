@@ -12,7 +12,7 @@ use vulkanalia::vk::ExtHdrMetadataExtensionDeviceCommands as _;
 use vulkanalia::vk::KhrSurfaceExtensionInstanceCommands as _;
 use vulkanalia::vk::KhrSwapchainExtensionDeviceCommands as _;
 
-use crate::_generated_::{ColorInfo, ContentLight, MasteringDisplay};
+use crate::core::color::{ColorTraits, HdrStaticMetadata};
 use crate::core::rhi::TextureFormat;
 use crate::core::{Error, Result};
 
@@ -112,19 +112,22 @@ struct PresentFrameInner {
 
 impl VulkanPresentTarget {
     /// Build a present target bound to `window` at the requested initial
-    /// extent + vsync preference. `color_info` drives the
+    /// extent + vsync preference. `color_traits` drives the
     /// `VkColorSpaceKHR` priority walk; `None` keeps the legacy SDR
-    /// pick (`B8G8R8A8_UNORM` + `SRGB_NONLINEAR`). The window handle
-    /// must outlive the present target; dropping the target destroys
-    /// the surface + swapchain + per-frame resources.
-    #[tracing::instrument(level = "trace", skip(device, window, color_info), fields(width, height, vsync))]
+    /// pick (`B8G8R8A8_UNORM` + `SRGB_NONLINEAR`). Consumers translate
+    /// their schema `ColorInfo` via
+    /// [`crate::core::color::color_traits_from_color_info`] at the call
+    /// site. The window handle must outlive the present target;
+    /// dropping the target destroys the surface + swapchain +
+    /// per-frame resources.
+    #[tracing::instrument(level = "trace", skip(device, window, color_traits), fields(width, height, vsync))]
     pub fn new(
         device: &Arc<HostVulkanDevice>,
         window: &(impl HasWindowHandle + HasDisplayHandle),
         width: u32,
         height: u32,
         vsync: bool,
-        color_info: Option<&ColorInfo>,
+        color_traits: Option<&ColorTraits>,
     ) -> Result<Self> {
         let instance = device.instance();
         let surface = unsafe { vulkanalia::window::create_surface(instance, window, window) }
@@ -166,7 +169,7 @@ impl VulkanPresentTarget {
             width,
             height,
             vsync,
-            color_info,
+            color_traits,
             vk::SwapchainKHR::null(),
         )?;
 
@@ -237,15 +240,15 @@ impl VulkanPresentTarget {
 
     /// Recreate the swapchain for a new window extent (driven by the
     /// caller's resize handling or an `OUT_OF_DATE_KHR` return from
-    /// [`Self::render_frame`]) or a new `ColorInfo` hint (driven by
+    /// [`Self::render_frame`]) or new color traits (driven by
     /// first-frame inspection or mid-stream color change). Passing
-    /// `None` for `color_info` keeps the legacy SDR pick.
-    #[tracing::instrument(level = "trace", skip(self, color_info), fields(width, height))]
+    /// `None` for `color_traits` keeps the legacy SDR pick.
+    #[tracing::instrument(level = "trace", skip(self, color_traits), fields(width, height))]
     pub fn recreate(
         &mut self,
         width: u32,
         height: u32,
-        color_info: Option<&ColorInfo>,
+        color_traits: Option<&ColorTraits>,
     ) -> Result<()> {
         // Drain in-flight work before destroying the old swapchain.
         // `wait_idle()` takes the queue mutexes so it doesn't race with
@@ -264,7 +267,7 @@ impl VulkanPresentTarget {
                 width,
                 height,
                 self.vsync,
-                color_info,
+                color_traits,
                 self.swapchain,
             )?;
 
@@ -353,11 +356,7 @@ impl VulkanPresentTarget {
     /// (PQ / HLG), or when `VK_EXT_hdr_metadata` was not enabled at
     /// device construction. Subsequent calls with byte-identical
     /// metadata short-circuit to avoid redundant driver round-trips.
-    pub fn set_hdr_metadata(
-        &mut self,
-        mastering: &MasteringDisplay,
-        content_light: &ContentLight,
-    ) -> Result<()> {
+    pub fn set_hdr_metadata(&mut self, metadata: &HdrStaticMetadata) -> Result<()> {
         if !self.color_pick.is_hdr {
             return Ok(());
         }
@@ -368,7 +367,7 @@ impl VulkanPresentTarget {
             );
             return Ok(());
         }
-        let metadata = build_hdr_metadata(mastering, content_light);
+        let metadata = build_hdr_metadata(metadata);
         if hdr_metadata_eq(self.last_hdr_metadata.as_ref(), &metadata) {
             return Ok(());
         }
@@ -707,7 +706,7 @@ impl Drop for VulkanPresentTarget {
 unsafe impl Send for VulkanPresentTarget {}
 unsafe impl Sync for VulkanPresentTarget {}
 
-/// Engine-internal: surface + dimensions + ColorInfo hint → swapchain
+/// Engine-internal: surface + dimensions + ColorTraits hint → swapchain
 /// handle chain. Returns `(swapchain, images, image_views, format,
 /// extent, color_pick)`. Colorspace negotiation is delegated to
 /// [`pick_swapchain_format`].
@@ -717,7 +716,7 @@ fn create_swapchain(
     width: u32,
     height: u32,
     vsync: bool,
-    color_info: Option<&ColorInfo>,
+    color_traits: Option<&ColorTraits>,
     old_swapchain: vk::SwapchainKHR,
 ) -> Result<(
     vk::SwapchainKHR,
@@ -776,17 +775,17 @@ fn create_swapchain(
         )));
     }
 
-    let color_pick = pick_swapchain_format(&representable_formats, color_info);
+    let color_pick = pick_swapchain_format(&representable_formats, color_traits);
     let chosen_format = vk::SurfaceFormatKHR {
         format: color_pick.format,
         color_space: color_pick.color_space,
     };
     tracing::info!(
-        "VulkanPresentTarget: swapchain colorspace pick {:?} + {:?} (is_hdr={}, color_info={:?})",
+        "VulkanPresentTarget: swapchain colorspace pick {:?} + {:?} (is_hdr={}, color_traits={:?})",
         chosen_format.format,
         chosen_format.color_space,
         color_pick.is_hdr,
-        color_info,
+        color_traits,
     );
 
     let present_mode = if vsync {
@@ -1081,8 +1080,7 @@ mod tests {
     /// filter+pick contract directly.
     #[test]
     fn representability_filter_drops_unsupported_picker_targets() {
-        use crate::_generated_::tatolab__core::color_info::{Primaries, Transfer};
-        use crate::_generated_::ColorInfo;
+        use crate::core::color::{ColorTraits, PrimariesId, TransferId};
 
         let surface_formats = vec![
             vk::SurfaceFormatKHR {
@@ -1097,11 +1095,9 @@ mod tests {
                 color_space: vk::ColorSpaceKHR::HDR10_ST2084_EXT,
             },
         ];
-        let pq_bt2020 = ColorInfo {
-            primaries: Some(Primaries::Bt2020),
-            transfer: Some(Transfer::Smpte2084),
-            matrix: None,
-            range: None,
+        let pq_bt2020 = ColorTraits {
+            primaries: Some(PrimariesId::Bt2020),
+            transfer: Some(TransferId::Pq),
         };
 
         // Without the filter: picker would pick A2B10G10R10_UNORM_PACK32

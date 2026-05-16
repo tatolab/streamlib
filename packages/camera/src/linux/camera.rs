@@ -7,7 +7,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use streamlib::sdk::color::{resolve_color_defaults, ColorSpaceKind, TransferId};
+use streamlib::sdk::color::{
+    matrix_id_from_schema, primaries_id_from_schema, range_id_from_schema, resolve_color_defaults,
+    transfer_id_from_schema, ColorSpaceKind, TransferId,
+};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
@@ -580,11 +583,13 @@ fn capture_thread_loop(
     // life of the capture thread — V4L2 colorspace doesn't change
     // mid-stream.
     //
-    // `cached_color_info` is the camera-crate's `_generated_::ColorInfo`;
-    // `resolve_color_defaults` consumes the engine-crate's variant.
-    // Both are codegen-generated from the same JTD schema with
-    // identical serde rename names, so a one-shot JSON round-trip
-    // converts cleanly. Runs once at startup — perf irrelevant.
+    // `cached_color_info` is the camera-crate's `_generated_::ColorInfo`
+    // (its own codegen output from `@tatolab/core` schema). Engine's
+    // translation helpers take the engine-crate's flavor of the same
+    // schema — both are codegen-generated from the same JTD source
+    // with identical serde rename names, so a one-shot JSON
+    // round-trip bridges the flavor mismatch cleanly. Runs once at
+    // startup; perf irrelevant.
     let engine_cached_color_info: streamlib::engine_internal::_generated_::ColorInfo =
         match streamlib::sdk::serde_json::to_value(&cached_color_info)
             .and_then(streamlib::sdk::serde_json::from_value)
@@ -600,8 +605,25 @@ fn capture_thread_loop(
                 return;
             }
         };
-    let resolved_color =
-        resolve_color_defaults(&engine_cached_color_info, ColorSpaceKind::Yuv);
+    let resolved_color = resolve_color_defaults(
+        engine_cached_color_info
+            .primaries
+            .as_ref()
+            .map(primaries_id_from_schema),
+        engine_cached_color_info
+            .transfer
+            .as_ref()
+            .map(transfer_id_from_schema),
+        engine_cached_color_info
+            .matrix
+            .as_ref()
+            .map(matrix_id_from_schema),
+        engine_cached_color_info
+            .range
+            .as_ref()
+            .map(range_id_from_schema),
+        ColorSpaceKind::Yuv,
+    );
 
     // Map (fourcc, resolved range) to the canonical PixelFormat used
     // as the converter cache key. The push-constant matrix bakes the
@@ -609,9 +631,7 @@ fn capture_thread_loop(
     // converter instances sharing the same SPIR-V — a few KB of
     // duplicated load, no correctness impact.
     let src_pixel_format = match (&fourcc_bytes, &resolved_color.range) {
-        (b"NV12", streamlib::engine_internal::_generated_::tatolab__core::color_info::Range::Full) => {
-            PixelFormat::Nv12FullRange
-        }
+        (b"NV12", streamlib::sdk::color::RangeId::Full) => PixelFormat::Nv12FullRange,
         (b"NV12", _) => PixelFormat::Nv12VideoRange,
         (b"YUYV", _) => PixelFormat::Yuyv422,
         _ => unreachable!("input_byte_size match above rejects other fourccs"),

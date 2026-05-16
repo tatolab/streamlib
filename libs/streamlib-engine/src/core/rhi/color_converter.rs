@@ -90,11 +90,11 @@ impl ColorConverterPushConstants {
         height: u32,
         layout: SourceLayoutInfo,
     ) -> Self {
-        let decomposition = yuv_to_rgb_matrix(info.matrix.clone(), info.range.clone());
+        let decomposition = yuv_to_rgb_matrix(info.matrix, info.range);
         let m = decomposition.matrix_row_major;
         let off = decomposition.offset;
 
-        let transfer_in = TransferId::from_transfer(info.transfer.clone()) as u32;
+        let transfer_in = info.transfer as u32;
         let transfer_out = dst_transfer as u32;
         // Always apply transfer when src/dst curves differ. For
         // matched curves leave it off — saves a pow() per channel.
@@ -345,7 +345,7 @@ impl RhiColorConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Transfer};
+    use crate::core::color::{MatrixId, PrimariesId, RangeId};
 
     /// Push-constants size locks the cross-language contract with the
     /// shader. If the struct changes, the shader's
@@ -368,10 +368,10 @@ mod tests {
     #[test]
     fn from_resolved_bt709_limited_populates_canonical_values() {
         let info = ResolvedColorInfo {
-            primaries: Primaries::Bt709,
-            transfer: Transfer::Bt709,
-            matrix: Matrix::Bt709,
-            range: Range::Limited,
+            primaries: PrimariesId::Bt709,
+            transfer: TransferId::Bt709,
+            matrix: MatrixId::Bt709,
+            range: RangeId::Limited,
         };
         let pc = ColorConverterPushConstants::from_resolved(
             &info,
@@ -393,10 +393,10 @@ mod tests {
     #[test]
     fn from_resolved_bt601_full_populates_canonical_values() {
         let info = ResolvedColorInfo {
-            primaries: Primaries::Bt709,
-            transfer: Transfer::Srgb,
-            matrix: Matrix::Smpte170m,
-            range: Range::Full,
+            primaries: PrimariesId::Bt709,
+            transfer: TransferId::Srgb,
+            matrix: MatrixId::Smpte170m,
+            range: RangeId::Full,
         };
         let pc = ColorConverterPushConstants::from_resolved(
             &info,
@@ -415,10 +415,10 @@ mod tests {
     #[test]
     fn mismatched_transfer_sets_apply_flag() {
         let info = ResolvedColorInfo {
-            primaries: Primaries::Bt2020,
-            transfer: Transfer::Smpte2084,
-            matrix: Matrix::Bt2020Ncl,
-            range: Range::Limited,
+            primaries: PrimariesId::Bt2020,
+            transfer: TransferId::Pq,
+            matrix: MatrixId::Bt2020Ncl,
+            range: RangeId::Limited,
         };
         let pc = ColorConverterPushConstants::from_resolved(
             &info,

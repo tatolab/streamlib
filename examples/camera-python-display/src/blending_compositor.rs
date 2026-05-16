@@ -735,10 +735,12 @@ fn default_working_space() -> ColorInfo {
 }
 
 /// Map BC's local schema `Transfer` enum to the engine's `TransferId`
-/// push-constant id. Local because the engine's `TransferId::from_transfer`
-/// takes the engine's flavor of the schema enum (which differs from
-/// BC's `_generated_/` shim's flavor of the same schema) — the
-/// engine→`@tatolab/core` decoupling follow-up will collapse this.
+/// push-constant id. Local because the engine's
+/// [`streamlib::sdk::color::transfer_id_from_schema`] takes the
+/// engine-crate's flavor of the schema enum (a distinct Rust type
+/// from BC's `_generated_/` codegen output, even though both are
+/// generated from the same JTD source). Match arms mirror the
+/// engine helper's coverage.
 fn transfer_id_from_schema(t: &Transfer) -> TransferId {
     match t {
         Transfer::Srgb => TransferId::Srgb,
@@ -750,8 +752,7 @@ fn transfer_id_from_schema(t: &Transfer) -> TransferId {
         Transfer::AribStdB67 => TransferId::Hlg,
         Transfer::Linear => TransferId::Linear,
         // Gamma22 / Gamma28 / Smpte240m / Log* / Xvycc / Bt1361 /
-        // Smpte428 are uncommon end-to-end; map to Linear (no transform)
-        // for now. Matches the engine's `TransferId::from_transfer`.
+        // Smpte428 are uncommon end-to-end; map to Linear (no transform).
         _ => TransferId::Linear,
     }
 }

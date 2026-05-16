@@ -448,12 +448,12 @@ impl ApplicationHandler for DisplayEventLoopHandler {
 
                 if let Some(pt) = self.present_target.as_mut() {
                     // Resize-driven recreate keeps the current colorspace pick.
-                    let engine_color_info =
-                        package_color_info_to_engine(self.current_frame_color_info.as_ref());
+                    let color_traits =
+                        package_color_info_to_traits(self.current_frame_color_info.as_ref());
                     if let Err(e) = pt.recreate(
                         new_size.width,
                         new_size.height,
-                        engine_color_info.as_ref(),
+                        color_traits.as_ref(),
                     ) {
                         tracing::error!(
                             "Display {}: Failed to recreate present target: {}",
@@ -533,14 +533,13 @@ impl DisplayEventLoopHandler {
         // is a no-op-cost path that only fires when the WSI exposes
         // wider colorspaces.
         if ipc_frame.color_info != self.current_frame_color_info {
-            let new_engine_color_info =
-                package_color_info_to_engine(ipc_frame.color_info.as_ref());
+            let new_color_traits = package_color_info_to_traits(ipc_frame.color_info.as_ref());
             let new_extent = present_target.current_extent();
             let prior_color_format = present_target.color_format();
             if let Err(e) = present_target.recreate(
                 new_extent.0,
                 new_extent.1,
-                new_engine_color_info.as_ref(),
+                new_color_traits.as_ref(),
             ) {
                 tracing::warn!(
                     "Display {}: ColorInfo recreate failed (keeping previous swapchain): {}",
@@ -588,11 +587,11 @@ impl DisplayEventLoopHandler {
         // `set_hdr_metadata` itself) and the frame carries the
         // sidecar metadata. Subsequent frames with byte-identical
         // payload short-circuit inside the present target.
-        if let (Some(md), Some(cl)) = (
-            package_mastering_display_to_engine(ipc_frame.mastering_display.as_ref()),
-            package_content_light_to_engine(ipc_frame.content_light.as_ref()),
+        if let Some(hdr_metadata) = package_hdr_metadata_to_engine(
+            ipc_frame.mastering_display.as_ref(),
+            ipc_frame.content_light.as_ref(),
         ) {
-            if let Err(e) = present_target.set_hdr_metadata(&md, &cl) {
+            if let Err(e) = present_target.set_hdr_metadata(&hdr_metadata) {
                 tracing::warn!(
                     "Display {}: vkSetHdrMetadataEXT failed: {}",
                     self.window_id, e
@@ -897,61 +896,77 @@ impl DisplayEventLoopHandler {
 }
 
 /// Convert a package-local `_generated_::ColorInfo` (or HDR sidecar) into
-/// the engine-facade equivalent. Both types are codegen-generated from
-/// the same JTD schema with identical serde rename names, so a one-shot
-/// JSON round-trip converts cleanly. Returns `None` on serde failure
-/// (logged, treated as no-color-info — keeps SDR behavior).
+/// the engine helpers' input. Both types are codegen-generated from
+/// the same JTD schema with identical serde rename names, so a
+/// one-shot JSON round-trip into the engine-flavor `ColorInfo`
+/// converts cleanly; the engine helper then projects it to
+/// `ColorTraits`. Returns `None` on serde failure (logged, treated as
+/// no-color-info — keeps SDR behavior).
 ///
 /// Same pattern + rationale as `LinuxCameraProcessor`'s
-/// `engine_cached_color_info` round-trip; see `packages/camera/src/linux/camera.rs`.
-fn package_color_info_to_engine(
+/// `engine_cached_color_info` round-trip; see
+/// `packages/camera/src/linux/camera.rs`.
+fn package_color_info_to_traits(
     pkg: Option<&crate::_generated_::ColorInfo>,
-) -> Option<streamlib::engine_internal::_generated_::ColorInfo> {
+) -> Option<streamlib::sdk::color::ColorTraits> {
     let pkg = pkg?;
-    match streamlib::sdk::serde_json::to_value(pkg)
-        .and_then(streamlib::sdk::serde_json::from_value)
-    {
-        Ok(v) => Some(v),
-        Err(e) => {
-            tracing::warn!(
-                "display: ColorInfo schema round-trip failed (treating as None): {}",
-                e
-            );
-            None
-        }
-    }
+    let engine: streamlib::engine_internal::_generated_::ColorInfo =
+        match streamlib::sdk::serde_json::to_value(pkg)
+            .and_then(streamlib::sdk::serde_json::from_value)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "display: ColorInfo schema round-trip failed (treating as None): {}",
+                    e
+                );
+                return None;
+            }
+        };
+    Some(streamlib::sdk::color::color_traits_from_color_info(&engine))
 }
 
-fn package_mastering_display_to_engine(
-    pkg: Option<&crate::_generated_::MasteringDisplay>,
-) -> Option<streamlib::engine_internal::_generated_::MasteringDisplay> {
-    let pkg = pkg?;
-    streamlib::sdk::serde_json::to_value(pkg)
-        .and_then(streamlib::sdk::serde_json::from_value)
-        .map_err(|e| {
-            tracing::warn!(
-                "display: MasteringDisplay schema round-trip failed (skipping HDR metadata): {}",
-                e
-            );
-            e
-        })
-        .ok()
-}
-
-fn package_content_light_to_engine(
-    pkg: Option<&crate::_generated_::ContentLight>,
-) -> Option<streamlib::engine_internal::_generated_::ContentLight> {
-    let pkg = pkg?;
-    streamlib::sdk::serde_json::to_value(pkg)
-        .and_then(streamlib::sdk::serde_json::from_value)
-        .map_err(|e| {
-            tracing::warn!(
-                "display: ContentLight schema round-trip failed (skipping HDR metadata): {}",
-                e
-            );
-            e
-        })
-        .ok()
+/// Project the per-frame mastering-display + content-light schema
+/// pair into engine `HdrStaticMetadata`. Returns `None` when either
+/// sidecar is absent or the round-trip fails — the present target's
+/// `set_hdr_metadata` is gated on `Some`, keeping HDR signaling off
+/// for SDR frames.
+fn package_hdr_metadata_to_engine(
+    mastering_pkg: Option<&crate::_generated_::MasteringDisplay>,
+    content_light_pkg: Option<&crate::_generated_::ContentLight>,
+) -> Option<streamlib::sdk::color::HdrStaticMetadata> {
+    let mastering_pkg = mastering_pkg?;
+    let content_light_pkg = content_light_pkg?;
+    let mastering: streamlib::engine_internal::_generated_::MasteringDisplay =
+        match streamlib::sdk::serde_json::to_value(mastering_pkg)
+            .and_then(streamlib::sdk::serde_json::from_value)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "display: MasteringDisplay schema round-trip failed (skipping HDR metadata): {}",
+                    e
+                );
+                return None;
+            }
+        };
+    let content_light: streamlib::engine_internal::_generated_::ContentLight =
+        match streamlib::sdk::serde_json::to_value(content_light_pkg)
+            .and_then(streamlib::sdk::serde_json::from_value)
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "display: ContentLight schema round-trip failed (skipping HDR metadata): {}",
+                    e
+                );
+                return None;
+            }
+        };
+    Some(streamlib::sdk::color::hdr_metadata_from_schema(
+        &mastering,
+        &content_light,
+    ))
 }
 
 fn build_display_kernel(
