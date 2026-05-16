@@ -29,14 +29,20 @@
 #![cfg(target_os = "linux")]
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use streamlib::sdk::engine::HostGpuDeviceExt;
+use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
+use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
+use streamlib::sdk::color::TransferId;
 use streamlib::sdk::display_info;
-use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
+use streamlib::sdk::rhi::{
+    RhiToneMapper, Texture, TextureDescriptor, TextureFormat, TextureUsages, ToneCurveId,
+    ToneMapperPushConstants, VulkanLayout,
+};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::error::{Result, Error};
 use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
@@ -89,6 +95,51 @@ pub struct BlendingCompositorConfig {
     /// for tests that need a deterministic cadence without a window.
     #[serde(default)]
     pub target_fps: Option<f64>,
+    /// Working-space `ColorInfo` for the per-acquire compositing model
+    /// (per `docs/research/color-management-pipeline.md` § 2): each
+    /// input frame whose declared `ColorInfo` differs from this is
+    /// converted via [`RhiToneMapper`] into a per-port intermediate
+    /// before the composite kernel reads it; the output frame stamps
+    /// this same `ColorInfo`.
+    ///
+    /// When unset, defaults to sRGB BT.709 / Identity / Full — matches
+    /// the implicit working space the composite kernel ingests today
+    /// (RGBA8 sRGB-encoded), so all-SDR pipelines see zero conversion
+    /// overhead and unchanged output.
+    #[serde(default)]
+    pub working_space_color: Option<ColorInfo>,
+    /// Peak luminance (cd/m²) the working-space `ColorInfo` references.
+    /// Drives the BT.2390 / BT.2446a peak-rescale math when conversion
+    /// engages. Defaults to 100 nits (SDR diffuse-white reference).
+    #[serde(default)]
+    pub working_space_peak_nits: Option<f32>,
+    /// Tone curve applied when an input's `ColorInfo` differs from the
+    /// working space. Defaults to BT.2390 (HDR→SDR) — the common case
+    /// for HDR sources targeting an SDR working space.
+    #[serde(default)]
+    pub default_tone_curve: Option<ToneCurveSelector>,
+}
+
+/// Serializable proxy for [`ToneCurveId`] so the engine-internal enum
+/// can be set from config YAML / JSON without leaking the engine type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToneCurveSelector {
+    /// Identity — pure transfer rescale, no tone curve.
+    None,
+    /// ITU-R BT.2390 EETF — HDR→SDR Hermite spline in PQ space.
+    Bt2390,
+    /// ITU-R BT.2446-1 method A2 inverse — SDR→HDR gamma-knee.
+    Bt2446a,
+}
+
+impl From<ToneCurveSelector> for ToneCurveId {
+    fn from(s: ToneCurveSelector) -> Self {
+        match s {
+            ToneCurveSelector::None => ToneCurveId::None,
+            ToneCurveSelector::Bt2390 => ToneCurveId::Bt2390,
+            ToneCurveSelector::Bt2446a => ToneCurveId::Bt2446a,
+        }
+    }
 }
 
 impl Default for BlendingCompositorConfig {
@@ -99,6 +150,9 @@ impl Default for BlendingCompositorConfig {
             pip_slide_duration: 0.5,
             pip_slide_delay: 2.5,
             target_fps: None,
+            working_space_color: None,
+            working_space_peak_nits: None,
+            default_tone_curve: None,
         }
     }
 }
@@ -119,6 +173,37 @@ struct OutputSlot {
 struct GpuBackend {
     compositor: Arc<SandboxedBlendingCompositor>,
     output_ring: Vec<OutputSlot>,
+    /// Per-input tone-mapper. Constructed in `setup()` (kernel is
+    /// allocated lazily on first dispatch). Engaged by
+    /// `normalize_layer` when an input frame's `ColorInfo` differs
+    /// from the working space.
+    tone_mapper: Arc<RhiToneMapper>,
+    /// Per-port intermediate textures, lazily allocated on first
+    /// frame and reallocated when input dimensions change. Keyed by
+    /// port name ("video_in", "lower_third_in", etc.). Only the
+    /// render thread mutates this; the mutex exists so the map can
+    /// also be inspected from other threads if a debug surface is
+    /// added later.
+    intermediates: StdMutex<HashMap<String, Intermediate>>,
+    /// Host Vulkan device, threaded through for lazy intermediate
+    /// allocation. The render thread holds the only consumer-side
+    /// `Arc`; teardown releases it when the thread exits.
+    vulkan_device: Arc<streamlib::sdk::engine::host_rhi::HostVulkanDevice>,
+}
+
+/// Per-input intermediate texture used by the per-acquire tone-mapping
+/// stage. The compositor reads this when the input's `ColorInfo`
+/// differs from the working space; allocated lazily on first
+/// conversion at the input's dimensions and reallocated on dimension
+/// change.
+struct Intermediate {
+    texture: Texture,
+    width: u32,
+    height: u32,
+    /// Last-known Vulkan layout the texture is in. Tracked by the
+    /// tone-mapper's `apply_with_layouts` which leaves the texture in
+    /// `SHADER_READ_ONLY_OPTIMAL` after every dispatch.
+    current_layout: VulkanLayout,
 }
 
 #[streamlib::sdk::processor("BlendingCompositor")]
@@ -341,9 +426,17 @@ impl BlendingCompositorProcessor::Processor {
             self.config.height
         );
 
+        // Per-input tone-mapper. Cheap to construct (kernel built
+        // lazily on first dispatch); each consumer owns its own
+        // instance per the "no engine-side cache" pattern.
+        let tone_mapper = Arc::new(RhiToneMapper::new(&vulkan_device));
+
         self.backend = Some(GpuBackend {
             compositor,
             output_ring,
+            tone_mapper,
+            intermediates: StdMutex::new(HashMap::new()),
+            vulkan_device,
         });
         Ok(())
     }
@@ -380,10 +473,29 @@ struct LoopState {
     last_lower_third: Option<ResolvedLayer>,
     last_watermark: Option<ResolvedLayer>,
     last_pip: Option<ResolvedLayer>,
+    /// Working-space `ColorInfo` resolved from config. Inputs whose
+    /// declared `ColorInfo` differs are converted into this space by
+    /// `normalize_layer` before the composite kernel reads them. The
+    /// output frame stamps this value.
+    working_space_color_info: ColorInfo,
+    /// Working-space reference peak luminance (cd/m²).
+    working_space_peak_nits: f32,
+    /// Tone curve dispatched when an input's `ColorInfo` differs from
+    /// the working space.
+    default_tone_curve: ToneCurveId,
 }
 
 impl LoopState {
     fn new(config: BlendingCompositorConfig) -> Self {
+        let working_space_color_info = config
+            .working_space_color
+            .clone()
+            .unwrap_or_else(default_working_space);
+        let working_space_peak_nits = config.working_space_peak_nits.unwrap_or(100.0);
+        let default_tone_curve = config
+            .default_tone_curve
+            .map(ToneCurveId::from)
+            .unwrap_or(ToneCurveId::Bt2390);
         Self {
             config,
             pip_ready: false,
@@ -395,6 +507,9 @@ impl LoopState {
             last_lower_third: None,
             last_watermark: None,
             last_pip: None,
+            working_space_color_info,
+            working_space_peak_nits,
+            default_tone_curve,
         }
     }
 
@@ -478,6 +593,30 @@ fn compose_one_frame(
     refresh_layer(gpu_ctx, inputs, "watermark_in", &mut state.last_watermark)?;
     refresh_layer(gpu_ctx, inputs, "pip_in", &mut state.last_pip)?;
 
+    // Per-input tone-mapping normalization — per-acquire conversion
+    // into the working-space ColorInfo before the composite kernel
+    // reads each layer. Passthrough when input already matches the
+    // working space (the all-SDR default case for current pipelines).
+    for (port, slot) in [
+        ("video_in", state.last_video.as_mut()),
+        ("lower_third_in", state.last_lower_third.as_mut()),
+        ("watermark_in", state.last_watermark.as_mut()),
+        ("pip_in", state.last_pip.as_mut()),
+    ] {
+        if let Some(layer) = slot {
+            normalize_layer(
+                port,
+                layer,
+                &state.working_space_color_info,
+                state.working_space_peak_nits,
+                state.default_tone_curve,
+                &backend.tone_mapper,
+                &backend.intermediates,
+                &backend.vulkan_device,
+            )?;
+        }
+    }
+
     if let Some(v) = state.last_video.as_ref() {
         state.cached_video_dimensions = Some((v.texture.width(), v.texture.height()));
         if state.first_video_time.is_none() {
@@ -556,6 +695,12 @@ fn compose_one_frame(
     // we registered it in the texture cache at setup time.
     let count = frame_count.fetch_add(1, Ordering::Relaxed);
     let timestamp_ns = (count as i64) * 16_666_667;
+    // Output ColorInfo stamps the working-space — every input was
+    // converted into this space by `normalize_layer` (or the working
+    // space matched the input and passthrough happened, equivalent).
+    // Either way, the output bytes the composite kernel wrote are in
+    // working-space encoding, so stamping that is honest.
+    let output_color_info = Some(state.working_space_color_info.clone());
     let output_frame = VideoFrame {
         surface_id: slot.surface_id.clone(),
         width,
@@ -567,18 +712,7 @@ fn compose_one_frame(
         // `current_image_layout` published via surface-share / Path 1
         // is the default.
         texture_layout: None,
-        // The compositor's RGBA8 output is sRGB-encoded by convention
-        // (the input layers are sampled as-is and blended in the
-        // shader's working space). Stamp the canonical sRGB color
-        // description so downstream consumers see the correct
-        // characteristics. Identity matrix because the output is
-        // RGB, not YCbCr.
-        color_info: Some(ColorInfo {
-            primaries: Some(Primaries::Bt709),
-            transfer: Some(Transfer::Srgb),
-            matrix: Some(Matrix::Identity),
-            range: Some(Range::Full),
-        }),
+        color_info: output_color_info,
         mastering_display: None,
         content_light: None,
     };
@@ -587,21 +721,97 @@ fn compose_one_frame(
     Ok(())
 }
 
+/// Default working-space `ColorInfo` when config doesn't set one:
+/// canonical sRGB BT.709 / Identity / Full. Matches the implicit
+/// working space the composite kernel ingests today (RGBA8 sRGB-
+/// encoded), so all-SDR pipelines see zero conversion overhead.
+fn default_working_space() -> ColorInfo {
+    ColorInfo {
+        primaries: Some(Primaries::Bt709),
+        transfer: Some(Transfer::Srgb),
+        matrix: Some(Matrix::Identity),
+        range: Some(Range::Full),
+    }
+}
+
+/// Map BC's local schema `Transfer` enum to the engine's `TransferId`
+/// push-constant id. Local because the engine's `TransferId::from_transfer`
+/// takes the engine's flavor of the schema enum (which differs from
+/// BC's `_generated_/` shim's flavor of the same schema) — the
+/// engine→`@tatolab/core` decoupling follow-up will collapse this.
+fn transfer_id_from_schema(t: &Transfer) -> TransferId {
+    match t {
+        Transfer::Srgb => TransferId::Srgb,
+        Transfer::Bt709
+        | Transfer::Smpte170m
+        | Transfer::Bt2020TenBit
+        | Transfer::Bt2020TwelveBit => TransferId::Bt709,
+        Transfer::Smpte2084 => TransferId::Pq,
+        Transfer::AribStdB67 => TransferId::Hlg,
+        Transfer::Linear => TransferId::Linear,
+        // Gamma22 / Gamma28 / Smpte240m / Log* / Xvycc / Bt1361 /
+        // Smpte428 are uncommon end-to-end; map to Linear (no transform)
+        // for now. Matches the engine's `TransferId::from_transfer`.
+        _ => TransferId::Linear,
+    }
+}
+
+/// True when an input frame's `ColorInfo` matches the working space.
+/// `None` axes on input are treated as matching (defaults flow through
+/// to the working space — which is exactly today's behavior for the
+/// many frames with no color tag at all).
+fn color_info_matches_working_space(input: Option<&ColorInfo>, working: &ColorInfo) -> bool {
+    let Some(input) = input else { return true };
+    // Per axis: None on input means "match"; Some must equal the
+    // working-space value.
+    let prim_ok = input.primaries.is_none() || input.primaries == working.primaries;
+    let xfer_ok = input.transfer.is_none() || input.transfer == working.transfer;
+    let mtx_ok = input.matrix.is_none() || input.matrix == working.matrix;
+    let rng_ok = input.range.is_none() || input.range == working.range;
+    prim_ok && xfer_ok && mtx_ok && rng_ok
+}
+
 /// One resolved input layer — texture + the registration its
 /// `current_layout` came from. Holding the `Arc<TextureRegistration>`
 /// lets the compositor update layout state (via
 /// [`TextureRegistration::update_layout`]) after the render submit
 /// completes.
+///
+/// `source_color_info` is the frame's declared `ColorInfo` (if any) —
+/// used by `normalize_layer` to detect mismatches against the
+/// working space and engage the tone-mapper.
 struct ResolvedLayer {
     registration: Arc<streamlib::sdk::context::TextureRegistration>,
     texture: Texture,
+    /// `ColorInfo` declared on the source `VideoFrame`. `None` means
+    /// the producer didn't tag the frame; defaults to the working
+    /// space (no conversion engages).
+    source_color_info: Option<ColorInfo>,
+    /// Source content peak luminance (cd/m²), if `mastering_display`
+    /// / `content_light` sidecars are populated. Defaults to 100 nits
+    /// for SDR sources where the field is absent.
+    source_peak_nits: f32,
+    /// When `normalize_layer` engages and tone-maps the source into a
+    /// per-port intermediate, this points at the intermediate texture
+    /// instead of `registration.texture()`. Layout state is tracked
+    /// on the intermediate itself (via `Intermediate::current_layout`)
+    /// rather than the `TextureRegistration` (which describes the
+    /// upstream-shared texture, unrelated to our scratch space).
+    normalized_layout: Option<VulkanLayout>,
 }
 
 impl ResolvedLayer {
     fn as_layer(&self) -> BlendingLayer<'_> {
+        // When normalize_layer engaged, the layout came from the
+        // intermediate's tracking; otherwise from the upstream
+        // registration. Both cases produce a layout that satisfies
+        // the compositor's pre-render barrier expectations.
+        let current_layout = self
+            .normalized_layout
+            .unwrap_or_else(|| self.registration.current_layout());
         BlendingLayer {
             texture: &self.texture,
-            current_layout: self.registration.current_layout(),
+            current_layout,
         }
     }
 }
@@ -627,10 +837,154 @@ fn refresh_layer(
         frame.height,
     )?;
     let texture = registration.texture().clone();
+    // Resolve source peak from the optional `mastering_display` /
+    // `content_light` sidecars; default to 100 nits SDR diffuse-white
+    // when absent. `content_light.max_cll` is the more conservative
+    // signal (per-content peak); `mastering_display.max_luminance` is
+    // the master-display peak. Prefer `max_cll` when present per the
+    // BT.2390 spec's source-peak guidance.
+    let source_peak_nits = frame
+        .content_light
+        .as_ref()
+        .map(|cl| cl.max_cll as f32)
+        .or_else(|| {
+            frame
+                .mastering_display
+                .as_ref()
+                .map(|md| md.max_luminance as f32)
+        })
+        .unwrap_or(100.0);
     *last = Some(ResolvedLayer {
         registration,
         texture,
+        source_color_info: frame.color_info.clone(),
+        source_peak_nits,
+        normalized_layout: None,
     });
+    Ok(())
+}
+
+/// Per-input tone-map normalization: if `layer.source_color_info`
+/// (after defaults resolution) differs from the working space, run
+/// the tone-mapper from the upstream texture into a per-port
+/// intermediate (allocating / reallocating on dimension change) and
+/// repoint the layer at the intermediate. When the source already
+/// matches, leaves the layer unchanged.
+///
+/// The composite kernel reads RGBA8 storage images in working-space
+/// encoding regardless of which path runs.
+fn normalize_layer(
+    port: &str,
+    layer: &mut ResolvedLayer,
+    working_space: &ColorInfo,
+    working_peak_nits: f32,
+    tone_curve: ToneCurveId,
+    tone_mapper: &RhiToneMapper,
+    intermediates: &StdMutex<HashMap<String, Intermediate>>,
+    vulkan_device: &Arc<streamlib::sdk::engine::host_rhi::HostVulkanDevice>,
+) -> Result<()> {
+    // Fast-path: missing color_info or matching axes mean "use the
+    // working space" — no conversion engages. This is the cheap-path
+    // back-compat for every existing SDR pipeline.
+    let peak_matches = (layer.source_peak_nits - working_peak_nits).abs() < 1e-3;
+    if color_info_matches_working_space(layer.source_color_info.as_ref(), working_space)
+        && peak_matches
+    {
+        return Ok(());
+    }
+
+    let width = layer.texture.width();
+    let height = layer.texture.height();
+
+    // Acquire-or-allocate the per-port intermediate at the input's
+    // current dimensions.
+    let mut map = intermediates.lock().unwrap();
+    let intermediate = match map.get_mut(port) {
+        Some(existing) if existing.width == width && existing.height == height => existing,
+        _ => {
+            // Allocate fresh — either first frame for this port or
+            // input dims changed and the cached intermediate is the
+            // wrong size.
+            let desc = TextureDescriptor {
+                width,
+                height,
+                format: TextureFormat::Bgra8Unorm,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+                label: Some("bc-tone-mapped-intermediate"),
+            };
+            let host_tex = HostVulkanTexture::new(vulkan_device, &desc).map_err(|e| {
+                Error::Configuration(format!(
+                    "BlendingCompositor: HostVulkanTexture::new for port {port}: {e}"
+                ))
+            })?;
+            let texture = <Texture as HostTextureExt>::from_vulkan(host_tex);
+            map.insert(
+                port.to_string(),
+                Intermediate {
+                    texture,
+                    width,
+                    height,
+                    current_layout: VulkanLayout::UNDEFINED,
+                },
+            );
+            map.get_mut(port).expect("just inserted")
+        }
+    };
+
+    // Resolve the per-axis transfer ids. Per-channel tone-curve and
+    // peak rescale ride per-frame push constants; the kernel works
+    // RGBA8 storage image → RGBA8 storage image in working-space
+    // encoding.
+    let src_transfer = layer
+        .source_color_info
+        .as_ref()
+        .and_then(|c| c.transfer.as_ref())
+        .map(transfer_id_from_schema)
+        .unwrap_or_else(|| {
+            working_space
+                .transfer
+                .as_ref()
+                .map(transfer_id_from_schema)
+                .unwrap_or(TransferId::Srgb)
+        });
+    let dst_transfer = working_space
+        .transfer
+        .as_ref()
+        .map(transfer_id_from_schema)
+        .unwrap_or(TransferId::Srgb);
+
+    // Dispatch: input (in registration.current_layout) → intermediate
+    // (in intermediate.current_layout). apply_with_layouts records
+    // the barrier dance and leaves both in SHADER_READ_ONLY_OPTIMAL.
+    let src_layout = layer.registration.current_layout();
+    let push = ToneMapperPushConstants::new(
+        width,
+        height,
+        src_transfer,
+        dst_transfer,
+        tone_curve,
+        layer.source_peak_nits,
+        working_peak_nits,
+    );
+    tone_mapper.apply_with_layouts(
+        &layer.texture,
+        src_layout,
+        &intermediate.texture,
+        intermediate.current_layout,
+        &push,
+    )?;
+    intermediate.current_layout = VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
+    // The upstream texture is left in SHADER_READ_ONLY_OPTIMAL by
+    // apply_with_layouts — update the registration so the next
+    // consumer reads an honest current_layout. If the prior layout
+    // already matched, this is a no-op write.
+    layer
+        .registration
+        .update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
+
+    // Repoint the layer at the intermediate.
+    layer.texture = intermediate.texture.clone();
+    layer.normalized_layout = Some(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
     Ok(())
 }
 
