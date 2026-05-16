@@ -14,12 +14,12 @@
 //   2. tonemap_curve: optional tone-curve in linear or PQ space.
 //   3. OETF: linear → output_transfer (per-channel, normalized to peak_out_nits).
 //
-// Push constants — see `core::rhi::tone_mapper::ToneMapperPushConstants`.
+// Push constants — see `streamlib_color::ToneMapperPushConstants`.
 
 #version 450
 #extension GL_GOOGLE_include_directive : require
 
-#include "color_convert_common.glsl"
+#include "color_common.glsl"
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
@@ -41,7 +41,7 @@ layout(push_constant, std430) uniform PushConstants {
     uint flags;
 } pc;
 
-// Keep in sync with `core::rhi::tone_mapper::ToneCurveId`.
+// Keep in sync with `streamlib_color::ToneCurveId`.
 const uint TONE_CURVE_NONE      = 0u;  // identity (transfer conversion only)
 const uint TONE_CURVE_BT2390    = 1u;  // forward HDR→SDR, ITU-R BT.2390 EETF
 const uint TONE_CURVE_BT2446A   = 2u;  // inverse SDR→HDR, ITU-R BT.2446-1 method A2

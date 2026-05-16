@@ -1,35 +1,35 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Engine-owned tone-curve primitive — image→image compute kernel that
+//! Color tone-mapping primitive — image→image compute kernel that
 //! consumes [`TransferId`] + [`ToneCurveId`] + reference peak luminance
 //! as push-constant state.
 //!
-//! Sibling to [`crate::core::rhi::RhiColorConverter`]: where the
-//! converter handles buffer→image YCbCr→RGB matrix + transfer
-//! conversion, the tone mapper handles image→image transfer + tone-curve
-//! conversion. Together they cover the full color-management pipeline:
-//! a YUV camera frame goes through the converter (NV12 → sRGB RGBA),
+//! Sibling-in-spirit to streamlib's engine-side `RhiColorConverter`
+//! (which handles buffer→image YCbCr→RGB matrix + transfer conversion).
+//! The tone mapper handles image→image transfer + tone-curve conversion
+//! so a YUV camera frame goes through the converter (NV12 → sRGB RGBA),
 //! and an HDR PQ frame goes through the tone mapper (PQ → sRGB RGBA
 //! with BT.2390 EETF).
 //!
-//! Consumers (the [`BlendingCompositor`], the display, encoders
-//! targeting cross-color-space output) hold an `Arc<RhiToneMapper>`
-//! as a struct field — same shape as `LinuxCameraProcessor` holds
-//! `Arc<RhiColorConverter>` per `packages/camera/src/linux/camera.rs`.
-//!
-//! [`BlendingCompositor`]: ../../../examples/camera-python-display/src/blending_compositor.rs
+//! Consumers (compositors, displays, encoders targeting cross-color-
+//! space output) hold an `Arc<RhiToneMapper>` as a struct field — same
+//! shape as `LinuxCameraProcessor` holds `Arc<RhiColorConverter>` per
+//! `packages/camera/src/linux/camera.rs`. Constructed via
+//! [`RhiToneMapper::new`]; no shared cache on `GpuContext` — each
+//! consumer owns its lifecycle so resource teardown is the consumer's
+//! call.
 
-use crate::core::color::TransferId;
+use crate::transfer::TransferId;
 
 #[cfg(target_os = "linux")]
-use crate::core::rhi::Texture;
+use streamlib::sdk::rhi::Texture;
 #[cfg(target_os = "linux")]
-use crate::core::Result;
+use streamlib::sdk::error::Result;
 
 /// Tone-curve selector for [`ToneMapperPushConstants::tonemap_curve`].
 /// Numeric values must match the `TONE_CURVE_*` constants in
-/// `vulkan/rhi/shaders/tone_curve.comp`.
+/// `src/shaders/tone_curve.comp`.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToneCurveId {
@@ -69,27 +69,20 @@ pub struct ToneMapperPushConstants {
     pub output_transfer: u32,
     /// Tone-curve selector, encoded as [`ToneCurveId`].
     pub tonemap_curve: u32,
-    /// Source reference peak luminance in nits. For HDR10 PQ
-    /// content this is the master display peak (commonly
-    /// 1000 / 4000 / 10000); for SDR sources it is 100 nits.
+    /// Source reference peak luminance in nits.
     pub peak_in_nits: f32,
-    /// Destination reference peak luminance in nits. For SDR display
-    /// targets this is 100 nits; for HDR display targets it matches
-    /// the negotiated display peak (typically 1000 nits for HDR10).
+    /// Destination reference peak luminance in nits.
     pub peak_out_nits: f32,
-    /// Reserved bits for future tone-curve extensions (gamut
-    /// compression, hue-preservation flags, scene-adaptive metadata
-    /// inputs). Must be zero today.
+    /// Reserved bits for future tone-curve extensions. Must be zero today.
     pub flags: u32,
 }
 
 impl ToneMapperPushConstants {
     /// Build push-constants for the canonical configuration.
     ///
-    /// The tone-curve discriminator picks the math; the peak-luminance
-    /// pair sets the source/destination reference. When both peaks
-    /// match and `curve = ToneCurveId::None`, the kernel reduces to a
-    /// pure transfer-conversion path with no math beyond EOTF + OETF.
+    /// When both peaks match and `curve = ToneCurveId::None`, the
+    /// kernel reduces to a pure transfer-conversion path with no math
+    /// beyond EOTF + OETF.
     pub fn new(
         width: u32,
         height: u32,
@@ -113,42 +106,62 @@ impl ToneMapperPushConstants {
 }
 
 /// Byte size of the push-constants block sent to the tone-mapper kernel.
-/// Must match the `layout(push_constant)` size in
-/// `vulkan/rhi/shaders/tone_curve.comp`.
+/// Must match the `layout(push_constant)` size in `src/shaders/tone_curve.comp`.
 pub const TONE_MAPPER_PUSH_CONSTANT_SIZE: u32 =
     std::mem::size_of::<ToneMapperPushConstants>() as u32;
 
-/// Engine-owned image→image tone-curve primitive.
+/// Image→image tone-curve primitive.
 ///
-/// Created via [`crate::core::context::GpuContext::tone_mapper`] and
-/// cached for the lifetime of the [`crate::core::context::GpuContext`].
-/// The kernel itself is stateless beyond push constants — one cached
-/// instance handles every variation of `(input_transfer, output_transfer,
-/// curve, peak_in, peak_out)` without invalidating the pipeline.
+/// Constructed via [`RhiToneMapper::new`]. Each consumer instantiates
+/// its own instance (kernel is lazy-built on first dispatch, so the
+/// construction cost is just a struct allocation). No engine-side cache
+/// — resource teardown is the consumer's responsibility, and there's
+/// only one kernel pipeline shape so caching across consumers buys
+/// nothing.
 ///
 /// Thread-safe — internal compute-kernel submissions serialize through
 /// the host queue mutex.
 pub struct RhiToneMapper {
     #[cfg(target_os = "linux")]
-    pub(crate) inner: crate::vulkan::rhi::VulkanToneMapper,
+    pub(crate) inner: crate::vulkan_tone_mapper::VulkanToneMapper,
 
     #[cfg(not(target_os = "linux"))]
     _marker: std::marker::PhantomData<()>,
 }
 
 impl RhiToneMapper {
+    /// Build a tone mapper bound to `device`. The internal compute
+    /// kernel is allocated lazily on first dispatch.
+    #[cfg(target_os = "linux")]
+    pub fn new(
+        device: &std::sync::Arc<streamlib::sdk::engine::host_rhi::HostVulkanDevice>,
+    ) -> Self {
+        Self {
+            inner: crate::vulkan_tone_mapper::VulkanToneMapper::new(device),
+        }
+    }
+
+    /// macOS stub — Apple-platform tone mapping lives in the
+    /// follow-on Apple activation work.
+    #[cfg(not(target_os = "linux"))]
+    pub fn new() -> Self {
+        Self {
+            _marker: std::marker::PhantomData,
+        }
+    }
+
     /// Bind `(src, dst)` + push-constants on the kernel and return it
     /// for recorder-driven dispatch. Use when the caller already has an
-    /// [`crate::vulkan::rhi::RhiCommandRecorder`] and wants the tone
-    /// curve to nest inside its own barriers rather than spawning a
-    /// separate queue submit.
+    /// engine `RhiCommandRecorder` and wants the tone curve to nest
+    /// inside its own barriers rather than spawning a separate queue
+    /// submit.
     #[cfg(target_os = "linux")]
     pub fn prepare(
         &self,
         src: &Texture,
         dst: &Texture,
         push: &ToneMapperPushConstants,
-    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+    ) -> Result<std::sync::Arc<streamlib::sdk::engine::host_rhi::VulkanComputeKernel>> {
         self.inner.prepare(src, dst, push)
     }
 
@@ -156,7 +169,7 @@ impl RhiToneMapper {
     /// kernel (if needed), binds, dispatches via its own command buffer
     /// + fence + queue submit, and waits before returning. Caller is
     /// responsible for ensuring `src` and `dst` are in
-    /// [`crate::core::rhi::VulkanLayout::GENERAL`] (the storage-image
+    /// [`streamlib::sdk::rhi::VulkanLayout::GENERAL`] (the storage-image
     /// binding requirement). For consumers that need layout transitions
     /// handled, prefer [`Self::apply_with_layouts`].
     #[cfg(target_os = "linux")]
@@ -179,9 +192,9 @@ impl RhiToneMapper {
     pub fn apply_with_layouts(
         &self,
         src: &Texture,
-        src_current_layout: crate::core::rhi::VulkanLayout,
+        src_current_layout: streamlib::sdk::rhi::VulkanLayout,
         dst: &Texture,
-        dst_current_layout: crate::core::rhi::VulkanLayout,
+        dst_current_layout: streamlib::sdk::rhi::VulkanLayout,
         push: &ToneMapperPushConstants,
     ) -> Result<()> {
         self.inner
@@ -195,7 +208,6 @@ impl std::fmt::Debug for RhiToneMapper {
     }
 }
 
-// Compute-kernel submissions serialize through the host queue mutex.
 unsafe impl Send for RhiToneMapper {}
 unsafe impl Sync for RhiToneMapper {}
 
@@ -204,8 +216,7 @@ mod tests {
     use super::*;
 
     /// Push-constants size locks the cross-language contract with the
-    /// shader. If the struct changes, the shader's
-    /// `layout(push_constant)` size must change in lock-step.
+    /// shader.
     #[test]
     fn push_constants_size_is_32_bytes() {
         assert_eq!(
@@ -217,8 +228,7 @@ mod tests {
     }
 
     /// Discriminator values must match the GLSL `TONE_CURVE_*` constants
-    /// in `vulkan/rhi/shaders/tone_curve.comp`. If these disagree, the
-    /// shader silently picks a different curve or no-ops the dispatch.
+    /// in `src/shaders/tone_curve.comp`.
     #[test]
     fn tone_curve_id_values_match_shader() {
         assert_eq!(ToneCurveId::None as u32, 0);

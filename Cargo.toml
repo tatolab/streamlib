@@ -27,6 +27,7 @@ members = [
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "packages/audio",            # @tatolab/audio — audio processors carved out of the streamlib engine (#672)
     "packages/camera",           # @tatolab/camera — camera capture processor carved out of the streamlib engine (#673)
+    "packages/color",            # @tatolab/color — GPU color-management primitives (tone-mapping kernel + CPU reference math)
     "packages/display",          # @tatolab/display — display processor carved out of the streamlib engine (#674)
     "packages/h264",             # @tatolab/h264 — H.264 encoder + decoder via Vulkan Video carved out of the streamlib engine (#675)
     "packages/h265",             # @tatolab/h265 — H.265 encoder + decoder via Vulkan Video carved out of the streamlib engine (#676)

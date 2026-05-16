@@ -4,8 +4,8 @@
 use crate::core::context::TextureRegistration;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat, RhiBlitter,
-    RhiColorConverter, RhiCommandQueue, RhiToneMapper, PixelBuffer, RhiPixelBufferPool, Texture,
-    TextureDescriptor, TextureFormat, TextureUsages,
+    RhiColorConverter, RhiCommandQueue, PixelBuffer, RhiPixelBufferPool, Texture, TextureDescriptor,
+    TextureFormat, TextureUsages,
 };
 use crate::core::{Result, Error};
 #[cfg(target_os = "linux")]
@@ -407,13 +407,6 @@ pub struct GpuContext {
     #[cfg(target_os = "linux")]
     color_converter_cache:
         Arc<RwLock<HashMap<(PixelFormat, PixelFormat), Arc<RhiColorConverter>>>>,
-    /// Engine-wide single-instance tone mapper. The kernel is stateless
-    /// beyond per-dispatch push constants — `(input_transfer,
-    /// output_transfer, curve, peak_in_nits, peak_out_nits)` all ride
-    /// the push-constant block, so one cached instance covers every
-    /// variation. Lazily constructed on first `tone_mapper()` call.
-    #[cfg(target_os = "linux")]
-    tone_mapper: Arc<Mutex<Option<Arc<RhiToneMapper>>>>,
     /// Engine-tier publication slot for an in-process producer's timeline
     /// semaphore. The producer (today: the camera; in principle any in-tree
     /// video source) publishes a typed handle here so an in-process consumer
@@ -481,8 +474,6 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(target_os = "linux")]
-            tone_mapper: Arc::new(Mutex::new(None)),
-            #[cfg(target_os = "linux")]
             video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
             processor_setup_lock: Arc::new(Mutex::new(())),
             #[cfg(target_os = "linux")]
@@ -511,8 +502,6 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
-            tone_mapper: Arc::new(Mutex::new(None)),
             #[cfg(target_os = "linux")]
             video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
             processor_setup_lock: Arc::new(Mutex::new(())),
@@ -1246,30 +1235,6 @@ impl GpuContext {
             "GpuContext::color_converter — converter constructed"
         );
         Ok(converter)
-    }
-
-    /// Acquire the engine-wide tone-mapper handle.
-    ///
-    /// First call lazily constructs the underlying compute kernel
-    /// (SPIR-V load + reflection); subsequent calls return the cached
-    /// handle. All `(input_transfer, output_transfer, curve, peak_in,
-    /// peak_out)` variation rides per-frame push constants, so a single
-    /// instance handles every variation.
-    #[cfg(target_os = "linux")]
-    pub fn tone_mapper(&self) -> Result<Arc<RhiToneMapper>> {
-        let mut guard = self.tone_mapper.lock().unwrap();
-        if let Some(t) = guard.as_ref() {
-            return Ok(Arc::clone(t));
-        }
-        let vulkan_device = &self.device.inner;
-        let inner = crate::vulkan::rhi::VulkanToneMapper::new(vulkan_device);
-        let mapper = Arc::new(RhiToneMapper { inner });
-        *guard = Some(Arc::clone(&mapper));
-        tracing::debug!(
-            rhi_op = "tone_mapper",
-            "GpuContext::tone_mapper — tone mapper constructed"
-        );
-        Ok(mapper)
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.
@@ -2346,14 +2311,6 @@ impl GpuContextFullAccess {
         dst: PixelFormat,
     ) -> Result<Arc<RhiColorConverter>> {
         self.inner.color_converter(src, dst)
-    }
-
-    /// Acquire the engine-wide tone-mapper handle. See
-    /// [`GpuContext::tone_mapper`](crate::core::context::GpuContext::tone_mapper)
-    /// on the inner context for usage.
-    #[cfg(target_os = "linux")]
-    pub fn tone_mapper(&self) -> Result<Arc<RhiToneMapper>> {
-        self.inner.tone_mapper()
     }
 
     /// Create a compute kernel from a SPIR-V shader and a binding declaration.

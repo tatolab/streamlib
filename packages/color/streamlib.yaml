@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/color — color-management GPU primitives.
+#
+# Hosts the engine-agnostic color primitives carved out of
+# `libs/streamlib-engine`: the BT.2390 + BT.2446a tone-curve compute
+# kernel, its Vulkan backend, and CPU reference math used by tests.
+# Engine purity precedent #794 (audio-converter retirement): the engine
+# substrate is domain-agnostic; color science is a domain primitive
+# packaged separately and reached via the SDK facade.
+package:
+  org: tatolab
+  name: color
+  version: 1.0.0
+  description: "GPU color-management primitives — tone-mapping kernel (BT.2390 + BT.2446a) + CPU reference math"

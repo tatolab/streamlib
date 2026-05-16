@@ -3,11 +3,14 @@
 
 //! Closed-form tone-curve reference implementations.
 //!
-//! Mirrors the GLSL implementations in
-//! `vulkan/rhi/shaders/tone_curve.comp` — the GPU dispatch tests use
-//! these CPU references to compute expected pixel values that the GPU
-//! output is asserted against. Drift between the two is what those
-//! tests catch.
+//! Mirrors the GLSL implementations in `src/shaders/tone_curve.comp` —
+//! the GPU dispatch tests use these CPU references to compute expected
+//! pixel values that the GPU output is asserted against. Drift between
+//! the two is what those tests catch.
+//!
+//! **Test-time reference only — do not call per-frame.** The production
+//! per-frame path goes through `RhiToneMapper` (the Vulkan compute
+//! kernel). These functions exist solely to validate the GPU output.
 //!
 //! Two curves:
 //! - **BT.2390 EETF** (`bt2390_eetf_per_channel`): forward HDR→SDR
@@ -16,7 +19,7 @@
 //! - **BT.2446-1 method A2 inverse** (`bt2446a_inverse_per_channel`):
 //!   SDR→HDR up-conversion. Closed-form Hermite ease in linear space.
 
-use crate::core::color::{linear_to_pq, pq_to_linear};
+use crate::transfer::{linear_to_pq, pq_to_linear};
 
 /// Source-normalized linear → tone-mapped destination-normalized linear,
 /// per channel, ITU-R BT.2390-9 EETF (Hermite spline in PQ space).
@@ -117,10 +120,7 @@ mod tests {
     use super::*;
 
     /// Black input → black output: BT.2390 must map 0.0 → 0.0 exactly
-    /// regardless of peak ratio. Mentally revert the
-    /// `linear_norm * peak_in_nits / 10_000.0` line in `bt2390_eetf_per_channel`
-    /// (e.g., to `linear_norm + peak_in_nits`) and this test fails
-    /// because pq_in is no longer 0 at linear_norm=0.
+    /// regardless of peak ratio.
     #[test]
     fn bt2390_zero_in_zero_out() {
         for &(pin, pout) in &[(1000.0, 100.0), (4000.0, 200.0), (10000.0, 1000.0)] {
@@ -130,11 +130,7 @@ mod tests {
     }
 
     /// Peak input → peak output: BT.2390 must map source peak (1.0
-    /// normalized) to destination peak (1.0 normalized). This locks the
-    /// "no peak loss" property the spline endpoint guarantees. Mentally
-    /// revert the renormalization step (drop the `* 10_000.0 / peak_out_nits`)
-    /// and this test fails — the output stays at peak_out/10000 instead
-    /// of 1.0.
+    /// normalized) to destination peak (1.0 normalized).
     #[test]
     fn bt2390_peak_input_maps_to_peak_output() {
         for &(pin, pout) in &[(1000.0, 100.0), (4000.0, 200.0), (10000.0, 1000.0)] {
@@ -147,9 +143,7 @@ mod tests {
     }
 
     /// Identity case: when peak_in == peak_out, the EETF must be
-    /// identity (input value passes through unchanged). The knee
-    /// `ks = 1.5*1 - 0.5 = 1.0`, so the spline branch is never
-    /// reached and the below-knee identity dominates everywhere.
+    /// identity (input value passes through unchanged).
     #[test]
     fn bt2390_identity_when_peaks_match() {
         for &x in &[0.0_f32, 0.1, 0.25, 0.5, 0.8, 1.0] {
@@ -163,9 +157,6 @@ mod tests {
 
     /// Monotonicity: a brighter input must produce an output at least
     /// as bright. Sample 65 points across [0, 1] and check pairwise.
-    /// Mentally revert the spline `+ (-2.0 * t3 + 3.0 * t2) * max_lum`
-    /// term (drop it) and this test fails because the spline becomes
-    /// non-monotonic near the peak.
     #[test]
     fn bt2390_is_monotonic() {
         let pin = 1000.0;
@@ -196,28 +187,20 @@ mod tests {
         }
     }
 
-    /// Mid-tone roll-off character: at HDR=1000 → SDR=100 (10× reduction)
-    /// the BT.2390 curve should preserve shadows roughly linearly and
-    /// roll off highlights into the smaller display range. Reference
-    /// points captured from the implementation by
-    /// [`bt2390_print_reference_points_1000_to_100`]; this test locks
-    /// them so a future refactor that silently changes the curve shape
-    /// fails. Tolerance is tight (1e-4) — the math is deterministic
-    /// single-precision float, no platform variation expected.
+    /// Mid-tone roll-off character: reference points captured from the
+    /// implementation; locks the curve shape against drift.
     #[test]
     fn bt2390_canonical_reference_points_1000_to_100() {
         let pin = 1000.0;
         let pout = 100.0;
-        // (input_norm, expected_output_norm) — input normalized to
-        // 1000-nit peak; output normalized to 100-nit peak.
         let cases = [
-            (0.01_f32, 0.099999_f32), // 10 nit input → 10 nit output (shadow, identity in PQ)
-            (0.025_f32, 0.249999_f32), // 25 nit input → still identity (below knee)
-            (0.05_f32, 0.461423_f32), // 50 nit input — knee onset
-            (0.10_f32, 0.694542_f32), // 100 nit input — significant roll-off
-            (0.25_f32, 0.920450_f32), // 250 nit input rolled toward peak
-            (0.50_f32, 0.989461_f32), // 500 nit input close to peak
-            (1.00_f32, 0.999997_f32), // peak preserved (within float tolerance)
+            (0.01_f32, 0.099999_f32),
+            (0.025_f32, 0.249999_f32),
+            (0.05_f32, 0.461423_f32),
+            (0.10_f32, 0.694542_f32),
+            (0.25_f32, 0.920450_f32),
+            (0.50_f32, 0.989461_f32),
+            (1.00_f32, 0.999997_f32),
         ];
         for (input, expected) in cases {
             let out = bt2390_eetf_per_channel(input, pin, pout);
@@ -239,10 +222,7 @@ mod tests {
         }
     }
 
-    /// BT.2446a: peak input → peak output (1.0 SDR → 1.0 HDR
-    /// normalized). Locks the cubic Hermite endpoint constraint.
-    /// Mentally revert `p1 = 1.0` to `p1 = 0.5` and this test fails
-    /// (output is 0.5 instead of 1.0 at peak).
+    /// BT.2446a: peak input → peak output.
     #[test]
     fn bt2446a_peak_input_maps_to_peak_output() {
         for &(pin, pout) in &[(100.0, 1000.0), (100.0, 4000.0), (200.0, 1000.0)] {
@@ -254,9 +234,7 @@ mod tests {
         }
     }
 
-    /// BT.2446a: when peak_in == peak_out, the curve must be identity
-    /// (no expansion needed; output equals input passed through the
-    /// identity branch).
+    /// BT.2446a: when peak_in == peak_out, the curve must be identity.
     #[test]
     fn bt2446a_identity_when_peaks_match() {
         for &x in &[0.0_f32, 0.1, 0.25, 0.5, 0.8, 1.0] {
@@ -269,11 +247,7 @@ mod tests {
     }
 
     /// BT.2446a: the linear shadow segment maps SDR midtone preserving
-    /// absolute nits. SDR knee=0.5 in 100-nit space = 50 nit absolute.
-    /// In HDR 1000-nit space, 50 nit absolute = 0.05 normalized.
-    /// Mentally revert the `if linear_norm <= KNEE { return linear_norm / ratio; }`
-    /// branch (drop the `/ ratio`) and this test fails with output 0.5
-    /// instead of 0.05.
+    /// absolute nits.
     #[test]
     fn bt2446a_below_knee_preserves_absolute_nits() {
         let pin = 100.0;
@@ -289,12 +263,7 @@ mod tests {
         }
     }
 
-    /// BT.2446a: continuity at the knee — values just below and just
-    /// above the knee point must produce nearly the same output (the
-    /// Hermite ease is C0-continuous at t=0 by construction). Mentally
-    /// revert `p0 = KNEE / ratio` to `p0 = KNEE` and this test fails
-    /// because the cubic-segment endpoint no longer matches the
-    /// linear-segment endpoint.
+    /// BT.2446a: continuity at the knee.
     #[test]
     fn bt2446a_continuous_at_knee() {
         let pin = 100.0;

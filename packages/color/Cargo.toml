@@ -1,0 +1,29 @@
+[package]
+name = "streamlib-color"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Color-management GPU primitives carved out of the streamlib engine — tone-mapping kernel (BT.2390 + BT.2446a) + CPU reference math"
+keywords = ["color", "hdr", "tone-mapping", "vulkan"]
+categories = ["multimedia::video", "graphics"]
+
+[lib]
+name = "streamlib_color"
+crate-type = ["rlib"]
+
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
+[dependencies]
+# Engine substrate — RhiCommandRecorder, HostVulkanDevice, Texture,
+# VulkanComputeKernel, ComputeKernelDescriptor, VulkanLayout, etc.
+# Reached through the SDK facade (`streamlib::sdk::engine::host_rhi`).
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+parking_lot = "0.12"
+tracing.workspace = true
+
+[lints]
+workspace = true

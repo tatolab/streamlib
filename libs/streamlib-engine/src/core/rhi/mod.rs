@@ -6,7 +6,6 @@
 mod backend;
 pub mod blitter;
 mod color_converter;
-mod tone_mapper;
 mod command_buffer;
 mod command_queue;
 mod compute_kernel;
@@ -33,9 +32,6 @@ pub use command_queue::RhiCommandQueue;
 pub use color_converter::{
     pixel_format_color_kind, ColorConverterPushConstants, RhiColorConverter, SourceLayoutInfo,
     COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
-};
-pub use tone_mapper::{
-    RhiToneMapper, ToneCurveId, ToneMapperPushConstants, TONE_MAPPER_PUSH_CONSTANT_SIZE,
 };
 pub use compute_kernel::{
     derive_bindings_from_spirv, ComputeBindingKind, ComputeBindingSpec,

@@ -48,11 +48,6 @@ pub use streamlib_consumer_rhi::{
 mod vulkan_blitter;
 pub use vulkan_blitter::VulkanBlitter;
 
-#[cfg(target_os = "linux")]
-mod vulkan_tone_mapper;
-#[cfg(target_os = "linux")]
-pub use vulkan_tone_mapper::{VulkanToneMapper, TONE_MAPPER_WORKGROUP_SIZE};
-
 pub(crate) mod vulkan_buffer;
 pub use vulkan_buffer::HostVulkanBuffer;
 
