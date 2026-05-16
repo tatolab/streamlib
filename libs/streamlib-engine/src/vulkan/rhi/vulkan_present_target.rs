@@ -8,14 +8,17 @@ use std::sync::Arc;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
+use vulkanalia::vk::ExtHdrMetadataExtensionDeviceCommands as _;
 use vulkanalia::vk::KhrSurfaceExtensionInstanceCommands as _;
 use vulkanalia::vk::KhrSwapchainExtensionDeviceCommands as _;
 
+use crate::_generated_::{ColorInfo, ContentLight, MasteringDisplay};
 use crate::core::rhi::TextureFormat;
 use crate::core::{Error, Result};
 
 use super::vulkan_command_recorder::RhiCommandRecorder;
 use super::vulkan_pipeline_flags::VulkanStage;
+use super::vulkan_swapchain_colorspace::{build_hdr_metadata, pick_swapchain_format, SwapchainColorPick};
 use super::vulkan_sync::HostVulkanTimelineSemaphore;
 use super::HostVulkanDevice;
 
@@ -41,6 +44,17 @@ pub struct VulkanPresentTarget {
     swapchain_format: vk::Format,
     swapchain_extent: vk::Extent2D,
     color_format: TextureFormat,
+    /// Negotiated `(format, color_space, is_hdr)` from the surface's
+    /// exposed format list and the most recent `ColorInfo` hint. Read
+    /// by [`Self::set_hdr_metadata`] to short-circuit when the current
+    /// colorspace is not HDR-signaling.
+    color_pick: SwapchainColorPick,
+    /// Cached most-recent `vk::HdrMetadataEXT` payload pushed to the
+    /// driver via `vkSetHdrMetadataEXT`. Carried so consecutive
+    /// identical metadata pushes (every-frame call sites) compress to
+    /// zero driver round-trips. `None` until the first successful
+    /// push.
+    last_hdr_metadata: Option<vk::HdrMetadataEXT>,
     vsync: bool,
 
     /// Per-swapchain-image binary semaphore signaled when rendering for
@@ -98,16 +112,19 @@ struct PresentFrameInner {
 
 impl VulkanPresentTarget {
     /// Build a present target bound to `window` at the requested initial
-    /// extent + vsync preference. The window handle must outlive the
-    /// present target; dropping the target destroys the surface +
-    /// swapchain + per-frame resources.
-    #[tracing::instrument(level = "trace", skip(device, window), fields(width, height, vsync))]
+    /// extent + vsync preference. `color_info` drives the
+    /// `VkColorSpaceKHR` priority walk; `None` keeps the legacy SDR
+    /// pick (`B8G8R8A8_UNORM` + `SRGB_NONLINEAR`). The window handle
+    /// must outlive the present target; dropping the target destroys
+    /// the surface + swapchain + per-frame resources.
+    #[tracing::instrument(level = "trace", skip(device, window, color_info), fields(width, height, vsync))]
     pub fn new(
         device: &Arc<HostVulkanDevice>,
         window: &(impl HasWindowHandle + HasDisplayHandle),
         width: u32,
         height: u32,
         vsync: bool,
+        color_info: Option<&ColorInfo>,
     ) -> Result<Self> {
         let instance = device.instance();
         let surface = unsafe { vulkanalia::window::create_surface(instance, window, window) }
@@ -136,8 +153,22 @@ impl VulkanPresentTarget {
             ));
         }
 
-        let (swapchain, swapchain_images, swapchain_image_views, swapchain_format, swapchain_extent) =
-            create_swapchain(device, surface, width, height, vsync, vk::SwapchainKHR::null())?;
+        let (
+            swapchain,
+            swapchain_images,
+            swapchain_image_views,
+            swapchain_format,
+            swapchain_extent,
+            color_pick,
+        ) = create_swapchain(
+            device,
+            surface,
+            width,
+            height,
+            vsync,
+            color_info,
+            vk::SwapchainKHR::null(),
+        )?;
 
         let color_format = vk_format_to_texture_format(swapchain_format).ok_or_else(|| {
             Error::GpuError(format!(
@@ -192,6 +223,8 @@ impl VulkanPresentTarget {
             swapchain_format,
             swapchain_extent,
             color_format,
+            color_pick,
+            last_hdr_metadata: None,
             vsync,
             render_finished_semaphores,
             image_available_semaphores,
@@ -204,9 +237,16 @@ impl VulkanPresentTarget {
 
     /// Recreate the swapchain for a new window extent (driven by the
     /// caller's resize handling or an `OUT_OF_DATE_KHR` return from
-    /// [`Self::render_frame`]).
-    #[tracing::instrument(level = "trace", skip(self), fields(width, height))]
-    pub fn recreate(&mut self, width: u32, height: u32) -> Result<()> {
+    /// [`Self::render_frame`]) or a new `ColorInfo` hint (driven by
+    /// first-frame inspection or mid-stream color change). Passing
+    /// `None` for `color_info` keeps the legacy SDR pick.
+    #[tracing::instrument(level = "trace", skip(self, color_info), fields(width, height))]
+    pub fn recreate(
+        &mut self,
+        width: u32,
+        height: u32,
+        color_info: Option<&ColorInfo>,
+    ) -> Result<()> {
         // Drain in-flight work before destroying the old swapchain.
         // `wait_idle()` takes the queue mutexes so it doesn't race with
         // an active submit on another thread.
@@ -217,14 +257,16 @@ impl VulkanPresentTarget {
         })?;
 
         let raw_device = self.device.device();
-        let (new_swapchain, new_images, new_views, new_format, new_extent) = create_swapchain(
-            &self.device,
-            self.surface,
-            width,
-            height,
-            self.vsync,
-            self.swapchain,
-        )?;
+        let (new_swapchain, new_images, new_views, new_format, new_extent, new_color_pick) =
+            create_swapchain(
+                &self.device,
+                self.surface,
+                width,
+                height,
+                self.vsync,
+                color_info,
+                self.swapchain,
+            )?;
 
         // Destroy old swapchain resources after successful recreate.
         unsafe {
@@ -254,13 +296,36 @@ impl VulkanPresentTarget {
             }
         }
 
+        // Refresh the cached `TextureFormat` view alongside the raw
+        // `vk::Format` — a recreate that lands on a new format
+        // (e.g. SDR `BGRA8_UNORM` → HDR10 `R16G16B16A16_SFLOAT`)
+        // must update both fields, otherwise downstream code
+        // reading [`Self::color_format`] sees a stale value and
+        // [`build_display_kernel`] (called by display.rs after a
+        // colorspace transition) silently rebuilds against the old
+        // attachment format.
+        let new_color_format = vk_format_to_texture_format(new_format).ok_or_else(|| {
+            Error::GpuError(format!(
+                "VulkanPresentTarget::recreate: swapchain format {new_format:?} \
+                 not mapped to TextureFormat"
+            ))
+        })?;
+
         self.swapchain = new_swapchain;
         self.swapchain_images = new_images;
         self.swapchain_image_views = new_views;
-        // Spec: same swapchain recreated from old keeps the same format —
-        // overwrite anyway in case the surface caps changed.
         self.swapchain_format = new_format;
+        self.color_format = new_color_format;
         self.swapchain_extent = new_extent;
+        // Update the cached colorspace pick. If the colorspace changed
+        // (SDR → HDR or vice versa, or one HDR variant → another),
+        // any previously-pushed `vkSetHdrMetadataEXT` payload is no
+        // longer valid for the new swapchain — clear the cache so the
+        // next `set_hdr_metadata` call re-pushes.
+        if new_color_pick != self.color_pick {
+            self.last_hdr_metadata = None;
+        }
+        self.color_pick = new_color_pick;
         // current_frame stays — slots are independent of swapchain count.
         Ok(())
     }
@@ -273,6 +338,49 @@ impl VulkanPresentTarget {
     /// Current swapchain extent (width, height).
     pub fn current_extent(&self) -> (u32, u32) {
         (self.swapchain_extent.width, self.swapchain_extent.height)
+    }
+
+    /// Last-negotiated `(format, colorspace, is_hdr)` triple. The
+    /// display processor uses this to decide whether to push HDR
+    /// metadata via [`Self::set_hdr_metadata`].
+    pub fn color_pick(&self) -> SwapchainColorPick {
+        self.color_pick
+    }
+
+    /// Push HDR static metadata to the driver via
+    /// `vkSetHdrMetadataEXT`. No-op when the current swapchain
+    /// colorspace is not one of the HDR signaling variants
+    /// (PQ / HLG), or when `VK_EXT_hdr_metadata` was not enabled at
+    /// device construction. Subsequent calls with byte-identical
+    /// metadata short-circuit to avoid redundant driver round-trips.
+    pub fn set_hdr_metadata(
+        &mut self,
+        mastering: &MasteringDisplay,
+        content_light: &ContentLight,
+    ) -> Result<()> {
+        if !self.color_pick.is_hdr {
+            return Ok(());
+        }
+        if !self.device.supports_hdr_metadata() {
+            tracing::debug!(
+                "VulkanPresentTarget::set_hdr_metadata: skipped — \
+                 VK_EXT_hdr_metadata not enabled at device construction"
+            );
+            return Ok(());
+        }
+        let metadata = build_hdr_metadata(mastering, content_light);
+        if hdr_metadata_eq(self.last_hdr_metadata.as_ref(), &metadata) {
+            return Ok(());
+        }
+        let swapchains = [self.swapchain];
+        let metadatas = [metadata];
+        // Safety: device is alive (we hold an Arc); swapchain is the
+        // currently-owned handle; metadata array is stack-allocated
+        // and lives across the call. The driver is required to read
+        // through the pointers before returning per spec.
+        unsafe { self.device.device().set_hdr_metadata_ext(&swapchains, &metadatas) };
+        self.last_hdr_metadata = Some(metadata);
+        Ok(())
     }
 
     /// Acquire the next swapchain image, run the caller's `render`
@@ -599,14 +707,17 @@ impl Drop for VulkanPresentTarget {
 unsafe impl Send for VulkanPresentTarget {}
 unsafe impl Sync for VulkanPresentTarget {}
 
-/// Engine-internal: surface + dimensions → swapchain handle chain.
-/// Returns `(swapchain, images, image_views, format, extent)`.
+/// Engine-internal: surface + dimensions + ColorInfo hint → swapchain
+/// handle chain. Returns `(swapchain, images, image_views, format,
+/// extent, color_pick)`. Colorspace negotiation is delegated to
+/// [`pick_swapchain_format`].
 fn create_swapchain(
     device: &Arc<HostVulkanDevice>,
     surface: vk::SurfaceKHR,
     width: u32,
     height: u32,
     vsync: bool,
+    color_info: Option<&ColorInfo>,
     old_swapchain: vk::SwapchainKHR,
 ) -> Result<(
     vk::SwapchainKHR,
@@ -614,6 +725,7 @@ fn create_swapchain(
     Vec<vk::ImageView>,
     vk::Format,
     vk::Extent2D,
+    SwapchainColorPick,
 )> {
     let instance = device.instance();
     let physical_device = device.physical_device();
@@ -646,14 +758,36 @@ fn create_swapchain(
         ))
     })?;
 
-    let chosen_format = surface_formats
-        .iter()
-        .find(|f| {
-            f.format == vk::Format::B8G8R8A8_UNORM
-                && f.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
-        })
-        .copied()
-        .unwrap_or(surface_formats[0]);
+    if surface_formats.is_empty() {
+        return Err(Error::GpuError(
+            "VulkanPresentTarget: surface advertised no formats — \
+             vkGetPhysicalDeviceSurfaceFormatsKHR returned an empty list"
+                .into(),
+        ));
+    }
+
+    let representable_formats = filter_representable_surface_formats(&surface_formats);
+    if representable_formats.is_empty() {
+        return Err(Error::GpuError(format!(
+            "VulkanPresentTarget: surface advertised {} formats but none are \
+             representable as TextureFormat (extend `vk_format_to_texture_format` \
+             when adding new HDR / wide-gamut backends)",
+            surface_formats.len()
+        )));
+    }
+
+    let color_pick = pick_swapchain_format(&representable_formats, color_info);
+    let chosen_format = vk::SurfaceFormatKHR {
+        format: color_pick.format,
+        color_space: color_pick.color_space,
+    };
+    tracing::info!(
+        "VulkanPresentTarget: swapchain colorspace pick {:?} + {:?} (is_hdr={}, color_info={:?})",
+        chosen_format.format,
+        chosen_format.color_space,
+        color_pick.is_hdr,
+        color_info,
+    );
 
     let present_mode = if vsync {
         vk::PresentModeKHR::FIFO
@@ -744,7 +878,14 @@ fn create_swapchain(
         image_views.push(view);
     }
 
-    Ok((swapchain, images, image_views, chosen_format.format, extent))
+    Ok((
+        swapchain,
+        images,
+        image_views,
+        chosen_format.format,
+        extent,
+        color_pick,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -797,12 +938,59 @@ fn recorder_device(recorder: &RhiCommandRecorder) -> &vulkanalia::Device {
     recorder.vulkan_device_ref().device()
 }
 
+/// Strip surface formats the engine's [`vk_format_to_texture_format`]
+/// table can't project to [`TextureFormat`]. Called by
+/// [`create_swapchain`] before the priority walk so the picker can
+/// never produce a `vk::Format` that fails downstream conversion —
+/// e.g. NVIDIA exposes `A2B10G10R10_UNORM_PACK32 + HDR10_ST2084_EXT`
+/// for HDR10 PQ, but the engine's `TextureFormat` enum doesn't yet
+/// carry a 10-bit packed variant. The filter degrades gracefully —
+/// the picker walks representable formats only, falling through to
+/// FP16 HDR or SDR.
+fn filter_representable_surface_formats(
+    surface_formats: &[vk::SurfaceFormatKHR],
+) -> Vec<vk::SurfaceFormatKHR> {
+    surface_formats
+        .iter()
+        .copied()
+        .filter(|sf| vk_format_to_texture_format(sf.format).is_some())
+        .collect()
+}
+
+/// Field-wise equality for `vk::HdrMetadataEXT`. The struct has no
+/// `PartialEq` impl in vulkanalia (it carries `*const c_void` for the
+/// `pNext` chain — never compared here since we always pass `null()`),
+/// so we compare the spec-significant fields directly. Used to
+/// short-circuit redundant `vkSetHdrMetadataEXT` round-trips.
+fn hdr_metadata_eq(a: Option<&vk::HdrMetadataEXT>, b: &vk::HdrMetadataEXT) -> bool {
+    let Some(a) = a else { return false };
+    a.display_primary_red.x == b.display_primary_red.x
+        && a.display_primary_red.y == b.display_primary_red.y
+        && a.display_primary_green.x == b.display_primary_green.x
+        && a.display_primary_green.y == b.display_primary_green.y
+        && a.display_primary_blue.x == b.display_primary_blue.x
+        && a.display_primary_blue.y == b.display_primary_blue.y
+        && a.white_point.x == b.white_point.x
+        && a.white_point.y == b.white_point.y
+        && a.max_luminance == b.max_luminance
+        && a.min_luminance == b.min_luminance
+        && a.max_content_light_level == b.max_content_light_level
+        && a.max_frame_average_light_level == b.max_frame_average_light_level
+}
+
 fn vk_format_to_texture_format(format: vk::Format) -> Option<TextureFormat> {
     match format {
         vk::Format::B8G8R8A8_UNORM => Some(TextureFormat::Bgra8Unorm),
         vk::Format::B8G8R8A8_SRGB => Some(TextureFormat::Bgra8UnormSrgb),
         vk::Format::R8G8B8A8_UNORM => Some(TextureFormat::Rgba8Unorm),
         vk::Format::R8G8B8A8_SRGB => Some(TextureFormat::Rgba8UnormSrgb),
+        // FP16 scanout — the representable path for both `HDR10_ST2084_EXT`
+        // and `EXTENDED_SRGB_LINEAR_EXT` colorspaces. The 10-bit packed
+        // formats `A2B10G10R10_UNORM_PACK32` / `A2R10G10B10_UNORM_PACK32`
+        // (the canonical HDR10 wire format) need a `Rgb10A2Unorm` variant
+        // on `TextureFormat` to map; not added here as it's a multi-
+        // backend / consumer-rhi change.
+        vk::Format::R16G16B16A16_SFLOAT => Some(TextureFormat::Rgba16Float),
         _ => None,
     }
 }
@@ -868,10 +1056,77 @@ mod tests {
             Some(TextureFormat::Rgba8UnormSrgb)
         );
         assert_eq!(
+            vk_format_to_texture_format(vk::Format::R16G16B16A16_SFLOAT),
+            Some(TextureFormat::Rgba16Float),
+            "FP16 scanout drives both HDR10 (when 10-bit packed isn't \
+             representable) and EXTENDED_SRGB_LINEAR — must round-trip"
+        );
+        assert_eq!(
             vk_format_to_texture_format(vk::Format::D32_SFLOAT),
             None,
             "non-color-attachment format must not map"
         );
+    }
+
+    /// Locks the contract `create_swapchain` relies on: when a surface
+    /// exposes the picker-preferred HDR10 10-bit packed format that
+    /// `vk_format_to_texture_format` doesn't yet support, the
+    /// representability filter in `create_swapchain` strips it AND the
+    /// picker then walks the remaining (representable) formats. Without
+    /// the filter, an HDR10-capable surface that exposed only the
+    /// 10-bit packed pair would have been picked and then errored out
+    /// at the format-to-TextureFormat conversion step in
+    /// `create_swapchain`. The construction-time path is hardware-only
+    /// (needs a real surface), so this test simulates the
+    /// filter+pick contract directly.
+    #[test]
+    fn representability_filter_drops_unsupported_picker_targets() {
+        use crate::_generated_::tatolab__core::color_info::{Primaries, Transfer};
+        use crate::_generated_::ColorInfo;
+
+        let surface_formats = vec![
+            vk::SurfaceFormatKHR {
+                format: vk::Format::B8G8R8A8_UNORM,
+                color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            },
+            // HDR10 with the canonical 10-bit packed format — picker
+            // would prefer this if unfiltered, but the engine has no
+            // `TextureFormat` variant for it today.
+            vk::SurfaceFormatKHR {
+                format: vk::Format::A2B10G10R10_UNORM_PACK32,
+                color_space: vk::ColorSpaceKHR::HDR10_ST2084_EXT,
+            },
+        ];
+        let pq_bt2020 = ColorInfo {
+            primaries: Some(Primaries::Bt2020),
+            transfer: Some(Transfer::Smpte2084),
+            matrix: None,
+            range: None,
+        };
+
+        // Without the filter: picker would pick A2B10G10R10_UNORM_PACK32
+        // and `create_swapchain` would error at format conversion.
+        let unfiltered_pick = pick_swapchain_format(&surface_formats, Some(&pq_bt2020));
+        assert_eq!(unfiltered_pick.format, vk::Format::A2B10G10R10_UNORM_PACK32);
+        assert!(
+            vk_format_to_texture_format(unfiltered_pick.format).is_none(),
+            "fixture assumption: picker-preferred HDR10 packed format must \
+             remain unrepresentable, otherwise this test no longer locks the \
+             filter contract"
+        );
+
+        // With the filter: picker walks representable formats only and
+        // gracefully falls through to SDR (since FP16 isn't exposed
+        // here). Call the same helper `create_swapchain` uses so a
+        // future regression that bypasses the filter at the production
+        // call site fails this test as soon as the helper's behavior
+        // diverges from inline filtering.
+        let representable = filter_representable_surface_formats(&surface_formats);
+        let filtered_pick = pick_swapchain_format(&representable, Some(&pq_bt2020));
+        assert_eq!(filtered_pick.format, vk::Format::B8G8R8A8_UNORM);
+        assert_eq!(filtered_pick.color_space, vk::ColorSpaceKHR::SRGB_NONLINEAR);
+        assert!(!filtered_pick.is_hdr);
+        assert!(vk_format_to_texture_format(filtered_pick.format).is_some());
     }
 
     /// `MAX_FRAMES_IN_FLIGHT = 2` is load-bearing across the engine

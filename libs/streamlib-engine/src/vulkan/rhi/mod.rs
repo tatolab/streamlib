@@ -74,6 +74,13 @@ pub use vulkan_present_target::{
     PresentFrame, VulkanPresentTarget, MAX_FRAMES_IN_FLIGHT,
 };
 
+#[cfg(target_os = "linux")]
+mod vulkan_swapchain_colorspace;
+#[cfg(target_os = "linux")]
+pub use vulkan_swapchain_colorspace::{
+    build_hdr_metadata, pick_swapchain_format, SwapchainColorPick,
+};
+
 mod vulkan_texture_cache;
 pub use vulkan_texture_cache::VulkanTextureCache;
 
