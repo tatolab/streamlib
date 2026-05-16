@@ -766,22 +766,7 @@ fn create_swapchain(
         ));
     }
 
-    // Filter the surface-exposed formats to those the engine's
-    // [`vk_format_to_texture_format`] table knows how to project to
-    // [`TextureFormat`]. Without this filter, the priority walk could
-    // pick a format the engine can't downstream — e.g. NVIDIA exposes
-    // `A2B10G10R10_UNORM_PACK32 + HDR10_ST2084_EXT` for HDR10 PQ, but
-    // the engine's `TextureFormat` enum doesn't yet have a 10-bit
-    // packed variant. An unrepresentable pick errors out at
-    // `vk_format_to_texture_format` below; pre-filtering keeps the
-    // picker honest and gracefully falls back to the next-best
-    // representable colorspace (HDR10 with `R16G16B16A16_SFLOAT` if
-    // exposed, then EXTENDED_SRGB_LINEAR, then SRGB_NONLINEAR).
-    let representable_formats: Vec<vk::SurfaceFormatKHR> = surface_formats
-        .iter()
-        .copied()
-        .filter(|sf| vk_format_to_texture_format(sf.format).is_some())
-        .collect();
+    let representable_formats = filter_representable_surface_formats(&surface_formats);
     if representable_formats.is_empty() {
         return Err(Error::GpuError(format!(
             "VulkanPresentTarget: surface advertised {} formats but none are \
@@ -953,6 +938,25 @@ fn recorder_device(recorder: &RhiCommandRecorder) -> &vulkanalia::Device {
     recorder.vulkan_device_ref().device()
 }
 
+/// Strip surface formats the engine's [`vk_format_to_texture_format`]
+/// table can't project to [`TextureFormat`]. Called by
+/// [`create_swapchain`] before the priority walk so the picker can
+/// never produce a `vk::Format` that fails downstream conversion —
+/// e.g. NVIDIA exposes `A2B10G10R10_UNORM_PACK32 + HDR10_ST2084_EXT`
+/// for HDR10 PQ, but the engine's `TextureFormat` enum doesn't yet
+/// carry a 10-bit packed variant. The filter degrades gracefully —
+/// the picker walks representable formats only, falling through to
+/// FP16 HDR or SDR.
+fn filter_representable_surface_formats(
+    surface_formats: &[vk::SurfaceFormatKHR],
+) -> Vec<vk::SurfaceFormatKHR> {
+    surface_formats
+        .iter()
+        .copied()
+        .filter(|sf| vk_format_to_texture_format(sf.format).is_some())
+        .collect()
+}
+
 /// Field-wise equality for `vk::HdrMetadataEXT`. The struct has no
 /// `PartialEq` impl in vulkanalia (it carries `*const c_void` for the
 /// `pNext` chain — never compared here since we always pass `null()`),
@@ -1113,12 +1117,11 @@ mod tests {
 
         // With the filter: picker walks representable formats only and
         // gracefully falls through to SDR (since FP16 isn't exposed
-        // here). No swapchain creation error.
-        let representable: Vec<_> = surface_formats
-            .iter()
-            .copied()
-            .filter(|sf| vk_format_to_texture_format(sf.format).is_some())
-            .collect();
+        // here). Call the same helper `create_swapchain` uses so a
+        // future regression that bypasses the filter at the production
+        // call site fails this test as soon as the helper's behavior
+        // diverges from inline filtering.
+        let representable = filter_representable_surface_formats(&surface_formats);
         let filtered_pick = pick_swapchain_format(&representable, Some(&pq_bt2020));
         assert_eq!(filtered_pick.format, vk::Format::B8G8R8A8_UNORM);
         assert_eq!(filtered_pick.color_space, vk::ColorSpaceKHR::SRGB_NONLINEAR);
