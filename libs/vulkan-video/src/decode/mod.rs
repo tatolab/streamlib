@@ -667,6 +667,55 @@ impl SimpleDecoder {
         (self.sps_width, self.sps_height)
     }
 
+    /// Return the H.273 color VUI parsed from the active SPS, or `None` if
+    /// no SPS has been parsed yet or the SPS didn't carry a VUI.
+    ///
+    /// Each axis is `Some(byte)` only if the bitstream actually carried it
+    /// AND it isn't the H.273 "Unspecified" enumerant (value `2`); axes
+    /// that the bitstream omitted or marked Unspecified come back as
+    /// `None`. Callers translate these byte values to their domain
+    /// `ColorInfo` at the codec-processor seam.
+    pub fn current_color_vui(&self) -> Option<crate::H273ColorVui> {
+        match self.config.codec {
+            crate::encode::Codec::H264 => {
+                let parser = self.h264_parser.as_ref()?;
+                let sps = parser.sps.as_ref()?;
+                if !sps.flags.vui_parameters_present_flag {
+                    return None;
+                }
+                let vui = &sps.vui;
+                let primaries = decoded_byte_to_option(vui.colour_primaries as i32);
+                let transfer = decoded_byte_to_option(vui.transfer_characteristics as i32);
+                let matrix = decoded_byte_to_option(vui.matrix_coefficients as i32);
+                let full_range = if vui.video_signal_type_present_flag {
+                    Some(vui.video_full_range_flag)
+                } else {
+                    None
+                };
+                build_color_vui(primaries, transfer, matrix, full_range)
+            }
+            crate::encode::Codec::H265 => {
+                let parser = self.h265_parser.as_ref()?;
+                // Find the first populated SPS slot — streamlib's encoder
+                // only emits sps_id=0, and decoders typically only see one.
+                let sps = parser.spss.iter().filter_map(|s| s.as_ref()).next()?;
+                if !sps.flags.vui_parameters_present_flag {
+                    return None;
+                }
+                let vui = &sps.vui;
+                let primaries = decoded_byte_to_option(vui.colour_primaries as i32);
+                let transfer = decoded_byte_to_option(vui.transfer_characteristics as i32);
+                let matrix = decoded_byte_to_option(vui.matrix_coeffs as i32);
+                let full_range = if vui.flags.video_signal_type_present_flag {
+                    Some(vui.flags.video_full_range_flag)
+                } else {
+                    None
+                };
+                build_color_vui(primaries, transfer, matrix, full_range)
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Private: NAL unit splitting
     // ------------------------------------------------------------------
@@ -1002,6 +1051,98 @@ impl SimpleDecoder {
         }
         // All slots in use — evict slot 0 (simplistic sliding window)
         0
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers — H.273 byte → Option<u8>
+// ---------------------------------------------------------------------------
+
+/// Map an H.273 byte parsed from the bitstream to `Some(byte)` if it is a
+/// real value, or `None` if it is the H.273 "Unspecified" enumerant
+/// (value `2`) or out-of-range. Returning `None` for `Unspecified` means
+/// `current_color_vui()` axes match the on-wire ColorInfo semantics ("absent
+/// IS unknown").
+fn decoded_byte_to_option(value: i32) -> Option<u8> {
+    if value <= 0 || value > 255 {
+        return None;
+    }
+    let byte = value as u8;
+    if byte == crate::encode::color_vui::H273_UNSPECIFIED {
+        return None;
+    }
+    Some(byte)
+}
+
+/// Build an [`H273ColorVui`] from per-axis options, returning `None` when
+/// every axis is `None` (so callers can disambiguate "no VUI" from "VUI
+/// present but every axis was Unspecified").
+fn build_color_vui(
+    primaries: Option<u8>,
+    transfer: Option<u8>,
+    matrix: Option<u8>,
+    full_range: Option<bool>,
+) -> Option<crate::H273ColorVui> {
+    if primaries.is_none() && transfer.is_none() && matrix.is_none() && full_range.is_none() {
+        return None;
+    }
+    Some(crate::H273ColorVui {
+        primaries,
+        transfer,
+        matrix,
+        full_range,
+    })
+}
+
+#[cfg(test)]
+mod color_vui_helper_tests {
+    use super::*;
+    use crate::encode::color_vui;
+
+    #[test]
+    fn unspecified_byte_becomes_none() {
+        assert_eq!(decoded_byte_to_option(2), None);
+    }
+
+    #[test]
+    fn zero_or_negative_byte_becomes_none() {
+        assert_eq!(decoded_byte_to_option(0), None);
+        assert_eq!(decoded_byte_to_option(-1), None);
+    }
+
+    #[test]
+    fn real_byte_becomes_some() {
+        assert_eq!(decoded_byte_to_option(1), Some(1)); // BT.709
+        assert_eq!(decoded_byte_to_option(13), Some(13)); // sRGB
+        assert_eq!(decoded_byte_to_option(16), Some(16)); // PQ
+    }
+
+    #[test]
+    fn all_axes_none_returns_none_vui() {
+        assert!(build_color_vui(None, None, None, None).is_none());
+    }
+
+    #[test]
+    fn full_range_alone_returns_some_vui() {
+        let vui = build_color_vui(None, None, None, Some(true))
+            .expect("non-empty axis yields Some");
+        assert_eq!(vui.full_range, Some(true));
+        assert!(vui.primaries.is_none());
+    }
+
+    #[test]
+    fn hdr10_axes_round_trip_to_h273_bytes() {
+        let vui = build_color_vui(
+            Some(color_vui::primaries::BT2020),
+            Some(color_vui::transfer::SMPTE2084),
+            Some(color_vui::matrix::BT2020_NCL),
+            Some(true),
+        )
+        .expect("non-empty axes yield Some");
+        assert_eq!(vui.primaries, Some(9));
+        assert_eq!(vui.transfer, Some(16));
+        assert_eq!(vui.matrix, Some(9));
+        assert_eq!(vui.full_range, Some(true));
     }
 }
 

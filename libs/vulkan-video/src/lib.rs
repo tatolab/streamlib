@@ -32,6 +32,7 @@ pub use video_context::{
 pub use decode::{DecodedFrame, SimpleDecoder, SimpleDecoderConfig, SimpleDecodedFrame};
 pub use encode::{EncodedOutput, FrameType};
 pub use encode::{SimpleEncoder, SimpleEncoderConfig, EncodePacket, Codec, Preset};
+pub use encode::{color_vui, H273ColorVui};
 pub use rgb_to_nv12::RgbToNv12Converter;
 pub use nv12_to_rgb::Nv12ToRgbConverter;
 pub use rhi::{RhiQueueSubmitter, RawQueueSubmitter};

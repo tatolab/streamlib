@@ -2558,9 +2558,44 @@ impl VulkanH265Decoder {
         sps.flags.sps_temporal_mvp_enabled_flag = reader.u(1)? != 0;
         sps.flags.strong_intra_smoothing_enabled_flag = reader.u(1)? != 0;
 
-        // VUI parameters — skip for now (not needed for decode correctness)
+        // VUI parameters — parse only the color-relevant subset
+        // (aspect-ratio + video_signal_type → colour_description).
+        // The rest of the VUI is left unparsed; full H.265 VUI parsing
+        // is huge and not needed for decode correctness. Color fields
+        // are surfaced via `SimpleDecoder::current_color_vui()`.
         sps.flags.vui_parameters_present_flag = reader.u(1)? != 0;
-        // VUI parsing omitted; only needed for display timing, not decode
+        if sps.flags.vui_parameters_present_flag {
+            // aspect_ratio_info_present_flag
+            let aspect_ratio_info_present = reader.u(1)? != 0;
+            if aspect_ratio_info_present {
+                let aspect_ratio_idc = reader.u(8)?;
+                if aspect_ratio_idc == 255 {
+                    // EXTENDED_SAR
+                    reader.u(16)?; // sar_width
+                    reader.u(16)?; // sar_height
+                }
+            }
+            // overscan_info_present_flag
+            let overscan_info_present = reader.u(1)? != 0;
+            if overscan_info_present {
+                reader.u(1)?; // overscan_appropriate_flag
+            }
+            // video_signal_type_present_flag
+            sps.vui.flags.video_signal_type_present_flag = reader.u(1)? != 0;
+            if sps.vui.flags.video_signal_type_present_flag {
+                sps.vui.video_format = reader.u(3)? as u8;
+                sps.vui.flags.video_full_range_flag = reader.u(1)? != 0;
+                sps.vui.flags.colour_description_present_flag = reader.u(1)? != 0;
+                if sps.vui.flags.colour_description_present_flag {
+                    sps.vui.colour_primaries = reader.u(8)? as u8;
+                    sps.vui.transfer_characteristics = reader.u(8)? as u8;
+                    sps.vui.matrix_coeffs = reader.u(8)? as u8;
+                }
+            }
+            // Stop here — remaining VUI fields (chroma_loc_info, neutral_chroma,
+            // field_seq, frame_field_info, default_display_window, timing, HRD,
+            // bitstream_restriction) are not consumed by streamlib today.
+        }
 
         // SPS extensions — skip
         // (not needed for basic decode correctness)

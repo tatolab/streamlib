@@ -1,17 +1,19 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Patch VUI/timing fields in driver-generated SPS/VPS NAL units.
+//! Patch VPS timing fields in driver-generated H.265 VPS NAL units.
 //!
-//! The NVIDIA Vulkan Video encoder emits SPS/VPS NAL units with broken timing
-//! info (time_scale=0 for H.264, wrong r_frame_rate for H.265). This module
-//! parses the cached header bytes, locates the VUI/timing section, and rewrites
-//! it with correct values derived from the encoder config's framerate.
+//! The NVIDIA Vulkan Video encoder emits an H.265 VPS NAL with broken timing
+//! (`vps_time_scale = 0` / wrong `vps_num_units_in_tick`). The VPS is a
+//! separate NAL from the SPS, so its timing block cannot be set through the
+//! standard `pSequenceParameterSetVui` chain — this module parses the cached
+//! VPS bytes, locates the timing section, and rewrites it with correct
+//! values derived from the encoder config's framerate.
 //!
-//! Approach: parse the driver-generated NAL to the VUI/timing bit offset, copy
-//! all preceding bits verbatim, then write a corrected VUI/timing section
-//! followed by RBSP trailing bits. This avoids re-serializing the entire
-//! parameter set.
+//! H.264 timing rides in the SPS VUI, which the session-parameter creation
+//! path now chains directly via `pSequenceParameterSetVui` (see
+//! `session.rs::create_session_parameters`). No post-write H.264 patching
+//! is required.
 
 use vulkanalia::vk;
 
@@ -71,18 +73,6 @@ impl<'a> BitReader<'a> {
         (1u32 << lz) - 1 + suffix
     }
 
-    fn se(&mut self) -> i32 {
-        let code = self.ue();
-        if code == 0 {
-            return 0;
-        }
-        let val = ((code + 1) / 2) as i32;
-        if code % 2 == 0 {
-            -val
-        } else {
-            val
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -276,103 +266,6 @@ fn reassemble_nals(nals: &[(usize, Vec<u8>)]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// H.264: find vui_parameters_present_flag bit offset in SPS RBSP
-// ---------------------------------------------------------------------------
-
-/// Advance the reader past an H.264 scaling list of the given size.
-/// Reads `scaling_list_present_flag` and, if set, up to `size` delta values.
-fn skip_h264_scaling_list(r: &mut BitReader, size: usize) {
-    if r.flag() {
-        let mut last_scale: i32 = 8;
-        let mut next_scale: i32 = 8;
-        for _j in 0..size {
-            if next_scale != 0 {
-                let delta = r.se();
-                next_scale = (last_scale + delta) & 0xff;
-            }
-            let scale = if next_scale == 0 {
-                last_scale
-            } else {
-                next_scale
-            };
-            last_scale = scale;
-        }
-    }
-}
-
-/// Parse H.264 SPS RBSP (after NAL header byte) to find the bit offset of
-/// `vui_parameters_present_flag`. Returns `None` if parsing fails (data too
-/// short or unexpected structure).
-fn find_h264_sps_vui_bit_offset(rbsp: &[u8]) -> Option<usize> {
-    let mut r = BitReader::new(rbsp);
-    if r.remaining() < 24 {
-        return None;
-    }
-
-    let profile_idc = r.u(8) as u8;
-    r.u(8); // constraint_set_flags
-    r.u(8); // level_idc
-    r.ue(); // seq_parameter_set_id
-
-    // High profile extensions
-    if matches!(
-        profile_idc,
-        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
-    ) {
-        let chroma_format_idc = r.ue();
-        if chroma_format_idc == 3 {
-            r.flag(); // separate_colour_plane_flag
-        }
-        r.ue(); // bit_depth_luma_minus8
-        r.ue(); // bit_depth_chroma_minus8
-        r.flag(); // qpprime_y_zero_transform_bypass_flag
-        if r.flag() {
-            // seq_scaling_matrix_present_flag
-            for i in 0..8u32 {
-                let size = if i < 6 { 16 } else { 64 };
-                skip_h264_scaling_list(&mut r, size);
-            }
-        }
-    }
-
-    r.ue(); // log2_max_frame_num_minus4
-    let poc_type = r.ue();
-    if poc_type == 0 {
-        r.ue(); // log2_max_pic_order_cnt_lsb_minus4
-    } else if poc_type == 1 {
-        r.flag(); // delta_pic_order_always_zero_flag
-        r.se(); // offset_for_non_ref_pic
-        r.se(); // offset_for_top_to_bottom_field
-        let n = r.ue();
-        for _ in 0..n {
-            r.se(); // offset_for_ref_frame[i]
-        }
-    }
-
-    r.ue(); // max_num_ref_frames
-    r.flag(); // gaps_in_frame_num_value_allowed_flag
-    r.ue(); // pic_width_in_mbs_minus1
-    r.ue(); // pic_height_in_map_units_minus1
-    let frame_mbs_only = r.flag();
-    if !frame_mbs_only {
-        r.flag(); // mb_adaptive_frame_field_flag
-    }
-    r.flag(); // direct_8x8_inference_flag
-    if r.flag() {
-        // frame_cropping_flag
-        r.ue(); // crop_left
-        r.ue(); // crop_right
-        r.ue(); // crop_top
-        r.ue(); // crop_bottom
-    }
-
-    if r.remaining() < 1 {
-        return None;
-    }
-    Some(r.pos())
-}
-
-// ---------------------------------------------------------------------------
 // H.265: find timing_info_present_flag bit offset in VPS RBSP
 // ---------------------------------------------------------------------------
 
@@ -456,70 +349,6 @@ fn find_h265_vps_timing_bit_offset(rbsp: &[u8]) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// H.264 SPS NAL patching
-// ---------------------------------------------------------------------------
-
-/// Patch an H.264 SPS NAL unit to include correct VUI timing.
-/// `nal_bytes` includes the 1-byte NAL header.
-fn patch_h264_sps_nal(nal_bytes: &[u8], fps_num: u32, fps_den: u32) -> Vec<u8> {
-    if nal_bytes.len() < 2 {
-        return nal_bytes.to_vec();
-    }
-
-    let nal_header = nal_bytes[0];
-    let rbsp_with_epb = &nal_bytes[1..];
-    let rbsp = remove_epb(rbsp_with_epb);
-
-    let vui_offset = match find_h264_sps_vui_bit_offset(&rbsp) {
-        Some(off) => off,
-        None => {
-            tracing::warn!("Failed to find VUI offset in H.264 SPS, skipping timing patch");
-            return nal_bytes.to_vec();
-        }
-    };
-
-    let mut w = BitWriter::new();
-
-    // Copy all bits before vui_parameters_present_flag
-    copy_bits(&rbsp, &mut w, vui_offset);
-
-    // Write vui_parameters_present_flag = 1
-    w.put_bit(1);
-
-    // Write minimal VUI with correct timing info.
-    // All flags before timing are set to 0 (no aspect ratio, overscan,
-    // video signal type, or chroma loc info).
-    w.put_bit(0); // aspect_ratio_info_present_flag
-    w.put_bit(0); // overscan_info_present_flag
-    w.put_bit(0); // video_signal_type_present_flag
-    w.put_bit(0); // chroma_loc_info_present_flag
-
-    // Timing info
-    w.put_bit(1); // timing_info_present_flag
-    w.put_bits(fps_den, 32); // num_units_in_tick
-    w.put_bits(fps_num * 2, 32); // time_scale (field-based: 2 ticks per frame)
-    w.put_bit(1); // fixed_frame_rate_flag
-
-    // HRD and remaining VUI flags
-    w.put_bit(0); // nal_hrd_parameters_present_flag
-    w.put_bit(0); // vcl_hrd_parameters_present_flag
-    // (no low_delay_hrd_flag since neither HRD present)
-    w.put_bit(0); // pic_struct_present_flag
-    w.put_bit(0); // bitstream_restriction_flag
-
-    // RBSP trailing bits
-    w.trailing_bits();
-
-    // Re-add EPBs and prepend NAL header
-    let patched_rbsp = w.into_bytes();
-    let with_epb = add_epb(&patched_rbsp);
-    let mut result = Vec::with_capacity(1 + with_epb.len());
-    result.push(nal_header);
-    result.extend_from_slice(&with_epb);
-    result
-}
-
-// ---------------------------------------------------------------------------
 // H.265 VPS NAL patching
 // ---------------------------------------------------------------------------
 
@@ -573,15 +402,15 @@ fn patch_h265_vps_nal(nal_bytes: &[u8], fps_num: u32, fps_den: u32) -> Vec<u8> {
 // Top-level: patch entire cached header
 // ---------------------------------------------------------------------------
 
-/// Patch the timing info in the cached SPS/VPS header bytes.
+/// Patch the timing info in the cached H.265 VPS header bytes.
 ///
-/// For H.264: rewrites the SPS VUI to include correct `num_units_in_tick` and
-/// `time_scale` derived from `fps_num` / `fps_den`.
+/// Only the H.265 VPS is rewritten — `vps_num_units_in_tick` /
+/// `vps_time_scale`. H.264 SPS VUI timing is now produced directly by the
+/// session-parameter creation path (`session.rs::create_session_parameters`
+/// chains `pSequenceParameterSetVui`), so calls with
+/// `codec_flag = ENCODE_H264` are a no-op and return the input unchanged.
 ///
-/// For H.265: rewrites the VPS to include correct `vps_num_units_in_tick` and
-/// `vps_time_scale`.
-///
-/// PPS NAL units are passed through unchanged.
+/// All other NAL units (SPS, PPS, slice data) are passed through unchanged.
 pub(crate) fn patch_header_timing(
     header: &[u8],
     codec_flag: vk::VideoCodecOperationFlagsKHR,
@@ -589,6 +418,10 @@ pub(crate) fn patch_header_timing(
     fps_den: u32,
 ) -> Vec<u8> {
     if header.is_empty() || fps_num == 0 || fps_den == 0 {
+        return header.to_vec();
+    }
+    if codec_flag != vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
+        // H.264 timing now rides in the SPS VUI chain; nothing to patch.
         return header.to_vec();
     }
 
@@ -604,36 +437,17 @@ pub(crate) fn patch_header_timing(
             patched.push((*sc_len, nal_data.clone()));
             continue;
         }
-
-        if codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H264 {
-            let nal_type = nal_data[0] & 0x1F;
-            if nal_type == 7 {
-                // SPS
-                tracing::debug!(
-                    original_len = nal_data.len(),
-                    fps_num,
-                    fps_den,
-                    "Patching H.264 SPS VUI timing"
-                );
-                patched.push((*sc_len, patch_h264_sps_nal(nal_data, fps_num, fps_den)));
-            } else {
-                patched.push((*sc_len, nal_data.clone()));
-            }
-        } else if codec_flag == vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
-            // H.265 NAL type is bits [1:6] of the first byte
-            let nal_type = (nal_data[0] >> 1) & 0x3F;
-            if nal_type == 32 {
-                // VPS
-                tracing::debug!(
-                    original_len = nal_data.len(),
-                    fps_num,
-                    fps_den,
-                    "Patching H.265 VPS timing"
-                );
-                patched.push((*sc_len, patch_h265_vps_nal(nal_data, fps_num, fps_den)));
-            } else {
-                patched.push((*sc_len, nal_data.clone()));
-            }
+        // H.265 NAL type is bits [1:6] of the first byte
+        let nal_type = (nal_data[0] >> 1) & 0x3F;
+        if nal_type == 32 {
+            // VPS
+            tracing::debug!(
+                original_len = nal_data.len(),
+                fps_num,
+                fps_den,
+                "Patching H.265 VPS timing"
+            );
+            patched.push((*sc_len, patch_h265_vps_nal(nal_data, fps_num, fps_den)));
         } else {
             patched.push((*sc_len, nal_data.clone()));
         }
@@ -781,131 +595,19 @@ mod tests {
     }
 
     #[test]
-    fn test_h264_sps_vui_offset_basic() {
-        // Build a minimal Baseline profile SPS RBSP (after NAL header byte):
-        // profile_idc=66 (Baseline, NOT high profile), constraint=0, level=30
-        // sps_id=0, log2_max_frame_num=0, poc_type=0, log2_max_poc_lsb=0,
-        // max_ref=1, gaps=0, width=7 (128px), height=5 (96px),
-        // frame_mbs_only=1, direct_8x8=1, no cropping
-        let mut w = BitWriter::new();
-        w.put_bits(66, 8); // profile_idc = Baseline
-        w.put_bits(0, 8); // constraint_set_flags
-        w.put_bits(30, 8); // level_idc
-        w.put_ue(0); // sps_id
-        // (no high profile extension)
-        w.put_ue(0); // log2_max_frame_num_minus4
-        w.put_ue(0); // pic_order_cnt_type = 0
-        w.put_ue(0); // log2_max_pic_order_cnt_lsb_minus4
-        w.put_ue(1); // max_num_ref_frames
-        w.put_bit(0); // gaps_in_frame_num
-        w.put_ue(7); // pic_width_in_mbs_minus1
-        w.put_ue(5); // pic_height_in_map_units_minus1
-        w.put_bit(1); // frame_mbs_only_flag
-        w.put_bit(1); // direct_8x8_inference_flag
-        w.put_bit(0); // frame_cropping_flag
-        // NEXT BIT: vui_parameters_present_flag
-        let expected_offset = w.bit_pos;
-        w.put_bit(0); // vui_parameters_present_flag = 0
-        w.trailing_bits();
-
-        let rbsp = w.into_bytes();
-        let offset = find_h264_sps_vui_bit_offset(&rbsp).unwrap();
-        assert_eq!(offset, expected_offset);
-    }
-
-    #[test]
-    fn test_patch_h264_sps_roundtrip() {
-        // Build a minimal SPS NAL and patch it
-        let mut w = BitWriter::new();
-        w.put_bits(66, 8); // profile_idc
-        w.put_bits(0, 8); // constraint
-        w.put_bits(30, 8); // level
-        w.put_ue(0); // sps_id
-        w.put_ue(0); // log2_max_frame_num
-        w.put_ue(0); // poc_type
-        w.put_ue(0); // log2_max_poc_lsb
-        w.put_ue(1); // max_ref
-        w.put_bit(0); // gaps
-        w.put_ue(7); // width
-        w.put_ue(5); // height
-        w.put_bit(1); // frame_mbs_only
-        w.put_bit(1); // direct_8x8
-        w.put_bit(0); // cropping
-        w.put_bit(0); // vui_present=0
-        w.trailing_bits();
-        let rbsp = w.into_bytes();
-
-        // Add NAL header (SPS, nal_ref_idc=3)
-        let mut nal = vec![0x67]; // 0110 0111 = ref_idc=3, type=7
-        nal.extend_from_slice(&add_epb(&rbsp));
-
-        let patched = patch_h264_sps_nal(&nal, 30, 1);
-
-        // Parse the patched NAL to verify VUI timing
-        let patched_rbsp = remove_epb(&patched[1..]);
-        let vui_offset = find_h264_sps_vui_bit_offset(&patched_rbsp).unwrap();
-        let mut r = BitReader::new(&patched_rbsp);
-        r.u(vui_offset as u32); // skip to VUI flag
-        assert!(r.flag()); // vui_parameters_present_flag = 1
-        assert!(!r.flag()); // aspect_ratio_info_present_flag = 0
-        assert!(!r.flag()); // overscan_info_present_flag = 0
-        assert!(!r.flag()); // video_signal_type_present_flag = 0
-        assert!(!r.flag()); // chroma_loc_info_present_flag = 0
-        assert!(r.flag()); // timing_info_present_flag = 1
-        let num_units = r.u(32);
-        let time_scale = r.u(32);
-        let fixed = r.flag();
-        assert_eq!(num_units, 1); // fps_den
-        assert_eq!(time_scale, 60); // fps_num * 2
-        assert!(fixed); // fixed_frame_rate_flag
-    }
-
-    #[test]
-    fn test_patch_header_h264() {
-        // Build a complete Annex-B header with SPS + PPS
-        let mut sps_w = BitWriter::new();
-        sps_w.put_bits(66, 8);
-        sps_w.put_bits(0, 8);
-        sps_w.put_bits(30, 8);
-        sps_w.put_ue(0);
-        sps_w.put_ue(0);
-        sps_w.put_ue(0);
-        sps_w.put_ue(0);
-        sps_w.put_ue(1);
-        sps_w.put_bit(0);
-        sps_w.put_ue(7);
-        sps_w.put_ue(5);
-        sps_w.put_bit(1);
-        sps_w.put_bit(1);
-        sps_w.put_bit(0);
-        sps_w.put_bit(0); // no VUI
-        sps_w.trailing_bits();
-        let sps_rbsp = sps_w.into_bytes();
-
-        let mut header = Vec::new();
-        // SPS with 4-byte start code
-        header.extend_from_slice(&[0, 0, 0, 1, 0x67]);
-        header.extend_from_slice(&add_epb(&sps_rbsp));
-        // PPS with 4-byte start code
-        header.extend_from_slice(&[0, 0, 0, 1, 0x68, 0xCE, 0x38, 0x80]);
-
+    fn h264_patch_header_timing_is_no_op() {
+        // H.264 timing rides in the SPS VUI chain now; patch_header_timing
+        // should pass the bytes through unchanged for H.264.
+        let header = vec![
+            0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1E, // SPS NAL (Baseline)
+            0, 0, 0, 1, 0x68, 0xCE, 0x38, 0x80, // PPS NAL
+        ];
         let patched = patch_header_timing(
             &header,
             vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
             30,
             1,
         );
-
-        // The patched header should still have 2 NALs
-        let nals = split_nals(&patched);
-        assert_eq!(nals.len(), 2);
-        // SPS should be patched (different from original)
-        assert_ne!(nals[0].1, {
-            let mut v = vec![0x67];
-            v.extend_from_slice(&add_epb(&sps_rbsp));
-            v
-        });
-        // PPS should be unchanged
-        assert_eq!(nals[1].1, vec![0x68, 0xCE, 0x38, 0x80]);
+        assert_eq!(patched, header);
     }
 }
