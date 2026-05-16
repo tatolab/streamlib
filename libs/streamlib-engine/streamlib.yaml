@@ -8,42 +8,27 @@ package:
   version: 0.4.28
   description: "Engine internals for streamlib (RHI, IPC, surface-share, runtime executor). Customer apps depend on `streamlib` (the SDK), not on this manifest directly."
 
+# Engine is schema-free for wire data by design — `@tatolab/core` lives in
+# packages that actually speak it on the wire, never here. iceoryx2 carries
+# bytes; each package brings its own JTD-codegen output for the messages
+# it speaks. Engine's attribute-macro + graph-compiler test fixtures
+# declare `schema: any` on their ports so the codebase exercises engine
+# logic without coupling to any wire schema.
+#
+# `@tatolab/escalate` is a different shape — it's the polyglot escalate IPC
+# protocol the engine itself implements (cdylib subprocesses on one side,
+# host runtime on the other). Engine owns this protocol, so it carries
+# the dep + codegen.
+
 dependencies:
-  "@tatolab/core": "^1.0.0"
   "@tatolab/escalate": "^1.0.0"
 
 # Dev-time path override; `streamlib pack` rejects this.
 patch:
-  "@tatolab/core":
-    path: ../../packages/core
   "@tatolab/escalate":
     path: ../../packages/escalate
 
-# Schema YAML files this package owns + bare-name imports from declared
-# dependencies. Drives the JTD-codegen pipeline
-# (`cargo xtask generate-schemas --project-dir libs/streamlib`) and the
-# build-script-generated embedded-schemas lookup.
-#
-# `Local { file }` — schema this package owns; the file ships in the
-# slpkg archive. `External { package }` — bare type-name imported from
-# the named dep; resolution walks the dep's own `schemas:` map.
 schemas:
-  # Wire types imported from @tatolab/core.
-  AudioFrame:
-    package: "@tatolab/core"
-  ColorInfo:
-    package: "@tatolab/core"
-  ContentLight:
-    package: "@tatolab/core"
-  EncodedAudioFrame:
-    package: "@tatolab/core"
-  EncodedVideoFrame:
-    package: "@tatolab/core"
-  MasteringDisplay:
-    package: "@tatolab/core"
-  VideoFrame:
-    package: "@tatolab/core"
-  # Polyglot escalate IPC wire schemas imported from @tatolab/escalate.
   EscalateRequest:
     package: "@tatolab/escalate"
   EscalateResponse:
@@ -58,17 +43,17 @@ processors:
     execution: manual
     inputs:
       - name: in1
-        schema: VideoFrame
+        schema: any
         description: Test input port 1
       - name: in2
-        schema: VideoFrame
+        schema: any
         description: Test input port 2
     outputs:
       - name: out1
-        schema: VideoFrame
+        schema: any
         description: Test output port 1
       - name: out2
-        schema: VideoFrame
+        schema: any
         description: Test output port 2
 
   - name: TestMockInputOnlyProcessor
@@ -77,10 +62,10 @@ processors:
     execution: manual
     inputs:
       - name: in1
-        schema: VideoFrame
+        schema: any
         description: Test input port 1
       - name: in2
-        schema: VideoFrame
+        schema: any
         description: Test input port 2
 
   - name: TestMockOutputOnlyProcessor
@@ -89,10 +74,10 @@ processors:
     execution: manual
     outputs:
       - name: out1
-        schema: VideoFrame
+        schema: any
         description: Test output port 1
       - name: out2
-        schema: VideoFrame
+        schema: any
         description: Test output port 2
 
   # === Test attribute macro processors ===
@@ -103,7 +88,7 @@ processors:
     execution: manual
     inputs:
       - name: video_in
-        schema: VideoFrame
+        schema: any
     outputs:
       - name: video_out
-        schema: VideoFrame
+        schema: any

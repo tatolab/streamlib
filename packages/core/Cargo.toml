@@ -1,0 +1,25 @@
+[package]
+name = "streamlib-core-schema-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Test-only Cargo crate that codegens @tatolab/core's wire schemas and exercises their Rust serialization. The wire vocabulary itself lives in streamlib.yaml + schemas/; nothing in this crate is shipped — slpkg pack ignores the Cargo files."
+publish = false
+
+[lib]
+name = "streamlib_core_schema_tests"
+path = "src/lib.rs"
+
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

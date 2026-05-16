@@ -14,7 +14,7 @@
 //! This collapses range expansion + YCbCr→RGB into a single matrix
 //! multiply on the GPU.
 
-use crate::_generated_::tatolab__core::color_info::{Matrix, Range};
+use super::{MatrixId, RangeId};
 
 /// Output of [`yuv_to_rgb_matrix`]. Row-major 3×3 matrix plus a
 /// per-channel offset that is subtracted from byte-domain YCbCr before
@@ -34,8 +34,8 @@ pub struct YuvToRgbDecomposition {
 ///
 /// `matrix = Identity` returns the identity matrix with zero offset —
 /// pass-through for RGB-encoded sources (no YCbCr conversion needed).
-pub fn yuv_to_rgb_matrix(matrix: Matrix, range: Range) -> YuvToRgbDecomposition {
-    if matches!(matrix, Matrix::Identity) {
+pub fn yuv_to_rgb_matrix(matrix: MatrixId, range: RangeId) -> YuvToRgbDecomposition {
+    if matches!(matrix, MatrixId::Identity) {
         return YuvToRgbDecomposition {
             matrix_row_major: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
             offset: [0.0, 0.0, 0.0],
@@ -63,13 +63,13 @@ pub fn yuv_to_rgb_matrix(matrix: Matrix, range: Range) -> YuvToRgbDecomposition 
 
 /// `(Kr, Kb)` for each H.273 matrix enumerant. Unmapped variants fall
 /// back to BT.601 525-line.
-fn kr_kb(matrix: Matrix) -> (f32, f32) {
+fn kr_kb(matrix: MatrixId) -> (f32, f32) {
     match matrix {
-        Matrix::Bt709 => (0.2126, 0.0722),
-        Matrix::Smpte170m | Matrix::Bt470Bg => (0.299, 0.114),
-        Matrix::Fcc => (0.30, 0.11),
-        Matrix::Smpte240m => (0.212, 0.087),
-        Matrix::Bt2020Ncl | Matrix::Bt2020Cl => (0.2627, 0.0593),
+        MatrixId::Bt709 => (0.2126, 0.0722),
+        MatrixId::Smpte170m | MatrixId::Bt470Bg => (0.299, 0.114),
+        MatrixId::Fcc => (0.30, 0.11),
+        MatrixId::Smpte240m => (0.212, 0.087),
+        MatrixId::Bt2020Ncl | MatrixId::Bt2020Cl => (0.2627, 0.0593),
         // YCgCo / ICtCp / Smpte2085 / ChromaNcl / ChromaCl have
         // distinct math the linear-matrix decomposition does not
         // cover. Falling back to BT.601 is a coarse approximation —
@@ -79,10 +79,10 @@ fn kr_kb(matrix: Matrix) -> (f32, f32) {
 }
 
 /// Returns `(y_scale, c_scale, y_offset)` in byte-domain units.
-fn range_scaling(range: Range) -> (f32, f32, f32) {
+fn range_scaling(range: RangeId) -> (f32, f32, f32) {
     match range {
-        Range::Limited => (255.0 / 219.0, 255.0 / 224.0, 16.0),
-        Range::Full => (1.0, 1.0, 0.0),
+        RangeId::Limited => (255.0 / 219.0, 255.0 / 224.0, 16.0),
+        RangeId::Full => (1.0, 1.0, 0.0),
     }
 }
 
@@ -106,7 +106,7 @@ mod tests {
     /// BT.601 full-range — classic webcam / JPEG matrix.
     #[test]
     fn bt601_full_range_matches_canonical_coefficients() {
-        let d = yuv_to_rgb_matrix(Matrix::Smpte170m, Range::Full);
+        let d = yuv_to_rgb_matrix(MatrixId::Smpte170m, RangeId::Full);
         // Y_scale=1, c_scale=1, y_offset=0, BT.601 coefficients
         let expected = [
             1.0, 0.0, 1.402,
@@ -121,7 +121,7 @@ mod tests {
     /// 1.164 Y_scale.
     #[test]
     fn bt601_limited_range_matches_canonical_coefficients() {
-        let d = yuv_to_rgb_matrix(Matrix::Smpte170m, Range::Limited);
+        let d = yuv_to_rgb_matrix(MatrixId::Smpte170m, RangeId::Limited);
         // The widely-quoted limited matrix:
         // R = 1.164 Y' + 1.596 Cr'
         // G = 1.164 Y' - 0.392 Cb' - 0.813 Cr'
@@ -138,7 +138,7 @@ mod tests {
     /// BT.709 full-range.
     #[test]
     fn bt709_full_range_matches_canonical_coefficients() {
-        let d = yuv_to_rgb_matrix(Matrix::Bt709, Range::Full);
+        let d = yuv_to_rgb_matrix(MatrixId::Bt709, RangeId::Full);
         let expected = [
             1.0, 0.0, 1.5748,
             1.0, -0.1873, -0.4681,
@@ -151,7 +151,7 @@ mod tests {
     /// BT.709 limited-range — modern camera + h264/h265 codec default.
     #[test]
     fn bt709_limited_range_matches_canonical_coefficients() {
-        let d = yuv_to_rgb_matrix(Matrix::Bt709, Range::Limited);
+        let d = yuv_to_rgb_matrix(MatrixId::Bt709, RangeId::Limited);
         // 1.164 = 255/219; 1.793 = 1.5748 * 255/224; etc.
         let expected = [
             1.164, 0.0, 1.793,
@@ -165,7 +165,7 @@ mod tests {
     /// BT.2020 NCL limited — HDR pipeline staple.
     #[test]
     fn bt2020_ncl_limited_range_matches_canonical_coefficients() {
-        let d = yuv_to_rgb_matrix(Matrix::Bt2020Ncl, Range::Limited);
+        let d = yuv_to_rgb_matrix(MatrixId::Bt2020Ncl, RangeId::Limited);
         // Kr=0.2627, Kb=0.0593, Kg=0.6780
         // R: 1.164, 0, 1.4746*255/224 ≈ 1.679
         // G: 1.164, -(2*0.9407*0.0593/0.678)*255/224 ≈ -0.187,
@@ -184,7 +184,7 @@ mod tests {
     /// RGB-encoded sources.
     #[test]
     fn identity_returns_identity_matrix() {
-        let d = yuv_to_rgb_matrix(Matrix::Identity, Range::Full);
+        let d = yuv_to_rgb_matrix(MatrixId::Identity, RangeId::Full);
         let expected = [
             1.0, 0.0, 0.0,
             0.0, 1.0, 0.0,
@@ -201,8 +201,8 @@ mod tests {
     /// expected matrix below stops matching.
     #[test]
     fn limited_range_actually_scales_y() {
-        let limited = yuv_to_rgb_matrix(Matrix::Smpte170m, Range::Limited);
-        let full = yuv_to_rgb_matrix(Matrix::Smpte170m, Range::Full);
+        let limited = yuv_to_rgb_matrix(MatrixId::Smpte170m, RangeId::Limited);
+        let full = yuv_to_rgb_matrix(MatrixId::Smpte170m, RangeId::Full);
         assert!(
             (limited.matrix_row_major[0] - full.matrix_row_major[0]).abs() > 0.1,
             "limited-range Y scale must differ from full-range Y scale; \

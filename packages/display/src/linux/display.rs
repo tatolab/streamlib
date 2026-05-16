@@ -448,12 +448,12 @@ impl ApplicationHandler for DisplayEventLoopHandler {
 
                 if let Some(pt) = self.present_target.as_mut() {
                     // Resize-driven recreate keeps the current colorspace pick.
-                    let engine_color_info =
-                        package_color_info_to_engine(self.current_frame_color_info.as_ref());
+                    let color_traits =
+                        package_color_info_to_traits(self.current_frame_color_info.as_ref());
                     if let Err(e) = pt.recreate(
                         new_size.width,
                         new_size.height,
-                        engine_color_info.as_ref(),
+                        color_traits.as_ref(),
                     ) {
                         tracing::error!(
                             "Display {}: Failed to recreate present target: {}",
@@ -533,14 +533,13 @@ impl DisplayEventLoopHandler {
         // is a no-op-cost path that only fires when the WSI exposes
         // wider colorspaces.
         if ipc_frame.color_info != self.current_frame_color_info {
-            let new_engine_color_info =
-                package_color_info_to_engine(ipc_frame.color_info.as_ref());
+            let new_color_traits = package_color_info_to_traits(ipc_frame.color_info.as_ref());
             let new_extent = present_target.current_extent();
             let prior_color_format = present_target.color_format();
             if let Err(e) = present_target.recreate(
                 new_extent.0,
                 new_extent.1,
-                new_engine_color_info.as_ref(),
+                new_color_traits.as_ref(),
             ) {
                 tracing::warn!(
                     "Display {}: ColorInfo recreate failed (keeping previous swapchain): {}",
@@ -588,11 +587,11 @@ impl DisplayEventLoopHandler {
         // `set_hdr_metadata` itself) and the frame carries the
         // sidecar metadata. Subsequent frames with byte-identical
         // payload short-circuit inside the present target.
-        if let (Some(md), Some(cl)) = (
-            package_mastering_display_to_engine(ipc_frame.mastering_display.as_ref()),
-            package_content_light_to_engine(ipc_frame.content_light.as_ref()),
+        if let Some(hdr_metadata) = package_hdr_metadata_to_engine(
+            ipc_frame.mastering_display.as_ref(),
+            ipc_frame.content_light.as_ref(),
         ) {
-            if let Err(e) = present_target.set_hdr_metadata(&md, &cl) {
+            if let Err(e) = present_target.set_hdr_metadata(&hdr_metadata) {
                 tracing::warn!(
                     "Display {}: vkSetHdrMetadataEXT failed: {}",
                     self.window_id, e
@@ -896,62 +895,86 @@ impl DisplayEventLoopHandler {
     }
 }
 
-/// Convert a package-local `_generated_::ColorInfo` (or HDR sidecar) into
-/// the engine-facade equivalent. Both types are codegen-generated from
-/// the same JTD schema with identical serde rename names, so a one-shot
-/// JSON round-trip converts cleanly. Returns `None` on serde failure
-/// (logged, treated as no-color-info — keeps SDR behavior).
-///
-/// Same pattern + rationale as `LinuxCameraProcessor`'s
-/// `engine_cached_color_info` round-trip; see `packages/camera/src/linux/camera.rs`.
-fn package_color_info_to_engine(
+/// Project this package's `_generated_::ColorInfo` into the engine's
+/// [`ColorTraits`] pair. Engine accepts only its own primitive types in
+/// public method signatures, so each consumer translates its own
+/// generated schema flavor at the boundary; the wire format is the
+/// contract across packages, not Rust type equality. Returns `None`
+/// when the frame has no color metadata — `pick_swapchain_format`
+/// stays on the SDR fallback path.
+fn package_color_info_to_traits(
     pkg: Option<&crate::_generated_::ColorInfo>,
-) -> Option<streamlib::engine_internal::_generated_::ColorInfo> {
+) -> Option<streamlib::sdk::color::ColorTraits> {
+    use crate::_generated_::tatolab__core::color_info::{Primaries, Transfer};
+    use streamlib::sdk::color::{ColorTraits, PrimariesId, TransferId};
     let pkg = pkg?;
-    match streamlib::sdk::serde_json::to_value(pkg)
-        .and_then(streamlib::sdk::serde_json::from_value)
-    {
-        Ok(v) => Some(v),
-        Err(e) => {
-            tracing::warn!(
-                "display: ColorInfo schema round-trip failed (treating as None): {}",
-                e
-            );
-            None
-        }
-    }
+    Some(ColorTraits {
+        primaries: pkg.primaries.as_ref().map(|p| match p {
+            Primaries::Bt709 => PrimariesId::Bt709,
+            Primaries::Bt470M => PrimariesId::Bt470M,
+            Primaries::Bt470Bg => PrimariesId::Bt470Bg,
+            Primaries::Smpte170m => PrimariesId::Smpte170m,
+            Primaries::Smpte240m => PrimariesId::Smpte240m,
+            Primaries::Film => PrimariesId::Film,
+            Primaries::Bt2020 => PrimariesId::Bt2020,
+            Primaries::Smpte428 => PrimariesId::Smpte428,
+            Primaries::Smpte431 => PrimariesId::Smpte431,
+            Primaries::Smpte432 => PrimariesId::Smpte432,
+            Primaries::Ebu3213 => PrimariesId::Ebu3213,
+        }),
+        transfer: pkg.transfer.as_ref().map(|t| match t {
+            Transfer::Srgb => TransferId::Srgb,
+            Transfer::Bt709
+            | Transfer::Smpte170m
+            | Transfer::Bt2020TenBit
+            | Transfer::Bt2020TwelveBit => TransferId::Bt709,
+            Transfer::Smpte2084 => TransferId::Pq,
+            Transfer::AribStdB67 => TransferId::Hlg,
+            Transfer::Linear => TransferId::Linear,
+            _ => TransferId::Linear,
+        }),
+    })
 }
 
-fn package_mastering_display_to_engine(
-    pkg: Option<&crate::_generated_::MasteringDisplay>,
-) -> Option<streamlib::engine_internal::_generated_::MasteringDisplay> {
-    let pkg = pkg?;
-    streamlib::sdk::serde_json::to_value(pkg)
-        .and_then(streamlib::sdk::serde_json::from_value)
-        .map_err(|e| {
-            tracing::warn!(
-                "display: MasteringDisplay schema round-trip failed (skipping HDR metadata): {}",
-                e
-            );
-            e
-        })
-        .ok()
-}
-
-fn package_content_light_to_engine(
-    pkg: Option<&crate::_generated_::ContentLight>,
-) -> Option<streamlib::engine_internal::_generated_::ContentLight> {
-    let pkg = pkg?;
-    streamlib::sdk::serde_json::to_value(pkg)
-        .and_then(streamlib::sdk::serde_json::from_value)
-        .map_err(|e| {
-            tracing::warn!(
-                "display: ContentLight schema round-trip failed (skipping HDR metadata): {}",
-                e
-            );
-            e
-        })
-        .ok()
+/// Project the per-frame mastering-display + content-light schema pair
+/// into engine [`HdrStaticMetadata`]. Returns `None` when either
+/// sidecar is absent — the present target's `set_hdr_metadata` is
+/// gated on `Some`, keeping HDR signaling off for SDR frames.
+///
+/// Schema unit scaling: chromaticity at 1/50000 increments
+/// (CIE 1931) → `[0, 1]`; mastering luminance at 0.0001 cd/m²
+/// increments → cd/m²; content-light fields are integer cd/m² cast
+/// to f32 directly.
+fn package_hdr_metadata_to_engine(
+    mastering_pkg: Option<&crate::_generated_::MasteringDisplay>,
+    content_light_pkg: Option<&crate::_generated_::ContentLight>,
+) -> Option<streamlib::sdk::color::HdrStaticMetadata> {
+    let m = mastering_pkg?;
+    let cl = content_light_pkg?;
+    const CHROMA_SCALE: f32 = 1.0 / 50_000.0;
+    const LUM_SCALE: f32 = 1.0 / 10_000.0;
+    Some(streamlib::sdk::color::HdrStaticMetadata {
+        display_primary_red: [
+            m.display_primaries_r_x as f32 * CHROMA_SCALE,
+            m.display_primaries_r_y as f32 * CHROMA_SCALE,
+        ],
+        display_primary_green: [
+            m.display_primaries_g_x as f32 * CHROMA_SCALE,
+            m.display_primaries_g_y as f32 * CHROMA_SCALE,
+        ],
+        display_primary_blue: [
+            m.display_primaries_b_x as f32 * CHROMA_SCALE,
+            m.display_primaries_b_y as f32 * CHROMA_SCALE,
+        ],
+        white_point: [
+            m.white_point_x as f32 * CHROMA_SCALE,
+            m.white_point_y as f32 * CHROMA_SCALE,
+        ],
+        min_luminance_cd_m2: m.min_luminance as f32 * LUM_SCALE,
+        max_luminance_cd_m2: m.max_luminance as f32 * LUM_SCALE,
+        max_content_light_level: cl.max_cll as f32,
+        max_frame_average_light_level: cl.max_fall as f32,
+    })
 }
 
 fn build_display_kernel(

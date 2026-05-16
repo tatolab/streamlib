@@ -25,6 +25,7 @@ members = [
     "libs/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "libs/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "libs/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
+    "packages/core",             # @tatolab/core — wire vocabulary (schemas-only at slpkg-pack time); a tiny Cargo crate hosts integration tests for the generated Rust types
     "packages/audio",            # @tatolab/audio — audio processors carved out of the streamlib engine (#672)
     "packages/camera",           # @tatolab/camera — camera capture processor carved out of the streamlib engine (#673)
     "packages/display",          # @tatolab/display — display processor carved out of the streamlib engine (#674)

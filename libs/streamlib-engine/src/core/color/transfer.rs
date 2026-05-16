@@ -24,6 +24,9 @@
 /// gets passed through the push-constant `transfer_in` / `transfer_out`
 /// slots — the shader switches on it. Must stay in sync with the
 /// `TRANSFER_*` constants in the shader.
+///
+/// Schema → id translation lives in
+/// [`super::translate::transfer_id_from_schema`].
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TransferId {
@@ -37,29 +40,6 @@ pub enum TransferId {
     Pq = 3,
     /// ARIB STD-B67 / HLG. Reference: 1000 nit display.
     Hlg = 4,
-}
-
-impl TransferId {
-    /// Map a (best-effort resolved) `Transfer` enum to a shader id.
-    /// Unmapped curves fall back to `Linear` — they're rare in
-    /// practice and the converter applies no transfer in that case.
-    pub fn from_transfer(t: crate::_generated_::tatolab__core::color_info::Transfer) -> Self {
-        use crate::_generated_::tatolab__core::color_info::Transfer;
-        match t {
-            Transfer::Srgb => TransferId::Srgb,
-            Transfer::Bt709
-            | Transfer::Smpte170m
-            | Transfer::Bt2020TenBit
-            | Transfer::Bt2020TwelveBit => TransferId::Bt709,
-            Transfer::Smpte2084 => TransferId::Pq,
-            Transfer::AribStdB67 => TransferId::Hlg,
-            Transfer::Linear => TransferId::Linear,
-            // Gamma22 / Gamma28 / Smpte240m / Log* / Xvycc / Bt1361 / Smpte428
-            // are uncommon end-to-end; map to Linear (no transform) for now.
-            // A future pass can extend the shader's switch.
-            _ => TransferId::Linear,
-        }
-    }
 }
 
 /// sRGB EOTF: encoded → linear.

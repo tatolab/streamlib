@@ -2509,22 +2509,8 @@ mod tests {
 
         gpu.register_texture(surface_id, texture.clone());
 
-        // Resolve via VideoFrame
-        let frame = crate::_generated_::VideoFrame {
-            surface_id: surface_id.to_string(),
-            width: 640,
-            height: 480,
-            timestamp_ns: "0".to_string(),
-            frame_index: "1".to_string(),
-            fps: None,
-            texture_layout: None,
-            color_info: None,
-            mastering_display: None,
-            content_light: None,
-        };
-
         let resolved = gpu
-            .resolve_texture_by_surface_id(&frame.surface_id, frame.texture_layout, frame.width, frame.height)
+            .resolve_texture_by_surface_id(surface_id, None, 640, 480)
             .expect("texture cache miss");
         assert_eq!(resolved.width(), 640);
         assert_eq!(resolved.height(), 480);
@@ -2557,21 +2543,8 @@ mod tests {
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         );
 
-        let frame = crate::_generated_::VideoFrame {
-            surface_id: surface_id.to_string(),
-            width: 640,
-            height: 480,
-            timestamp_ns: "0".to_string(),
-            frame_index: "1".to_string(),
-            fps: None,
-            texture_layout: None,
-            color_info: None,
-            mastering_display: None,
-            content_light: None,
-        };
-
         let registration = gpu
-            .resolve_texture_registration_by_surface_id(&frame.surface_id, frame.texture_layout, frame.width, frame.height)
+            .resolve_texture_registration_by_surface_id(surface_id, None, 640, 480)
             .expect("registration cache miss");
         assert_eq!(
             registration.current_layout(),
@@ -2582,7 +2555,7 @@ mod tests {
         // Update flow — consumer barriers transition + advance layout.
         registration.update_layout(VulkanLayout::TRANSFER_SRC_OPTIMAL);
         let registration2 = gpu
-            .resolve_texture_registration_by_surface_id(&frame.surface_id, frame.texture_layout, frame.width, frame.height)
+            .resolve_texture_registration_by_surface_id(surface_id, None, 640, 480)
             .expect("second resolve");
         assert_eq!(
             registration2.current_layout(),
@@ -2596,12 +2569,13 @@ mod tests {
             .create_texture(&desc)
             .expect("second texture creation failed");
         gpu.register_texture("test-surface-default-layout", texture2);
-        let frame2 = crate::_generated_::VideoFrame {
-            surface_id: "test-surface-default-layout".to_string(),
-            ..frame
-        };
         let registration3 = gpu
-            .resolve_texture_registration_by_surface_id(&frame2.surface_id, frame2.texture_layout, frame2.width, frame2.height)
+            .resolve_texture_registration_by_surface_id(
+                "test-surface-default-layout",
+                None,
+                640,
+                480,
+            )
             .expect("default-layout resolve");
         assert_eq!(
             registration3.current_layout(),
@@ -2612,176 +2586,6 @@ mod tests {
         println!("register_texture_with_layout + resolve_texture_registration_by_surface_id: OK");
     }
 
-    /// Issue #633 — `VideoFrame.texture_layout` is an optional i32
-    /// field that producers may set to override the per-surface
-    /// `current_image_layout` from surface-share IPC. Lock the
-    /// serialization shape: present when set, absent when None
-    /// (skip-serializing-if=Option::is_none keeps backward compat with
-    /// older consumers). Mentally revert the
-    /// `skip_serializing_if = "Option::is_none"` in the generated
-    /// `com_tatolab_videoframe.rs` and the `field_absent_when_none`
-    /// case starts emitting `"texture_layout":null`.
-    #[test]
-    fn videoframe_texture_layout_serialization_round_trip() {
-        let with_layout = crate::_generated_::VideoFrame {
-            surface_id: "s".to_string(),
-            width: 8,
-            height: 8,
-            timestamp_ns: "0".to_string(),
-            frame_index: "1".to_string(),
-            fps: None,
-            // SHADER_READ_ONLY_OPTIMAL = 5 per Vulkan spec.
-            texture_layout: Some(5),
-            color_info: None,
-            mastering_display: None,
-            content_light: None,
-        };
-        let json = serde_json::to_value(&with_layout).expect("serialize");
-        assert_eq!(
-            json.get("texture_layout").and_then(|v| v.as_i64()),
-            Some(5),
-            "set texture_layout must round-trip"
-        );
-
-        let absent = crate::_generated_::VideoFrame {
-            surface_id: "s".to_string(),
-            width: 8,
-            height: 8,
-            timestamp_ns: "0".to_string(),
-            frame_index: "1".to_string(),
-            fps: None,
-            texture_layout: None,
-            color_info: None,
-            mastering_display: None,
-            content_light: None,
-        };
-        let json_absent = serde_json::to_value(&absent).expect("serialize");
-        assert!(
-            json_absent.get("texture_layout").is_none(),
-            "None texture_layout must be absent from the wire (back-compat with pre-#633 consumers)"
-        );
-
-        // Round-trip through a JSON string: deserialize must recover
-        // the field both directions (set → Some, absent → None).
-        let serialized = serde_json::to_string(&with_layout).unwrap();
-        let parsed: crate::_generated_::VideoFrame = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(parsed.texture_layout, Some(5));
-        let serialized_absent = serde_json::to_string(&absent).unwrap();
-        let parsed_absent: crate::_generated_::VideoFrame =
-            serde_json::from_str(&serialized_absent).unwrap();
-        assert_eq!(parsed_absent.texture_layout, None);
-    }
-
-    /// Issue #811 — `VideoFrame.{color_info, mastering_display,
-    /// content_light}` are optional sidecar fields that producers
-    /// populate from V4L2 / VUI / EDID / HDR metadata. Lock the
-    /// serialization shape: present when set (with all sub-fields
-    /// round-tripping), absent when None. Mentally revert the
-    /// `skip_serializing_if = "Option::is_none"` on either field
-    /// in the generated `_generated_/tatolab__core/video_frame.rs` and
-    /// the absent assertions start failing.
-    #[test]
-    fn videoframe_color_metadata_round_trip() {
-        use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Transfer};
-        use crate::_generated_::{ColorInfo, ContentLight, MasteringDisplay, VideoFrame};
-
-        let with_color = VideoFrame {
-            surface_id: "s".to_string(),
-            width: 1920,
-            height: 1080,
-            timestamp_ns: "0".to_string(),
-            frame_index: "0".to_string(),
-            fps: None,
-            texture_layout: None,
-            color_info: Some(ColorInfo {
-                primaries: Some(Primaries::Bt2020),
-                transfer: Some(Transfer::Smpte2084),
-                matrix: Some(Matrix::Bt2020Ncl),
-                range: Some(Range::Limited),
-            }),
-            mastering_display: Some(MasteringDisplay {
-                // BT.2020 primaries in 1/50000 increments — round-trip
-                // proof, not a real mastering display.
-                display_primaries_r_x: 35400,
-                display_primaries_r_y: 14600,
-                display_primaries_g_x: 8500,
-                display_primaries_g_y: 39850,
-                display_primaries_b_x: 6550,
-                display_primaries_b_y: 2300,
-                white_point_x: 15635,
-                white_point_y: 16450,
-                min_luminance: 1, // 0.0001 cd/m^2
-                max_luminance: 10_000_000, // 1000 cd/m^2
-            }),
-            content_light: Some(ContentLight {
-                max_cll: 1000,
-                max_fall: 400,
-            }),
-        };
-        let json = serde_json::to_value(&with_color).expect("serialize");
-        assert!(json.get("color_info").is_some());
-        assert!(json.get("mastering_display").is_some());
-        assert!(json.get("content_light").is_some());
-        // Enums round-trip as snake_case strings (H.273 alignment).
-        assert_eq!(
-            json.pointer("/color_info/transfer").and_then(|v| v.as_str()),
-            Some("smpte2084"),
-            "transfer enum serializes as the snake_case discriminant"
-        );
-
-        let serialized = serde_json::to_string(&with_color).unwrap();
-        let parsed: VideoFrame = serde_json::from_str(&serialized).unwrap();
-        let parsed_color = parsed.color_info.expect("color_info round-trips");
-        assert_eq!(parsed_color.primaries, Some(Primaries::Bt2020));
-        assert_eq!(parsed_color.transfer, Some(Transfer::Smpte2084));
-        assert_eq!(parsed_color.matrix, Some(Matrix::Bt2020Ncl));
-        assert_eq!(parsed_color.range, Some(Range::Limited));
-
-        // ColorInfo with all axes None — wire-format-correct
-        // representation of "I have a ColorInfo record but every
-        // axis is unspecified." Lock the per-axis skip-on-None
-        // behavior; mentally revert `optionalProperties` in the
-        // schema and the JSON gains four `null` axis fields.
-        let info_all_none = ColorInfo::default();
-        let json_info_none = serde_json::to_value(&info_all_none).expect("serialize");
-        assert_eq!(
-            json_info_none,
-            serde_json::json!({}),
-            "ColorInfo::default() serializes as empty object — every axis is None and skipped",
-        );
-        let parsed_info_none: ColorInfo =
-            serde_json::from_value(json_info_none).expect("deserialize empty");
-        assert_eq!(parsed_info_none, ColorInfo::default());
-        let parsed_mdcv = parsed.mastering_display.expect("mastering_display round-trips");
-        assert_eq!(parsed_mdcv.display_primaries_r_x, 35400);
-        assert_eq!(parsed_mdcv.max_luminance, 10_000_000);
-        let parsed_cll = parsed.content_light.expect("content_light round-trips");
-        assert_eq!(parsed_cll.max_cll, 1000);
-        assert_eq!(parsed_cll.max_fall, 400);
-
-        // Absent on the wire when None — the optional-field plumbing
-        // pattern (mirrors `texture_layout`'s shape).
-        let absent = VideoFrame {
-            surface_id: "s".to_string(),
-            width: 1920,
-            height: 1080,
-            timestamp_ns: "0".to_string(),
-            frame_index: "0".to_string(),
-            fps: None,
-            texture_layout: None,
-            color_info: None,
-            mastering_display: None,
-            content_light: None,
-        };
-        let json_absent = serde_json::to_value(&absent).unwrap();
-        assert!(json_absent.get("color_info").is_none());
-        assert!(json_absent.get("mastering_display").is_none());
-        assert!(json_absent.get("content_light").is_none());
-        let parsed_absent: VideoFrame = serde_json::from_str(&serde_json::to_string(&absent).unwrap()).unwrap();
-        assert!(parsed_absent.color_info.is_none());
-        assert!(parsed_absent.mastering_display.is_none());
-        assert!(parsed_absent.content_light.is_none());
-    }
 
     #[test]
     fn test_texture_cache_miss_and_timeline_semaphore() {
@@ -2794,20 +2598,8 @@ mod tests {
         };
 
         // Cache miss returns error (no texture registered, no surface-share service)
-        let frame = crate::_generated_::VideoFrame {
-            surface_id: "nonexistent-surface".to_string(),
-            width: 640,
-            height: 480,
-            timestamp_ns: "0".to_string(),
-            frame_index: "1".to_string(),
-            fps: None,
-            texture_layout: None,
-            color_info: None,
-            mastering_display: None,
-            content_light: None,
-        };
         assert!(gpu
-            .resolve_texture_by_surface_id(&frame.surface_id, frame.texture_layout, frame.width, frame.height)
+            .resolve_texture_by_surface_id("nonexistent-surface", None, 640, 480)
             .is_err());
 
         // Timeline semaphore publication slot is shared across Clones.

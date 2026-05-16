@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Swapchain colorspace negotiation + HDR static metadata materialization.
+//!
+//! Inputs are engine-ID-shaped — schema translation happens at the
+//! consumer boundary via [`crate::core::color::translate`].
 
 use vulkanalia::vk;
 use vulkanalia::vk::HasBuilder as _;
 
-use crate::_generated_::tatolab__core::color_info::{Primaries, Transfer};
-use crate::_generated_::{ColorInfo, ContentLight, MasteringDisplay};
+use crate::core::color::{ColorTraits, HdrStaticMetadata, PrimariesId, TransferId};
 
 /// Result of [`pick_swapchain_format`] — the chosen `(format, color_space)`
 /// pair plus a flag indicating whether the chosen colorspace expects HDR
@@ -40,7 +42,7 @@ pub struct SwapchainColorPick {
 ///    surface offered. Engine tone-maps + gamut-maps as needed.
 pub fn pick_swapchain_format(
     surface_formats: &[vk::SurfaceFormatKHR],
-    color_info: Option<&ColorInfo>,
+    color_traits: Option<&ColorTraits>,
 ) -> SwapchainColorPick {
     debug_assert!(
         !surface_formats.is_empty(),
@@ -48,11 +50,10 @@ pub fn pick_swapchain_format(
          spec requires at least one entry on a supported surface"
     );
 
-    let want_pq = matches!(color_info.and_then(|c| c.transfer.as_ref()), Some(Transfer::Smpte2084));
-    let want_hlg =
-        matches!(color_info.and_then(|c| c.transfer.as_ref()), Some(Transfer::AribStdB67));
-    let want_bt2020 =
-        matches!(color_info.and_then(|c| c.primaries.as_ref()), Some(Primaries::Bt2020));
+    let traits = color_traits.copied().unwrap_or_default();
+    let want_pq = matches!(traits.transfer, Some(TransferId::Pq));
+    let want_hlg = matches!(traits.transfer, Some(TransferId::Hlg));
+    let want_bt2020 = matches!(traits.primaries, Some(PrimariesId::Bt2020));
 
     if want_pq && want_bt2020 {
         if let Some(pick) = walk_hdr10(surface_formats, vk::ColorSpaceKHR::HDR10_ST2084_EXT) {
@@ -159,43 +160,31 @@ fn pick_srgb_fallback(surface_formats: &[vk::SurfaceFormatKHR]) -> SwapchainColo
     }
 }
 
-/// Materializes a `vk::HdrMetadataEXT` from the H.265 SEI / MP4 mdcv
-/// wire-format integers carried in the schemas. Schema units:
-///
-/// - chromaticity in 1/50000 increments (CIE 1931) → divided by 50000
-///   to land in `XYColorEXT`'s `[0.0, 1.0]` float range.
-/// - luminance in 0.0001 cd/m² increments → divided by 10000 to land
-///   in `HdrMetadataEXT`'s cd/m² float range.
-/// - `max_cll` / `max_fall` are integer cd/m² in the schema → cast to
-///   f32 directly (no scaling).
-pub fn build_hdr_metadata(
-    mastering: &MasteringDisplay,
-    content_light: &ContentLight,
-) -> vk::HdrMetadataEXT {
-    const CHROMA_SCALE: f32 = 1.0 / 50_000.0;
-    const LUM_SCALE: f32 = 1.0 / 10_000.0;
-
+/// Materialize a `vk::HdrMetadataEXT` from already-translated
+/// engine-internal f32 fields. Schema → engine-internal translation
+/// lives in [`crate::core::color::translate::hdr_metadata_from_schema`].
+pub fn build_hdr_metadata(metadata: &HdrStaticMetadata) -> vk::HdrMetadataEXT {
     vk::HdrMetadataEXT::builder()
         .display_primary_red(vk::XYColorEXT {
-            x: mastering.display_primaries_r_x as f32 * CHROMA_SCALE,
-            y: mastering.display_primaries_r_y as f32 * CHROMA_SCALE,
+            x: metadata.display_primary_red[0],
+            y: metadata.display_primary_red[1],
         })
         .display_primary_green(vk::XYColorEXT {
-            x: mastering.display_primaries_g_x as f32 * CHROMA_SCALE,
-            y: mastering.display_primaries_g_y as f32 * CHROMA_SCALE,
+            x: metadata.display_primary_green[0],
+            y: metadata.display_primary_green[1],
         })
         .display_primary_blue(vk::XYColorEXT {
-            x: mastering.display_primaries_b_x as f32 * CHROMA_SCALE,
-            y: mastering.display_primaries_b_y as f32 * CHROMA_SCALE,
+            x: metadata.display_primary_blue[0],
+            y: metadata.display_primary_blue[1],
         })
         .white_point(vk::XYColorEXT {
-            x: mastering.white_point_x as f32 * CHROMA_SCALE,
-            y: mastering.white_point_y as f32 * CHROMA_SCALE,
+            x: metadata.white_point[0],
+            y: metadata.white_point[1],
         })
-        .max_luminance(mastering.max_luminance as f32 * LUM_SCALE)
-        .min_luminance(mastering.min_luminance as f32 * LUM_SCALE)
-        .max_content_light_level(content_light.max_cll as f32)
-        .max_frame_average_light_level(content_light.max_fall as f32)
+        .max_luminance(metadata.max_luminance_cd_m2)
+        .min_luminance(metadata.min_luminance_cd_m2)
+        .max_content_light_level(metadata.max_content_light_level)
+        .max_frame_average_light_level(metadata.max_frame_average_light_level)
         .build()
 }
 
@@ -207,21 +196,17 @@ mod tests {
         vk::SurfaceFormatKHR { format, color_space }
     }
 
-    fn pq_bt2020() -> ColorInfo {
-        ColorInfo {
-            primaries: Some(Primaries::Bt2020),
-            transfer: Some(Transfer::Smpte2084),
-            matrix: None,
-            range: None,
+    fn pq_bt2020() -> ColorTraits {
+        ColorTraits {
+            primaries: Some(PrimariesId::Bt2020),
+            transfer: Some(TransferId::Pq),
         }
     }
 
-    fn hlg_bt2020() -> ColorInfo {
-        ColorInfo {
-            primaries: Some(Primaries::Bt2020),
-            transfer: Some(Transfer::AribStdB67),
-            matrix: None,
-            range: None,
+    fn hlg_bt2020() -> ColorTraits {
+        ColorTraits {
+            primaries: Some(PrimariesId::Bt2020),
+            transfer: Some(TransferId::Hlg),
         }
     }
 
@@ -264,14 +249,14 @@ mod tests {
 
     /// SDR-only surfaces (today's NVIDIA X11 reality) must always pick
     /// the legacy `BGRA8_UNORM + SRGB_NONLINEAR` pair, regardless of
-    /// what the frame's `ColorInfo` requests. Mentally reverting the
+    /// what the frame's `ColorTraits` requests. Mentally reverting the
     /// `pick_srgb_fallback` priority order to "first format wins" would
     /// regress to a non-deterministic pick; this test catches that.
     #[test]
     fn sdr_only_surface_always_picks_bgra8_srgb_nonlinear() {
         let formats = srgb_only();
-        for color_info in [None, Some(pq_bt2020()), Some(hlg_bt2020())] {
-            let pick = pick_swapchain_format(&formats, color_info.as_ref());
+        for traits in [None, Some(pq_bt2020()), Some(hlg_bt2020())] {
+            let pick = pick_swapchain_format(&formats, traits.as_ref());
             assert_eq!(pick.format, vk::Format::B8G8R8A8_UNORM);
             assert_eq!(pick.color_space, vk::ColorSpaceKHR::SRGB_NONLINEAR);
             assert!(!pick.is_hdr);
@@ -348,87 +333,62 @@ mod tests {
         assert!(pick.is_hdr);
     }
 
-    /// `None` ColorInfo + HDR-capable surface must NOT promote the
-    /// pick to HDR10. Default-frame producers rely on the SRGB
+    /// `None` `ColorTraits` + HDR-capable surface must NOT promote
+    /// the pick to HDR10. Default-frame producers rely on the SRGB
     /// fallback to stay byte-identical to today's behavior, and
-    /// promoting an absent ColorInfo to HDR would silently change
-    /// the engine's color-handling for every existing pipeline.
+    /// promoting absent traits to HDR would silently change the
+    /// engine's color-handling for every existing pipeline.
     #[test]
-    fn absent_color_info_against_hdr_surface_stays_srgb() {
+    fn absent_color_traits_against_hdr_surface_stays_srgb() {
         let pick = pick_swapchain_format(&mesa_full_set(), None);
         assert_eq!(pick.format, vk::Format::B8G8R8A8_UNORM);
         assert_eq!(pick.color_space, vk::ColorSpaceKHR::SRGB_NONLINEAR);
         assert!(!pick.is_hdr);
     }
 
-    /// `Smpte2084` (PQ) without `Bt2020` primaries is technically a
-    /// non-standard combination — HDR10 is defined as PQ + BT.2020.
-    /// Picking HDR10 anyway would mis-signal the scanout primaries.
-    /// Falling through to SRGB is correct: the engine tone-maps PQ
-    /// down to SDR, and the wrong-primaries case can't be fixed by
-    /// the colorspace pick.
+    /// PQ transfer without `Bt2020` primaries is a non-standard
+    /// combination — HDR10 is defined as PQ + BT.2020. Picking HDR10
+    /// anyway would mis-signal the scanout primaries. Falling
+    /// through to SRGB is correct: the engine tone-maps PQ down to
+    /// SDR, and the wrong-primaries case can't be fixed by the
+    /// colorspace pick.
     #[test]
     fn pq_without_bt2020_does_not_pick_hdr10() {
-        let color_info = ColorInfo {
-            primaries: Some(Primaries::Bt709),
-            transfer: Some(Transfer::Smpte2084),
-            matrix: None,
-            range: None,
+        let traits = ColorTraits {
+            primaries: Some(PrimariesId::Bt709),
+            transfer: Some(TransferId::Pq),
         };
-        let pick = pick_swapchain_format(&nvidia_hdr10(), Some(&color_info));
+        let pick = pick_swapchain_format(&nvidia_hdr10(), Some(&traits));
         assert_eq!(pick.format, vk::Format::B8G8R8A8_UNORM);
         assert_eq!(pick.color_space, vk::ColorSpaceKHR::SRGB_NONLINEAR);
         assert!(!pick.is_hdr);
     }
 
-    /// `build_hdr_metadata` must convert the schema's wire-format
-    /// integers to the `vk::HdrMetadataEXT` floating-point fields
-    /// using the right scale per axis: 1/50000 for chromaticity,
-    /// 1/10000 for mastering luminance, 1.0 for content light. A
-    /// silent bug here ships wrong HDR metadata to the driver — the
-    /// scanout will tone-map against the wrong volume.
-    ///
-    /// Reference values: BT.2020 primaries + D65 white point + a
-    /// canonical HDR10 mastering display (1000 cd/m² peak,
-    /// 0.0001 cd/m² floor).
+    /// `build_hdr_metadata` materializes the `vk::HdrMetadataEXT`
+    /// directly from already-translated f32 fields. A canonical
+    /// HDR10 BT.2020 mastering display + content light triple ends
+    /// up byte-identical in the output struct.
     #[test]
-    fn hdr_metadata_round_trip_uses_correct_unit_scaling() {
-        let mastering = MasteringDisplay {
-            // BT.2020 primaries:  R = (0.708, 0.292)  → 35400, 14600
-            //                     G = (0.170, 0.797)  →  8500, 39850
-            //                     B = (0.131, 0.046)  →  6550,  2300
-            display_primaries_r_x: 35_400,
-            display_primaries_r_y: 14_600,
-            display_primaries_g_x: 8_500,
-            display_primaries_g_y: 39_850,
-            display_primaries_b_x: 6_550,
-            display_primaries_b_y: 2_300,
-            // D65 white point: (0.3127, 0.3290) → 15635, 16450
-            white_point_x: 15_635,
-            white_point_y: 16_450,
-            // 1000 cd/m² peak → 10_000_000 in 0.0001 cd/m² units.
-            max_luminance: 10_000_000,
-            // 0.005 cd/m² floor → 50.
-            min_luminance: 50,
+    fn hdr_metadata_passes_through_engine_struct() {
+        let metadata = HdrStaticMetadata {
+            display_primary_red: [0.708, 0.292],
+            display_primary_green: [0.170, 0.797],
+            display_primary_blue: [0.131, 0.046],
+            white_point: [0.3127, 0.3290],
+            min_luminance_cd_m2: 0.005,
+            max_luminance_cd_m2: 1000.0,
+            max_content_light_level: 1000.0,
+            max_frame_average_light_level: 400.0,
         };
-        let content_light = ContentLight {
-            max_cll: 1000,
-            max_fall: 400,
-        };
-
-        let md = build_hdr_metadata(&mastering, &content_light);
-
+        let md = build_hdr_metadata(&metadata);
         let eps = 1e-4;
-        assert!((md.display_primary_red.x - 0.708).abs() < eps, "red.x={}", md.display_primary_red.x);
-        assert!((md.display_primary_red.y - 0.292).abs() < eps, "red.y={}", md.display_primary_red.y);
-        assert!((md.display_primary_green.x - 0.170).abs() < eps, "green.x={}", md.display_primary_green.x);
-        assert!((md.display_primary_green.y - 0.797).abs() < eps, "green.y={}", md.display_primary_green.y);
-        assert!((md.display_primary_blue.x - 0.131).abs() < eps, "blue.x={}", md.display_primary_blue.x);
-        assert!((md.display_primary_blue.y - 0.046).abs() < eps, "blue.y={}", md.display_primary_blue.y);
-        assert!((md.white_point.x - 0.3127).abs() < eps, "white.x={}", md.white_point.x);
-        assert!((md.white_point.y - 0.3290).abs() < eps, "white.y={}", md.white_point.y);
-        assert!((md.max_luminance - 1000.0).abs() < 1e-3, "max_lum={}", md.max_luminance);
-        assert!((md.min_luminance - 0.005).abs() < 1e-6, "min_lum={}", md.min_luminance);
+        assert!((md.display_primary_red.x - 0.708).abs() < eps);
+        assert!((md.display_primary_red.y - 0.292).abs() < eps);
+        assert!((md.display_primary_green.x - 0.170).abs() < eps);
+        assert!((md.display_primary_blue.x - 0.131).abs() < eps);
+        assert!((md.white_point.x - 0.3127).abs() < eps);
+        assert!((md.max_luminance - 1000.0).abs() < 1e-3);
+        assert!((md.min_luminance - 0.005).abs() < 1e-6);
         assert!((md.max_content_light_level - 1000.0).abs() < 1e-3);
         assert!((md.max_frame_average_light_level - 400.0).abs() < 1e-3);
     }
