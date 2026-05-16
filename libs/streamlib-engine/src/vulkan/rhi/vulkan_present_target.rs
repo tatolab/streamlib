@@ -296,12 +296,26 @@ impl VulkanPresentTarget {
             }
         }
 
+        // Refresh the cached `TextureFormat` view alongside the raw
+        // `vk::Format` — a recreate that lands on a new format
+        // (e.g. SDR `BGRA8_UNORM` → HDR10 `R16G16B16A16_SFLOAT`)
+        // must update both fields, otherwise downstream code
+        // reading [`Self::color_format`] sees a stale value and
+        // [`build_display_kernel`] (called by display.rs after a
+        // colorspace transition) silently rebuilds against the old
+        // attachment format.
+        let new_color_format = vk_format_to_texture_format(new_format).ok_or_else(|| {
+            Error::GpuError(format!(
+                "VulkanPresentTarget::recreate: swapchain format {new_format:?} \
+                 not mapped to TextureFormat"
+            ))
+        })?;
+
         self.swapchain = new_swapchain;
         self.swapchain_images = new_images;
         self.swapchain_image_views = new_views;
-        // Spec: same swapchain recreated from old keeps the same format —
-        // overwrite anyway in case the surface caps changed.
         self.swapchain_format = new_format;
+        self.color_format = new_color_format;
         self.swapchain_extent = new_extent;
         // Update the cached colorspace pick. If the colorspace changed
         // (SDR → HDR or vice versa, or one HDR variant → another),
@@ -752,7 +766,32 @@ fn create_swapchain(
         ));
     }
 
-    let color_pick = pick_swapchain_format(&surface_formats, color_info);
+    // Filter the surface-exposed formats to those the engine's
+    // [`vk_format_to_texture_format`] table knows how to project to
+    // [`TextureFormat`]. Without this filter, the priority walk could
+    // pick a format the engine can't downstream — e.g. NVIDIA exposes
+    // `A2B10G10R10_UNORM_PACK32 + HDR10_ST2084_EXT` for HDR10 PQ, but
+    // the engine's `TextureFormat` enum doesn't yet have a 10-bit
+    // packed variant. An unrepresentable pick errors out at
+    // `vk_format_to_texture_format` below; pre-filtering keeps the
+    // picker honest and gracefully falls back to the next-best
+    // representable colorspace (HDR10 with `R16G16B16A16_SFLOAT` if
+    // exposed, then EXTENDED_SRGB_LINEAR, then SRGB_NONLINEAR).
+    let representable_formats: Vec<vk::SurfaceFormatKHR> = surface_formats
+        .iter()
+        .copied()
+        .filter(|sf| vk_format_to_texture_format(sf.format).is_some())
+        .collect();
+    if representable_formats.is_empty() {
+        return Err(Error::GpuError(format!(
+            "VulkanPresentTarget: surface advertised {} formats but none are \
+             representable as TextureFormat (extend `vk_format_to_texture_format` \
+             when adding new HDR / wide-gamut backends)",
+            surface_formats.len()
+        )));
+    }
+
+    let color_pick = pick_swapchain_format(&representable_formats, color_info);
     let chosen_format = vk::SurfaceFormatKHR {
         format: color_pick.format,
         color_space: color_pick.color_space,
@@ -941,6 +980,13 @@ fn vk_format_to_texture_format(format: vk::Format) -> Option<TextureFormat> {
         vk::Format::B8G8R8A8_SRGB => Some(TextureFormat::Bgra8UnormSrgb),
         vk::Format::R8G8B8A8_UNORM => Some(TextureFormat::Rgba8Unorm),
         vk::Format::R8G8B8A8_SRGB => Some(TextureFormat::Rgba8UnormSrgb),
+        // FP16 scanout — the representable path for both `HDR10_ST2084_EXT`
+        // and `EXTENDED_SRGB_LINEAR_EXT` colorspaces. The 10-bit packed
+        // formats `A2B10G10R10_UNORM_PACK32` / `A2R10G10B10_UNORM_PACK32`
+        // (the canonical HDR10 wire format) need a `Rgb10A2Unorm` variant
+        // on `TextureFormat` to map; not added here as it's a multi-
+        // backend / consumer-rhi change.
+        vk::Format::R16G16B16A16_SFLOAT => Some(TextureFormat::Rgba16Float),
         _ => None,
     }
 }
@@ -1006,10 +1052,78 @@ mod tests {
             Some(TextureFormat::Rgba8UnormSrgb)
         );
         assert_eq!(
+            vk_format_to_texture_format(vk::Format::R16G16B16A16_SFLOAT),
+            Some(TextureFormat::Rgba16Float),
+            "FP16 scanout drives both HDR10 (when 10-bit packed isn't \
+             representable) and EXTENDED_SRGB_LINEAR — must round-trip"
+        );
+        assert_eq!(
             vk_format_to_texture_format(vk::Format::D32_SFLOAT),
             None,
             "non-color-attachment format must not map"
         );
+    }
+
+    /// Locks the contract `create_swapchain` relies on: when a surface
+    /// exposes the picker-preferred HDR10 10-bit packed format that
+    /// `vk_format_to_texture_format` doesn't yet support, the
+    /// representability filter in `create_swapchain` strips it AND the
+    /// picker then walks the remaining (representable) formats. Without
+    /// the filter, an HDR10-capable surface that exposed only the
+    /// 10-bit packed pair would have been picked and then errored out
+    /// at the format-to-TextureFormat conversion step in
+    /// `create_swapchain`. The construction-time path is hardware-only
+    /// (needs a real surface), so this test simulates the
+    /// filter+pick contract directly.
+    #[test]
+    fn representability_filter_drops_unsupported_picker_targets() {
+        use crate::_generated_::tatolab__core::color_info::{Primaries, Transfer};
+        use crate::_generated_::ColorInfo;
+
+        let surface_formats = vec![
+            vk::SurfaceFormatKHR {
+                format: vk::Format::B8G8R8A8_UNORM,
+                color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            },
+            // HDR10 with the canonical 10-bit packed format — picker
+            // would prefer this if unfiltered, but the engine has no
+            // `TextureFormat` variant for it today.
+            vk::SurfaceFormatKHR {
+                format: vk::Format::A2B10G10R10_UNORM_PACK32,
+                color_space: vk::ColorSpaceKHR::HDR10_ST2084_EXT,
+            },
+        ];
+        let pq_bt2020 = ColorInfo {
+            primaries: Some(Primaries::Bt2020),
+            transfer: Some(Transfer::Smpte2084),
+            matrix: None,
+            range: None,
+        };
+
+        // Without the filter: picker would pick A2B10G10R10_UNORM_PACK32
+        // and `create_swapchain` would error at format conversion.
+        let unfiltered_pick = pick_swapchain_format(&surface_formats, Some(&pq_bt2020));
+        assert_eq!(unfiltered_pick.format, vk::Format::A2B10G10R10_UNORM_PACK32);
+        assert!(
+            vk_format_to_texture_format(unfiltered_pick.format).is_none(),
+            "fixture assumption: picker-preferred HDR10 packed format must \
+             remain unrepresentable, otherwise this test no longer locks the \
+             filter contract"
+        );
+
+        // With the filter: picker walks representable formats only and
+        // gracefully falls through to SDR (since FP16 isn't exposed
+        // here). No swapchain creation error.
+        let representable: Vec<_> = surface_formats
+            .iter()
+            .copied()
+            .filter(|sf| vk_format_to_texture_format(sf.format).is_some())
+            .collect();
+        let filtered_pick = pick_swapchain_format(&representable, Some(&pq_bt2020));
+        assert_eq!(filtered_pick.format, vk::Format::B8G8R8A8_UNORM);
+        assert_eq!(filtered_pick.color_space, vk::ColorSpaceKHR::SRGB_NONLINEAR);
+        assert!(!filtered_pick.is_hdr);
+        assert!(vk_format_to_texture_format(filtered_pick.format).is_some());
     }
 
     /// `MAX_FRAMES_IN_FLIGHT = 2` is load-bearing across the engine
