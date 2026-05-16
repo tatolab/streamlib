@@ -120,11 +120,17 @@ pub const TONE_MAPPER_PUSH_CONSTANT_SIZE: u32 =
 
 /// Engine-owned image→image tone-curve primitive.
 ///
-/// Created via [`crate::core::context::GpuContext::tone_mapper`] and
-/// cached for the lifetime of the [`crate::core::context::GpuContext`].
-/// The kernel itself is stateless beyond push constants — one cached
-/// instance handles every variation of `(input_transfer, output_transfer,
-/// curve, peak_in, peak_out)` without invalidating the pipeline.
+/// Constructed directly by consumers via [`RhiToneMapper::new`]. The
+/// kernel is allocated lazily on first dispatch, so construction is
+/// effectively free — consumers can hold their own instance as a
+/// struct field without worrying about pre-warm cost. Mirrors the
+/// shape `LinuxCameraProcessor` uses for `RhiColorConverter` (held in
+/// `CameraGpuResources` and dispatched per-frame).
+///
+/// No engine-side shared cache: there's no per-`(src,dst)` keying to
+/// amortize, and each consumer owning its instance keeps resource
+/// teardown the consumer's call (no surprise leaks via a long-lived
+/// cache on `GpuContext`).
 ///
 /// Thread-safe — internal compute-kernel submissions serialize through
 /// the host queue mutex.
@@ -137,6 +143,26 @@ pub struct RhiToneMapper {
 }
 
 impl RhiToneMapper {
+    /// Build a tone-mapper bound to `device`. The internal compute
+    /// kernel is allocated lazily on first dispatch.
+    #[cfg(target_os = "linux")]
+    pub fn new(
+        device: &std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice>,
+    ) -> Self {
+        Self {
+            inner: crate::vulkan::rhi::VulkanToneMapper::new(device),
+        }
+    }
+
+    /// macOS stub — Apple-platform tone mapping lives in the
+    /// follow-on Apple activation work.
+    #[cfg(not(target_os = "linux"))]
+    pub fn new() -> Self {
+        Self {
+            _marker: std::marker::PhantomData,
+        }
+    }
+
     /// Bind `(src, dst)` + push-constants on the kernel and return it
     /// for recorder-driven dispatch. Use when the caller already has an
     /// [`crate::vulkan::rhi::RhiCommandRecorder`] and wants the tone
