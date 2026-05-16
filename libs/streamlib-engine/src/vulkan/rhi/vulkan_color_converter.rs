@@ -236,15 +236,11 @@ mod tests {
 
     // ---- GPU-output bit-exact regression coverage ----
     //
-    // The reference is computed in-code from the same `core::color`
-    // helpers the converter's push-constant builder uses
-    // (`yuv_to_rgb_matrix`, `to_linear` / `from_linear`). Choosing an
-    // in-code reference over a committed PNG fixture is deliberate:
-    // the new converter is parameterized on `(matrix, range,
-    // transfer_in, transfer_out)` per dispatch, so a PNG snapshot
-    // would lock the test to one tuple while leaving the rest of the
-    // matrix uncovered. The in-code reference covers any
-    // `ResolvedColorInfo` shape with the same ~10 lines of math.
+    // The reference is computed in-code from `core::color` helpers
+    // (`yuv_to_rgb_matrix`, `to_linear` / `from_linear`) so any
+    // `(matrix, range, transfer_in, transfer_out)` tuple is one new
+    // test, not one new fixture. Committed-PNG would lock the test
+    // to a single tuple.
     //
     // The math chain mirrors `convert_color` in
     // `vulkan/rhi/shaders/color_convert_common.glsl`:
@@ -253,9 +249,43 @@ mod tests {
     //   3. `rgb = clamp(rgb_byte / 255, 0, 1)`
     //   4. if `transfer_in != transfer_out`:
     //         `rgb = from_linear(out, to_linear(in, rgb))`  per channel
-    // Mentally revert any step in `vulkan_color_converter.rs` or
-    // `core::rhi::color_converter::ColorConverterPushConstants::from_resolved`
-    // and these tests should fail.
+    //
+    // What these tests catch:
+    //   - `ColorConverterPushConstants` std430 field ORDER / SIZE
+    //     drift — the GPU pulls the matrix + offset out of push
+    //     constants laid out in a specific slot order, so swapping
+    //     `matrix_row0` and `range_offset` (or anything analogous)
+    //     in `from_resolved` makes the shader multiply with the
+    //     wrong values. Confirmed by negative-test (#822 PR): zeroing
+    //     the Y component of `range_offset` in `from_resolved` fails
+    //     the BT.709-limited and BT.709→sRGB tests with thousands of
+    //     pixel mismatches.
+    //   - Shader's NV12 stride math (`read_byte` packed-uint
+    //     extraction + `plane0_stride_bytes` / `plane1_stride_bytes`
+    //     / `plane1_offset_bytes` walks).
+    //   - GLSL ↔ Rust drift in the transfer functions — these are
+    //     independently implemented in `color_convert_common.glsl`
+    //     and `core::color::transfer`, so the `bt709→srgb` test is
+    //     the gate that the two stay in sync.
+    //   - `imageStore` correctness on `rgba8` storage image (writes
+    //     ending up in the right pixel, with UNORM rounding within
+    //     ±1 of the CPU reference).
+    //   - The `UNDEFINED → GENERAL` layout transition on the output
+    //     texture (without it the dispatch is spec-illegal).
+    //
+    // What they don't catch (locked elsewhere by design):
+    //   - `yuv_to_rgb_matrix` returning wrong matrix coefficients —
+    //     the same Rust function feeds both push constants and the
+    //     CPU reference here, so a coefficient bug shifts both sides
+    //     in lockstep. Locked by `core::color::matrix::tests` with
+    //     hardcoded canonical coefficients (BT.601/709/2020 ×
+    //     Full/Limited).
+    //   - `to_linear` / `from_linear` math errors in Rust — locked by
+    //     `core::color::transfer::tests` (round-trip + known points).
+    //     Note that the `bt709→srgb` test below DOES catch
+    //     Rust-vs-GLSL drift in the transfer functions; what it
+    //     can't catch is Rust-side errors that haven't drifted from
+    //     GLSL yet.
 
     /// CPU reference: one NV12 source pixel → one RGBA8 output pixel.
     ///
@@ -528,13 +558,13 @@ mod tests {
     /// BT.601 full-range NV12 (the canonical webcam path) → Rgba8Unorm
     /// must match the CPU reference within ±1 per channel.
     ///
-    /// Exercises:
-    /// - Matrix decomposition (`MatrixId::Smpte170m, RangeId::Full`)
-    ///   → row 0 = `(1.0, 0.0, 1.402)`, offset = `(0, 128, 128)`.
-    /// - Transfer-bypass path (`Srgb` source = `Srgb` dest →
-    ///   `FLAG_APPLY_TRANSFER` cleared, no `pow()` per channel).
-    /// - `SourceLayoutInfo::nv12_tight` strides flow through push
-    ///   constants and the shader walks them correctly.
+    /// Locks (see module header for the full taxonomy):
+    /// - Push-constant struct field-order — the shader pulls the
+    ///   matrix + offset out of fixed std430 slots.
+    /// - Transfer-bypass path (`Srgb` source = `Srgb` dest → shader
+    ///   skips `pow()` per channel).
+    /// - `SourceLayoutInfo::nv12_tight` strides flowing through push
+    ///   constants and the shader's `read_byte` walk.
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
     fn nv12_full_range_bt601_matches_cpu_reference() {
@@ -559,12 +589,13 @@ mod tests {
     /// BT.709 limited-range NV12 (the codec-output path) → Rgba8Unorm
     /// must match the CPU reference within ±1 per channel.
     ///
-    /// Exercises:
-    /// - Matrix decomposition (`MatrixId::Bt709, RangeId::Limited`)
-    ///   → row 0 Y-scale = `255/219 ≈ 1.164`, offset =
-    ///   `(16, 128, 128)`. Reverting the `255/219` in
-    ///   `core::color::matrix::range_scaling` drops the scale to 1.0
-    ///   and this test fails for every non-saturated Y byte.
+    /// Locks (see module header for the full taxonomy):
+    /// - Push-constant `range_offset` slot is wired through to the
+    ///   shader's `c = ycbcr_byte - range_offset` step — confirmed
+    ///   by negative-test: zeroing the Y component of `range_offset`
+    ///   in `from_resolved` fails this test with thousands of
+    ///   mismatches (full-range stays green because its Y-offset is
+    ///   already 0).
     /// - Transfer-bypass path (`Bt709` source = `Bt709` dest).
     #[cfg_attr(not(feature = "hardware-tests"), ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md")]
     #[test]
@@ -591,11 +622,15 @@ mod tests {
     /// (`Bt709` source → `Srgb` dest) → Rgba8Unorm must match the CPU
     /// reference within ±1 per channel.
     ///
-    /// Exercises:
-    /// - `FLAG_APPLY_TRANSFER` path (`transfer_in != transfer_out` →
-    ///   shader runs `from_linear(srgb, to_linear(bt709, x))` per
-    ///   channel). Bypass tests above don't catch shader-vs-CPU drift
-    ///   in the transfer math; this test does.
+    /// Locks (see module header for the full taxonomy):
+    /// - `FLAG_APPLY_TRANSFER` path active (`transfer_in !=
+    ///   transfer_out` → shader runs `from_linear(srgb,
+    ///   to_linear(bt709, x))` per channel).
+    /// - GLSL ↔ Rust transfer-function drift. The transfer-bypass
+    ///   tests above can't catch this; here the GLSL closed-forms
+    ///   in `color_convert_common.glsl` and the Rust closed-forms in
+    ///   `core::color::transfer` are independent implementations,
+    ///   and the test fails the moment they disagree.
     /// - Mid-stream transfer change costs only push constants — no
     ///   pipeline rebuild — which the test verifies by reusing the
     ///   same `(src, dst)` PixelFormat pair as the prior test.
