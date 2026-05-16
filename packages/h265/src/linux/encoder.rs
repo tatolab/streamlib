@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
+use crate::linux::color_vui_translate::color_info_to_h273;
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
@@ -181,6 +182,14 @@ fn build_encoder_lazily(
         frame.fps,
     );
 
+    // First-frame color info drives the session-level SPS VUI. Mid-stream
+    // ColorInfo changes are not honored — switching colorimetry requires a
+    // new SPS, which the encoder doesn't re-emit per frame.
+    let color_vui = frame
+        .color_info
+        .as_ref()
+        .and_then(color_info_to_h273);
+
     let encoder_config = SimpleEncoderConfig {
         width,
         height,
@@ -192,6 +201,7 @@ fn build_encoder_lazily(
         bitrate_bps: config.bitrate_bps,
         prepend_header_to_idr: Some(true),
         effort_level: config.effort_level,
+        color_vui,
         ..Default::default()
     };
 
@@ -240,8 +250,31 @@ fn build_encoder_lazily(
         height,
         fps
     );
+    tracing::info!(
+        color_vui = ?color_vui,
+        "[H265Encoder] SPS VUI color metadata chained from first-frame color_info"
+    );
+    // Debug: emit the cached VPS+SPS+PPS bytes as hex once at construction
+    // so E2E flows can `ffprobe` the parameter sets without saving a full
+    // MP4. One-shot trace; encoded packets at frame rate are not logged.
+    tracing::debug!(
+        header_hex = %hex_encode(encoder.header()),
+        header_len = encoder.header().len(),
+        "[H265Encoder] Cached VPS+SPS+PPS header"
+    );
 
     Ok(encoder)
+}
+
+/// Lowercase hex encoder for the one-shot VPS+SPS+PPS debug log. Returns an
+/// empty string on empty input.
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 #[cfg(test)]

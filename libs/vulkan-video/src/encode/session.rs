@@ -509,6 +509,7 @@ impl SimpleEncoder {
         // H.264: add SPS + PPS parameter sets
         let h264_sps;
         let h264_pps;
+        let h264_sps_vui;
         let h264_add_info;
         let mut h264_params;
 
@@ -518,6 +519,7 @@ impl SimpleEncoder {
         let h265_vps;
         let h265_sps;
         let h265_pps;
+        let h265_sps_vui: Option<vk::video::StdVideoH265SequenceParameterSetVui>;
         let h265_add_info;
         let mut h265_params;
         let h265_dec_pic_buf_mgr;
@@ -538,10 +540,60 @@ impl SimpleEncoder {
                 enc.log2_max_pic_order_cnt_lsb_minus4,
             );
 
+            // Build the SPS VUI: always emit timing (replaces the post-write
+            // patch in vui_patch.rs) and conditionally include the
+            // colour_description block when the caller provided color info.
+            // Time scale convention matches the legacy patcher:
+            // num_units_in_tick = framerate_denominator,
+            // time_scale = framerate_numerator * 2 (field-based, 2 ticks
+            // per frame).
+            let mut vui_flags: vk::video::StdVideoH264SpsVuiFlags = std::mem::zeroed();
+            vui_flags.set_timing_info_present_flag(1);
+            vui_flags.set_fixed_frame_rate_flag(1);
+            let color_vui = config.color_vui;
+            if let Some(cv) = color_vui {
+                if cv.is_video_signal_type_block_needed() {
+                    vui_flags.set_video_signal_type_present_flag(1);
+                    vui_flags.set_video_full_range_flag(cv.full_range_bit());
+                    if cv.is_colour_description_block_needed() {
+                        vui_flags.set_color_description_present_flag(1);
+                    }
+                }
+            }
+            // Decoders skip these fields entirely when
+            // `colour_description_present_flag = 0`, but emit H.273
+            // "Unspecified" (2) rather than "Reserved" (0) for
+            // spec-symmetry — the fields are part of the same byte
+            // budget the per-axis `_byte()` accessors already honor.
+            let unspec = crate::encode::color_vui::H273_UNSPECIFIED;
+            let (vui_primaries, vui_transfer, vui_matrix) = color_vui
+                .map(|cv| (cv.primaries_byte(), cv.transfer_byte(), cv.matrix_byte()))
+                .unwrap_or((unspec, unspec, unspec));
+
+            h264_sps_vui = vk::video::StdVideoH264SequenceParameterSetVui {
+                flags: vui_flags,
+                aspect_ratio_idc: vk::video::StdVideoH264AspectRatioIdc(0),
+                sar_width: 0,
+                sar_height: 0,
+                video_format: 5, // "Unspecified" per H.264 Annex E
+                colour_primaries: vui_primaries,
+                transfer_characteristics: vui_transfer,
+                matrix_coefficients: vui_matrix,
+                num_units_in_tick: config.framerate_denominator,
+                time_scale: config.framerate_numerator.saturating_mul(2),
+                max_num_reorder_frames: 0,
+                max_dec_frame_buffering: 0,
+                chroma_sample_loc_type_top_field: 0,
+                chroma_sample_loc_type_bottom_field: 0,
+                reserved1: 0,
+                pHrdParameters: ptr::null(),
+            };
+
             let mut sps_flags: vk::video::StdVideoH264SpsFlags = std::mem::zeroed();
             sps_flags.set_direct_8x8_inference_flag(if state.sps_info.direct_8x8_inference_flag { 1 } else { 0 });
             sps_flags.set_frame_mbs_only_flag(if state.sps_info.frame_mbs_only_flag { 1 } else { 0 });
             sps_flags.set_frame_cropping_flag(if state.sps_info.frame_cropping_flag { 1 } else { 0 });
+            sps_flags.set_vui_parameters_present_flag(1);
 
             h264_sps = vk::video::StdVideoH264SequenceParameterSet {
                 flags: sps_flags,
@@ -570,7 +622,7 @@ impl SimpleEncoder {
                 reserved2: 0,
                 pOffsetForRefFrame: ptr::null(),
                 pScalingLists: ptr::null(),
-                pSequenceParameterSetVui: ptr::null(),
+                pSequenceParameterSetVui: &h264_sps_vui,
             };
 
             let mut pps_flags: vk::video::StdVideoH264PpsFlags = std::mem::zeroed();
@@ -660,6 +712,53 @@ impl SimpleEncoder {
                 pProfileTierLevel: &h265_profile_tier_level,
             };
 
+            // --- SPS VUI (color-only) ---
+            // H.265 timing rides in the VPS (patched separately in
+            // vui_patch.rs because NVIDIA's driver emits broken VPS
+            // timing). The SPS VUI therefore carries color metadata
+            // only — skipped entirely when the caller provided no
+            // color info, since fabricating defaults defeats the
+            // purpose of typed color metadata.
+            h265_sps_vui = match config.color_vui {
+                Some(cv) if cv.is_video_signal_type_block_needed() => {
+                    let mut flags: vk::video::StdVideoH265SpsVuiFlags = std::mem::zeroed();
+                    flags.set_video_signal_type_present_flag(1);
+                    flags.set_video_full_range_flag(cv.full_range_bit());
+                    if cv.is_colour_description_block_needed() {
+                        flags.set_colour_description_present_flag(1);
+                    }
+                    Some(vk::video::StdVideoH265SequenceParameterSetVui {
+                        flags,
+                        aspect_ratio_idc: vk::video::StdVideoH265AspectRatioIdc(0),
+                        sar_width: 0,
+                        sar_height: 0,
+                        video_format: 5, // "Unspecified" per H.265 Annex E
+                        colour_primaries: cv.primaries_byte(),
+                        transfer_characteristics: cv.transfer_byte(),
+                        matrix_coeffs: cv.matrix_byte(),
+                        chroma_sample_loc_type_top_field: 0,
+                        chroma_sample_loc_type_bottom_field: 0,
+                        reserved1: 0,
+                        reserved2: 0,
+                        def_disp_win_left_offset: 0,
+                        def_disp_win_right_offset: 0,
+                        def_disp_win_top_offset: 0,
+                        def_disp_win_bottom_offset: 0,
+                        vui_num_units_in_tick: 0,
+                        vui_time_scale: 0,
+                        vui_num_ticks_poc_diff_one_minus1: 0,
+                        min_spatial_segmentation_idc: 0,
+                        reserved3: 0,
+                        max_bytes_per_pic_denom: 0,
+                        max_bits_per_min_cu_denom: 0,
+                        log2_max_mv_length_horizontal: 0,
+                        log2_max_mv_length_vertical: 0,
+                        pHrdParameters: ptr::null(),
+                    })
+                }
+                _ => None,
+            };
+
             // --- SPS flags (C++ lines 661-689) ---
             let mut sps_flags: vk::video::StdVideoH265SpsFlags = std::mem::zeroed();
             sps_flags.set_sps_temporal_id_nesting_flag(1);            // C++ line 661
@@ -675,6 +774,9 @@ impl SimpleEncoder {
             sps_flags.set_sample_adaptive_offset_enabled_flag(1);      // C++ line 667
             // strong_intra_smoothing_enabled_flag = 0 (C++ line 672) — already 0
             // sps_temporal_mvp_enabled_flag = 0 (C++ line 671) — already 0
+            if h265_sps_vui.is_some() {
+                sps_flags.set_vui_parameters_present_flag(1);
+            }
 
             // --- SPS (C++ lines 691-757) ---
             h265_sps = vk::video::StdVideoH265SequenceParameterSet {
@@ -716,7 +818,10 @@ impl SimpleEncoder {
                 pScalingLists: ptr::null(),
                 pShortTermRefPicSet: ptr::null(),
                 pLongTermRefPicsSps: ptr::null(),
-                pSequenceParameterSetVui: ptr::null(),
+                pSequenceParameterSetVui: h265_sps_vui
+                    .as_ref()
+                    .map(|v| v as *const _)
+                    .unwrap_or(ptr::null()),
                 pPredictorPaletteEntries: ptr::null(),
             };
 

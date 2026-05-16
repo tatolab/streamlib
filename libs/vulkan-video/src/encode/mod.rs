@@ -17,6 +17,7 @@
 //! interface that stitches together VkVideoEncoder, VkEncoderConfig, the DPB
 //! modules, and Vulkan Video encode commands into a usable library API.
 
+pub mod color_vui;
 pub mod config;
 mod session;
 mod submit;
@@ -27,6 +28,7 @@ mod vui_patch;
 #[cfg(test)]
 mod tests;
 
+pub use color_vui::H273ColorVui;
 pub use config::*;
 
 use vulkanalia::prelude::v1_4::*;

@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
+use crate::linux::color_vui_translate::h273_to_color_info;
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
@@ -148,6 +149,20 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
 
             let timestamp_ns = encoded.timestamp_ns.clone();
 
+            // Color info: prefer the parsed bitstream VUI (self-describing,
+            // survives muxer round-trips that re-encode `EncodedVideoFrame.
+            // color_info`) over the producer's attestation. Falls back to the
+            // passthrough when the bitstream didn't carry a VUI.
+            let parsed_vui = decoder.current_color_vui();
+            let color_info_source = if parsed_vui.is_some() {
+                "bitstream"
+            } else {
+                "encoded_passthrough"
+            };
+            let color_info = parsed_vui
+                .map(|vui| h273_to_color_info(&vui))
+                .or_else(|| encoded.color_info.clone());
+
             // Carry the encoder's input-frame index (`frame_number`) through to the
             // decoded output so downstream consumers (PSNR rig, display PNG sampler)
             // can pair each decoded frame with the reference input.
@@ -161,22 +176,24 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
                 // Per-frame override is opt-in; per-surface
                 // `current_image_layout` from surface-share is the default.
                 texture_layout: None,
-                // Pass color metadata through encoded → decoded so
-                // downstream consumers see what the producer attested.
-                // VUI parsing for codec-attested color lands in a
-                // follow-up.
-                color_info: encoded.color_info.clone(),
+                color_info,
                 mastering_display: encoded.mastering_display.clone(),
                 content_light: encoded.content_light.clone(),
             };
 
+            let log_color = self.frames_decoded == 0;
             self.outputs.write("video_out", &video_frame)?;
             self.frames_decoded += 1;
+            if log_color {
+                tracing::info!(
+                    color_info = ?video_frame.color_info,
+                    source = color_info_source,
+                    "[H265Decoder] First frame decoded — surfaced color_info"
+                );
+            }
         }
 
-        if self.frames_decoded == 1 {
-            tracing::info!("[H265Decoder] First frame decoded");
-        } else if self.frames_decoded % 300 == 0 {
+        if self.frames_decoded % 300 == 0 && self.frames_decoded > 0 {
             tracing::info!(frames = self.frames_decoded, "[H265Decoder] Decode progress");
         }
 

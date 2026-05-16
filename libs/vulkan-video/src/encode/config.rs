@@ -9,6 +9,7 @@
 use vulkanalia::vk;
 use vulkanalia::vk::Handle;
 
+use super::color_vui::H273ColorVui;
 use crate::video_context::{VideoError, VideoResult};
 use crate::vk_video_encoder::vk_video_encoder_def::{align_size, H264_MB_SIZE_ALIGNMENT};
 use crate::vk_video_encoder::vk_video_gop_structure::{
@@ -141,6 +142,11 @@ pub(crate) struct EncodeConfig {
     pub(crate) max_dpb_slots: u32,
     /// Bitstream output buffer size in bytes (0 = use default 2 MiB).
     pub(crate) bitstream_buffer_size: usize,
+    /// H.273 color VUI metadata to chain into the SPS. `None` skips the
+    /// colour_description block; an `H273ColorVui` whose every axis is
+    /// `None` is equivalent. Range alone (no primaries/transfer/matrix)
+    /// emits only the video_signal_type block.
+    pub(crate) color_vui: Option<H273ColorVui>,
 }
 
 impl Default for EncodeConfig {
@@ -166,6 +172,7 @@ impl Default for EncodeConfig {
             num_b_frames: 0,
             max_dpb_slots: 16,
             bitstream_buffer_size: 0,
+            color_vui: None,
         }
     }
 }
@@ -370,6 +377,11 @@ pub struct SimpleEncoderConfig {
     /// See `docs/research/h265-encoder-quality-knobs.md` for why this knob
     /// does not move PSNR at fixed CQP.
     pub effort_level: Option<u32>,
+    /// H.273 color VUI metadata baked into the SPS at session-parameter
+    /// creation time. `None` (or `Some(H273ColorVui::default())`) emits no
+    /// colour_description block. Callers translate their domain `ColorInfo`
+    /// → [`H273ColorVui`] at the processor seam.
+    pub color_vui: Option<H273ColorVui>,
 }
 
 /// Default Vulkan encoder-effort index per codec.
@@ -405,6 +417,7 @@ impl Default for SimpleEncoderConfig {
             idr_interval_secs: 2,
             prepend_header_to_idr: None,
             effort_level: None,
+            color_vui: None,
         }
     }
 }
@@ -504,6 +517,7 @@ impl SimpleEncoderConfig {
             idr_period,
             num_b_frames: num_b,
             max_dpb_slots: if num_b > 0 { 6 } else { 4 },
+            color_vui: self.color_vui,
             ..Default::default()
         }
     }
