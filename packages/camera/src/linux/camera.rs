@@ -8,8 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use streamlib::sdk::color::{
-    matrix_id_from_schema, primaries_id_from_schema, range_id_from_schema, resolve_color_defaults,
-    transfer_id_from_schema, ColorSpaceKind, TransferId,
+    resolve_color_defaults, ColorSpaceKind, MatrixId, PrimariesId, RangeId, TransferId,
 };
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
@@ -581,47 +580,15 @@ fn capture_thread_loop(
     // Resolve V4L2 ColorInfo to a fully-resolved description used by
     // the color converter's per-frame push constants. Held for the
     // life of the capture thread — V4L2 colorspace doesn't change
-    // mid-stream.
-    //
-    // `cached_color_info` is the camera-crate's `_generated_::ColorInfo`
-    // (its own codegen output from `@tatolab/core` schema). Engine's
-    // translation helpers take the engine-crate's flavor of the same
-    // schema — both are codegen-generated from the same JTD source
-    // with identical serde rename names, so a one-shot JSON
-    // round-trip bridges the flavor mismatch cleanly. Runs once at
-    // startup; perf irrelevant.
-    let engine_cached_color_info: streamlib::engine_internal::_generated_::ColorInfo =
-        match streamlib::sdk::serde_json::to_value(&cached_color_info)
-            .and_then(streamlib::sdk::serde_json::from_value)
-        {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(
-                    camera = camera_name,
-                    error = %e,
-                    "failed to convert camera-crate ColorInfo to engine-crate ColorInfo \
-                     — schema mismatch?"
-                );
-                return;
-            }
-        };
+    // mid-stream. Translate this package's `_generated_::ColorInfo`
+    // axes into engine IDs locally; engine APIs take engine-owned
+    // primitive types so each consumer maps its own generated
+    // schema flavor here.
     let resolved_color = resolve_color_defaults(
-        engine_cached_color_info
-            .primaries
-            .as_ref()
-            .map(primaries_id_from_schema),
-        engine_cached_color_info
-            .transfer
-            .as_ref()
-            .map(transfer_id_from_schema),
-        engine_cached_color_info
-            .matrix
-            .as_ref()
-            .map(matrix_id_from_schema),
-        engine_cached_color_info
-            .range
-            .as_ref()
-            .map(range_id_from_schema),
+        cached_color_info.primaries.as_ref().map(primaries_id),
+        cached_color_info.transfer.as_ref().map(transfer_id),
+        cached_color_info.matrix.as_ref().map(matrix_id),
+        cached_color_info.range.as_ref().map(range_id),
         ColorSpaceKind::Yuv,
     );
 
@@ -631,7 +598,7 @@ fn capture_thread_loop(
     // converter instances sharing the same SPIR-V — a few KB of
     // duplicated load, no correctness impact.
     let src_pixel_format = match (&fourcc_bytes, &resolved_color.range) {
-        (b"NV12", streamlib::sdk::color::RangeId::Full) => PixelFormat::Nv12FullRange,
+        (b"NV12", RangeId::Full) => PixelFormat::Nv12FullRange,
         (b"NV12", _) => PixelFormat::Nv12VideoRange,
         (b"YUYV", _) => PixelFormat::Yuyv422,
         _ => unreachable!("input_byte_size match above rejects other fourccs"),
@@ -1353,6 +1320,73 @@ impl LinuxCameraProcessor::Processor {
         }
 
         Ok(devices)
+    }
+}
+
+/// Per-axis maps from this package's `_generated_::ColorInfo` enums to the
+/// engine's color IDs. The engine accepts only its own primitive types in
+/// public method signatures, so each consumer translates its own generated
+/// schema flavor at the boundary; the wire format is the contract across
+/// packages, not Rust type equality.
+
+fn primaries_id(p: &crate::_generated_::tatolab__core::color_info::Primaries) -> PrimariesId {
+    use crate::_generated_::tatolab__core::color_info::Primaries;
+    match p {
+        Primaries::Bt709 => PrimariesId::Bt709,
+        Primaries::Bt470M => PrimariesId::Bt470M,
+        Primaries::Bt470Bg => PrimariesId::Bt470Bg,
+        Primaries::Smpte170m => PrimariesId::Smpte170m,
+        Primaries::Smpte240m => PrimariesId::Smpte240m,
+        Primaries::Film => PrimariesId::Film,
+        Primaries::Bt2020 => PrimariesId::Bt2020,
+        Primaries::Smpte428 => PrimariesId::Smpte428,
+        Primaries::Smpte431 => PrimariesId::Smpte431,
+        Primaries::Smpte432 => PrimariesId::Smpte432,
+        Primaries::Ebu3213 => PrimariesId::Ebu3213,
+    }
+}
+
+fn transfer_id(t: &crate::_generated_::tatolab__core::color_info::Transfer) -> TransferId {
+    use crate::_generated_::tatolab__core::color_info::Transfer;
+    match t {
+        Transfer::Srgb => TransferId::Srgb,
+        Transfer::Bt709
+        | Transfer::Smpte170m
+        | Transfer::Bt2020TenBit
+        | Transfer::Bt2020TwelveBit => TransferId::Bt709,
+        Transfer::Smpte2084 => TransferId::Pq,
+        Transfer::AribStdB67 => TransferId::Hlg,
+        Transfer::Linear => TransferId::Linear,
+        // Gamma22 / Gamma28 / Smpte240m / Log* / Xvycc / Bt1361 / Smpte428
+        // are uncommon end-to-end; map to Linear (no transform).
+        _ => TransferId::Linear,
+    }
+}
+
+fn matrix_id(m: &crate::_generated_::tatolab__core::color_info::Matrix) -> MatrixId {
+    use crate::_generated_::tatolab__core::color_info::Matrix;
+    match m {
+        Matrix::Identity => MatrixId::Identity,
+        Matrix::Bt709 => MatrixId::Bt709,
+        Matrix::Fcc => MatrixId::Fcc,
+        Matrix::Bt470Bg => MatrixId::Bt470Bg,
+        Matrix::Smpte170m => MatrixId::Smpte170m,
+        Matrix::Smpte240m => MatrixId::Smpte240m,
+        Matrix::Ycgco => MatrixId::Ycgco,
+        Matrix::Bt2020Ncl => MatrixId::Bt2020Ncl,
+        Matrix::Bt2020Cl => MatrixId::Bt2020Cl,
+        Matrix::Smpte2085 => MatrixId::Smpte2085,
+        Matrix::ChromaNcl => MatrixId::ChromaNcl,
+        Matrix::ChromaCl => MatrixId::ChromaCl,
+        Matrix::Ictcp => MatrixId::Ictcp,
+    }
+}
+
+fn range_id(r: &crate::_generated_::tatolab__core::color_info::Range) -> RangeId {
+    use crate::_generated_::tatolab__core::color_info::Range;
+    match r {
+        Range::Limited => RangeId::Limited,
+        Range::Full => RangeId::Full,
     }
 }
 
