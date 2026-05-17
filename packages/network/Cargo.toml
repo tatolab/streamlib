@@ -1,0 +1,50 @@
+[package]
+name = "streamlib-network"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "Generic UDP source/sink processors for streamlib — byte-level transport. Framing/protocol concerns belong in consumer packages (MAVLink, RTP, etc.)."
+keywords = ["udp", "network", "transport", "streamlib"]
+categories = ["network-programming", "multimedia"]
+
+[lib]
+name = "streamlib_network"
+crate-type = ["rlib", "cdylib"]
+
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated config
+# types under `crate::_generated_::*`.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+# Async UDP via tokio::net::UdpSocket; the engine already exposes a shared
+# tokio runtime via RuntimeContext::tokio_handle().
+tokio = { workspace = true }
+
+# Pre-bind sockopt configuration (SO_RCVBUF / SO_SNDBUF). tokio::net::UdpSocket
+# doesn't expose these; socket2 is the idiomatic shim.
+socket2 = "0.5"
+
+# Logging.
+tracing.workspace = true
+
+[dev-dependencies]
+# Integration tests spin up a Runner and exercise the processors end-to-end.
+streamlib = { path = "../../libs/streamlib-sdk" }
+tokio = { workspace = true }
+serde_json.workspace = true
+serial_test = "3.1"
+
+[lints]
+workspace = true
