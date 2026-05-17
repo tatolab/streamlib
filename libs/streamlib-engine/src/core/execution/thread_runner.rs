@@ -245,6 +245,12 @@ fn run_reactive_mode(
         // reactor, GStreamer base-src loop). Skips entirely for
         // processors that have no input mailboxes (manual sources),
         // which fall back to the single-process() shape.
+        //
+        // A shutdown_rx check is interleaved with each drain iteration
+        // so a producer that publishes faster than the consumer can
+        // drain (sustained back-pressure) doesn't starve the runner's
+        // shutdown signaling — without it, the outer loop's
+        // shutdown_rx.try_recv at the top never fires.
         loop {
             {
                 let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
@@ -252,6 +258,11 @@ fn run_reactive_mode(
                 if let Err(e) = guard.process(&limited_ctx) {
                     tracing::warn!("[{}] process() failed: {}", id, e);
                 }
+            }
+
+            if shutdown_rx.try_recv().is_ok() {
+                tracing::info!("[{}] Received shutdown signal mid-drain", id);
+                return;
             }
 
             let more_pending = {
