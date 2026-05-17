@@ -3,17 +3,14 @@
 
 //! JPEG decode for streamlib.
 //!
-//! This crate ships the CPU half of a JPEG decoder:
-//!
 //! - Baseline-sequential JPEG marker parser (SOI/DQT/DHT/SOF0/SOS/DRI/EOI,
 //!   skips APPn/COM).
 //! - Huffman entropy decoder that produces zig-zag-ordered DCT coefficient
-//!   buffers, one per component, ready for a GPU compute kernel to
-//!   dequantize + IDCT + chroma-upsample + colorspace-convert.
-//!
-//! A companion GPU kernel built on the streamlib RHI public surface
-//! (`HostVulkanDevice`, `VulkanComputeKernel`) lands in a follow-up
-//! issue under the same milestone.
+//!   buffers, one per component.
+//! - On Linux, a fused GPU compute kernel ([`kernel::JpegDecodeKernel`])
+//!   that dequantizes, runs the 8x8 IDCT, upsamples 4:2:0 chroma, and
+//!   converts BT.601 full-range YCbCr to RGB, writing the result to a
+//!   caller-supplied `rgba8` storage image.
 
 mod bit_reader;
 mod error;
@@ -23,6 +20,9 @@ mod marker;
 mod parser;
 mod scan;
 
+#[cfg(target_os = "linux")]
+pub mod kernel;
+
 pub use error::{JpegError, JpegResult};
 pub use header::{
     ComponentScan, DecodedJpeg, FrameComponent, FrameHeader, QuantizationTable, ScanComponent,
@@ -30,6 +30,9 @@ pub use header::{
 };
 pub use huffman::HuffmanClass;
 pub use marker::ZIGZAG;
+
+#[cfg(target_os = "linux")]
+pub use kernel::{JpegDecodeKernel, JPEG_DECODE_WORKGROUP_SIZE};
 
 /// Parse and entropy-decode a baseline-sequential JPEG bitstream.
 ///
