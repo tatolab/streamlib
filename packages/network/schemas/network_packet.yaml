@@ -1,0 +1,36 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for a single UDP datagram on
+# the wire. Used by both UdpSource (inbound) and UdpSink (outbound) so
+# a source can be wired directly to a sink for echo-style pipelines.
+
+metadata:
+  type: NetworkPacket
+  description: "One UDP datagram — raw payload bytes plus peer address and recv timestamp"
+  read_mode: read_next_in_order
+  buffer_size: 64
+  # 65,536 covers the theoretical UDP datagram maximum (65,507 payload +
+  # IP/UDP headers margin). Real-world datagrams ride 1500-MTU links and
+  # are 1–1472 B; the cap just bounds the worst-case buffer slot.
+  max_payload_bytes: 65536
+
+properties:
+  payload:
+    metadata:
+      description: "Raw UDP datagram bytes (payload only — no IP or UDP headers)"
+    elements:
+      type: uint8
+  peer_addr:
+    metadata:
+      description: |
+        Remote peer address as host:port. On inbound packets this is the
+        sender's address; on outbound packets it targets the destination
+        (overriding UdpSinkConfig.default_destination). Empty string means
+        "use the sink's default_destination". Parses as
+        std::net::SocketAddr — IPv4 ("1.2.3.4:5") or IPv6 ("[::1]:5").
+    type: string
+  timestamp_ns:
+    metadata:
+      description: "Monotonic recv timestamp in nanoseconds at recv_from time (int64 as string). Populated by UdpSource; ignored by UdpSink."
+    type: string

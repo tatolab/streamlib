@@ -40,6 +40,7 @@ members = [
     "packages/screen-capture",   # @tatolab/screen-capture — screen capture processor (Apple-only today; Linux follows in #374)
     "packages/test-fixtures",    # @tatolab/test-fixtures — attribute-macro test fixtures (TestConfiguredProcessor)
     "packages/debug-utilities",  # @tatolab/debug-utilities — utility processors for development, demos, and rigorous-input testing (BgraFileSource, SimplePassthrough)
+    "packages/network",          # @tatolab/network — generic UDP source/sink processors (byte-level transport)
     # Disabled examples blocked on Apple codec/display impls parked in `_apple_impl_pending_/`:
     #   - camera-audio-recorder, screen-recorder, runtime-graph-json-demo (Apple Mp4WriterProcessor)
     #   - whep-player (Apple VideoToolbox + DisplayProcessor)

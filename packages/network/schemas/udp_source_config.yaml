@@ -1,0 +1,28 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for UdpSource config.
+
+metadata:
+  type: UdpSourceConfig
+  description: "Configuration for a UDP source processor — bind a local socket and emit inbound datagrams"
+
+properties:
+  bind_addr:
+    metadata:
+      description: |
+        Local bind address as host:port (e.g. "0.0.0.0:14540" for MAVLink
+        on all interfaces, "[::]:5600" for IPv6 dual-stack, "127.0.0.1:9001"
+        for a loopback-only listener). Parses as std::net::SocketAddr.
+    type: string
+
+optionalProperties:
+  recv_buffer_bytes:
+    metadata:
+      description: |
+        SO_RCVBUF size hint in bytes. Linux defaults to ~200 KB which can
+        drop packets at burst rates (e.g. AGP vision stream at 30Hz × N
+        chunks per JPEG frame). Set to 4–8 MiB for high-rate consumers.
+        The kernel typically clamps to net.core.rmem_max; values above
+        that are silently truncated.
+    type: uint32
