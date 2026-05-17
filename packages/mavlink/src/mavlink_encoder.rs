@@ -55,6 +55,11 @@ impl ReactiveProcessor for MavlinkEncoderProcessor::Processor {
         let default_comp = self.config.default_component_id;
 
         let (system_id, component_id, peer_addr) = identity(&msg, default_sys, default_comp);
+        // Auto-increment per (system_id, component_id) — the input
+        // message's `sequence` field is deliberately ignored. The
+        // schema field exists for visibility on decode, not as an
+        // encoder input; threading it through user code would let a
+        // bug there corrupt a real MAVLink sequence-tracking link.
         let sequence = self
             .sequence_counters
             .entry((system_id, component_id))
@@ -148,11 +153,10 @@ fn convert_to_mavlink(msg: &MavlinkMessage) -> Result<MavMessage> {
     Ok(match msg {
         MavlinkMessage::Heartbeat(d) => MavMessage::HEARTBEAT(HEARTBEAT_DATA {
             custom_mode: d.custom_mode,
-            mavtype: MavType::from_u8(d.mavtype).unwrap_or(MavType::MAV_TYPE_GENERIC),
-            autopilot: MavAutopilot::from_u8(d.autopilot)
-                .unwrap_or(MavAutopilot::MAV_AUTOPILOT_GENERIC),
+            mavtype: lift_enum::<MavType>(d.mavtype, "HEARTBEAT.mavtype")?,
+            autopilot: lift_enum::<MavAutopilot>(d.autopilot, "HEARTBEAT.autopilot")?,
             base_mode: MavModeFlag::from_bits_truncate(d.base_mode),
-            system_status: MavState::from_u8(d.system_status).unwrap_or(MavState::MAV_STATE_UNINIT),
+            system_status: lift_enum::<MavState>(d.system_status, "HEARTBEAT.system_status")?,
             mavlink_version: d.mavlink_version,
         }),
         MavlinkMessage::Attitude(d) => MavMessage::ATTITUDE(ATTITUDE_DATA {
@@ -207,8 +211,10 @@ fn convert_to_mavlink(msg: &MavlinkMessage) -> Result<MavMessage> {
                 type_mask: PositionTargetTypemask::from_bits_truncate(d.type_mask),
                 target_system: d.target_system,
                 target_component: d.target_component,
-                coordinate_frame: MavFrame::from_u8(d.coordinate_frame)
-                    .unwrap_or(MavFrame::MAV_FRAME_LOCAL_NED),
+                coordinate_frame: lift_enum::<MavFrame>(
+                    d.coordinate_frame,
+                    "SET_POSITION_TARGET_LOCAL_NED.coordinate_frame",
+                )?,
             })
         }
         MavlinkMessage::SetAttitudeTarget(d) => {
@@ -218,7 +224,14 @@ fn convert_to_mavlink(msg: &MavlinkMessage) -> Result<MavMessage> {
                     d.q.len()
                 )));
             }
+            if d.thrust_body.len() != 3 {
+                return Err(Error::Configuration(format!(
+                    "MavlinkEncoder: SET_ATTITUDE_TARGET.thrust_body must have exactly 3 elements, got {}",
+                    d.thrust_body.len()
+                )));
+            }
             let q = [d.q[0], d.q[1], d.q[2], d.q[3]];
+            let thrust_body = [d.thrust_body[0], d.thrust_body[1], d.thrust_body[2]];
             MavMessage::SET_ATTITUDE_TARGET(SET_ATTITUDE_TARGET_DATA {
                 time_boot_ms: d.time_boot_ms,
                 q,
@@ -229,7 +242,7 @@ fn convert_to_mavlink(msg: &MavlinkMessage) -> Result<MavMessage> {
                 target_system: d.target_system,
                 target_component: d.target_component,
                 type_mask: AttitudeTargetTypemask::from_bits_truncate(d.type_mask),
-                thrust_body: [0.0, 0.0, 0.0],
+                thrust_body,
             })
         }
         MavlinkMessage::Timesync(d) => {
@@ -248,10 +261,23 @@ fn convert_to_mavlink(msg: &MavlinkMessage) -> Result<MavMessage> {
             MavMessage::TIMESYNC(TIMESYNC_DATA {
                 tc1,
                 ts1,
-                target_system: 0,
-                target_component: 0,
+                target_system: d.target_system,
+                target_component: d.target_component,
             })
         }
+    })
+}
+
+/// Lift a raw `u8` from the wire schema into a typed rust-mavlink enum
+/// variant. Returns `Error::Configuration` when the value doesn't match
+/// any declared discriminant — the schema documents these fields as
+/// enum-bearing uint8, so silent substitution to GENERIC would
+/// misrepresent caller intent on the wire.
+fn lift_enum<E: FromPrimitive>(value: u8, ctx: &'static str) -> Result<E> {
+    E::from_u8(value).ok_or_else(|| {
+        Error::Configuration(format!(
+            "MavlinkEncoder: {ctx} = {value} is not a known enum discriminant"
+        ))
     })
 }
 
@@ -365,6 +391,7 @@ mod tests {
             body_pitch_rate: 0.0,
             body_yaw_rate: 0.0,
             thrust: 0.5,
+            thrust_body: vec![0.0, 0.0, 0.0],
         })
     }
 
@@ -377,6 +404,8 @@ mod tests {
             timestamp_ns: "0".to_string(),
             tc1: "1234567890".to_string(),
             ts1: "9876543210".to_string(),
+            target_system: 0,
+            target_component: 0,
         })
     }
 
@@ -491,12 +520,45 @@ mod tests {
             body_pitch_rate: 0.0,
             body_yaw_rate: 0.0,
             thrust: 0.0,
+            thrust_body: vec![0.0, 0.0, 0.0],
         });
         match convert_to_mavlink(&msg) {
             Err(Error::Configuration(s)) => {
                 assert!(s.contains("q must have exactly 4 elements"), "got: {s}");
             }
             other => panic!("expected configuration error on q.len() != 4, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_thrust_body_length_rejects() {
+        let msg = MavlinkMessage::SetAttitudeTarget(MavlinkMessageSetAttitudeTarget {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+            peer_addr: String::new(),
+            timestamp_ns: "0".to_string(),
+            time_boot_ms: 0,
+            target_system: 1,
+            target_component: 1,
+            type_mask: 0,
+            q: vec![1.0, 0.0, 0.0, 0.0],
+            body_roll_rate: 0.0,
+            body_pitch_rate: 0.0,
+            body_yaw_rate: 0.0,
+            thrust: 0.0,
+            thrust_body: vec![0.0, 0.0], // only 2 elements — invalid
+        });
+        match convert_to_mavlink(&msg) {
+            Err(Error::Configuration(s)) => {
+                assert!(
+                    s.contains("thrust_body must have exactly 3 elements"),
+                    "got: {s}"
+                );
+            }
+            other => panic!(
+                "expected configuration error on thrust_body.len() != 3, got {other:?}"
+            ),
         }
     }
 
@@ -510,12 +572,40 @@ mod tests {
             timestamp_ns: "0".to_string(),
             tc1: "not-a-number".to_string(),
             ts1: "0".to_string(),
+            target_system: 0,
+            target_component: 0,
         });
         match convert_to_mavlink(&msg) {
             Err(Error::Configuration(s)) => {
                 assert!(s.contains("tc1 is not a valid i64"), "got: {s}");
             }
             other => panic!("expected configuration error on bad tc1 string, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_enum_discriminant_rejects() {
+        let msg = MavlinkMessage::Heartbeat(MavlinkMessageHeartbeat {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+            peer_addr: String::new(),
+            timestamp_ns: "0".to_string(),
+            custom_mode: 0,
+            mavtype: 250, // not a known MAV_TYPE discriminant
+            autopilot: 12,
+            base_mode: 0,
+            system_status: 4,
+            mavlink_version: 3,
+        });
+        match convert_to_mavlink(&msg) {
+            Err(Error::Configuration(s)) => {
+                assert!(s.contains("mavtype"), "expected mavtype in error: {s}");
+                assert!(s.contains("250"), "expected the bad value in error: {s}");
+            }
+            other => panic!(
+                "expected configuration error on out-of-range mavtype, got {other:?}"
+            ),
         }
     }
 }

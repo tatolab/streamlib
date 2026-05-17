@@ -315,6 +315,11 @@ mapping:
       thrust:
         metadata: { description: "Collective thrust, normalized to 0..1 (-1..1 for vehicles supporting reverse thrust)." }
         type: float32
+      thrust_body:
+        metadata:
+          description: "3D thrust setpoint in body NED frame, normalized to -1..1. Exactly 3 elements [x, y, z]; MAVLink2 extension field that defaults to [0, 0, 0]."
+        elements:
+          type: float32
 
   timesync:
     properties:
@@ -341,3 +346,11 @@ mapping:
         metadata:
           description: "Time sync timestamp 2, ns (int64 as string). Time of request sender."
         type: string
+      target_system:
+        metadata:
+          description: "Target system ID. Request: 0 (broadcast) or id of specific system. MAVLink2 extension field that defaults to 0."
+        type: uint8
+      target_component:
+        metadata:
+          description: "Target component ID. Request: 0 (broadcast) or id of specific component. MAVLink2 extension field that defaults to 0."
+        type: uint8
