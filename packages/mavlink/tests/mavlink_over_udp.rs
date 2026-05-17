@@ -271,21 +271,6 @@ fn udp_source_decoder_then_encoder_udp_sink_loopback_all_six_variants() {
         echo_socket
             .send_to(bytes, source_bind)
             .unwrap_or_else(|e| panic!("inject {kind}: {e}"));
-        // Inter-frame gap to dodge a reactive-processor burst-coalescing
-        // limitation: when we inject 6 datagrams back-to-back, UdpSource
-        // recv+publishes all 6 to its output port (verified via
-        // packets_received=6 at teardown), but the downstream
-        // MavlinkDecoder's reactive process() is only fired ~2 times
-        // (messages_decoded=2), so 4 frames stall in the iceoryx2
-        // mailbox and the integration test sees only the first couple
-        // echoes. The pattern suggests edge-triggered notification
-        // semantics in the reactive scheduler rather than level-
-        // triggered "wake while has_data". Spacing sends out at 20ms
-        // sidesteps it without affecting the typed-payload assertions
-        // below. Worth investigating at the engine layer — any
-        // reactive consumer with a burst-producing upstream would
-        // hit the same shape.
-        std::thread::sleep(Duration::from_millis(20));
     }
 
     // Collect echoes until we've seen all 6 variants or hit the read
