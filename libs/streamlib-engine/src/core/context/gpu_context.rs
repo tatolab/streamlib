@@ -680,6 +680,29 @@ impl GpuContext {
         cache.insert(id.to_string(), registration);
     }
 
+    /// Remove a `surface_id` from the same-process texture cache.
+    ///
+    /// Idempotent — missing entries are a no-op. Producers that
+    /// pre-register textures with a known lifetime (e.g.
+    /// [`TextureRing`](crate::core::context::TextureRing)) call this on
+    /// teardown so the cache doesn't outlive the underlying texture.
+    pub fn unregister_texture(&self, id: &str) {
+        let mut cache = self.texture_cache.lock().unwrap();
+        cache.remove(id);
+    }
+
+    /// Refresh the registration's `current_layout` for a given
+    /// `surface_id`. No-op if the surface_id isn't in the cache.
+    /// Used by producers after a layout transition (e.g.
+    /// [`TextureRing`](crate::core::context::TextureRing)'s per-frame
+    /// copy ends in `SHADER_READ_ONLY_OPTIMAL`).
+    #[cfg(target_os = "linux")]
+    pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
+        if let Some(reg) = self.texture_cache.lock().unwrap().get(id) {
+            reg.update_layout(layout);
+        }
+    }
+
     /// Resolve a VideoFrame's full registration record (texture + layout).
     ///
     /// Same lookup path as [`Self::resolve_texture_by_surface_id`] but
@@ -936,6 +959,52 @@ impl GpuContext {
             texture,
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         );
+        Ok(())
+    }
+
+    /// Copy a host-visible pixel buffer's contents into an *already-allocated*
+    /// device-local texture.
+    ///
+    /// Counterpart to [`Self::upload_pixel_buffer_as_texture`]: that one
+    /// allocates a fresh texture per call (privileged), this one writes
+    /// to a texture the caller already owns (sampbox-safe — no
+    /// allocation, no descriptor / pipeline construction, just a
+    /// `vkCmdCopyBufferToImage` queue submit). The shared command queue
+    /// serializes the submit; layout transitions run UNDEFINED →
+    /// TRANSFER_DST → SHADER_READ_ONLY_OPTIMAL via the existing
+    /// `upload_buffer_to_image` path (content discard on the
+    /// UNDEFINED transition is intended — the caller is about to
+    /// overwrite the slot's contents anyway).
+    ///
+    /// When `surface_id` resolves to an entry in the texture cache
+    /// (e.g. a ring slot pre-registered via
+    /// [`crate::core::context::GpuContextFullAccess::create_texture_ring`])
+    /// the registration's `current_layout` is refreshed to
+    /// `SHADER_READ_ONLY_OPTIMAL` to match the post-upload state.
+    #[cfg(target_os = "linux")]
+    pub fn copy_pixel_buffer_to_texture(
+        &self,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
+        texture: &Texture,
+        surface_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        unsafe {
+            let image = texture.inner.image().ok_or_else(|| {
+                Error::GpuError("Texture has no VkImage".into())
+            })?;
+            self.device.inner.upload_buffer_to_image(
+                pixel_buffer.buffer_ref().inner.buffer(),
+                image,
+                width,
+                height,
+            )?;
+        }
+        // Refresh the registration's layout (no-op for unregistered surface_ids).
+        if let Some(reg) = self.texture_cache.lock().unwrap().get(surface_id) {
+            reg.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
+        }
         Ok(())
     }
 
@@ -2057,6 +2126,37 @@ impl GpuContextLimitedAccess {
         self.inner.acquire_texture(desc)
     }
 
+    /// Copy a host-visible pixel buffer's contents into a pre-allocated
+    /// device-local texture (e.g. a [`TextureRing`](crate::core::context::TextureRing)
+    /// slot the caller already owns).
+    ///
+    /// Sandbox-safe: no allocation, no descriptor / pipeline construction,
+    /// just a `vkCmdCopyBufferToImage` queue submit on the shared queue.
+    /// See [`GpuContext::copy_pixel_buffer_to_texture`] for the full
+    /// contract.
+    #[cfg(target_os = "linux")]
+    pub fn copy_pixel_buffer_to_texture(
+        &self,
+        pixel_buffer: &PixelBuffer,
+        texture: &Texture,
+        surface_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        self.inner.copy_pixel_buffer_to_texture(
+            pixel_buffer,
+            texture,
+            surface_id,
+            width,
+            height,
+        )
+    }
+
+    /// See [`GpuContext::unregister_texture`].
+    pub fn unregister_texture(&self, id: &str) {
+        self.inner.unregister_texture(id);
+    }
+
     /// Get the shared command queue.
     ///
     /// Submitting recorded command buffers from `process()` is safe: the
@@ -2248,6 +2348,114 @@ impl GpuContextFullAccess {
     ) -> Result<()> {
         self.inner
             .upload_pixel_buffer_as_texture(surface_id, pixel_buffer, width, height)
+    }
+
+    /// Copy a host-visible pixel buffer's contents into an *already-allocated*
+    /// device-local texture.
+    ///
+    /// See [`GpuContext::copy_pixel_buffer_to_texture`] for the
+    /// underlying contract; the same primitive is exposed on
+    /// [`GpuContextLimitedAccess`] for hot-path callers that already
+    /// hold a texture (e.g. from a [`TextureRing`](crate::core::context::TextureRing)
+    /// slot).
+    #[cfg(target_os = "linux")]
+    pub fn copy_pixel_buffer_to_texture(
+        &self,
+        pixel_buffer: &PixelBuffer,
+        texture: &Texture,
+        surface_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        self.inner.copy_pixel_buffer_to_texture(
+            pixel_buffer,
+            texture,
+            surface_id,
+            width,
+            height,
+        )
+    }
+
+    /// Pre-allocate a ring of `count` non-exportable DEVICE_LOCAL
+    /// textures and register each in the same-process texture cache.
+    ///
+    /// The returned [`crate::core::context::TextureRing`] is the
+    /// canonical engine helper for decode-output hot paths — replaces
+    /// every per-frame `upload_pixel_buffer_as_texture` escalation
+    /// with a one-shot setup-time allocation plus a sandbox-safe
+    /// rotation in `process()`. See `docs/architecture/texture-ring.md`
+    /// for the recipe and CLAUDE.md → "Texture rings — single
+    /// canonical abstraction" for the engine-model context.
+    ///
+    /// `count` is rejected if zero; sizing to
+    /// `MAX_FRAMES_IN_FLIGHT = 2`
+    /// (`docs/learnings/vulkan-frames-in-flight.md`) is the standard
+    /// for hot-path decoders.
+    #[cfg(target_os = "linux")]
+    pub fn create_texture_ring(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        usages: TextureUsages,
+        count: usize,
+    ) -> Result<Arc<crate::core::context::TextureRing>> {
+        use crate::core::context::{TextureRing, TextureRingSlot};
+
+        if count == 0 {
+            return Err(Error::GpuError(
+                "create_texture_ring: count must be > 0".into(),
+            ));
+        }
+
+        let mut slots = Vec::with_capacity(count);
+        let mut upload_resources = Vec::with_capacity(count);
+        for slot_index in 0..count {
+            let desc = TextureDescriptor::new(width, height, format).with_usage(usages);
+            let texture = self.inner.device.create_texture_local(&desc)?;
+            let surface_id = uuid::Uuid::new_v4().to_string();
+            // Spec-correct initial layout for a freshly-allocated VkImage
+            // that no one has touched yet (per docs/architecture/texture-registration.md
+            // Producer Rule 2). The per-frame
+            // `TextureRing::copy_pixel_buffer_to_slot` runs
+            // upload_buffer_to_image_amortized which transitions UNDEFINED →
+            // SHADER_READ_ONLY_OPTIMAL and updates the registration to
+            // match — so after the first per-frame copy on a slot, the
+            // claim and reality both read SHADER_READ_ONLY_OPTIMAL for
+            // downstream consumers' barriers.
+            self.inner.register_texture_with_layout(
+                &surface_id,
+                texture.clone(),
+                VulkanLayout::UNDEFINED,
+            );
+            slots.push(TextureRingSlot {
+                surface_id,
+                texture,
+                slot_index,
+            });
+            // Pre-allocate per-slot upload resources (private command
+            // pool + cb + fence) so the per-frame hot path never calls
+            // vkCreateCommandPool / vkAllocateCommandBuffers /
+            // vkCreateFence — just reset + record + submit + wait via
+            // upload_buffer_to_image_amortized.
+            let res = crate::vulkan::rhi::HostVulkanUploadResources::new(
+                &self.inner.device.inner,
+            )?;
+            upload_resources.push(res);
+        }
+        Ok(TextureRing::from_slots(
+            slots,
+            upload_resources,
+            width,
+            height,
+            format,
+            self.inner.clone(),
+        ))
+    }
+
+    /// See [`GpuContext::unregister_texture`].
+    pub fn unregister_texture(&self, id: &str) {
+        self.inner.unregister_texture(id);
     }
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].

@@ -2516,6 +2516,12 @@ impl HostVulkanDevice {
     /// Copy a host-visible VkBuffer to a device-local VkImage (RGBA upload).
     ///
     /// Transitions the image UNDEFINED → TRANSFER_DST → SHADER_READ_ONLY.
+    ///
+    /// Creates and destroys a transient command pool + command buffer + fence
+    /// per call — fine for one-shot uses (texture init from a fixture), wrong
+    /// for the per-frame hot path. Hot-path callers should use
+    /// [`HostVulkanUploadResources`] + [`Self::upload_buffer_to_image_amortized`]
+    /// instead.
     pub unsafe fn upload_buffer_to_image(
         &self,
         src_buffer: vk::Buffer,
@@ -2526,7 +2532,6 @@ impl HostVulkanDevice {
         use crate::core::Error;
 
         let device = self.device();
-        let queue = self.queue;
         let qf = self.queue_family_index;
 
         let pool = unsafe {
@@ -2549,6 +2554,69 @@ impl HostVulkanDevice {
 
         let fence = unsafe { device.create_fence(&vk::FenceCreateInfo::default(), None) }
             .map_err(|e| Error::GpuError(format!("upload fence: {e}")))?;
+
+        unsafe { self.record_and_submit_buffer_to_image(cb, fence, src_buffer, dst_image, width, height) }?;
+
+        unsafe { device.destroy_fence(fence, None) };
+        unsafe { device.destroy_command_pool(pool, None) };
+
+        Ok(())
+    }
+
+    /// Amortized hot-path variant of [`Self::upload_buffer_to_image`].
+    ///
+    /// Reuses caller-provided pool / command buffer / fence — no
+    /// `vkCreateCommandPool` / `vkAllocateCommandBuffers` / `vkCreateFence`
+    /// per call. The cb is reset (its pool must have
+    /// `RESET_COMMAND_BUFFER_BIT`) and the fence is reset before recording.
+    /// Submits to the shared queue and blocks on the fence (same sync
+    /// model as the per-call variant; only the resource churn is removed).
+    ///
+    /// Used by [`crate::core::context::TextureRing`]'s per-slot upload
+    /// path — see `docs/architecture/texture-ring.md`.
+    pub unsafe fn upload_buffer_to_image_amortized(
+        &self,
+        cb: vk::CommandBuffer,
+        fence: vk::Fence,
+        src_buffer: vk::Buffer,
+        dst_image: vk::Image,
+        width: u32,
+        height: u32,
+    ) -> crate::core::Result<()> {
+        use crate::core::Error;
+
+        let device = self.device();
+        // Fence may be signaled (from prior submit on this slot) or
+        // unsignaled (first use). Reset unconditionally.
+        unsafe { device.reset_fences(&[fence]) }
+            .map_err(|e| Error::GpuError(format!("amortized upload reset fence: {e}")))?;
+        // Cb may be in executable (recorded but not submitted), pending
+        // (submitted, before fence wait), or initial state. We just
+        // fenced-waited (or first use), so it's safe to reset.
+        unsafe { device.reset_command_buffer(cb, vk::CommandBufferResetFlags::empty()) }
+            .map_err(|e| Error::GpuError(format!("amortized upload reset cb: {e}")))?;
+
+        unsafe { self.record_and_submit_buffer_to_image(cb, fence, src_buffer, dst_image, width, height) }
+    }
+
+    /// Shared by [`Self::upload_buffer_to_image`] and
+    /// [`Self::upload_buffer_to_image_amortized`]: records the
+    /// UNDEFINED → TRANSFER_DST → copy → SHADER_READ_ONLY sequence into
+    /// `cb`, submits to the shared queue (mutex-protected), and waits
+    /// on `fence`. Caller owns cb + fence lifecycle.
+    unsafe fn record_and_submit_buffer_to_image(
+        &self,
+        cb: vk::CommandBuffer,
+        fence: vk::Fence,
+        src_buffer: vk::Buffer,
+        dst_image: vk::Image,
+        width: u32,
+        height: u32,
+    ) -> crate::core::Result<()> {
+        use crate::core::Error;
+
+        let device = self.device();
+        let queue = self.queue;
 
         unsafe {
             device.begin_command_buffer(
@@ -2638,9 +2706,6 @@ impl HostVulkanDevice {
         unsafe { self.submit_to_queue(queue, &[submit], fence) }?;
         unsafe { device.wait_for_fences(&[fence], true, u64::MAX) }
             .map_err(|e| Error::GpuError(format!("wait: {e}")))?;
-
-        unsafe { device.destroy_fence(fence, None) };
-        unsafe { device.destroy_command_pool(pool, None) };
 
         Ok(())
     }

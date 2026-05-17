@@ -403,6 +403,28 @@ versus elsewhere (`Videoframe` IPC for per-frame state; adapter
 `SurfaceState` for adapter-internal state; RDG #631 for declared-usage
 hints), read the doc end-to-end first — the boundaries are deliberate.
 
+#### Texture rings — single canonical abstraction
+
+Every decode-output / CPU-upload-style hot path that needs a
+small ring of rotating output textures rides
+`TextureRing` plus the public
+`GpuContextFullAccess::create_texture_ring` /
+`GpuContextLimitedAccess::copy_pixel_buffer_to_texture` pair.
+**Never hand-roll a `Vec<Texture>` + rotating index inside a
+consumer for this use case** — the engine helper pre-allocates
+on FullAccess at setup, hands back an `Arc<TextureRing>` that
+the consumer rotates via `acquire_next()` from `process()`,
+and the companion Limited primitive writes CPU-staged bytes
+into a slot without escalating. `MAX_FRAMES_IN_FLIGHT = 2`
+slots is the standard depth. See @docs/architecture/texture-ring.md
+for the recipe (separate sub-recipes for CPU-upload consumers
+and GPU-native producers — the ring shape is the same; only the
+slot-write primitive differs).
+
+GPU-native producers that hand-roll their own ring today
+(camera) are not in scope to migrate retroactively, but new
+producers should ride the helper from day 1.
+
 
 ### Custom Commands
 
