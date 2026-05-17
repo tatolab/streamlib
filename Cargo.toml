@@ -77,6 +77,7 @@ members = [
     "libs/vulkan-video",                  # Vulkan Video encoder/decoder (H.264/H.265 via Vulkan Video extensions)
     "libs/vulkan-video/examples/h264-codec", # Example: H.264 encode/decode roundtrip
     "libs/vulkan-video/examples/h265-codec", # Example: H.265 encode/decode roundtrip
+    "libs/vulkan-jpeg",                   # JPEG decoder: CPU parser + Huffman entropy decode + GPU compute kernel (compute kernel ships in a follow-up issue)
 ]
 
 [workspace.package]
