@@ -1,0 +1,256 @@
+// Copyright (c) 2026 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! MAVLink2 decoder processor — accepts `NetworkPacket` payloads on
+//! `bytes_in` and emits typed `MavlinkMessage` variants on `messages_out`.
+//! Parse failures (malformed frames, unknown msgid, CRC fail) are
+//! counted and logged on first occurrence + powers-of-two thereafter;
+//! they do NOT abort the processor.
+
+use std::io::Cursor;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use mavlink::dialects::common::MavMessage;
+use mavlink::peek_reader::PeekReader;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib::sdk::error::Result;
+use streamlib::sdk::processors::ReactiveProcessor;
+
+use crate::_generated_::tatolab__mavlink::mavlink_message::{
+    MavlinkMessageAttitude, MavlinkMessageHeartbeat, MavlinkMessageHighresImu,
+    MavlinkMessageSetAttitudeTarget, MavlinkMessageSetPositionTargetLocalNed, MavlinkMessageTimesync,
+};
+use crate::_generated_::{MavlinkMessage, NetworkPacket};
+
+#[streamlib::sdk::processor("MavlinkDecoder")]
+pub struct MavlinkDecoderProcessor {
+    messages_decoded: AtomicU64,
+    parse_errors: AtomicU64,
+}
+
+impl ReactiveProcessor for MavlinkDecoderProcessor::Processor {
+    fn setup(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        tracing::info!(
+            warn_on_parse_error = ?self.config.warn_on_parse_error,
+            "MavlinkDecoder: setup",
+        );
+        std::future::ready(Ok(()))
+    }
+
+    fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        if !self.inputs.has_data("bytes_in") {
+            return Ok(());
+        }
+        let packet: NetworkPacket = self.inputs.read("bytes_in")?;
+
+        let warn = self.config.warn_on_parse_error.unwrap_or(true);
+
+        match decode_one(&packet.payload, &packet.peer_addr, &packet.timestamp_ns) {
+            Ok(Some(msg)) => {
+                self.outputs.write("messages_out", &msg)?;
+                let n = self.messages_decoded.fetch_add(1, Ordering::Relaxed) + 1;
+                if n == 1 {
+                    tracing::info!("MavlinkDecoder: first message decoded");
+                }
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(err) => {
+                let n = self.parse_errors.fetch_add(1, Ordering::Relaxed) + 1;
+                if warn && (n == 1 || n.is_power_of_two()) {
+                    tracing::warn!(
+                        error = %err,
+                        peer_addr = %packet.peer_addr,
+                        bytes = packet.payload.len(),
+                        parse_errors_total = n,
+                        "MavlinkDecoder: dropping malformed frame",
+                    );
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        tracing::info!(
+            messages_decoded = self.messages_decoded.load(Ordering::Relaxed),
+            parse_errors = self.parse_errors.load(Ordering::Relaxed),
+            "MavlinkDecoder: teardown",
+        );
+        std::future::ready(Ok(()))
+    }
+}
+
+/// Parse one MAVLink2 frame out of a byte slice and convert into the
+/// streamlib `MavlinkMessage` tagged union. Returns `Ok(None)` when the
+/// message is a valid MAVLink2 frame of a type outside our supported six;
+/// returns `Err` for wire-level corruption.
+pub(crate) fn decode_one(
+    payload: &[u8],
+    peer_addr: &str,
+    timestamp_ns: &str,
+) -> std::result::Result<Option<MavlinkMessage>, mavlink::error::MessageReadError> {
+    let mut reader = PeekReader::new(Cursor::new(payload));
+    let (header, msg) = mavlink::read_v2_msg::<MavMessage, _>(&mut reader)?;
+    Ok(convert(msg, header, peer_addr, timestamp_ns))
+}
+
+fn convert(
+    msg: MavMessage,
+    header: mavlink::MavHeader,
+    peer_addr: &str,
+    timestamp_ns: &str,
+) -> Option<MavlinkMessage> {
+    use mavlink::dialects::common::MavMessage::*;
+    let system_id = header.system_id;
+    let component_id = header.component_id;
+    let sequence = header.sequence;
+    let peer_addr = peer_addr.to_string();
+    let timestamp_ns = timestamp_ns.to_string();
+
+    Some(match msg {
+        HEARTBEAT(d) => MavlinkMessage::Heartbeat(MavlinkMessageHeartbeat {
+            system_id,
+            component_id,
+            sequence,
+            peer_addr,
+            timestamp_ns,
+            custom_mode: d.custom_mode,
+            mavtype: d.mavtype as u8,
+            autopilot: d.autopilot as u8,
+            base_mode: d.base_mode.bits(),
+            system_status: d.system_status as u8,
+            mavlink_version: d.mavlink_version,
+        }),
+        ATTITUDE(d) => MavlinkMessage::Attitude(MavlinkMessageAttitude {
+            system_id,
+            component_id,
+            sequence,
+            peer_addr,
+            timestamp_ns,
+            time_boot_ms: d.time_boot_ms,
+            roll: d.roll,
+            pitch: d.pitch,
+            yaw: d.yaw,
+            rollspeed: d.rollspeed,
+            pitchspeed: d.pitchspeed,
+            yawspeed: d.yawspeed,
+        }),
+        HIGHRES_IMU(d) => MavlinkMessage::HighresImu(MavlinkMessageHighresImu {
+            system_id,
+            component_id,
+            sequence,
+            peer_addr,
+            timestamp_ns,
+            time_usec: d.time_usec.to_string(),
+            xacc: d.xacc,
+            yacc: d.yacc,
+            zacc: d.zacc,
+            xgyro: d.xgyro,
+            ygyro: d.ygyro,
+            zgyro: d.zgyro,
+            xmag: d.xmag,
+            ymag: d.ymag,
+            zmag: d.zmag,
+            abs_pressure: d.abs_pressure,
+            diff_pressure: d.diff_pressure,
+            pressure_alt: d.pressure_alt,
+            temperature: d.temperature,
+            fields_updated: d.fields_updated.bits(),
+            id: d.id,
+        }),
+        SET_POSITION_TARGET_LOCAL_NED(d) => {
+            MavlinkMessage::SetPositionTargetLocalNed(MavlinkMessageSetPositionTargetLocalNed {
+                system_id,
+                component_id,
+                sequence,
+                peer_addr,
+                timestamp_ns,
+                time_boot_ms: d.time_boot_ms,
+                target_system: d.target_system,
+                target_component: d.target_component,
+                coordinate_frame: d.coordinate_frame as u8,
+                type_mask: d.type_mask.bits(),
+                x: d.x,
+                y: d.y,
+                z: d.z,
+                vx: d.vx,
+                vy: d.vy,
+                vz: d.vz,
+                afx: d.afx,
+                afy: d.afy,
+                afz: d.afz,
+                yaw: d.yaw,
+                yaw_rate: d.yaw_rate,
+            })
+        }
+        SET_ATTITUDE_TARGET(d) => {
+            MavlinkMessage::SetAttitudeTarget(MavlinkMessageSetAttitudeTarget {
+                system_id,
+                component_id,
+                sequence,
+                peer_addr,
+                timestamp_ns,
+                time_boot_ms: d.time_boot_ms,
+                target_system: d.target_system,
+                target_component: d.target_component,
+                type_mask: d.type_mask.bits(),
+                q: d.q.to_vec(),
+                body_roll_rate: d.body_roll_rate,
+                body_pitch_rate: d.body_pitch_rate,
+                body_yaw_rate: d.body_yaw_rate,
+                thrust: d.thrust,
+            })
+        }
+        TIMESYNC(d) => MavlinkMessage::Timesync(MavlinkMessageTimesync {
+            system_id,
+            component_id,
+            sequence,
+            peer_addr,
+            timestamp_ns,
+            tc1: d.tc1.to_string(),
+            ts1: d.ts1.to_string(),
+        }),
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_bytes_return_error() {
+        let garbage = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
+        let result = decode_one(&garbage, "127.0.0.1:14550", "0");
+        assert!(
+            result.is_err(),
+            "garbage bytes must surface a parser error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn empty_bytes_return_error() {
+        let result = decode_one(&[], "127.0.0.1:14550", "0");
+        assert!(
+            result.is_err(),
+            "empty payload cannot contain a MAVLink frame"
+        );
+    }
+
+    #[test]
+    fn truncated_frame_returns_error() {
+        let truncated = vec![0xFD, 0x00];
+        let result = decode_one(&truncated, "127.0.0.1:14550", "0");
+        assert!(
+            result.is_err(),
+            "truncated frame must error, got: {result:?}"
+        );
+    }
+}

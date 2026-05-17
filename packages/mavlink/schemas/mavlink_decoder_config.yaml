@@ -1,0 +1,18 @@
+# Copyright (c) 2026 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for MavlinkDecoder config.
+
+metadata:
+  type: MavlinkDecoderConfig
+  description: "Configuration for the MAVLink2 decoder processor — controls how malformed frames are handled"
+
+optionalProperties:
+  warn_on_parse_error:
+    metadata:
+      description: |
+        When true, log parse failures (malformed bytes, unknown msgid, CRC fail)
+        via tracing::warn on first occurrence + powers-of-two thereafter.
+        When false, parse failures increment the drop counter silently.
+        Default: true.
+    type: boolean

@@ -1,0 +1,343 @@
+# Copyright (c) 2026 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for a decoded MAVLink2 message,
+# represented as a tagged union over the six core navigation / telemetry /
+# control messages. The discriminator (`kind`) preserves the message-type
+# distinction across the iceoryx2 mailbox; consumers `match` on the
+# variant to dispatch typed payload handling.
+#
+# Each variant carries:
+#   - MAVLink header fields (system_id, component_id, sequence)
+#   - Networking metadata (peer_addr, timestamp_ns from the source
+#     NetworkPacket; both pass through encode → decode roundtrips).
+#   - The MAVLink message body, field-for-field matched against the
+#     common-dialect XML definition. Field types mirror the wire format:
+#     uint8 enums (MavType, MavAutopilot, MavModeFlag, MavState) stay as
+#     raw `uint8` here so the schema doesn't bake the enum surface into
+#     the wire vocabulary — consumers map to typed enums in user code if
+#     they wish. uint64 / int64 fields ride as decimal strings per the
+#     in-tree int64-as-string convention.
+#
+# Adding a new MAVLink message later means adding one entry to `mapping:`
+# below — the processor surface (one input port, one output port per
+# direction) stays unchanged.
+
+metadata:
+  type: MavlinkMessage
+  description: "Decoded MAVLink2 message as a tagged union over the core six common-dialect messages"
+  read_mode: read_next_in_order
+  buffer_size: 64
+  # MAVLink2 max wire frame is 280 bytes (1 STX + 10 header + 255 payload
+  # + 2 CRC + 13 signature). The decoded-struct form is larger due to
+  # msgpack overhead and string-encoded int64 fields, but still fits
+  # comfortably under 1 KiB; round up for headroom.
+  max_payload_bytes: 1024
+
+discriminator: kind
+mapping:
+  heartbeat:
+    properties:
+      system_id:
+        metadata:
+          description: "MAVLink system ID of the sender (1..255). Vehicles conventionally use 1; GCS uses 255."
+        type: uint8
+      component_id:
+        metadata:
+          description: "MAVLink component ID of the sender (1..255). Autopilot uses 1; companion-computer / GCS commonly use MAV_COMP_ID_USER1 (190)."
+        type: uint8
+      sequence:
+        metadata:
+          description: "MAVLink sequence counter; wraps at 256. Auto-incremented by MavlinkEncoder per (system_id, component_id) pair."
+        type: uint8
+      peer_addr:
+        metadata:
+          description: "Networking peer address as host:port. On decode this is propagated from the source NetworkPacket; on encode it overrides UdpSink's default_destination. Empty string means 'use the sink's default_destination'."
+        type: string
+      timestamp_ns:
+        metadata:
+          description: "Monotonic timestamp from the source NetworkPacket recv (int64 as string). Populated by MavlinkDecoder; ignored by MavlinkEncoder."
+        type: string
+      custom_mode:
+        metadata:
+          description: "A bitfield for use for autopilot-specific flags."
+        type: uint32
+      mavtype:
+        metadata:
+          description: "Vehicle/component type — MAV_TYPE enum value (raw uint8). 0=GENERIC, 2=QUADROTOR, 6=GCS, etc."
+        type: uint8
+      autopilot:
+        metadata:
+          description: "Autopilot type / class — MAV_AUTOPILOT enum value (raw uint8). 8=INVALID (non-flight-controller node), 12=PX4, 3=ARDUPILOTMEGA."
+        type: uint8
+      base_mode:
+        metadata:
+          description: "System mode bitmap — MAV_MODE_FLAG (raw uint8). Bits include MANUAL_INPUT_ENABLED, STABILIZE_ENABLED, GUIDED_ENABLED, AUTO_ENABLED, SAFETY_ARMED."
+        type: uint8
+      system_status:
+        metadata:
+          description: "System status — MAV_STATE enum value (raw uint8). 0=UNINIT, 3=STANDBY, 4=ACTIVE, 5=CRITICAL, 6=EMERGENCY."
+        type: uint8
+      mavlink_version:
+        metadata:
+          description: "MAVLink wire-protocol version. Always 3 for MAVLink2."
+        type: uint8
+
+  attitude:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      time_boot_ms:
+        metadata:
+          description: "Timestamp since system boot, milliseconds."
+        type: uint32
+      roll:
+        metadata:
+          description: "Roll angle (-pi..+pi), radians."
+        type: float32
+      pitch:
+        metadata:
+          description: "Pitch angle (-pi..+pi), radians."
+        type: float32
+      yaw:
+        metadata:
+          description: "Yaw angle (-pi..+pi), radians."
+        type: float32
+      rollspeed:
+        metadata:
+          description: "Roll angular speed, rad/s."
+        type: float32
+      pitchspeed:
+        metadata:
+          description: "Pitch angular speed, rad/s."
+        type: float32
+      yawspeed:
+        metadata:
+          description: "Yaw angular speed, rad/s."
+        type: float32
+
+  highres_imu:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      time_usec:
+        metadata:
+          description: "Timestamp (UNIX Epoch or time since system boot), microseconds (uint64 as string)."
+        type: string
+      xacc:
+        metadata: { description: "X acceleration, m/s^2." }
+        type: float32
+      yacc:
+        metadata: { description: "Y acceleration, m/s^2." }
+        type: float32
+      zacc:
+        metadata: { description: "Z acceleration, m/s^2." }
+        type: float32
+      xgyro:
+        metadata: { description: "Angular speed around X axis, rad/s." }
+        type: float32
+      ygyro:
+        metadata: { description: "Angular speed around Y axis, rad/s." }
+        type: float32
+      zgyro:
+        metadata: { description: "Angular speed around Z axis, rad/s." }
+        type: float32
+      xmag:
+        metadata: { description: "X magnetic field, gauss." }
+        type: float32
+      ymag:
+        metadata: { description: "Y magnetic field, gauss." }
+        type: float32
+      zmag:
+        metadata: { description: "Z magnetic field, gauss." }
+        type: float32
+      abs_pressure:
+        metadata: { description: "Absolute pressure, hPa." }
+        type: float32
+      diff_pressure:
+        metadata: { description: "Differential pressure, hPa." }
+        type: float32
+      pressure_alt:
+        metadata: { description: "Altitude calculated from pressure, m." }
+        type: float32
+      temperature:
+        metadata: { description: "Temperature, degC. 0 if temperature not provided." }
+        type: float32
+      fields_updated:
+        metadata:
+          description: "Bitmap indicating which IMU fields hold updated values — HIGHRES_IMU_UPDATED_FLAGS bitmask."
+        type: uint16
+      id:
+        metadata:
+          description: "IMU instance ID (extension field, defaults to 0)."
+        type: uint8
+
+  set_position_target_local_ned:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      time_boot_ms:
+        metadata:
+          description: "Timestamp since system boot, milliseconds."
+        type: uint32
+      target_system:
+        metadata: { description: "MAVLink system ID of the target." }
+        type: uint8
+      target_component:
+        metadata: { description: "MAVLink component ID of the target." }
+        type: uint8
+      coordinate_frame:
+        metadata:
+          description: "Coordinate frame — MAV_FRAME enum. 1=LOCAL_NED, 7=LOCAL_OFFSET_NED, 8=BODY_NED, 9=BODY_OFFSET_NED."
+        type: uint8
+      type_mask:
+        metadata:
+          description: "Bitmap to indicate which fields should be ignored by the vehicle (POSITION_TARGET_TYPEMASK_*)."
+        type: uint16
+      x:
+        metadata: { description: "X position in NED frame, m." }
+        type: float32
+      y:
+        metadata: { description: "Y position in NED frame, m." }
+        type: float32
+      z:
+        metadata: { description: "Z position in NED frame, m (positive down)." }
+        type: float32
+      vx:
+        metadata: { description: "X velocity in NED frame, m/s." }
+        type: float32
+      vy:
+        metadata: { description: "Y velocity in NED frame, m/s." }
+        type: float32
+      vz:
+        metadata: { description: "Z velocity in NED frame, m/s." }
+        type: float32
+      afx:
+        metadata: { description: "X acceleration / force in NED frame, m/s^2." }
+        type: float32
+      afy:
+        metadata: { description: "Y acceleration / force in NED frame, m/s^2." }
+        type: float32
+      afz:
+        metadata: { description: "Z acceleration / force in NED frame, m/s^2." }
+        type: float32
+      yaw:
+        metadata: { description: "Yaw setpoint, rad." }
+        type: float32
+      yaw_rate:
+        metadata: { description: "Yaw rate setpoint, rad/s." }
+        type: float32
+
+  set_attitude_target:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      time_boot_ms:
+        metadata:
+          description: "Timestamp since system boot, milliseconds."
+        type: uint32
+      target_system:
+        metadata: { description: "MAVLink system ID of the target." }
+        type: uint8
+      target_component:
+        metadata: { description: "MAVLink component ID of the target." }
+        type: uint8
+      type_mask:
+        metadata:
+          description: "Bitmap to ignore one or more attitude fields (ATTITUDE_TARGET_TYPEMASK_*)."
+        type: uint8
+      q:
+        metadata:
+          description: "Attitude quaternion [w, x, y, z]. Exactly four elements; encoder validates length."
+        elements:
+          type: float32
+      body_roll_rate:
+        metadata: { description: "Body roll rate, rad/s." }
+        type: float32
+      body_pitch_rate:
+        metadata: { description: "Body pitch rate, rad/s." }
+        type: float32
+      body_yaw_rate:
+        metadata: { description: "Body yaw rate, rad/s." }
+        type: float32
+      thrust:
+        metadata: { description: "Collective thrust, normalized to 0..1 (-1..1 for vehicles supporting reverse thrust)." }
+        type: float32
+
+  timesync:
+    properties:
+      system_id:
+        metadata: { description: "MAVLink system ID of the sender." }
+        type: uint8
+      component_id:
+        metadata: { description: "MAVLink component ID of the sender." }
+        type: uint8
+      sequence:
+        metadata: { description: "MAVLink sequence counter." }
+        type: uint8
+      peer_addr:
+        metadata: { description: "Networking peer address (host:port). See heartbeat.peer_addr." }
+        type: string
+      timestamp_ns:
+        metadata: { description: "Monotonic timestamp from source NetworkPacket recv (int64 as string)." }
+        type: string
+      tc1:
+        metadata:
+          description: "Time sync timestamp 1, ns (int64 as string). 0 from initiator; filled by responder."
+        type: string
+      ts1:
+        metadata:
+          description: "Time sync timestamp 2, ns (int64 as string). Time of request sender."
+        type: string

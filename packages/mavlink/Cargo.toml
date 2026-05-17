@@ -1,0 +1,60 @@
+[package]
+name = "streamlib-mavlink"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "MAVLink2 encoder + decoder processors for streamlib — wraps rust-mavlink (common dialect). Pairs with @tatolab/network for MAVLink-over-UDP."
+keywords = ["mavlink", "drone", "telemetry", "streamlib"]
+categories = ["aerospace::drones", "encoding", "multimedia"]
+
+[lib]
+name = "streamlib_mavlink"
+crate-type = ["rlib", "cdylib"]
+
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated wire
+# types under `crate::_generated_::*` (NetworkPacket imported from
+# @tatolab/network; MavlinkMessage + Config types defined locally).
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+# MAVLink wire format + typed messages. Default features off so the
+# bundled MavConnection transports (`transport-udp`, `transport-tcp`,
+# `transport-direct-serial`) are not pulled in — @tatolab/network owns
+# the socket; our processors only need the parser / writer primitives.
+mavlink = { version = "0.18", default-features = false, features = [
+    "std",
+    "dialect-common",
+    "mav2-message-extensions",
+] }
+
+# num-traits — rust-mavlink's generated enums derive FromPrimitive /
+# ToPrimitive; the encoder uses FromPrimitive::from_u8 to lift raw u8
+# values back into MavType / MavAutopilot / MavState / MavFrame.
+num-traits = { version = "0.2", default-features = false }
+
+# Logging.
+tracing.workspace = true
+
+[dev-dependencies]
+# Integration tests spin up a Runner and exercise the encode/decode
+# pipeline through real iceoryx2 + UDP.
+streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-network = { path = "../network" }
+tokio = { workspace = true }
+serde_json.workspace = true
+serial_test = "3.1"
+
+[lints]
+workspace = true
