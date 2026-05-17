@@ -1,0 +1,26 @@
+# Copyright (c) 2026 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for MavlinkEncoder config.
+
+metadata:
+  type: MavlinkEncoderConfig
+  description: "Configuration for the MAVLink2 encoder processor — sequence counter is auto-incremented per (system_id, component_id) pair"
+
+properties:
+  default_system_id:
+    metadata:
+      description: |
+        Default MAVLink system ID stamped on outbound messages whose
+        MavlinkMessage.system_id is 0. Real autopilots use 1; companion-
+        computer / ground-station clients commonly use 255 (per the de-
+        facto GCS convention). Per-message system_id always wins when set.
+    type: uint8
+  default_component_id:
+    metadata:
+      description: |
+        Default MAVLink component ID stamped on outbound messages whose
+        MavlinkMessage.component_id is 0. Autopilot uses 1; companion
+        computers commonly use MAV_COMP_ID_USER1 (190). Per-message
+        component_id always wins when set.
+    type: uint8

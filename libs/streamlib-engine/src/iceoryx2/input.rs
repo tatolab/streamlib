@@ -290,6 +290,21 @@ impl InputMailboxes {
             .unwrap_or(false)
     }
 
+    /// True iff any configured input port has at least one queued
+    /// payload. Drains pending iceoryx2 samples into the per-port
+    /// mailboxes first, so this reflects total queue depth rather than
+    /// just iceoryx2-buffered state.
+    ///
+    /// Used by the reactive scheduler to keep dispatching `process()`
+    /// while events remain after a single epoll wake — iceoryx2's
+    /// Event service coalesces multiple notifies on the same EventId
+    /// into one fd-readable transition, so the runner must check
+    /// queue depth itself rather than trusting one wake = one event.
+    pub fn any_port_has_data(&self) -> bool {
+        self.receive_pending();
+        self.ports.values().any(|p| !p.mailbox.is_empty())
+    }
+
     /// Drain all raw frame slices from the given port's mailbox.
     pub fn drain(&self, port: &str) -> impl Iterator<Item = Vec<u8>> + '_ {
         self.ports
@@ -396,5 +411,81 @@ mod tests {
         // pfd is on the stack and not aliased.
         let n = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
         n > 0 && (pfd.revents & libc::POLLIN) != 0
+    }
+
+    /// Regression lock for the reactive-scheduler burst-drain path:
+    /// `any_port_has_data()` must reflect total queued depth across all
+    /// configured ports, draining iceoryx2 samples into the per-port
+    /// mailboxes first. The reactive runner relies on this method to
+    /// know whether more `process()` calls are needed after a single
+    /// epoll wake — iceoryx2's Event service coalesces multiple
+    /// notify()s on the same EventId into one fd-readable transition,
+    /// so the runner cannot trust "one wake = one event". Mentally
+    /// reverting `any_port_has_data` to always return `false` makes
+    /// this test fail at every depth check below.
+    #[test]
+    fn any_port_has_data_reflects_total_queued_depth() {
+        let mut mailboxes = InputMailboxes::new();
+        mailboxes.add_port("port_a", 64, ReadMode::ReadNextInOrder);
+        mailboxes.add_port("port_b", 64, ReadMode::ReadNextInOrder);
+
+        assert!(!mailboxes.any_port_has_data(), "empty mailboxes report no data");
+
+        // Build a minimal valid frame for `port_a` and route it directly
+        // — bypasses the iceoryx2 subscriber, exercising only the
+        // mailbox-depth accounting.
+        let schema_ident = streamlib_ipc_types::SchemaIdentWire::from_segments(
+            "tatolab", "test", "AnyPortHasData", 1, 0, 0,
+        )
+        .expect("schema ident");
+        let make_frame = |port: &str| -> Vec<u8> {
+            let mut buf = vec![0u8; FRAME_HEADER_SIZE + 4];
+            let header = FrameHeader::new(port, schema_ident, 0, 4);
+            header.write_to_slice(&mut buf);
+            buf[FRAME_HEADER_SIZE..].copy_from_slice(&[1, 2, 3, 4]);
+            buf
+        };
+
+        // Burst: three frames on port_a, two on port_b.
+        for _ in 0..3 {
+            assert!(mailboxes.route(make_frame("port_a")));
+        }
+        for _ in 0..2 {
+            assert!(mailboxes.route(make_frame("port_b")));
+        }
+
+        // All 5 are queued; any_port_has_data sees them.
+        assert!(mailboxes.any_port_has_data(), "five queued frames must report has_data");
+
+        // Drain port_a entirely via read_raw (skips msgpack deserialization
+        // of the synthetic payload).
+        for _ in 0..3 {
+            assert!(
+                mailboxes
+                    .read_raw("port_a")
+                    .expect("read_raw port_a ok")
+                    .is_some(),
+                "port_a should still have a frame",
+            );
+        }
+        assert!(
+            mailboxes.any_port_has_data(),
+            "port_a empty but port_b still has 2 frames",
+        );
+
+        // Drain the other.
+        for _ in 0..2 {
+            assert!(
+                mailboxes
+                    .read_raw("port_b")
+                    .expect("read_raw port_b ok")
+                    .is_some(),
+                "port_b should still have a frame",
+            );
+        }
+        assert!(
+            !mailboxes.any_port_has_data(),
+            "both ports drained — must report no data",
+        );
     }
 }

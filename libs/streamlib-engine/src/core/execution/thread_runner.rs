@@ -232,11 +232,48 @@ fn run_reactive_mode(
         #[cfg(not(target_os = "linux"))]
         std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
 
-        {
-            let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
-            let mut guard = processor.lock();
-            if let Err(e) = guard.process(&limited_ctx) {
-                tracing::warn!("[{}] process() failed: {}", id, e);
+        // Drain-loop dispatch: iceoryx2's Event service coalesces
+        // multiple notify()s on the same EventId into one fd-readable
+        // transition (the underlying IdTracker is a bit-set, not a
+        // counter). After `drain_listener` clears that bit, the
+        // listener fd is not-readable again, and the next `epoll_wait`
+        // would block — even though the subscriber's shared-memory
+        // ring and the per-port mailboxes may still hold unread
+        // samples from the same burst. Call `process()` until every
+        // input port reports empty, then go back to sleep. This is
+        // the standard level-triggered drain pattern (libuv, tokio
+        // reactor, GStreamer base-src loop). Skips entirely for
+        // processors that have no input mailboxes (manual sources),
+        // which fall back to the single-process() shape.
+        //
+        // A shutdown_rx check is interleaved with each drain iteration
+        // so a producer that publishes faster than the consumer can
+        // drain (sustained back-pressure) doesn't starve the runner's
+        // shutdown signaling — without it, the outer loop's
+        // shutdown_rx.try_recv at the top never fires.
+        loop {
+            {
+                let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
+                let mut guard = processor.lock();
+                if let Err(e) = guard.process(&limited_ctx) {
+                    tracing::warn!("[{}] process() failed: {}", id, e);
+                }
+            }
+
+            if shutdown_rx.try_recv().is_ok() {
+                tracing::info!("[{}] Received shutdown signal mid-drain", id);
+                return;
+            }
+
+            let more_pending = {
+                let mut guard = processor.lock();
+                match guard.get_iceoryx2_input_mailboxes() {
+                    Some(mailboxes) => mailboxes.any_port_has_data(),
+                    None => false,
+                }
+            };
+            if !more_pending {
+                break;
             }
         }
     }
