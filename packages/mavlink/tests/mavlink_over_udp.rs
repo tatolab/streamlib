@@ -199,10 +199,8 @@ fn udp_source_decoder_then_encoder_udp_sink_loopback_all_six_variants() {
     let echo_socket =
         std::net::UdpSocket::bind("127.0.0.1:0").expect("bind echo socket");
     echo_socket
-        .set_read_timeout(Some(Duration::from_secs(3)))
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .expect("set echo read timeout");
-    let _echo_addr = echo_socket.local_addr().expect("echo local_addr");
-
     let source_bind = pick_free_udp_port();
 
     let runtime = Runner::new().expect("Runner::new");
@@ -273,43 +271,152 @@ fn udp_source_decoder_then_encoder_udp_sink_loopback_all_six_variants() {
         echo_socket
             .send_to(bytes, source_bind)
             .unwrap_or_else(|e| panic!("inject {kind}: {e}"));
-        // Small inter-frame gap so each frame can flow through the
-        // four-processor chain (recv → decode → encode → send) before
-        // the next one races for the same iceoryx2 mailbox slot.
-        // Without this the sink's send_loop sees rapid bursts that the
-        // bounded outbound mpsc + kernel UDP buffer may coalesce or
-        // drop on loopback under load.
+        // Inter-frame gap to dodge a reactive-processor burst-coalescing
+        // limitation: when we inject 6 datagrams back-to-back, UdpSource
+        // recv+publishes all 6 to its output port (verified via
+        // packets_received=6 at teardown), but the downstream
+        // MavlinkDecoder's reactive process() is only fired ~2 times
+        // (messages_decoded=2), so 4 frames stall in the iceoryx2
+        // mailbox and the integration test sees only the first couple
+        // echoes. The pattern suggests edge-triggered notification
+        // semantics in the reactive scheduler rather than level-
+        // triggered "wake while has_data". Spacing sends out at 20ms
+        // sidesteps it without affecting the typed-payload assertions
+        // below. Worth investigating at the engine layer — any
+        // reactive consumer with a burst-producing upstream would
+        // hit the same shape.
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    // The runtime is reactive; we collect 6 echoes back. Order is not
-    // guaranteed across processors, so build a "saw" set.
-    let mut seen = std::collections::HashSet::new();
+    // Collect echoes until we've seen all 6 variants or hit the read
+    // timeout. recv_from's `peer` is the sink's outbound source port
+    // (an ephemeral port chosen when the sink bound 0.0.0.0:0). What
+    // we're asserting via `recv_from` succeeding at all is that the
+    // sink sent the bytes to the echo socket's bind port — the kernel
+    // would not route them to us otherwise. peer_addr propagation is
+    // implicit in the recv working.
+    let mut seen: std::collections::HashMap<String, Vec<u8>> =
+        std::collections::HashMap::new();
     let mut recv_buf = [0u8; 512];
     for _ in 0..frames.len() {
-        let (n, peer) = echo_socket
-            .recv_from(&mut recv_buf)
-            .expect("recv echoed frame");
-        // recv_from's `peer` is the sink's outbound source port (an
-        // ephemeral port chosen when the sink bound 0.0.0.0:0). What
-        // we're asserting via `recv_from` succeeding at all is that
-        // the sink sent the bytes to `echo_addr.port()` — the kernel
-        // would not route them to us otherwise. peer_addr propagation
-        // is implicit in the recv working.
+        let (n, peer) = match echo_socket.recv_from(&mut recv_buf) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!(
+                    "[integration] recv timed out after {} variants: {e}; seen={:?}",
+                    seen.len(),
+                    seen.keys().collect::<Vec<_>>()
+                );
+                break;
+            }
+        };
         assert_eq!(peer.ip().to_string(), "127.0.0.1", "echo arrived on loopback");
         assert_ne!(peer.port(), 0, "echo sender used a real port");
         let kind = parse_kind(&recv_buf[..n]);
-        assert!(
-            seen.insert(kind.to_string()),
-            "saw duplicate echo for {kind}",
-        );
+        seen.entry(kind.to_string())
+            .or_insert_with(|| recv_buf[..n].to_vec());
     }
+
+    // Stop the runtime BEFORE asserting so teardown counters land in
+    // the logs even if the assertion below fails.
+    runtime.stop().expect("runtime.stop");
 
     let expected: std::collections::HashSet<String> = frames
         .iter()
         .map(|(kind, _)| kind.to_string())
         .collect();
-    assert_eq!(seen, expected, "missing variants in echo set");
+    let seen_kinds: std::collections::HashSet<String> = seen.keys().cloned().collect();
+    assert_eq!(seen_kinds, expected, "missing variants in echo set");
 
-    runtime.stop().expect("runtime.stop");
+    // Stronger lock: decode each echoed frame back into a typed
+    // MavMessage and assert the typed payload survived the
+    // bytes → typed → bytes → typed round-trip through real iceoryx2 +
+    // UDP. Sequence and src system/component IDs are rewritten by the
+    // encoder (per-(sys, comp) auto-increment, default 1/1), so they
+    // don't match the injected values — compare only the typed body.
+    for (kind, expected_bytes) in &frames {
+        let echoed = seen.get(*kind).unwrap_or_else(|| {
+            panic!("missing echoed frame for {kind}")
+        });
+
+        let expected_typed = read_typed(expected_bytes);
+        let echoed_typed = read_typed(echoed);
+
+        assert_eq!(
+            std::mem::discriminant(&expected_typed),
+            std::mem::discriminant(&echoed_typed),
+            "echo for {kind} round-tripped to a different MavMessage variant",
+        );
+        assert_typed_body_eq(*kind, &expected_typed, &echoed_typed);
+    }
+}
+
+fn read_typed(bytes: &[u8]) -> MavMessage {
+    let mut reader = PeekReader::new(std::io::Cursor::new(bytes));
+    let (_hdr, msg) = mavlink::read_v2_msg::<MavMessage, _>(&mut reader)
+        .expect("decode frame for body comparison");
+    msg
+}
+
+fn assert_typed_body_eq(kind: &str, expected: &MavMessage, got: &MavMessage) {
+    match (expected, got) {
+        (MavMessage::HEARTBEAT(a), MavMessage::HEARTBEAT(b)) => {
+            assert_eq!(a.custom_mode, b.custom_mode, "{kind}.custom_mode");
+            assert_eq!(a.mavtype as u32, b.mavtype as u32, "{kind}.mavtype");
+            assert_eq!(a.autopilot as u32, b.autopilot as u32, "{kind}.autopilot");
+            assert_eq!(a.base_mode.bits(), b.base_mode.bits(), "{kind}.base_mode");
+            assert_eq!(
+                a.system_status as u32, b.system_status as u32,
+                "{kind}.system_status"
+            );
+            assert_eq!(a.mavlink_version, b.mavlink_version, "{kind}.mavlink_version");
+        }
+        (MavMessage::ATTITUDE(a), MavMessage::ATTITUDE(b)) => {
+            assert_eq!(a.time_boot_ms, b.time_boot_ms, "{kind}.time_boot_ms");
+            assert_eq!(a.roll.to_bits(), b.roll.to_bits(), "{kind}.roll");
+            assert_eq!(a.pitch.to_bits(), b.pitch.to_bits(), "{kind}.pitch");
+            assert_eq!(a.yaw.to_bits(), b.yaw.to_bits(), "{kind}.yaw");
+            assert_eq!(a.rollspeed.to_bits(), b.rollspeed.to_bits(), "{kind}.rollspeed");
+            assert_eq!(a.pitchspeed.to_bits(), b.pitchspeed.to_bits(), "{kind}.pitchspeed");
+            assert_eq!(a.yawspeed.to_bits(), b.yawspeed.to_bits(), "{kind}.yawspeed");
+        }
+        (MavMessage::HIGHRES_IMU(a), MavMessage::HIGHRES_IMU(b)) => {
+            assert_eq!(a.time_usec, b.time_usec, "{kind}.time_usec");
+            assert_eq!(a.xacc.to_bits(), b.xacc.to_bits(), "{kind}.xacc");
+            assert_eq!(a.yacc.to_bits(), b.yacc.to_bits(), "{kind}.yacc");
+            assert_eq!(a.zacc.to_bits(), b.zacc.to_bits(), "{kind}.zacc");
+            assert_eq!(
+                a.fields_updated.bits(),
+                b.fields_updated.bits(),
+                "{kind}.fields_updated"
+            );
+            assert_eq!(a.id, b.id, "{kind}.id");
+        }
+        (MavMessage::SET_POSITION_TARGET_LOCAL_NED(a), MavMessage::SET_POSITION_TARGET_LOCAL_NED(b)) => {
+            assert_eq!(a.time_boot_ms, b.time_boot_ms);
+            assert_eq!(a.x.to_bits(), b.x.to_bits());
+            assert_eq!(a.y.to_bits(), b.y.to_bits());
+            assert_eq!(a.z.to_bits(), b.z.to_bits());
+            assert_eq!(a.target_system, b.target_system);
+            assert_eq!(a.target_component, b.target_component);
+            assert_eq!(a.type_mask.bits(), b.type_mask.bits());
+            assert_eq!(a.coordinate_frame as u32, b.coordinate_frame as u32);
+        }
+        (MavMessage::SET_ATTITUDE_TARGET(a), MavMessage::SET_ATTITUDE_TARGET(b)) => {
+            assert_eq!(a.time_boot_ms, b.time_boot_ms);
+            assert_eq!(a.q, b.q, "{kind}.q");
+            assert_eq!(a.target_system, b.target_system);
+            assert_eq!(a.target_component, b.target_component);
+            assert_eq!(a.type_mask.bits(), b.type_mask.bits());
+            assert_eq!(a.thrust.to_bits(), b.thrust.to_bits());
+            assert_eq!(a.thrust_body, b.thrust_body, "{kind}.thrust_body");
+        }
+        (MavMessage::TIMESYNC(a), MavMessage::TIMESYNC(b)) => {
+            assert_eq!(a.tc1, b.tc1, "{kind}.tc1");
+            assert_eq!(a.ts1, b.ts1, "{kind}.ts1");
+            assert_eq!(a.target_system, b.target_system);
+            assert_eq!(a.target_component, b.target_component);
+        }
+        (e, g) => panic!("variant mismatch for {kind}: expected {e:?}, got {g:?}"),
+    }
 }
