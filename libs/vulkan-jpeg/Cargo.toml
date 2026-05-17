@@ -5,11 +5,15 @@ edition = "2024"
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
-description = "JPEG decode for streamlib — CPU parser + Huffman entropy decode; GPU compute kernel (dequant + IDCT + chroma upsample + YCbCr->RGB) ships in a follow-up issue"
+description = "JPEG decode for streamlib — CPU parser + Huffman entropy decode + fused Vulkan compute kernel (dequant + IDCT + chroma upsample + YCbCr->RGB)"
 
 [dependencies]
 thiserror = { workspace = true }
 tracing = { workspace = true }
+bytemuck = { version = "1.16", features = ["derive"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+streamlib = { path = "../streamlib-sdk" }
 
 [dev-dependencies]
 jpeg-encoder = "0.6"

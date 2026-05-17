@@ -1,0 +1,154 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+//
+// Fused JPEG decode compute kernel: dequantize -> 8x8 IDCT -> 4:2:0 chroma
+// upsample (nearest) -> BT.601 full-range YCbCr -> RGB -> write rgba8 storage
+// image. One thread per output pixel; each thread independently dequantizes
+// and runs the 2D IDCT for the Y, Cb, Cr blocks covering its pixel.
+//
+// Per-thread IDCT is intentionally naive (64 cosine-product accumulations per
+// sample, times 3 planes = 192 per output pixel). Plenty fast for the
+// 640x360 / 30 Hz target and keeps the kernel small and easy to reason about.
+// A cooperative shared-memory IDCT is a future optimization.
+//
+// Coefficient buffer (binding 0): int[] holding signed coefficients in
+// zig-zag scan order, sign-extended from the parser's i16 representation.
+// Plane layout: Y at offset 0, Cb at `cb_coef_offset`, Cr at `cr_coef_offset`.
+//
+// Quant-table buffer (binding 1): uint[] holding 8-bit quant values
+// zero-extended from u16. Y table at offset 0, chroma table at
+// `chroma_qtable_offset`. Both tables are stored in zig-zag order
+// matching the coefficient layout.
+
+#version 450
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Coefficients {
+    int coefs[];
+};
+
+layout(set = 0, binding = 1, std430) readonly buffer QuantTables {
+    uint qtable[];
+};
+
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D output_image;
+
+layout(push_constant) uniform PushConstants {
+    uint width;
+    uint height;
+    uint y_blocks_h;
+    uint y_blocks_v;
+    uint chroma_blocks_h;
+    uint chroma_blocks_v;
+    uint cb_coef_offset;
+    uint cr_coef_offset;
+    uint chroma_qtable_offset;
+} pc;
+
+// ITU-T T.81 Figure A.6 zig-zag scan order. `ZIGZAG[zz]` returns the
+// natural row-major linear index (row * 8 + col) of the coefficient at
+// zig-zag scan position `zz`.
+const uint ZIGZAG[64] = uint[64](
+     0u,  1u,  8u, 16u,  9u,  2u,  3u, 10u,
+    17u, 24u, 32u, 25u, 18u, 11u,  4u,  5u,
+    12u, 19u, 26u, 33u, 40u, 48u, 41u, 34u,
+    27u, 20u, 13u,  6u,  7u, 14u, 21u, 28u,
+    35u, 42u, 49u, 56u, 57u, 50u, 43u, 36u,
+    29u, 22u, 15u, 23u, 30u, 37u, 44u, 51u,
+    58u, 59u, 52u, 45u, 38u, 31u, 39u, 46u,
+    53u, 60u, 61u, 54u, 47u, 55u, 62u, 63u
+);
+
+const float PI = 3.14159265358979323846;
+const float INV_SQRT2 = 0.70710678118654752440;
+
+// Dequantize + 2D IDCT a single sample at (in_x, in_y) within the 8x8 block
+// at grid coords (block_x, block_y) on a plane whose first coefficient is
+// at `plane_coef_offset` and whose quant table starts at `plane_qt_offset`.
+float idct_sample(
+    uint plane_coef_offset,
+    uint plane_qt_offset,
+    uint blocks_h,
+    uint block_x,
+    uint block_y,
+    uint in_x,
+    uint in_y
+) {
+    uint block_base = plane_coef_offset + (block_y * blocks_h + block_x) * 64u;
+    float sum = 0.0;
+    for (uint zz = 0u; zz < 64u; ++zz) {
+        uint natural = ZIGZAG[zz];
+        uint u = natural & 7u;
+        uint v = natural >> 3;
+        float coef = float(coefs[block_base + zz]);
+        float q = float(qtable[plane_qt_offset + zz]);
+        float dequant = coef * q;
+        float cu = (u == 0u) ? INV_SQRT2 : 1.0;
+        float cv = (v == 0u) ? INV_SQRT2 : 1.0;
+        float cx = cos((float(2u * in_x + 1u) * float(u) * PI) / 16.0);
+        float cy = cos((float(2u * in_y + 1u) * float(v) * PI) / 16.0);
+        sum += cu * cv * dequant * cx * cy;
+    }
+    return sum * 0.25;
+}
+
+void main() {
+    uint px = gl_GlobalInvocationID.x;
+    uint py = gl_GlobalInvocationID.y;
+    if (px >= pc.width || py >= pc.height) {
+        return;
+    }
+
+    // Y plane: one 8x8 block per (px/8, py/8); sample at (px%8, py%8).
+    uint y_block_x = px / 8u;
+    uint y_block_y = py / 8u;
+    uint y_in_x = px & 7u;
+    uint y_in_y = py & 7u;
+
+    // 4:2:0 chroma: one 8x8 block per (px/16, py/16); each chroma sample
+    // covers a 2x2 pixel region. Nearest-neighbor upsample (no chroma
+    // siting / co-located interpolation) — matches the CPU reference.
+    uint chroma_block_x = px / 16u;
+    uint chroma_block_y = py / 16u;
+    uint chroma_in_x = (px & 15u) >> 1;
+    uint chroma_in_y = (py & 15u) >> 1;
+
+    // JPEG level shift: +128 to lift signed IDCT result into [0, 255].
+    float y_sample = idct_sample(
+        0u, 0u,
+        pc.y_blocks_h,
+        y_block_x, y_block_y,
+        y_in_x, y_in_y
+    ) + 128.0;
+    float cb_sample = idct_sample(
+        pc.cb_coef_offset, pc.chroma_qtable_offset,
+        pc.chroma_blocks_h,
+        chroma_block_x, chroma_block_y,
+        chroma_in_x, chroma_in_y
+    ) + 128.0;
+    float cr_sample = idct_sample(
+        pc.cr_coef_offset, pc.chroma_qtable_offset,
+        pc.chroma_blocks_h,
+        chroma_block_x, chroma_block_y,
+        chroma_in_x, chroma_in_y
+    ) + 128.0;
+
+    // BT.601 full-range (JFIF) YCbCr -> RGB. Source-of-truth coefficients
+    // hardcoded here to keep the shader independent of the engine's
+    // `core::color::matrix` Rust code; the CPU reference in the test
+    // mirrors the same constants independently.
+    float cb_centered = cb_sample - 128.0;
+    float cr_centered = cr_sample - 128.0;
+    float r = y_sample + 1.402 * cr_centered;
+    float g = y_sample - 0.344136 * cb_centered - 0.714136 * cr_centered;
+    float b = y_sample + 1.772 * cb_centered;
+
+    vec4 rgba = vec4(
+        clamp(r, 0.0, 255.0) / 255.0,
+        clamp(g, 0.0, 255.0) / 255.0,
+        clamp(b, 0.0, 255.0) / 255.0,
+        1.0
+    );
+    imageStore(output_image, ivec2(int(px), int(py)), rgba);
+}
