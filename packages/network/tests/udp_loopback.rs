@@ -57,7 +57,6 @@ fn loopback_round_trip_propagates_peer_addr() {
     test_socket
         .set_read_timeout(Some(Duration::from_secs(3)))
         .expect("set test socket read timeout");
-    let test_addr = test_socket.local_addr().expect("test socket local_addr");
 
     let source_bind = pick_free_udp_port();
 
@@ -109,8 +108,13 @@ fn loopback_round_trip_propagates_peer_addr() {
 
     // The sink's source-port on its outbound socket is ephemeral and
     // not the source's bind_addr — what matters is the peer_addr was
-    // honored (data arrived back at test_socket at all). Just confirm
-    // the recv came from 127.0.0.1 to lock in the loopback path.
+    // honored end-to-end. The recv succeeding at all proves the sink
+    // sent to our exact test_socket's bound port (kernel routes by
+    // dst-port match); the recv from 127.0.0.1 proves the loopback
+    // path; together they lock peer_addr propagation through the
+    // source's emit → iceoryx2 link → sink's send_to chain. If
+    // peer_addr were dropped or misrouted, recv_from would have
+    // timed out (3-second deadline above).
     assert_eq!(
         recv_from.ip().to_string(),
         "127.0.0.1",
@@ -121,9 +125,6 @@ fn loopback_round_trip_propagates_peer_addr() {
         0,
         "echo sender used a real port",
     );
-    // The destination of the echo was our test_addr (the kernel
-    // routed it via 127.0.0.1, which we just confirmed).
-    let _ = test_addr;
 
     runtime.stop().expect("runtime.stop");
 }

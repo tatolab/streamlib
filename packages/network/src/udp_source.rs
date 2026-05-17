@@ -89,9 +89,14 @@ impl ManualProcessor for UdpSourceProcessor::Processor {
     }
 
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Notify-first: the recv loop selects on (recv_from, notified)
-        // and exits its `loop` body cleanly when notified. The abort
-        // below is defense-in-depth in case the task is wedged.
+        // The actual shutdown contract is `handle.abort()` — the
+        // tokio runtime guarantees the spawned task is cancelled.
+        // `notify_waiters` is a best-effort graceful signal so a loop
+        // mid-await-on-recv can break the `select!` cleanly before
+        // the abort lands; if the task hasn't yet registered the
+        // `notified()` future (race: stop fires between spawn and
+        // first poll), notify_waiters is a no-op but abort still
+        // does the job.
         self.shutdown.notify_waiters();
         if let Some(handle) = self.recv_task_handle.take() {
             handle.abort();
@@ -200,12 +205,16 @@ async fn recv_loop(
 mod tests {
     use super::*;
 
-    /// Lifecycle: bind ephemeral port, capture it, drop the socket,
-    /// rebind on the same port. SO_REUSEADDR lets the rebind succeed
-    /// even if the previous socket is still in TIME_WAIT-equivalent
-    /// kernel state.
+    /// Locks the bind → drop → rebind path through `build_udp_socket`.
+    /// Linux UDP has no TIME_WAIT (TCP-only), so the rebind succeeds
+    /// regardless of `SO_REUSEADDR` — this test does NOT verify the
+    /// REUSEADDR knob (that would require overlapping wildcard /
+    /// specific binds, out of scope for the v1 surface). What it
+    /// does lock is that the function itself doesn't leak a kernel-
+    /// side socket descriptor: a refactor that forgot to close the
+    /// fd would make the rebind fail with EADDRINUSE.
     #[tokio::test]
-    async fn build_socket_lifecycle_bind_drop_rebind() {
+    async fn build_socket_binds_drops_and_rebinds_cleanly() {
         let handle = tokio::runtime::Handle::current();
         let ephemeral: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
@@ -215,9 +224,6 @@ mod tests {
         assert_ne!(bound_addr.port(), 0, "kernel assigned a real port");
         drop(socket_a);
 
-        // Rebind on the same address — the SO_REUSEADDR flag is the
-        // load-bearing knob; without it this rebind would fail with
-        // EADDRINUSE on systems that delay port reuse.
         let socket_b = build_udp_socket(bound_addr, None, &handle).expect("rebind");
         assert_eq!(socket_b.local_addr().unwrap(), bound_addr);
     }
@@ -246,13 +252,15 @@ mod tests {
         }
     }
 
-    /// Sockopt error: SO_RCVBUF accepts any value the kernel can clamp,
-    /// so a positive request always succeeds. Test the happy path —
-    /// the kernel reports back the (possibly clamped) value via
-    /// SO_RCVBUF read, which would diverge from request — but the
-    /// build itself completes.
+    /// Smoke test that passing a `recv_buffer_bytes` hint does not
+    /// break the build path. The kernel may silently clamp the value
+    /// to `net.core.rmem_max`, and `socket2` does NOT surface a clamp
+    /// as an error — so this only locks "the optional code path
+    /// doesn't error", not "the hint is honored by the kernel".
+    /// Verifying the actual SO_RCVBUF value would require reading it
+    /// back via `socket2` getsockopt; that's overkill for v1.
     #[tokio::test]
-    async fn build_socket_with_recv_buffer_hint_succeeds() {
+    async fn build_socket_accepts_recv_buffer_hint() {
         let handle = tokio::runtime::Handle::current();
         let ephemeral: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let socket = build_udp_socket(ephemeral, Some(1 << 20), &handle)
