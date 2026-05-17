@@ -11,13 +11,18 @@ use std::sync::Arc;
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::linux::color_vui_translate::h273_to_color_info;
 use streamlib::sdk::context::{
-    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess, TextureRing,
 };
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostPixelBufferRefExt};
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::PixelFormat;
+use streamlib::sdk::rhi::{PixelFormat, TextureFormat, TextureUsages};
 
 use vulkan_video::{Codec, SimpleDecoder, SimpleDecoderConfig};
+
+/// Pre-allocated output texture ring depth. Matches `MAX_FRAMES_IN_FLIGHT`
+/// — one slot for the GPU's in-flight upload, one for the next decoded
+/// frame the processor is staging. See `docs/learnings/vulkan-frames-in-flight.md`.
+const RING_DEPTH: usize = 2;
 
 // ============================================================================
 // PROCESSOR
@@ -30,6 +35,11 @@ pub struct H265DecoderProcessor {
 
     /// GPU context for creating pixel buffers for decoded frames.
     gpu_context: Option<GpuContextLimitedAccess>,
+
+    /// Pre-allocated output texture ring. Built lazily on the first
+    /// decoded frame (dimensions come from the SPS), rebuilt only on
+    /// mid-stream resolution change.
+    texture_ring: Option<Arc<TextureRing>>,
 
     /// Frames decoded counter.
     frames_decoded: u64,
@@ -96,6 +106,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
             "[H265Decoder] Shutting down"
         );
         self.decoder.take();
+        self.texture_ring.take();
         self.gpu_context.take();
         Ok(())
     }
@@ -128,24 +139,44 @@ impl streamlib::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Pro
             let rgba_size = (width * height * 4) as usize;
             let src = &decoded.data[..rgba_size.min(decoded.data.len())];
 
-            // Write RGBA to a pixel buffer. The texture cache resolves pixel
-            // buffers as textures on demand (buffer→image upload in GpuContext).
-            let (pool_id, pixel_buffer) =
+            // Acquire (or build, on first frame / resolution change) the
+            // output texture ring. SPS-driven dimensions are stable within
+            // a session, so the escalate path runs at most once per stream
+            // and steady-state decode stays Limited-only.
+            let need_rebuild = match self.texture_ring.as_ref() {
+                Some(ring) => ring.width() != width || ring.height() != height,
+                None => true,
+            };
+            if need_rebuild {
+                self.texture_ring = Some(gpu_ctx.escalate(|full| {
+                    full.create_texture_ring(
+                        width,
+                        height,
+                        TextureFormat::Rgba8Unorm,
+                        TextureUsages::COPY_DST
+                            | TextureUsages::TEXTURE_BINDING
+                            | TextureUsages::STORAGE_BINDING,
+                        RING_DEPTH,
+                    )
+                })?);
+            }
+            let ring = self.texture_ring.as_ref().unwrap();
+            let slot = ring.acquire_next();
+
+            // Stage RGBA into a host-visible pixel buffer, then copy into
+            // the ring slot's pre-allocated DEVICE_LOCAL texture via the
+            // ring's amortized upload primitive — no per-frame escalation
+            // AND no per-frame vkCreateCommandPool / vkAllocateCommandBuffers
+            // / vkCreateFence (the slot's command pool + cb + fence are
+            // pre-allocated by `create_texture_ring`, reset+reused per call).
+            let (_pool_id, pixel_buffer) =
                 gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
             let dst_ptr = pixel_buffer.buffer_ref().vulkan_inner().mapped_ptr();
             unsafe {
                 std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
             }
-
-            // Register as texture by uploading pixel buffer to GPU texture.
-            // `upload_pixel_buffer_as_texture` creates a new DEVICE_LOCAL texture
-            // per decoded frame, so it's FullAccess-only and must be escalated.
-            // TODO(#324-followup): restructure to a pre-allocated texture ring in
-            // setup() so steady-state decode doesn't escalate per frame.
-            let surface_id = pool_id.to_string();
-            gpu_ctx.escalate(|full| {
-                full.upload_pixel_buffer_as_texture(&surface_id, &pixel_buffer, width, height)
-            })?;
+            ring.copy_pixel_buffer_to_slot(&slot, &pixel_buffer, width, height)?;
+            let surface_id = slot.surface_id;
 
             let timestamp_ns = encoded.timestamp_ns.clone();
 

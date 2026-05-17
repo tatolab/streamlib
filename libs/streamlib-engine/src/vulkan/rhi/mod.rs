@@ -19,6 +19,8 @@ mod vulkan_command_queue;
 mod vulkan_device;
 mod vulkan_sync;
 mod vulkan_texture;
+#[cfg(target_os = "linux")]
+mod vulkan_upload_resources;
 
 pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
@@ -30,6 +32,8 @@ pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 #[allow(unused_imports)]
 pub use vulkan_sync::HostVulkanTimelineSemaphore;
 pub use vulkan_texture::HostVulkanTexture;
+#[cfg(target_os = "linux")]
+pub use vulkan_upload_resources::HostVulkanUploadResources;
 
 // Trait machinery + Consumer flavor — re-exported from the canonical
 // home in `streamlib-consumer-rhi`. Some entries appear unused inside

@@ -15,6 +15,7 @@ mod runtime_context;
 mod surface_store;
 pub mod texture_pool;
 mod texture_registration;
+mod texture_ring;
 mod time_context;
 
 pub use audio_clock::{
@@ -50,4 +51,5 @@ pub use runtime_context::{
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
 pub use texture_registration::TextureRegistration;
+pub use texture_ring::{TextureRing, TextureRingSlot};
 pub use time_context::TimeContext;
