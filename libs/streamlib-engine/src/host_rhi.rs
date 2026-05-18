@@ -55,10 +55,10 @@ pub use crate::vulkan::rhi::{
     drm_modifier_probe, AccelerationStructureKind, HostMarker, HostVulkanDevice,
     HostVulkanBuffer, HostVulkanTexture, HostVulkanTimelineSemaphore, ImageCopyRegion,
     OffscreenColorTarget, OffscreenDraw, RayTracingPipelineProperties, RhiCommandRecorder,
-    TlasInstanceDesc, VulkanAccelerationStructure, VulkanAccess, VulkanBufferLike,
-    VulkanComputeKernel, VulkanGraphicsKernel, VulkanIndexBindable, VulkanRayTracingKernel,
-    VulkanStage, VulkanStorageBindable, VulkanTextureReadback, VulkanUniformBindable,
-    VulkanVertexBindable, IDENTITY_TRANSFORM,
+    ThirdPartyGpuCapabilities, TlasInstanceDesc, VulkanAccelerationStructure, VulkanAccess,
+    VulkanBufferLike, VulkanComputeKernel, VulkanGraphicsKernel, VulkanIndexBindable,
+    VulkanRayTracingKernel, VulkanStage, VulkanStorageBindable, VulkanTextureReadback,
+    VulkanUniformBindable, VulkanVertexBindable, IDENTITY_TRANSFORM,
 };
 
 #[cfg(target_os = "linux")]

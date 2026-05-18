@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Engine-internal trait that lets command-buffer recording methods on
-//! [`RhiCommandRecorder`](super::RhiCommandRecorder) accept any of the
-//! five typed buffer wrappers
-//! ([`PixelBuffer`], [`StorageBuffer`], [`UniformBuffer`],
-//! [`VertexBuffer`], [`IndexBuffer`]) uniformly.
+//! [`RhiCommandRecorder`](super::RhiCommandRecorder) accept any of
+//! streamlib's typed buffer wrappers ([`PixelBuffer`],
+//! [`StorageBuffer`], [`UniformBuffer`], [`VertexBuffer`],
+//! [`IndexBuffer`]) or a raw [`HostVulkanBuffer`] uniformly. The raw
+//! variant is needed because some allocation flavors — notably
+//! OPAQUE_FD-exportable buffers used in CUDA / OpenCL interop — have
+//! no typed wrapper above [`HostVulkanBuffer`] but still participate
+//! in transfer + barrier recording.
 //!
 //! Distinct from the binding-site traits in
 //! [`vulkan_storage_binding`](super::vulkan_storage_binding) (which gate
@@ -18,6 +22,7 @@
 //! [`UniformBuffer`]: crate::core::rhi::UniformBuffer
 //! [`VertexBuffer`]: crate::core::rhi::VertexBuffer
 //! [`IndexBuffer`]: crate::core::rhi::IndexBuffer
+//! [`HostVulkanBuffer`]: super::HostVulkanBuffer
 
 use vulkanalia::vk;
 
@@ -93,5 +98,15 @@ impl VulkanBufferLike for IndexBuffer {
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
         self.inner.size()
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl VulkanBufferLike for crate::vulkan::rhi::HostVulkanBuffer {
+    fn vk_buffer(&self) -> vk::Buffer {
+        self.buffer()
+    }
+    fn vk_buffer_size(&self) -> vk::DeviceSize {
+        self.size()
     }
 }
