@@ -14,6 +14,20 @@ bytemuck = { version = "1.16", features = ["derive"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib = { path = "../streamlib-sdk" }
+# Dynamic loading for libnvjpeg.so.12. nvJPEG is NVIDIA-only and not
+# always installed; resolving at runtime keeps the workspace building
+# cleanly on hosts without the CUDA Toolkit. See
+# `docs/architecture/third-party-gpu-backends.md` for the rationale
+# (anti-pattern #5: Cargo-feature gating of vendor SDKs).
+libloading = "0.8"
+# CUDA bindings — `fallback-dynamic-loading` mirrors the dlopen shape
+# above for the cudart side. Workspace pin keeps `cuda-12090` aligned
+# with the cdylibs.
+cudarc = { workspace = true }
+# `libc::close` for closing the dup'd OPAQUE_FD on the error path of
+# `cudaImportExternalMemory` — ownership stays with us when the import
+# fails, so we must `close(fd)`.
+libc = "0.2"
 
 [dev-dependencies]
 jpeg-encoder = "0.6"
