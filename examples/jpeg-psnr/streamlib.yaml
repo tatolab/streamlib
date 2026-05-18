@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# jpeg-psnr example. Declares `@tatolab/core` so `Runner::load_project(.)`
+# registers the wire-vocabulary schemas (VideoFrame, …) with the engine's
+# runtime schema registry. `EncodedJpegFrame` (owned by @tatolab/jpeg) is
+# NOT registered here — the rig's 1920×1080 reference JPEGs encode to
+# well under iceoryx2's 64 KiB per-slot default (~57 KiB worst case for
+# `complex_pattern` at quality=95), so the schema's declared 16 MiB
+# upper bound isn't load-bearing for this binary.
+
+package:
+  org: tatolab
+  name: jpeg-psnr
+  version: "0.1.0"
+  description: "PSNR fixture rig — JpegBytesSource → JpegDecoder → Display, decoded PNG sampling for comparison vs reference"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+patch:
+  "@tatolab/core":
+    path: ../../packages/core
+
+schemas:
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"
