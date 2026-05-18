@@ -8,9 +8,15 @@
 # reviewer can read both rigs with the same mental model. Differences
 # (per the JPEG pipeline's shape):
 #
-#   - JPEG is self-contained per-frame and `JpegBytesSource` republishes
-#     a single file. The rig therefore loops references one at a time
-#     rather than concatenating raw BGRA across references.
+#   - JPEG is self-contained per-frame and `JpegBytesSource` reads a
+#     single file at setup (its schema's `file_path` is a required
+#     scalar string, not an array). The rig therefore invokes the
+#     `jpeg-psnr` binary once per reference rather than running a
+#     single binary across a concatenated BGRA stream and pairing
+#     decoded PNGs to references by `frame_index`. Per-invocation
+#     overhead is small (~3s per reference at the configured FPS),
+#     and the per-reference output subdirs match the rig's
+#     middle-sample selection cleanly.
 #   - ffmpeg performs the PNG → JPEG encode step (the "encoder" half of
 #     the PSNR comparison); the streamlib pipeline owns the decode half.
 #
@@ -218,11 +224,19 @@ if [ -n "$PSNR_INJECT_BUG" ]; then
             ;;
     esac
 
-    for f in $(find "$PNG_DIR" -name "display_*_frame_*.png" 2>/dev/null); do
-        ffmpeg -y -hide_banner -loglevel error -i "$f" \
-            -vf "$inject_filter" \
-            "${f}.injected.png"
-        mv "${f}.injected.png" "$f"
+    # Iterate per-reference subdir and glob each — matches the sibling
+    # rig's whitespace-safe glob idiom (rather than the path-splitting
+    # `for f in $(find ...)` form).
+    for i in "${!REF_PNGS[@]}"; do
+        name="$(basename "${REF_PNGS[$i]}" .png)"
+        idx="$(printf "%02d" "$i")"
+        for f in "$PNG_DIR/${idx}_${name}"/display_*_frame_*.png; do
+            [ -f "$f" ] || continue
+            ffmpeg -y -hide_banner -loglevel error -i "$f" \
+                -vf "$inject_filter" \
+                "${f}.injected.png"
+            mv "${f}.injected.png" "$f"
+        done
     done
 fi
 
