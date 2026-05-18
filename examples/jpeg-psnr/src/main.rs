@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Fixture-driven JPEG decode PSNR rig (issue #844).
+//! Fixture-driven JPEG decode PSNR rig.
 //!
 //! Feeds a single JPEG file through `JpegBytesSource → JpegDecoder →
 //! Display` so the decoded PNG sampler can capture the decoded frame
