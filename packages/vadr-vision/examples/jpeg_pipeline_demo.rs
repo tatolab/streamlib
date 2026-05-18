@@ -38,16 +38,37 @@ use streamlib_network::UdpSourceProcessor as _;
 #[allow(unused_imports)]
 use streamlib_vadr_vision::VadrVisionDepayloaderProcessor as _;
 
-const FIXTURE_WIDTH: u32 = 320;
-const FIXTURE_HEIGHT: u32 = 180;
 const CHUNK_PAYLOAD_BYTES: usize = 1200;
 const SEND_FPS: u32 = 15;
 
+/// Default fixture path / dimensions. Env-var overrides (`VADR_DEMO_JPEG`,
+/// `VADR_DEMO_WIDTH`, `VADR_DEMO_HEIGHT`) let the same demo run against
+/// either the small 320×180 test fixture or the VADR-TS-002 §3.8 /
+/// §4.6 spec-resolution 640×360 fixture without code changes.
+const DEFAULT_FIXTURE: &str = "test_640x360_spec.jpg";
+const DEFAULT_WIDTH: u32 = 640;
+const DEFAULT_HEIGHT: u32 = 360;
+
 fn fixture_path() -> PathBuf {
+    if let Ok(custom) = std::env::var("VADR_DEMO_JPEG") {
+        return PathBuf::from(custom);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
-        .join("test_320x180.jpg")
+        .join(DEFAULT_FIXTURE)
+}
+
+fn fixture_dims() -> (u32, u32) {
+    let w = std::env::var("VADR_DEMO_WIDTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_WIDTH);
+    let h = std::env::var("VADR_DEMO_HEIGHT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_HEIGHT);
+    (w, h)
 }
 
 fn pick_free_udp_port() -> SocketAddr {
@@ -79,10 +100,15 @@ fn chunked_datagrams(frame_id: u32, sim_time_ns: u64, jpeg: &[u8]) -> Vec<Vec<u8
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let jpeg = std::fs::read(fixture_path())?;
+    let path = fixture_path();
+    let (width, height) = fixture_dims();
+    let jpeg = std::fs::read(&path)?;
     println!(
-        "Loaded JPEG fixture: {} bytes ({} chunks of {} bytes max)",
+        "Loaded JPEG fixture: {} ({} bytes, declared {}x{}, {} chunks of {} bytes max)",
+        path.display(),
         jpeg.len(),
+        width,
+        height,
         jpeg.len().div_ceil(CHUNK_PAYLOAD_BYTES),
         CHUNK_PAYLOAD_BYTES
     );
@@ -113,15 +139,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let decoder_id = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "jpeg", "JpegDecoder", "1.0.0"),
-        serde_json::json!({"max_width": 640, "max_height": 480}),
+        serde_json::json!({"max_width": width, "max_height": height}),
     ))?;
     println!("+ JpegDecoder: {decoder_id}");
 
     let display_id = runtime.add_processor(ProcessorSpec::new(
         schema_ident!("tatolab", "display", "Display", "1.0.0"),
         serde_json::json!({
-            "width": FIXTURE_WIDTH,
-            "height": FIXTURE_HEIGHT,
+            "width": width,
+            "height": height,
             "title": "VADR-vision pipeline demo",
             "vsync": false,
         }),
