@@ -525,6 +525,26 @@ impl GpuContext {
             .unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Wrap this `GpuContext` in a [`GpuContextLimitedAccess`] view.
+    ///
+    /// Intended for callers that already hold the raw `GpuContext` — setup
+    /// hooks ([`crate::core::runtime::Runner::install_setup_hook`]),
+    /// runtime orchestrators, and crate-external integration tests — and
+    /// need to invoke the typestate API surface (most notably
+    /// [`GpuContextLimitedAccess::escalate`] for serialized elevation to
+    /// [`GpuContextFullAccess`]).
+    ///
+    /// This does NOT weaken the capability moat: processor code never
+    /// holds a raw `GpuContext` (the field is `pub(crate)` on
+    /// `RuntimeContext`), so processors still reach the typestate
+    /// surface only through their `RuntimeContextLimitedAccess` /
+    /// `RuntimeContextFullAccess` borrows. The Limited view returned
+    /// here exposes a strict subset of `GpuContext`'s public API and is
+    /// safe to clone (it does not grant Full).
+    pub fn limited_access(&self) -> GpuContextLimitedAccess {
+        GpuContextLimitedAccess::new(self.clone())
+    }
+
     /// Wait for the GPU device to become idle. On Vulkan backends this calls
     /// `vkDeviceWaitIdle`; on other backends this is a no-op.
     pub fn wait_device_idle(&self) -> Result<()> {
@@ -2068,6 +2088,13 @@ impl GpuContextLimitedAccess {
             .register_texture_with_layout(id, texture, initial_layout);
     }
 
+    /// Update a registered texture's tracked layout after a transition.
+    /// See [`GpuContext::update_texture_registration_layout`].
+    #[cfg(target_os = "linux")]
+    pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
+        self.inner.update_texture_registration_layout(id, layout);
+    }
+
     /// Resolve a VideoFrame's full registration record (texture + layout).
     pub fn resolve_texture_registration_by_surface_id(
         &self,
@@ -2301,6 +2328,13 @@ impl GpuContextFullAccess {
     ) {
         self.inner
             .register_texture_with_layout(id, texture, initial_layout);
+    }
+
+    /// Update a registered texture's tracked layout after a transition.
+    /// See [`GpuContext::update_texture_registration_layout`].
+    #[cfg(target_os = "linux")]
+    pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
+        self.inner.update_texture_registration_layout(id, layout);
     }
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
