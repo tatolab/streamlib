@@ -155,6 +155,32 @@ impl NvJpegResources {
         let lib = NvJpegLib::load()?;
         let device = Arc::clone(full_access.device().vulkan_device());
 
+        // ── Bind CUDA to the matching physical device ──────────────────
+        // Match the Vulkan-selected device's `VkPhysicalDeviceIDProperties::deviceUUID`
+        // against each CUDA device's `cudaDeviceProp::uuid` and call
+        // `cudaSetDevice` with the matching ordinal. On a single-GPU host
+        // this resolves to ordinal 0 either way; on multi-GPU rigs without
+        // the match, CUDA's default device may differ from the Vulkan-
+        // selected one and the OPAQUE_FD import below would land on the
+        // wrong GPU. Falls back to ordinal 0 with a warn log when no CUDA
+        // device's UUID matches (defensive — keeps single-GPU behavior
+        // even if the probe fails).
+        let vulkan_uuid = device.physical_device_uuid();
+        let cuda_ordinal = match_cuda_device_to_vulkan_uuid(&vulkan_uuid).unwrap_or_else(|| {
+            tracing::warn!(
+                target: "vulkan_jpeg::cuda_device_match",
+                vulkan_uuid = ?vulkan_uuid,
+                "no CUDA device matches Vulkan device UUID; falling back to CUDA ordinal 0 \
+                 (single-GPU hosts unaffected; multi-GPU may decode on the wrong device)",
+            );
+            0
+        });
+        unsafe {
+            sys::cudaSetDevice(cuda_ordinal).result().map_err(|e| {
+                Error::GpuError(format!("cudaSetDevice({cuda_ordinal}): {e:?}"))
+            })?;
+        }
+
         // ── CUDA stream ────────────────────────────────────────────────
         let stream = unsafe {
             let mut stream = MaybeUninit::<sys::cudaStream_t>::uninit();
@@ -555,4 +581,52 @@ fn build_slot(
         cuda_shared_dev_ptr,
         cuda_rgbi_ptr,
     })
+}
+
+/// Match `vulkan_uuid` (`VkPhysicalDeviceIDProperties::deviceUUID`)
+/// against every CUDA device's `cudaDeviceProp::uuid` and return the
+/// matching ordinal, or `None` when no CUDA device shares the UUID
+/// (or CUDA isn't available).
+///
+/// Defensive helper for the multi-GPU case: CUDA's default device may
+/// not be the same physical device Vulkan selected, in which case
+/// every `cudaImportExternalMemory(OPAQUE_FD)` call lands on the
+/// wrong device and decode silently writes to the wrong GPU. Callers
+/// pair this with `cudaSetDevice(matched_ordinal)` before any other
+/// CUDA work. Returns `None` when CUDA can't be queried — caller
+/// falls back to ordinal 0 (single-GPU behavior) with a warn log.
+///
+/// Duplicated in `streamlib-python-native::cuda` and
+/// `streamlib-deno-native::cuda` — keep the three in sync. A future
+/// refactor lifts this to a shared utility crate; today's
+/// duplication is cheap enough that the engine/library/cdylib dep
+/// graph doesn't need to grow yet.
+fn match_cuda_device_to_vulkan_uuid(vulkan_uuid: &[u8; 16]) -> Option<i32> {
+    let mut count: i32 = 0;
+    if unsafe { sys::cudaGetDeviceCount(&mut count) }
+        .result()
+        .is_err()
+    {
+        return None;
+    }
+    for ordinal in 0..count {
+        let mut props = MaybeUninit::<sys::cudaDeviceProp>::uninit();
+        // SAFETY: `cudaGetDeviceProperties_v2` fully initializes the
+        // out-pointer on success. On error we skip the ordinal.
+        let ok = unsafe { sys::cudaGetDeviceProperties_v2(props.as_mut_ptr(), ordinal) }
+            .result();
+        if ok.is_err() {
+            continue;
+        }
+        let props = unsafe { props.assume_init() };
+        // `cudaDeviceProp::uuid` is `cudaUUID_t` which is
+        // `#[repr(C)] struct { bytes: [c_char; 16] }`. Transmute to a
+        // plain `[u8; 16]` for comparison against Vulkan's UUID bytes.
+        let cuda_uuid_bytes: [u8; 16] =
+            unsafe { std::mem::transmute::<sys::cudaUUID_t, [u8; 16]>(props.uuid) };
+        if cuda_uuid_bytes == *vulkan_uuid {
+            return Some(ordinal);
+        }
+    }
+    None
 }

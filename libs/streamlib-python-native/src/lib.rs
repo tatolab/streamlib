@@ -5147,6 +5147,48 @@ mod cuda {
         registered_images: Mutex<HashMap<u64, Arc<RegisteredCudaImageSurface>>>,
     }
 
+    /// Match `vulkan_uuid` (`VkPhysicalDeviceIDProperties::deviceUUID`)
+    /// against every CUDA device's `cudaDeviceProp::uuid` and return the
+    /// matching ordinal, or `None` when no CUDA device shares the UUID
+    /// (or CUDA isn't available).
+    ///
+    /// Multi-GPU defensive helper: CUDA's default device may not be the
+    /// same physical device Vulkan selected, in which case
+    /// `cudaImportExternalMemory(OPAQUE_FD)` lands on the wrong GPU.
+    /// Callers pair this with `cudaSetDevice(matched_ordinal)` before
+    /// any other CUDA work; on `None`, fall back to ordinal 0 with a
+    /// warn log (single-GPU behavior preserved).
+    ///
+    /// Duplicated in `streamlib-deno-native::cuda` and
+    /// `vulkan-jpeg::nvjpeg_backend::resources` — keep the three in
+    /// sync. A future refactor lifts this to a shared utility crate.
+    fn match_cuda_device_to_vulkan_uuid(vulkan_uuid: &[u8; 16]) -> Option<i32> {
+        let mut count: i32 = 0;
+        if unsafe { sys::cudaGetDeviceCount(&mut count) }
+            .result()
+            .is_err()
+        {
+            return None;
+        }
+        for ordinal in 0..count {
+            let mut props = MaybeUninit::<sys::cudaDeviceProp>::uninit();
+            // SAFETY: `cudaGetDeviceProperties_v2` fully initializes the
+            // out-pointer on success. On error we skip the ordinal.
+            let ok = unsafe { sys::cudaGetDeviceProperties_v2(props.as_mut_ptr(), ordinal) }
+                .result();
+            if ok.is_err() {
+                continue;
+            }
+            let props = unsafe { props.assume_init() };
+            let cuda_uuid_bytes: [u8; 16] =
+                unsafe { std::mem::transmute::<sys::cudaUUID_t, [u8; 16]>(props.uuid) };
+            if cuda_uuid_bytes == *vulkan_uuid {
+                return Some(ordinal);
+            }
+        }
+        None
+    }
+
     /// Per-surface registered state. The adapter's registry holds
     /// references to the same Vulkan-side `Arc`s; this struct adds the
     /// CUDA-side handles + the per-surface stream the cdylib uses for
@@ -5237,7 +5279,26 @@ mod cuda {
             return std::ptr::null_mut();
         }
 
-        let cuda_device_ordinal: i32 = 0;
+        // Bind CUDA to the physical device Vulkan selected. Single-GPU
+        // hosts resolve to ordinal 0 either way; multi-GPU rigs need
+        // the UUID match or CUDA's default device may differ from
+        // Vulkan's selected `physicalDevice` and every OPAQUE_FD import
+        // below lands on the wrong GPU. Falls back to ordinal 0 with a
+        // warn log when no CUDA device matches the Vulkan UUID
+        // (defensive — keeps single-GPU behavior even if the probe
+        // fails).
+        let vulkan_uuid = device.physical_device_uuid();
+        let cuda_device_ordinal =
+            match_cuda_device_to_vulkan_uuid(&vulkan_uuid).unwrap_or_else(|| {
+                tracing::warn!(
+                    target: "slpn_cuda::device_match",
+                    vulkan_uuid = ?vulkan_uuid,
+                    "no CUDA device matches Vulkan device UUID; falling back to CUDA \
+                     ordinal 0 (single-GPU hosts unaffected; multi-GPU may run on the \
+                     wrong device)",
+                );
+                0
+            });
         if let Err(e) = unsafe { sys::cudaSetDevice(cuda_device_ordinal) }.result() {
             tracing::error!(
                 "slpn_cuda_runtime_new: cudaSetDevice({}) failed: {:?}",

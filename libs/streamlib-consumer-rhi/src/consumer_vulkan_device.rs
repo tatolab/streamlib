@@ -78,6 +78,14 @@ pub struct ConsumerVulkanDevice {
     /// available; only this acquire-side extension is the meaningful
     /// gate.
     has_acquire_unmodified: bool,
+    /// `VkPhysicalDeviceIDProperties::deviceUUID` — 16-byte unique
+    /// identifier the driver assigns to the physical device. Mirrors
+    /// the same field on the host-side device. CUDA / OpenCL interop
+    /// matches this against `cudaDeviceProp::uuid` to pick the
+    /// matching CUDA device on multi-GPU rigs; without the match
+    /// CUDA's default device may differ from the Vulkan-selected
+    /// physical device and OPAQUE_FD imports land on the wrong GPU.
+    physical_device_uuid: [u8; 16],
     /// Live count of memory allocations made via [`Self::import_dma_buf_memory`]
     /// (raw `vkAllocateMemory`). Mirrors the host counterpart; surfaces leaks
     /// on drop via the warning emitted in [`Drop`].
@@ -143,6 +151,16 @@ impl ConsumerVulkanDevice {
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
         let device_name =
             unsafe { CStr::from_ptr(device_props.device_name.as_ptr()) }.to_string_lossy().into_owned();
+
+        // Extract VkPhysicalDeviceIDProperties::deviceUUID via
+        // vkGetPhysicalDeviceProperties2. Used by CUDA / OpenCL interop
+        // to pick the matching foreign-API device on multi-GPU rigs.
+        let mut id_props = vk::PhysicalDeviceIDProperties::default();
+        let mut props2 = vk::PhysicalDeviceProperties2::builder()
+            .push_next(&mut id_props)
+            .build();
+        unsafe { instance.get_physical_device_properties2(physical_device, &mut props2) };
+        let physical_device_uuid: [u8; 16] = id_props.device_uuid.into();
 
         // Pick any GRAPHICS-capable queue family (graphics implies transfer +
         // compute on every conformant Vulkan implementation, which covers
@@ -263,9 +281,18 @@ impl ConsumerVulkanDevice {
             queue_family_index,
             device_name,
             has_acquire_unmodified,
+            physical_device_uuid,
             live_allocation_count: AtomicUsize::new(0),
             queue_mutex: Mutex::new(()),
         })
+    }
+
+    /// `VkPhysicalDeviceIDProperties::deviceUUID` for the selected
+    /// physical device. CUDA / OpenCL interop matches against
+    /// `cudaDeviceProp::uuid` to pick the foreign-API device that
+    /// shares this Vulkan device's PCI identity.
+    pub fn physical_device_uuid(&self) -> [u8; 16] {
+        self.physical_device_uuid
     }
 
     /// Device label from `VkPhysicalDeviceProperties::deviceName`.
