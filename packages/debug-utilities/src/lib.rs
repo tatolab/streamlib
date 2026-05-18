@@ -14,7 +14,13 @@ pub mod simple_passthrough;
 #[cfg(target_os = "linux")]
 pub mod bgra_file_source;
 
+#[cfg(target_os = "linux")]
+pub mod jpeg_bytes_source;
+
 pub use simple_passthrough::SimplePassthroughProcessor;
 
 #[cfg(target_os = "linux")]
 pub use bgra_file_source::BgraFileSourceProcessor;
+
+#[cfg(target_os = "linux")]
+pub use jpeg_bytes_source::JpegBytesSourceProcessor;

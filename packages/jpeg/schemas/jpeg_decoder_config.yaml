@@ -1,0 +1,28 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for JPEG Decoder config.
+
+metadata:
+  type: JpegDecoderConfig
+  description: "Configuration for GPU-backed JPEG decoding."
+
+# `optionalProperties` (rather than an empty body) is load-bearing — an
+# empty schema declaration is treated as "any value" by JTD codegen and
+# emits `pub type X = Option<Value>` instead of a typed struct.
+optionalProperties:
+  max_width:
+    metadata:
+      description: >
+        Maximum frame width in pixels the decoder will accept. Sizes the
+        worst-case GPU storage backing the texture ring at setup time.
+        Defaults to 3840 (4K). Frames exceeding this are rejected with
+        a typed error; rebuild the decoder with a larger value to handle
+        them.
+    type: uint32
+  max_height:
+    metadata:
+      description: >
+        Maximum frame height in pixels the decoder will accept. Defaults
+        to 2160 (4K). Same exceeded-frame behavior as max_width.
+    type: uint32

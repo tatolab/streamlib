@@ -1,0 +1,61 @@
+# yaml-language-server: $schema=../../schemas/streamlib.schema.json
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# @tatolab/jpeg — GPU-backed JPEG decoder processor wrapping
+# libs/vulkan-jpeg::SimpleJpegDecoder. Owns the EncodedJpegFrame wire
+# type + decoder config schema and the decoder processor declaration.
+# Linux-only today (the underlying SimpleJpegDecoder primitive is
+# Linux-only — VulkanComputeBackend + optional NvJpegBackend).
+package:
+  org: tatolab
+  name: jpeg
+  version: 1.0.0
+  description: "JPEG decoder processor via the GPU SimpleJpegDecoder primitive"
+
+dependencies:
+  "@tatolab/core": "^1.0.0"
+
+# Dev-time path override; `streamlib pack` rejects this.
+patch:
+  "@tatolab/core":
+    path: ../core
+
+schemas:
+  # Wire types imported from @tatolab/core.
+  ColorInfo:
+    package: "@tatolab/core"
+  ContentLight:
+    package: "@tatolab/core"
+  MasteringDisplay:
+    package: "@tatolab/core"
+  VideoFrame:
+    package: "@tatolab/core"
+  # Local schemas this package owns.
+  EncodedJpegFrame:
+    file: schemas/encoded_jpeg_frame.yaml
+  JpegDecoderConfig:
+    file: schemas/jpeg_decoder_config.yaml
+
+processors:
+  - name: JpegDecoder
+    version: 1.0.0
+    description: "Decodes EncodedJpegFrame to VideoFrame via the GPU SimpleJpegDecoder primitive"
+    execution: reactive
+    scheduling:
+      priority: high
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: JpegDecoderConfig
+    inputs:
+      - name: encoded_jpeg_in
+        schema: EncodedJpegFrame
+        description: JPEG-encoded frames to decode
+        read_mode: read_next_in_order
+        buffer_size: 16
+    outputs:
+      - name: video_out
+        schema: VideoFrame
+        description: Decoded video frames

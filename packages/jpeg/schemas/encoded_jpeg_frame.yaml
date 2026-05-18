@@ -1,0 +1,45 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for encoded JPEG frames.
+#
+# Mirrors EncodedVideoFrame's shape minus codec-specific fields: JPEG
+# is self-contained per-frame (no keyframe/predicted-frame distinction,
+# no inter-frame state) and carries its own colorimetry in-band via
+# EXIF / ICC / Adobe APP14 segments — so no `is_keyframe` and no
+# `color_info` / mastering / content-light fields out here. The
+# decoder surfaces the parsed colorimetry on its output VideoFrame.
+
+metadata:
+  type: EncodedJpegFrame
+  description: "JPEG-encoded image bytes (one self-contained frame per message)"
+  read_mode: read_next_in_order
+  buffer_size: 16
+  # 16 MiB per slot accommodates an uncompressed-quality 4K baseline JPEG
+  # (4K @ Q=100 ≈ 4–8 MiB; the worst-case headroom matches what
+  # EncodedVideoFrame allocates for an H.264 IDR at the same resolution
+  # so the AGP vision pipeline doesn't need a per-codec budget). Lower-
+  # resolution drone streams (720p / 1080p, 30 Hz) stay well under this
+  # cap; the schema-level limit just bounds the worst case.
+  max_payload_bytes: 16777216
+
+properties:
+  data:
+    metadata:
+      description: "Raw JPEG bytes (SOI through EOI, one full image)"
+    elements:
+      type: uint8
+  timestamp_ns:
+    metadata:
+      description: "Monotonic timestamp in nanoseconds (int64 as string)"
+    type: string
+  frame_number:
+    metadata:
+      description: "Sequential frame number (uint64 as string)"
+    type: string
+
+optionalProperties:
+  fps:
+    metadata:
+      description: "Source frame rate in frames per second (pass-through from capture / depayloader, when known)"
+    type: uint32

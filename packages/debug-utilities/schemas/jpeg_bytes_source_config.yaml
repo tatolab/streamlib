@@ -1,0 +1,24 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for JPEG Bytes Source config.
+
+metadata:
+  type: JpegBytesSourceConfig
+  description: "Configuration for streaming a fixed JPEG file as EncodedJpegFrame messages."
+
+properties:
+  file_path:
+    metadata:
+      description: "Path to a JPEG file. The whole file is read once at setup and republished every emit interval."
+    type: string
+
+optionalProperties:
+  fps:
+    metadata:
+      description: "Republish rate in frames per second (default: 10). Each tick re-emits the same JPEG bytes with an updated frame_number / timestamp."
+    type: uint32
+  frame_count:
+    metadata:
+      description: "Total number of times to emit the JPEG before stopping (default: 0 = unlimited)."
+    type: uint32
