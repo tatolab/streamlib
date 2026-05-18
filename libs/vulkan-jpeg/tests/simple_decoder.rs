@@ -18,7 +18,10 @@ use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, VulkanTextureReadback};
 use streamlib::sdk::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
 use streamlib::sdk::color::MatrixId;
-use vulkan_jpeg::{JpegColorSource, JpegDecodeOutput, SimpleJpegDecoder, MAX_FRAMES_IN_FLIGHT};
+use vulkan_jpeg::{
+    JpegBackendKind, JpegBackendPreference, JpegColorSource, JpegDecodeOutput, SimpleJpegDecoder,
+    VulkanComputeBackend, MAX_FRAMES_IN_FLIGHT,
+};
 
 /// Acquire a `GpuContext` for tests, or skip cleanly when no GPU is
 /// available (the workstation has one; CI baseline runners may not).
@@ -102,71 +105,77 @@ fn readback_rgba(
 // Construction + rotation
 // -----------------------------------------------------------------------------
 
+// Ring-internal tests exercise the [`VulkanComputeBackend`]'s
+// pre-allocation contract — eager ring sizing, eager layout transition,
+// slot Arc reuse across decodes. They construct the backend directly so
+// they stay deterministic on hosts where [`SimpleJpegDecoder::new`]
+// auto-selects a different backend (e.g. nvJPEG on NVIDIA + libnvjpeg).
+
 #[test]
-fn new_pre_allocates_ring_at_max_frames_in_flight_depth() {
+fn vulkan_compute_backend_pre_allocates_ring_at_max_frames_in_flight_depth() {
     let Some(gpu) = fresh_gpu_context() else {
         return;
     };
-    let decoder = gpu
+    let backend = gpu
         .limited_access()
-        .escalate(|full| SimpleJpegDecoder::new(full, 128, 96))
-        .expect("decoder construction");
+        .escalate(|full| VulkanComputeBackend::new(full, 128, 96))
+        .expect("backend construction");
 
     assert_eq!(
-        decoder.ring().len(),
+        backend.ring().len(),
         MAX_FRAMES_IN_FLIGHT,
-        "decoder ring must have MAX_FRAMES_IN_FLIGHT slots"
+        "backend ring must have MAX_FRAMES_IN_FLIGHT slots"
     );
-    assert_eq!(decoder.max_width(), 128);
-    assert_eq!(decoder.max_height(), 96);
-    assert_eq!(decoder.ring().width(), 128);
-    assert_eq!(decoder.ring().height(), 96);
-    assert_eq!(decoder.ring().format(), TextureFormat::Rgba8Unorm);
+    assert_eq!(backend.ring().width(), 128);
+    assert_eq!(backend.ring().height(), 96);
+    assert_eq!(backend.ring().format(), TextureFormat::Rgba8Unorm);
 }
 
 #[test]
-fn new_eagerly_transitions_ring_slots_to_general_and_updates_registration() {
+fn vulkan_compute_backend_eagerly_transitions_ring_slots_to_general_and_updates_registration() {
     use streamlib::sdk::rhi::VulkanLayout;
 
     let Some(gpu) = fresh_gpu_context() else {
         return;
     };
-    let decoder = gpu
+    let backend = gpu
         .limited_access()
-        .escalate(|full| SimpleJpegDecoder::new(full, 64, 64))
-        .expect("decoder construction");
+        .escalate(|full| VulkanComputeBackend::new(full, 64, 64))
+        .expect("backend construction");
 
-    for slot_index in 0..decoder.ring().len() {
-        let slot = decoder.ring().slot(slot_index).expect("ring slot");
+    for slot_index in 0..backend.ring().len() {
+        let slot = backend.ring().slot(slot_index).expect("ring slot");
         let reg = gpu
             .resolve_texture_registration_by_surface_id(&slot.surface_id, None, 64, 64)
             .expect("registration in cache");
         assert_eq!(
             reg.current_layout(),
             VulkanLayout::GENERAL,
-            "slot {slot_index} layout must be GENERAL after SimpleJpegDecoder::new \
+            "slot {slot_index} layout must be GENERAL after VulkanComputeBackend::new \
              eager transition (anti-pattern #2: registration-vs-reality drift)"
         );
     }
 }
 
 #[test]
-fn decode_rotates_ring_and_reuses_pre_allocated_slot_textures() {
+fn vulkan_compute_backend_decode_rotates_ring_and_reuses_pre_allocated_slot_textures() {
+    use vulkan_jpeg::JpegDecodeBackend;
+
     let Some(gpu) = fresh_gpu_context() else {
         return;
     };
-    let mut decoder = gpu
+    let mut backend = gpu
         .limited_access()
-        .escalate(|full| SimpleJpegDecoder::new(full, 64, 64))
-        .expect("decoder construction");
+        .escalate(|full| VulkanComputeBackend::new(full, 64, 64))
+        .expect("backend construction");
 
     // Snapshot the underlying Arc<HostVulkanTexture> pointer for each
     // ring slot before any decode runs. After multiple decodes, the
     // ring must hand back the SAME Arcs — pointer drift would mean
     // re-allocation, defeating the steady-state-no-alloc invariant.
-    let initial_arcs: Vec<_> = (0..decoder.ring().len())
+    let initial_arcs: Vec<_> = (0..backend.ring().len())
         .map(|i| {
-            Arc::as_ptr(decoder.ring().slot(i).expect("ring slot").texture.vulkan_inner())
+            Arc::as_ptr(backend.ring().slot(i).expect("ring slot").texture.vulkan_inner())
         })
         .collect();
 
@@ -176,7 +185,7 @@ fn decode_rotates_ring_and_reuses_pre_allocated_slot_textures() {
     let mut surface_ids = Vec::new();
     let mut texture_ptrs = Vec::new();
     for _ in 0..(MAX_FRAMES_IN_FLIGHT * 2) {
-        let out = decoder.decode(&jpeg).expect("decode");
+        let out = backend.decode(&jpeg).expect("decode");
         surface_ids.push(out.surface_id.clone());
         texture_ptrs.push(Arc::as_ptr(out.texture.vulkan_inner()));
     }
@@ -207,6 +216,28 @@ fn decode_rotates_ring_and_reuses_pre_allocated_slot_textures() {
              (initial arcs {initial_arcs:?}, got {ptr:?}) — steady-state allocation regression"
         );
     }
+}
+
+#[test]
+fn simple_decoder_forwards_max_dimensions_through_dispatcher() {
+    let Some(gpu) = fresh_gpu_context() else {
+        return;
+    };
+    let decoder = gpu
+        .limited_access()
+        .escalate(|full| {
+            SimpleJpegDecoder::new_with_preference(
+                full,
+                128,
+                96,
+                JpegBackendPreference::Force(JpegBackendKind::VulkanCompute),
+            )
+        })
+        .expect("decoder construction");
+
+    assert_eq!(decoder.max_width(), 128);
+    assert_eq!(decoder.max_height(), 96);
+    assert_eq!(decoder.backend_kind(), JpegBackendKind::VulkanCompute);
 }
 
 // -----------------------------------------------------------------------------
