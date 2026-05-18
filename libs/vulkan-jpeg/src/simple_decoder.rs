@@ -13,8 +13,10 @@
 //! texture creation, zero command-pool / cb / fence creation in steady
 //! state.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use streamlib::sdk::color::ResolvedColorInfo;
 use streamlib::sdk::context::{GpuContextFullAccess, TextureRing};
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, RhiCommandRecorder, VulkanAccess, VulkanStage,
@@ -23,6 +25,7 @@ use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{Texture, TextureFormat, TextureUsages, VulkanLayout};
 
+use crate::color::{JpegColorInfo, JpegColorSource};
 use crate::kernel::{
     worst_case_coefficient_buffer_bytes_420, JpegDecodeKernel, QUANT_TABLE_BUFFER_BYTES,
 };
@@ -48,6 +51,17 @@ pub struct JpegDecodeOutput {
     pub width: u32,
     /// Decoded frame height, in pixels. Always ≤ `max_height`.
     pub height: u32,
+    /// Which APP-segment declaration drove the colorimetry decision
+    /// for this frame. `UnsupportedDeclarationFallback` means the
+    /// bitstream declared a colorimetry the engine can't represent
+    /// yet (Adobe RGB / Display P3 / Rec.2020 via EXIF or ICC) and
+    /// the kernel decoded under the JFIF default instead.
+    pub color_source: JpegColorSource,
+    /// Resolved 4-tuple the kernel actually used for this frame.
+    /// Cheap to compare; surfaces the dispatched matrix / range /
+    /// transfer / primaries for downstream consumers that want to
+    /// reason about the color decision per frame.
+    pub color_info: ResolvedColorInfo,
 }
 
 /// High-level fused-compute JPEG decoder with pre-allocated GPU
@@ -60,6 +74,12 @@ pub struct SimpleJpegDecoder {
     ring: Arc<TextureRing>,
     max_width: u32,
     max_height: u32,
+    /// Latch for the "non-sRGB declaration → JFIF fallback" warning.
+    /// Flips to `true` on the first frame that takes the fallback;
+    /// subsequent fallback frames stay silent so a 30 Hz pipeline
+    /// doesn't flood the log. Resetting to `false` re-arms the warn
+    /// (e.g. across a teardown / rebuild cycle).
+    unsupported_fallback_warned: AtomicBool,
 }
 
 impl std::fmt::Debug for SimpleJpegDecoder {
@@ -158,6 +178,7 @@ impl SimpleJpegDecoder {
             ring,
             max_width,
             max_height,
+            unsupported_fallback_warned: AtomicBool::new(false),
         })
     }
 
@@ -189,11 +210,17 @@ impl SimpleJpegDecoder {
         // (YCCK) bubbles up as `Error::NotSupported` here — the kernel only
         // handles 3-component YCbCr / RGB-direct decode. EXIF / ICC
         // declarations the engine can't yet represent fall back to JFIF
-        // default with a tracing::warn from inside `resolve()`.
+        // default and surface as `JpegColorSource::UnsupportedDeclarationFallback`
+        // on the output, plus a one-shot `tracing::warn!` per decoder
+        // instance.
         let resolved = decoded
             .color_info
             .resolve()
             .map_err(|e| Error::GpuError(format!("jpeg colorimetry: {e}")))?;
+
+        if resolved.source == JpegColorSource::UnsupportedDeclarationFallback {
+            self.warn_unsupported_fallback_once(&decoded.color_info);
+        }
 
         let slot = self.ring.acquire_next();
         self.kernel.dispatch_pooled(
@@ -209,7 +236,35 @@ impl SimpleJpegDecoder {
             surface_id: slot.surface_id,
             width,
             height,
+            color_source: resolved.source,
+            color_info: resolved.info,
         })
+    }
+
+    /// Emit a structured `tracing::warn!` describing the first frame
+    /// where this decoder's input declared a non-sRGB colorimetry that
+    /// the engine can't honor yet. Subsequent fallback frames stay
+    /// silent — the latch fires once per decoder instance.
+    ///
+    /// The warn uses the stable target `vulkan_jpeg::colorimetry_fallback`
+    /// so an AGP-style runtime can `grep`/filter for it cleanly. Carries
+    /// the parsed APP-segment fields so the operator can tell which
+    /// declaration tripped the fallback (Adobe `transform=Other` /
+    /// EXIF Uncalibrated / ICC profile bytes).
+    fn warn_unsupported_fallback_once(&self, info: &JpegColorInfo) {
+        if self
+            .unsupported_fallback_warned
+            .swap(true, Ordering::Relaxed)
+        {
+            return;
+        }
+        tracing::warn!(
+            target: "vulkan_jpeg::colorimetry_fallback",
+            adobe_transform = ?info.adobe.map(|a| a.transform),
+            exif_color_space = ?info.exif_color_space,
+            icc_profile_bytes = info.icc_profile.as_ref().map(|p| p.len()),
+            "JPEG stream declares non-sRGB colorimetry the engine `PrimariesId` enum can't represent yet (Adobe RGB / Display P3 / Rec.2020); decoded under the JFIF default. Extend `PrimariesId` to honor it.",
+        );
     }
 
     /// Borrow the underlying [`TextureRing`] — for tests and

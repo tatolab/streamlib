@@ -17,7 +17,8 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, VulkanTextureReadback};
 use streamlib::sdk::rhi::{TextureFormat, TextureReadbackDescriptor, TextureSourceLayout};
-use vulkan_jpeg::{JpegDecodeOutput, SimpleJpegDecoder, MAX_FRAMES_IN_FLIGHT};
+use streamlib::sdk::color::MatrixId;
+use vulkan_jpeg::{JpegColorSource, JpegDecodeOutput, SimpleJpegDecoder, MAX_FRAMES_IN_FLIGHT};
 
 /// Acquire a `GpuContext` for tests, or skip cleanly when no GPU is
 /// available (the workstation has one; CI baseline runners may not).
@@ -346,6 +347,31 @@ fn decode_rejects_app14_ycck_with_typed_error() {
         msg.contains("jpeg colorimetry") && msg.contains("YCCK"),
         "expected wrapped colorimetry/YCCK error, got: {msg}"
     );
+}
+
+/// APP14 transform=0 (RGB-direct) decode succeeds and surfaces
+/// `JpegColorSource::AdobeRgbDirect` + `MatrixId::Identity` on the
+/// output handle. Locks the new `JpegDecodeOutput::color_source` /
+/// `color_info` fields end-to-end — downstream consumers (e.g. an
+/// AGP-style vision pipeline that wants to log "what matrix did
+/// we decode under this frame?") rely on this surface.
+#[test]
+fn decode_app14_transform_zero_surfaces_adobe_rgb_direct_on_output() {
+    let Some(gpu) = fresh_gpu_context() else {
+        return;
+    };
+    let mut decoder = gpu
+        .limited_access()
+        .escalate(|full| SimpleJpegDecoder::new(full, 64, 64))
+        .expect("decoder construction");
+
+    let rgb = synthesize_test_image(32, 32);
+    let baseline = encode_jpeg_rgb_420(32, 32, &rgb, 85);
+    let jpeg = splice_app14_after_soi(&baseline, /* transform */ 0);
+
+    let output = decoder.decode(&jpeg).expect("APP14 transform=0 decode");
+    assert_eq!(output.color_source, JpegColorSource::AdobeRgbDirect);
+    assert_eq!(output.color_info.matrix, MatrixId::Identity);
 }
 
 /// Splice an APP14 Adobe segment with the given `transform` value

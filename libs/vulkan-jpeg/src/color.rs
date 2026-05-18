@@ -495,11 +495,7 @@ impl JpegColorInfo {
                         "APP14 Adobe transform=2 (YCCK / 4-component CMYK) — the 3-component fused kernel cannot handle this stream",
                     ));
                 }
-                AdobeTransform::Other(raw) => {
-                    tracing::warn!(
-                        raw_transform = raw,
-                        "APP14 Adobe transform byte outside known set {{0,1,2}} — falling back to JFIF default",
-                    );
+                AdobeTransform::Other(_) => {
                     return Ok(ResolvedJpegColor {
                         info: jfif_default,
                         source: JpegColorSource::UnsupportedDeclarationFallback,
@@ -514,16 +510,10 @@ impl JpegColorInfo {
                     info: jfif_default,
                     source: JpegColorSource::ExifSrgb,
                 },
-                ExifColorSpace::Uncalibrated | ExifColorSpace::Other(_) => {
-                    tracing::warn!(
-                        ?cs,
-                        "EXIF ColorSpace declares non-sRGB primaries — the engine's `PrimariesId` enum can't represent Adobe RGB / Display P3 today; falling back to JFIF default",
-                    );
-                    ResolvedJpegColor {
-                        info: jfif_default,
-                        source: JpegColorSource::UnsupportedDeclarationFallback,
-                    }
-                }
+                ExifColorSpace::Uncalibrated | ExifColorSpace::Other(_) => ResolvedJpegColor {
+                    info: jfif_default,
+                    source: JpegColorSource::UnsupportedDeclarationFallback,
+                },
             });
         }
 
@@ -532,9 +522,6 @@ impl JpegColorInfo {
             // `Display P3` variants that the engine enum doesn't carry
             // today. Parse, surface, fall back to JFIF — a future engine
             // extension is the right place to honor non-sRGB profiles.
-            tracing::warn!(
-                "ICC profile present but engine `PrimariesId` cannot represent non-sRGB primaries today; falling back to JFIF default",
-            );
             return Ok(ResolvedJpegColor {
                 info: jfif_default,
                 source: JpegColorSource::UnsupportedDeclarationFallback,
