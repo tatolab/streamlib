@@ -20,6 +20,98 @@ use crate::core::{Result, Error};
 use super::drm_modifier_probe::{self, DrmModifierTable};
 use super::{HostMarker, VulkanCommandQueue, VulkanRhiDevice, HostVulkanTexture};
 
+/// Best-effort hint about which third-party GPU compute libraries are
+/// **available to integrate against this device**. Probed once at
+/// device construction; each field is `true` when the matching vendor
+/// SDK can plausibly run on this physical device + host environment.
+///
+/// "Available" is a build-host hint, not a runtime guarantee: the
+/// actual `Backend::new` step may still fail (CUDA context init
+/// fails, driver mismatch, GPU lacks the right compute capability,
+/// etc.). Backend-using libraries (e.g. `vulkan-jpeg`'s
+/// `SimpleJpegDecoder`) treat the field as "try this backend first,
+/// fall back if construction fails."
+///
+/// **When you add a second field to this struct**, read
+/// `docs/architecture/third-party-gpu-backends.md` first. The single-
+/// consumer JPEG-specific backend trait in `vulkan-jpeg` is the right
+/// shape for one consumer — the second consumer is the trigger to
+/// lift the trait to an engine-tier `ThirdPartyGpuBackend` primitive
+/// next to this struct. Don't copy the JPEG-specific shape.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ThirdPartyGpuCapabilities {
+    /// NVIDIA `libnvjpeg` (CUDA-based JPEG decode). True when this
+    /// physical device's PCI vendor matches NVIDIA and
+    /// `libnvjpeg.so.12` is loadable via `dlopen`. The actual nvJPEG
+    /// init (`nvjpegCreateSimple` + CUDA context creation) happens at
+    /// backend construction time and may still fail for reasons not
+    /// covered by this probe (e.g. CUDA driver missing, GPU lacks
+    /// the required compute capability).
+    pub nvjpeg: bool,
+}
+
+impl ThirdPartyGpuCapabilities {
+    /// PCI vendor ID assigned by the Khronos Vulkan registry to NVIDIA.
+    const PCI_VENDOR_NVIDIA: u32 = 0x10DE;
+
+    /// Probe the host environment for available third-party GPU
+    /// libraries. Cheap — `dlopen` + `dlclose` per probed lib, no
+    /// vendor SDK init, no CUDA context creation. Safe to call from
+    /// `HostVulkanDevice::new` before any consumer code runs.
+    pub(crate) fn probe(vendor_id: u32) -> Self {
+        Self {
+            nvjpeg: vendor_id == Self::PCI_VENDOR_NVIDIA && probe_nvjpeg_loadable(),
+        }
+    }
+}
+
+/// Try to `dlopen` `libnvjpeg.so.12` and close it immediately. Returns
+/// `true` when the dynamic linker can find the library by any of:
+///
+/// 1. The bare SONAME `libnvjpeg.so.12` — works when the toolkit's
+///    `/etc/ld.so.conf.d/*cuda*.conf` entries have been picked up by a
+///    recent `ldconfig` run.
+/// 2. The canonical CUDA Toolkit install paths (12.x versioned
+///    `/usr/local/cuda-12.{9,8,7,6,5,4,3,2,1,0}/targets/x86_64-linux/lib/`
+///    and the unversioned `/usr/local/cuda/...` symlink). A fresh
+///    `libnvjpeg-dev-12-*` apt install often leaves the ldconfig cache
+///    stale until the next `ldconfig` run; falling back to explicit
+///    paths means our capability probe doesn't depend on root-only
+///    cache state.
+/// 3. The Debian multiarch path `/usr/lib/x86_64-linux-gnu/` —
+///    distro-packaged installs land here.
+///
+/// Probing the actual `nvjpegCreateSimple` symbol would require a CUDA
+/// context (CUDA initializes lazily on first call), so the minimal probe
+/// stops at the library-loadable level. Backend construction validates
+/// the rest.
+fn probe_nvjpeg_loadable() -> bool {
+    // SAFETY: `libloading::Library::new` is safe to call against any
+    // path — failure to find the lib returns `Err`, not undefined
+    // behavior. The library is dropped immediately, calling `dlclose`.
+    let candidates: &[&str] = &[
+        "libnvjpeg.so.12",
+        "/usr/local/cuda/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.9/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.8/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.7/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.6/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.5/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.4/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.3/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.2/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.1/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/local/cuda-12.0/targets/x86_64-linux/lib/libnvjpeg.so.12",
+        "/usr/lib/x86_64-linux-gnu/libnvjpeg.so.12",
+    ];
+    for candidate in candidates {
+        if unsafe { libloading::Library::new(candidate) }.is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Vulkan GPU device.
 ///
 /// Wraps the Vulkan instance, physical device, and logical device.
@@ -38,6 +130,10 @@ pub struct HostVulkanDevice {
     #[allow(dead_code)]
     device_name: String,
     supports_external_memory: bool,
+    /// Best-effort hint about which third-party GPU compute libraries
+    /// (nvJPEG, etc.) are available to integrate against this device.
+    /// Probed at construction; see [`ThirdPartyGpuCapabilities`].
+    third_party_gpu_capabilities: ThirdPartyGpuCapabilities,
     /// Whether the driver tolerates a failed cross-device DMA-BUF import
     /// (raw `vkAllocateMemory` chained with `VkImportMemoryFdInfoKHR`)
     /// without perturbing per-handle-type accounting for other export
@@ -480,6 +576,15 @@ impl HostVulkanDevice {
         // this, the blocklist is a one-line update.
         const PCI_VENDOR_NVIDIA: u32 = 0x10DE;
         let supports_cross_device_dma_buf_probe = device_props.vendor_id != PCI_VENDOR_NVIDIA;
+
+        // Probe third-party GPU library availability (nvJPEG, future
+        // siblings like AMD AMF / Intel MFX / OptiX denoiser). Cheap
+        // dlopen-based hint; backend construction validates the rest.
+        // See `docs/architecture/third-party-gpu-backends.md` and the
+        // `ThirdPartyGpuCapabilities` struct doc for the "when to lift
+        // to engine-tier" trigger as siblings arrive.
+        let third_party_gpu_capabilities =
+            ThirdPartyGpuCapabilities::probe(device_props.vendor_id);
 
         // 5b. Query VkPhysicalDeviceIDProperties::deviceUUID via
         //     vkGetPhysicalDeviceProperties2. CUDA-Vulkan interop matches
@@ -1249,6 +1354,7 @@ impl HostVulkanDevice {
             transfer_queue,
             device_name: device_name.into_owned(),
             supports_external_memory,
+            third_party_gpu_capabilities,
             supports_cross_device_dma_buf_probe,
             has_acquire_unmodified,
             has_hdr_metadata,
@@ -2304,6 +2410,26 @@ impl HostVulkanDevice {
         self.supports_cross_device_dma_buf_probe
     }
 
+    /// Best-effort hint about which third-party GPU compute libraries
+    /// (nvJPEG today; future siblings as the workspace grows) are
+    /// available to integrate against this device. Probed once at
+    /// construction; cheap to clone.
+    ///
+    /// Backend-using libraries (e.g. `vulkan-jpeg`'s `SimpleJpegDecoder`)
+    /// consult this to decide which backend to attempt first. A `true`
+    /// field is a *hint*, not a guarantee — the matching backend's
+    /// `new()` may still fail for reasons not covered by the probe
+    /// (CUDA context init, GPU compute-capability mismatch, etc.).
+    /// Callers handle that by falling back to a lower-tier backend.
+    ///
+    /// See [`ThirdPartyGpuCapabilities`] and
+    /// `docs/architecture/third-party-gpu-backends.md` for the
+    /// integration shape and the trigger that lifts the JPEG-specific
+    /// backend trait to an engine-tier primitive as siblings arrive.
+    pub fn third_party_gpu_capabilities(&self) -> ThirdPartyGpuCapabilities {
+        self.third_party_gpu_capabilities
+    }
+
     /// Whether Vulkan Video encode extensions are available.
     #[allow(dead_code)]
     pub fn supports_video_encode(&self) -> bool {
@@ -3228,6 +3354,58 @@ mod tests {
                 "expected supports_cross_device_dma_buf_probe()=true on non-NVIDIA ({name}), got false"
             );
         }
+    }
+
+    /// Non-NVIDIA vendor IDs must report `nvjpeg = false` regardless
+    /// of whether `libnvjpeg.so.12` happens to be on the host. Locks
+    /// the vendor-id gate inside [`ThirdPartyGpuCapabilities::probe`]
+    /// — mentally revert that gate (`vendor_id == PCI_VENDOR_NVIDIA &&`
+    /// → `true &&`) and this test fails on any host where libnvjpeg
+    /// IS present (true on this development host). Cheap, no Vulkan
+    /// device required.
+    #[test]
+    fn third_party_gpu_capabilities_non_nvidia_vendor_disables_nvjpeg() {
+        // PCI vendor IDs from the Khronos Vulkan registry. Intel, AMD,
+        // ARM Mali, Qualcomm Adreno — none are NVIDIA.
+        for non_nvidia_vendor in [0x8086_u32, 0x1002, 0x13B5, 0x5143] {
+            let caps = ThirdPartyGpuCapabilities::probe(non_nvidia_vendor);
+            assert!(
+                !caps.nvjpeg,
+                "non-NVIDIA vendor 0x{:04X} must report nvjpeg=false; \
+                 got nvjpeg=true (vendor-id gate broken)",
+                non_nvidia_vendor,
+            );
+        }
+    }
+
+    /// On NVIDIA-vendor hosts, `nvjpeg` reflects whether `libnvjpeg.so.12`
+    /// is dlopen-able — runtime-detection shape, not a build-time
+    /// feature gate. The probe is deterministic for a given host, so
+    /// the field's value must equal the independent dlopen check.
+    /// Cheap, no Vulkan device required.
+    #[test]
+    fn third_party_gpu_capabilities_nvidia_nvjpeg_tracks_library_loadability() {
+        const PCI_VENDOR_NVIDIA: u32 = 0x10DE;
+        let caps = ThirdPartyGpuCapabilities::probe(PCI_VENDOR_NVIDIA);
+        let independent_check = probe_nvjpeg_loadable();
+        assert_eq!(
+            caps.nvjpeg, independent_check,
+            "ThirdPartyGpuCapabilities::probe must report nvjpeg=true \
+             iff libnvjpeg.so.12 is dlopen-able; got caps.nvjpeg={} \
+             but independent dlopen returns {}",
+            caps.nvjpeg, independent_check,
+        );
+    }
+
+    /// `Default` must produce an all-`false` capabilities struct.
+    /// Lets callers spell "no third-party libs available" without
+    /// touching every field — important for future siblings that
+    /// extend the struct (the `Default` derive auto-tracks new
+    /// fields). Cheap, no Vulkan device required.
+    #[test]
+    fn third_party_gpu_capabilities_default_is_all_false() {
+        let caps = ThirdPartyGpuCapabilities::default();
+        assert!(!caps.nvjpeg, "Default::nvjpeg must be false");
     }
 
     /// Issue #633 — `supports_qfot_acquire_unmodified` must equal the

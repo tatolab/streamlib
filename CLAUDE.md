@@ -672,5 +672,21 @@ make sense if the surrounding files were renamed or restructured.
   `texture_cache` — extend `TextureRegistration`. Adapter-internal
   `SurfaceState<P>` lives at a different scope and is not the failure
   mode this rule prevents.
+- @docs/architecture/third-party-gpu-backends.md — Canonical shape for
+  integrating a third-party GPU library (NVIDIA nvJPEG, NVDEC, OptiX
+  denoiser, AMD AMF, Intel MFX) as a backend behind a streamlib
+  decoder/encoder/post-processor: engine-allocates an OPAQUE_FD
+  staging surface via `HostVulkanBuffer::new_opaque_fd_export*`,
+  vendor library imports the FD via its own SDK
+  (`cudaImportExternalMemory` for CUDA), Vulkan timeline semaphore
+  carries the cross-API signal, host-side `vkCmdCopyBufferToImage`
+  lands the result in a normal `TextureRing` slot consumers see via
+  `surface_id`. Direction is **engine-allocates / vendor-imports**
+  universally — the inverse (CUDA-allocates / Vulkan-imports) cannot
+  bind a tiled `VkImage` and is the anti-pattern this doc rules out.
+  Read before adding a second backend-using library — the doc names
+  the trigger ("`ThirdPartyGpuCapabilities` grew a second `bool`
+  field") for lifting the JPEG-shaped backend trait to an engine-tier
+  `ThirdPartyGpuBackend` primitive.
 
 Index: @docs/learnings/README.md

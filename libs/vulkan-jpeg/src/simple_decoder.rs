@@ -1,34 +1,36 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! High-level JPEG decoder API: parser + Huffman + fused compute kernel +
-//! pre-allocated HOST_VISIBLE SSBOs + pre-allocated [`TextureRing`] of
-//! `MAX_FRAMES_IN_FLIGHT = 2` output textures.
+//! High-level JPEG decoder API. Wraps a [`JpegDecodeBackend`] and
+//! selects between [`VulkanComputeBackend`] (cross-vendor, default) and
+//! [`NvJpegBackend`] (NVIDIA fast path) at construction time based on
+//! [`HostVulkanDevice::third_party_gpu_capabilities`] and an optional
+//! caller-supplied [`JpegBackendPreference`].
 //!
-//! Construction is privileged (allocates the kernel pipeline, the
-//! coefficient + quant-table HOST_VISIBLE SSBOs sized for the worst-case
-//! 4:2:0 frame at `(max_width, max_height)`, and a `TextureRing` of
-//! `Rgba8Unorm` STORAGE textures). Per-frame [`Self::decode`] rotates
-//! the ring and reuses the SSBOs — zero `vkAllocateMemory`, zero
-//! texture creation, zero command-pool / cb / fence creation in steady
-//! state.
-
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+//! Runtime selection rule: nvJPEG is preferred when (a) the device's
+//! `ThirdPartyGpuCapabilities::nvjpeg` is `true` and (b)
+//! [`NvJpegBackend::new`] succeeds. Construction falls back to
+//! [`VulkanComputeBackend`] otherwise. Callers can force a specific
+//! backend via [`JpegBackendPreference::Force`] — useful for testing,
+//! benchmarking, and consumers who want determinism across hosts.
+//!
+//! [`VulkanComputeBackend`]: crate::vulkan_compute_backend::VulkanComputeBackend
+//! [`NvJpegBackend`]: crate::nvjpeg_backend::NvJpegBackend
+//! [`HostVulkanDevice::third_party_gpu_capabilities`]:
+//!   streamlib::sdk::engine::host_rhi::HostVulkanDevice::third_party_gpu_capabilities
 
 use streamlib::sdk::color::ResolvedColorInfo;
-use streamlib::sdk::context::{GpuContextFullAccess, TextureRing};
-use streamlib::sdk::engine::host_rhi::{
-    HostVulkanBuffer, RhiCommandRecorder, VulkanAccess, VulkanStage,
-};
+use streamlib::sdk::context::GpuContextFullAccess;
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{Texture, TextureFormat, TextureUsages, VulkanLayout};
+use streamlib::sdk::rhi::Texture;
 
-use crate::color::{JpegColorInfo, JpegColorSource};
-use crate::kernel::{
-    worst_case_coefficient_buffer_bytes_420, JpegDecodeKernel, QUANT_TABLE_BUFFER_BYTES,
-};
+use crate::backend::{JpegBackendKind, JpegDecodeBackend};
+use crate::color::JpegColorSource;
+use crate::vulkan_compute_backend::VulkanComputeBackend;
+
+#[cfg(target_os = "linux")]
+use crate::nvjpeg_backend::NvJpegBackend;
 
 /// Ring depth — one frame in flight on the GPU, one being recorded on
 /// the CPU. Matches every decoder in the engine.
@@ -55,56 +57,72 @@ pub struct JpegDecodeOutput {
     /// for this frame. `UnsupportedDeclarationFallback` means the
     /// bitstream declared a colorimetry the engine can't represent
     /// yet (Adobe RGB / Display P3 / Rec.2020 via EXIF or ICC) and
-    /// the kernel decoded under the JFIF default instead.
+    /// the backend decoded under the JFIF default instead.
     pub color_source: JpegColorSource,
-    /// Resolved 4-tuple the kernel actually used for this frame.
+    /// Resolved 4-tuple the backend actually used for this frame.
     /// Cheap to compare; surfaces the dispatched matrix / range /
     /// transfer / primaries for downstream consumers that want to
     /// reason about the color decision per frame.
     pub color_info: ResolvedColorInfo,
 }
 
-/// High-level fused-compute JPEG decoder with pre-allocated GPU
-/// resources. Drops in steady-state allocation on the per-frame hot
-/// path.
+/// Backend-selection preference passed to [`SimpleJpegDecoder::new`]
+/// alongside the device.
+///
+/// [`Auto`](Self::Auto) is the recommended default: nvJPEG when
+/// available, Vulkan-compute otherwise. The escape hatches are for
+/// testing, benchmarking, and consumers that need determinism across
+/// hosts.
+#[derive(Debug, Clone, Copy)]
+pub enum JpegBackendPreference {
+    /// Use nvJPEG when the device's
+    /// [`ThirdPartyGpuCapabilities::nvjpeg`] is `true` and
+    /// [`NvJpegBackend::new`] succeeds. Fall back to the
+    /// cross-vendor Vulkan-compute backend otherwise.
+    ///
+    /// [`ThirdPartyGpuCapabilities::nvjpeg`]:
+    ///   streamlib::sdk::engine::host_rhi::ThirdPartyGpuCapabilities::nvjpeg
+    /// [`NvJpegBackend::new`]: crate::nvjpeg_backend::NvJpegBackend::new
+    Auto,
+    /// Force a specific backend. `new` returns
+    /// [`Error::NotSupported`] when the forced backend isn't
+    /// available (e.g. `Force(NvJpeg)` on a non-NVIDIA host or one
+    /// without `libnvjpeg.so.12`).
+    Force(JpegBackendKind),
+}
+
+impl Default for JpegBackendPreference {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// High-level fused-compute JPEG decoder.
+///
+/// Wraps a single [`JpegDecodeBackend`] chosen at construction time per
+/// [`JpegBackendPreference`]. Per-frame [`Self::decode`] forwards to the
+/// backend — no decision overhead, no hot-path allocation.
 pub struct SimpleJpegDecoder {
-    kernel: JpegDecodeKernel,
-    coef_buf: Arc<HostVulkanBuffer>,
-    qt_buf: Arc<HostVulkanBuffer>,
-    ring: Arc<TextureRing>,
+    backend: Box<dyn JpegDecodeBackend>,
     max_width: u32,
     max_height: u32,
-    /// Latch for the "non-sRGB declaration → JFIF fallback" warning.
-    /// Flips to `true` on the first frame that takes the fallback;
-    /// subsequent fallback frames stay silent so a 30 Hz pipeline
-    /// doesn't flood the log. Resetting to `false` re-arms the warn
-    /// (e.g. across a teardown / rebuild cycle).
-    unsupported_fallback_warned: AtomicBool,
 }
 
 impl std::fmt::Debug for SimpleJpegDecoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SimpleJpegDecoder")
+            .field("backend", &self.backend.kind().as_str())
             .field("max_width", &self.max_width)
             .field("max_height", &self.max_height)
-            .field("ring_slots", &self.ring.len())
             .finish()
     }
 }
 
 impl SimpleJpegDecoder {
     /// Construct a decoder ready to handle JPEGs up to
-    /// `(max_width, max_height)` pixels.
-    ///
-    /// Pre-allocates the fused compute kernel pipeline, a coefficient
-    /// SSBO sized for the worst-case 4:2:0 frame at the declared maxima,
-    /// a 128-entry quant-table SSBO, and a [`MAX_FRAMES_IN_FLIGHT`]-slot
-    /// [`TextureRing`] of `Rgba8Unorm` STORAGE textures. Each ring slot
-    /// is eagerly transitioned `UNDEFINED → GENERAL` and the slot's
-    /// registration layout updated to match — subsequent kernel
-    /// dispatches write directly without further transitions, and
-    /// downstream consumers that resolve the slot's `surface_id` see a
-    /// registration claim that matches reality.
+    /// `(max_width, max_height)` pixels, with auto-selected backend.
+    /// Equivalent to [`Self::new_with_preference`] with
+    /// [`JpegBackendPreference::Auto`].
     ///
     /// Must be called inside a [`streamlib::sdk::context::GpuContext::escalate`]
     /// closure (the only way crate-external code obtains a
@@ -116,163 +134,61 @@ impl SimpleJpegDecoder {
         max_width: u32,
         max_height: u32,
     ) -> Result<Self> {
-        if max_width == 0 || max_height == 0 {
-            return Err(Error::GpuError(format!(
-                "SimpleJpegDecoder::new: max dimensions must be non-zero, got {}x{}",
-                max_width, max_height,
-            )));
-        }
-
-        let device = full_access.device().vulkan_device();
-        let kernel = JpegDecodeKernel::new(device)?;
-
-        let coef_bytes = worst_case_coefficient_buffer_bytes_420(max_width, max_height);
-        let coef_buf = Arc::new(HostVulkanBuffer::new_storage_buffer_host_visible(
-            device, coef_bytes,
-        )?);
-        let qt_buf = Arc::new(HostVulkanBuffer::new_storage_buffer_host_visible(
-            device,
-            QUANT_TABLE_BUFFER_BYTES,
-        )?);
-
-        let ring = full_access.create_texture_ring(
+        Self::new_with_preference(
+            full_access,
             max_width,
             max_height,
-            TextureFormat::Rgba8Unorm,
-            TextureUsages::STORAGE_BINDING
-                | TextureUsages::COPY_SRC
-                | TextureUsages::COPY_DST
-                | TextureUsages::TEXTURE_BINDING,
-            MAX_FRAMES_IN_FLIGHT,
-        )?;
+            JpegBackendPreference::Auto,
+        )
+    }
 
-        // Eagerly transition every slot UNDEFINED → GENERAL and refresh
-        // its TextureRegistration to match. The kernel writes via
-        // STORAGE_BINDING in GENERAL and never transitions back; this
-        // pre-warm means per-frame `decode()` records no transitions.
-        for slot_index in 0..ring.len() {
-            let slot = ring
-                .slot(slot_index)
-                .ok_or_else(|| Error::GpuError("ring slot index out of range".into()))?;
-            let mut recorder =
-                RhiCommandRecorder::new(device, "simple_jpeg_decoder_init_layout")?;
-            recorder.begin()?;
-            recorder.record_image_barrier(
-                &slot.texture,
-                VulkanLayout::UNDEFINED,
-                VulkanLayout::GENERAL,
-                VulkanStage::TOP_OF_PIPE,
-                VulkanStage::COMPUTE_SHADER,
-                VulkanAccess::NONE,
-                VulkanAccess::SHADER_WRITE,
-            )?;
-            recorder.submit_and_wait()?;
-            full_access
-                .update_texture_registration_layout(&slot.surface_id, VulkanLayout::GENERAL);
-        }
-
+    /// Construct a decoder with explicit backend preference.
+    ///
+    /// - [`JpegBackendPreference::Auto`] picks nvJPEG when the device's
+    ///   [`ThirdPartyGpuCapabilities::nvjpeg`] reports `true` and
+    ///   nvJPEG construction succeeds; falls back to Vulkan-compute
+    ///   otherwise. A failed nvJPEG construction logs at
+    ///   `tracing::warn!` level and the decoder transparently uses
+    ///   Vulkan-compute.
+    /// - [`JpegBackendPreference::Force`] requires the specified backend
+    ///   to construct successfully. Returns
+    ///   [`Error::NotSupported`] otherwise. Useful for testing,
+    ///   benchmarking, and consumers that need determinism across
+    ///   hosts.
+    ///
+    /// [`ThirdPartyGpuCapabilities::nvjpeg`]:
+    ///   streamlib::sdk::engine::host_rhi::ThirdPartyGpuCapabilities::nvjpeg
+    pub fn new_with_preference(
+        full_access: &GpuContextFullAccess,
+        max_width: u32,
+        max_height: u32,
+        preference: JpegBackendPreference,
+    ) -> Result<Self> {
+        let backend = build_backend(full_access, max_width, max_height, preference)?;
+        tracing::debug!(
+            target: "vulkan_jpeg::backend_selection",
+            backend = backend.kind().as_str(),
+            max_width,
+            max_height,
+            "SimpleJpegDecoder constructed",
+        );
         Ok(Self {
-            kernel,
-            coef_buf,
-            qt_buf,
-            ring,
+            backend,
             max_width,
             max_height,
-            unsupported_fallback_warned: AtomicBool::new(false),
         })
     }
 
     /// Decode `jpeg_bytes` into the next ring slot's texture and return
-    /// a handle to it. Steady-state Limited-safe — no escalation, no
-    /// allocation. Single-threaded by `&mut self`; multi-decoder
-    /// parallelism is the caller's pattern.
-    ///
-    /// Rejects baseline-but-non-4:2:0 input ([`Error::NotSupported`]
-    /// from the kernel) and frames whose dimensions exceed the decoder's
-    /// declared maxima ([`Error::GpuError`] with "exceeds max"). Parser
-    /// / Huffman / kernel errors surface as their typed variants — no
-    /// panics, no leaked GPU resources.
+    /// a handle to it. Forwards to the selected backend — see the
+    /// backend's documentation for backend-specific behavior.
     pub fn decode(&mut self, jpeg_bytes: &[u8]) -> Result<JpegDecodeOutput> {
-        let decoded = crate::decode(jpeg_bytes)
-            .map_err(|e| Error::GpuError(format!("jpeg parse/huffman: {e}")))?;
-
-        let width = u32::from(decoded.frame.width);
-        let height = u32::from(decoded.frame.height);
-        if width > self.max_width || height > self.max_height {
-            return Err(Error::GpuError(format!(
-                "SimpleJpegDecoder::decode: frame {}x{} exceeds decoder maxima {}x{} \
-                 (rebuild SimpleJpegDecoder with larger max_width/max_height)",
-                width, height, self.max_width, self.max_height,
-            )));
-        }
-
-        // Honor declared colorimetry from APP segments. APP14 transform=2
-        // (YCCK) bubbles up as `Error::NotSupported` here — the kernel only
-        // handles 3-component YCbCr / RGB-direct decode. EXIF / ICC
-        // declarations the engine can't yet represent fall back to JFIF
-        // default and surface as `JpegColorSource::UnsupportedDeclarationFallback`
-        // on the output, plus a one-shot `tracing::warn!` per decoder
-        // instance.
-        let resolved = decoded
-            .color_info
-            .resolve()
-            .map_err(|e| Error::GpuError(format!("jpeg colorimetry: {e}")))?;
-
-        if resolved.source == JpegColorSource::UnsupportedDeclarationFallback {
-            self.warn_unsupported_fallback_once(&decoded.color_info);
-        }
-
-        let slot = self.ring.acquire_next();
-        self.kernel.dispatch_pooled(
-            &decoded,
-            &slot.texture,
-            &self.coef_buf,
-            &self.qt_buf,
-            &resolved.info,
-        )?;
-
-        Ok(JpegDecodeOutput {
-            texture: slot.texture,
-            surface_id: slot.surface_id,
-            width,
-            height,
-            color_source: resolved.source,
-            color_info: resolved.info,
-        })
+        self.backend.decode(jpeg_bytes)
     }
 
-    /// Emit a structured `tracing::warn!` describing the first frame
-    /// where this decoder's input declared a non-sRGB colorimetry that
-    /// the engine can't honor yet. Subsequent fallback frames stay
-    /// silent — the latch fires once per decoder instance.
-    ///
-    /// The warn uses the stable target `vulkan_jpeg::colorimetry_fallback`
-    /// so an AGP-style runtime can `grep`/filter for it cleanly. Carries
-    /// the parsed APP-segment fields so the operator can tell which
-    /// declaration tripped the fallback (Adobe `transform=Other` /
-    /// EXIF Uncalibrated / ICC profile bytes).
-    fn warn_unsupported_fallback_once(&self, info: &JpegColorInfo) {
-        if self
-            .unsupported_fallback_warned
-            .swap(true, Ordering::Relaxed)
-        {
-            return;
-        }
-        tracing::warn!(
-            target: "vulkan_jpeg::colorimetry_fallback",
-            adobe_transform = ?info.adobe.map(|a| a.transform),
-            exif_color_space = ?info.exif_color_space,
-            icc_profile_bytes = info.icc_profile.as_ref().map(|p| p.len()),
-            "JPEG stream declares non-sRGB colorimetry the engine `PrimariesId` enum can't represent yet (Adobe RGB / Display P3 / Rec.2020); decoded under the JFIF default. Extend `PrimariesId` to honor it.",
-        );
-    }
-
-    /// Borrow the underlying [`TextureRing`] — for tests and
-    /// introspection. Production callers consume slots via
-    /// [`Self::decode`].
-    #[doc(hidden)]
-    pub fn ring(&self) -> &Arc<TextureRing> {
-        &self.ring
+    /// The backend this decoder selected at construction.
+    pub fn backend_kind(&self) -> JpegBackendKind {
+        self.backend.kind()
     }
 
     /// Declared maximum width this decoder can handle, in pixels.
@@ -283,5 +199,70 @@ impl SimpleJpegDecoder {
     /// Declared maximum height this decoder can handle, in pixels.
     pub fn max_height(&self) -> u32 {
         self.max_height
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn build_backend(
+    full_access: &GpuContextFullAccess,
+    max_width: u32,
+    max_height: u32,
+    preference: JpegBackendPreference,
+) -> Result<Box<dyn JpegDecodeBackend>> {
+    let caps = full_access
+        .device()
+        .vulkan_device()
+        .third_party_gpu_capabilities();
+
+    match preference {
+        JpegBackendPreference::Force(JpegBackendKind::VulkanCompute) => {
+            VulkanComputeBackend::new(full_access, max_width, max_height)
+                .map(|b| Box::new(b) as Box<dyn JpegDecodeBackend>)
+        }
+        JpegBackendPreference::Force(JpegBackendKind::NvJpeg) => {
+            if !caps.nvjpeg {
+                return Err(Error::NotSupported(
+                    "JpegBackendPreference::Force(NvJpeg): nvJPEG not available on this device \
+                     (ThirdPartyGpuCapabilities::nvjpeg = false)"
+                        .into(),
+                ));
+            }
+            NvJpegBackend::new(full_access, max_width, max_height)
+                .map(|b| Box::new(b) as Box<dyn JpegDecodeBackend>)
+        }
+        JpegBackendPreference::Auto => {
+            if caps.nvjpeg {
+                match NvJpegBackend::new(full_access, max_width, max_height) {
+                    Ok(b) => return Ok(Box::new(b)),
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "vulkan_jpeg::backend_selection",
+                            error = %e,
+                            "nvJPEG construction failed; falling back to Vulkan-compute backend",
+                        );
+                    }
+                }
+            }
+            VulkanComputeBackend::new(full_access, max_width, max_height)
+                .map(|b| Box::new(b) as Box<dyn JpegDecodeBackend>)
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn build_backend(
+    full_access: &GpuContextFullAccess,
+    max_width: u32,
+    max_height: u32,
+    preference: JpegBackendPreference,
+) -> Result<Box<dyn JpegDecodeBackend>> {
+    // nvJPEG ships only for Linux; on other platforms the only available
+    // backend is Vulkan-compute.
+    match preference {
+        JpegBackendPreference::Force(JpegBackendKind::NvJpeg) => Err(Error::NotSupported(
+            "JpegBackendPreference::Force(NvJpeg): nvJPEG backend is Linux-only".into(),
+        )),
+        _ => VulkanComputeBackend::new(full_access, max_width, max_height)
+            .map(|b| Box::new(b) as Box<dyn JpegDecodeBackend>),
     }
 }

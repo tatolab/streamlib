@@ -22,9 +22,15 @@ mod parser;
 mod scan;
 
 #[cfg(target_os = "linux")]
+pub mod backend;
+#[cfg(target_os = "linux")]
 pub mod kernel;
 #[cfg(target_os = "linux")]
+pub mod nvjpeg_backend;
+#[cfg(target_os = "linux")]
 pub mod simple_decoder;
+#[cfg(target_os = "linux")]
+pub mod vulkan_compute_backend;
 
 pub use color::{
     AdobeMetadata, AdobeTransform, ExifColorSpace, JfifMetadata, JpegColorInfo,
@@ -40,9 +46,17 @@ pub use huffman::HuffmanClass;
 pub use marker::ZIGZAG;
 
 #[cfg(target_os = "linux")]
+pub use backend::{JpegBackendKind, JpegDecodeBackend};
+#[cfg(target_os = "linux")]
 pub use kernel::{JpegDecodeKernel, JPEG_DECODE_WORKGROUP_SIZE};
 #[cfg(target_os = "linux")]
-pub use simple_decoder::{JpegDecodeOutput, SimpleJpegDecoder, MAX_FRAMES_IN_FLIGHT};
+pub use nvjpeg_backend::NvJpegBackend;
+#[cfg(target_os = "linux")]
+pub use simple_decoder::{
+    JpegBackendPreference, JpegDecodeOutput, SimpleJpegDecoder, MAX_FRAMES_IN_FLIGHT,
+};
+#[cfg(target_os = "linux")]
+pub use vulkan_compute_backend::VulkanComputeBackend;
 
 /// Parse and entropy-decode a baseline-sequential JPEG bitstream.
 ///
