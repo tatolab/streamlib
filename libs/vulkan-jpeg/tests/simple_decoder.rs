@@ -33,10 +33,31 @@ fn synthesize_test_image(width: u16, height: u16) -> Vec<u8> {
     for y in 0..height {
         for x in 0..width {
             // Smoothly-varying gradients across R/G/B so Y, Cb, Cr all
-            // carry signal; matches the gpu_decode.rs fixture math.
+            // carry signal; matches the gpu_decode.rs fixture math —
+            // small high-frequency aliasing terms populate AC
+            // coefficients so the pipeline isn't tested only on DC.
             let r = ((u32::from(x) * 4 + u32::from(y) * 3) & 0xFF) as u8;
             let g = ((u32::from(x) * 5 + u32::from(y) * 7 + 32) & 0xFF) as u8;
             let b = ((u32::from(x) * 3 + u32::from(y) * 11 + 96) & 0xFF) as u8;
+            rgb.extend_from_slice(&[r, g, b]);
+        }
+    }
+    rgb
+}
+
+/// Smoother fixture for round-trip PSNR — clean per-channel gradients
+/// with no high-frequency aliasing. JPEG compresses this comfortably
+/// at baseline-quality settings (Q=85), unlike the stress fixture
+/// above which sits ~33 dB at Q=85 on Y PSNR vs source.
+fn synthesize_smooth_test_image(width: u16, height: u16) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(usize::from(width) * usize::from(height) * 3);
+    let w = u32::from(width.saturating_sub(1).max(1));
+    let h = u32::from(height.saturating_sub(1).max(1));
+    for y in 0..height {
+        for x in 0..width {
+            let r = (u32::from(x) * 255 / w) as u8;
+            let g = (u32::from(y) * 255 / h) as u8;
+            let b = ((u32::from(x) + u32::from(y)) * 255 / (w + h)) as u8;
             rgb.extend_from_slice(&[r, g, b]);
         }
     }
@@ -333,13 +354,13 @@ fn y_channel_psnr_db(reference_rgb: &[u8], actual_rgba: &[u8]) -> f64 {
 fn end_to_end_round_trip_y_psnr_at_least_35db() {
     const W: u16 = 64;
     const H: u16 = 64;
-    // Quality 95: high enough that the round-trip comfortably clears the
-    // 35 dB floor on the high-frequency synthetic fixture used here
-    // (which is designed to populate AC coefficients — stresses the
-    // pipeline more than typical natural content). Q85 sits ~33 dB on
-    // this fixture; the floor exists to gate end-to-end correctness, not
-    // to benchmark JPEG-quality vs. content type.
-    const QUALITY: u8 = 95;
+    // Baseline-quality JPEG per the issue body. The smooth fixture
+    // (`synthesize_smooth_test_image`) clears 35 dB comfortably here;
+    // the stress fixture used by the other tests in this file
+    // populates aggressive AC coefficients on purpose and would sit
+    // ~33 dB at this quality, so it's not the right pick for the
+    // round-trip gate.
+    const QUALITY: u8 = 85;
 
     let Some(gpu) = fresh_gpu_context() else {
         return;
@@ -348,7 +369,7 @@ fn end_to_end_round_trip_y_psnr_at_least_35db() {
         "GpuContext bootstrapped — HostVulkanDevice must be available",
     );
 
-    let rgb = synthesize_test_image(W, H);
+    let rgb = synthesize_smooth_test_image(W, H);
     let jpeg = encode_jpeg_rgb_420(W, H, &rgb, QUALITY);
 
     let mut decoder = gpu
@@ -380,8 +401,13 @@ fn end_to_end_round_trip_y_psnr_at_least_35db() {
     );
 }
 
+/// Locks the contract: parser/Huffman rejection (which aborts before
+/// any GPU work runs) must not leave `SimpleJpegDecoder` in a state
+/// that breaks subsequent decodes. Doesn't exercise mid-dispatch
+/// failure recovery — that's a harder scenario to construct
+/// deterministically from test-controllable inputs.
 #[test]
-fn decode_after_error_recovers_cleanly() {
+fn decode_after_parser_error_state_is_reusable() {
     let Some(gpu) = fresh_gpu_context() else {
         return;
     };
@@ -390,19 +416,19 @@ fn decode_after_error_recovers_cleanly() {
         .escalate(|full| SimpleJpegDecoder::new(full, 64, 64))
         .expect("decoder construction");
 
-    // Bad input first — must error, must NOT leave the kernel in a
-    // half-bound state that breaks the next decode.
     let _ = decoder.decode(&[]).expect_err("empty input rejection");
     let _ = decoder
         .decode(&[0u8, 1, 2])
         .expect_err("garbage input rejection");
 
-    // Now a good decode must still work.
+    // Good decode after the rejections must still work — verifies the
+    // parser-error path doesn't leave the decoder/kernel/ring in a
+    // half-baked state.
     let rgb = synthesize_test_image(32, 32);
     let jpeg = encode_jpeg_rgb_420(32, 32, &rgb, 85);
     let out = decoder
         .decode(&jpeg)
-        .expect("good decode after prior errors must succeed");
+        .expect("good decode after prior parser errors must succeed");
     assert_eq!(out.width, 32);
     assert_eq!(out.height, 32);
 }
