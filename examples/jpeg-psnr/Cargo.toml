@@ -1,0 +1,11 @@
+[package]
+name = "jpeg-psnr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-debug-utilities = { path = "../../packages/debug-utilities" }
+streamlib-display = { path = "../../packages/display" }
+streamlib-jpeg = { path = "../../packages/jpeg" }
+anyhow = "1.0.100"

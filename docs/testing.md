@@ -200,9 +200,44 @@ saturated single-color patterns are insensitive to range
 mis-interpretation. The main fixture rig's gradient references are
 where range-swap deterministically drops Y PSNR below FAIL.
 
+**JPEG decode rig** (`e2e_fixture_psnr_jpeg.sh`,
+[`libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh`](../libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh)).
+Sibling of the main rig for GPU JPEG decode (`@tatolab/jpeg::JpegDecoder`
+wrapping `vulkan-jpeg::SimpleJpegDecoder`). Same shape, decode-only:
+ffmpeg encodes each reference PNG to JPEG (the "encoder" half), then
+`JpegBytesSource → JpegDecoder → Display` decodes back to a PNG sample
+and ffmpeg computes Y/U/V PSNR vs reference. Same `swap-channels |
+bt601-bt709 | range-swap` bug-injection modes, same Y ≥ 35 dB pass bar.
+
+```bash
+# Clean pipeline — every reference should hit Y PSNR ≥ 35 dB.
+libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg
+
+# Negative tests — each is expected to deterministically drop Y PSNR
+# below FAIL on the references that carry the affected channels:
+PSNR_INJECT_BUG=swap-channels \
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-swap
+PSNR_INJECT_BUG=bt601-bt709 \
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-matrix
+PSNR_INJECT_BUG=range-swap \
+    libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-range
+```
+
+The default `JPEG_QUALITY=70` is load-bearing on the rig's payload-fit
+arithmetic: `rmp_serde` serializes `EncodedJpegFrame.data: Vec<u8>` as
+a msgpack array (per-byte tag overhead, ~1.5× wire expansion), and
+iceoryx2's per-slot default of 64 KiB applies when `@tatolab/jpeg`'s
+declared 16 MiB bound isn't registered with the runtime (the example's
+streamlib.yaml declares `@tatolab/core` only, matching how every
+in-tree example wires today). q=70 keeps even the worst-case
+`complex_pattern` fixture under that wire budget while still clearing
+the 35 dB Y PSNR pass bar. The `JPEG_QUALITY` env var overrides the
+default for ad-hoc experimentation; quality settings above ~70 will
+trip `ExceedsMaxLoanSize` on `complex_pattern` at 1920×1080.
+
 **Manual gate for color-management PRs.** Until the GPU CI runner
-milestone lands and CI can run the rigs automatically, treat both
-fixtures above as a mandatory manual gate on any PR that touches
+milestone lands and CI can run the rigs automatically, treat the
+fixture rigs above as a mandatory manual gate on any PR that touches
 the color path (RHI color converter, encoder/decoder VUI / colorimetry,
 display swapchain color space, tone mapper, any sampler-conversion
 key). The gate is:
@@ -211,7 +246,9 @@ key). The gate is:
    passes; same for `h265`.
 2. Vivid regression gate clean — `e2e_fixture_psnr_vivid.sh` passes
    against the checked-in baseline TSV.
-3. At least one negative test from the matrix above runs as part of
+3. JPEG fixture rig clean — `e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg`
+   passes (when the change touches the JPEG path).
+4. At least one negative test from the matrix above runs as part of
    PR validation and is shown to deterministically FAIL — proves the
    gate is non-vacuous for this branch.
 
