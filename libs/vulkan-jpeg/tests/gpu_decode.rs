@@ -27,6 +27,7 @@
 use std::sync::Arc;
 
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
+use streamlib::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
 use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice, HostVulkanTexture, RhiCommandRecorder, VulkanAccess, VulkanStage,
@@ -36,7 +37,10 @@ use streamlib::sdk::rhi::{
     Texture, TextureDescriptor, TextureFormat, TextureReadbackDescriptor, TextureSourceLayout,
     TextureUsages, VulkanLayout,
 };
-use vulkan_jpeg::{decode, ComponentScan, DecodedJpeg, JpegDecodeKernel, QuantizationTable, ZIGZAG};
+use vulkan_jpeg::{
+    decode, AdobeTransform, ComponentScan, DecodedJpeg, JpegColorSource, JpegDecodeKernel,
+    QuantizationTable, ZIGZAG,
+};
 
 const QUALITY: u8 = 85;
 const TEST_WIDTH: u16 = 64;
@@ -80,8 +84,11 @@ fn gpu_decode_matches_cpu_reference_psnr_50db() {
         u32::from(TEST_HEIGHT),
     );
     let kernel = JpegDecodeKernel::new(&device).expect("kernel construction");
+    // No APP segments → JFIF default resolves to BT.601-Full / sRGB.
+    let resolved = decoded.color_info.resolve().expect("resolve color");
+    assert_eq!(resolved.source, JpegColorSource::JfifDefault);
     kernel
-        .dispatch(&decoded, &texture)
+        .dispatch(&decoded, &texture, &resolved.info)
         .expect("kernel dispatch");
     let gpu_rgba = readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT);
 
@@ -331,4 +338,247 @@ fn y_channel_psnr_db(reference: &[u8], actual: &[u8]) -> f64 {
     }
     let mse = sum_sq_err / count as f64;
     10.0 * (255.0f64 * 255.0 / mse).log10()
+}
+
+// ---------------------------------------------------------------------------
+// APP14 transform=0 (RGB-direct) tests
+// ---------------------------------------------------------------------------
+//
+// These tests verify that when the bitstream's APP14 marker declares
+// transform=0 (RGB-direct, no YCbCr↔RGB matrix), the kernel honors the
+// declaration by collapsing the matrix axis to `MatrixId::Identity` —
+// the IDCT samples pass through to RGB without the BT.601 mix-down that
+// JFIF assumes.
+//
+// Test pattern: encode an RGB image through `jpeg-encoder` (produces a
+// JFIF YCbCr bitstream), splice an APP14 transform=0 segment between SOI
+// and SOF0, then verify GPU-vs-CPU agreement on the resulting (intentionally
+// abnormal) decode. Both sides use the same `Identity` matrix; both produce
+// the *same* "what RGB would the IDCT samples look like if we treated them
+// as RGB-direct" output. PSNR is the GPU↔CPU agreement, not the GPU↔source
+// agreement — the test's job is to lock that the GPU honors the declared
+// colorimetry, NOT that any particular RGB image came out.
+
+/// Positive E2E test: APP14 transform=0 fixture decoded through the
+/// Identity-matrix path matches a CPU reference that uses the same
+/// Identity matrix.
+///
+/// Mentally revert the kernel's `color_info.resolve()` plumbing
+/// (force-passing the JFIF default) and this test fails — the GPU side
+/// applies Smpte170m, the CPU side applies Identity, and the per-pixel
+/// RGB triples diverge by hundreds of LSBs.
+#[test]
+fn app14_transform_zero_rgb_direct_matches_cpu_reference_psnr_50db() {
+    let Some(device) = HostVulkanDevice::new().ok().map(Arc::new) else {
+        return;
+    };
+
+    let rgb = synthesize_test_image(TEST_WIDTH, TEST_HEIGHT);
+    let baseline = encode_jpeg_rgb_420(TEST_WIDTH, TEST_HEIGHT, &rgb, QUALITY);
+    let spliced = splice_app14_after_soi(&baseline, /* transform */ 0);
+
+    let decoded = decode(&spliced).expect("parse + huffman decode of spliced bitstream");
+    assert_eq!(decoded.frame.width, TEST_WIDTH);
+    assert_eq!(decoded.frame.height, TEST_HEIGHT);
+    assert!(
+        matches!(
+            decoded.color_info.adobe,
+            Some(vulkan_jpeg::AdobeMetadata {
+                transform: AdobeTransform::Direct
+            })
+        ),
+        "splice failed: APP14 transform=0 must reach the parser",
+    );
+
+    // CPU reference uses Identity (matches the Adobe-RGB-direct branch).
+    let cpu_rgba = cpu_reference_decode_identity(&decoded);
+
+    // GPU path: resolve from the parsed metadata, dispatch, read back.
+    let texture = allocate_storage_texture_general(
+        &device,
+        u32::from(TEST_WIDTH),
+        u32::from(TEST_HEIGHT),
+    );
+    let kernel = JpegDecodeKernel::new(&device).expect("kernel construction");
+    let resolved = decoded.color_info.resolve().expect("resolve");
+    assert_eq!(resolved.source, JpegColorSource::AdobeRgbDirect);
+    assert_eq!(resolved.info.matrix, MatrixId::Identity);
+
+    kernel
+        .dispatch(&decoded, &texture, &resolved.info)
+        .expect("kernel dispatch");
+    let gpu_rgba = readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT);
+
+    let psnr = y_channel_psnr_db(&cpu_rgba, &gpu_rgba);
+    tracing::info!(
+        psnr_db = psnr,
+        floor_db = PSNR_FLOOR_DB,
+        "APP14 transform=0 GPU vs CPU Y-channel PSNR",
+    );
+    assert!(
+        psnr >= PSNR_FLOOR_DB,
+        "Y-channel PSNR {psnr:.2} dB fell below floor {PSNR_FLOOR_DB} dB \
+         — GPU did not honor APP14 transform=0 (Identity matrix path)",
+    );
+}
+
+/// Negative E2E test: forcing the kernel to interpret an APP14
+/// transform=0 fixture as JFIF (Smpte170m) must produce GPU output that
+/// disagrees with the CPU reference (which uses Identity).
+///
+/// Proves the gate is non-vacuous: if the kernel started ignoring the
+/// `ResolvedColorInfo` argument entirely (e.g. hardcoding Smpte170m on
+/// the GPU side), this test would pass against the JFIF CPU reference
+/// — so a stricter PSNR floor on the comparison the test *actually*
+/// runs is what catches it.
+///
+/// The test asserts the GPU output (run with the wrong, JFIF-forced
+/// `ResolvedColorInfo`) is FAR from the Identity-matrix CPU reference,
+/// which is what the bitstream actually declared.
+#[test]
+fn app14_transform_zero_forced_jfif_interpretation_drops_psnr() {
+    let Some(device) = HostVulkanDevice::new().ok().map(Arc::new) else {
+        return;
+    };
+
+    let rgb = synthesize_test_image(TEST_WIDTH, TEST_HEIGHT);
+    let baseline = encode_jpeg_rgb_420(TEST_WIDTH, TEST_HEIGHT, &rgb, QUALITY);
+    let spliced = splice_app14_after_soi(&baseline, /* transform */ 0);
+
+    let decoded = decode(&spliced).expect("parse + huffman decode");
+
+    // CPU reference reflects what the bitstream DECLARED (RGB-direct).
+    let cpu_rgba_truth = cpu_reference_decode_identity(&decoded);
+
+    // GPU forced into JFIF (Smpte170m) interpretation — IGNORING the
+    // resolved info. This is what would happen if the kernel were
+    // hardcoded back to BT.601-Full.
+    let jfif_force = ResolvedColorInfo {
+        primaries: PrimariesId::Bt709,
+        transfer: TransferId::Srgb,
+        matrix: MatrixId::Smpte170m,
+        range: RangeId::Full,
+    };
+
+    let texture = allocate_storage_texture_general(
+        &device,
+        u32::from(TEST_WIDTH),
+        u32::from(TEST_HEIGHT),
+    );
+    let kernel = JpegDecodeKernel::new(&device).expect("kernel construction");
+    kernel
+        .dispatch(&decoded, &texture, &jfif_force)
+        .expect("kernel dispatch");
+    let gpu_rgba = readback_texture(&device, &texture, TEST_WIDTH, TEST_HEIGHT);
+
+    let psnr = y_channel_psnr_db(&cpu_rgba_truth, &gpu_rgba);
+    tracing::info!(
+        psnr_db = psnr,
+        "APP14 transform=0 with forced-JFIF kernel: GPU vs declared-Identity CPU reference Y-PSNR",
+    );
+
+    // The matrix divergence between Identity and Smpte170m on the
+    // synthetic gradient produces tens-of-dB MSE per pixel — well below
+    // a 35 dB ceiling. Setting the ceiling generously below the matching
+    // path's 50 dB floor keeps the test stable across rounding nuances
+    // while still locking that the two paths produce visibly different
+    // output.
+    const NEGATIVE_PSNR_CEILING_DB: f64 = 35.0;
+    assert!(
+        psnr < NEGATIVE_PSNR_CEILING_DB,
+        "Y-channel PSNR {psnr:.2} dB exceeded the negative-test ceiling {NEGATIVE_PSNR_CEILING_DB} dB \
+         — forcing JFIF interpretation on an APP14 RGB-direct fixture should diverge sharply from the \
+         declared (Identity) reference; if this test passed, the kernel may be ignoring its `color_info` \
+         argument entirely",
+    );
+}
+
+/// Splice an APP14 Adobe segment with the given `transform` value
+/// directly after the SOI marker of `baseline`. The result is a valid
+/// JPEG bitstream that the parser routes through APP14 handling before
+/// reaching SOF0.
+fn splice_app14_after_soi(baseline: &[u8], transform: u8) -> Vec<u8> {
+    assert!(baseline.len() >= 2 && baseline[0] == 0xFF && baseline[1] == 0xD8);
+
+    // Adobe APP14 payload layout per TN5116:
+    //   "Adobe\0"  (6 bytes)
+    //   version    (u16 BE)        — 0x0065 = 101
+    //   flags0     (u16)            — 0x0000
+    //   flags1     (u16)            — 0x0000
+    //   transform  (u8)             — 0, 1, or 2
+    let mut payload = Vec::with_capacity(13);
+    payload.extend_from_slice(b"Adobe\0");
+    payload.extend_from_slice(&[0x00, 0x65]);
+    payload.extend_from_slice(&[0x00, 0x00]);
+    payload.extend_from_slice(&[0x00, 0x00]);
+    payload.push(transform);
+
+    // Length = payload length + 2 (the 2-byte length field itself).
+    let length = (payload.len() + 2) as u16;
+    let mut segment = Vec::with_capacity(4 + payload.len());
+    segment.push(0xFF);
+    segment.push(0xEE); // APP14
+    segment.extend_from_slice(&length.to_be_bytes());
+    segment.extend_from_slice(&payload);
+
+    let mut out = Vec::with_capacity(baseline.len() + segment.len());
+    out.extend_from_slice(&baseline[..2]); // SOI
+    out.extend_from_slice(&segment);
+    out.extend_from_slice(&baseline[2..]);
+    out
+}
+
+/// CPU reference for the RGB-direct decode path. Identical to
+/// `cpu_reference_decode` except the YCbCr → RGB step is replaced with
+/// an identity pass-through: the IDCT samples (already +128-level-shifted
+/// in [`idct_sample`]'s callers) are clamped and written as the R, G, B
+/// channels in scan order.
+fn cpu_reference_decode_identity(decoded: &DecodedJpeg) -> Vec<u8> {
+    let width = usize::from(decoded.frame.width);
+    let height = usize::from(decoded.frame.height);
+    let mut rgba = vec![0u8; width * height * 4];
+
+    let y_plane = &decoded.components[Y_POSITION];
+    let cb_plane = &decoded.components[CB_POSITION];
+    let cr_plane = &decoded.components[CR_POSITION];
+
+    let y_qt = decoded
+        .quantization_table(y_plane.quant_table_id)
+        .expect("Y quant table");
+    let chroma_qt = decoded
+        .quantization_table(cb_plane.quant_table_id)
+        .expect("chroma quant table");
+
+    for py in 0..height {
+        for px in 0..width {
+            let r_sample = idct_sample(y_plane, y_qt, px / 8, py / 8, px % 8, py % 8) + 128.0;
+            let chroma_block_x = px / 16;
+            let chroma_block_y = py / 16;
+            let chroma_in_x = (px % 16) / 2;
+            let chroma_in_y = (py % 16) / 2;
+            let g_sample = idct_sample(
+                cb_plane,
+                chroma_qt,
+                chroma_block_x,
+                chroma_block_y,
+                chroma_in_x,
+                chroma_in_y,
+            ) + 128.0;
+            let b_sample = idct_sample(
+                cr_plane,
+                chroma_qt,
+                chroma_block_x,
+                chroma_block_y,
+                chroma_in_x,
+                chroma_in_y,
+            ) + 128.0;
+
+            let off = (py * width + px) * 4;
+            rgba[off] = clamp_to_u8(r_sample);
+            rgba[off + 1] = clamp_to_u8(g_sample);
+            rgba[off + 2] = clamp_to_u8(b_sample);
+            rgba[off + 3] = 255;
+        }
+    }
+    rgba
 }

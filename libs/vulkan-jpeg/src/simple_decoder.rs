@@ -185,9 +185,24 @@ impl SimpleJpegDecoder {
             )));
         }
 
+        // Honor declared colorimetry from APP segments. APP14 transform=2
+        // (YCCK) bubbles up as `Error::NotSupported` here — the kernel only
+        // handles 3-component YCbCr / RGB-direct decode. EXIF / ICC
+        // declarations the engine can't yet represent fall back to JFIF
+        // default with a tracing::warn from inside `resolve()`.
+        let resolved = decoded
+            .color_info
+            .resolve()
+            .map_err(|e| Error::GpuError(format!("jpeg colorimetry: {e}")))?;
+
         let slot = self.ring.acquire_next();
-        self.kernel
-            .dispatch_pooled(&decoded, &slot.texture, &self.coef_buf, &self.qt_buf)?;
+        self.kernel.dispatch_pooled(
+            &decoded,
+            &slot.texture,
+            &self.coef_buf,
+            &self.qt_buf,
+            &resolved.info,
+        )?;
 
         Ok(JpegDecodeOutput {
             texture: slot.texture,

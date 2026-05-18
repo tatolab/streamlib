@@ -2,9 +2,15 @@
 // SPDX-License-Identifier: BUSL-1.1
 //
 // Fused JPEG decode compute kernel: dequantize -> 8x8 IDCT -> 4:2:0 chroma
-// upsample (nearest) -> BT.601 full-range YCbCr -> RGB -> write rgba8 storage
-// image. One thread per output pixel; each thread independently dequantizes
-// and runs the 2D IDCT for the Y, Cb, Cr blocks covering its pixel.
+// upsample (nearest) -> YCbCr -> RGB -> write rgba8 storage image. One thread
+// per output pixel; each thread independently dequantizes and runs the 2D
+// IDCT for the Y, Cb, Cr blocks covering its pixel.
+//
+// Color conversion delegates to `convert_color()` in `color_convert_common.glsl`
+// (engine shader tree) — the matrix / range_offset / transfer curve are driven
+// by per-dispatch push constants the host fills from a `ResolvedColorInfo`.
+// The "JFIF BT.601-full -> sRGB primaries" default is one branch among many,
+// not hardcoded shader math.
 //
 // Per-thread IDCT is intentionally naive (64 cosine-product accumulations per
 // sample, times 3 planes = 192 per output pixel). Plenty fast for the
@@ -21,6 +27,9 @@
 // matching the coefficient layout.
 
 #version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "color_convert_common.glsl"
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
@@ -34,7 +43,12 @@ layout(set = 0, binding = 1, std430) readonly buffer QuantTables {
 
 layout(set = 0, binding = 2, rgba8) uniform writeonly image2D output_image;
 
-layout(push_constant) uniform PushConstants {
+// Layout matches `kernel.rs::JpegDecodePushConstants` (std430).
+// JPEG geometry comes first (the kernel only fields), color follows
+// (mirrors `ColorConverterPushConstants`'s shape exactly). The three
+// `_pad` slots after the JPEG block align the first `vec4` to a 16-byte
+// boundary per std430.
+layout(push_constant, std430) uniform PushConstants {
     uint width;
     uint height;
     uint y_blocks_h;
@@ -44,6 +58,17 @@ layout(push_constant) uniform PushConstants {
     uint cb_coef_offset;
     uint cr_coef_offset;
     uint chroma_qtable_offset;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+    vec4 matrix_row0;
+    vec4 matrix_row1;
+    vec4 matrix_row2;
+    vec4 range_offset;
+    uint transfer_in;
+    uint transfer_out;
+    uint flags;
+    uint _pad3;
 } pc;
 
 // ITU-T T.81 Figure A.6 zig-zag scan order. `ZIGZAG[zz]` returns the
@@ -114,41 +139,41 @@ void main() {
     uint chroma_in_x = (px & 15u) >> 1;
     uint chroma_in_y = (py & 15u) >> 1;
 
-    // JPEG level shift: +128 to lift signed IDCT result into [0, 255].
-    float y_sample = idct_sample(
+    // JPEG level shift: +128 lifts the signed IDCT result into [0, 255].
+    // For YCbCr sources this is the Y/Cb/Cr byte-domain triple `convert_color`
+    // operates on. For RGB-direct sources (APP14 transform=0, matrix=Identity)
+    // the IDCT outputs are already R/G/B byte-domain samples with the same
+    // +128 level shift — the Identity matrix + zero range_offset on the host
+    // side passes them through cleanly.
+    float y_or_r = idct_sample(
         0u, 0u,
         pc.y_blocks_h,
         y_block_x, y_block_y,
         y_in_x, y_in_y
     ) + 128.0;
-    float cb_sample = idct_sample(
+    float cb_or_g = idct_sample(
         pc.cb_coef_offset, pc.chroma_qtable_offset,
         pc.chroma_blocks_h,
         chroma_block_x, chroma_block_y,
         chroma_in_x, chroma_in_y
     ) + 128.0;
-    float cr_sample = idct_sample(
+    float cr_or_b = idct_sample(
         pc.cr_coef_offset, pc.chroma_qtable_offset,
         pc.chroma_blocks_h,
         chroma_block_x, chroma_block_y,
         chroma_in_x, chroma_in_y
     ) + 128.0;
 
-    // BT.601 full-range (JFIF) YCbCr -> RGB. Source-of-truth coefficients
-    // hardcoded here to keep the shader independent of the engine's
-    // `core::color::matrix` Rust code; the CPU reference in the test
-    // mirrors the same constants independently.
-    float cb_centered = cb_sample - 128.0;
-    float cr_centered = cr_sample - 128.0;
-    float r = y_sample + 1.402 * cr_centered;
-    float g = y_sample - 0.344136 * cb_centered - 0.714136 * cr_centered;
-    float b = y_sample + 1.772 * cb_centered;
-
-    vec4 rgba = vec4(
-        clamp(r, 0.0, 255.0) / 255.0,
-        clamp(g, 0.0, 255.0) / 255.0,
-        clamp(b, 0.0, 255.0) / 255.0,
-        1.0
+    vec3 rgb = convert_color(
+        vec3(y_or_r, cb_or_g, cr_or_b),
+        pc.matrix_row0.xyz,
+        pc.matrix_row1.xyz,
+        pc.matrix_row2.xyz,
+        pc.range_offset.xyz,
+        pc.transfer_in,
+        pc.transfer_out,
+        pc.flags
     );
-    imageStore(output_image, ivec2(int(px), int(py)), rgba);
+
+    imageStore(output_image, ivec2(int(px), int(py)), vec4(rgb, 1.0));
 }

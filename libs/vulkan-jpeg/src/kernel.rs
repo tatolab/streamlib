@@ -12,12 +12,14 @@
 
 use std::sync::Arc;
 
+use streamlib::sdk::color::{ResolvedColorInfo, TransferId};
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, VulkanComputeKernel,
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{
-    ComputeBindingSpec, ComputeKernelDescriptor, StorageBuffer, Texture,
+    ColorConverterPushConstants, ComputeBindingSpec, ComputeKernelDescriptor, SourceLayoutInfo,
+    StorageBuffer, Texture,
 };
 
 use crate::header::DecodedJpeg;
@@ -47,8 +49,11 @@ const BINDINGS: &[ComputeBindingSpec] = &[
 
 /// Push constants matching the GLSL `PushConstants` block.
 ///
-/// `std430` layout: nine `uint`s packed contiguously. 36 bytes, well
-/// under Vulkan's spec-minimum 128-byte push-constant range.
+/// `std430` layout: nine JPEG-geometry `uint`s, three `_pad` slots to
+/// align the first `vec4` to a 16-byte boundary, then the same matrix
+/// `+` range_offset `+` transfer/flags shape as
+/// [`ColorConverterPushConstants`]. Total 128 bytes — at Vulkan's
+/// spec-minimum push-constant range.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct JpegDecodePushConstants {
@@ -61,9 +66,28 @@ struct JpegDecodePushConstants {
     cb_coef_offset: u32,
     cr_coef_offset: u32,
     chroma_qtable_offset: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    matrix_row0: [f32; 4],
+    matrix_row1: [f32; 4],
+    matrix_row2: [f32; 4],
+    range_offset: [f32; 4],
+    transfer_in: u32,
+    transfer_out: u32,
+    flags: u32,
+    _pad3: u32,
 }
 
 const PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<JpegDecodePushConstants>() as u32;
+
+/// Compile-time check that the push-constant block matches the shader's
+/// 128-byte `layout(push_constant)` range.
+const _: () = assert!(
+    PUSH_CONSTANT_SIZE as usize == 128,
+    "JpegDecodePushConstants must stay at 128 bytes — update the shader's \
+     push_constant block before regenerating SPIR-V"
+);
 
 /// Fused JPEG decode kernel.
 pub struct JpegDecodeKernel {
@@ -99,6 +123,12 @@ impl JpegDecodeKernel {
     /// contract as every other `VulkanComputeKernel` consumer in the
     /// engine).
     ///
+    /// `color_info` drives the YCbCr → RGB matrix / range_offset /
+    /// transfer push constants — typically resolved from
+    /// `decoded.color_info.resolve()`; pass the JFIF default
+    /// (`(Bt709, Srgb, Smpte170m, Full)`) when the source is known to
+    /// be canonical JFIF.
+    ///
     /// Allocates per-call HOST_VISIBLE storage buffers for the coefficient
     /// and quant-table uploads, copies the data in, binds, dispatches, and
     /// waits on the kernel's fence before returning. This is the one-shot
@@ -106,7 +136,12 @@ impl JpegDecodeKernel {
     /// the kernel-level integration test); steady-state hot-path callers
     /// should ride [`Self::dispatch_pooled`] through
     /// [`crate::SimpleJpegDecoder`] instead.
-    pub fn dispatch(&self, decoded: &DecodedJpeg, output_texture: &Texture) -> Result<()> {
+    pub fn dispatch(
+        &self,
+        decoded: &DecodedJpeg,
+        output_texture: &Texture,
+        color_info: &ResolvedColorInfo,
+    ) -> Result<()> {
         let layout = JpegBufferLayout::from_decoded(decoded)?;
         let coef_words = layout.pack_coefficients(decoded);
         let qt_words = layout.pack_quant_tables(decoded)?;
@@ -123,7 +158,14 @@ impl JpegDecodeKernel {
             qt_bytes.len() as u64,
         )?);
 
-        self.dispatch_with_buffers(decoded, &layout, output_texture, &coef_buf, &qt_buf)
+        self.dispatch_with_buffers(
+            decoded,
+            &layout,
+            output_texture,
+            &coef_buf,
+            &qt_buf,
+            color_info,
+        )
     }
 
     /// Decode `decoded` into `output_texture` using caller-supplied
@@ -138,6 +180,8 @@ impl JpegDecodeKernel {
     /// returns a typed error if too small, so undersized buffers can't
     /// silently corrupt output.
     ///
+    /// `color_info` semantics match [`Self::dispatch`].
+    ///
     /// Same per-call texture contract as [`Self::dispatch`]: `output_texture`
     /// must be an `Rgba8Unorm` storage image in `GENERAL` layout.
     pub fn dispatch_pooled(
@@ -146,9 +190,17 @@ impl JpegDecodeKernel {
         output_texture: &Texture,
         coef_buf: &Arc<HostVulkanBuffer>,
         qt_buf: &Arc<HostVulkanBuffer>,
+        color_info: &ResolvedColorInfo,
     ) -> Result<()> {
         let layout = JpegBufferLayout::from_decoded(decoded)?;
-        self.dispatch_with_buffers(decoded, &layout, output_texture, coef_buf, qt_buf)
+        self.dispatch_with_buffers(
+            decoded,
+            &layout,
+            output_texture,
+            coef_buf,
+            qt_buf,
+            color_info,
+        )
     }
 
     /// Shared dispatch tail: pack coefficients + quant tables into the
@@ -162,6 +214,7 @@ impl JpegDecodeKernel {
         output_texture: &Texture,
         coef_buf: &Arc<HostVulkanBuffer>,
         qt_buf: &Arc<HostVulkanBuffer>,
+        color_info: &ResolvedColorInfo,
     ) -> Result<()> {
         // Pack i16 coefficients into i32 SSBO words. Sign-extension is
         // implicit in `i32::from(i16)`. Quant tables go u16 -> u32 with
@@ -212,9 +265,27 @@ impl JpegDecodeKernel {
         self.kernel.set_storage_buffer(1, &qt_storage)?;
         self.kernel.set_storage_image(2, output_texture)?;
 
+        // Build the color-side push constants via the engine helper so
+        // the matrix + range_offset + transfer math is sourced from one
+        // place (the JPEG kernel and the engine color converter end up
+        // with bit-identical fields when fed the same `ResolvedColorInfo`).
+        // `SourceLayoutInfo` carries plane-stride metadata that the JPEG
+        // kernel ignores (it walks coefficients via its own offsets) —
+        // pass tight strides for the resolved dimensions; the kernel
+        // never reads these slots.
+        let width = u32::from(decoded.frame.width);
+        let height = u32::from(decoded.frame.height);
+        let color_pc = ColorConverterPushConstants::from_resolved(
+            color_info,
+            TransferId::Srgb,
+            width,
+            height,
+            SourceLayoutInfo::nv12_tight(width, height),
+        );
+
         let push = JpegDecodePushConstants {
-            width: u32::from(decoded.frame.width),
-            height: u32::from(decoded.frame.height),
+            width,
+            height,
             y_blocks_h: layout.y_blocks_h,
             y_blocks_v: layout.y_blocks_v,
             chroma_blocks_h: layout.chroma_blocks_h,
@@ -222,6 +293,17 @@ impl JpegDecodeKernel {
             cb_coef_offset: layout.cb_coef_offset,
             cr_coef_offset: layout.cr_coef_offset,
             chroma_qtable_offset: layout.chroma_qtable_offset,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
+            matrix_row0: color_pc.matrix_row0,
+            matrix_row1: color_pc.matrix_row1,
+            matrix_row2: color_pc.matrix_row2,
+            range_offset: color_pc.range_offset,
+            transfer_in: color_pc.transfer_in,
+            transfer_out: color_pc.transfer_out,
+            flags: color_pc.flags,
+            _pad3: 0,
         };
         self.kernel.set_push_constants_value(&push)?;
 

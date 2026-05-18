@@ -13,6 +13,11 @@ pub const DHT: u8 = 0xC4;
 pub const DRI: u8 = 0xDD;
 pub const COM: u8 = 0xFE;
 
+pub const APP0: u8 = 0xE0;
+pub const APP1: u8 = 0xE1;
+pub const APP2: u8 = 0xE2;
+pub const APP14: u8 = 0xEE;
+
 pub const SOF0: u8 = 0xC0;
 pub const SOF1: u8 = 0xC1;
 pub const SOF2: u8 = 0xC2;

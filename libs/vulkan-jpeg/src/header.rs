@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::color::JpegColorInfo;
 use crate::huffman::HuffmanTable;
 
 /// Parsed SOF0 frame header.
@@ -91,6 +92,11 @@ pub struct DecodedJpeg {
     pub scan: ScanHeader,
     pub components: Vec<ComponentScan>,
     pub restart_interval: u16,
+    /// APP-segment-derived color metadata. Carries JFIF / Adobe APP14
+    /// / EXIF ColorSpace / ICC profile bytes when present. Empty
+    /// `JpegColorInfo::default()` indicates none were found — JFIF
+    /// defaults apply by convention.
+    pub color_info: JpegColorInfo,
 }
 
 impl DecodedJpeg {
