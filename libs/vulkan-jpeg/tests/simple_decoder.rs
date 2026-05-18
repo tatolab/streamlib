@@ -315,6 +315,66 @@ fn decode_rejects_progressive_sof_with_typed_error() {
     );
 }
 
+/// APP14 transform=2 (YCCK / 4-component CMYK) must bubble up as a
+/// typed `Error::GpuError` from [`SimpleJpegDecoder::decode`] — the
+/// 3-component fused kernel cannot handle 4-component CMYK and the
+/// resolver returns `JpegError::Unsupported`, which `decode()` wraps
+/// as `"jpeg colorimetry: ..."`.
+///
+/// Locks the bubble-up path. Mentally revert `simple_decoder.rs`'s
+/// `decoded.color_info.resolve()?` call (e.g. ignore the error) and
+/// this test fails — the decode would then proceed to the kernel
+/// dispatch with a JFIF default, masking the unsupported declaration.
+#[test]
+fn decode_rejects_app14_ycck_with_typed_error() {
+    let Some(gpu) = fresh_gpu_context() else {
+        return;
+    };
+    let mut decoder = gpu
+        .limited_access()
+        .escalate(|full| SimpleJpegDecoder::new(full, 64, 64))
+        .expect("decoder construction");
+
+    // Encode a baseline JPEG, then splice APP14 transform=2 after SOI.
+    let rgb = synthesize_test_image(32, 32);
+    let baseline = encode_jpeg_rgb_420(32, 32, &rgb, 85);
+    let jpeg = splice_app14_after_soi(&baseline, /* transform */ 2);
+
+    let err = decoder.decode(&jpeg).expect_err("YCCK must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("jpeg colorimetry") && msg.contains("YCCK"),
+        "expected wrapped colorimetry/YCCK error, got: {msg}"
+    );
+}
+
+/// Splice an APP14 Adobe segment with the given `transform` value
+/// directly after the SOI marker of `baseline`. Same shape as the
+/// helper in `tests/gpu_decode.rs`; kept here so the two test files
+/// stay independent.
+fn splice_app14_after_soi(baseline: &[u8], transform: u8) -> Vec<u8> {
+    assert!(baseline.len() >= 2 && baseline[0] == 0xFF && baseline[1] == 0xD8);
+    let mut payload = Vec::with_capacity(13);
+    payload.extend_from_slice(b"Adobe\0");
+    payload.extend_from_slice(&[0x00, 0x65]);
+    payload.extend_from_slice(&[0x00, 0x00]);
+    payload.extend_from_slice(&[0x00, 0x00]);
+    payload.push(transform);
+
+    let length = (payload.len() + 2) as u16;
+    let mut segment = Vec::with_capacity(4 + payload.len());
+    segment.push(0xFF);
+    segment.push(0xEE);
+    segment.extend_from_slice(&length.to_be_bytes());
+    segment.extend_from_slice(&payload);
+
+    let mut out = Vec::with_capacity(baseline.len() + segment.len());
+    out.extend_from_slice(&baseline[..2]);
+    out.extend_from_slice(&segment);
+    out.extend_from_slice(&baseline[2..]);
+    out
+}
+
 // -----------------------------------------------------------------------------
 // End-to-end round-trip + PSNR
 // -----------------------------------------------------------------------------

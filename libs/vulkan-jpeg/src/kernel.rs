@@ -269,6 +269,20 @@ impl JpegDecodeKernel {
         // the matrix + range_offset + transfer math is sourced from one
         // place (the JPEG kernel and the engine color converter end up
         // with bit-identical fields when fed the same `ResolvedColorInfo`).
+        //
+        // `dst_transfer = TransferId::Srgb` matches the kernel's
+        // `Rgba8Unorm` output texture by convention — 8-bit unorm
+        // displays are sRGB-encoded. Every resolution path today
+        // (JFIF / Adobe / EXIF sRGB / fallback) returns
+        // `info.transfer = Srgb` too, so the shader bypasses the
+        // transfer-function chain via `transfer_in == transfer_out`.
+        // Once non-sRGB transfer characteristics start being honored
+        // (e.g. ICC-profile-driven `Bt709`), the shader will start
+        // running the EOTF/OETF closed-forms automatically — and this
+        // hardcoded `Srgb` output curve becomes the place to revisit
+        // if the JPEG kernel's downstream consumer ever wants linear
+        // or HDR output instead.
+        //
         // `SourceLayoutInfo` carries plane-stride metadata that the JPEG
         // kernel ignores (it walks coefficients via its own offsets) —
         // pass tight strides for the resolved dimensions; the kernel
