@@ -1,6 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use crate::color::{
+    parse_app0, parse_app14_adobe, parse_app1_exif_color_space, parse_app2_icc_fragment,
+    IccAccumulator, JpegColorInfo,
+};
 use crate::error::{JpegError, JpegResult};
 use crate::header::{
     FrameComponent, FrameHeader, HuffmanTables, QuantizationTable, ScanComponent, ScanHeader,
@@ -17,6 +21,7 @@ pub(crate) struct ParsedHeaders<'a> {
     pub scan: ScanHeader,
     pub restart_interval: u16,
     pub entropy_data: &'a [u8],
+    pub color_info: JpegColorInfo,
 }
 
 /// Walk a JPEG bitstream from SOI through SOS, returning the parsed
@@ -29,6 +34,8 @@ pub(crate) fn parse_headers(bytes: &[u8]) -> JpegResult<ParsedHeaders<'_>> {
     let mut huffman = HuffmanTables::default();
     let mut frame: Option<FrameHeader> = None;
     let mut restart_interval: u16 = 0;
+    let mut color_info = JpegColorInfo::default();
+    let mut icc_accum = IccAccumulator::default();
 
     loop {
         let marker_byte = parser.next_marker()?;
@@ -46,6 +53,12 @@ pub(crate) fn parse_headers(bytes: &[u8]) -> JpegResult<ParsedHeaders<'_>> {
                 let frame = frame.take().ok_or(JpegError::MissingSof)?;
                 let scan = parser.parse_sos(&frame)?;
                 let entropy_data = &bytes[parser.cursor..];
+                // Cache the finished ICC profile (if any) before
+                // handing the result to the caller. Incomplete
+                // multi-segment ICC data is discarded silently —
+                // the spec allows partial profiles but the kernel
+                // can't act on them.
+                color_info.icc_profile = icc_accum.try_finish();
                 return Ok(ParsedHeaders {
                     frame,
                     quant_tables,
@@ -53,10 +66,35 @@ pub(crate) fn parse_headers(bytes: &[u8]) -> JpegResult<ParsedHeaders<'_>> {
                     scan,
                     restart_interval,
                     entropy_data,
+                    color_info,
                 });
             }
             marker::EOI => return Err(JpegError::MissingSos),
             marker::COM => parser.skip_segment(marker_byte)?,
+            marker::APP0 => {
+                let payload = parser.read_segment_payload(marker::APP0)?;
+                if let Some(jfif) = parse_app0(payload)? {
+                    color_info.jfif = Some(jfif);
+                }
+            }
+            marker::APP1 => {
+                let payload = parser.read_segment_payload(marker::APP1)?;
+                if let Some(cs) = parse_app1_exif_color_space(payload)? {
+                    color_info.exif_color_space = Some(cs);
+                }
+            }
+            marker::APP2 => {
+                let payload = parser.read_segment_payload(marker::APP2)?;
+                if let Some(fragment) = parse_app2_icc_fragment(payload)? {
+                    icc_accum.ingest(fragment)?;
+                }
+            }
+            marker::APP14 => {
+                let payload = parser.read_segment_payload(marker::APP14)?;
+                if let Some(adobe) = parse_app14_adobe(payload)? {
+                    color_info.adobe = Some(adobe);
+                }
+            }
             other if marker::is_app(other) => parser.skip_segment(other)?,
             other => {
                 if let Some(reason) = marker::is_unsupported_sof(other) {

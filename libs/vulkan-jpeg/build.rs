@@ -26,6 +26,16 @@ fn compile_shaders() {
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
 
+    // The JPEG kernel `#include`s `color_convert_common.glsl` from the
+    // streamlib-engine shader tree so the YCbCr → RGB math, transfer
+    // closed-forms, and `TRANSFER_*` / `FLAG_APPLY_TRANSFER` constants
+    // come from one source of truth. Rebuild when that file changes.
+    let engine_shader_include_dir = "../streamlib-engine/src/vulkan/rhi/shaders";
+    println!(
+        "cargo:rerun-if-changed={}/color_convert_common.glsl",
+        engine_shader_include_dir
+    );
+
     for (src, dst, stage) in shaders {
         let src_path = Path::new(src);
         let dst_path: PathBuf = Path::new(&out_dir).join(dst);
@@ -35,6 +45,8 @@ fn compile_shaders() {
         let status = Command::new("glslc")
             .arg(format!("-fshader-stage={stage}"))
             .arg("-O")
+            .arg("-I")
+            .arg(engine_shader_include_dir)
             .arg(src_path)
             .arg("-o")
             .arg(&dst_path)

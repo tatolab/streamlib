@@ -13,6 +13,7 @@
 //!   caller-supplied `rgba8` storage image.
 
 mod bit_reader;
+pub mod color;
 mod error;
 mod header;
 mod huffman;
@@ -25,6 +26,11 @@ pub mod kernel;
 #[cfg(target_os = "linux")]
 pub mod simple_decoder;
 
+pub use color::{
+    AdobeMetadata, AdobeTransform, ExifColorSpace, JfifMetadata, JpegColorInfo,
+};
+#[cfg(target_os = "linux")]
+pub use color::{JpegColorSource, ResolvedJpegColor};
 pub use error::{JpegError, JpegResult};
 pub use header::{
     ComponentScan, DecodedJpeg, FrameComponent, FrameHeader, QuantizationTable, ScanComponent,
@@ -53,6 +59,7 @@ pub fn decode(bytes: &[u8]) -> JpegResult<DecodedJpeg> {
         scan,
         restart_interval,
         entropy_data,
+        color_info,
     } = parser::parse_headers(bytes)?;
 
     // Sanity-check that every component's quant table is present.
@@ -81,5 +88,6 @@ pub fn decode(bytes: &[u8]) -> JpegResult<DecodedJpeg> {
         scan,
         components,
         restart_interval,
+        color_info,
     })
 }
