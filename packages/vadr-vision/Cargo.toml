@@ -43,6 +43,13 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-network = { path = "../network" }
 streamlib-jpeg = { path = "../jpeg" }
 streamlib-debug-utilities = { path = "../debug-utilities" }
+# Example-only: `examples/jpeg_pipeline_demo.rs` wires the depayloader
+# all the way to a winit-backed display window that owns the PNG
+# sampler hooks (STREAMLIB_DISPLAY_PNG_SAMPLE_*). Display isn't part
+# of the depayloader's normal runtime dependency graph; it's a
+# downstream consumer the demo binary uses to validate the full
+# pipeline emits a recognizable image.
+streamlib-display = { path = "../display" }
 serde_json.workspace = true
 serial_test = "3.1"
 
