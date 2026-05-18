@@ -80,15 +80,10 @@ impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Pro
             .as_mut()
             .ok_or_else(|| Error::Runtime("JPEG decoder not initialized".into()))?;
 
-        let output = match decoder.decode(&encoded.data) {
-            Ok(out) => out,
-            Err(e) => {
-                // Surface as a clean typed Runtime error. The runtime
-                // logs WARN and keeps the processor alive for the next
-                // frame — see thread_runner.rs reactive drain loop.
-                return Err(Error::Runtime(format!("JPEG decode failed: {e}")));
-            }
-        };
+        // Surface decode failures as a typed Runtime error. The runtime
+        // logs WARN and keeps the processor alive for the next frame
+        // (thread_runner.rs reactive drain loop).
+        let output = decoder.decode(&encoded.data).map_err(wrap_decode_error)?;
 
         let log_first = self.frames_decoded == 0;
         let color_source = output.color_source;
@@ -130,5 +125,41 @@ impl streamlib::sdk::processors::ReactiveProcessor for JpegDecoderProcessor::Pro
         }
 
         Ok(())
+    }
+}
+
+/// Wrap a SimpleJpegDecoder error into the typed `Error::Runtime`
+/// variant the processor surfaces from `process()`. Pulled out as a
+/// free function so the variant + format-string contract is unit-
+/// testable without standing up a real GPU runtime.
+fn wrap_decode_error(inner: Error) -> Error {
+    Error::Runtime(format!("JPEG decode failed: {inner}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrap_decode_error_produces_runtime_variant() {
+        // Any inner decoder error must come back out as
+        // `Error::Runtime(_)` — that's the variant the issue's
+        // error-path exit criterion calls for, and the only variant
+        // downstream pattern-matchers can rely on.
+        let inner = Error::GpuError("jpeg parse/huffman: missing SOI marker".into());
+        let mapped = wrap_decode_error(inner);
+        match mapped {
+            Error::Runtime(msg) => {
+                assert!(
+                    msg.contains("JPEG decode failed"),
+                    "expected wrap prefix, got: {msg}"
+                );
+                assert!(
+                    msg.contains("missing SOI marker"),
+                    "expected inner error message preserved in wrap, got: {msg}"
+                );
+            }
+            other => panic!("expected Error::Runtime, got {other:?}"),
+        }
     }
 }
