@@ -10,6 +10,7 @@ pub mod _generated_ {
 }
 
 pub mod simple_passthrough;
+pub mod video_frame_counter;
 
 #[cfg(target_os = "linux")]
 pub mod bgra_file_source;
@@ -18,6 +19,7 @@ pub mod bgra_file_source;
 pub mod jpeg_bytes_source;
 
 pub use simple_passthrough::SimplePassthroughProcessor;
+pub use video_frame_counter::VideoFrameCounterProcessor;
 
 #[cfg(target_os = "linux")]
 pub use bgra_file_source::BgraFileSourceProcessor;

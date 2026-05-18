@@ -4,36 +4,33 @@
 //! Integration smoke tests for `@tatolab/jpeg::JpegDecoder`.
 //!
 //! Pipeline: `JpegBytesSource` (debug-utilities) → `JpegDecoder` (this
-//! crate) → `SimplePassthrough` (debug-utilities — VideoFrame sink so
-//! the decoder's `outputs.write("video_out", ...)` has a wired service
-//! to publish into; without a downstream, the write errors with
-//! `Link error: Unknown output port`).
+//! crate) → `VideoFrameCounter` (debug-utilities — sink that records
+//! observations into process-global atomics so the test asserts on
+//! frame count + first-frame dimensions + first-frame surface_id length
+//! after `runtime.stop()`).
 //! The source republishes the same JPEG bytes on a paced timer; the
-//! decoder feeds each into `SimpleJpegDecoder::decode`.
+//! decoder feeds each into `SimpleJpegDecoder::decode`; the counter
+//! captures what arrives so the test locks the decoder actually emitted
+//! VideoFrames (not just that start/stop bracketed cleanly).
 //!
 //! Two scenarios:
 //!
 //! 1. **Happy path** — a real 320×180 baseline JPEG runs through the
-//!    pipeline cleanly. Asserts: setup succeeds (decoder GPU resources
-//!    allocated), start/stop bracket without errors, and at least one
-//!    EncodedJpegFrame was published by the source thread before stop.
-//! 2. **Malformed bytes** — non-JPEG garbage bytes flow through the
-//!    decoder, which surfaces a typed `Error::Runtime` per the
-//!    error-path exit criterion. The runtime survives (engine logs
-//!    WARN per `thread_runner.rs` and keeps the processor alive); the
-//!    test asserts both `runtime.start()` and `runtime.stop()` succeed.
+//!    pipeline. Asserts the counter saw ≥1 VideoFrame whose width /
+//!    height match the fixture (320 × 180) and whose `surface_id` is
+//!    non-empty (the decoder's internal TextureRing registered a slot).
+//! 2. **Malformed bytes** — non-JPEG garbage flows through. The
+//!    decoder surfaces a typed `Error::Runtime` per the error-path
+//!    exit criterion; the runtime survives (logs WARN, processor
+//!    stays alive); the counter sees zero VideoFrames because every
+//!    decode failed.
 //!
-//! Deep VideoFrame-content assertions (specific width/height/surface_id
-//! on emitted frames) live in the `libs/vulkan-jpeg` crate's own
-//! end-to-end tests against `SimpleJpegDecoder::decode` directly. This
-//! test's job is to lock the streamlib-jpeg wrapper's wiring +
-//! schema-resolution + error-mapping surface, not to re-verify the
-//! underlying GPU primitive.
-//!
-//! Both tests use `#[serial]` so the iceoryx2 service-name space
-//! doesn't race against parallel test binaries.
+//! Both tests use `#[serial]` so the `VideoFrameCounter`'s
+//! process-global atomics and the iceoryx2 service-name space don't
+//! race against parallel test binaries.
 
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use serial_test::serial;
@@ -41,6 +38,9 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
+use streamlib_debug_utilities::video_frame_counter::{
+    FIRST_HEIGHT, FIRST_SURFACE_ID_LEN, FIRST_WIDTH, FRAMES_OBSERVED,
+};
 
 // Force-link the package lib crates so their `inventory::submit!`
 // factory registrations are pulled into the test binary's link line.
@@ -48,10 +48,14 @@ use streamlib::sdk::schema_ident;
 // and `add_processor` errors with `UnknownProcessorType`.
 #[allow(unused_imports)]
 use streamlib_debug_utilities::{
-    JpegBytesSourceProcessor as _, SimplePassthroughProcessor as _,
+    JpegBytesSourceProcessor as _, VideoFrameCounterProcessor as _,
 };
 #[allow(unused_imports)]
 use streamlib_jpeg::JpegDecoderProcessor as _;
+
+const FIXTURE_WIDTH: u32 = 320;
+const FIXTURE_HEIGHT: u32 = 180;
+const FIXTURE_FRAME_COUNT: u32 = 5;
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -63,6 +67,8 @@ fn fixture_path(name: &str) -> PathBuf {
 #[test]
 #[serial]
 fn valid_jpeg_runs_through_pipeline_cleanly() {
+    streamlib_debug_utilities::video_frame_counter::reset();
+
     let runtime = Runner::new().expect("Runner::new");
 
     let source_id = runtime
@@ -73,7 +79,7 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
                     .to_str()
                     .expect("fixture path utf-8"),
                 "fps": 30,
-                "frame_count": 5,
+                "frame_count": FIXTURE_FRAME_COUNT,
             }),
         ))
         .expect("add JpegBytesSource");
@@ -93,10 +99,10 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
 
     let sink_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "debug-utilities", "SimplePassthrough", "1.0.0"),
-            serde_json::json!({ "scale": 1.0 }),
+            schema_ident!("tatolab", "debug-utilities", "VideoFrameCounter", "1.0.0"),
+            serde_json::json!({}),
         ))
-        .expect("add SimplePassthrough");
+        .expect("add VideoFrameCounter");
 
     runtime
         .connect(
@@ -110,7 +116,7 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
             OutputLinkPortRef::new(decoder_id.as_str(), "video_out"),
             InputLinkPortRef::new(sink_id.as_str(), "input"),
         )
-        .expect("connect JpegDecoder → SimplePassthrough");
+        .expect("connect JpegDecoder → VideoFrameCounter");
 
     runtime.start().expect("runtime.start");
 
@@ -125,11 +131,38 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
     std::thread::sleep(Duration::from_millis(1500));
 
     runtime.stop().expect("runtime.stop");
+
+    let frames = FRAMES_OBSERVED.load(Ordering::Relaxed);
+    let width = FIRST_WIDTH.load(Ordering::Relaxed);
+    let height = FIRST_HEIGHT.load(Ordering::Relaxed);
+    let surface_id_len = FIRST_SURFACE_ID_LEN.load(Ordering::Relaxed);
+
+    assert!(
+        frames >= 1,
+        "VideoFrameCounter saw {frames} frames; expected ≥1. \
+         decoder never published — reverting `outputs.write` to a no-op \
+         would falsify only this assertion."
+    );
+    assert_eq!(
+        width, FIXTURE_WIDTH,
+        "first VideoFrame width was {width}, expected {FIXTURE_WIDTH} (the fixture's actual width)"
+    );
+    assert_eq!(
+        height, FIXTURE_HEIGHT,
+        "first VideoFrame height was {height}, expected {FIXTURE_HEIGHT} (the fixture's actual height)"
+    );
+    assert!(
+        surface_id_len > 0,
+        "first VideoFrame surface_id was empty — decoder did not register \
+         a TextureRing slot in the texture cache before emitting"
+    );
 }
 
 #[test]
 #[serial]
 fn malformed_jpeg_bytes_do_not_crash_runtime() {
+    streamlib_debug_utilities::video_frame_counter::reset();
+
     let runtime = Runner::new().expect("Runner::new");
 
     let source_id = runtime
@@ -157,10 +190,10 @@ fn malformed_jpeg_bytes_do_not_crash_runtime() {
 
     let sink_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "debug-utilities", "SimplePassthrough", "1.0.0"),
-            serde_json::json!({ "scale": 1.0 }),
+            schema_ident!("tatolab", "debug-utilities", "VideoFrameCounter", "1.0.0"),
+            serde_json::json!({}),
         ))
-        .expect("add SimplePassthrough");
+        .expect("add VideoFrameCounter");
 
     runtime
         .connect(
@@ -174,7 +207,7 @@ fn malformed_jpeg_bytes_do_not_crash_runtime() {
             OutputLinkPortRef::new(decoder_id.as_str(), "video_out"),
             InputLinkPortRef::new(sink_id.as_str(), "input"),
         )
-        .expect("connect JpegDecoder → SimplePassthrough");
+        .expect("connect JpegDecoder → VideoFrameCounter");
 
     // The decoder's setup() must succeed even when no valid JPEG has
     // arrived yet — backend selection + GPU resource allocation runs
@@ -189,4 +222,11 @@ fn malformed_jpeg_bytes_do_not_crash_runtime() {
     // processor alive (thread_runner.rs reactive drain loop). A
     // panic or unhandled error would surface as a non-Ok stop.
     runtime.stop().expect("runtime.stop");
+
+    let frames = FRAMES_OBSERVED.load(Ordering::Relaxed);
+    assert_eq!(
+        frames, 0,
+        "VideoFrameCounter saw {frames} frames; expected 0 (every input was \
+         malformed and the decoder should have emitted nothing downstream)."
+    );
 }
