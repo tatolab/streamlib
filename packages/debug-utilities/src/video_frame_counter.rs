@@ -15,6 +15,7 @@
 
 use crate::_generated_::VideoFrame;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::Result;
 
@@ -30,6 +31,11 @@ pub static FIRST_HEIGHT: AtomicU32 = AtomicU32::new(0);
 /// (a non-empty `surface_id` is the cheapest proof the decoder
 /// registered a slot in the texture cache before publishing).
 pub static FIRST_SURFACE_ID_LEN: AtomicU32 = AtomicU32::new(0);
+/// Clone of the first VideoFrame the counter saw since the last reset.
+/// Used by tests that want to inspect richer fields (color_info,
+/// mastering_display, content_light) the atomic-only summaries can't
+/// represent.
+pub static FIRST_FRAME: Mutex<Option<VideoFrame>> = Mutex::new(None);
 
 /// Reset the counter statics. Call at the top of each test before
 /// `runtime.start()`.
@@ -38,6 +44,7 @@ pub fn reset() {
     FIRST_WIDTH.store(0, Ordering::Relaxed);
     FIRST_HEIGHT.store(0, Ordering::Relaxed);
     FIRST_SURFACE_ID_LEN.store(0, Ordering::Relaxed);
+    *FIRST_FRAME.lock().expect("FIRST_FRAME mutex poisoned") = None;
 }
 
 #[streamlib::sdk::processor("VideoFrameCounter")]
@@ -54,6 +61,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for VideoFrameCounterProcesso
             FIRST_WIDTH.store(frame.width, Ordering::Relaxed);
             FIRST_HEIGHT.store(frame.height, Ordering::Relaxed);
             FIRST_SURFACE_ID_LEN.store(frame.surface_id.len() as u32, Ordering::Relaxed);
+            *FIRST_FRAME.lock().expect("FIRST_FRAME mutex poisoned") = Some(frame);
         }
         Ok(())
     }

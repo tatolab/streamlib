@@ -38,8 +38,11 @@ use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
+use streamlib_debug_utilities::_generated_::tatolab__core::color_info::{
+    Matrix, Primaries, Range, Transfer,
+};
 use streamlib_debug_utilities::video_frame_counter::{
-    FIRST_HEIGHT, FIRST_SURFACE_ID_LEN, FIRST_WIDTH, FRAMES_OBSERVED,
+    FIRST_FRAME, FIRST_HEIGHT, FIRST_SURFACE_ID_LEN, FIRST_WIDTH, FRAMES_OBSERVED,
 };
 
 // Force-link the package lib crates so their `inventory::submit!`
@@ -155,6 +158,118 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
         surface_id_len > 0,
         "first VideoFrame surface_id was empty — decoder did not register \
          a TextureRing slot in the texture cache before emitting"
+    );
+
+    // Color metadata round-trip: the fixture is a baseline JFIF JPEG
+    // with no EXIF / ICC / Adobe APP14 overrides, so JFIF default
+    // applies — `(Bt709, Srgb, Smpte170m, Full)` per
+    // libs/vulkan-jpeg/src/color.rs::JFIF_DEFAULT. The decoder must
+    // surface that 4-tuple on the emitted VideoFrame so downstream
+    // consumers (muxers, displays) don't have to re-derive colorimetry
+    // from the bitstream. The PSNR rig (#844) catches pixel-level
+    // matrix mistakes; this assertion catches the metadata-only
+    // regression where the pixels are right but the wire field is
+    // None or wrong-variant.
+    let first = FIRST_FRAME
+        .lock()
+        .expect("FIRST_FRAME mutex poisoned")
+        .clone()
+        .expect("FIRST_FRAME populated by VideoFrameCounter");
+    let color_info = first
+        .color_info
+        .expect("VideoFrame.color_info populated — decoder ran the color translator");
+    assert_eq!(
+        color_info.primaries,
+        Some(Primaries::Bt709),
+        "JFIF default primaries are Bt709"
+    );
+    assert_eq!(
+        color_info.transfer,
+        Some(Transfer::Srgb),
+        "JFIF default transfer is sRGB"
+    );
+    assert_eq!(
+        color_info.matrix,
+        Some(Matrix::Smpte170m),
+        "JFIF default YCbCr matrix is SMPTE170M (BT.601 525-line)"
+    );
+    assert_eq!(
+        color_info.range,
+        Some(Range::Full),
+        "JFIF default range is Full"
+    );
+}
+
+#[test]
+#[serial]
+fn invalid_max_dimensions_do_not_crash_runtime() {
+    // SimpleJpegDecoder::new hard-rejects `max_width: 0 || max_height: 0`
+    // — the wrapper must propagate that Err out of setup() via `?` so
+    // the runtime's spawn op marks the processor as failed without
+    // panicking and the runtime as a whole survives. Observable:
+    // runtime.start() / runtime.stop() both Ok, no frames flow through
+    // (the failed processor's port produces nothing).
+    streamlib_debug_utilities::video_frame_counter::reset();
+
+    let runtime = Runner::new().expect("Runner::new");
+
+    let source_id = runtime
+        .add_processor(ProcessorSpec::new(
+            schema_ident!("tatolab", "debug-utilities", "JpegBytesSource", "1.0.0"),
+            serde_json::json!({
+                "file_path": fixture_path("test_320x180.jpg")
+                    .to_str()
+                    .expect("fixture path utf-8"),
+                "fps": 30,
+                "frame_count": 3,
+            }),
+        ))
+        .expect("add JpegBytesSource");
+
+    let decoder_id = runtime
+        .add_processor(ProcessorSpec::new(
+            schema_ident!("tatolab", "jpeg", "JpegDecoder", "1.0.0"),
+            serde_json::json!({
+                // Both zero — primitive will reject at SimpleJpegDecoder::new.
+                "max_width": 0,
+                "max_height": 0,
+            }),
+        ))
+        .expect("add JpegDecoder");
+
+    let sink_id = runtime
+        .add_processor(ProcessorSpec::new(
+            schema_ident!("tatolab", "debug-utilities", "VideoFrameCounter", "1.0.0"),
+            serde_json::json!({}),
+        ))
+        .expect("add VideoFrameCounter");
+
+    runtime
+        .connect(
+            OutputLinkPortRef::new(source_id.as_str(), "encoded_jpeg"),
+            InputLinkPortRef::new(decoder_id.as_str(), "encoded_jpeg_in"),
+        )
+        .expect("connect JpegBytesSource → JpegDecoder");
+
+    runtime
+        .connect(
+            OutputLinkPortRef::new(decoder_id.as_str(), "video_out"),
+            InputLinkPortRef::new(sink_id.as_str(), "input"),
+        )
+        .expect("connect JpegDecoder → VideoFrameCounter");
+
+    runtime.start().expect("runtime.start");
+
+    std::thread::sleep(Duration::from_millis(250));
+    std::thread::sleep(Duration::from_millis(500));
+
+    runtime.stop().expect("runtime.stop");
+
+    let frames = FRAMES_OBSERVED.load(Ordering::Relaxed);
+    assert_eq!(
+        frames, 0,
+        "VideoFrameCounter saw {frames} frames; expected 0 (decoder setup \
+         should have failed on max_width=0 and never decoded anything)."
     );
 }
 

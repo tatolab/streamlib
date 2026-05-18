@@ -141,6 +141,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_max_dimensions_are_non_zero() {
+        // SimpleJpegDecoder::new hard-rejects max_width=0 || max_height=0
+        // (no "size from first frame" idiom). The defaults the wrapper
+        // applies when `JpegDecoderConfig::{max_width, max_height}` are
+        // unset must produce a valid construction — otherwise an empty
+        // config (`{}`) would silently fail at setup.
+        assert!(DEFAULT_MAX_WIDTH > 0, "DEFAULT_MAX_WIDTH must be non-zero");
+        assert!(DEFAULT_MAX_HEIGHT > 0, "DEFAULT_MAX_HEIGHT must be non-zero");
+    }
+
+    #[test]
     fn wrap_decode_error_produces_runtime_variant() {
         // Any inner decoder error must come back out as
         // `Error::Runtime(_)` — that's the variant the issue's
