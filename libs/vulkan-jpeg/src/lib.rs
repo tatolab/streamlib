@@ -22,6 +22,8 @@ mod scan;
 
 #[cfg(target_os = "linux")]
 pub mod kernel;
+#[cfg(target_os = "linux")]
+pub mod simple_decoder;
 
 pub use error::{JpegError, JpegResult};
 pub use header::{
@@ -33,6 +35,8 @@ pub use marker::ZIGZAG;
 
 #[cfg(target_os = "linux")]
 pub use kernel::{JpegDecodeKernel, JPEG_DECODE_WORKGROUP_SIZE};
+#[cfg(target_os = "linux")]
+pub use simple_decoder::{JpegDecodeOutput, SimpleJpegDecoder, MAX_FRAMES_IN_FLIGHT};
 
 /// Parse and entropy-decode a baseline-sequential JPEG bitstream.
 ///

@@ -101,18 +101,13 @@ impl JpegDecodeKernel {
     ///
     /// Allocates per-call HOST_VISIBLE storage buffers for the coefficient
     /// and quant-table uploads, copies the data in, binds, dispatches, and
-    /// waits on the kernel's fence before returning. Per-call allocation
-    /// is intentional for this issue's scope; a pooled `SimpleJpegDecoder`
-    /// wrapper is a follow-up.
+    /// waits on the kernel's fence before returning. This is the one-shot
+    /// convenience for callers without a pre-allocated buffer pool (e.g.
+    /// the kernel-level integration test); steady-state hot-path callers
+    /// should ride [`Self::dispatch_pooled`] through
+    /// [`crate::SimpleJpegDecoder`] instead.
     pub fn dispatch(&self, decoded: &DecodedJpeg, output_texture: &Texture) -> Result<()> {
         let layout = JpegBufferLayout::from_decoded(decoded)?;
-
-        // Pack i16 coefficients into i32 SSBO words. Sign-extension is
-        // implicit in `i32::from(i16)`. Quant tables go u16 -> u32 with
-        // zero extension. Packing on the host keeps the shader portable
-        // (no dependency on `VK_KHR_16bit_storage` / `shaderInt16`) at
-        // the cost of doubling the upload payload — for 640x360 4:2:0
-        // that's 690 KB, trivial against modern PCIe bandwidth.
         let coef_words = layout.pack_coefficients(decoded);
         let qt_words = layout.pack_quant_tables(decoded)?;
 
@@ -128,9 +123,75 @@ impl JpegDecodeKernel {
             qt_bytes.len() as u64,
         )?);
 
+        self.dispatch_with_buffers(decoded, &layout, output_texture, &coef_buf, &qt_buf)
+    }
+
+    /// Decode `decoded` into `output_texture` using caller-supplied
+    /// pre-allocated HOST_VISIBLE SSBOs. Steady-state hot-path entrypoint:
+    /// no `vkAllocateMemory`, no `vkCreateBuffer`, no `vkMapMemory`.
+    ///
+    /// `coef_buf` and `qt_buf` must be HOST_VISIBLE storage buffers (built
+    /// via [`HostVulkanBuffer::new_storage_buffer_host_visible`]) sized
+    /// to fit the largest decode the caller intends to run — typically the
+    /// worst-case 4:2:0 byte count for the decoder's `(max_width,
+    /// max_height)`. The kernel checks the sizes against `decoded` and
+    /// returns a typed error if too small, so undersized buffers can't
+    /// silently corrupt output.
+    ///
+    /// Same per-call texture contract as [`Self::dispatch`]: `output_texture`
+    /// must be an `Rgba8Unorm` storage image in `GENERAL` layout.
+    pub fn dispatch_pooled(
+        &self,
+        decoded: &DecodedJpeg,
+        output_texture: &Texture,
+        coef_buf: &Arc<HostVulkanBuffer>,
+        qt_buf: &Arc<HostVulkanBuffer>,
+    ) -> Result<()> {
+        let layout = JpegBufferLayout::from_decoded(decoded)?;
+        self.dispatch_with_buffers(decoded, &layout, output_texture, coef_buf, qt_buf)
+    }
+
+    /// Shared dispatch tail: pack coefficients + quant tables into the
+    /// supplied HOST_VISIBLE buffers, bind, set push constants, dispatch.
+    /// Validates that the supplied buffers are large enough so a too-small
+    /// pool surfaces as a typed error instead of an out-of-bounds memcpy.
+    fn dispatch_with_buffers(
+        &self,
+        decoded: &DecodedJpeg,
+        layout: &JpegBufferLayout,
+        output_texture: &Texture,
+        coef_buf: &Arc<HostVulkanBuffer>,
+        qt_buf: &Arc<HostVulkanBuffer>,
+    ) -> Result<()> {
+        // Pack i16 coefficients into i32 SSBO words. Sign-extension is
+        // implicit in `i32::from(i16)`. Quant tables go u16 -> u32 with
+        // zero extension. Packing on the host keeps the shader portable
+        // (no dependency on `VK_KHR_16bit_storage` / `shaderInt16`).
+        let coef_words = layout.pack_coefficients(decoded);
+        let qt_words = layout.pack_quant_tables(decoded)?;
+
+        let coef_bytes = bytemuck::cast_slice::<i32, u8>(&coef_words);
+        let qt_bytes = bytemuck::cast_slice::<u32, u8>(&qt_words);
+
+        if (coef_bytes.len() as u64) > coef_buf.size() {
+            return Err(Error::GpuError(format!(
+                "jpeg_decode: coefficient buffer too small — need {} bytes, pool sized for {} \
+                 (rebuild SimpleJpegDecoder with larger max_width/max_height)",
+                coef_bytes.len(),
+                coef_buf.size(),
+            )));
+        }
+        if (qt_bytes.len() as u64) > qt_buf.size() {
+            return Err(Error::GpuError(format!(
+                "jpeg_decode: quant-table buffer too small — need {} bytes, pool sized for {}",
+                qt_bytes.len(),
+                qt_buf.size(),
+            )));
+        }
+
         // Persistently mapped HOST_VISIBLE | HOST_COHERENT memory.
-        // SAFETY: `mapped_ptr()` returns a valid mapped pointer for the
-        // full allocation; sizes match by construction.
+        // SAFETY: size-checked above; `mapped_ptr()` returns a valid
+        // mapped pointer for the full allocation.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 coef_bytes.as_ptr(),
@@ -144,8 +205,8 @@ impl JpegDecodeKernel {
             );
         }
 
-        let coef_storage = StorageBuffer::from_host_vulkan_buffer(coef_buf);
-        let qt_storage = StorageBuffer::from_host_vulkan_buffer(qt_buf);
+        let coef_storage = StorageBuffer::from_host_vulkan_buffer(Arc::clone(coef_buf));
+        let qt_storage = StorageBuffer::from_host_vulkan_buffer(Arc::clone(qt_buf));
 
         self.kernel.set_storage_buffer(0, &coef_storage)?;
         self.kernel.set_storage_buffer(1, &qt_storage)?;
@@ -169,6 +230,27 @@ impl JpegDecodeKernel {
         self.kernel.dispatch(dispatch_x, dispatch_y, 1)
     }
 }
+
+/// Worst-case byte size for the coefficient HOST_VISIBLE SSBO when
+/// decoding any 4:2:0 frame up to `(max_width, max_height)` pixels.
+///
+/// Dimensions are padded up to a 16-pixel MCU boundary (4:2:0's max
+/// sampling factor is 2×2, so the MCU is 16×16). Within each MCU the
+/// kernel packs `i16` coefficients into `i32` SSBO words: 4 Y blocks
+/// (256 coefficients) + 1 Cb block (64) + 1 Cr block (64), times 4
+/// bytes/coefficient → 1536 bytes per MCU.
+pub fn worst_case_coefficient_buffer_bytes_420(max_width: u32, max_height: u32) -> u64 {
+    const MCU_SIDE: u64 = 16;
+    const COEFFICIENTS_PER_MCU_420: u64 = 4 * 64 + 64 + 64; // Y(2×2) + Cb + Cr blocks
+    const BYTES_PER_COEFFICIENT: u64 = 4; // i32-packed
+    let padded_w = u64::from(max_width).div_ceil(MCU_SIDE);
+    let padded_h = u64::from(max_height).div_ceil(MCU_SIDE);
+    padded_w * padded_h * COEFFICIENTS_PER_MCU_420 * BYTES_PER_COEFFICIENT
+}
+
+/// Byte size for the quant-table HOST_VISIBLE SSBO. 128 entries (Y +
+/// shared chroma), each packed as `u32`.
+pub const QUANT_TABLE_BUFFER_BYTES: u64 = 128 * 4;
 
 /// Indices into `DecodedJpeg.components` for each YCbCr plane plus the
 /// per-plane geometry needed to lay out the SSBO uploads and push
