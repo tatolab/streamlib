@@ -205,18 +205,24 @@ impl DepayloaderState {
         dropped
     }
 
-    /// Ingest one datagram. Sweeps expired frames first so the cap
-    /// check below sees the current set, then attempts to fold the
-    /// chunk in. Returns:
+    /// Ingest one datagram. Returns:
     ///
     /// - `Progress` — chunk accepted, frame still pending
     /// - `Completed(...)` — all chunks present, JPEG ready
     /// - `Dropped(...)` — chunk or frame dropped (malformed,
     ///   duplicate, conflict, capacity-evicted)
     ///
-    /// Calling `sweep_timeouts` separately is fine — the chunk path
-    /// does NOT re-sweep, so callers polling on a periodic timer can
-    /// keep the table tidy independent of incoming traffic.
+    /// This call does not internally sweep timeouts; the caller is
+    /// expected to drive `sweep_timeouts` on whatever cadence they
+    /// want stale state cleared. The processor sweeps before each
+    /// ingest so a quiet-stream sender that suddenly resumes doesn't
+    /// see frames evicted only at the *next* arrival; a periodic-
+    /// timer caller would sweep on the timer tick instead.
+    ///
+    /// Outcome priority when both eviction and completion fire in
+    /// the same call (cap full + single-chunk new frame): `Completed`
+    /// wins — the caller wants the JPEG downstream — and the
+    /// eviction is only visible via `metrics().frames_dropped_capacity`.
     pub fn ingest(&mut self, datagram: &[u8], now: Instant) -> IngestOutcome {
         let (header, payload) = match header::parse(datagram) {
             Ok(parsed) => parsed,
@@ -229,33 +235,20 @@ impl DepayloaderState {
         // Cap check before insertion. If we'd be adding a brand-new
         // frame_id and we're already at the cap, evict the oldest.
         // Existing frame_ids don't hit the cap (we're updating in
-        // place).
+        // place). We don't short-circuit here — the new chunk still
+        // gets ingested below, and if it's a single-chunk frame the
+        // Completed outcome takes priority over the eviction.
+        let mut cap_evicted: Option<DropReason> = None;
         if !self.pending.contains_key(&header.frame_id)
             && self.pending.len() >= self.max_pending
-            && let Some((oldest_id, oldest)) = self.evict_oldest()
+            && let Some((_, oldest)) = self.evict_oldest()
         {
             self.frames_dropped_capacity += 1;
-            // Continue past the eviction — the new frame still gets
-            // ingested below. The eviction is logged via the
-            // returned DropReason; the caller may inspect both this
-            // outcome and the eviction. For simplicity we surface
-            // the eviction here and proceed; the new frame's first
-            // chunk is then accepted as Progress.
-            let _ = oldest_id;
-            let evicted = DropReason::CapacityEvicted {
+            cap_evicted = Some(DropReason::CapacityEvicted {
                 frame_id: oldest.0,
                 chunks_received: oldest.1,
                 total_chunks: oldest.2,
-            };
-            // We have to return SOMETHING per chunk. The contract
-            // is one DropReason per drop event; capacity-evicted
-            // counts as the drop event for this ingest, and the
-            // new chunk's data is queued internally. The caller's
-            // next ingest call will see the new pending frame and
-            // proceed normally. This keeps the API one-event-per-
-            // call without losing data.
-            self.start_new_assembly(&header, payload, now);
-            return IngestOutcome::Dropped(evicted);
+            });
         }
 
         // From here, either the frame_id exists or we're inserting
@@ -317,9 +310,12 @@ impl DepayloaderState {
             return IngestOutcome::Progress;
         }
 
-        // Fresh frame_id under cap.
+        // Fresh frame_id under cap (or under cap after the eviction above).
         self.start_new_assembly(&header, payload, now);
-        // A single-chunk frame is complete immediately.
+        // A single-chunk frame is complete immediately. When this fires
+        // in the same call as a cap eviction, Completed takes priority
+        // over the CapacityEvicted DropReason — the eviction stays
+        // visible via the metrics counter.
         if let Some(assembly) = self.pending.get(&header.frame_id)
             && assembly.is_complete()
         {
@@ -331,7 +327,10 @@ impl DepayloaderState {
             self.frames_emitted += 1;
             return IngestOutcome::Completed(completed);
         }
-        IngestOutcome::Progress
+        match cap_evicted {
+            Some(reason) => IngestOutcome::Dropped(reason),
+            None => IngestOutcome::Progress,
+        }
     }
 
     fn start_new_assembly(&mut self, header: &ChunkHeader, payload: &[u8], now: Instant) {
@@ -599,6 +598,48 @@ mod tests {
         assert_eq!(dropped.len(), 1000);
         assert_eq!(state.pending_len(), 0);
         assert_eq!(state.metrics().frames_dropped_timeout, 1000);
+    }
+
+    /// Corner case: when the pending table is at capacity AND the
+    /// incoming chunk is itself a single-chunk frame (`total_chunks = 1`),
+    /// the new frame is BOTH eviction-triggering AND immediately
+    /// complete. Outcome priority: `Completed` wins (the caller wants
+    /// the JPEG downstream); the eviction is only visible via the
+    /// `frames_dropped_capacity` metrics counter. Without the priority
+    /// rule, the complete frame would sit in pending until timeout —
+    /// silently delaying a frame that's already done.
+    #[test]
+    fn capacity_eviction_plus_single_chunk_frame_completes_priority() {
+        let mut state = DepayloaderState::new(Duration::from_secs(60), 2);
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_millis(1);
+        let t2 = t1 + Duration::from_millis(1);
+
+        // Fill cap with two multi-chunk frames.
+        let h1_c0 = header(1, 0, 4, 16, 4, 0);
+        let h2_c0 = header(2, 0, 4, 16, 4, 0);
+        state.ingest(&datagram(h1_c0, b"1111"), t0);
+        state.ingest(&datagram(h2_c0, b"2222"), t1);
+        assert_eq!(state.pending_len(), 2);
+
+        // Single-chunk frame 3 arrives at cap. Expected: Completed
+        // (priority over eviction), eviction visible via counter.
+        let h3 = header(3, 0, 1, 4, 4, 999);
+        let bytes = b"3333";
+        let outcome = state.ingest(&datagram(h3, bytes), t2);
+        match outcome {
+            IngestOutcome::Completed(frame) => {
+                assert_eq!(frame.frame_id, 3);
+                assert_eq!(frame.sim_time_ns, 999);
+                assert_eq!(frame.data, bytes);
+            }
+            other => panic!("expected Completed (priority over eviction), got {other:?}"),
+        }
+        let metrics = state.metrics();
+        assert_eq!(metrics.frames_emitted, 1);
+        assert_eq!(metrics.frames_dropped_capacity, 1, "eviction still counted");
+        // After: one entry left (frame 2 — frame 1 was evicted, frame 3 emitted).
+        assert_eq!(state.pending_len(), 1);
     }
 
     /// Capacity eviction: with `max_pending = 2`, ingesting chunks
