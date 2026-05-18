@@ -43,6 +43,7 @@ members = [
     "packages/debug-utilities",  # @tatolab/debug-utilities — utility processors for development, demos, and rigorous-input testing (BgraFileSource, SimplePassthrough)
     "packages/network",          # @tatolab/network — generic UDP source/sink processors (byte-level transport)
     "packages/mavlink",          # @tatolab/mavlink — MAVLink2 encoder + decoder processors (rust-mavlink wrapper)
+    "packages/vadr-vision",      # @tatolab/vadr-vision — VADR-TS-002 §4.6 vision-stream depayloader (AGP chunked JPEG-over-UDP)
     # Disabled examples blocked on Apple codec/display impls parked in `_apple_impl_pending_/`:
     #   - camera-audio-recorder, screen-recorder, runtime-graph-json-demo (Apple Mp4WriterProcessor)
     #   - whep-player (Apple VideoToolbox + DisplayProcessor)
