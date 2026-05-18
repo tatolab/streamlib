@@ -15,11 +15,14 @@ package:
 
 dependencies:
   "@tatolab/core": "^1.0.0"
+  "@tatolab/jpeg": "^1.0.0"
 
 # Dev-time path override; `streamlib pack` rejects this.
 patch:
   "@tatolab/core":
     path: ../core
+  "@tatolab/jpeg":
+    path: ../jpeg
 
 schemas:
   # Wire types imported from @tatolab/core.
@@ -31,11 +34,18 @@ schemas:
     package: "@tatolab/core"
   VideoFrame:
     package: "@tatolab/core"
+  # Wire types imported from @tatolab/jpeg.
+  EncodedJpegFrame:
+    package: "@tatolab/jpeg"
   # Local config schemas this package owns.
   BgraFileSourceConfig:
     file: schemas/bgra_file_source_config.yaml
+  JpegBytesSourceConfig:
+    file: schemas/jpeg_bytes_source_config.yaml
   SimplePassthroughConfig:
     file: schemas/simple_passthrough_config.yaml
+  VideoFrameCounterConfig:
+    file: schemas/video_frame_counter_config.yaml
 
 processors:
   - name: SimplePassthrough
@@ -69,3 +79,33 @@ processors:
       - name: video
         schema: VideoFrame
         description: Video frames read from the BGRA file
+
+  - name: JpegBytesSource
+    version: 1.0.0
+    description: "Loads a JPEG file from disk at setup time and republishes it as EncodedJpegFrame on a paced background thread (for testing the JPEG decoder pipeline)"
+    execution: manual
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: JpegBytesSourceConfig
+    outputs:
+      - name: encoded_jpeg
+        schema: EncodedJpegFrame
+        description: JPEG-encoded bytes wrapped in an EncodedJpegFrame
+
+  - name: VideoFrameCounter
+    version: 1.0.0
+    description: "Counts incoming VideoFrames into process-global atomics so integration tests can assert on frame count + first-frame dimensions after runtime.stop()"
+    execution: reactive
+    runtime:
+      language: rust
+    config:
+      name: config
+      schema: VideoFrameCounterConfig
+    inputs:
+      - name: input
+        schema: VideoFrame
+        description: VideoFrame stream to observe
+        read_mode: read_next_in_order
+        buffer_size: 16

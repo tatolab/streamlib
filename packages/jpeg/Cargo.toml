@@ -1,0 +1,49 @@
+[package]
+name = "streamlib-jpeg"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+description = "JPEG decoder processor — thin wrapper around libs/vulkan-jpeg::SimpleJpegDecoder (GPU compute / nvJPEG)."
+keywords = ["jpeg", "image", "decoder", "vulkan-compute", "nvjpeg"]
+categories = ["multimedia::images", "multimedia"]
+
+[lib]
+name = "streamlib_jpeg"
+crate-type = ["rlib", "cdylib"]
+
+[build-dependencies]
+streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
+
+[dependencies]
+# Engine substrate — runtime context, processor traits, generated config
+# types under `crate::_generated_::tatolab__jpeg::*`, VideoFrame wire
+# type, RHI texture / color primitives.
+streamlib = { path = "../../libs/streamlib-sdk" }
+
+# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
+streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Serialization (config dataclasses ship as serde-derived).
+serde.workspace = true
+
+# Logging.
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# GPU JPEG decode primitive — fused Vulkan compute kernel + optional
+# nvJPEG fast path behind SimpleJpegDecoder. Owns its own texture ring.
+vulkan-jpeg = { path = "../../libs/vulkan-jpeg" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Integration tests spin up a real Runner wiring JpegBytesSource
+# (debug-utilities) → JpegDecoder (this crate) end-to-end.
+streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-debug-utilities = { path = "../debug-utilities" }
+serde_json.workspace = true
+serial_test = "3.1"
+
+[lints]
+workspace = true

@@ -15,9 +15,3 @@ packages:
       kind: path
       path: ../core
     content_hash: sha256:dccefbd6d0f322c6bc621fa10fdeb8675090f2c9e74051a3db8a7ec4753c4580
-  '@tatolab/jpeg':
-    version: 1.0.0
-    source:
-      kind: path
-      path: ../jpeg
-    content_hash: sha256:25be8221db8c86ef20c2a886ba0cbe73643d510e570c8b1fe68b5636c54adea9
