@@ -630,3 +630,62 @@ fn match_cuda_device_to_vulkan_uuid(vulkan_uuid: &[u8; 16]) -> Option<i32> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// On a non-NVIDIA / no-CUDA host (and on no-match-found CUDA hosts),
+    /// the helper returns `None` rather than panicking — that's the
+    /// fallback case the caller's `.unwrap_or_else(|| 0)` relies on.
+    /// Bogus all-zero UUID exercises the no-match branch even on
+    /// CUDA-capable hosts.
+    #[test]
+    fn match_cuda_device_to_vulkan_uuid_bogus_uuid_returns_none() {
+        let bogus = [0u8; 16];
+        let result = match_cuda_device_to_vulkan_uuid(&bogus);
+        assert!(
+            result.is_none(),
+            "all-zero Vulkan UUID must not match any real CUDA device; got {result:?}"
+        );
+    }
+
+    /// When a Vulkan device is available on this host, the helper must
+    /// return `Some(ordinal)` for that device's UUID — locks the
+    /// "successful UUID match on a single-GPU NVIDIA host" path that
+    /// the production `NvJpegResources::new` relies on. Skips cleanly
+    /// when no Vulkan device or no CUDA runtime is available.
+    #[test]
+    fn match_cuda_device_to_vulkan_uuid_matches_local_vulkan_device() {
+        use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                eprintln!("Skipping — no Vulkan device available");
+                return;
+            }
+        };
+        if !device.third_party_gpu_capabilities().nvjpeg {
+            eprintln!(
+                "Skipping — capability probe says nvjpeg=false; \
+                 host probably has no NVIDIA + libnvjpeg combination"
+            );
+            return;
+        }
+        let vulkan_uuid = device.physical_device_uuid();
+        let ordinal = match_cuda_device_to_vulkan_uuid(&vulkan_uuid);
+        // Defensive: even if the UUID match somehow fails on this NVIDIA
+        // host, the caller's `unwrap_or_else(|| 0)` keeps single-GPU
+        // behavior alive. The assertion locks the GREEN path — UUID
+        // matching DOES work against real hardware when capability is
+        // true. Mentally revert the `unsafe { std::mem::transmute }`
+        // call to e.g. `[0u8; 16]` and this test fails on every
+        // NVIDIA host.
+        assert!(
+            ordinal.is_some(),
+            "nvjpeg capability is true but the UUID match returned None — \
+             Vulkan device UUID {vulkan_uuid:?} did not match any CUDA \
+             device. This is a multi-GPU mismatch or a UUID transmute regression."
+        );
+    }
+}
