@@ -33,5 +33,18 @@ serde.workspace = true
 # Logging.
 tracing.workspace = true
 
+[dev-dependencies]
+# Integration tests spin up a Runner and exercise the full vision
+# pipeline: UdpSource → VadrVisionDepayloader → JpegDecoder →
+# VideoFrameCounter. force-link the upstream / downstream crates so
+# their `inventory::submit!` factory registrations are present in
+# the test binary.
+streamlib = { path = "../../libs/streamlib-sdk" }
+streamlib-network = { path = "../network" }
+streamlib-jpeg = { path = "../jpeg" }
+streamlib-debug-utilities = { path = "../debug-utilities" }
+serde_json.workspace = true
+serial_test = "3.1"
+
 [lints]
 workspace = true
