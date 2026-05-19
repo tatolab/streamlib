@@ -283,6 +283,222 @@ mod tests {
         );
     }
 
+    /// End-to-end smoke test for the 200 Hz two-stage pipeline shape that
+    /// motivated this engine fix (the MAVLink stress test in PR #836:
+    /// UdpSource → Decoder → Encoder → UdpSink at 200 Hz, where each
+    /// stage's drain window was tight against scheduler jitter).
+    ///
+    /// Producer publishes at 200 Hz to service S1; a relay thread drains
+    /// S1 and republishes to S2 while periodically pausing to simulate
+    /// downstream jitter; a consumer drains S2 and counts. We run the
+    /// pipeline twice:
+    ///
+    /// 1. **Shallow rings (depth 4)** — during a 50 ms relay pause, the
+    ///    producer emits ~10 messages at 200 Hz. The S1 ring (depth 4)
+    ///    overflows; ~6 messages per pause are overwritten and lost.
+    /// 2. **Deep rings (depth 64, matching MavlinkMessage's declared
+    ///    `max_queued_messages`)** — the same 10-message accumulation
+    ///    fits comfortably; zero loss.
+    ///
+    /// Reverting the engine's `subscriber_max_buffer_size` wiring to a
+    /// hardcoded constant would either make both runs lose the same way
+    /// (low constant) or both runs preserve everything (high constant) —
+    /// the asymmetric outcome locks the per-service plumbing.
+    ///
+    /// Runtime ~1.5 s. Two thread pools per run.
+    #[test]
+    fn sustained_200hz_two_stage_relay_preserves_messages_only_with_deep_rings() {
+        use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        fn run_relay(
+            s1_depth: usize,
+            s2_depth: usize,
+            total: u32,
+            hz: u32,
+            relay_pause_every: u32,
+            relay_pause_ms: u64,
+        ) -> (u32, u32) {
+            let interval = Duration::from_micros(1_000_000 / hz as u64);
+            // iceoryx2 Publishers/Subscribers are `!Send` (they hold Rc
+            // internally), so each thread constructs its own ports from
+            // the shared Node + service-name string.
+            let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+            let s1_name = Arc::new(unique_service_name("relay_s1"));
+            let s2_name = Arc::new(unique_service_name("relay_s2"));
+
+            let sent_counter = Arc::new(AtomicU32::new(0));
+            // Startup barrier — iceoryx2 doesn't queue messages for late
+            // subscribers, so the producer must wait until the relay
+            // subscriber and consumer subscriber are both attached
+            // before publishing the first sample. 3 participants:
+            // producer, relay, consumer.
+            let startup = Arc::new(std::sync::Barrier::new(3));
+            // Two-phase shutdown: relay stops first (drain S1 → S2),
+            // then consumer stops (drain S2). One shared flag would
+            // race: the consumer's "drain and exit" can finish before
+            // the relay republishes the last message.
+            let relay_stop = Arc::new(AtomicBool::new(false));
+            let consumer_stop = Arc::new(AtomicBool::new(false));
+
+            let node_p = node.clone();
+            let s1_p = s1_name.clone();
+            let sent_clone = sent_counter.clone();
+            let startup_p = startup.clone();
+            let producer = std::thread::spawn(move || {
+                let svc = node_p
+                    .open_or_create_service(&s1_p, s1_depth)
+                    .expect("producer s1 open");
+                let publisher = svc.create_publisher(64).expect("publisher");
+                startup_p.wait();
+                let start = Instant::now();
+                for i in 0..total {
+                    let mut payload = vec![0u8; FRAME_HEADER_SIZE + 4];
+                    payload[FRAME_HEADER_SIZE..]
+                        .copy_from_slice(&i.to_le_bytes());
+                    let sample = publisher
+                        .loan_slice_uninit(payload.len())
+                        .expect("loan");
+                    let sample = sample.write_from_slice(&payload);
+                    sample.send().expect("send");
+                    sent_clone.fetch_add(1, Ordering::Relaxed);
+
+                    let target = start + interval * (i + 1);
+                    let now = Instant::now();
+                    if target > now {
+                        std::thread::sleep(target - now);
+                    }
+                }
+            });
+
+            let node_r = node.clone();
+            let s1_r = s1_name.clone();
+            let s2_r = s2_name.clone();
+            let relay_stop_t = relay_stop.clone();
+            let startup_r = startup.clone();
+            let relay = std::thread::spawn(move || {
+                let svc_in = node_r
+                    .open_or_create_service(&s1_r, s1_depth)
+                    .expect("relay s1 open");
+                let svc_out = node_r
+                    .open_or_create_service(&s2_r, s2_depth)
+                    .expect("relay s2 open");
+                let subscriber = svc_in.create_subscriber().expect("relay sub");
+                let publisher = svc_out.create_publisher(64).expect("relay pub");
+                startup_r.wait();
+                let mut count: u32 = 0;
+                let relay_one =
+                    |subscriber: &iceoryx2::port::subscriber::Subscriber<
+                        ipc::Service,
+                        [u8],
+                        (),
+                    >,
+                     publisher: &iceoryx2::port::publisher::Publisher<
+                        ipc::Service,
+                        [u8],
+                        (),
+                    >|
+                     -> bool {
+                        match subscriber.receive() {
+                            Ok(Some(sample)) => {
+                                let bytes = sample.payload().to_vec();
+                                let s = publisher
+                                    .loan_slice_uninit(bytes.len())
+                                    .expect("relay loan");
+                                let s = s.write_from_slice(&bytes);
+                                s.send().expect("relay send");
+                                true
+                            }
+                            _ => false,
+                        }
+                    };
+                loop {
+                    if relay_stop_t.load(Ordering::Relaxed) {
+                        // Drain anything still pending so the very last
+                        // producer message makes it to s2.
+                        while relay_one(&subscriber, &publisher) {}
+                        break;
+                    }
+                    if relay_one(&subscriber, &publisher) {
+                        count += 1;
+                        if relay_pause_every > 0
+                            && count % relay_pause_every == 0
+                        {
+                            std::thread::sleep(Duration::from_millis(
+                                relay_pause_ms,
+                            ));
+                        }
+                    } else {
+                        std::thread::sleep(Duration::from_micros(200));
+                    }
+                }
+            });
+
+            let node_c = node.clone();
+            let s2_c = s2_name.clone();
+            let consumer_stop_t = consumer_stop.clone();
+            let startup_c = startup.clone();
+            let consumer_handle = std::thread::spawn(move || {
+                let svc = node_c
+                    .open_or_create_service(&s2_c, s2_depth)
+                    .expect("consumer s2 open");
+                let subscriber = svc.create_subscriber().expect("consumer sub");
+                startup_c.wait();
+                let mut received: u32 = 0;
+                loop {
+                    if consumer_stop_t.load(Ordering::Relaxed) {
+                        while let Ok(Some(_)) = subscriber.receive() {
+                            received += 1;
+                        }
+                        break;
+                    }
+                    match subscriber.receive() {
+                        Ok(Some(_)) => received += 1,
+                        Ok(None) => std::thread::sleep(Duration::from_micros(200)),
+                        Err(_) => break,
+                    }
+                }
+                received
+            });
+
+            // Phased shutdown: producer → settle → relay finishes flushing
+            // S1 into S2 → settle → consumer drains S2. Using one shared
+            // flag races on the very last message.
+            producer.join().expect("producer thread");
+            std::thread::sleep(Duration::from_millis(500));
+            relay_stop.store(true, Ordering::Relaxed);
+            relay.join().expect("relay thread");
+            std::thread::sleep(Duration::from_millis(100));
+            consumer_stop.store(true, Ordering::Relaxed);
+            let received = consumer_handle.join().expect("consumer thread");
+
+            (sent_counter.load(Ordering::Relaxed), received)
+        }
+
+        let total: u32 = 100; // 0.5 s at 200 Hz
+        let hz: u32 = 200;
+        let pause_every: u32 = 25;
+        let pause_ms: u64 = 50;
+
+        let (sent_shallow, recv_shallow) =
+            run_relay(4, 4, total, hz, pause_every, pause_ms);
+        let (sent_deep, recv_deep) =
+            run_relay(64, 64, total, hz, pause_every, pause_ms);
+
+        assert_eq!(sent_shallow, total, "producer should send every message");
+        assert_eq!(sent_deep, total, "producer should send every message");
+
+        assert!(
+            recv_shallow < sent_shallow,
+            "depth-4 rings should lose messages at 200 Hz under {pause_ms} ms relay pauses (every {pause_every} msgs): sent {sent_shallow}, recv {recv_shallow}"
+        );
+        assert_eq!(
+            recv_deep, sent_deep,
+            "depth-64 rings (MavlinkMessage's declared depth) should preserve every message at 200 Hz under the same jitter: sent {sent_deep}, recv {recv_deep}"
+        );
+    }
+
     /// End-to-end overwrite behavior: a depth-N ring published with N+1
     /// unread samples drops the oldest in favor of the newest. Locks the
     /// fact that the `subscriber_max_buffer_size` we pass through actually
