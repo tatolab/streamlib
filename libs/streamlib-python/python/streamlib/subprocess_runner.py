@@ -143,14 +143,18 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
         port_name = inp["name"]
         service_name = inp["service_name"]
         read_mode = inp.get("read_mode", "skip_to_latest")
+        max_queued_messages = inp.get("max_queued_messages", 16)
         log.info(
             "Subscribing to input",
             port=port_name,
             service=service_name,
             read_mode=read_mode,
             max_payload_bytes=inp.get("max_payload_bytes"),
+            max_queued_messages=max_queued_messages,
         )
-        result = lib.slpn_input_subscribe(ctx_ptr, service_name.encode("utf-8"))
+        result = lib.slpn_input_subscribe(
+            ctx_ptr, service_name.encode("utf-8"), max_queued_messages,
+        )
         if result != 0:
             log.error("Failed to subscribe to input", service=service_name)
         # Configure per-port read mode (0 = skip_to_latest, 1 = read_next_in_order)
@@ -210,6 +214,7 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             ver_minor,
             ver_patch,
             out.get("max_payload_bytes", 65536),
+            out.get("max_queued_messages", 16),
             dest_notify_service.encode("utf-8"),
         )
         if result != 0:

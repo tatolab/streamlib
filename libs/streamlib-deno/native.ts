@@ -43,7 +43,7 @@ const symbols = {
 
   // Input
   sldn_input_subscribe: {
-    parameters: ["pointer", "buffer"] as const,
+    parameters: ["pointer", "buffer", "usize"] as const,
     result: "i32" as const,
   },
   sldn_input_poll: {
@@ -74,6 +74,7 @@ const symbols = {
       "u32", // schema_version_minor
       "u32", // schema_version_patch
       "usize", // max_payload_bytes
+      "usize", // max_queued_messages
       "buffer", // notify_service_name
     ] as const,
     result: "i32" as const,

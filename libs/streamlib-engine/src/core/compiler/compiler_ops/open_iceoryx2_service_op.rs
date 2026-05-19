@@ -10,7 +10,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::context::RuntimeContext;
-use crate::core::embedded_schemas::max_payload_bytes_for_port_spec;
+use crate::core::embedded_schemas::{
+    max_payload_bytes_for_port_spec, max_queued_messages_for_port_spec,
+};
 use crate::core::error::{Result, Error};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
@@ -350,7 +352,9 @@ fn open_iceoryx2_pubsub(
 
     // Create iceoryx2 Service (pub/sub) and paired Notify service (event/fd-wake).
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let service = iceoryx2_node.open_or_create_service(&service_name)?;
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema);
+    let service =
+        iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
@@ -458,11 +462,6 @@ fn open_iceoryx2_subprocess_to_subprocess(
         service_name
     );
 
-    // Ensure both services exist (both subprocesses will open them independently).
-    let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let _service = iceoryx2_node.open_or_create_service(&service_name)?;
-    let _notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
-
     let output_schema = {
         let source_proc_type = graph
             .traversal_mut()
@@ -482,6 +481,13 @@ fn open_iceoryx2_subprocess_to_subprocess(
             .unwrap_or_default()
     };
     let max_payload = max_payload_bytes_for_port_spec(&output_schema);
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema);
+
+    // Ensure both services exist (both subprocesses will open them independently).
+    let iceoryx2_node = runtime_ctx.iceoryx2_node();
+    let _service =
+        iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
+    let _notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Store output wiring info on the source subprocess
     {
@@ -498,6 +504,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 "dest_notify_service_name": notify_service_name,
                 "schema": schema_ident_json(&output_schema),
                 "max_payload_bytes": max_payload,
+                "max_queued_messages": max_queued_messages,
             }));
         } else if let Some(python_native_host) = source_guard
             .as_any_mut()
@@ -512,6 +519,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                     "dest_notify_service_name": notify_service_name,
                     "schema": schema_ident_json(&output_schema),
                     "max_payload_bytes": max_payload,
+                    "max_queued_messages": max_queued_messages,
                 }));
         }
     }
@@ -530,6 +538,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                 "notify_service_name": notify_service_name,
                 "read_mode": "skip_to_latest",
                 "max_payload_bytes": max_payload,
+                "max_queued_messages": max_queued_messages,
             }));
         } else if let Some(python_native_host) = dest_guard
             .as_any_mut()
@@ -543,6 +552,7 @@ fn open_iceoryx2_subprocess_to_subprocess(
                     "notify_service_name": notify_service_name,
                     "read_mode": "skip_to_latest",
                     "max_payload_bytes": max_payload,
+                    "max_queued_messages": max_queued_messages,
                 }));
         }
     }
@@ -585,34 +595,36 @@ fn open_iceoryx2_subprocess_to_rust(
         dest_proc_id
     );
 
+    // Look up schema for the output port from the registry
+    let output_schema = {
+        let source_proc_type = graph
+            .traversal_mut()
+            .v(source_proc_id)
+            .first()
+            .map(|node| node.processor_type().clone());
+
+        source_proc_type
+            .as_ref()
+            .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
+            .and_then(|(_, outputs)| {
+                outputs
+                    .iter()
+                    .find(|p| p.name == source_port)
+                    .map(|p| p.data_type.clone())
+            })
+            .unwrap_or_default()
+    };
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema);
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema);
+
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let service = iceoryx2_node.open_or_create_service(&service_name)?;
+    let service =
+        iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Source is subprocess - it creates its own publisher and notifier via FFI.
     // Store output wiring info on the subprocess processor so it can publish via FFI.
     {
-        // Look up schema for the output port from the registry
-        let output_schema = {
-            let source_proc_type = graph
-                .traversal_mut()
-                .v(source_proc_id)
-                .first()
-                .map(|node| node.processor_type().clone());
-
-            source_proc_type
-                .as_ref()
-                .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
-                .and_then(|(_, outputs)| {
-                    outputs
-                        .iter()
-                        .find(|p| p.name == source_port)
-                        .map(|p| p.data_type.clone())
-                })
-                .unwrap_or_default()
-        };
-
-        let max_payload = max_payload_bytes_for_port_spec(&output_schema);
         let source_proc_arc = get_single_processor(graph, source_proc_id)?;
         let mut source_guard = source_proc_arc.lock();
         if let Some(deno_host) = source_guard
@@ -626,6 +638,7 @@ fn open_iceoryx2_subprocess_to_rust(
                 "dest_notify_service_name": notify_service_name,
                 "schema": schema_ident_json(&output_schema),
                 "max_payload_bytes": max_payload,
+                "max_queued_messages": max_queued_messages,
             }));
             tracing::debug!(
                 "Stored output wiring on Deno processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
@@ -644,6 +657,7 @@ fn open_iceoryx2_subprocess_to_rust(
                     "dest_notify_service_name": notify_service_name,
                     "schema": schema_ident_json(&output_schema),
                     "max_payload_bytes": max_payload,
+                    "max_queued_messages": max_queued_messages,
                 }));
             tracing::debug!(
                 "Stored output wiring on Python native processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
@@ -740,11 +754,13 @@ fn open_iceoryx2_rust_to_subprocess(
     };
 
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let service = iceoryx2_node.open_or_create_service(&service_name)?;
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema);
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema);
+    let service =
+        iceoryx2_node.open_or_create_service(&service_name, max_queued_messages)?;
     let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
 
     // Create Publisher sized for this schema's declared max payload.
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema);
     let publisher = service.create_publisher(max_payload)?;
     let notifier = notify_service.create_notifier()?;
 
@@ -782,6 +798,7 @@ fn open_iceoryx2_rust_to_subprocess(
                 "notify_service_name": notify_service_name,
                 "read_mode": "skip_to_latest",
                 "max_payload_bytes": max_payload,
+                "max_queued_messages": max_queued_messages,
             }));
             tracing::debug!(
                 "Stored input wiring on Deno processor '{}': port='{}', service='{}'",
@@ -801,6 +818,7 @@ fn open_iceoryx2_rust_to_subprocess(
                     "notify_service_name": notify_service_name,
                     "read_mode": "skip_to_latest",
                     "max_payload_bytes": max_payload,
+                    "max_queued_messages": max_queued_messages,
                 }));
             tracing::debug!(
                 "Stored input wiring on Python native processor '{}': port='{}', service='{}'",

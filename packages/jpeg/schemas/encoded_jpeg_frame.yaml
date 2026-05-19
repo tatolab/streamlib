@@ -14,7 +14,7 @@ metadata:
   type: EncodedJpegFrame
   description: "JPEG-encoded image bytes (one self-contained frame per message)"
   read_mode: read_next_in_order
-  buffer_size: 16
+  max_queued_messages: 16
   # 16 MiB per slot accommodates an uncompressed-quality 4K baseline JPEG
   # (4K @ Q=100 ≈ 4–8 MiB; the worst-case headroom matches what
   # EncodedVideoFrame allocates for an H.264 IDR at the same resolution
