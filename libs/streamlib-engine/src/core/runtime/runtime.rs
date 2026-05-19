@@ -134,6 +134,21 @@ pub struct Runner {
 
 impl Runner {
     pub fn new() -> Result<Arc<Self>> {
+        // Cap per-thread timer slack at 1 ns on the calling thread before
+        // spawning any worker. Linux defaults to 50 µs grouping for
+        // `epoll_wait` / `nanosleep` / `futex` relative timeouts; new
+        // threads inherit the creator's slack at clone time, so setting it
+        // here propagates to the tokio worker pool, the logging drain
+        // worker, the iceoryx2 node, and every processor thread spawned
+        // later. SCHED_FIFO/RR threads (rtkit-promoted reactive processors)
+        // bypass slack entirely per kernel design — this only affects
+        // SCHED_OTHER waits. Same call QEMU has shipped in production
+        // since 2013. Cannot fail for self per `prctl(2)`.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            libc::prctl(libc::PR_SET_TIMERSLACK, 1u64, 0u64, 0u64, 0u64);
+        }
+
         // Auto-detect tokio context FIRST — telemetry exporters need a Tokio handle.
         // If inside tokio runtime: use current handle (external handle mode)
         // If outside tokio runtime: create owned runtime
@@ -1883,6 +1898,22 @@ mod tests {
     fn test_runtime_creation() {
         let _runtime = Runner::new();
         // Runtime creates successfully
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[serial]
+    fn runner_new_caps_timer_slack_to_one_nanosecond() {
+        // Linux default is 50_000 ns. `Runner::new` calls
+        // `prctl(PR_SET_TIMERSLACK, 1)` as its very first step;
+        // `prctl(PR_GET_TIMERSLACK)` on the same thread should report 1.
+        let _runtime = Runner::new().expect("Runner::new");
+        let slack = unsafe { libc::prctl(libc::PR_GET_TIMERSLACK) };
+        assert_eq!(
+            slack, 1,
+            "expected timer slack 1 ns after Runner::new (got {})",
+            slack
+        );
     }
 
     /// Path-style dep recursion: `runtime.load_project(A)` must walk into
