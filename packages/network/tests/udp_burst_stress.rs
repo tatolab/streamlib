@@ -198,18 +198,20 @@ fn burst_six_streams_at_200hz_round_trips_without_loss() {
 
     assert_eq!(sent, expected, "every sender completed its full burst");
 
-    // Zero loss is the goal. A small loss tolerance accommodates
-    // loopback scheduling noise — recvmmsg amortizes the syscall
-    // cost, but if the test host is heavily loaded the sink's mpsc
-    // (capacity 256) can momentarily back-pressure the source's
-    // iceoryx2 publish chain. The lower bound here is far above
-    // what a regression to per-datagram recv_from would survive
-    // (that path drops a meaningful fraction on this burst shape
-    // under the kernel's default rmem clamp).
-    let min_received = expected * 95 / 100;
-    assert!(
-        received >= min_received,
-        "expected at least {min_received}/{expected} round-trips with recvmmsg + 4 MiB SO_RCVBUF; \
-         got {received}. send took {send_elapsed:?}, total {total_elapsed:?}.",
+    // Zero loss is the exit criterion from #838. recvmmsg + the
+    // 4 MiB SO_RCVBUF default + iceoryx2's 64-entry NetworkPacket
+    // ring + UdpSink's 256-entry mpsc all stack up such that 1800
+    // datagrams over ~1.5 s on loopback round-trip cleanly. A
+    // regression to per-datagram recv_from or to the old ~208 KiB
+    // SO_RCVBUF default would drop a meaningful fraction on this
+    // burst shape, which the strict equality assertion catches.
+    // If this ever flakes on a contended CI box the failure
+    // message includes the wall times so the loss can be
+    // re-characterized — but the goal is the exit criterion, not
+    // an arbitrary tolerance.
+    assert_eq!(
+        received, expected,
+        "expected zero loss round-trip with recvmmsg + 4 MiB SO_RCVBUF default; \
+         got {received}/{expected}. send took {send_elapsed:?}, total {total_elapsed:?}.",
     );
 }
