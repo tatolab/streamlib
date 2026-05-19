@@ -22,7 +22,18 @@ optionalProperties:
       description: |
         SO_RCVBUF size hint in bytes. Linux defaults to ~200 KB which can
         drop packets at burst rates (e.g. AGP vision stream at 30Hz × N
-        chunks per JPEG frame). Set to 4–8 MiB for high-rate consumers.
-        The kernel typically clamps to net.core.rmem_max; values above
-        that are silently truncated.
+        chunks per JPEG frame). When unset, UdpSource asks the kernel for
+        4 MiB — the kernel typically clamps to net.core.rmem_max, so on
+        stock Linux you get ~208 KiB and on tuned hosts you get the full
+        4 MiB. Override to raise or lower this hint.
+    type: uint32
+  batch_size:
+    metadata:
+      description: |
+        Max datagrams drained per wakeup. On Linux the recv loop uses
+        recvmmsg(2) to pull up to batch_size datagrams in one syscall;
+        on other platforms the value caps a drain loop around recv_from.
+        Defaults to 64 — matches the Quinn (QUIC) shape and is enough
+        to amortize syscall cost on bursty sources without latching
+        long stalls into the loop.
     type: uint32
