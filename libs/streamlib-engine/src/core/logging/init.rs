@@ -89,12 +89,64 @@ impl Drop for StreamlibLoggingGuard {
 
 static GLOBAL_INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// Env-var escape hatch. When set to `1` / `true`, streamlib skips
+/// **all** logging initialization (worker, JSONL writer, stdio
+/// interceptor, polyglot sink, panic hook) and defers ownership of
+/// the global `tracing` subscriber to whatever the host process has
+/// already installed.
+///
+/// Use cases:
+///
+/// - **Throughput benchmarks** that need to install their own
+///   subscriber to capture per-processor counter events.
+/// - **Host applications** that own their own tracing setup
+///   end-to-end and don't want streamlib's defaults.
+///
+/// **Demotions when set** — these features rely on the streamlib
+/// worker existing, so opting in disables them:
+///
+/// - JSONL forensics (`~/.local/state/streamlib/runtime-<id>/...`)
+/// - Stdio interception that converges python/deno cdylib subprocess
+///   stderr onto the same tracing dispatch as Rust events.
+/// - The streamlib panic hook that funnels Rust panics through the
+///   tracing worker.
+///
+/// The `DANGEROUSLY_` prefix is there to make the trade-off
+/// unmistakable to anyone reading a runbook or `env | grep`.
+pub const DEFER_LOGGING_TO_HOST_ENV: &str = "STREAMLIB_DANGEROUSLY_DEFER_LOGGING_TO_HOST";
+
+fn host_owns_logging() -> bool {
+    matches!(
+        std::env::var(DEFER_LOGGING_TO_HOST_ENV).ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE")
+    )
+}
+
 /// Install the logging pathway as the **global** tracing subscriber.
 /// First-caller wins: subsequent calls return a no-op guard and the
 /// original subscriber stays live. Used by production entrypoints
 /// (`Runner::new`, `streamlib-cli`, `streamlib-runtime`).
+///
+/// When [`DEFER_LOGGING_TO_HOST_ENV`] is set, this function skips
+/// initialization entirely and returns a noop guard so the host
+/// process keeps full control of the global subscriber. See the
+/// constant's docs for the precise behavioral demotions.
 pub fn init(config: StreamlibLoggingConfig) -> Result<StreamlibLoggingGuard> {
     if GLOBAL_INSTALLED.swap(true, Ordering::SeqCst) {
+        return Ok(StreamlibLoggingGuard::noop());
+    }
+
+    if host_owns_logging() {
+        // Emit a one-line marker via raw stderr (tracing isn't ours
+        // to use here) so the demotion is visible in logs.
+        #[allow(clippy::disallowed_macros)]
+        {
+            eprintln!(
+                "streamlib::logging: {}=1 — deferring all logging initialization to the host \
+                 process (JSONL forensics, stdio interception, and panic hook are disabled)",
+                DEFER_LOGGING_TO_HOST_ENV,
+            );
+        }
         return Ok(StreamlibLoggingGuard::noop());
     }
 
