@@ -388,33 +388,28 @@ fn spawn_dedicated_thread(
 
 /// Run a processor's `__generated_setup` body under the right lock
 /// discipline for its `runtime`.
-///
-/// Rust processors wrap in `sandbox.escalate(|_| ...)` so concurrent
-/// video session / DPB / swapchain creation can't race on the device
-/// (#304); the setup mutex and the device-idle wait on exit are
-/// private implementation details of escalate.
-///
-/// Subprocess host processors (Python / TypeScript) skip the wrap
-/// deliberately. Their `__generated_setup` does no host-side GPU work
-/// — it spawns the child, constructs the bridge, sends a `setup`
-/// lifecycle, then blocks on the subprocess's `ready` reply. Holding
-/// `processor_setup_lock` across that IPC wait deadlocks every
-/// FullAccess escalate the subprocess tries to issue during its own
-/// init: the bridge-reader thread dispatches each `escalate_request`
-/// inline through `sandbox.escalate(|full| ...)`, which would try to
-/// acquire the same mutex the host setup thread already holds. Each
-/// bridge-handler escalate still acquires the lock + waits device
-/// idle on its own, so the GPU-resource serialization is preserved
-/// without the outer wrap (#867).
 fn run_setup_phase<F>(runtime: ProcessorRuntime, gpu: &GpuContext, setup_body: F) -> Result<()>
 where
     F: FnOnce() -> Result<()>,
 {
     match runtime {
+        // Rust setup may directly create video sessions / DPB images /
+        // swapchain; the wrap serializes that work via the setup mutex
+        // and waits device idle on exit (#304).
         ProcessorRuntime::Rust => {
             let sandbox = GpuContextLimitedAccess::new(gpu.clone());
             sandbox.escalate(|_full_gpu| setup_body())
         }
+        // Subprocess host setup does no host-side GPU work — it spawns
+        // the child, constructs the bridge, sends a `setup` lifecycle,
+        // then blocks on the subprocess's `ready` reply. Wrapping that
+        // IPC wait in escalate would hold `processor_setup_lock` against
+        // every FullAccess escalate the subprocess issues during its own
+        // init: the bridge-reader thread dispatches each
+        // `escalate_request` inline through `sandbox.escalate(|full|
+        // ...)` and deadlocks on the same mutex. Per-call bridge-handler
+        // escalates still acquire the lock + wait device idle on their
+        // own, so GPU-resource serialization is preserved (#867).
         ProcessorRuntime::Python | ProcessorRuntime::TypeScript => setup_body(),
     }
 }
@@ -513,6 +508,9 @@ mod tests {
     /// `sandbox.escalate`, so a concurrent escalate from another
     /// thread is correctly serialized against the outer wrap. Locks
     /// the asymmetry: the fix is targeted at subprocess hosts only.
+    /// Verifies both halves — the inner escalate is blocked while
+    /// the outer body is running, AND the inner escalate succeeds
+    /// once the outer body returns.
     #[test]
     fn rust_processor_setup_phase_holds_setup_lock_against_concurrent_escalate() {
         const TEST: &str = "rust_processor_setup_phase_holds_setup_lock_against_concurrent_escalate";
@@ -521,17 +519,20 @@ mod tests {
         };
 
         let gpu_handle = gpu.clone();
-        let result: Result<()> = run_setup_phase(ProcessorRuntime::Rust, &gpu, || {
+        let (done_tx, done_rx) = mpsc::channel();
+        let inner_thread = {
             let sandbox = GpuContextLimitedAccess::new(gpu_handle);
-            let (done_tx, done_rx) = mpsc::channel();
             thread::spawn(move || {
                 let inner = sandbox.escalate(|_full| Ok::<(), Error>(()));
                 let _ = done_tx.send(inner);
-            });
+            })
+        };
+
+        let outer_result: Result<()> = run_setup_phase(ProcessorRuntime::Rust, &gpu, || {
             // The Rust-branch wrap holds the setup lock here, so the
             // inner escalate from the spawned thread must NOT
             // complete until this body returns and the outer escalate
-            // releases. Wait briefly, then drop through.
+            // releases.
             match done_rx.recv_timeout(Duration::from_millis(500)) {
                 Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
                 Err(mpsc::RecvTimeoutError::Disconnected) => Err(Error::Runtime(
@@ -544,6 +545,21 @@ mod tests {
                 ))),
             }
         });
-        result.unwrap();
+        outer_result.unwrap();
+
+        // After the outer wrap releases, the spawned inner escalate
+        // must now succeed within bounded time — closes the asymmetry
+        // by proving the lock was held briefly, not permanently.
+        let inner_result = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| {
+                panic!("{TEST}: inner escalate did not complete within 5s of outer release")
+            });
+        inner_result.unwrap_or_else(|e| {
+            panic!("{TEST}: inner escalate eventually failed: {e}")
+        });
+        inner_thread.join().unwrap_or_else(|_| {
+            panic!("{TEST}: spawned inner-escalate thread panicked")
+        });
     }
 }
