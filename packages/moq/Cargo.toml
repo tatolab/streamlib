@@ -21,6 +21,8 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-macros = { path = "../../libs/streamlib-macros" }
 
 serde.workspace = true
+# Generated `EncodedVideoFrame.data` rides msgpack `bin` instead of array.
+serde_bytes.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 parking_lot = "0.12"

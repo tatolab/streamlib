@@ -21,6 +21,9 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-macros = { path = "../../libs/streamlib-macros" }
 
 serde.workspace = true
+# Generated `EncodedVideoFrame.data` / `EncodedAudioFrame.data` ride msgpack
+# `bin` (1× wire) instead of array.
+serde_bytes.workspace = true
 tracing.workspace = true
 
 webrtc = "0.14.0"

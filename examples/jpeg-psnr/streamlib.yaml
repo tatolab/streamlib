@@ -10,14 +10,13 @@
 # processor registration and avoids triggering `load_project`'s
 # packed-dylib lookup against `packages/jpeg/lib/`. The unregistered
 # schema means iceoryx2 sizes `EncodedJpegFrame` slots to its 64 KiB
-# per-slot default rather than the schema's declared 16 MiB. That
-# budget IS load-bearing for the rig: `rmp_serde` serializes
-# `EncodedJpegFrame.data: Vec<u8>` as a msgpack array (~1.5× wire
-# expansion), so the harness caps `JPEG_QUALITY` at 70 to keep the
-# worst-case `complex_pattern` fixture's wire-encoded payload under
-# 64 KiB. See the harness header in
-# `libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh` for
-# the full arithmetic.
+# per-slot default rather than the schema's declared 16 MiB. The
+# default budget covers every fixture cleanly because `EncodedJpegFrame.data`
+# rides msgpack `bin` (1× wire footprint) rather than an array of
+# integers — JTD codegen emits `#[serde(with = "serde_bytes")]` on the
+# field. The rig runs cleanly up to `JPEG_QUALITY=95` on `complex_pattern`
+# at 1920×1080; see the harness header in
+# `libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh`.
 
 package:
   org: tatolab

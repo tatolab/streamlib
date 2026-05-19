@@ -17,9 +17,16 @@ streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
 
 [dependencies]
 serde.workspace = true
+# Generated `EncodedVideoFrame.data` / `EncodedAudioFrame.data` carry
+# `#[serde(with = "serde_bytes")]` so msgpack publish writes `bin` instead
+# of array (~33% wire reduction on binary payloads).
+serde_bytes.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+# Wire-shape integration test serializes generated schemas through
+# `rmp_serde::to_vec_named` to assert binary fields land as msgpack `bin`.
+rmp-serde.workspace = true
 
 [lints]
 workspace = true

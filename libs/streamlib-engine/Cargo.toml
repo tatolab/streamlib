@@ -78,6 +78,9 @@ dotenvy = "0.15"  # Load .env files for development environment
 
 # Serialization
 serde.workspace = true
+# Generated `EncodedVideoFrame.data` / `EncodedAudioFrame.data` carry
+# `#[serde(with = "serde_bytes")]` for compact msgpack `bin` wire shape.
+serde_bytes.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 toml.workspace = true

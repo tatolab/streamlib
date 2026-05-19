@@ -28,6 +28,9 @@ streamlib-macros = { path = "../../libs/streamlib-macros" }
 
 # Serialization (config dataclasses ship as serde-derived).
 serde.workspace = true
+# Generated `EncodedVideoFrame.data` carries `#[serde(with = "serde_bytes")]`
+# so msgpack encoder/decoder I/O writes `bin` (1× wire) instead of array.
+serde_bytes.workspace = true
 
 # Logging.
 tracing.workspace = true

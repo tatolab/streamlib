@@ -29,6 +29,9 @@ streamlib-macros = { path = "../../libs/streamlib-macros" }
 
 # Serialization (config dataclasses ship as serde-derived).
 serde.workspace = true
+# Generated `NetworkPacket.payload` / `EncodedJpegFrame.data` ride msgpack
+# `bin` (1× wire) instead of array.
+serde_bytes.workspace = true
 
 # Logging.
 tracing.workspace = true

@@ -27,6 +27,12 @@ streamlib-macros = { path = "../../libs/streamlib-macros" }
 
 # Serialization (config dataclasses ship as serde-derived).
 serde.workspace = true
+# Generated `NetworkPacket.payload` carries `#[serde(with = "serde_bytes")]`
+# so each datagram serializes as msgpack `bin` (1× wire) instead of an
+# array of integers — load-bearing on UDP source/sink throughput for any
+# payload with bytes ≥ 128 (the ones that take 2 wire bytes as array
+# elements but 1 wire byte as `bin` contents).
+serde_bytes.workspace = true
 
 # Async UDP via tokio::net::UdpSocket; the engine already exposes a shared
 # tokio runtime via RuntimeContext::tokio_handle().
@@ -51,6 +57,9 @@ tokio = { workspace = true }
 serde_json.workspace = true
 serial_test = "3.1"
 tracing-subscriber.workspace = true
+# Wire-shape regression test serializes generated `NetworkPacket` through
+# `rmp_serde::to_vec_named` and asserts msgpack `bin` tag presence.
+rmp-serde.workspace = true
 
 [lints]
 workspace = true
