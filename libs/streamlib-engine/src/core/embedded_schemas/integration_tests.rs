@@ -198,7 +198,10 @@ fn test_audioframe_schema_publisher_rejects_256kb() {
     test_support::register_core_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
-        .open_or_create_service("streamlib/test/schema-audio-reject")
+        .open_or_create_service(
+            "streamlib/test/schema-audio-reject",
+            crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
+        )
         .unwrap();
 
     let max_bytes = max_payload_bytes_for_port_spec(&core_spec("AudioFrame"));
@@ -220,7 +223,10 @@ fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
     test_support::register_core_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
-        .open_or_create_service("streamlib/test/schema-video-ok")
+        .open_or_create_service(
+            "streamlib/test/schema-video-ok",
+            crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
+        )
         .unwrap();
 
     let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
@@ -247,7 +253,10 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
     test_support::register_core_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
-        .open_or_create_service("streamlib/test/frame-header-256kb")
+        .open_or_create_service(
+            "streamlib/test/frame-header-256kb",
+            crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
+        )
         .unwrap();
 
     let data_size = 256 * 1024;
@@ -317,7 +326,10 @@ fn test_encodedvideoframe_schema_publisher_subscriber_roundtrip_256kb() {
     test_support::register_core_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
-        .open_or_create_service("streamlib/test/schema-video-roundtrip")
+        .open_or_create_service(
+            "streamlib/test/schema-video-roundtrip",
+            crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
+        )
         .unwrap();
 
     let max_bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));

@@ -65,7 +65,9 @@ class _MockNativeLib:
         self.disconnect_calls.append(handle)
 
     # I/O wiring (the runner's setup walks input/output port lists)
-    def slpn_input_subscribe(self, _ctx: int, _service: bytes) -> int:
+    def slpn_input_subscribe(
+        self, _ctx: int, _service: bytes, _max_queued_messages: int,
+    ) -> int:
         return 0
 
     def slpn_input_set_read_mode(self, _ctx: int, _port: bytes, _mode: int) -> None:

@@ -73,6 +73,31 @@ pub fn max_payload_bytes_for_port_spec(
     MAX_PAYLOAD_SIZE as usize
 }
 
+/// Resolve the iceoryx2 ring depth (slot count) for a port's wire schema
+/// from `metadata.max_queued_messages`. Returns
+/// [`DEFAULT_MAX_QUEUED_MESSAGES`] for `Any`, for unknown schemas, and
+/// for schemas that don't declare the field.
+///
+/// [`DEFAULT_MAX_QUEUED_MESSAGES`]: crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES
+pub fn max_queued_messages_for_port_spec(
+    schema_spec: &streamlib_processor_schema::PortSchemaSpec,
+) -> usize {
+    use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
+    let canonical = schema_spec.to_string();
+    if let Some(yaml) = get_embedded_schema_definition(&canonical) {
+        if let Ok(value) = serde_yaml::from_str::<serde_yaml::Value>(&yaml) {
+            if let Some(n) = value
+                .get("metadata")
+                .and_then(|m| m.get("max_queued_messages"))
+                .and_then(|v| v.as_u64())
+            {
+                return n as usize;
+            }
+        }
+    }
+    DEFAULT_MAX_QUEUED_MESSAGES
+}
+
 /// List every registered schema's canonical identifier (unversioned).
 /// Sorted alphabetically so consumers (api-server) get diff-stable
 /// output across processes.
@@ -277,6 +302,91 @@ mod tests {
             max_payload_bytes_for_port_spec(&PortSchemaSpec::Any),
             MAX_PAYLOAD_SIZE as usize
         );
+    }
+
+    #[test]
+    fn max_queued_messages_returns_default_for_unknown() {
+        use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
+        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("does-not-exist").unwrap(),
+            TypeName::new("Nothing").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        assert_eq!(
+            max_queued_messages_for_port_spec(&spec),
+            DEFAULT_MAX_QUEUED_MESSAGES
+        );
+    }
+
+    #[test]
+    fn max_queued_messages_any_returns_default() {
+        use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
+        assert_eq!(
+            max_queued_messages_for_port_spec(&PortSchemaSpec::Any),
+            DEFAULT_MAX_QUEUED_MESSAGES
+        );
+    }
+
+    /// A schema declaring `metadata.max_queued_messages` is honored by the
+    /// resolver. Reverting the resolver's `metadata.max_queued_messages`
+    /// branch to return the default will fail this test.
+    #[test]
+    fn max_queued_messages_resolves_declared_value() {
+        let canonical = "@tatolab/test-mqm-resolves/HighRateStream";
+        register_schema(
+            canonical,
+            "metadata:\n  type: HighRateStream\n  max_queued_messages: 128\n",
+        );
+        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("test-mqm-resolves").unwrap(),
+            TypeName::new("HighRateStream").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        assert_eq!(max_queued_messages_for_port_spec(&spec), 128);
+    }
+
+    /// A schema without `metadata.max_queued_messages` falls back to the
+    /// default — proves the resolver doesn't accidentally read some
+    /// adjacent field.
+    #[test]
+    fn max_queued_messages_falls_back_when_field_absent() {
+        use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
+        let canonical = "@tatolab/test-mqm-fallback/NoMqm";
+        register_schema(
+            canonical,
+            "metadata:\n  type: NoMqm\n  max_payload_bytes: 4096\n",
+        );
+        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("test-mqm-fallback").unwrap(),
+            TypeName::new("NoMqm").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        assert_eq!(
+            max_queued_messages_for_port_spec(&spec),
+            DEFAULT_MAX_QUEUED_MESSAGES
+        );
+    }
+
+    /// The MAVLink wire schema declares `max_queued_messages: 64` for
+    /// 200 Hz burst tolerance. Locks the live in-tree declaration so a
+    /// silent edit to the YAML (back to 16, or to a lower value)
+    /// trips this test rather than silently regressing the AGP pipeline.
+    #[test]
+    fn max_queued_messages_resolves_mavlink_at_64() {
+        register_schema(
+            "@tatolab/mavlink/MavlinkMessage",
+            include_str!("../../../../../packages/mavlink/schemas/mavlink_message.yaml"),
+        );
+        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("mavlink").unwrap(),
+            TypeName::new("MavlinkMessage").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        assert_eq!(max_queued_messages_for_port_spec(&spec), 64);
     }
 
     #[test]

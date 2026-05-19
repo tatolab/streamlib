@@ -349,11 +349,17 @@ mod timerfd {
 
 /// Subscribe to an iceoryx2 service for reading data.
 ///
+/// `max_queued_messages` caps how many `[u8]` samples this subscriber can buffer;
+/// pass the value the host runtime emitted in the wiring envelope (`max_queued_messages`
+/// field on the per-input entry; resolved on the host side from the wire schema's
+/// `metadata.max_queued_messages` via `max_queued_messages_for_port_spec`).
+///
 /// Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_input_subscribe(
     ctx: *mut PythonNativeContext,
     service_name: *const c_char,
+    max_queued_messages: usize,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
@@ -380,7 +386,7 @@ pub unsafe extern "C" fn slpn_input_subscribe(
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
         .max_publishers(MAX_FANIN_PER_DESTINATION)
-        .subscriber_max_buffer_size(16)
+        .subscriber_max_buffer_size(max_queued_messages)
         .open_or_create()
     {
         Ok(s) => s,
@@ -393,7 +399,11 @@ pub unsafe extern "C" fn slpn_input_subscribe(
         }
     };
 
-    let subscriber = match service.subscriber_builder().buffer_size(16).create() {
+    let subscriber = match service
+        .subscriber_builder()
+        .buffer_size(max_queued_messages)
+        .create()
+    {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(
@@ -604,6 +614,7 @@ pub unsafe extern "C" fn slpn_output_publish(
     schema_version_minor: u32,
     schema_version_patch: u32,
     max_payload_bytes: usize,
+    max_queued_messages: usize,
     notify_service_name: *const c_char,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_ref() } {
@@ -659,7 +670,7 @@ pub unsafe extern "C" fn slpn_output_publish(
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
         .max_publishers(MAX_FANIN_PER_DESTINATION)
-        .subscriber_max_buffer_size(16)
+        .subscriber_max_buffer_size(max_queued_messages)
         .open_or_create()
     {
         Ok(s) => s,

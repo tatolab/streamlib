@@ -21,6 +21,15 @@ pub const MAX_PORT_KEY_SIZE: usize = 64;
 pub const MAX_EVENT_PAYLOAD_SIZE: usize = 8192;
 pub const MAX_TOPIC_KEY_SIZE: usize = 128;
 
+/// Default iceoryx2 ring depth (slot count, not bytes) for the data
+/// pub/sub channel between two processors. Wire schemas override this
+/// per-vocabulary via `metadata.max_queued_messages` in their YAML.
+///
+/// iceoryx2 pre-allocates `DEFAULT_MAX_QUEUED_MESSAGES * MAX_PAYLOAD_SIZE`
+/// of shared memory per publisher when the wire schema does not declare
+/// its own depth, so this value is a per-publisher memory commitment too.
+pub const DEFAULT_MAX_QUEUED_MESSAGES: usize = 16;
+
 /// On-wire size of a [`SchemaIdentWire`]. Held constant at 128 bytes so
 /// the total [`FrameHeader`] / [`FramePayload`] layout matches the
 /// pre-#401-phase-2 [`SchemaName`]-shaped predecessor.

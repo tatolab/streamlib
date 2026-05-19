@@ -342,6 +342,7 @@ mod timerfd {
 pub unsafe extern "C" fn sldn_input_subscribe(
     ctx: *mut DenoNativeContext,
     service_name: *const c_char,
+    max_queued_messages: usize,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
@@ -368,7 +369,7 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
         .max_publishers(MAX_FANIN_PER_DESTINATION)
-        .subscriber_max_buffer_size(16)
+        .subscriber_max_buffer_size(max_queued_messages)
         .open_or_create()
     {
         Ok(s) => s,
@@ -381,7 +382,11 @@ pub unsafe extern "C" fn sldn_input_subscribe(
         }
     };
 
-    let subscriber = match service.subscriber_builder().buffer_size(16).create() {
+    let subscriber = match service
+        .subscriber_builder()
+        .buffer_size(max_queued_messages)
+        .create()
+    {
         Ok(s) => s,
         Err(e) => {
             tracing::error!(
@@ -591,6 +596,7 @@ pub unsafe extern "C" fn sldn_output_publish(
     schema_version_minor: u32,
     schema_version_patch: u32,
     max_payload_bytes: usize,
+    max_queued_messages: usize,
     notify_service_name: *const c_char,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_ref() } {
@@ -646,7 +652,7 @@ pub unsafe extern "C" fn sldn_output_publish(
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
         .max_publishers(MAX_FANIN_PER_DESTINATION)
-        .subscriber_max_buffer_size(16)
+        .subscriber_max_buffer_size(max_queued_messages)
         .open_or_create()
     {
         Ok(s) => s,

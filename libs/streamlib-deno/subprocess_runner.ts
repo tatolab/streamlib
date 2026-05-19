@@ -297,6 +297,7 @@ async function main(): Promise<void> {
               notify_service_name?: string;
               read_mode?: string;
               max_payload_bytes?: number;
+              max_queued_messages?: number;
             }[];
             outputs?: {
               name: string;
@@ -309,6 +310,7 @@ async function main(): Promise<void> {
               // the key, so the type is `null | object`.
               schema?: SchemaIdentEnvelope | null;
               max_payload_bytes?: number;
+              max_queued_messages?: number;
             }[];
           }) ?? { inputs: [], outputs: [] };
 
@@ -316,15 +318,18 @@ async function main(): Promise<void> {
           const inputPorts = ports.inputs ?? [];
           for (const input of inputPorts) {
             const readMode = input.read_mode ?? "skip_to_latest";
+            const maxQueuedMessages = input.max_queued_messages ?? 16;
             log.info("Subscribing to input", {
               port: input.name,
               service: input.service_name,
               read_mode: readMode,
               max_payload_bytes: input.max_payload_bytes ?? null,
+              max_queued_messages: maxQueuedMessages,
             });
             const result = lib.symbols.sldn_input_subscribe(
               ctxPtr,
               cString(input.service_name),
+              BigInt(maxQueuedMessages),
             );
             if (result !== 0) {
               log.error("Failed to subscribe to input", {
@@ -391,6 +396,7 @@ async function main(): Promise<void> {
               segs.minor,
               segs.patch,
               BigInt(output.max_payload_bytes ?? 65536),
+              BigInt(output.max_queued_messages ?? 16),
               cString(destNotify),
             );
             if (result !== 0) {

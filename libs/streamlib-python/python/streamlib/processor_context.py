@@ -130,7 +130,11 @@ def load_native_lib(lib_path):
     lib.slpn_monotonic_now_ns.restype = ctypes.c_uint64
 
     # Input
-    lib.slpn_input_subscribe.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.slpn_input_subscribe.argtypes = [
+        ctypes.c_void_p,    # ctx
+        ctypes.c_char_p,    # service_name
+        ctypes.c_size_t,    # max_queued_messages
+    ]
     lib.slpn_input_subscribe.restype = ctypes.c_int32
     lib.slpn_input_poll.argtypes = [ctypes.c_void_p]
     lib.slpn_input_poll.restype = ctypes.c_int32
@@ -158,6 +162,7 @@ def load_native_lib(lib_path):
         ctypes.c_uint32,    # schema_version_minor
         ctypes.c_uint32,    # schema_version_patch
         ctypes.c_size_t,    # max_payload_bytes
+        ctypes.c_size_t,    # max_queued_messages
         ctypes.c_char_p,    # notify_service_name (may be empty/null)
     ]
     lib.slpn_output_publish.restype = ctypes.c_int32

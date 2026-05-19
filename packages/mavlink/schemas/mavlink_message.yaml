@@ -27,7 +27,7 @@ metadata:
   type: MavlinkMessage
   description: "Decoded MAVLink2 message as a tagged union over the core six common-dialect messages"
   read_mode: read_next_in_order
-  buffer_size: 64
+  max_queued_messages: 64
   # MAVLink2 max wire frame is 280 bytes (1 STX + 10 header + 255 payload
   # + 2 CRC + 13 signature). The decoded-struct form is larger due to
   # msgpack overhead and string-encoded int64 fields, but still fits
