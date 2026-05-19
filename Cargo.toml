@@ -111,6 +111,11 @@ tokio = { version = "1.48.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = "0.9"
+# Specialized msgpack `bin` (de)serialization for Vec<u8> fields — jtd-codegen
+# emits `#[serde(with = "serde_bytes")]` for JTD `elements: type: uint8`
+# shapes so `rmp_serde` writes a `bin` tag (1× wire footprint) instead of an
+# array of integers (~1.5× footprint for ≥128 byte values).
+serde_bytes = "0.11"
 toml = "0.8"
 rmp-serde = "1.3"
 

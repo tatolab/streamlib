@@ -28,6 +28,8 @@ streamlib-macros = { path = "../../libs/streamlib-macros" }
 
 # Serialization (config dataclasses ship as serde-derived).
 serde.workspace = true
+# Generated `NetworkPacket.payload` rides msgpack `bin` (1× wire) instead of array.
+serde_bytes.workspace = true
 
 # MAVLink wire format + typed messages. Default features off so the
 # bundled MavConnection transports (`transport-udp`, `transport-tcp`,

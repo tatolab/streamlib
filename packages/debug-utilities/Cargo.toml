@@ -28,6 +28,8 @@ streamlib-macros = { path = "../../libs/streamlib-macros" }
 
 # Serialization (config dataclasses ship as serde-derived).
 serde.workspace = true
+# Generated `EncodedJpegFrame.data` rides msgpack `bin` (1× wire) instead of array.
+serde_bytes.workspace = true
 
 # tracing for processor lifecycle logs.
 tracing.workspace = true
