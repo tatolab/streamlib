@@ -406,11 +406,15 @@ fn verify_jtd_codegen() -> Result<()> {
 
 /// Convert a schema YAML file to JSON, run the sentinel pre-pass + property
 /// ordering, and write the result to `temp_dir`. Returns the (identity,
-/// json_path, sentinel_table) tuple.
+/// json_path, sentinel_table, binary_field_names) tuple. `binary_field_names`
+/// holds the snake_case Rust field names whose JTD shape is
+/// `elements: type: uint8` — the Rust post-processor injects
+/// `#[serde(with = "serde_bytes")]` on these so `rmp_serde` emits msgpack
+/// `bin` instead of an array of integers (1× vs ~1.5× wire footprint).
 fn prepare_schema(
     task: &SchemaTask,
     temp_dir: &Path,
-) -> Result<(SchemaIdentity, PathBuf, SentinelTable)> {
+) -> Result<(SchemaIdentity, PathBuf, SentinelTable, Vec<String>)> {
     let yaml_path = &task.schema_path;
     let yaml_content = fs::read_to_string(yaml_path)
         .with_context(|| format!("Failed to read {}", yaml_path.display()))?;
@@ -437,6 +441,8 @@ fn prepare_schema(
         }
     }
 
+    let binary_field_names = collect_binary_field_names(&json_value);
+
     let mut sentinel_table = SentinelTable::default();
     sentinel::substitute(&mut json_value, &mut sentinel_table)
         .with_context(|| format!("Sentinel substitution failed for {}", yaml_path.display()))?;
@@ -449,7 +455,37 @@ fn prepare_schema(
     fs::write(&json_path, &json_content)
         .with_context(|| format!("Failed to write {}", json_path.display()))?;
 
-    Ok((identity, json_path, sentinel_table))
+    Ok((identity, json_path, sentinel_table, binary_field_names))
+}
+
+/// Walk a JTD schema's `properties` and `optionalProperties` maps to find
+/// fields whose value shape is `{ elements: { type: "uint8" } }` — JTD's
+/// canonical form for a binary blob. Returns the Rust-side snake_case field
+/// names so the post-processor can prepend `#[serde(with = "serde_bytes")]`
+/// before each declaration.
+///
+/// Top-level only — JTD schemas in this repo never nest `elements: uint8`
+/// inside another `properties` map, and adding deeper traversal would
+/// invite false positives from unrelated `uint8` arrays used as integer
+/// payloads. If a future schema needs that shape, extend here.
+fn collect_binary_field_names(json: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for props_key in ["properties", "optionalProperties"] {
+        let Some(props) = json.get(props_key).and_then(|v| v.as_object()) else {
+            continue;
+        };
+        for (field_name, field_schema) in props {
+            let is_uint8_bytes = field_schema
+                .get("elements")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str())
+                == Some("uint8");
+            if is_uint8_bytes {
+                out.push(camel_to_snake(field_name));
+            }
+        }
+    }
+    out
 }
 
 // =============================================================================
@@ -467,7 +503,8 @@ fn run_jtd_codegen_rust(tasks: &[SchemaTask], output_dir: &Path) -> Result<()> {
     for task in tasks {
         tracing::info!("  Processing: {}", task.schema_path.display());
 
-        let (identity, json_path, sentinel_table) = prepare_schema(task, temp_dir.path())?;
+        let (identity, json_path, sentinel_table, binary_fields) =
+            prepare_schema(task, temp_dir.path())?;
 
         let temp_rust_out = temp_dir.path().join(format!("rust_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_rust_out)?;
@@ -492,7 +529,8 @@ fn run_jtd_codegen_rust(tasks: &[SchemaTask], output_dir: &Path) -> Result<()> {
             format!("Failed to read generated code for {}", task.schema_path.display())
         })?;
 
-        let processed_code = post_process_rust(&generated_code, &identity.struct_name)?;
+        let processed_code =
+            post_process_rust(&generated_code, &identity.struct_name, &binary_fields)?;
         let restored_code = sentinel::restore_rust(&processed_code, &sentinel_table);
 
         let output_path = identity.output_path(output_dir, "rs");
@@ -536,7 +574,8 @@ fn run_jtd_codegen_python(tasks: &[SchemaTask], output_dir: &Path) -> Result<()>
     for task in tasks {
         tracing::info!("  Processing: {}", task.schema_path.display());
 
-        let (identity, json_path, sentinel_table) = prepare_schema(task, temp_dir.path())?;
+        let (identity, json_path, sentinel_table, _binary_fields) =
+            prepare_schema(task, temp_dir.path())?;
 
         let temp_python_out = temp_dir.path().join(format!("python_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_python_out)?;
@@ -629,7 +668,8 @@ fn run_jtd_codegen_typescript(tasks: &[SchemaTask], output_dir: &Path) -> Result
     for task in tasks {
         tracing::info!("  Processing: {}", task.schema_path.display());
 
-        let (identity, json_path, sentinel_table) = prepare_schema(task, temp_dir.path())?;
+        let (identity, json_path, sentinel_table, _binary_fields) =
+            prepare_schema(task, temp_dir.path())?;
 
         let temp_ts_out = temp_dir.path().join(format!("ts_{}", identity.temp_dir_key()));
         fs::create_dir_all(&temp_ts_out)?;
@@ -701,7 +741,16 @@ fn run_jtd_codegen_typescript(tasks: &[SchemaTask], output_dir: &Path) -> Result
 /// - Handles discriminator (tagged) enums: no Default derive, no #[default],
 ///   preserves #[serde(tag = "…")] ordering, keeps variant payload structs
 ///   as fully-qualified names (avoids Ok/Err collisions with std::result).
-fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
+/// - Prepends `#[serde(with = "serde_bytes")]` on struct fields whose JTD
+///   shape is `elements: type: uint8` so `rmp_serde` emits msgpack `bin`
+///   instead of an array of integers (~33% wire reduction on binary
+///   payloads). The set of binary field names is passed in by the caller
+///   from [`collect_binary_field_names`] over the pre-codegen JSON.
+fn post_process_rust(
+    code: &str,
+    expected_struct_name: &str,
+    binary_field_names: &[String],
+) -> Result<String> {
     let lines: Vec<&str> = code.lines().collect();
 
     let struct_names: Vec<String> = lines
@@ -868,12 +917,14 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
             && !line.trim().starts_with("//")
         {
             let mut processed_line = line.to_string();
+            let mut field_snake_name: Option<String> = None;
 
             if let Some(field_start) = processed_line.find("pub ") {
                 let after_pub = &processed_line[field_start + 4..];
                 if let Some(colon_pos) = after_pub.find(':') {
                     let field_name = &after_pub[..colon_pos];
                     let snake_name = camel_to_snake(field_name);
+                    field_snake_name = Some(snake_name.clone());
                     if snake_name != field_name {
                         processed_line = format!(
                             "{}pub {}{}",
@@ -895,6 +946,16 @@ fn post_process_rust(code: &str, expected_struct_name: &str) -> Result<String> {
 
             for (full_name, short_name) in &name_renames {
                 processed_line = processed_line.replace(full_name.as_str(), short_name.as_str());
+            }
+
+            // Inject #[serde(with = "serde_bytes")] for JTD `elements: uint8`
+            // fields so msgpack serialization emits `bin` instead of array.
+            // serde_bytes supports both `Vec<u8>` (required field) and
+            // `Option<Vec<u8>>` (optional field) via the same attribute.
+            if let Some(name) = field_snake_name {
+                if binary_field_names.iter().any(|n| n == &name) {
+                    result.push_str("    #[serde(with = \"serde_bytes\")]\n");
+                }
             }
 
             result.push_str(&processed_line);
@@ -1625,9 +1686,109 @@ mod tests {
     #[test]
     fn post_process_rust_substitutes_root_sentinel() {
         let code = "// Code generated by jtd-codegen for Rust v0.4.1\n\nuse serde::{Deserialize, Serialize};\n\n#[derive(Serialize, Deserialize)]\npub struct StreamlibCanonRoot {}\n";
-        let out = post_process_rust(code, "JtdCodegenFixtureA").unwrap();
+        let out = post_process_rust(code, "JtdCodegenFixtureA", &[]).unwrap();
         assert!(out.contains("pub struct JtdCodegenFixtureA {}"));
         assert!(!out.contains("StreamlibCanonRoot"));
+    }
+
+    #[test]
+    fn post_process_rust_emits_serde_bytes_attribute_for_binary_field() {
+        let code = "// Code generated by jtd-codegen for Rust v0.4.1\n\nuse serde::{Deserialize, Serialize};\n\n#[derive(Serialize, Deserialize)]\npub struct StreamlibCanonRoot {\n    pub data: Vec<u8>,\n    pub timestamp_ns: String,\n}\n";
+        let binary_fields = vec!["data".to_string()];
+        let out = post_process_rust(code, "EncodedJpegFrame", &binary_fields).unwrap();
+        // The binary field gets the serde_bytes attribute on the line above.
+        assert!(
+            out.contains("    #[serde(with = \"serde_bytes\")]\n    pub data: Vec<u8>,"),
+            "expected serde_bytes attribute before `pub data: Vec<u8>`, got:\n{}",
+            out
+        );
+        // Non-binary fields are unchanged.
+        assert!(out.contains("pub timestamp_ns: String,"));
+        assert!(!out.contains("#[serde(with = \"serde_bytes\")]\n    pub timestamp_ns"));
+    }
+
+    #[test]
+    fn post_process_rust_skips_serde_bytes_when_binary_set_empty() {
+        let code = "// Code generated by jtd-codegen for Rust v0.4.1\n\nuse serde::{Deserialize, Serialize};\n\n#[derive(Serialize, Deserialize)]\npub struct StreamlibCanonRoot {\n    pub data: Vec<u8>,\n}\n";
+        let out = post_process_rust(code, "Sample", &[]).unwrap();
+        // Without a binary-field declaration, no attribute is emitted — keeps
+        // existing (non-binary) Vec<u8> uses unaffected.
+        assert!(!out.contains("serde_bytes"));
+        assert!(out.contains("pub data: Vec<u8>,"));
+    }
+
+    #[test]
+    fn collect_binary_field_names_finds_uint8_elements_in_properties() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "properties": {
+                    "data": { "elements": { "type": "uint8" } },
+                    "timestamp_ns": { "type": "string" },
+                    "frame_count": { "type": "uint32" }
+                }
+            }"#,
+        )
+        .unwrap();
+        let names = collect_binary_field_names(&json);
+        assert_eq!(names, vec!["data".to_string()]);
+    }
+
+    #[test]
+    fn collect_binary_field_names_finds_uint8_in_optional_properties() {
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "properties": {
+                    "kind": { "type": "string" }
+                },
+                "optionalProperties": {
+                    "trailing_payload": { "elements": { "type": "uint8" } }
+                }
+            }"#,
+        )
+        .unwrap();
+        let names = collect_binary_field_names(&json);
+        assert_eq!(names, vec!["trailing_payload".to_string()]);
+    }
+
+    #[test]
+    fn collect_binary_field_names_ignores_non_uint8_element_arrays() {
+        // `elements: type: float32` is a real Vec<f32>, not a binary payload —
+        // serde_bytes would corrupt the wire format. Confirm we filter it out.
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "properties": {
+                    "samples": { "elements": { "type": "float32" } },
+                    "ids": { "elements": { "type": "uint32" } }
+                }
+            }"#,
+        )
+        .unwrap();
+        let names = collect_binary_field_names(&json);
+        assert!(names.is_empty(), "expected no binary fields, got {:?}", names);
+    }
+
+    #[test]
+    fn collect_binary_field_names_handles_schemas_with_no_properties() {
+        let json: serde_json::Value = serde_json::from_str(r#"{"metadata": {"name": "Empty"}}"#).unwrap();
+        let names = collect_binary_field_names(&json);
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn collect_binary_field_names_converts_camel_to_snake() {
+        // JTD property keys are author-chosen; the resulting Rust field name
+        // is snake_case via camel_to_snake. The match in post_process_rust
+        // happens against the snake name, so collect_ must convert too.
+        let json: serde_json::Value = serde_json::from_str(
+            r#"{
+                "properties": {
+                    "binaryBlob": { "elements": { "type": "uint8" } }
+                }
+            }"#,
+        )
+        .unwrap();
+        let names = collect_binary_field_names(&json);
+        assert_eq!(names, vec!["binary_blob".to_string()]);
     }
 
     #[test]

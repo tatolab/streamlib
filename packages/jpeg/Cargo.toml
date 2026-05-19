@@ -28,6 +28,10 @@ streamlib-macros = { path = "../../libs/streamlib-macros" }
 
 # Serialization (config dataclasses ship as serde-derived).
 serde.workspace = true
+# Generated `EncodedJpegFrame.data` carries `#[serde(with = "serde_bytes")]`
+# so msgpack publish/decode writes a `bin` tag (1× wire) instead of an
+# array of integers — unlocks JPEG_QUALITY > 70 without `ExceedsMaxLoanSize`.
+serde_bytes.workspace = true
 
 # Logging.
 tracing.workspace = true

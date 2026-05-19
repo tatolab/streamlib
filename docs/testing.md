@@ -223,17 +223,25 @@ PSNR_INJECT_BUG=range-swap \
     libs/streamlib-engine/tests/fixtures/e2e_fixture_psnr_jpeg.sh /tmp/psnr-jpeg-bug-range
 ```
 
-The default `JPEG_QUALITY=70` is load-bearing on the rig's payload-fit
-arithmetic: `rmp_serde` serializes `EncodedJpegFrame.data: Vec<u8>` as
-a msgpack array (per-byte tag overhead, ~1.5× wire expansion), and
-iceoryx2's per-slot default of 64 KiB applies when `@tatolab/jpeg`'s
-declared 16 MiB bound isn't registered with the runtime (the example's
-streamlib.yaml declares `@tatolab/core` only, matching how every
-in-tree example wires today). q=70 keeps even the worst-case
-`complex_pattern` fixture under that wire budget while still clearing
-the 35 dB Y PSNR pass bar. The `JPEG_QUALITY` env var overrides the
-default for ad-hoc experimentation; quality settings above ~70 will
-trip `ExceedsMaxLoanSize` on `complex_pattern` at 1920×1080.
+The `JPEG_QUALITY` env var sets encoder quality (1–100, default 70).
+The default is a known-good baseline that lands every reference well
+above the 35 dB Y PSNR pass bar; the rig has been run end-to-end at
+quality 95 with all references clearing the pass bar.
+
+> ~~The default `JPEG_QUALITY=70` is load-bearing on the rig's payload-fit
+> arithmetic: `rmp_serde` serializes `EncodedJpegFrame.data: Vec<u8>` as
+> a msgpack array (per-byte tag overhead, ~1.5× wire expansion), and
+> iceoryx2's per-slot default of 64 KiB applies when `@tatolab/jpeg`'s
+> declared 16 MiB bound isn't registered with the runtime. q=70 keeps
+> even the worst-case `complex_pattern` fixture under that wire budget;
+> quality settings above ~70 will trip `ExceedsMaxLoanSize` on
+> `complex_pattern` at 1920×1080.~~ — Superseded 2026-05-18 by PR
+> `perf/jtd-codegen-serde-bytes-859`. JTD codegen now emits
+> `#[serde(with = "serde_bytes")]` on `EncodedJpegFrame.data`, so the
+> wire shape is msgpack `bin` (1× footprint) rather than an array of
+> integers (~1.5× footprint). The 64 KiB per-slot fallback budget now
+> easily covers `complex_pattern` at q=95; the historical q ≤ 70 cap is
+> no longer in effect.
 
 **Manual gate for color-management PRs.** Until the GPU CI runner
 milestone lands and CI can run the rigs automatically, treat the
