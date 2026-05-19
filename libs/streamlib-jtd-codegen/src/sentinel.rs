@@ -780,9 +780,13 @@ properties:
     fn restore_rust_strips_placeholder_and_emits_use() {
         let ident = make_ident("tatolab", "core", "VideoFrame", (1, 0, 0));
         let sentinel = sentinel_name(&ident);
+        let mangled = mangle_sentinel_pascal(&sentinel);
         let mut table = SentinelTable::default();
-        table.map.insert(sentinel.clone(), ident);
+        table.map.insert(sentinel, ident);
 
+        // jtd-codegen PascalCases the sentinel before the post-pass runs;
+        // the fixture matches that observed shape so restore_rust's
+        // strip+replace finds something to act on.
         let code = format!(
             "// Copyright (c) 2025 Jonathan Fontanez\n\
              // SPDX-License-Identifier: BUSL-1.1\n\n\
@@ -790,11 +794,15 @@ properties:
              pub struct {} {{\n}}\n\n\
              #[derive(Debug, Default, Serialize, Deserialize)]\n\
              pub struct JtdCodegenFixtureA {{\n    pub source: {},\n    pub bitrate: u32,\n}}\n",
-            sentinel, sentinel
+            mangled, mangled
         );
 
         let restored = restore_rust(&code, &table);
-        assert!(!restored.contains(&sentinel), "sentinel must be replaced");
+        assert!(
+            !restored.contains(&mangled),
+            "mangled sentinel must be replaced: {}",
+            restored
+        );
         assert!(
             restored.contains("use crate::_generated_::tatolab__core::{VideoFrame};"),
             "missing import block: {}",
@@ -811,21 +819,26 @@ properties:
     fn restore_python_strips_placeholder_and_emits_import() {
         let ident = make_ident("tatolab", "core", "VideoFrame", (1, 0, 0));
         let sentinel = sentinel_name(&ident);
+        let mangled = mangle_sentinel_pascal(&sentinel);
         let mut table = SentinelTable::default();
-        table.map.insert(sentinel.clone(), ident);
+        table.map.insert(sentinel, ident);
 
         let code = format!(
             "# Copyright (c) 2025 Jonathan Fontanez\n\n\
              from dataclasses import dataclass\n\n\
              @dataclass\nclass {}:\n    pass\n\n\
              @dataclass\nclass JtdCodegenFixtureA:\n    source: '{}'\n    bitrate: 'int'\n",
-            sentinel, sentinel
+            mangled, mangled
         );
 
         let restored = restore_python(&code, &table);
-        assert!(!restored.contains(&sentinel));
         assert!(
-            restored.contains("from _generated_.tatolab__core import VideoFrame"),
+            !restored.contains(&mangled),
+            "mangled sentinel must be replaced: {}",
+            restored
+        );
+        assert!(
+            restored.contains("from ..tatolab__core.video_frame import VideoFrame"),
             "missing import: {}",
             restored
         );
@@ -836,18 +849,23 @@ properties:
     fn restore_typescript_strips_placeholder_and_emits_import() {
         let ident = make_ident("tatolab", "core", "VideoFrame", (1, 0, 0));
         let sentinel = sentinel_name(&ident);
+        let mangled = mangle_sentinel_pascal(&sentinel);
         let mut table = SentinelTable::default();
-        table.map.insert(sentinel.clone(), ident);
+        table.map.insert(sentinel, ident);
 
         let code = format!(
             "// Copyright (c) 2025 Jonathan Fontanez\n\n\
              export interface {} {{\n}}\n\n\
              export interface JtdCodegenFixtureA {{\n  source: {};\n  bitrate: number;\n}}\n",
-            sentinel, sentinel
+            mangled, mangled
         );
 
         let restored = restore_typescript(&code, &table);
-        assert!(!restored.contains(&sentinel));
+        assert!(
+            !restored.contains(&mangled),
+            "mangled sentinel must be replaced: {}",
+            restored
+        );
         assert!(
             restored.contains("import { VideoFrame } from \"../tatolab__core/index.ts\";"),
             "missing import: {}",

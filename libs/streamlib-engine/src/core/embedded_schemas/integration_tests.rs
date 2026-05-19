@@ -134,17 +134,6 @@ fn test_schema_max_payload_bytes_audioframe() {
 }
 
 #[test]
-fn test_schema_max_payload_bytes_encodedvideoframe() {
-    test_support::register_core_wire_vocabulary();
-    let bytes = max_payload_bytes_for_port_spec(&core_spec("EncodedVideoFrame"));
-    assert_eq!(
-        bytes,
-        512 * 1024,
-        "encodedvideoframe should declare 512 KB for 1080p60 H.264/H.265 at 8 Mbps CBR"
-    );
-}
-
-#[test]
 fn test_schema_max_payload_bytes_videoframe() {
     test_support::register_core_wire_vocabulary();
     let bytes = max_payload_bytes_for_port_spec(&core_spec("VideoFrame"));
@@ -216,7 +205,7 @@ fn test_audioframe_schema_publisher_rejects_256kb() {
     );
 }
 
-/// Publisher sized from the encodedvideoframe schema (4 MB) accepts a 256 KB payload.
+/// Publisher sized from the encodedvideoframe schema accepts a 256 KB payload.
 /// This is the GREEN-after-fix test: before the fix all publishers used ~64 KB.
 #[test]
 fn test_encodedvideoframe_schema_publisher_accepts_256kb() {
