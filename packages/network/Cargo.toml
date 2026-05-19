@@ -50,6 +50,7 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 tokio = { workspace = true }
 serde_json.workspace = true
 serial_test = "3.1"
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
