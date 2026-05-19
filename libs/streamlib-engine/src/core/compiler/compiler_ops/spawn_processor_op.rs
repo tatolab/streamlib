@@ -9,7 +9,9 @@ use std::os::fd::OwnedFd;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::scheduling::{scheduling_strategy_for_processor, SchedulingStrategy};
-use crate::core::context::{GpuContextLimitedAccess, RuntimeContext, RuntimeContextFullAccess};
+use crate::core::context::{
+    GpuContext, GpuContextLimitedAccess, RuntimeContext, RuntimeContextFullAccess,
+};
 use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Result, Error};
 use crate::core::execution::run_processor_loop;
@@ -122,6 +124,7 @@ pub(crate) fn spawn_processor(
                 proc_id_clone,
                 priority,
                 barrier_component,
+                runtime,
             )?;
         }
     }
@@ -136,6 +139,7 @@ fn spawn_dedicated_thread(
     processor_id: ProcessorUniqueId,
     priority: crate::core::execution::ThreadPriority,
     mut barrier: ProcessorReadyBarrierComponent,
+    runtime: ProcessorRuntime,
 ) -> Result<()> {
     // Clone Arcs for thread
     let graph_arc_clone = Arc::clone(&graph_arc);
@@ -316,32 +320,23 @@ fn spawn_dedicated_thread(
                 )
             }; // Lock released here
 
-            // === PHASE 4: Setup (serialized across processors) ===
+            // === PHASE 4: Setup ===
             // Create processor-specific context with both processor ID and pause gate
             let processor_context = runtime_ctx_clone
                 .with_processor_id(proc_id_clone.clone())
                 .with_pause_gate(pause_gate_inner.clone());
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
+                let full_ctx = RuntimeContextFullAccess::new(&processor_context);
+                let mut guard = processor_arc_clone.lock();
 
                 tracing::info!(
-                    "[{}] Calling setup (thread id={:?}) - escalating via setup mutex",
+                    "[{}] Calling setup (thread id={:?}, runtime={:?})",
                     proc_id_clone,
-                    thread_id
+                    thread_id,
+                    runtime,
                 );
-
-                // Serialize setup across processors and wait for device idle
-                // on exit via the escalate primitive. The setup mutex and the
-                // device-idle wait are private implementation details of
-                // escalate; concurrent video session / DPB / swapchain
-                // creation can't race on the device (#304).
-                let sandbox = GpuContextLimitedAccess::new(runtime_ctx_clone.gpu.clone());
-                let setup_result = sandbox.escalate(|_full_gpu| {
-                    // Build the privileged ctx view for setup. The borrow is
-                    // scoped to this closure, so `process()` inside the loop
-                    // below can never observe a full-access handle.
-                    let full_ctx = RuntimeContextFullAccess::new(&processor_context);
-                    let mut guard = processor_arc_clone.lock();
+                let setup_result = run_setup_phase(runtime, &runtime_ctx_clone.gpu, || {
                     tokio_handle.block_on(guard.__generated_setup(&full_ctx))
                 });
                 if let Err(e) = setup_result {
@@ -391,6 +386,39 @@ fn spawn_dedicated_thread(
     Ok(())
 }
 
+/// Run a processor's `__generated_setup` body under the right lock
+/// discipline for its `runtime`.
+///
+/// Rust processors wrap in `sandbox.escalate(|_| ...)` so concurrent
+/// video session / DPB / swapchain creation can't race on the device
+/// (#304); the setup mutex and the device-idle wait on exit are
+/// private implementation details of escalate.
+///
+/// Subprocess host processors (Python / TypeScript) skip the wrap
+/// deliberately. Their `__generated_setup` does no host-side GPU work
+/// — it spawns the child, constructs the bridge, sends a `setup`
+/// lifecycle, then blocks on the subprocess's `ready` reply. Holding
+/// `processor_setup_lock` across that IPC wait deadlocks every
+/// FullAccess escalate the subprocess tries to issue during its own
+/// init: the bridge-reader thread dispatches each `escalate_request`
+/// inline through `sandbox.escalate(|full| ...)`, which would try to
+/// acquire the same mutex the host setup thread already holds. Each
+/// bridge-handler escalate still acquires the lock + waits device
+/// idle on its own, so the GPU-resource serialization is preserved
+/// without the outer wrap (#867).
+fn run_setup_phase<F>(runtime: ProcessorRuntime, gpu: &GpuContext, setup_body: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    match runtime {
+        ProcessorRuntime::Rust => {
+            let sandbox = GpuContextLimitedAccess::new(gpu.clone());
+            sandbox.escalate(|_full_gpu| setup_body())
+        }
+        ProcessorRuntime::Python | ProcessorRuntime::TypeScript => setup_body(),
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn clone_shutdown_eventfd(
     channel: &ShutdownChannelComponent,
@@ -416,4 +444,106 @@ fn clone_shutdown_eventfd(
     _proc_id: &ProcessorUniqueId,
 ) -> Option<OwnedFd> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::GpuContext;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
+        match GpuContext::init_for_platform_sync() {
+            Ok(gpu) => Some(gpu),
+            Err(e) => {
+                eprintln!("{test_name}: no GPU device ({e}) — skipping");
+                None
+            }
+        }
+    }
+
+    /// Regression for #867 — subprocess host setup must not hold
+    /// `processor_setup_lock` against a concurrent escalate from the
+    /// bridge-reader thread.
+    ///
+    /// Reproduces the deadlock the engine fix prevents: a setup body
+    /// (simulating a subprocess host's `__generated_setup` IPC wait)
+    /// blocks on another thread that's trying to acquire its own
+    /// `sandbox.escalate` (simulating a bridge-reader handler). With
+    /// the fix, `run_setup_phase` for `Python` / `TypeScript` skips
+    /// the outer wrap so the concurrent escalate proceeds and the
+    /// setup body completes. Mentally revert the runtime branch
+    /// (always wrap in `sandbox.escalate`) — this test hangs past
+    /// the 5-second timeout and fails.
+    #[test]
+    fn subprocess_host_setup_phase_does_not_block_concurrent_escalate() {
+        const TEST: &str = "subprocess_host_setup_phase_does_not_block_concurrent_escalate";
+        let Some(gpu) = gpu_or_skip(TEST) else {
+            return;
+        };
+
+        for runtime in [ProcessorRuntime::Python, ProcessorRuntime::TypeScript] {
+            let gpu_handle = gpu.clone();
+            let result = run_setup_phase(runtime.clone(), &gpu, || {
+                let sandbox = GpuContextLimitedAccess::new(gpu_handle);
+                let (done_tx, done_rx) = mpsc::channel();
+                thread::spawn(move || {
+                    let inner = sandbox.escalate(|_full| Ok::<(), Error>(()));
+                    let _ = done_tx.send(inner);
+                });
+                done_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|_| {
+                        Error::Runtime(format!(
+                            "{TEST}: concurrent escalate did not complete within 5s \
+                             (runtime={runtime:?}) — outer setup-phase wrap is holding \
+                             processor_setup_lock against bridge-reader-thread escalate \
+                             dispatch (#867)"
+                        ))
+                    })?
+                    .map_err(|e| Error::Runtime(format!("{TEST}: inner escalate failed: {e}")))
+            });
+            result.unwrap_or_else(|e| panic!("{TEST} (runtime={runtime:?}): {e}"));
+        }
+    }
+
+    /// Positive control: Rust processors STILL wrap setup in
+    /// `sandbox.escalate`, so a concurrent escalate from another
+    /// thread is correctly serialized against the outer wrap. Locks
+    /// the asymmetry: the fix is targeted at subprocess hosts only.
+    #[test]
+    fn rust_processor_setup_phase_holds_setup_lock_against_concurrent_escalate() {
+        const TEST: &str = "rust_processor_setup_phase_holds_setup_lock_against_concurrent_escalate";
+        let Some(gpu) = gpu_or_skip(TEST) else {
+            return;
+        };
+
+        let gpu_handle = gpu.clone();
+        let result: Result<()> = run_setup_phase(ProcessorRuntime::Rust, &gpu, || {
+            let sandbox = GpuContextLimitedAccess::new(gpu_handle);
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::spawn(move || {
+                let inner = sandbox.escalate(|_full| Ok::<(), Error>(()));
+                let _ = done_tx.send(inner);
+            });
+            // The Rust-branch wrap holds the setup lock here, so the
+            // inner escalate from the spawned thread must NOT
+            // complete until this body returns and the outer escalate
+            // releases. Wait briefly, then drop through.
+            match done_rx.recv_timeout(Duration::from_millis(500)) {
+                Err(mpsc::RecvTimeoutError::Timeout) => Ok(()),
+                Err(mpsc::RecvTimeoutError::Disconnected) => Err(Error::Runtime(
+                    format!("{TEST}: inner thread dropped without responding"),
+                )),
+                Ok(_) => Err(Error::Runtime(format!(
+                    "{TEST}: inner escalate completed while the outer Rust wrap was \
+                     supposed to be holding processor_setup_lock — Rust-branch wrap \
+                     regression"
+                ))),
+            }
+        });
+        result.unwrap();
+    }
 }
