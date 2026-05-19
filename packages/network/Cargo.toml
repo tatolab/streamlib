@@ -57,6 +57,9 @@ tokio = { workspace = true }
 serde_json.workspace = true
 serial_test = "3.1"
 tracing-subscriber.workspace = true
+# Wire-shape regression test serializes generated `NetworkPacket` through
+# `rmp_serde::to_vec_named` and asserts msgpack `bin` tag presence.
+rmp-serde.workspace = true
 
 [lints]
 workspace = true

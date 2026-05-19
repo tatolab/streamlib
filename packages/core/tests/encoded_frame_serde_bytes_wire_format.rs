@@ -13,7 +13,7 @@
 //! assertions fail (the array-tag check fires, the bin-tag check misses,
 //! and the wire-size budget blows out by ~100 bytes).
 
-use streamlib_core_schema_tests::_generated_::EncodedVideoFrame;
+use streamlib_core_schema_tests::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
 
 /// msgpack `bin 8` tag — payload length < 256, written as `0xc4 LEN <bytes>`.
 const MSGPACK_BIN_8: u8 = 0xc4;
@@ -120,4 +120,36 @@ fn encoded_video_frame_roundtrips_through_rmp_serde() {
         rmp_serde::from_slice(&wire).expect("rmp_serde::from_slice");
 
     assert_eq!(decoded, frame, "round-trip must be exact");
+}
+
+#[test]
+fn encoded_audio_frame_data_serializes_as_msgpack_bin() {
+    // Companion lock for `EncodedAudioFrame.data` — the codegen path that
+    // produces this attribute is the same as `EncodedVideoFrame`'s, but a
+    // per-schema test catches a regression that skipped one specific
+    // generated file (e.g., a schema-discovery bug in the build.rs).
+    let frame = EncodedAudioFrame {
+        data: vec![0xff_u8; 100],
+        timestamp_ns: "0".to_string(),
+        sample_count: 960,
+    };
+    let wire = rmp_serde::to_vec_named(&frame).expect("rmp_serde::to_vec_named");
+
+    let bin_tag_pos = wire
+        .windows(2)
+        .position(|w| w[0] == MSGPACK_BIN_8 && w[1] == 100);
+    assert!(
+        bin_tag_pos.is_some(),
+        "EncodedAudioFrame.data expected as `bin 8` (0xc4) with length 100; \
+         wire={:02x?}",
+        wire
+    );
+
+    let array_tag_present = wire.iter().any(|&b| b == MSGPACK_ARRAY_16);
+    assert!(
+        !array_tag_present,
+        "wire contains `array 16` (0xdc) — codegen attribute regressed on \
+         EncodedAudioFrame.data; wire={:02x?}",
+        wire
+    );
 }

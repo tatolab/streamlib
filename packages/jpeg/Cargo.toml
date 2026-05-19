@@ -41,6 +41,11 @@ tracing.workspace = true
 # nvJPEG fast path behind SimpleJpegDecoder. Owns its own texture ring.
 vulkan-jpeg = { path = "../../libs/vulkan-jpeg" }
 
+[dev-dependencies]
+# Wire-shape regression test serializes generated `EncodedJpegFrame` through
+# `rmp_serde::to_vec_named` and asserts msgpack `bin` tag presence.
+rmp-serde.workspace = true
+
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Integration tests spin up a real Runner wiring JpegBytesSource
 # (debug-utilities) → JpegDecoder (this crate) end-to-end.
