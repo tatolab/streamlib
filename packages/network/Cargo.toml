@@ -36,6 +36,11 @@ tokio = { workspace = true }
 # doesn't expose these; socket2 is the idiomatic shim.
 socket2 = "0.5"
 
+# Raw libc::recvmmsg for the Linux batched-recv path. Bound to Linux
+# at the use site via cfg; on macOS / non-Linux the per-datagram
+# recv_from fallback path doesn't reach libc.
+libc.workspace = true
+
 # Logging.
 tracing.workspace = true
 
@@ -45,6 +50,7 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 tokio = { workspace = true }
 serde_json.workspace = true
 serial_test = "3.1"
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
