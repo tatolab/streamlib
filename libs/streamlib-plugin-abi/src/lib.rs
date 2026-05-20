@@ -856,6 +856,130 @@ unsafe impl Sync for HostServices {}
 /// cdylib's process lifetime.
 pub type PluginRegisterFn = unsafe extern "C" fn(host_services: *const c_void);
 
+// =============================================================================
+// Layout regression tests
+// =============================================================================
+//
+// These tests pin the byte-level shape of every type that crosses the
+// cdylib boundary. A failure here means the layout drifted in a way
+// that would silently corrupt cross-DSO dispatch. Bump the matching
+// `*_LAYOUT_VERSION` constant when an intentional change lands and
+// update the expected sizes/offsets here in the same commit.
+//
+// The expected sizes are 64-bit-pointer-target-specific. On a 32-bit
+// target the pointer/fn-pointer sizes shrink and the tests need
+// `#[cfg(target_pointer_width = "64")]` (left out today — every
+// supported triple is 64-bit).
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn audio_tick_context_repr_layout() {
+        // 5 fields: i64 + u64 + u32 + u32 + u64 = 8+8+4+4+8 = 32 bytes
+        // with 8-byte alignment from the i64/u64.
+        assert_eq!(size_of::<AudioTickContextRepr>(), 32);
+        assert_eq!(align_of::<AudioTickContextRepr>(), 8);
+        assert_eq!(offset_of!(AudioTickContextRepr, timestamp_ns), 0);
+        assert_eq!(offset_of!(AudioTickContextRepr, samples_needed), 8);
+        assert_eq!(offset_of!(AudioTickContextRepr, sample_rate), 16);
+        assert_eq!(offset_of!(AudioTickContextRepr, _reserved_padding), 20);
+        assert_eq!(offset_of!(AudioTickContextRepr, tick_number), 24);
+    }
+
+    #[test]
+    fn runtime_context_vtable_layout() {
+        // layout_version (u32) + _reserved_padding (u32) + 8 fn pointers (8 bytes each)
+        // = 4 + 4 + 8*8 = 72 bytes
+        assert_eq!(size_of::<RuntimeContextVTable>(), 72);
+        assert_eq!(align_of::<RuntimeContextVTable>(), 8);
+        assert_eq!(offset_of!(RuntimeContextVTable, layout_version), 0);
+        assert_eq!(offset_of!(RuntimeContextVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(RuntimeContextVTable, runtime_id_copy), 8);
+        assert_eq!(offset_of!(RuntimeContextVTable, processor_id_copy), 16);
+        assert_eq!(offset_of!(RuntimeContextVTable, is_paused), 24);
+        assert_eq!(offset_of!(RuntimeContextVTable, should_process), 32);
+        assert_eq!(offset_of!(RuntimeContextVTable, gpu_full_access), 40);
+        assert_eq!(offset_of!(RuntimeContextVTable, gpu_limited_access), 48);
+        assert_eq!(offset_of!(RuntimeContextVTable, audio_clock_handle), 56);
+        assert_eq!(offset_of!(RuntimeContextVTable, runtime_ops_handle), 64);
+    }
+
+    #[test]
+    fn audio_clock_vtable_layout() {
+        // 4 + 4 + 3 fn pointers = 32 bytes
+        assert_eq!(size_of::<AudioClockVTable>(), 32);
+        assert_eq!(align_of::<AudioClockVTable>(), 8);
+        assert_eq!(offset_of!(AudioClockVTable, layout_version), 0);
+        assert_eq!(offset_of!(AudioClockVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(AudioClockVTable, sample_rate), 8);
+        assert_eq!(offset_of!(AudioClockVTable, buffer_size), 16);
+        assert_eq!(offset_of!(AudioClockVTable, on_tick), 24);
+    }
+
+    #[test]
+    fn runtime_ops_vtable_layout() {
+        // 4 + 4 + 5 fn pointers = 48 bytes
+        assert_eq!(size_of::<RuntimeOpsVTable>(), 48);
+        assert_eq!(align_of::<RuntimeOpsVTable>(), 8);
+        assert_eq!(offset_of!(RuntimeOpsVTable, layout_version), 0);
+        assert_eq!(offset_of!(RuntimeOpsVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(RuntimeOpsVTable, add_processor), 8);
+        assert_eq!(offset_of!(RuntimeOpsVTable, remove_processor), 16);
+        assert_eq!(offset_of!(RuntimeOpsVTable, connect), 24);
+        assert_eq!(offset_of!(RuntimeOpsVTable, disconnect), 32);
+        assert_eq!(offset_of!(RuntimeOpsVTable, to_json), 40);
+    }
+
+    #[test]
+    fn host_services_v3_layout_version_is_bumped() {
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 3);
+        assert_eq!(STREAMLIB_ABI_VERSION, 4);
+        assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
+        assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 1);
+    }
+
+    #[test]
+    fn host_services_v3_tail_carries_three_vtable_pointers() {
+        // The v3 additions live at the tail of HostServices. We don't
+        // pin the absolute offsets (earlier fields are subject to
+        // their own pre-v3 layout audit), but we do pin:
+        //   1. Each vtable is a single 8-byte pointer.
+        //   2. They appear in the order RuntimeContext → AudioClock → RuntimeOps.
+        //   3. They are contiguous (no padding inserted between them).
+        assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
+        assert_eq!(size_of::<*const AudioClockVTable>(), 8);
+        assert_eq!(size_of::<*const RuntimeOpsVTable>(), 8);
+
+        let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
+        let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
+        let runtime_ops_off = offset_of!(HostServices, runtime_ops_vtable);
+        assert!(runtime_ctx_off < audio_clock_off);
+        assert!(audio_clock_off < runtime_ops_off);
+        assert_eq!(audio_clock_off - runtime_ctx_off, 8);
+        assert_eq!(runtime_ops_off - audio_clock_off, 8);
+
+        // The runtime-ops pointer must end at the end of the struct
+        // (it is the last field added in v3).
+        assert_eq!(runtime_ops_off + 8, size_of::<HostServices>());
+    }
+
+    /// Compile-time witnesses that the vtable types are Send + Sync.
+    /// This catches regressions where a struct field added to the
+    /// vtable would break the unsafe impls.
+    #[test]
+    fn vtables_are_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<RuntimeContextVTable>();
+        assert_send_sync::<AudioClockVTable>();
+        assert_send_sync::<RuntimeOpsVTable>();
+        assert_send_sync::<HostServices>();
+        assert_send_sync::<ProcessorVTable>();
+    }
+}
+
 /// Plugin declaration exported by dynamic libraries.
 ///
 /// Plugins export a static named `STREAMLIB_PLUGIN` of this type via

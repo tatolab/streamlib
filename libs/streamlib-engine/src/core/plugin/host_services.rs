@@ -57,22 +57,24 @@
 //! commit-level coupling, no shared Cargo.lock.
 
 use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use streamlib_plugin_abi::{
-    HostHandle, HostInterest, HostLogLevel, HostServices, ProcessorVTable,
+    AudioClockVTable, HostHandle, HostInterest, HostLogLevel, HostServices, ProcessorVTable,
+    RuntimeContextVTable, RuntimeOpsVTable, AUDIO_CLOCK_VTABLE_LAYOUT_VERSION,
     HOST_SERVICES_LAYOUT_VERSION, PROCESSOR_VTABLE_LAYOUT_VERSION,
+    RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
 };
 
-// Note on tokio: cdylib-side async-lifecycle wrappers grab the tokio
-// handle from `ctx.tokio_handle()` rather than going through an
-// extern "C" callback. Tokio's `Handle` layout is host/cdylib-shared
-// via the workspace-pinned tokio version — one of the known
-// shared-type crossings Phase A leaves in place by design (Phase B
-// addresses RuntimeContext crossings if multi-builder tokio drift
-// becomes a real concern).
+// Phase B + v3 layout: tokio is no longer exposed across the ABI.
+// Lifecycle methods are synchronous at the trait surface; plugins
+// that need async lifecycle work bring their own runtime. The host's
+// tokio runtime stays invisible to plugins. See
+// `streamlib_plugin_abi`'s `HOST_SERVICES_LAYOUT_VERSION` v3 doc.
 
+use crate::core::context::{RuntimeContext, SharedAudioClock};
 use crate::core::pubsub::Event;
+use crate::core::runtime::RuntimeOperations;
 
 // =============================================================================
 // HostCallbacks — per-DSO cache of the host's fn pointers
@@ -669,6 +671,489 @@ fn emit_via_host_dispatch(
 }
 
 // =============================================================================
+// Host-side static vtables (RuntimeContext / AudioClock / RuntimeOps)
+// =============================================================================
+//
+// The host installs these `&'static` vtables into [`HostServices`] at
+// `host_services_for_self` time. Every callback derefs the opaque
+// `ctx` / `handle` pointer back to a host-owned Rust type and routes
+// through that type's normal Rust accessor — `ctx` for the
+// RuntimeContext vtable is a `*const RuntimeContext`, `handle` for
+// the audio-clock vtable is a `*const SharedAudioClock`, and `handle`
+// for the runtime-ops vtable is a `*const Arc<dyn RuntimeOperations>`.
+// The cdylib treats them all as opaque, dispatching through fn
+// pointers and reading nothing about layout.
+
+// ---------------- RuntimeContext vtable ----------------
+
+unsafe extern "C" fn host_rcv_runtime_id_copy(
+    ctx: *const c_void,
+    out_buf: *mut u8,
+    out_buf_cap: usize,
+    out_len: *mut usize,
+) -> usize {
+    // SAFETY: host-side construction passes &RuntimeContext as ctx.
+    let rc = unsafe { &*(ctx as *const RuntimeContext) };
+    let id_bytes = rc.runtime_id().as_str().as_bytes();
+    write_id_bytes(id_bytes, out_buf, out_buf_cap, out_len)
+}
+
+unsafe extern "C" fn host_rcv_processor_id_copy(
+    ctx: *const c_void,
+    out_buf: *mut u8,
+    out_buf_cap: usize,
+    out_len: *mut usize,
+) -> isize {
+    let rc = unsafe { &*(ctx as *const RuntimeContext) };
+    match rc.processor_id() {
+        Some(pid) => {
+            let bytes = pid.as_str().as_bytes();
+            write_id_bytes(bytes, out_buf, out_buf_cap, out_len) as isize
+        }
+        None => -1,
+    }
+}
+
+unsafe extern "C" fn host_rcv_is_paused(ctx: *const c_void) -> bool {
+    let rc = unsafe { &*(ctx as *const RuntimeContext) };
+    rc.is_paused()
+}
+
+unsafe extern "C" fn host_rcv_should_process(ctx: *const c_void) -> bool {
+    let rc = unsafe { &*(ctx as *const RuntimeContext) };
+    rc.should_process()
+}
+
+unsafe extern "C" fn host_rcv_gpu_full_access(_ctx: *const c_void) -> *const c_void {
+    // Phase B: the shim still embeds `GpuContextFullAccess` directly
+    // alongside the handle/vtable pair, so the cdylib never reaches
+    // through this callback. Phase C (#886) replaces the embedded
+    // value with `(gpu_full_handle, &HOST_GPU_CONTEXT_VTABLE)` and
+    // wires this callback to return the real handle.
+    std::ptr::null()
+}
+
+unsafe extern "C" fn host_rcv_gpu_limited_access(_ctx: *const c_void) -> *const c_void {
+    std::ptr::null()
+}
+
+unsafe extern "C" fn host_rcv_audio_clock_handle(ctx: *const c_void) -> *const c_void {
+    let rc = unsafe { &*(ctx as *const RuntimeContext) };
+    // The shim's audio-clock handle is a `&SharedAudioClock` — the
+    // accompanying [`HOST_AUDIO_CLOCK_VTABLE`] callbacks cast it back
+    // to that type and invoke the Rust trait methods.
+    rc.audio_clock() as *const SharedAudioClock as *const c_void
+}
+
+unsafe extern "C" fn host_rcv_runtime_ops_handle(ctx: *const c_void) -> *const c_void {
+    let rc = unsafe { &*(ctx as *const RuntimeContext) };
+    // `rc.runtime()` produces an owned `Arc<dyn RuntimeOperations>`
+    // each call; the per-RuntimeContext handle we hand the cdylib must
+    // outlive the call boundary. We keep the canonical handle as
+    // `&Arc<dyn RuntimeOperations>` borrowed out of the
+    // RuntimeContext's internal storage, which lives as long as the
+    // RuntimeContext itself.
+    rc.runtime_operations_ref() as *const Arc<dyn RuntimeOperations> as *const c_void
+}
+
+/// Static [`RuntimeContextVTable`] installed once per process and
+/// reused for every cdylib's `RuntimeContext*Access` shim
+/// construction. The host-side `RuntimeContextFullAccess::new` /
+/// `RuntimeContextLimitedAccess::new` constructors capture
+/// `&HOST_RUNTIME_CONTEXT_VTABLE` directly.
+pub static HOST_RUNTIME_CONTEXT_VTABLE: RuntimeContextVTable = RuntimeContextVTable {
+    layout_version: RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION,
+    _reserved_padding: 0,
+    runtime_id_copy: host_rcv_runtime_id_copy,
+    processor_id_copy: host_rcv_processor_id_copy,
+    is_paused: host_rcv_is_paused,
+    should_process: host_rcv_should_process,
+    gpu_full_access: host_rcv_gpu_full_access,
+    gpu_limited_access: host_rcv_gpu_limited_access,
+    audio_clock_handle: host_rcv_audio_clock_handle,
+    runtime_ops_handle: host_rcv_runtime_ops_handle,
+};
+
+/// Pointer to the host's [`RuntimeContextVTable`]. Engine-side shim
+/// constructors capture this when building a host-flavor
+/// `RuntimeContext{Full,Limited}Access`. The cdylib reads the
+/// equivalent pointer from `HostServices::runtime_context_vtable` at
+/// install time.
+pub fn host_runtime_context_vtable() -> *const RuntimeContextVTable {
+    &HOST_RUNTIME_CONTEXT_VTABLE
+}
+
+// ---------------- AudioClock vtable ----------------
+
+unsafe extern "C" fn host_acv_sample_rate(handle: *const c_void) -> u32 {
+    let clock = unsafe { &*(handle as *const SharedAudioClock) };
+    clock.sample_rate()
+}
+
+unsafe extern "C" fn host_acv_buffer_size(handle: *const c_void) -> usize {
+    let clock = unsafe { &*(handle as *const SharedAudioClock) };
+    clock.buffer_size()
+}
+
+unsafe extern "C" fn host_acv_on_tick(
+    handle: *const c_void,
+    callback: unsafe extern "C" fn(*mut c_void, streamlib_plugin_abi::AudioTickContextRepr),
+    user_data: *mut c_void,
+    drop_user_data: unsafe extern "C" fn(*mut c_void),
+) {
+    let clock = unsafe { &*(handle as *const SharedAudioClock) };
+
+    // Wrap the (callback, user_data, drop_user_data) trio in a single
+    // Send + Sync struct that the host's AudioClock holds as its
+    // callback's owned state. The struct's `fire` method takes
+    // `&self`, which forces the dispatching closure to capture the
+    // whole struct (avoiding Rust 2021 disjoint-capture splitting,
+    // which would otherwise lift the inner `*mut c_void` out and
+    // break Send).
+    let bridge = OnTickBridge {
+        callback,
+        user_data,
+        drop_user_data,
+    };
+    let cb: Box<dyn Fn(crate::core::context::AudioTickContext) + Send + Sync> =
+        Box::new(move |ctx_local| bridge.fire(ctx_local));
+    clock.on_tick(cb);
+}
+
+/// Holder for the cdylib's `(callback, user_data, drop_user_data)`
+/// trio. Owns the user-data pointer for the lifetime of the on-tick
+/// registration; the deleter fires when the registration drops.
+struct OnTickBridge {
+    callback: unsafe extern "C" fn(*mut c_void, streamlib_plugin_abi::AudioTickContextRepr),
+    user_data: *mut c_void,
+    drop_user_data: unsafe extern "C" fn(*mut c_void),
+}
+
+// SAFETY: cdylib's ABI contract requires the callback + drop pair to be
+// thread-safe. The on-tick callback may fire from any thread the host's
+// audio clock chooses (today, the audio-clock thread).
+unsafe impl Send for OnTickBridge {}
+unsafe impl Sync for OnTickBridge {}
+
+impl OnTickBridge {
+    fn fire(&self, ctx: crate::core::context::AudioTickContext) {
+        let repr = streamlib_plugin_abi::AudioTickContextRepr {
+            timestamp_ns: ctx.timestamp_ns,
+            samples_needed: ctx.samples_needed as u64,
+            sample_rate: ctx.sample_rate,
+            _reserved_padding: 0,
+            tick_number: ctx.tick_number,
+        };
+        // SAFETY: callback + user_data come from the cdylib's ABI
+        // promise; valid for the lifetime of this bridge.
+        unsafe { (self.callback)(self.user_data, repr) };
+    }
+}
+
+impl Drop for OnTickBridge {
+    fn drop(&mut self) {
+        // SAFETY: drop_user_data is part of the cdylib's ABI contract
+        // and is called exactly once when this bridge is released.
+        unsafe { (self.drop_user_data)(self.user_data) };
+    }
+}
+
+/// Static [`AudioClockVTable`] installed once per process. Paired
+/// with the per-RuntimeContext audio-clock handle returned by
+/// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::audio_clock_handle`.
+pub static HOST_AUDIO_CLOCK_VTABLE: AudioClockVTable = AudioClockVTable {
+    layout_version: AUDIO_CLOCK_VTABLE_LAYOUT_VERSION,
+    _reserved_padding: 0,
+    sample_rate: host_acv_sample_rate,
+    buffer_size: host_acv_buffer_size,
+    on_tick: host_acv_on_tick,
+};
+
+pub fn host_audio_clock_vtable() -> *const AudioClockVTable {
+    &HOST_AUDIO_CLOCK_VTABLE
+}
+
+// ---------------- RuntimeOps vtable ----------------
+//
+// The cdylib-side `RuntimeOpsShim` wraps each submit-with-completion
+// callback in a `tokio::sync::oneshot` whose Sender is boxed and
+// shipped across the FFI as the `user_data` pointer. The host's
+// callback impl spawns on the host's tokio runtime (held in
+// `HOST_RUNTIME_TOKIO_HANDLE`), awaits the real
+// `RuntimeOperations::*_async` method, encodes the response payload,
+// and fires the completion callback.
+
+/// Set by the host once at startup before any cdylib registers. The
+/// runtime-ops vtable's callbacks block on this handle to run the
+/// real `*_async` methods on the host's tokio runtime, completely
+/// invisible to the cdylib (which sees only a `oneshot` it polls on
+/// its own runtime).
+static HOST_RUNTIME_TOKIO_HANDLE: OnceLock<tokio::runtime::Handle> = OnceLock::new();
+
+/// Install the host's tokio handle so the [`HOST_RUNTIME_OPS_VTABLE`]
+/// callbacks can spawn `*_async` futures against it. The host's
+/// `Runner::start` calls this once before any cdylib is loaded.
+/// Idempotent: subsequent calls with a different handle are silently
+/// ignored.
+pub fn install_host_runtime_tokio_handle(handle: tokio::runtime::Handle) {
+    let _ = HOST_RUNTIME_TOKIO_HANDLE.set(handle);
+}
+
+fn host_tokio_handle() -> Option<&'static tokio::runtime::Handle> {
+    HOST_RUNTIME_TOKIO_HANDLE.get()
+}
+
+unsafe fn invoke_completion(
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+    status: i32,
+    bytes: &[u8],
+) {
+    // SAFETY: cdylib promises completion is safe to invoke with the
+    // user_data pointer; payload bytes are valid for the call.
+    unsafe { completion(user_data, status, bytes.as_ptr(), bytes.len()) };
+}
+
+unsafe fn completion_with_msgpack_result<T: serde::Serialize>(
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+    result: crate::core::Result<T>,
+) {
+    match result {
+        Ok(value) => match rmp_serde::to_vec_named(&value) {
+            Ok(bytes) => unsafe { invoke_completion(completion, user_data, 0, &bytes) },
+            Err(e) => {
+                let msg = format!("response msgpack encode failed: {e}");
+                unsafe { invoke_completion(completion, user_data, -1, msg.as_bytes()) };
+            }
+        },
+        Err(e) => {
+            let msg = e.to_string();
+            unsafe { invoke_completion(completion, user_data, -1, msg.as_bytes()) };
+        }
+    }
+}
+
+unsafe extern "C" fn host_rov_add_processor(
+    handle: *const c_void,
+    spec_msgpack_ptr: *const u8,
+    spec_msgpack_len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let Some(rt) = host_tokio_handle() else {
+        let msg = b"host tokio handle not installed";
+        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        return;
+    };
+    let spec_bytes = if spec_msgpack_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(spec_msgpack_ptr, spec_msgpack_len) }.to_vec()
+    };
+    // Tunnel `user_data` through to the spawned task — its raw pointer
+    // is Send-safe by the cdylib's ABI promise (the holder must be
+    // safe to invoke from any thread the host chooses).
+    let user_data_addr = user_data as usize;
+    rt.spawn(async move {
+        let result = match rmp_serde::from_slice::<crate::core::processors::ProcessorSpec>(
+            &spec_bytes,
+        ) {
+            Ok(spec) => ops.add_processor_async(spec).await,
+            Err(e) => Err(crate::core::Error::Config(format!(
+                "add_processor: spec msgpack decode failed: {e}"
+            ))),
+        };
+        // Reconstruct the pointer here so `*mut c_void` does not live
+        // across the `.await` above and the future stays Send.
+        let user_data_ptr = user_data_addr as *mut c_void;
+        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+    });
+}
+
+unsafe extern "C" fn host_rov_remove_processor(
+    handle: *const c_void,
+    processor_id_msgpack_ptr: *const u8,
+    processor_id_msgpack_len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let Some(rt) = host_tokio_handle() else {
+        let msg = b"host tokio handle not installed";
+        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        return;
+    };
+    let id_bytes = if processor_id_msgpack_len == 0 {
+        Vec::new()
+    } else {
+        unsafe {
+            std::slice::from_raw_parts(processor_id_msgpack_ptr, processor_id_msgpack_len)
+        }
+        .to_vec()
+    };
+    let user_data_addr = user_data as usize;
+    rt.spawn(async move {
+        let result =
+            match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(&id_bytes) {
+                Ok(pid) => ops.remove_processor_async(pid).await,
+                Err(e) => Err(crate::core::Error::Config(format!(
+                    "remove_processor: processor_id msgpack decode failed: {e}"
+                ))),
+            };
+        let user_data_ptr = user_data_addr as *mut c_void;
+        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+    });
+}
+
+unsafe extern "C" fn host_rov_connect(
+    handle: *const c_void,
+    from_msgpack_ptr: *const u8,
+    from_msgpack_len: usize,
+    to_msgpack_ptr: *const u8,
+    to_msgpack_len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let Some(rt) = host_tokio_handle() else {
+        let msg = b"host tokio handle not installed";
+        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        return;
+    };
+    let from_bytes = if from_msgpack_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(from_msgpack_ptr, from_msgpack_len) }.to_vec()
+    };
+    let to_bytes = if to_msgpack_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(to_msgpack_ptr, to_msgpack_len) }.to_vec()
+    };
+    let user_data_addr = user_data as usize;
+    rt.spawn(async move {
+        let from: crate::core::OutputLinkPortRef = match rmp_serde::from_slice(&from_bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
+                    Err(crate::core::Error::Config(format!(
+                        "connect: from-port msgpack decode failed: {e}"
+                    )));
+                let user_data_ptr = user_data_addr as *mut c_void;
+                unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+                return;
+            }
+        };
+        let to: crate::core::InputLinkPortRef = match rmp_serde::from_slice(&to_bytes) {
+            Ok(v) => v,
+            Err(e) => {
+                let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
+                    Err(crate::core::Error::Config(format!(
+                        "connect: to-port msgpack decode failed: {e}"
+                    )));
+                let user_data_ptr = user_data_addr as *mut c_void;
+                unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+                return;
+            }
+        };
+        let result = ops.connect_async(from, to).await;
+        let user_data_ptr = user_data_addr as *mut c_void;
+        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+    });
+}
+
+unsafe extern "C" fn host_rov_disconnect(
+    handle: *const c_void,
+    link_id_msgpack_ptr: *const u8,
+    link_id_msgpack_len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let Some(rt) = host_tokio_handle() else {
+        let msg = b"host tokio handle not installed";
+        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        return;
+    };
+    let bytes = if link_id_msgpack_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(link_id_msgpack_ptr, link_id_msgpack_len) }.to_vec()
+    };
+    let user_data_addr = user_data as usize;
+    rt.spawn(async move {
+        let result = match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes) {
+            Ok(link_id) => ops.disconnect_async(link_id).await,
+            Err(e) => Err(crate::core::Error::Config(format!(
+                "disconnect: link_id msgpack decode failed: {e}"
+            ))),
+        };
+        let user_data_ptr = user_data_addr as *mut c_void;
+        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+    });
+}
+
+unsafe extern "C" fn host_rov_to_json(
+    handle: *const c_void,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let Some(rt) = host_tokio_handle() else {
+        let msg = b"host tokio handle not installed";
+        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        return;
+    };
+    let user_data_addr = user_data as usize;
+    rt.spawn(async move {
+        let result = ops.to_json_async().await;
+        let user_data_ptr = user_data_addr as *mut c_void;
+        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+    });
+}
+
+/// Static [`RuntimeOpsVTable`] installed once per process. Paired
+/// with the per-RuntimeContext runtime-ops handle returned by
+/// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::runtime_ops_handle`.
+pub static HOST_RUNTIME_OPS_VTABLE: RuntimeOpsVTable = RuntimeOpsVTable {
+    layout_version: RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
+    _reserved_padding: 0,
+    add_processor: host_rov_add_processor,
+    remove_processor: host_rov_remove_processor,
+    connect: host_rov_connect,
+    disconnect: host_rov_disconnect,
+    to_json: host_rov_to_json,
+};
+
+pub fn host_runtime_ops_vtable() -> *const RuntimeOpsVTable {
+    &HOST_RUNTIME_OPS_VTABLE
+}
+
+// ---------------- Shared scratch-buffer helper ----------------
+
+fn write_id_bytes(
+    bytes: &[u8],
+    out_buf: *mut u8,
+    out_buf_cap: usize,
+    out_len: *mut usize,
+) -> usize {
+    let required = bytes.len();
+    let written = required.min(out_buf_cap);
+    if written > 0 && !out_buf.is_null() {
+        // SAFETY: caller guarantees `out_buf` is writable for
+        // `out_buf_cap` bytes; we only write `written` bytes.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf, written) };
+    }
+    if !out_len.is_null() {
+        // SAFETY: caller guarantees `out_len` is writable.
+        unsafe { *out_len = written };
+    }
+    required
+}
+
+// =============================================================================
 // runtime_facing — host-side payload builder
 // =============================================================================
 
@@ -680,7 +1165,8 @@ pub mod runtime_facing {
     use super::{
         host_iceoryx_log_emit, host_processor_register, host_pubsub_publish, host_schema_lookup,
         host_schema_register, host_tracing_emit, host_tracing_enabled,
-        host_tracing_register_callsite, HostServiceImpls,
+        host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
+        HOST_RUNTIME_CONTEXT_VTABLE, HOST_RUNTIME_OPS_VTABLE,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
@@ -721,17 +1207,9 @@ pub mod runtime_facing {
             schema_lookup: host_schema_lookup,
             iceoryx_log_emit: host_iceoryx_log_emit,
             processor_register: host_processor_register,
-            // TODO(#885 follow-up): wire `RuntimeContextVTable`,
-            // `AudioClockVTable`, and `RuntimeOpsVTable` host
-            // implementations. The ABI types exist in
-            // `streamlib-plugin-abi`; the host-side static vtables
-            // + the cdylib-side shim restructure
-            // (`RuntimeContextFullAccess` / `LimitedAccess` →
-            // `(handle, vtable)` shape) land in their own follow-up
-            // issues per the locked design on #885.
-            runtime_context_vtable: std::ptr::null(),
-            audio_clock_vtable: std::ptr::null(),
-            runtime_ops_vtable: std::ptr::null(),
+            runtime_context_vtable: &HOST_RUNTIME_CONTEXT_VTABLE,
+            audio_clock_vtable: &HOST_AUDIO_CLOCK_VTABLE,
+            runtime_ops_vtable: &HOST_RUNTIME_OPS_VTABLE,
         }
     }
 }
