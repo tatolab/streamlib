@@ -73,7 +73,7 @@ use core::ffi::c_void;
 /// incompatibly. Same-major-version layout additions append to the
 /// end of [`HostServices`] and read the new fields only when
 /// `abi_layout_version` advertises them.
-pub const STREAMLIB_ABI_VERSION: u32 = 3;
+pub const STREAMLIB_ABI_VERSION: u32 = 4;
 
 /// Layout version of the [`HostServices`] payload. Read first by the
 /// cdylib's `install_host_services` before any other field is
@@ -87,12 +87,29 @@ pub const STREAMLIB_ABI_VERSION: u32 = 3;
 ///   [`HostServices::processor_register`] callback + [`ProcessorVTable`].
 ///   Async-lifecycle wrappers grab the tokio handle from
 ///   `ctx.tokio_handle()` rather than via a separate callback.
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 2;
+/// - v3: [`RuntimeContextVTable`] + [`AudioClockVTable`] +
+///   [`RuntimeOpsVTable`] references appended. The
+///   shared-type `tokio::runtime::Handle` crossing is eliminated:
+///   plugins own their own tokio runtimes; the host's runtime is
+///   not exposed to plugins. Lifecycle methods are synchronous at
+///   the trait surface; the host's lifecycle wrappers no longer
+///   `block_on`.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 3;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
 /// entry; mismatching versions abort the registration cleanly.
 pub const PROCESSOR_VTABLE_LAYOUT_VERSION: u32 = 1;
+
+/// Layout version of [`RuntimeContextVTable`]. Pinned at offset 0;
+/// newer fields append to the end and bump this constant.
+pub const RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION: u32 = 1;
+
+/// Layout version of [`AudioClockVTable`].
+pub const AUDIO_CLOCK_VTABLE_LAYOUT_VERSION: u32 = 1;
+
+/// Layout version of [`RuntimeOpsVTable`].
+pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
 // Primitive enums
@@ -354,6 +371,259 @@ unsafe impl Send for ProcessorVTable {}
 unsafe impl Sync for ProcessorVTable {}
 
 // =============================================================================
+// RuntimeContextVTable — per-instance accessors for the RuntimeContext shim
+// =============================================================================
+
+/// Dispatch table the cdylib's `RuntimeContext{Full,Limited}Access`
+/// shim uses to read host-owned runtime context state. Replaces the
+/// Rust trait-object / struct-layout-shared crossings Phase A left in
+/// place at the cdylib's `ctx.<accessor>()` boundary.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0. Older vtables loaded into
+/// newer hosts are rejected cleanly. New fields go at the **end** and
+/// bump [`RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION`].
+///
+/// # Opaque-handle returns
+///
+/// `gpu_full_access` / `gpu_limited_access` return `*const c_void`
+/// opaque handles. Their callable surface is defined by the GpuContext
+/// callback tables (Phase C — see #886). For Phase B the handles
+/// suffice as identity tokens that the cdylib stashes and Phase C
+/// fills in.
+///
+/// `audio_clock_handle` and `runtime_ops_handle` return opaque per-
+/// instance handles paired with the static vtables on [`HostServices`]
+/// ([`HostServices::audio_clock_vtable`],
+/// [`HostServices::runtime_ops_vtable`]).
+#[repr(C)]
+pub struct RuntimeContextVTable {
+    /// Vtable layout version. Must equal
+    /// [`RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+
+    // -------------------------------------------------------------------------
+    // Identifier accessors (owned-return; cdylib does not retain a borrow)
+    // -------------------------------------------------------------------------
+
+    /// Copy the runtime id as UTF-8 bytes into `out_buf`. Returns the
+    /// required length; `*out_len` receives the actually-written
+    /// count (`min(required, out_buf_cap)`). Truncation is benign;
+    /// the caller resizes and retries when `required > out_buf_cap`.
+    pub runtime_id_copy: unsafe extern "C" fn(
+        ctx: *const c_void,
+        out_buf: *mut u8,
+        out_buf_cap: usize,
+        out_len: *mut usize,
+    ) -> usize,
+
+    /// Copy the processor id as UTF-8 bytes into `out_buf`. Returns
+    /// `-1` when the processor id is `None` (shared/global ctx); for
+    /// `Some`, returns the required length and writes `*out_len` like
+    /// [`Self::runtime_id_copy`].
+    pub processor_id_copy: unsafe extern "C" fn(
+        ctx: *const c_void,
+        out_buf: *mut u8,
+        out_buf_cap: usize,
+        out_len: *mut usize,
+    ) -> isize,
+
+    // -------------------------------------------------------------------------
+    // Lifecycle flags
+    // -------------------------------------------------------------------------
+
+    pub is_paused: unsafe extern "C" fn(ctx: *const c_void) -> bool,
+    pub should_process: unsafe extern "C" fn(ctx: *const c_void) -> bool,
+
+    // -------------------------------------------------------------------------
+    // GPU context handles (Phase C wires their methods)
+    // -------------------------------------------------------------------------
+
+    /// Returns an opaque handle to the privileged [`GpuContextFullAccess`].
+    /// Pointer is valid for the lifetime of the surrounding
+    /// `RuntimeContextFullAccess` shim. Phase C (#886) defines the
+    /// callback table the cdylib uses to invoke methods on the handle.
+    pub gpu_full_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
+
+    /// Returns an opaque handle to the restricted [`GpuContextLimitedAccess`].
+    /// Same lifetime and Phase C contract as
+    /// [`Self::gpu_full_access`].
+    pub gpu_limited_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
+
+    // -------------------------------------------------------------------------
+    // Host-owned services (handles; static vtables live on HostServices)
+    // -------------------------------------------------------------------------
+
+    /// Opaque handle to the runtime's audio clock. Pair with
+    /// [`HostServices::audio_clock_vtable`] to call methods on it.
+    /// The handle remains valid for the lifetime of the runtime.
+    pub audio_clock_handle: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
+
+    /// Opaque handle to the runtime's graph-mutation operations.
+    /// Pair with [`HostServices::runtime_ops_vtable`] to invoke
+    /// methods. The handle remains valid for the lifetime of the
+    /// runtime.
+    pub runtime_ops_handle: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
+}
+
+// Safety: every field is a primitive or a fn pointer. The vtable's
+// `&'static` storage on the host side outlives the cdylib's process
+// lifetime via the `LOADED_PLUGIN_LIBRARIES` pinning shape.
+unsafe impl Send for RuntimeContextVTable {}
+unsafe impl Sync for RuntimeContextVTable {}
+
+// =============================================================================
+// AudioClockVTable — extern "C" dispatch for SharedAudioClock
+// =============================================================================
+
+/// FFI-compatible mirror of `AudioTickContext` carried into
+/// extern "C" tick callbacks. Field order matches the host-side
+/// `AudioTickContext` and is locked by layout-regression tests.
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct AudioTickContextRepr {
+    pub timestamp_ns: i64,
+    pub samples_needed: u64,
+    pub sample_rate: u32,
+    pub _reserved_padding: u32,
+    pub tick_number: u64,
+}
+
+/// Dispatch table for the host's audio clock. The cdylib obtains a
+/// handle via [`RuntimeContextVTable::audio_clock_handle`] and reads
+/// the static vtable from [`HostServices::audio_clock_vtable`].
+#[repr(C)]
+pub struct AudioClockVTable {
+    pub layout_version: u32,
+    pub _reserved_padding: u32,
+
+    /// Returns the clock's sample rate in Hz.
+    pub sample_rate: unsafe extern "C" fn(handle: *const c_void) -> u32,
+
+    /// Returns the clock's buffer size (samples per tick).
+    pub buffer_size: unsafe extern "C" fn(handle: *const c_void) -> usize,
+
+    /// Register a tick callback. The host owns the callback registration
+    /// and invokes `callback(user_data, AudioTickContextRepr)` on every
+    /// tick. The `drop_user_data` fn is invoked when the registration
+    /// is released (host shutdown or clock teardown). Multiple
+    /// registrations are permitted; they fire in registration order.
+    pub on_tick: unsafe extern "C" fn(
+        handle: *const c_void,
+        callback: unsafe extern "C" fn(*mut c_void, AudioTickContextRepr),
+        user_data: *mut c_void,
+        drop_user_data: unsafe extern "C" fn(*mut c_void),
+    ),
+}
+
+unsafe impl Send for AudioClockVTable {}
+unsafe impl Sync for AudioClockVTable {}
+
+// =============================================================================
+// RuntimeOpsVTable — extern "C" dispatch for RuntimeOperations
+// =============================================================================
+
+/// Completion callback signature for async runtime ops.
+///
+/// `status` is `0` on success, non-zero on error. On success,
+/// `result_ptr` points at a msgpack-encoded result payload of length
+/// `result_len`. On error, `result_ptr` points at a UTF-8 error
+/// message of length `result_len`.
+///
+/// The pointed-at bytes are valid only for the duration of the
+/// callback invocation; the cdylib must copy any data it needs to
+/// retain.
+pub type RuntimeOpCompletionCallback = unsafe extern "C" fn(
+    user_data: *mut c_void,
+    status: i32,
+    result_ptr: *const u8,
+    result_len: usize,
+);
+
+/// Dispatch table for the host's graph-mutation operations
+/// (`add_processor`, `connect`, etc.). The cdylib obtains a handle
+/// via [`RuntimeContextVTable::runtime_ops_handle`] and reads the
+/// static vtable from [`HostServices::runtime_ops_vtable`].
+///
+/// All methods are submit-with-completion: the host fires
+/// `completion(user_data, status, result_ptr, result_len)` once
+/// when the operation finishes. The completion may fire synchronously
+/// (op was instantly ready) or asynchronously (on a host thread).
+/// The cdylib's wrapper bridges back to its own runtime via a
+/// `tokio::sync::oneshot` or equivalent.
+///
+/// Request payloads are msgpack-encoded; the host decodes against
+/// the same types the in-process trait surface accepts
+/// (`ProcessorSpec`, `OutputLinkPortRef`, `InputLinkPortRef`,
+/// `ProcessorUniqueId`, `LinkUniqueId`).
+#[repr(C)]
+pub struct RuntimeOpsVTable {
+    pub layout_version: u32,
+    pub _reserved_padding: u32,
+
+    /// Submit an `add_processor` operation. `spec_msgpack` carries a
+    /// msgpack-encoded `ProcessorSpec`. On success the result payload
+    /// is the msgpack-encoded `ProcessorUniqueId`.
+    pub add_processor: unsafe extern "C" fn(
+        handle: *const c_void,
+        spec_msgpack_ptr: *const u8,
+        spec_msgpack_len: usize,
+        completion: RuntimeOpCompletionCallback,
+        user_data: *mut c_void,
+    ),
+
+    /// Submit a `remove_processor` operation. `processor_id_msgpack`
+    /// carries a msgpack-encoded `ProcessorUniqueId`. Empty success
+    /// payload.
+    pub remove_processor: unsafe extern "C" fn(
+        handle: *const c_void,
+        processor_id_msgpack_ptr: *const u8,
+        processor_id_msgpack_len: usize,
+        completion: RuntimeOpCompletionCallback,
+        user_data: *mut c_void,
+    ),
+
+    /// Submit a `connect` operation. `from_msgpack` and `to_msgpack`
+    /// carry msgpack-encoded `OutputLinkPortRef` / `InputLinkPortRef`.
+    /// Success payload is the msgpack-encoded `LinkUniqueId`.
+    pub connect: unsafe extern "C" fn(
+        handle: *const c_void,
+        from_msgpack_ptr: *const u8,
+        from_msgpack_len: usize,
+        to_msgpack_ptr: *const u8,
+        to_msgpack_len: usize,
+        completion: RuntimeOpCompletionCallback,
+        user_data: *mut c_void,
+    ),
+
+    /// Submit a `disconnect` operation. `link_id_msgpack` carries a
+    /// msgpack-encoded `LinkUniqueId`. Empty success payload.
+    pub disconnect: unsafe extern "C" fn(
+        handle: *const c_void,
+        link_id_msgpack_ptr: *const u8,
+        link_id_msgpack_len: usize,
+        completion: RuntimeOpCompletionCallback,
+        user_data: *mut c_void,
+    ),
+
+    /// Submit a `to_json` operation. Success payload is the msgpack-
+    /// encoded `serde_json::Value`.
+    pub to_json: unsafe extern "C" fn(
+        handle: *const c_void,
+        completion: RuntimeOpCompletionCallback,
+        user_data: *mut c_void,
+    ),
+}
+
+unsafe impl Send for RuntimeOpsVTable {}
+unsafe impl Sync for RuntimeOpsVTable {}
+
+// =============================================================================
 // HostServices — the callback table
 // =============================================================================
 
@@ -525,17 +795,38 @@ pub struct HostServices {
         descriptor_msgpack_len: usize,
         vtable: *const ProcessorVTable,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // RuntimeContext vtable surface (v3 — eliminates the tokio shared crossing)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table the cdylib's
+    /// `RuntimeContext{Full,Limited}Access` shim uses to read host-
+    /// owned context state. Set once at install time; never null
+    /// for v3+ HostServices payloads. See [`RuntimeContextVTable`].
+    pub runtime_context_vtable: *const RuntimeContextVTable,
+
+    /// Static dispatch table for the host's `SharedAudioClock`.
+    /// Paired with the per-instance handle returned by
+    /// [`RuntimeContextVTable::audio_clock_handle`]. Set once at
+    /// install time; non-null for hosts that ship an audio clock,
+    /// null otherwise (cdylib must check before dispatching).
+    pub audio_clock_vtable: *const AudioClockVTable,
+
+    /// Static dispatch table for the host's `RuntimeOperations`.
+    /// Paired with the per-instance handle returned by
+    /// [`RuntimeContextVTable::runtime_ops_handle`]. Set once at
+    /// install time; never null for v3+ HostServices payloads.
+    pub runtime_ops_vtable: *const RuntimeOpsVTable,
 }
 
-// Note: cdylib-side async-lifecycle wrappers (`setup` / `teardown` /
-// `on_pause` / `on_resume`) grab the tokio handle from the
-// `RuntimeContext*Access` they receive as a parameter
-// (`ctx.tokio_handle()`). Tokio handle layout is host/cdylib-shared
-// via the workspace-pinned tokio version. Phase B's RuntimeContext
-// callback table will lift that crossing to extern "C" if /
-// when multi-builder tokio drift becomes a real concern; until then,
-// the tokio handle is one of the few remaining shared-type
-// crossings Phase A leaves in place by design.
+// Note: under v3 the ABI eliminates the tokio shared-type crossing
+// entirely. Plugins own their own tokio runtimes (or whatever async
+// runtime they prefer); the host's runtime is not exposed and is
+// never required to match the plugin's. Lifecycle methods are
+// synchronous at the trait surface; the host's lifecycle wrappers
+// no longer wrap user code in `block_on`. Plugins that want async
+// in lifecycle methods do their own `block_on` internally.
 
 // Safety: every field is a raw pointer, a fn pointer, or a
 // primitive. The host guarantees the pointed-at state outlives the

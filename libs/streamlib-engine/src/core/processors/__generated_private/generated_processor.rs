@@ -4,7 +4,6 @@
 //! Internal generated processor trait - DO NOT USE DIRECTLY.
 
 use serde_json::Value as JsonValue;
-use std::future::Future;
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::Result;
@@ -86,35 +85,25 @@ pub trait GeneratedProcessor: Send + 'static {
     }
 
     /// Generated setup hook called by runtime with privileged ctx.
-    fn __generated_setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    /// Sync per the Phase B ABI; plugins that want async setup work do
+    /// their own `block_on` against a self-owned runtime.
+    fn __generated_setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Generated teardown hook called by runtime with privileged ctx.
-    fn __generated_teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Generated on_pause hook — restricted ctx.
-    fn __generated_on_pause(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn __generated_on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Generated on_resume hook — restricted ctx.
-    fn __generated_on_resume(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn __generated_on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called once to start a Manual mode processor. Privileged ctx.

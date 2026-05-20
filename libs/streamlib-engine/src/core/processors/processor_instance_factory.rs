@@ -157,9 +157,7 @@ impl ProcessorInstance {
             Self::VTable { instance_ptr, vtable, .. } => {
                 Self::vtable_call_full(*instance_ptr, vtable.setup, ctx, "setup")
             }
-            Self::LegacyDyn(inner) => {
-                ctx.tokio_handle().block_on(inner.__generated_setup(ctx))
-            }
+            Self::LegacyDyn(inner) => inner.__generated_setup(ctx),
         }
     }
 
@@ -169,9 +167,7 @@ impl ProcessorInstance {
             Self::VTable { instance_ptr, vtable, .. } => {
                 Self::vtable_call_full(*instance_ptr, vtable.teardown, ctx, "teardown")
             }
-            Self::LegacyDyn(inner) => {
-                ctx.tokio_handle().block_on(inner.__generated_teardown(ctx))
-            }
+            Self::LegacyDyn(inner) => inner.__generated_teardown(ctx),
         }
     }
 
@@ -181,9 +177,7 @@ impl ProcessorInstance {
             Self::VTable { instance_ptr, vtable, .. } => {
                 Self::vtable_call_limited(*instance_ptr, vtable.on_pause, ctx, "on_pause")
             }
-            Self::LegacyDyn(inner) => {
-                ctx.tokio_handle().block_on(inner.__generated_on_pause(ctx))
-            }
+            Self::LegacyDyn(inner) => inner.__generated_on_pause(ctx),
         }
     }
 
@@ -193,9 +187,7 @@ impl ProcessorInstance {
             Self::VTable { instance_ptr, vtable, .. } => {
                 Self::vtable_call_limited(*instance_ptr, vtable.on_resume, ctx, "on_resume")
             }
-            Self::LegacyDyn(inner) => {
-                ctx.tokio_handle().block_on(inner.__generated_on_resume(ctx))
-            }
+            Self::LegacyDyn(inner) => inner.__generated_on_resume(ctx),
         }
     }
 

@@ -721,6 +721,17 @@ pub mod runtime_facing {
             schema_lookup: host_schema_lookup,
             iceoryx_log_emit: host_iceoryx_log_emit,
             processor_register: host_processor_register,
+            // TODO(#885 follow-up): wire `RuntimeContextVTable`,
+            // `AudioClockVTable`, and `RuntimeOpsVTable` host
+            // implementations. The ABI types exist in
+            // `streamlib-plugin-abi`; the host-side static vtables
+            // + the cdylib-side shim restructure
+            // (`RuntimeContextFullAccess` / `LimitedAccess` →
+            // `(handle, vtable)` shape) land in their own follow-up
+            // issues per the locked design on #885.
+            runtime_context_vtable: std::ptr::null(),
+            audio_clock_vtable: std::ptr::null(),
+            runtime_ops_vtable: std::ptr::null(),
         }
     }
 }

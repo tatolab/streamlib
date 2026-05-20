@@ -5,7 +5,6 @@
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::Result;
-use std::future::Future;
 
 /// Processor that reacts to input data.
 ///
@@ -29,37 +28,29 @@ use std::future::Future;
 /// Both types are `!Clone` and borrow-scoped — the `ctx` cannot be stashed
 /// past the call. Pre-reserve resources in `setup()`; use them from
 /// `process()` through the limited-access ctx.
+///
+/// All lifecycle methods are synchronous at the trait surface. Plugins that
+/// need async work construct their own async runtime in `setup` and use it
+/// via `block_on` from within the sync method bodies. See issue #885.
 pub trait ReactiveProcessor {
     /// Called once when the processor starts. Privileged ctx.
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called once when the processor stops. Privileged ctx.
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called when the processor is paused. Restricted ctx.
-    fn on_pause(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called when the processor is resumed after being paused. Restricted ctx.
-    fn on_resume(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called when input data arrives. Restricted ctx.

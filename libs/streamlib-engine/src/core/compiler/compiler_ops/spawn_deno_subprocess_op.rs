@@ -10,7 +10,6 @@ use crate::core::error::{Result, Error};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::DynamicProcessorConstructorFn;
-use crate::core::runtime::BoxFuture;
 use crate::core::{
     ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
@@ -64,11 +63,11 @@ pub(crate) struct DenoSubprocessHostProcessor {
 // ============================================================================
 
 impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProcessor {
-    fn __generated_setup<'a>(
-        &'a mut self,
-        ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
+    fn __generated_setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Result<()> {
+        (|| -> Result<()> {
             let project_path = PathBuf::from(&self.project_path);
 
             tracing::info!(
@@ -256,14 +255,14 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             );
 
             Ok(())
-        })
+        })()
     }
 
-    fn __generated_teardown<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
+    fn __generated_teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Result<()> {
+        (|| -> Result<()> {
             tracing::info!("[{}] Tearing down Deno subprocess", self.processor_id);
 
             // Send teardown command (best-effort)
@@ -325,14 +324,14 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             }
 
             Ok(())
-        })
+        })()
     }
 
-    fn __generated_on_pause<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async {
+    fn __generated_on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
+        (|| -> Result<()> {
             if self.subprocess_dead {
                 return Ok(());
             }
@@ -355,14 +354,14 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 }
             }
             Ok(())
-        })
+        })()
     }
 
-    fn __generated_on_resume<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async {
+    fn __generated_on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
+        (|| -> Result<()> {
             if self.subprocess_dead {
                 return Ok(());
             }
@@ -385,7 +384,7 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 }
             }
             Ok(())
-        })
+        })()
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {

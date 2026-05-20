@@ -5,7 +5,6 @@
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::error::Result;
-use std::future::Future;
 
 /// Processor that runs continuously in a loop.
 ///
@@ -14,37 +13,31 @@ use std::future::Future;
 ///
 /// See [`ReactiveProcessor`](super::reactive::ReactiveProcessor) for the
 /// capability-typed lifecycle contract — the same rules apply here.
+///
+/// All lifecycle methods are synchronous at the trait surface. Plugins that
+/// need async work in lifecycle methods construct their own async runtime
+/// (tokio, smol, etc.) in `setup`, stash a handle on `self`, and use it
+/// via `block_on` from within the sync method bodies. The host does NOT
+/// expose an async runtime — see issue #885 for the rationale.
 pub trait ContinuousProcessor {
     /// Called once when the processor starts. Privileged ctx.
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called once when the processor stops. Privileged ctx.
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called when the processor is paused. Restricted ctx.
-    fn on_pause(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called when the processor is resumed after being paused. Restricted ctx.
-    fn on_resume(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     /// Called repeatedly by the runtime in a loop. Restricted ctx.
