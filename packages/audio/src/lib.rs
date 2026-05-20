@@ -50,3 +50,17 @@ pub use chord_generator::ChordGeneratorProcessor;
 pub use processor_audio_converter::{
     ProcessorAudioConverter, ProcessorAudioConverterStatus, ProcessorAudioConverterTargetFormat,
 };
+
+#[cfg(all(
+    feature = "plugin",
+    any(target_os = "linux", target_os = "macos", target_os = "ios")
+))]
+streamlib_plugin_abi::export_plugin!(
+    crate::AudioChannelConverterProcessor::Processor,
+    crate::AudioMixerProcessor::Processor,
+    crate::AudioResamplerProcessor::Processor,
+    crate::BufferRechunkerProcessor::Processor,
+    crate::ChordGeneratorProcessor::Processor,
+    crate::AudioCaptureProcessor::Processor,
+    crate::AudioOutputProcessor::Processor,
+);

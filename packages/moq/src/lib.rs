@@ -25,3 +25,9 @@ pub use moq_session::{
     DEFAULT_MOQ_RELAY_URL,
 };
 pub use moq_subscribe_track::MoqSubscribeTrackProcessor;
+
+#[cfg(feature = "plugin")]
+streamlib_plugin_abi::export_plugin!(
+    crate::MoqPublishTrackProcessor::Processor,
+    crate::MoqSubscribeTrackProcessor::Processor,
+);

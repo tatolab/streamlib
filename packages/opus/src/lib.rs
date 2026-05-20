@@ -26,3 +26,12 @@ pub use opus_encoder::{
 };
 
 pub use _generated_::{OpusDecoderConfig, OpusEncoderConfig};
+
+#[cfg(all(
+    feature = "plugin",
+    any(target_os = "macos", target_os = "ios", target_os = "linux")
+))]
+streamlib_plugin_abi::export_plugin!(
+    crate::OpusDecoderProcessor::Processor,
+    crate::OpusEncoderProcessor::Processor,
+);

@@ -183,8 +183,10 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
             }
         } else if no_build {
             let cargo_hint = read_cargo_package_name(package_dir)
-                .map(|name| format!("cargo build --release -p {}", name))
-                .unwrap_or_else(|_| "cargo build --release -p <name>".to_string());
+                .map(|name| format!("cargo build --release -p {n} --features {n}/plugin", n = name))
+                .unwrap_or_else(|_| {
+                    "cargo build --release -p <name> --features <name>/plugin".to_string()
+                });
             anyhow::bail!(
                 "Package at {} declares Rust runtime processors but {} contains no \
                  host-OS dylib (`*.{}`) for triple `{}` and `--no-build` was specified. \
@@ -340,21 +342,34 @@ fn run_cargo_build_release(
     cargo_name: &str,
     dylib_ext: &str,
 ) -> Result<PathBuf> {
-    println!("Building {} (cargo build --release -p {})", cargo_name, cargo_name);
+    // `--features <name>/plugin` enables the `export_plugin!` invocation
+    // in the package's `lib.rs`. The feature is default-off so force-link
+    // rlib consumers don't pull in the unmangled `STREAMLIB_PLUGIN`
+    // symbol (multiple rlibs with the same static collide at link time);
+    // pack flips it on so the produced cdylib carries the symbol the
+    // runtime dlopens.
+    let features_flag = format!("{}/plugin", cargo_name);
+    println!(
+        "Building {} (cargo build --release -p {} --features {})",
+        cargo_name, cargo_name, features_flag
+    );
     let output = Command::new("cargo")
         .arg("build")
         .arg("--release")
         .arg("--message-format=json")
         .arg("-p")
         .arg(cargo_name)
+        .arg("--features")
+        .arg(&features_flag)
         .current_dir(package_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .output()
         .with_context(|| {
             format!(
-                "Failed to invoke `cargo build --release -p {}` in {}",
+                "Failed to invoke `cargo build --release -p {} --features {}` in {}",
                 cargo_name,
+                features_flag,
                 package_dir.display()
             )
         })?;

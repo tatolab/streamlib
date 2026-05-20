@@ -15,3 +15,9 @@ pub use webrtc_whep::WebRtcWhepProcessor;
 pub use webrtc_whip::WebRtcWhipProcessor;
 
 pub use _generated_::{WebrtcWhepConfig, WebrtcWhipConfig};
+
+#[cfg(feature = "plugin")]
+streamlib_plugin_abi::export_plugin!(
+    crate::WebRtcWhepProcessor::Processor,
+    crate::WebRtcWhipProcessor::Processor,
+);

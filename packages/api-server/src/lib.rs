@@ -12,3 +12,6 @@ mod state;
 
 pub use _generated_::ApiServerConfig;
 pub use processor::ApiServerProcessor;
+
+#[cfg(feature = "plugin")]
+streamlib_plugin_abi::export_plugin!(crate::ApiServerProcessor::Processor);

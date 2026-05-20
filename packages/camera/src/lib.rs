@@ -18,3 +18,9 @@ pub mod linux;
 pub mod apple;
 
 pub use camera::{CameraDevice, CameraProcessor};
+
+#[cfg(all(
+    feature = "plugin",
+    any(target_os = "linux", target_os = "macos", target_os = "ios")
+))]
+streamlib_plugin_abi::export_plugin!(crate::CameraProcessor::Processor);
