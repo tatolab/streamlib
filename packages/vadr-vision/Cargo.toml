@@ -51,9 +51,10 @@ tracing.workspace = true
 [dev-dependencies]
 # Integration tests spin up a Runner and exercise the full vision
 # pipeline: UdpSource → VadrVisionDepayloader → JpegDecoder →
-# VideoFrameCounter. force-link the upstream / downstream crates so
-# their `inventory::submit!` factory registrations are present in
-# the test binary.
+# VideoFrameCounter. Tests reference each upstream / downstream
+# crate's typed `Processor` types via explicit
+# `PROCESSOR_REGISTRY.register::<P>()` calls in setup, which both
+# pulls the rlib into the link line and makes registration explicit.
 streamlib = { path = "../../libs/streamlib-sdk" }
 streamlib-network = { path = "../network" }
 streamlib-jpeg = { path = "../jpeg" }

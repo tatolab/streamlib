@@ -854,12 +854,14 @@ mod tests {
 
     /// Look up a registered mock processor's structured ident by its
     /// PascalCase short name. The mock processors live in
-    /// `graph::graph_tests` and self-register via the `#[processor]`
-    /// macro at link time; their full ident is composed from
-    /// `libs/streamlib/streamlib.yaml`'s `package:` block — so reading
-    /// the version off the registry rather than hardcoding it keeps
-    /// these tests robust to package-version bumps.
+    /// [`crate::core::test_support`] and are registered explicitly via
+    /// `ensure_test_mocks_registered()` (no `inventory::submit!`
+    /// auto-discovery); their full ident is composed from the engine
+    /// `streamlib.yaml`'s `package:` block, so reading the version off
+    /// the registry rather than hardcoding it keeps these tests robust
+    /// to package-version bumps.
     fn lookup_registered_ident(short: &str) -> SchemaIdent {
+        crate::core::test_support::ensure_test_mocks_registered();
         PROCESSOR_REGISTRY
             .list_registered()
             .into_iter()

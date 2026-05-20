@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use serial_test::serial;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
 use streamlib_debug_utilities::video_frame_counter::{
@@ -36,18 +36,17 @@ use streamlib_debug_utilities::video_frame_counter::{
 };
 use streamlib_vadr_vision::header::{ChunkHeader, encode};
 
-// Force-link the package lib crates so their `inventory::submit!`
-// factory registrations are pulled into the test binary's link line.
-// Without this rustc's dead-code elimination drops the libs entirely
-// and `add_processor` errors with `UnknownProcessorType`.
-#[allow(unused_imports)]
-use streamlib_debug_utilities::VideoFrameCounterProcessor as _;
-#[allow(unused_imports)]
-use streamlib_jpeg::JpegDecoderProcessor as _;
-#[allow(unused_imports)]
-use streamlib_network::UdpSourceProcessor as _;
-#[allow(unused_imports)]
-use streamlib_vadr_vision::VadrVisionDepayloaderProcessor as _;
+/// Explicit typed registration for the package processors this test
+/// drives. Replaces the legacy `use foo::Bar as _;` inventory
+/// force-link pattern.
+fn register_test_processors() {
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSourceProcessor::Processor>();
+    PROCESSOR_REGISTRY
+        .register::<streamlib_vadr_vision::VadrVisionDepayloaderProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_jpeg::JpegDecoderProcessor::Processor>();
+    PROCESSOR_REGISTRY
+        .register::<streamlib_debug_utilities::VideoFrameCounterProcessor::Processor>();
+}
 
 const FIXTURE_WIDTH: u32 = 320;
 const FIXTURE_HEIGHT: u32 = 180;
@@ -105,6 +104,7 @@ fn chunked_datagrams(frame_id: u32, sim_time_ns: u64, jpeg: &[u8]) -> Vec<Vec<u8
 /// the counter atomics afterward.
 fn run_pipeline(bind_addr: SocketAddr, jpeg: &[u8], frames: u32) {
     let runtime = Runner::new().expect("Runner::new");
+    register_test_processors();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(
@@ -297,6 +297,7 @@ fn malformed_vadr_datagrams_do_not_crash_runtime() {
 
     let bind_addr = pick_free_udp_port();
     let runtime = Runner::new().expect("Runner::new");
+    register_test_processors();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(

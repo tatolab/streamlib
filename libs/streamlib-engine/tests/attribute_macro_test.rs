@@ -9,8 +9,11 @@
 use streamlib_engine::core::GeneratedProcessor;
 use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
-// Define a simple processor using YAML schema
-#[streamlib::sdk::processor("TestProcessor")]
+// Define a simple processor using YAML schema. `no_inventory` opts out
+// of the macro's `inventory::submit!` emission — this test only exercises
+// the macro's typed-API surface (descriptor + ident + port markers) and
+// doesn't need the processor in the global `PROCESSOR_REGISTRY`.
+#[streamlib::sdk::processor("TestProcessor", no_inventory)]
 pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct

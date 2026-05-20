@@ -34,15 +34,12 @@ use std::time::{Duration, Instant};
 
 use serial_test::serial;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
 use tokio::io::Interest;
 use tokio::net::UdpSocket as TokioUdpSocket;
 use tracing_subscriber::fmt::MakeWriter;
-
-#[allow(unused_imports)]
-use streamlib_network::{UdpSinkProcessor as _, UdpSourceProcessor as _};
 
 // --------------------------------------------------------------------
 // Captured-tracing harness for #2.
@@ -370,6 +367,11 @@ fn pipeline_scenario(
 
     let source_bind = pick_free_udp_port();
     let runtime = Runner::new().expect("Runner::new");
+
+    // Explicit typed registration replaces the legacy
+    // `use foo::Bar as _;` inventory force-link.
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSourceProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSinkProcessor::Processor>();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(

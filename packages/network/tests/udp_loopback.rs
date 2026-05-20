@@ -26,14 +26,8 @@ use serial_test::serial;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::schema_ident;
-
-// Force-link the package's lib crate so its `inventory::submit!` factory
-// registrations (one per `#[streamlib::sdk::processor("...")]`) are
-// pulled into the test binary. Without an explicit reference rustc's
-// dead-code elimination would drop the lib entirely from the link line.
-#[allow(unused_imports)]
-use streamlib_network::{UdpSinkProcessor as _, UdpSourceProcessor as _};
 
 /// Bind an ephemeral UDP port, capture its address, drop the socket so
 /// the port is free for the processor to bind. The brief window
@@ -61,6 +55,16 @@ fn loopback_round_trip_propagates_peer_addr() {
     let source_bind = pick_free_udp_port();
 
     let runtime = Runner::new().expect("Runner::new");
+
+    // Replace the legacy `use foo::Bar as _;` inventory force-link
+    // pattern with explicit, typed `register::<P>()` calls. The
+    // package macros opt out of `inventory::submit!` via
+    // `no_inventory` so the registry sees these registrations only.
+    // Cross-DSO `load_project + dlopen` is the production path but
+    // is not exercised here — see issue #873 + the follow-up engine
+    // ticket on `HostServices` plugin-ABI v2 for the dlopen story.
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSourceProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSinkProcessor::Processor>();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(

@@ -16,6 +16,8 @@ pub(crate) mod observability;
 pub(crate) mod runtime_hooks;
 pub(crate) mod signals;
 pub(crate) mod streamlib_home;
+#[cfg(test)]
+pub(crate) mod test_support;
 // Apple-flavored codec wrappers + VideoToolbox + AppleMp4Muxer live in
 // their domain packages' `_apple_impl_pending_/` directories (#786):
 // h264 (videotoolbox + video_codec/encoder/decoder + their configs),

@@ -31,12 +31,9 @@ use std::time::{Duration, Instant};
 
 use serial_test::serial;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
-
-#[allow(unused_imports)]
-use streamlib_network::{UdpSinkProcessor as _, UdpSourceProcessor as _};
 
 const SENDER_COUNT: usize = 6;
 const PACKETS_PER_SENDER: usize = 300;
@@ -57,6 +54,14 @@ fn burst_six_streams_at_200hz_round_trips_without_loss() {
     let source_bind = pick_free_udp_port();
 
     let runtime = Runner::new().expect("Runner::new");
+
+    // Explicit typed registration replaces the legacy
+    // `use foo::Bar as _;` inventory force-link. The typed
+    // reference pulls the rlib into the link line; the
+    // `register::<P>()` call makes registration intent explicit
+    // (idempotent — dedup'd against the rlib's inventory submission).
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSourceProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSinkProcessor::Processor>();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(
