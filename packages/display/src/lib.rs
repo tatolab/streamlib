@@ -22,3 +22,6 @@ pub mod linux;
 // wrong contract for this carve-out.
 
 pub use display::{DisplayConfig, DisplayProcessor};
+
+#[cfg(all(feature = "plugin", target_os = "linux"))]
+streamlib_plugin_abi::export_plugin!(crate::DisplayProcessor::Processor);

@@ -37,3 +37,6 @@ pub use plugin_info::{ParameterInfo, PluginInfo};
 pub use scanner::{ClapPluginInfo, ClapScanner};
 
 pub use _generated_::ClapEffectConfig;
+
+#[cfg(all(feature = "plugin", any(target_os = "macos", target_os = "ios")))]
+streamlib_plugin_abi::export_plugin!(crate::ClapEffectProcessor::Processor);

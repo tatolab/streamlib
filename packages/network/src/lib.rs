@@ -15,3 +15,9 @@ pub mod udp_source;
 
 pub use udp_sink::UdpSinkProcessor;
 pub use udp_source::UdpSourceProcessor;
+
+#[cfg(feature = "plugin")]
+streamlib_plugin_abi::export_plugin!(
+    crate::UdpSinkProcessor::Processor,
+    crate::UdpSourceProcessor::Processor,
+);

@@ -11,7 +11,15 @@ categories = ["multimedia::audio", "multimedia"]
 
 [lib]
 name = "streamlib_audio"
-crate-type = ["rlib"]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+# Default off so force-link rlib consumers don't see the `STREAMLIB_PLUGIN`
+# symbol (multiple Rust-impl rlibs with the same unmangled static collide
+# at link time). `streamlib pack` invokes `cargo build --features plugin`
+# when packing the cdylib for dlopen-based loading.
+default = []
+plugin = []
 
 [build-dependencies]
 streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
@@ -25,6 +33,10 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 # Procedural macros — `#[streamlib::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
+# runtime dlopens at load time.
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
 
 # Cross-platform deps used by every audio processor.
 parking_lot = "0.12"

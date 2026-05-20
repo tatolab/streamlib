@@ -20,3 +20,6 @@ pub mod linux;
 pub use linux::JpegDecoderProcessor;
 
 pub use _generated_::{EncodedJpegFrame, JpegDecoderConfig};
+
+#[cfg(all(feature = "plugin", target_os = "linux"))]
+streamlib_plugin_abi::export_plugin!(crate::JpegDecoderProcessor::Processor);

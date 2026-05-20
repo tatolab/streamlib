@@ -11,3 +11,6 @@ pub mod _generated_ {
 pub mod test_configured_processor;
 
 pub use test_configured_processor::ConfiguredProcessor;
+
+#[cfg(feature = "plugin")]
+streamlib_plugin_abi::export_plugin!(crate::ConfiguredProcessor::Processor);

@@ -13,6 +13,14 @@ categories = ["development-tools"]
 name = "streamlib_debug_utilities"
 crate-type = ["rlib", "cdylib"]
 
+[features]
+# Gates the `export_plugin!` invocation so the `STREAMLIB_PLUGIN` symbol
+# only ends up in the cdylib output (multiple Rust-impl rlibs sharing
+# the same unmangled static collide at link time). `streamlib pack`
+# invokes `cargo build --features plugin` when packing.
+default = []
+plugin = []
+
 [build-dependencies]
 streamlib-jtd-codegen = { path = "../../libs/streamlib-jtd-codegen" }
 
@@ -25,6 +33,10 @@ streamlib = { path = "../../libs/streamlib-sdk" }
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = { path = "../../libs/streamlib-macros" }
+
+# Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
+# runtime dlopens at load time.
+streamlib-plugin-abi = { path = "../../libs/streamlib-plugin-abi" }
 
 # Serialization (config dataclasses ship as serde-derived).
 serde.workspace = true

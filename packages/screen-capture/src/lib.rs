@@ -19,3 +19,6 @@ pub use apple::AppleScreenCaptureProcessor;
 
 pub use _generated_::ScreenCaptureConfig;
 pub use _generated_::tatolab__screen_capture::screen_capture_config::TargetType;
+
+#[cfg(all(feature = "plugin", any(target_os = "macos", target_os = "ios")))]
+streamlib_plugin_abi::export_plugin!(crate::AppleScreenCaptureProcessor::Processor);

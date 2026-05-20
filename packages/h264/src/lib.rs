@@ -19,6 +19,12 @@ pub use linux::{H264DecoderProcessor, H264EncoderProcessor};
 
 pub use _generated_::{H264DecoderConfig, H264EncoderConfig};
 
+#[cfg(all(feature = "plugin", target_os = "linux"))]
+streamlib_plugin_abi::export_plugin!(
+    crate::H264DecoderProcessor::Processor,
+    crate::H264EncoderProcessor::Processor,
+);
+
 // `_apple_impl_pending_` holds the VideoToolbox encoder/decoder + the
 // cross-platform Apple-flavored codec wrappers parked out of the engine
 // in #786. Gated so it never compiles; re-enable + rewire imports to

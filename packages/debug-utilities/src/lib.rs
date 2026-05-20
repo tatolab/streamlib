@@ -26,3 +26,17 @@ pub use bgra_file_source::BgraFileSourceProcessor;
 
 #[cfg(target_os = "linux")]
 pub use jpeg_bytes_source::JpegBytesSourceProcessor;
+
+#[cfg(all(feature = "plugin", target_os = "linux"))]
+streamlib_plugin_abi::export_plugin!(
+    crate::SimplePassthroughProcessor::Processor,
+    crate::VideoFrameCounterProcessor::Processor,
+    crate::BgraFileSourceProcessor::Processor,
+    crate::JpegBytesSourceProcessor::Processor,
+);
+
+#[cfg(all(feature = "plugin", not(target_os = "linux")))]
+streamlib_plugin_abi::export_plugin!(
+    crate::SimplePassthroughProcessor::Processor,
+    crate::VideoFrameCounterProcessor::Processor,
+);
