@@ -51,13 +51,13 @@ where
     let cache = VTABLES.get_or_init(|| Mutex::new(HashMap::new()));
     let type_id = TypeId::of::<P>();
 
-    if let Some(vtable) = cache.lock().unwrap().get(&type_id) {
-        return *vtable;
-    }
-
-    let new_vtable: &'static ProcessorVTable = Box::leak(Box::new(build_vtable::<P>()));
+    // Single lock acquire: existing entry returns immediately; otherwise
+    // construct + leak + insert under the lock so two concurrent first-
+    // callers don't both leak a `ProcessorVTable`.
     let mut guard = cache.lock().unwrap();
-    *guard.entry(type_id).or_insert(new_vtable)
+    *guard
+        .entry(type_id)
+        .or_insert_with(|| Box::leak(Box::new(build_vtable::<P>())))
 }
 
 fn build_vtable<P>() -> ProcessorVTable

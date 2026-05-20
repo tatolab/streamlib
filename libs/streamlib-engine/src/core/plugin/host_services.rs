@@ -9,9 +9,9 @@
 //! - **Host-side callback impls** (`host_tracing_emit`,
 //!   `host_pubsub_publish`, `host_schema_register`,
 //!   `host_schema_lookup`, `host_iceoryx_log_emit`,
-//!   `host_processor_register`, `host_tokio_handle_clone`) that the
-//!   host's loader writes into a [`HostServices`] struct before
-//!   invoking a cdylib's `STREAMLIB_PLUGIN.register` callback.
+//!   `host_processor_register`) that the host's loader writes into a
+//!   [`HostServices`] struct before invoking a cdylib's
+//!   `STREAMLIB_PLUGIN.register` callback.
 //! - **Cdylib-side `install_host_services` helper** that the cdylib's
 //!   `export_plugin!` macro calls at register time. The helper
 //!   validates layout, stores the callback table in a per-DSO

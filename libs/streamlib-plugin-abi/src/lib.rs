@@ -85,8 +85,8 @@ pub const STREAMLIB_ABI_VERSION: u32 = 3;
 ///   `processor_registry_typed` typed pointer.
 /// - v2: `processor_registry_typed` removed; replaced with
 ///   [`HostServices::processor_register`] callback + [`ProcessorVTable`].
-///   Adds [`HostServices::host_tokio_handle_clone`] so cdylib-side
-///   async-lifecycle wrappers can block_on on the host's tokio runtime.
+///   Async-lifecycle wrappers grab the tokio handle from
+///   `ctx.tokio_handle()` rather than via a separate callback.
 pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 2;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
@@ -292,12 +292,13 @@ pub struct ProcessorVTable {
     pub has_iceoryx2_outputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
     pub has_iceoryx2_inputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
 
-    /// Returns `Arc::into_raw(arc.clone()).cast()` for the
-    /// `OutputWriter` arc the processor exposes, or null for "no
-    /// output writer". The host casts back via `Arc::from_raw`,
-    /// taking ownership of the cloned reference. Cdylib MUST clone
-    /// from its own Arc (so its internal Arc remains valid) before
-    /// `Arc::into_raw`.
+    /// Returns `Arc::into_raw(arc).cast()` of an `OutputWriter` arc
+    /// the processor exposes, or null for "no output writer". The
+    /// host casts back via `Arc::from_raw`, taking ownership of one
+    /// strong reference. The cdylib wrapper consumes the `Arc<...>`
+    /// returned by `<P as GeneratedProcessor>::get_iceoryx2_output_writer`
+    /// directly — that trait method is responsible for returning a
+    /// clone (the macro emits `Some(self.outputs.clone())`).
     pub get_iceoryx2_output_writer_arc:
         unsafe extern "C" fn(instance: *const c_void) -> *const c_void,
 
