@@ -21,17 +21,12 @@
 //! pointers that bridge every process-wide service the plugin's
 //! statically-linked engine copy would otherwise see in isolation:
 //! tracing emit, PUBSUB publish, schema-registry register / lookup,
-//! iceoryx2-log emit. The cdylib's `streamlib::sdk::plugin::install_host_services`
-//! stores those fn pointers and replaces the cdylib's per-DSO
-//! statics' read sites with forwarders that thunk through them.
-//!
-//! Side note: the legacy `processor_registry_typed` field still
-//! crosses as a typed `*const ProcessorInstanceFactory`. The
-//! `ProcessorInstanceFactory`'s internal `Box<dyn Fn>` constructors
-//! and `Box<dyn DynGeneratedProcessor>` instance objects are
-//! pre-existing dyn-trait crossings whose ABI stability depends on
-//! the engine's semver coupling — separate from the callback-table
-//! bridges this struct introduces.
+//! iceoryx2-log emit. Cdylib registration of processor types crosses
+//! via [`HostServices::processor_register`], which carries a msgpack-
+//! encoded `ProcessorDescriptor` plus a [`ProcessorVTable`] of
+//! extern "C" fn pointers covering the full host-called
+//! `DynGeneratedProcessor` surface — constructor + lifecycle plus
+//! iceoryx2 wiring, execution-config, and config-json IO.
 //!
 //! # Example plugin
 //!
@@ -78,14 +73,26 @@ use core::ffi::c_void;
 /// incompatibly. Same-major-version layout additions append to the
 /// end of [`HostServices`] and read the new fields only when
 /// `abi_layout_version` advertises them.
-pub const STREAMLIB_ABI_VERSION: u32 = 2;
+pub const STREAMLIB_ABI_VERSION: u32 = 3;
 
 /// Layout version of the [`HostServices`] payload. Read first by the
 /// cdylib's `install_host_services` before any other field is
 /// touched. Bumped whenever fields are added, removed, or reordered.
 /// Distinct from [`STREAMLIB_ABI_VERSION`] because layout-only
 /// additions can ship without bumping the wire ABI.
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 1;
+///
+/// - v1: tracing / PUBSUB / schema / iceoryx2-log callbacks +
+///   `processor_registry_typed` typed pointer.
+/// - v2: `processor_registry_typed` removed; replaced with
+///   [`HostServices::processor_register`] callback + [`ProcessorVTable`].
+///   Adds [`HostServices::host_tokio_handle_clone`] so cdylib-side
+///   async-lifecycle wrappers can block_on on the host's tokio runtime.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 2;
+
+/// Layout version of the [`ProcessorVTable`] struct. Read by the
+/// host's `processor_register` impl before dereferencing any vtable
+/// entry; mismatching versions abort the registration cleanly.
+pub const PROCESSOR_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 // =============================================================================
 // Primitive enums
@@ -120,6 +127,230 @@ pub enum HostInterest {
 /// as the first argument; the host derefs to its concrete service
 /// table, the cdylib treats it as opaque.
 pub type HostHandle = *const c_void;
+
+// =============================================================================
+// ProcessorVTable — extern "C" dispatch table for processor instances
+// =============================================================================
+
+/// `extern "C" fn` dispatch table the host uses to call methods on a
+/// dlopen'd processor instance. Replaces the `Box<dyn
+/// DynGeneratedProcessor>` dyn-trait crossing the host used to
+/// dispatch through.
+///
+/// The vtable covers the full host-called surface — constructor +
+/// lifecycle (setup / teardown / on_pause / on_resume / process /
+/// start / stop / destroy) plus the static-info, iceoryx2-wiring,
+/// and config-IO methods compiler ops invoke on every processor.
+/// Methods bodies still receive `&RuntimeContext*Access` references
+/// crossing via Rust trait-object dispatch; those are Phase B + C
+/// (see `streamlib-plugin-abi`'s parent issue).
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0 forever. The host's
+/// `processor_register` impl reads it before dereferencing any other
+/// field; older vtables loaded into newer hosts are rejected
+/// cleanly. New fields go at the **end** and bump
+/// [`PROCESSOR_VTABLE_LAYOUT_VERSION`].
+///
+/// # Error convention
+///
+/// Sync lifecycle methods (`process`, `start`, `stop`) and async
+/// lifecycle methods (`setup`, `teardown`, `on_pause`, `on_resume`)
+/// share the error convention: return `0` on success, non-zero on
+/// failure. `err_buf` / `err_buf_cap` is a caller-provided UTF-8
+/// scratch buffer the callee writes a message into; `*err_len`
+/// receives the actual byte count written. Truncation is benign
+/// (caller's buffer was too small).
+///
+/// `construct` follows the same convention but returns a `*mut
+/// c_void` instance handle (null on failure).
+///
+/// `to_runtime_json`, `config_json`, `execution_config` return a
+/// byte count: 0 = "no payload"; a value larger than `out_cap` = the
+/// required buffer size (caller should resize and retry). On
+/// success, `*out_len` receives the bytes written.
+#[repr(C)]
+pub struct ProcessorVTable {
+    /// Vtable layout version. Must equal
+    /// [`PROCESSOR_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+
+    // -------------------------------------------------------------------------
+    // Constructor + lifetime
+    // -------------------------------------------------------------------------
+
+    /// Build a processor instance from msgpack-encoded `Config`
+    /// bytes. Returns a thin opaque pointer the cdylib's wrappers
+    /// cast back to `*mut P::Processor`. Null = failure (message in
+    /// `err_buf`).
+    pub construct: unsafe extern "C" fn(
+        config_msgpack_ptr: *const u8,
+        config_msgpack_len: usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> *mut c_void,
+
+    /// Free the heap allocation `construct` returned. Equivalent to
+    /// `Box::from_raw(instance as *mut P::Processor)` + drop on the
+    /// cdylib side.
+    pub destroy: unsafe extern "C" fn(instance: *mut c_void),
+
+    // -------------------------------------------------------------------------
+    // Async lifecycle (block_on'd inside cdylib using host's tokio handle)
+    // -------------------------------------------------------------------------
+
+    pub setup: unsafe extern "C" fn(
+        instance: *mut c_void,
+        ctx_full: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    pub teardown: unsafe extern "C" fn(
+        instance: *mut c_void,
+        ctx_full: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    pub on_pause: unsafe extern "C" fn(
+        instance: *mut c_void,
+        ctx_limited: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    pub on_resume: unsafe extern "C" fn(
+        instance: *mut c_void,
+        ctx_limited: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Sync lifecycle
+    // -------------------------------------------------------------------------
+
+    pub process: unsafe extern "C" fn(
+        instance: *mut c_void,
+        ctx_limited: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Manual-mode start. Returns non-zero with an error message for
+    /// non-Manual processors.
+    pub start: unsafe extern "C" fn(
+        instance: *mut c_void,
+        ctx_full: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Manual-mode stop. Returns non-zero with an error message for
+    /// non-Manual processors.
+    pub stop: unsafe extern "C" fn(
+        instance: *mut c_void,
+        ctx_full: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Static info
+    // -------------------------------------------------------------------------
+
+    /// Serialize the processor's [`ExecutionConfig`] to msgpack bytes.
+    /// Return value follows the byte-count convention documented on
+    /// the struct.
+    pub execution_config_msgpack: unsafe extern "C" fn(
+        instance: *const c_void,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_len: *mut usize,
+    ) -> usize,
+
+    // -------------------------------------------------------------------------
+    // Iceoryx2 wiring (returns Rust types via raw pointer — known
+    // source-coupling for OutputWriter / InputMailboxes; see Phase A
+    // AI Agent Notes for the deferred-flip rationale)
+    // -------------------------------------------------------------------------
+
+    pub has_iceoryx2_outputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
+    pub has_iceoryx2_inputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
+
+    /// Returns `Arc::into_raw(arc.clone()).cast()` for the
+    /// `OutputWriter` arc the processor exposes, or null for "no
+    /// output writer". The host casts back via `Arc::from_raw`,
+    /// taking ownership of the cloned reference. Cdylib MUST clone
+    /// from its own Arc (so its internal Arc remains valid) before
+    /// `Arc::into_raw`.
+    pub get_iceoryx2_output_writer_arc:
+        unsafe extern "C" fn(instance: *const c_void) -> *const c_void,
+
+    /// Returns `&mut self.inputs as *mut InputMailboxes` cast to
+    /// `*mut c_void`, or null for "no input mailboxes". The pointer
+    /// is valid for the lifetime of `instance` — caller must not
+    /// hold across other vtable calls (the cdylib could mutate
+    /// during a `process()` call from another thread). In practice
+    /// the compiler op holds the lock on `instance` and so the
+    /// borrow is sound.
+    pub get_iceoryx2_input_mailboxes_mut:
+        unsafe extern "C" fn(instance: *mut c_void) -> *mut c_void,
+
+    // -------------------------------------------------------------------------
+    // Config / state IO (msgpack bytes on the wire)
+    // -------------------------------------------------------------------------
+
+    /// Apply a runtime-reconfigure update. The bytes are
+    /// msgpack-encoded `P::Config` (matches `construct`'s payload
+    /// shape).
+    pub apply_config_msgpack: unsafe extern "C" fn(
+        instance: *mut c_void,
+        config_msgpack_ptr: *const u8,
+        config_msgpack_len: usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Serialize the processor's runtime state to msgpack. Return
+    /// value follows the byte-count convention; 0 = no state.
+    pub to_runtime_msgpack: unsafe extern "C" fn(
+        instance: *const c_void,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_len: *mut usize,
+    ) -> usize,
+
+    /// Serialize the processor's current config to msgpack. Return
+    /// value follows the byte-count convention; 0 = no config.
+    pub config_msgpack: unsafe extern "C" fn(
+        instance: *const c_void,
+        out_buf: *mut u8,
+        out_cap: usize,
+        out_len: *mut usize,
+    ) -> usize,
+}
+
+// Safety: every field is a primitive or a fn pointer. The vtable's
+// `&'static` storage on the cdylib side outlives the cdylib's
+// process lifetime via `LOADED_PLUGIN_LIBRARIES` pinning.
+unsafe impl Send for ProcessorVTable {}
+unsafe impl Sync for ProcessorVTable {}
 
 // =============================================================================
 // HostServices — the callback table
@@ -268,24 +499,42 @@ pub struct HostServices {
     ),
 
     // -------------------------------------------------------------------------
-    // Processor registry — legacy typed pointer
+    // Processor registration (v2 — replaces the v1 typed pointer)
     // -------------------------------------------------------------------------
 
-    /// Host's `ProcessorInstanceFactory` reference as a raw pointer.
-    /// The cdylib casts back to `&'static ProcessorInstanceFactory`
-    /// and calls `register::<P>()` on it.
+    /// Register a processor type with the host's registry. The
+    /// `descriptor_msgpack` bytes encode a `ProcessorDescriptor`
+    /// (using `streamlib-processor-schema`'s serde derives) — the
+    /// host decodes them and stores the descriptor + vtable +
+    /// constructor.
     ///
-    /// This is the **one remaining type-passing field** in
-    /// [`HostServices`]. The `ProcessorInstanceFactory`'s internal
-    /// constructor / instance representations use `Box<dyn Fn>` and
-    /// `Box<dyn DynGeneratedProcessor>` — dyn-trait crossings whose
-    /// ABI stability depends on the engine's semver coupling, not
-    /// on the callback-table contract. Lifting them to extern "C"
-    /// requires reshaping the entire processor lifecycle ABI
-    /// (setup / process / teardown / port wiring / runtime-context
-    /// access) and is the natural next-step plugin-ABI milestone.
-    pub processor_registry_typed: *const c_void,
+    /// `vtable` is a `&'static ProcessorVTable` on the cdylib side;
+    /// the host pins the loaded library forever via
+    /// `LOADED_PLUGIN_LIBRARIES`, so the pointer outlives the host's
+    /// usage.
+    ///
+    /// Returns `0` on success. Non-zero indicates the descriptor
+    /// was malformed, the vtable layout version mismatched, or the
+    /// processor type was already registered; the cdylib's macro
+    /// expansion treats failures as silent (the host's "processor
+    /// not registered" check surfaces the error to the user).
+    pub processor_register: unsafe extern "C" fn(
+        host: HostHandle,
+        descriptor_msgpack_ptr: *const u8,
+        descriptor_msgpack_len: usize,
+        vtable: *const ProcessorVTable,
+    ) -> i32,
 }
+
+// Note: cdylib-side async-lifecycle wrappers (`setup` / `teardown` /
+// `on_pause` / `on_resume`) grab the tokio handle from the
+// `RuntimeContext*Access` they receive as a parameter
+// (`ctx.tokio_handle()`). Tokio handle layout is host/cdylib-shared
+// via the workspace-pinned tokio version. Phase B's RuntimeContext
+// callback table will lift that crossing to extern "C" if /
+// when multi-builder tokio drift becomes a real concern; until then,
+// the tokio handle is one of the few remaining shared-type
+// crossings Phase A leaves in place by design.
 
 // Safety: every field is a raw pointer, a fn pointer, or a
 // primitive. The host guarantees the pointed-at state outlives the
@@ -350,8 +599,9 @@ unsafe impl Sync for PluginDeclaration {}
 ///    callback table for the cdylib's PUBSUB / schema-registry
 ///    forwarders, installs the tracing `ForwardingSubscriber`,
 ///    installs the iceoryx2-log forwarder, and returns a
-///    `RegisterHelper` whose `register::<P>()` method routes through
-///    the host's `ProcessorInstanceFactory`.
+///    `RegisterHelper` whose `register::<P>()` method assembles the
+///    processor vtable + descriptor and routes through the host's
+///    `processor_register` callback.
 /// 2. Calls `helper.register::<$processor>()` for each declared
 ///    processor type, registering it with the host's registry.
 ///

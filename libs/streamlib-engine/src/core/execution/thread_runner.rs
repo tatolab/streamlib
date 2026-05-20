@@ -76,10 +76,10 @@ pub fn run_processor_loop(
     {
         let full_ctx = RuntimeContextFullAccess::new(&runtime_ctx);
         let mut guard = processor.lock();
-        match runtime_ctx
-            .tokio_handle()
-            .block_on(guard.__generated_teardown(&full_ctx))
-        {
+        // block_on is now internal to ProcessorInstance::teardown's
+        // dispatch (LegacyDyn variant) or the cdylib's vtable
+        // wrapper (VTable variant).
+        match guard.teardown(&full_ctx) {
             Ok(()) => tracing::info!("[{}] teardown() completed successfully", id),
             Err(e) => tracing::warn!("[{}] teardown() failed: {}", id, e),
         }
@@ -468,10 +468,8 @@ fn dispatch_on_pause(
     tracing::info!("[{}] Invoking on_pause()...", id);
     let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
     let mut guard = processor.lock();
-    match runtime_ctx
-        .tokio_handle()
-        .block_on(guard.__generated_on_pause(&limited_ctx))
-    {
+    // block_on is internal to ProcessorInstance::on_pause's dispatch.
+    match guard.on_pause(&limited_ctx) {
         Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
         Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
     }
@@ -485,10 +483,8 @@ fn dispatch_on_resume(
     tracing::info!("[{}] Invoking on_resume()...", id);
     let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
     let mut guard = processor.lock();
-    match runtime_ctx
-        .tokio_handle()
-        .block_on(guard.__generated_on_resume(&limited_ctx))
-    {
+    // block_on is internal to ProcessorInstance::on_resume's dispatch.
+    match guard.on_resume(&limited_ctx) {
         Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
         Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),
     }

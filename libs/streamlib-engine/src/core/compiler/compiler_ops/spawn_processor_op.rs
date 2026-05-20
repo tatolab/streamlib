@@ -337,7 +337,12 @@ fn spawn_dedicated_thread(
                     runtime,
                 );
                 let setup_result = run_setup_phase(runtime, &runtime_ctx_clone.gpu, || {
-                    tokio_handle.block_on(guard.__generated_setup(&full_ctx))
+                    let _ = &tokio_handle; // block_on now happens inside the
+                    // ProcessorInstance::setup dispatch — VTable variant calls
+                    // through extern "C" (cdylib block_ons on its own tokio
+                    // handle pulled from ctx), LegacyDyn variant block_ons
+                    // here via the ctx's tokio handle.
+                    guard.setup(&full_ctx)
                 });
                 if let Err(e) = setup_result {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);

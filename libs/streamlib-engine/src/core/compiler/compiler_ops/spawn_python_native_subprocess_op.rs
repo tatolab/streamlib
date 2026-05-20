@@ -9,7 +9,7 @@ use std::time::Duration;
 use crate::core::error::{Result, Error};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::ProcessorNode;
-use crate::core::processors::{DynamicProcessorConstructorFn, ProcessorInstance};
+use crate::core::processors::DynamicProcessorConstructorFn;
 use crate::core::runtime::BoxFuture;
 use crate::core::{
     ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
@@ -569,7 +569,7 @@ pub(crate) fn create_python_native_subprocess_host_constructor(
             native_lib_path: native_lib_path.clone(),
             input_port_wiring: Vec::new(),
             output_port_wiring: Vec::new(),
-        }) as ProcessorInstance)
+        }) as Box<dyn crate::core::processors::DynGeneratedProcessor + Send>)
     })
 }
 
