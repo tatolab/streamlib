@@ -19,6 +19,9 @@
 //!
 //! [`PUBSUB`]: crate::core::pubsub::PUBSUB
 
+pub(crate) mod forwarding_subscriber;
 pub mod host_services;
+pub(crate) mod iceoryx2_log_forwarder;
 
-pub use host_services::{install_host_services, HostServices, HOST_SERVICES_LAYOUT_VERSION};
+pub use host_services::{install_host_services, RegisterHelper};
+pub use streamlib_plugin_abi::{HostServices, HOST_SERVICES_LAYOUT_VERSION};

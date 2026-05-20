@@ -20,7 +20,8 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::ffi::c_void;
+use std::sync::{Arc, LazyLock};
 
 #[cfg(test)]
 mod integration_tests;
@@ -28,47 +29,44 @@ mod integration_tests;
 /// Canonical-id → YAML-body store backing the runtime schema registry.
 pub type SchemaRegistryStorage = RwLock<HashMap<String, Arc<str>>>;
 
-/// Per-DSO schema registry. Each linked copy of streamlib-engine
-/// (host binary + every dlopen'd cdylib plugin) gets its own
-/// `LOCAL_SCHEMA_REGISTRY` because Rust mangled statics are not in the
-/// dynsym table. The host bridges every DSO to a single instance via
-/// [`ACTIVE_SCHEMA_REGISTRY`].
-static LOCAL_SCHEMA_REGISTRY: LazyLock<SchemaRegistryStorage> =
+/// Process-wide schema registry.
+///
+/// **Per-DSO instance.** Same shape as [`crate::core::pubsub::PUBSUB`]
+/// — each linked copy of streamlib-engine has its own
+/// `LazyLock<SchemaRegistryStorage>`. Cross-DSO bridging happens
+/// inside the public functions below: when this DSO is a plugin
+/// cdylib whose `install_host_services` has run,
+/// [`register_schema`] and [`get_embedded_schema_definition`] route
+/// through the host's `schema_register` / `schema_lookup` fn
+/// pointers; otherwise they read/write the local DSO's instance
+/// directly.
+static SCHEMA_REGISTRY: LazyLock<SchemaRegistryStorage> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
-
-/// Active schema registry for this DSO. First read lazy-binds to
-/// [`LOCAL_SCHEMA_REGISTRY`]; plugin cdylibs override via
-/// [`install_host_schema_registry`] from their `STREAMLIB_PLUGIN`
-/// register callback so `register_schema` + `get_embedded_schema_definition`
-/// in cdylib code reach the host's instance.
-static ACTIVE_SCHEMA_REGISTRY: OnceLock<&'static SchemaRegistryStorage> = OnceLock::new();
-
-fn active_schema_registry() -> &'static SchemaRegistryStorage {
-    *ACTIVE_SCHEMA_REGISTRY.get_or_init(|| &LOCAL_SCHEMA_REGISTRY)
-}
-
-/// Install a host-owned schema-registry reference into this DSO's
-/// [`ACTIVE_SCHEMA_REGISTRY`] slot. Called by
-/// `streamlib::sdk::plugin::install_host_services` from a plugin
-/// cdylib's register callback. Idempotent at the type-system level
-/// (OnceLock); a later call is a no-op so emit once at register time
-/// before any schema-registry touch.
-pub fn install_host_schema_registry(host: &'static SchemaRegistryStorage) {
-    let _ = ACTIVE_SCHEMA_REGISTRY.set(host);
-}
-
-/// This DSO's local schema-registry instance. The host hands the
-/// pointer to plugin cdylibs through `HostServices.schema_registry`.
-pub fn local_schema_registry() -> &'static SchemaRegistryStorage {
-    &LOCAL_SCHEMA_REGISTRY
-}
 
 /// Register a schema's YAML body under its canonical identifier. Last
 /// write wins. Idempotent for identical bodies.
+///
+/// In a plugin cdylib whose `install_host_services` has run, forwards
+/// to the host's `schema_register` callback so registrations from
+/// cdylib code land in the host's registry (where every consumer
+/// reads).
 pub fn register_schema(canonical_id: impl Into<String>, body: impl Into<Arc<str>>) {
     let canonical = canonical_id.into();
     let body = body.into();
-    let mut guard = active_schema_registry().write();
+    if let Some(cbs) = crate::core::plugin::host_services::host_callbacks() {
+        let yaml: &str = &body;
+        unsafe {
+            (cbs.schema_register)(
+                cbs.host,
+                canonical.as_ptr(),
+                canonical.len(),
+                yaml.as_ptr(),
+                yaml.len(),
+            );
+        }
+        return;
+    }
+    let mut guard = SCHEMA_REGISTRY.write();
     guard.insert(canonical, body);
 }
 
@@ -77,9 +75,43 @@ pub fn register_schema(canonical_id: impl Into<String>, body: impl Into<Arc<str>
 /// Accepts both unversioned (`@tatolab/core/VideoFrame`) and versioned
 /// (`@tatolab/core/VideoFrame@1.0.0`) forms; the version suffix is
 /// stripped before lookup.
+///
+/// In a plugin cdylib whose `install_host_services` has run, routes
+/// through the host's `schema_lookup` callback — the host invokes a
+/// cdylib-provided result callback with the yaml bytes (or null on
+/// miss). The bytes are copied into an owned `Arc<str>` before the
+/// host's call returns; the borrow doesn't outlive the call.
 pub fn get_embedded_schema_definition(name: &str) -> Option<Arc<str>> {
     let canonical = strip_semver_suffix(name);
-    active_schema_registry().read().get(canonical).cloned()
+    if let Some(cbs) = crate::core::plugin::host_services::host_callbacks() {
+        let mut captured: Option<Arc<str>> = None;
+        extern "C" fn capture(userdata: *mut c_void, yaml_ptr: *const u8, yaml_len: usize) {
+            if yaml_ptr.is_null() || yaml_len == 0 {
+                return;
+            }
+            // SAFETY: caller (host) guarantees the bytes are valid
+            // UTF-8 for the duration of this call. We copy into an
+            // owned String before returning, so the borrow doesn't
+            // outlive the call.
+            let bytes = unsafe { std::slice::from_raw_parts(yaml_ptr, yaml_len) };
+            let s: Arc<str> = std::str::from_utf8(bytes)
+                .map(Into::into)
+                .unwrap_or_else(|_| Arc::<str>::from(""));
+            let target = unsafe { &mut *(userdata as *mut Option<Arc<str>>) };
+            *target = Some(s);
+        }
+        unsafe {
+            (cbs.schema_lookup)(
+                cbs.host,
+                canonical.as_ptr(),
+                canonical.len(),
+                capture,
+                &mut captured as *mut _ as *mut c_void,
+            );
+        }
+        return captured;
+    }
+    SCHEMA_REGISTRY.read().get(canonical).cloned()
 }
 
 /// Resolve `max_payload_bytes` from a structured port-schema spec.
@@ -134,7 +166,7 @@ pub fn max_queued_messages_for_port_spec(
 /// Sorted alphabetically so consumers (api-server) get diff-stable
 /// output across processes.
 pub fn list_embedded_schema_names() -> Vec<String> {
-    let mut names: Vec<String> = active_schema_registry().read().keys().cloned().collect();
+    let mut names: Vec<String> = SCHEMA_REGISTRY.read().keys().cloned().collect();
     names.sort();
     names
 }
