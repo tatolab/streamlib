@@ -24,9 +24,8 @@ use std::time::Duration;
 
 use serial_test::serial;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::schema_ident;
 
 /// Bind an ephemeral UDP port, capture its address, drop the socket so
@@ -56,13 +55,12 @@ fn loopback_round_trip_propagates_peer_addr() {
 
     let runtime = Runner::new().expect("Runner::new");
 
-    // Replace the legacy `use foo::Bar as _;` inventory force-link
-    // pattern with explicit, typed `register::<P>()` calls. The
-    // package macros opt out of `inventory::submit!` via
-    // `no_inventory` so the registry sees these registrations only.
-    // Cross-DSO `load_project + dlopen` is the production path but
-    // is not exercised here — see issue #873 + the follow-up engine
-    // ticket on `HostServices` plugin-ABI v2 for the dlopen story.
+    // Explicit typed registration replaces the legacy
+    // `use foo::Bar as _;` inventory force-link pattern. The typed
+    // reference pulls the rlib into the link line (without which
+    // rustc's dead-code elimination would drop it); the
+    // `register::<P>()` call makes registration intent explicit
+    // (idempotent — dedup'd against the rlib's inventory submission).
     PROCESSOR_REGISTRY.register::<streamlib_network::UdpSourceProcessor::Processor>();
     PROCESSOR_REGISTRY.register::<streamlib_network::UdpSinkProcessor::Processor>();
 
