@@ -1,4 +1,4 @@
-// Copyright (c) 2026 Jonathan Fontanez
+// Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Smoke test for the dynamic Rust-plugin load path: build a real
