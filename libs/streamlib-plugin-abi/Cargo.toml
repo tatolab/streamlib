@@ -9,9 +9,15 @@ license = "BUSL-1.1"
 description = "Plugin interface for StreamLib dynamic processor loading"
 repository.workspace = true
 
-# Depends on streamlib for ProcessorInstanceFactory type in the registration function signature
+# The plugin-abi crate is the wire-protocol header for the
+# `STREAMLIB_PLUGIN` symbol. It carries no streamlib dependencies —
+# the macro expansion calls into `streamlib::sdk::plugin::*` (defined
+# in streamlib-engine) at the cdylib's call site, where the streamlib
+# dep already lives. Keeping plugin-abi dep-free resolves the cyclic
+# `streamlib-engine → streamlib-plugin-abi → streamlib-sdk →
+# streamlib-engine` cycle the engine used to dodge by redeclaring
+# `PluginDeclaration` locally.
 [dependencies]
-streamlib = { path = "../streamlib-sdk" }
 
 [lints]
 workspace = true

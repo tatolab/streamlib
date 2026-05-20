@@ -4,6 +4,7 @@
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::{Arc, LazyLock, OnceLock, Weak};
 
 use super::events::{topics, Event, EventListener};
@@ -23,12 +24,65 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-/// Global pub/sub instance for runtime events.
+/// Per-DSO `PubSub` instance.
 ///
-/// Created as an empty shell via LazyLock. Must be initialized via `init()`
-/// during `Runner::new()` before iceoryx2 services are available.
-/// Before init, publish is a no-op and subscribe is buffered.
-pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
+/// Each linked copy of streamlib-engine (host binary, every dlopen'd
+/// cdylib plugin) gets its own `LOCAL_PUBSUB` — Rust mangled statics
+/// aren't in the dynsym table and the dynamic linker doesn't dedupe
+/// them. The host's loader bridges them through [`ACTIVE_PUBSUB`] so
+/// every DSO converges on a single canonical instance.
+static LOCAL_PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
+
+/// Active `PubSub` reference. Set once per DSO:
+/// - on the host, by `Runner::new` → `wire_host_pubsub_for_self()` (points at this DSO's `LOCAL_PUBSUB`).
+/// - in a cdylib, by `streamlib::sdk::plugin::install_host_services` (points at the host's `LOCAL_PUBSUB`).
+///
+/// `OnceLock` semantics: the first writer wins. Calling
+/// [`install_host_pubsub`] after the proxy has already lazy-initialised
+/// to the local instance is a no-op — emit before any `PUBSUB.foo()`
+/// touch.
+static ACTIVE_PUBSUB: OnceLock<&'static PubSub> = OnceLock::new();
+
+/// Proxy that derefs to the active `PubSub`. Lets every call site keep
+/// the `PUBSUB.publish(...)` / `PUBSUB.subscribe(...)` syntax while
+/// the underlying instance can be host-injected at plugin-load time.
+pub struct PubSubProxy {
+    _private: (),
+}
+
+impl Deref for PubSubProxy {
+    type Target = PubSub;
+
+    fn deref(&self) -> &'static PubSub {
+        *ACTIVE_PUBSUB.get_or_init(|| &LOCAL_PUBSUB)
+    }
+}
+
+/// Process-wide pub/sub handle. Reads through [`PubSubProxy`] so a
+/// dlopen'd cdylib plugin gets the host's `PubSub` instance after
+/// `STREAMLIB_PLUGIN`'s register callback wires it via
+/// [`install_host_pubsub`].
+pub static PUBSUB: PubSubProxy = PubSubProxy { _private: () };
+
+/// Install a host-owned `PubSub` reference into this DSO's
+/// [`ACTIVE_PUBSUB`] slot. Called by `streamlib::sdk::plugin::install_host_services`
+/// from a plugin cdylib's register callback to share the host's
+/// `PubSub` instance instead of the cdylib's per-DSO `LOCAL_PUBSUB`.
+///
+/// Idempotent at the type-system level (OnceLock semantics) but a
+/// later call is a no-op — call once at register time before any
+/// `PUBSUB.*` touch.
+pub fn install_host_pubsub(host: &'static PubSub) {
+    let _ = ACTIVE_PUBSUB.set(host);
+}
+
+/// Return this DSO's local `PubSub` instance. Used by the host's
+/// loader to obtain the pointer it hands to plugin cdylibs through
+/// `HostServices.pubsub`, and by `Runner::new()` to wire the host's
+/// own DSO through the same indirection layer plugins ride.
+pub fn local_pubsub() -> &'static PubSub {
+    &LOCAL_PUBSUB
+}
 
 /// iceoryx2-backed pub/sub for runtime events.
 pub struct PubSub {

@@ -17,6 +17,7 @@ pub use worker::format_event_pretty;
 
 mod config;
 mod event;
+pub(crate) mod iceoryx2_log_bridge;
 mod init;
 mod layer;
 mod paths;

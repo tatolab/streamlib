@@ -35,21 +35,6 @@ use crate::iceoryx2::Iceoryx2Node;
 static LOADED_PLUGIN_LIBRARIES: std::sync::LazyLock<parking_lot::Mutex<Vec<libloading::Library>>> =
     std::sync::LazyLock::new(|| parking_lot::Mutex::new(Vec::new()));
 
-/// ABI version for plugin compatibility checks.
-///
-/// Must match `streamlib_plugin_abi::STREAMLIB_ABI_VERSION`. Duplicated here to
-/// avoid a cyclic dependency (streamlib-plugin-abi depends on streamlib).
-const PLUGIN_ABI_VERSION: u32 = 1;
-
-/// Plugin declaration exported by dynamic libraries.
-///
-/// Must match the layout of `streamlib_plugin_abi::PluginDeclaration`.
-#[repr(C)]
-struct PluginDeclaration {
-    abi_version: u32,
-    register: extern "C" fn(&'static crate::core::processors::ProcessorInstanceFactory),
-}
-
 /// Storage variant for tokio runtime in Runner.
 ///
 /// Enables Runner to work both standalone (owning its runtime) and
@@ -200,6 +185,15 @@ impl Runner {
         let result = crate::core::processors::PROCESSOR_REGISTRY.register_all_processors();
         tracing::debug!("Registered {} processors from inventory", result.count);
 
+        // Bridge iceoryx2's internal log records into streamlib tracing
+        // before creating the iceoryx2 Node so any iceoryx2 emit at
+        // construction time lands in the unified JSONL pipeline. The
+        // host's bridge value is the same `&'static dyn Log` that
+        // [`crate::core::plugin::host_services`] hands to plugin cdylibs
+        // via `HostServices.iceoryx2_logger_ptr` so every DSO converges
+        // on a single logger.
+        crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge_for_self();
+
         // Create iceoryx2 Node early so PUBSUB can initialize before start().
         // The node is cloned into RuntimeContext during start().
         tracing::info!("[new] Creating iceoryx2 Node...");
@@ -284,6 +278,16 @@ impl Runner {
     /// Unique identifier for this runtime instance.
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
         &self.runtime_id
+    }
+
+    /// This runtime's iceoryx2 node. Exposed so external loaders
+    /// (`streamlib-runtime`'s `--plugin` flag, embedding apps that
+    /// `dlopen` a cdylib outside `load_project`) can hand it to
+    /// [`crate::core::plugin::host_services::runtime_facing::host_services_for_self`]
+    /// when assembling the `HostServices` payload for a plugin
+    /// register callback.
+    pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
+        &self.iceoryx2_node
     }
 
     /// Path of the JSONL log file this runtime is writing to, if any.
@@ -579,9 +583,11 @@ impl Runner {
                             })?
                         };
 
-                        let decl: &PluginDeclaration = unsafe {
+                        let decl: &streamlib_plugin_abi::PluginDeclaration = unsafe {
                             let symbol = lib
-                                .get::<*const PluginDeclaration>(b"STREAMLIB_PLUGIN\0")
+                                .get::<*const streamlib_plugin_abi::PluginDeclaration>(
+                                    b"STREAMLIB_PLUGIN\0",
+                                )
                                 .map_err(|e| {
                                     Error::Configuration(format!(
                                         "Plugin '{}' missing STREAMLIB_PLUGIN symbol. \
@@ -593,18 +599,37 @@ impl Runner {
                             &**symbol
                         };
 
-                        if decl.abi_version != PLUGIN_ABI_VERSION {
+                        if decl.abi_version != streamlib_plugin_abi::STREAMLIB_ABI_VERSION {
                             return Err(Error::Configuration(format!(
                                 "ABI version mismatch for '{}': plugin has v{}, \
                                  runtime expects v{}. Rebuild the plugin with a \
                                  compatible streamlib-plugin-abi version.",
                                 dylib_path.display(),
                                 decl.abi_version,
-                                PLUGIN_ABI_VERSION
+                                streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
                             )));
                         }
 
-                        (decl.register)(&crate::core::processors::PROCESSOR_REGISTRY);
+                        // Build the HostServices payload from the host's
+                        // process-wide statics + this runtime's iceoryx2
+                        // node, hand it to the cdylib's register callback.
+                        // The cdylib's macro-emitted prologue calls
+                        // `install_host_services` which bridges every
+                        // per-DSO static (tracing dispatch, PUBSUB,
+                        // schema registry, iceoryx2 logger) into the
+                        // host's instances before processor registration.
+                        let host_services =
+                            crate::core::plugin::host_services::runtime_facing::host_services_for_self(
+                                &self.iceoryx2_node,
+                            );
+                        // SAFETY: `host_services` outlives the call;
+                        // the cdylib's callback returns before this
+                        // function frame is dropped.
+                        unsafe {
+                            (decl.register)(
+                                &host_services as *const _ as *const ::std::ffi::c_void,
+                            );
+                        }
 
                         // Keep the library alive for the process lifetime
                         LOADED_PLUGIN_LIBRARIES.lock().push(lib);

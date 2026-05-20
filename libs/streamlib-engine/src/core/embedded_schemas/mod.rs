@@ -20,23 +20,55 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 #[cfg(test)]
 mod integration_tests;
 
-/// Runtime schema registry. Populated by [`register_schema`] (called
-/// from `Runner::load_project` for each loaded package's `schemas:`
-/// entries). Empty until something registers.
-static SCHEMA_REGISTRY: LazyLock<RwLock<HashMap<String, Arc<str>>>> =
+/// Canonical-id → YAML-body store backing the runtime schema registry.
+pub type SchemaRegistryStorage = RwLock<HashMap<String, Arc<str>>>;
+
+/// Per-DSO schema registry. Each linked copy of streamlib-engine
+/// (host binary + every dlopen'd cdylib plugin) gets its own
+/// `LOCAL_SCHEMA_REGISTRY` because Rust mangled statics are not in the
+/// dynsym table. The host bridges every DSO to a single instance via
+/// [`ACTIVE_SCHEMA_REGISTRY`].
+static LOCAL_SCHEMA_REGISTRY: LazyLock<SchemaRegistryStorage> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
+
+/// Active schema registry for this DSO. First read lazy-binds to
+/// [`LOCAL_SCHEMA_REGISTRY`]; plugin cdylibs override via
+/// [`install_host_schema_registry`] from their `STREAMLIB_PLUGIN`
+/// register callback so `register_schema` + `get_embedded_schema_definition`
+/// in cdylib code reach the host's instance.
+static ACTIVE_SCHEMA_REGISTRY: OnceLock<&'static SchemaRegistryStorage> = OnceLock::new();
+
+fn active_schema_registry() -> &'static SchemaRegistryStorage {
+    *ACTIVE_SCHEMA_REGISTRY.get_or_init(|| &LOCAL_SCHEMA_REGISTRY)
+}
+
+/// Install a host-owned schema-registry reference into this DSO's
+/// [`ACTIVE_SCHEMA_REGISTRY`] slot. Called by
+/// `streamlib::sdk::plugin::install_host_services` from a plugin
+/// cdylib's register callback. Idempotent at the type-system level
+/// (OnceLock); a later call is a no-op so emit once at register time
+/// before any schema-registry touch.
+pub fn install_host_schema_registry(host: &'static SchemaRegistryStorage) {
+    let _ = ACTIVE_SCHEMA_REGISTRY.set(host);
+}
+
+/// This DSO's local schema-registry instance. The host hands the
+/// pointer to plugin cdylibs through `HostServices.schema_registry`.
+pub fn local_schema_registry() -> &'static SchemaRegistryStorage {
+    &LOCAL_SCHEMA_REGISTRY
+}
 
 /// Register a schema's YAML body under its canonical identifier. Last
 /// write wins. Idempotent for identical bodies.
 pub fn register_schema(canonical_id: impl Into<String>, body: impl Into<Arc<str>>) {
     let canonical = canonical_id.into();
     let body = body.into();
-    let mut guard = SCHEMA_REGISTRY.write();
+    let mut guard = active_schema_registry().write();
     guard.insert(canonical, body);
 }
 
@@ -47,7 +79,7 @@ pub fn register_schema(canonical_id: impl Into<String>, body: impl Into<Arc<str>
 /// stripped before lookup.
 pub fn get_embedded_schema_definition(name: &str) -> Option<Arc<str>> {
     let canonical = strip_semver_suffix(name);
-    SCHEMA_REGISTRY.read().get(canonical).cloned()
+    active_schema_registry().read().get(canonical).cloned()
 }
 
 /// Resolve `max_payload_bytes` from a structured port-schema spec.
@@ -102,7 +134,7 @@ pub fn max_queued_messages_for_port_spec(
 /// Sorted alphabetically so consumers (api-server) get diff-stable
 /// output across processes.
 pub fn list_embedded_schema_names() -> Vec<String> {
-    let mut names: Vec<String> = SCHEMA_REGISTRY.read().keys().cloned().collect();
+    let mut names: Vec<String> = active_schema_registry().read().keys().cloned().collect();
     names.sort();
     names
 }

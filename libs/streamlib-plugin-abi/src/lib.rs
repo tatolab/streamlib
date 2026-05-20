@@ -3,11 +3,14 @@
 
 //! ABI-stable plugin interface for StreamLib dynamic processor loading.
 //!
-//! This crate provides the minimal interface for plugins to register their
-//! processors with the StreamLib runtime. Plugins use the same `#[streamlib::sdk::processor]`
-//! macro as built-in processors - the only difference is how they're registered.
+//! This crate is the wire-protocol header for the `STREAMLIB_PLUGIN`
+//! symbol: it defines [`PluginDeclaration`], [`STREAMLIB_ABI_VERSION`],
+//! and the [`export_plugin!`] macro. **It does not depend on the
+//! streamlib SDK** — the register callback takes an opaque pointer that
+//! the macro hands to a helper inside the SDK, which is the layer that
+//! knows the typed shape of the host services.
 //!
-//! # Example Plugin
+//! # Example plugin
 //!
 //! ```ignore
 //! use streamlib::prelude::*;
@@ -25,15 +28,13 @@
 //! impl ContinuousProcessor for MyProcessor::Processor {
 //!     fn process(&mut self) -> Result<()> {
 //!         if let Some(frame) = self.video_in.read() {
-//!             // Process frame...
 //!             self.video_out.write(frame);
 //!         }
 //!         Ok(())
 //!     }
 //! }
 //!
-//! // Export for dynamic loading
-//! export_plugin!(MyProcessor);
+//! export_plugin!(MyProcessor::Processor);
 //! ```
 //!
 //! # Plugin Cargo.toml
@@ -47,74 +48,106 @@
 //! streamlib-plugin-abi = "0.2"
 //! ```
 
-use streamlib::sdk::processors::ProcessorInstanceFactory;
+/// Current ABI version. Plugins must match this exactly. Bumped when
+/// the wire shape of [`PluginDeclaration`] or the register callback's
+/// signature changes incompatibly. The shape of the *host-services
+/// payload* passed through the opaque pointer is versioned separately
+/// inside the SDK (see `streamlib::sdk::plugin::HostServices::LAYOUT_VERSION`).
+pub const STREAMLIB_ABI_VERSION: u32 = 2;
 
-/// Current ABI version. Plugins must match this exactly.
+/// Plugin register function signature.
 ///
-/// Increment when making breaking changes to the plugin interface.
-pub const STREAMLIB_ABI_VERSION: u32 = 1;
-
-/// Function signature for plugin registration.
+/// The host passes a pointer to its `HostServices` payload (defined in
+/// streamlib-engine). The cdylib's macro expansion forwards the pointer
+/// into `streamlib::sdk::plugin::install_host_services` which validates
+/// the layout, bridges every process-wide static (tracing dispatch,
+/// PUBSUB, schema registry, iceoryx2 logger), and returns the host's
+/// processor registry the cdylib registers into.
 ///
-/// The host passes its `ProcessorInstanceFactory` reference to ensure processors
-/// register with the host's registry, not a duplicate in the plugin's address space.
-pub type PluginRegisterFn = extern "C" fn(&'static ProcessorInstanceFactory);
+/// # Safety
+///
+/// `host_services` must point at a valid `HostServices` payload owned
+/// by the host. The host guarantees the pointer outlives the cdylib's
+/// process lifetime (today: the cdylib's `Library` handle is pinned by
+/// the host's `LOADED_PLUGIN_LIBRARIES` static).
+pub type PluginRegisterFn = unsafe extern "C" fn(host_services: *const core::ffi::c_void);
 
 /// Plugin declaration exported by dynamic libraries.
 ///
-/// Plugins must export a static symbol named `STREAMLIB_PLUGIN` of this type.
-/// Use the [`export_plugin!`] macro to generate this correctly.
+/// Plugins export a static named `STREAMLIB_PLUGIN` of this type via
+/// [`export_plugin!`]. The host's loader looks up the symbol, validates
+/// `abi_version`, and invokes `register`.
 #[repr(C)]
 pub struct PluginDeclaration {
-    /// ABI version - must match [`STREAMLIB_ABI_VERSION`].
+    /// Wire ABI version — must equal [`STREAMLIB_ABI_VERSION`] at load
+    /// time. Bumped when [`PluginDeclaration`] or [`PluginRegisterFn`]
+    /// changes incompatibly.
     pub abi_version: u32,
 
-    /// Registration function called by the CLI to register processors.
-    ///
-    /// The host passes its [`ProcessorInstanceFactory`] reference to ensure
-    /// processors register with the host's registry, not a duplicate static
-    /// in the plugin's address space.
+    /// Register callback. Receives the host-services pointer; the
+    /// cdylib's macro expansion uses it to bridge process-wide statics
+    /// before registering processors with the host's registry.
     pub register: PluginRegisterFn,
 }
 
-// Safety: PluginDeclaration contains only a version number and function pointer,
-// both of which are Send + Sync.
+// Safety: contains only a u32 and a function pointer.
 unsafe impl Send for PluginDeclaration {}
 unsafe impl Sync for PluginDeclaration {}
 
 /// Export processors for dynamic loading.
 ///
-/// This macro generates the `STREAMLIB_PLUGIN` symbol that the CLI looks for
-/// when loading plugin libraries. It creates a registration function that
-/// registers each processor with the host's `ProcessorInstanceFactory`.
+/// Emits the `STREAMLIB_PLUGIN` static the host's loader looks for, and
+/// generates the register callback that:
+///
+/// 1. Bridges process-wide statics from the host (tracing dispatch,
+///    `PUBSUB`, schema registry, iceoryx2 logger) into the cdylib's
+///    own per-DSO copies via
+///    `streamlib::sdk::plugin::install_host_services`.
+/// 2. Registers each declared processor type with the host's
+///    `ProcessorInstanceFactory`.
+///
+/// Step 1 has to happen before step 2 — the registry's
+/// `register::<P>()` path publishes a `RuntimeDidRegisterProcessorType`
+/// event via `PUBSUB`, which only flows back to the host once `PUBSUB`
+/// points at the host's instance.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use streamlib_plugin_abi::export_plugin;
-///
-/// // Export a single processor
-/// export_plugin!(MyProcessor);
-///
-/// // Export multiple processors
-/// export_plugin!(ProcessorA, ProcessorB, ProcessorC);
+/// export_plugin!(MyProcessor::Processor);
+/// export_plugin!(ProcessorA::Processor, ProcessorB::Processor);
 /// ```
-///
-/// # Requirements
-///
-/// - Each processor must be defined using `#[streamlib::sdk::processor]`
-/// - The processor's `Processor` type must implement the appropriate trait
-///   (`ContinuousProcessor`, `ReactiveProcessor`, or `ManualProcessor`)
 #[macro_export]
 macro_rules! export_plugin {
     ($($processor:ty),* $(,)?) => {
+        /// Generated by `streamlib_plugin_abi::export_plugin!`.
+        ///
+        /// # Safety
+        ///
+        /// `host_services` must point at a layout-compatible
+        /// `HostServices` payload, per the [`PluginRegisterFn`] contract.
         #[allow(non_snake_case)]
-        extern "C" fn __streamlib_plugin_register(
-            registry: &'static ::streamlib::sdk::processors::ProcessorInstanceFactory
+        unsafe extern "C" fn __streamlib_plugin_register(
+            host_services: *const ::core::ffi::c_void,
         ) {
-            $(
-                registry.register::<$processor>();
-            )*
+            // Panic across an `extern "C"` boundary is UB. `catch_unwind`
+            // contains any unwinding within the cdylib; a panic in
+            // `install_host_services` or `registry.register::<_>()` is
+            // converted to silent return on the host side, where the
+            // post-call "processor not registered" check surfaces an
+            // actionable error.
+            let _ = ::std::panic::catch_unwind(|| {
+                // SAFETY: forwarded per the [`PluginRegisterFn`] contract.
+                let registry = unsafe {
+                    ::streamlib::sdk::plugin::install_host_services(host_services)
+                };
+                let Some(registry) = registry else {
+                    return;
+                };
+                $(
+                    registry.register::<$processor>();
+                )*
+            });
         }
 
         #[unsafe(no_mangle)]

@@ -86,6 +86,10 @@ pub mod sdk {
     pub use streamlib_engine::core::graph_file;
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
+    /// Plugin-loading host-services payload + cdylib install helper
+    /// — referenced from `streamlib_plugin_abi::export_plugin!`
+    /// macro expansion.
+    pub use streamlib_engine::core::plugin;
     pub use streamlib_engine::core::prelude;
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;

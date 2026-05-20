@@ -7,5 +7,5 @@ mod events;
 #[cfg(test)]
 mod integration_tests;
 
-pub use bus::PUBSUB;
+pub use bus::{install_host_pubsub, local_pubsub, PubSub, PubSubProxy, PUBSUB};
 pub use events::{topics, Event, EventListener, ProcessorEvent, RuntimeEvent};

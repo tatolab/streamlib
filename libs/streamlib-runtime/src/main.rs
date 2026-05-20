@@ -6,11 +6,13 @@
 //! Standalone process that hosts a StreamLib runtime with API server.
 //! Spawned by the `streamlib run` CLI command (kubectl model).
 
+use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use libloading::Library;
+use streamlib::sdk::plugin::host_services::runtime_facing;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::Runner;
 use streamlib_api_server::{ApiServerConfig, ApiServerProcessor};
@@ -170,7 +172,17 @@ impl PluginLoader {
         }
     }
 
-    fn load_plugin(&mut self, path: &Path) -> Result<usize> {
+    /// Load a Rust plugin cdylib and invoke its `STREAMLIB_PLUGIN`
+    /// register callback. `runtime` provides the host's iceoryx2 node
+    /// used to build the cdylib-facing `HostServices` payload — every
+    /// process-wide static the plugin's per-DSO copy of streamlib
+    /// would otherwise see in isolation (tracing dispatch, PUBSUB,
+    /// schema registry, iceoryx2 logger) is bridged to the host's
+    /// instance before the cdylib's `register::<P>()` calls run.
+    ///
+    /// Must be called AFTER `Runner::new()` — the iceoryx2 node and
+    /// tracing-subscriber pipeline only exist post-construction.
+    fn load_plugin(&mut self, path: &Path, runtime: &Runner) -> Result<usize> {
         let lib = unsafe {
             Library::new(path)
                 .with_context(|| format!("Failed to load plugin library: {}", path.display()))?
@@ -200,7 +212,11 @@ impl PluginLoader {
         }
 
         let before_count = PROCESSOR_REGISTRY.list_registered().len();
-        (decl.register)(&PROCESSOR_REGISTRY);
+        let host_services = runtime_facing::host_services_for_self(runtime.iceoryx2_node());
+        // SAFETY: `host_services` outlives the call.
+        unsafe {
+            (decl.register)(&host_services as *const _ as *const c_void);
+        }
         let after_count = PROCESSOR_REGISTRY.list_registered().len();
         let registered_count = after_count - before_count;
 
@@ -209,7 +225,7 @@ impl PluginLoader {
         Ok(registered_count)
     }
 
-    fn load_plugin_dir(&mut self, dir: &Path) -> Result<usize> {
+    fn load_plugin_dir(&mut self, dir: &Path, runtime: &Runner) -> Result<usize> {
         let mut total_registered = 0;
 
         let entries = std::fs::read_dir(dir)
@@ -220,7 +236,7 @@ impl PluginLoader {
             let path = entry.path();
 
             if is_plugin_library(&path) {
-                match self.load_plugin(&path) {
+                match self.load_plugin(&path, runtime) {
                     Ok(count) => {
                         tracing::info!(
                             "Loaded plugin '{}': {} processor(s) registered",
@@ -298,22 +314,28 @@ async fn run(args: Args) -> Result<()> {
 
     tracing::info!("Starting runtime: {} ({})", runtime_name, runtime_id);
 
-    // Load plugins BEFORE creating runtime (registers processors in global registry)
+    // Construct the runtime FIRST so HostServices is constructable:
+    // tracing dispatch, PUBSUB, schema registry, and the iceoryx2
+    // node only exist post-`Runner::new()`. Plugins loaded below
+    // bridge their per-DSO statics through HostServices and so must
+    // see the host's wired instances.
+    let runtime = Runner::new()?;
+
+    // Load plugins (registers processors with the host's registry,
+    // bridges every per-DSO static into the host's instance).
     let mut loader = PluginLoader::new();
 
     for plugin_path in &args.plugins {
         println!("Loading plugin: {}", plugin_path.display());
-        let count = loader.load_plugin(plugin_path)?;
+        let count = loader.load_plugin(plugin_path, &runtime)?;
         println!("  Registered {} processor(s)", count);
     }
 
     if let Some(ref dir) = args.plugin_dir {
         println!("Loading plugins from: {}", dir.display());
-        let count = loader.load_plugin_dir(dir)?;
+        let count = loader.load_plugin_dir(dir, &runtime)?;
         println!("  Registered {} processor(s) total", count);
     }
-
-    let runtime = Runner::new()?;
 
     let log_path = runtime
         .jsonl_log_path()
