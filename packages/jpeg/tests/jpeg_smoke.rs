@@ -35,7 +35,7 @@ use std::time::Duration;
 
 use serial_test::serial;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
 use streamlib_debug_utilities::_generated_::tatolab__core::color_info::{
@@ -45,16 +45,18 @@ use streamlib_debug_utilities::video_frame_counter::{
     FIRST_FRAME, FIRST_HEIGHT, FIRST_SURFACE_ID_LEN, FIRST_WIDTH, FRAMES_OBSERVED,
 };
 
-// Force-link the package lib crates so their `inventory::submit!`
-// factory registrations are pulled into the test binary's link line.
-// Without this rustc's dead-code elimination drops the libs entirely
-// and `add_processor` errors with `UnknownProcessorType`.
-#[allow(unused_imports)]
-use streamlib_debug_utilities::{
-    JpegBytesSourceProcessor as _, VideoFrameCounterProcessor as _,
-};
-#[allow(unused_imports)]
-use streamlib_jpeg::JpegDecoderProcessor as _;
+/// Explicit typed registration for the package processors this test
+/// drives. Replaces the legacy `use foo::Bar as _;` inventory
+/// force-link pattern — the typed `register::<P>()` calls pull each
+/// package's rlib into the link line (without which rustc's dead-code
+/// elimination would drop it) and make registration intent explicit.
+fn register_test_processors() {
+    PROCESSOR_REGISTRY
+        .register::<streamlib_debug_utilities::JpegBytesSourceProcessor::Processor>();
+    PROCESSOR_REGISTRY
+        .register::<streamlib_debug_utilities::VideoFrameCounterProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_jpeg::JpegDecoderProcessor::Processor>();
+}
 
 const FIXTURE_WIDTH: u32 = 320;
 const FIXTURE_HEIGHT: u32 = 180;
@@ -73,6 +75,7 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
     streamlib_debug_utilities::video_frame_counter::reset();
 
     let runtime = Runner::new().expect("Runner::new");
+    register_test_processors();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(
@@ -212,6 +215,7 @@ fn invalid_max_dimensions_do_not_crash_runtime() {
     streamlib_debug_utilities::video_frame_counter::reset();
 
     let runtime = Runner::new().expect("Runner::new");
+    register_test_processors();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(
@@ -279,6 +283,7 @@ fn malformed_jpeg_bytes_do_not_crash_runtime() {
     streamlib_debug_utilities::video_frame_counter::reset();
 
     let runtime = Runner::new().expect("Runner::new");
+    register_test_processors();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(

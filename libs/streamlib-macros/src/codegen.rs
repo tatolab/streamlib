@@ -80,6 +80,7 @@ pub fn generate_from_processor_schema(
     schema: &ProcessorSchema,
     schema_ident: &SchemaIdent,
     config_schema_id: Option<&str>,
+    no_inventory: bool,
 ) -> TokenStream {
     let module_name = &item.ident;
 
@@ -147,11 +148,20 @@ pub fn generate_from_processor_schema(
         quote! {}
     };
 
-    // Auto-registration via inventory crate
-    let inventory_submit = quote! {
-        ::streamlib::sdk::inventory::submit! {
-            ::streamlib::sdk::processors::macro_codegen::FactoryRegistration {
-                register_fn: |factory| factory.register::<Processor>(),
+    // Auto-registration via inventory crate. Suppressed when the
+    // processor attribute carries `no_inventory` — used by test-only
+    // mocks and any future processor that wants the consumer to
+    // register explicitly (via load_project / load_package or a direct
+    // PROCESSOR_REGISTRY.register::<P>() call) rather than relying on
+    // link-time auto-discovery.
+    let inventory_submit = if no_inventory {
+        quote! {}
+    } else {
+        quote! {
+            ::streamlib::sdk::inventory::submit! {
+                ::streamlib::sdk::processors::macro_codegen::FactoryRegistration {
+                    register_fn: |factory| factory.register::<Processor>(),
+                }
             }
         }
     };

@@ -49,17 +49,23 @@ use syn::{
 /// `SchemaIdent { org: tatolab, package: streamlib, type: Camera,
 /// version: <package.version> }` when used inside a manifest declaring
 /// `package: { org: tatolab, name: streamlib, ... }`.
+///
+/// An optional `no_inventory` flag suppresses the
+/// `inventory::submit!` emission so consumers can opt out of link-time
+/// auto-registration: `#[streamlib::processor("Foo", no_inventory)]`.
+/// The generated `Processor` type is unchanged; callers register it
+/// explicitly via `PROCESSOR_REGISTRY.register::<Foo::Processor>()`.
 #[proc_macro_attribute]
 pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
 
-    let short_name = match parse_processor_short_name(attr) {
-        Ok(name) => name,
+    let parsed = match parse_processor_attr(attr) {
+        Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
 
     let (schema, schema_ident, config_schema_id) =
-        match load_processor_schema(&short_name, &item_struct) {
+        match load_processor_schema(&parsed.short_name, &item_struct) {
             Ok(triple) => triple,
             Err(err) => return err.to_compile_error().into(),
         };
@@ -69,15 +75,50 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
         &schema,
         &schema_ident,
         config_schema_id.as_deref(),
+        parsed.no_inventory,
     );
 
     TokenStream::from(generated)
 }
 
-/// Parse the processor short name from the attribute argument.
-fn parse_processor_short_name(attr: TokenStream) -> syn::Result<String> {
-    let lit: LitStr = syn::parse(attr)?;
-    Ok(lit.value())
+/// Parsed `#[processor(...)]` attribute arguments.
+struct ProcessorAttr {
+    short_name: String,
+    no_inventory: bool,
+}
+
+/// Parse the processor short name plus optional flags.
+fn parse_processor_attr(attr: TokenStream) -> syn::Result<ProcessorAttr> {
+    use syn::parse::Parser;
+
+    let parser = |input: syn::parse::ParseStream<'_>| -> syn::Result<ProcessorAttr> {
+        let name: LitStr = input.parse()?;
+        let mut no_inventory = false;
+        while !input.is_empty() {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            let flag: syn::Ident = input.parse()?;
+            match flag.to_string().as_str() {
+                "no_inventory" => no_inventory = true,
+                other => {
+                    return Err(syn::Error::new(
+                        flag.span(),
+                        format!(
+                            "unknown processor attribute flag `{}` (expected `no_inventory`)",
+                            other
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(ProcessorAttr {
+            short_name: name.value(),
+            no_inventory,
+        })
+    };
+    parser.parse(attr.into())
 }
 
 /// Locate `CARGO_MANIFEST_DIR/streamlib.yaml`, resolve the package metadata

@@ -4,7 +4,7 @@
 //! Graph data structure tests using only the traversal API.
 //!
 //! Tests verify Graph operates as a standalone data structure.
-//! MockProcessor implements the Processor trait to work with add_v.
+//! Engine-shared TestMock processors live in [`crate::core::test_support`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -13,85 +13,18 @@ use serde_json::{json, Value as JsonValue};
 
 use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
 use crate::core::processors::ProcessorState;
+use crate::core::test_support::{
+    ensure_test_mocks_registered, MockInputOnlyProcessor, MockOutputOnlyProcessor, MockProcessor,
+};
 use crate::core::JsonSerializableComponent;
 
-// =============================================================================
-// Mock Processor and Config
-// =============================================================================
-
-/// Mock processor for testing graph operations.
-#[crate::processor("TestMockProcessor")]
-struct MockProcessor;
-
-impl crate::core::ManualProcessor for MockProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
-
-/// Processor with only output ports.
-#[crate::processor("TestMockOutputOnlyProcessor")]
-struct MockOutputOnlyProcessor;
-
-impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-}
-
-/// Processor with only input ports.
-#[crate::processor("TestMockInputOnlyProcessor")]
-struct MockInputOnlyProcessor;
-
-impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
-    }
-    fn start(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
+/// Construct a fresh `Graph` with the engine-internal test mock
+/// processors registered in `PROCESSOR_REGISTRY`. Tests use this in
+/// place of `test_graph()` so `add_v` can resolve mock port info and
+/// `add_e` can validate port presence on those nodes.
+fn test_graph() -> Graph {
+    ensure_test_mocks_registered();
+    Graph::new()
 }
 
 // =============================================================================
@@ -213,7 +146,7 @@ mod query_ops {
 
     #[test]
     fn test_v_all_returns_all_processors() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         graph
             .traversal_mut()
@@ -231,7 +164,7 @@ mod query_ops {
 
     #[test]
     fn test_v_by_id_returns_specific_processor() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let id = graph
             .traversal_mut()
@@ -254,7 +187,7 @@ mod query_ops {
 
     #[test]
     fn test_v_nonexistent_returns_empty() {
-        let graph = Graph::new();
+        let graph = test_graph();
 
         let found = graph.traversal().v("nonexistent").first();
         assert!(found.is_none());
@@ -262,7 +195,7 @@ mod query_ops {
 
     #[test]
     fn test_exists_true_when_found() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -276,14 +209,14 @@ mod query_ops {
 
     #[test]
     fn test_exists_false_when_not_found() {
-        let graph = Graph::new();
+        let graph = test_graph();
 
         assert!(!graph.traversal().v("nonexistent").exists());
     }
 
     #[test]
     fn test_ids_returns_all_processor_ids() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let id1 = graph
             .traversal_mut()
@@ -308,7 +241,7 @@ mod query_ops {
 
     #[test]
     fn test_first_returns_some_processor() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()));
@@ -319,14 +252,14 @@ mod query_ops {
 
     #[test]
     fn test_first_on_empty_returns_none() {
-        let graph = Graph::new();
+        let graph = test_graph();
 
         assert!(graph.traversal().v(()).first().is_none());
     }
 
     #[test]
     fn test_iter_yields_all_processors() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         graph
             .traversal_mut()
@@ -362,7 +295,7 @@ mod edge_query_ops {
 
     #[test]
     fn test_e_all_returns_all_links() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -401,7 +334,7 @@ mod edge_query_ops {
 
     #[test]
     fn test_e_by_id_returns_specific_link() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -435,7 +368,7 @@ mod edge_query_ops {
 
     #[test]
     fn test_link_from_port_and_to_port() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -482,7 +415,7 @@ mod filter_ops {
 
     #[test]
     fn test_filter_by_processor_type() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         graph
             .traversal_mut()
@@ -505,7 +438,7 @@ mod filter_ops {
 
     #[test]
     fn test_has_component_filters_correctly() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let id1 = graph
             .traversal_mut()
@@ -533,7 +466,7 @@ mod filter_ops {
 
     #[test]
     fn test_filter_links_by_destination() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -586,7 +519,7 @@ mod component_ops {
 
     #[test]
     fn test_insert_and_get_component() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -615,7 +548,7 @@ mod component_ops {
 
     #[test]
     fn test_has_component() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -648,7 +581,7 @@ mod component_ops {
 
     #[test]
     fn test_remove_component() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -683,7 +616,7 @@ mod component_ops {
 
     #[test]
     fn test_multiple_components_on_same_node() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -708,7 +641,7 @@ mod component_ops {
 
     #[test]
     fn test_link_components() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -764,7 +697,7 @@ mod mutation_persistence {
 
     #[test]
     fn test_component_mutation_persists() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -800,7 +733,7 @@ mod mutation_persistence {
 
     #[test]
     fn test_arc_shared_component_modification() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -834,7 +767,7 @@ mod mutation_persistence {
 
     #[test]
     fn test_drop_removes_processor() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -852,7 +785,7 @@ mod mutation_persistence {
 
     #[test]
     fn test_drop_removes_link() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -897,7 +830,7 @@ mod real_world_scenarios {
 
     #[test]
     fn test_compiler_create_phase_pattern() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
         let id = graph
             .traversal_mut()
             .add_v(MockProcessor::Processor::node(Default::default()))
@@ -921,7 +854,7 @@ mod real_world_scenarios {
 
     #[test]
     fn test_compiler_wire_phase_pattern() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -963,7 +896,7 @@ mod real_world_scenarios {
 
     #[test]
     fn test_runtime_pause_all_pattern() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let id1 = graph
             .traversal_mut()
@@ -1018,7 +951,7 @@ mod real_world_scenarios {
 
     #[test]
     fn test_runtime_status_pattern() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let id1 = graph
             .traversal_mut()
@@ -1072,7 +1005,7 @@ mod real_world_scenarios {
 
     #[test]
     fn test_pipeline_topology() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -1120,7 +1053,7 @@ mod edge_navigation {
 
     #[test]
     fn test_out_e_returns_outgoing_links() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -1159,7 +1092,7 @@ mod edge_navigation {
 
     #[test]
     fn test_in_e_returns_incoming_links() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream1_id = graph
             .traversal_mut()
@@ -1198,7 +1131,7 @@ mod edge_navigation {
 
     #[test]
     fn test_out_v_returns_upstream_processor() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()
@@ -1233,7 +1166,7 @@ mod edge_navigation {
 
     #[test]
     fn test_in_v_returns_downstream_processor() {
-        let mut graph = Graph::new();
+        let mut graph = test_graph();
 
         let upstream_id = graph
             .traversal_mut()

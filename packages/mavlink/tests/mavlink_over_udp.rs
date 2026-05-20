@@ -23,16 +23,19 @@ use std::time::Duration;
 
 use serial_test::serial;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::schema_ident;
 
-// Force-link the package lib crates so their `inventory::submit!`
-// factory registrations are present in the test binary's link line.
-#[allow(unused_imports)]
-use streamlib_mavlink::{MavlinkDecoderProcessor as _, MavlinkEncoderProcessor as _};
-#[allow(unused_imports)]
-use streamlib_network::{UdpSinkProcessor as _, UdpSourceProcessor as _};
+/// Explicit typed registration for the package processors this test
+/// drives. Replaces the legacy `use foo::Bar as _;` inventory
+/// force-link pattern.
+fn register_test_processors() {
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSourceProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_network::UdpSinkProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_mavlink::MavlinkDecoderProcessor::Processor>();
+    PROCESSOR_REGISTRY.register::<streamlib_mavlink::MavlinkEncoderProcessor::Processor>();
+}
 
 use mavlink::MavHeader;
 use mavlink::dialects::common::{
@@ -204,6 +207,7 @@ fn udp_source_decoder_then_encoder_udp_sink_loopback_all_six_variants() {
     let source_bind = pick_free_udp_port();
 
     let runtime = Runner::new().expect("Runner::new");
+    register_test_processors();
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(

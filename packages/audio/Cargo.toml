@@ -14,10 +14,10 @@ name = "streamlib_audio"
 crate-type = ["rlib", "cdylib"]
 
 [features]
-# Default off so force-link rlib consumers don't see the `STREAMLIB_PLUGIN`
-# symbol (multiple Rust-impl rlibs with the same unmangled static collide
-# at link time). `streamlib pack` invokes `cargo build --features plugin`
-# when packing the cdylib for dlopen-based loading.
+# Gates the `export_plugin!` invocation so the `STREAMLIB_PLUGIN` symbol
+# only ends up in the cdylib output (multiple Rust-impl rlibs sharing
+# the same unmangled static collide at link time). `streamlib pack`
+# invokes `cargo build --features plugin` when packing.
 default = []
 plugin = []
 
