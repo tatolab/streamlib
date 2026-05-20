@@ -8,15 +8,18 @@
 //!
 //! - **Host-side callback impls** (`host_tracing_emit`,
 //!   `host_pubsub_publish`, `host_schema_register`,
-//!   `host_schema_lookup`, `host_iceoryx_log_emit`) that the host's
-//!   loader writes into a [`HostServices`] struct before invoking a
-//!   cdylib's `STREAMLIB_PLUGIN.register` callback.
+//!   `host_schema_lookup`, `host_iceoryx_log_emit`,
+//!   `host_processor_register`) that the host's loader writes into a
+//!   [`HostServices`] struct before invoking a cdylib's
+//!   `STREAMLIB_PLUGIN.register` callback.
 //! - **Cdylib-side `install_host_services` helper** that the cdylib's
 //!   `export_plugin!` macro calls at register time. The helper
 //!   validates layout, stores the callback table in a per-DSO
-//!   [`HOST_CALLBACKS`] static, installs the cdylib's tracing
-//!   `ForwardingSubscriber` and iceoryx2 `Log` forwarder, and returns
-//!   a [`RegisterHelper`] for the macro to register processors with.
+//!   [`HOST_CALLBACKS`] static, caches the host's tokio handle in
+//!   [`HOST_TOKIO_HANDLE`] for cdylib-side async-lifecycle wrappers,
+//!   installs the cdylib's tracing `ForwardingSubscriber` and
+//!   iceoryx2 `Log` forwarder, and returns a [`RegisterHelper`] for
+//!   the macro to register processors with.
 //!
 //! # Why this shape
 //!
@@ -36,6 +39,14 @@
 //! `iceoryx2_log::*`) route through the host's fn pointers instead
 //! of through the local DSO's state.
 //!
+//! Processor registration follows the same shape: cdylib's
+//! `RegisterHelper::register::<P>()` monomorphizes a [`ProcessorVTable`]
+//! per processor type P and calls the host's `processor_register`
+//! callback with the descriptor msgpack + vtable. The host's factory
+//! stores `(descriptor, &'static ProcessorVTable)` and dispatches
+//! every host-called method through extern "C" — retiring the
+//! `Box<dyn DynGeneratedProcessor>` dyn-trait crossing class.
+//!
 //! # Deployment model this enables
 //!
 //! Computer A builds the host binary, computer B builds packages via
@@ -44,27 +55,23 @@
 //! interoperate as long as they target the same triple and link the
 //! same [`streamlib_plugin_abi::STREAMLIB_ABI_VERSION`]. No
 //! commit-level coupling, no shared Cargo.lock.
-//!
-//! # What's not in the callback table
-//!
-//! `processor_registry_typed: *const ProcessorInstanceFactory`
-//! remains as a typed pointer in [`HostServices`]. The
-//! `ProcessorInstanceFactory`'s internal `Box<dyn Fn>` constructor
-//! closures and `Box<dyn DynGeneratedProcessor>` instance objects
-//! are pre-existing dyn-trait crossings whose ABI stability depends
-//! on the engine's semver coupling. Lifting them to extern "C"
-//! requires reshaping the entire processor lifecycle ABI (setup /
-//! process / teardown / port wiring / runtime-context access) and
-//! is the natural next-step plugin-ABI milestone.
 
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use streamlib_plugin_abi::{
-    HostHandle, HostInterest, HostLogLevel, HostServices, HOST_SERVICES_LAYOUT_VERSION,
+    HostHandle, HostInterest, HostLogLevel, HostServices, ProcessorVTable,
+    HOST_SERVICES_LAYOUT_VERSION, PROCESSOR_VTABLE_LAYOUT_VERSION,
 };
 
-use crate::core::processors::ProcessorInstanceFactory;
+// Note on tokio: cdylib-side async-lifecycle wrappers grab the tokio
+// handle from `ctx.tokio_handle()` rather than going through an
+// extern "C" callback. Tokio's `Handle` layout is host/cdylib-shared
+// via the workspace-pinned tokio version — one of the known
+// shared-type crossings Phase A leaves in place by design (Phase B
+// addresses RuntimeContext crossings if multi-builder tokio drift
+// becomes a real concern).
+
 use crate::core::pubsub::Event;
 
 // =============================================================================
@@ -134,6 +141,12 @@ pub struct HostCallbacks {
         message_ptr: *const u8,
         message_len: usize,
     ),
+    pub processor_register: unsafe extern "C" fn(
+        host: HostHandle,
+        descriptor_msgpack_ptr: *const u8,
+        descriptor_msgpack_len: usize,
+        vtable: *const ProcessorVTable,
+    ) -> i32,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -212,6 +225,7 @@ pub unsafe fn install_host_services(
         schema_register: services.schema_register,
         schema_lookup: services.schema_lookup,
         iceoryx_log_emit: services.iceoryx_log_emit,
+        processor_register: services.processor_register,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -230,35 +244,98 @@ pub unsafe fn install_host_services(
     // its tracing pipeline what to actually emit.
     crate::core::plugin::iceoryx2_log_forwarder::install_for_self();
 
-    // The processor registry is the one remaining type-passing
-    // field. Cast back to `&'static ProcessorInstanceFactory` and
-    // return a `RegisterHelper` that exposes the same
-    // `register::<P>()` shape the macro used in v1.
-    if services.processor_registry_typed.is_null() {
-        return None;
-    }
-    let registry = unsafe {
-        &*(services.processor_registry_typed as *const ProcessorInstanceFactory)
-    };
-
-    Some(RegisterHelper { registry })
+    Some(RegisterHelper {})
 }
 
-/// Thin wrapper around the host's `ProcessorInstanceFactory` returned
-/// by [`install_host_services`]. Source-compatible with the macro's
-/// `registry.register::<P>()` call shape.
-pub struct RegisterHelper {
-    registry: &'static ProcessorInstanceFactory,
-}
+/// Helper handed back to the cdylib's `export_plugin!` macro for
+/// registering processors with the host's registry. Source-compatible
+/// with v1's `helper.register::<P>()` call shape — the implementation
+/// now monomorphizes a [`ProcessorVTable`] per processor type and
+/// routes through the host's `processor_register` callback instead
+/// of dispatching through `&'static ProcessorInstanceFactory`.
+pub struct RegisterHelper {}
 
 impl RegisterHelper {
     /// Register a processor type with the host's registry.
+    ///
+    /// Builds the static per-P [`ProcessorVTable`], serializes
+    /// `P::descriptor()` to msgpack, and calls the host's
+    /// `processor_register` callback. Source-compatible at the call
+    /// site (`helper.register::<P::Processor>()`).
     pub fn register<P>(&self)
     where
         P: crate::core::processors::GeneratedProcessor + 'static,
-        P::Config: for<'de> serde::Deserialize<'de> + Default,
+        P::Config: crate::core::processors::Config,
     {
-        self.registry.register::<P>();
+        // Resolve the host's callback table. In a cdylib this was
+        // populated by `install_host_services` above. In the host
+        // process (where this code path also runs when a processor
+        // is registered inline via `PROCESSOR_REGISTRY.register::<P>()`),
+        // `HOST_CALLBACKS` is empty — the host-static path bypasses
+        // FFI and registers directly with the factory.
+        if let Some(callbacks) = host_callbacks() {
+            register_via_callback::<P>(callbacks);
+        } else {
+            // Host-static path: same vtable shape, but registered
+            // directly with the in-process factory (no FFI hop).
+            crate::core::processors::PROCESSOR_REGISTRY.register::<P>();
+        }
+    }
+}
+
+/// Cdylib-side registration: build a vtable + descriptor msgpack and
+/// call the host's `processor_register` callback.
+fn register_via_callback<P>(callbacks: &HostCallbacks)
+where
+    P: crate::core::processors::GeneratedProcessor + 'static,
+    P::Config: crate::core::processors::Config,
+{
+    let descriptor = match <P as crate::core::processors::GeneratedProcessor>::descriptor() {
+        Some(d) => d,
+        None => {
+            tracing::warn!(
+                "Processor {} has no descriptor, skipping registration",
+                std::any::type_name::<P>()
+            );
+            return;
+        }
+    };
+
+    let descriptor_msgpack = match rmp_serde::to_vec_named(&descriptor) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to serialize descriptor for {}: {}",
+                std::any::type_name::<P>(),
+                e
+            );
+            return;
+        }
+    };
+
+    let vtable = crate::core::plugin::processor_vtable::vtable_for::<P>();
+
+    // SAFETY: msgpack bytes and vtable pointer live in this DSO's
+    // process address space for the duration of the call. The host's
+    // implementation copies any data it needs to retain (the
+    // descriptor is decoded into a `ProcessorDescriptor`; the vtable
+    // pointer is stored as-is and the cdylib is pinned via
+    // `LOADED_PLUGIN_LIBRARIES`).
+    let rc = unsafe {
+        (callbacks.processor_register)(
+            callbacks.host,
+            descriptor_msgpack.as_ptr(),
+            descriptor_msgpack.len(),
+            vtable as *const ProcessorVTable,
+        )
+    };
+
+    if rc != 0 {
+        tracing::warn!(
+            "processor_register for {} returned non-zero rc={}",
+            descriptor.name,
+            rc
+        );
     }
 }
 
@@ -269,9 +346,8 @@ impl RegisterHelper {
 /// Concrete host-side service table the host's loader plugs into a
 /// [`HostServices`] payload via [`runtime_facing::host_services_for_self`].
 ///
-/// Holds the host's iceoryx2 node + any other handles host-side
-/// callbacks need. Lives behind the [`HostServices::host`] opaque
-/// pointer.
+/// Holds the host's iceoryx2 node. Lives behind the
+/// [`HostServices::host`] opaque pointer.
 pub struct HostServiceImpls {
     pub iceoryx2_node: crate::iceoryx2::Iceoryx2Node,
 }
@@ -322,11 +398,15 @@ unsafe extern "C" fn host_tracing_emit(
     fields_msgpack_ptr: *const u8,
     fields_msgpack_len: usize,
 ) {
-    let target = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(target_ptr, target_len)) };
+    let target = unsafe {
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(target_ptr, target_len))
+    };
     let message = if message_len == 0 {
         ""
     } else {
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(message_ptr, message_len)) }
+        unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(message_ptr, message_len))
+        }
     };
     let level_val = host_log_level_to_tracing(level);
     let fields_bytes = if fields_msgpack_len == 0 || fields_msgpack_ptr.is_null() {
@@ -355,7 +435,9 @@ unsafe extern "C" fn host_pubsub_publish(
     event_msgpack_ptr: *const u8,
     event_msgpack_len: usize,
 ) {
-    let topic = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(topic_ptr, topic_len)) };
+    let topic = unsafe {
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(topic_ptr, topic_len))
+    };
     let event_bytes = unsafe { std::slice::from_raw_parts(event_msgpack_ptr, event_msgpack_len) };
     let event: Event = match rmp_serde::from_slice(event_bytes) {
         Ok(e) => e,
@@ -377,8 +459,14 @@ unsafe extern "C" fn host_schema_register(
     yaml_ptr: *const u8,
     yaml_len: usize,
 ) {
-    let canonical_id = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(canonical_id_ptr, canonical_id_len)) };
-    let yaml = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(yaml_ptr, yaml_len)) };
+    let canonical_id = unsafe {
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+            canonical_id_ptr,
+            canonical_id_len,
+        ))
+    };
+    let yaml =
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(yaml_ptr, yaml_len)) };
     crate::core::embedded_schemas::register_schema(canonical_id.to_string(), yaml);
 }
 
@@ -389,7 +477,12 @@ unsafe extern "C" fn host_schema_lookup(
     result_callback: extern "C" fn(*mut c_void, *const u8, usize),
     result_userdata: *mut c_void,
 ) {
-    let canonical_id = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(canonical_id_ptr, canonical_id_len)) };
+    let canonical_id = unsafe {
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+            canonical_id_ptr,
+            canonical_id_len,
+        ))
+    };
     match crate::core::embedded_schemas::get_embedded_schema_definition(canonical_id) {
         Some(yaml) => {
             let bytes = yaml.as_bytes();
@@ -412,12 +505,16 @@ unsafe extern "C" fn host_iceoryx_log_emit(
     let origin = if origin_len == 0 {
         ""
     } else {
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(origin_ptr, origin_len)) }
+        unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(origin_ptr, origin_len))
+        }
     };
     let message = if message_len == 0 {
         ""
     } else {
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(message_ptr, message_len)) }
+        unsafe {
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(message_ptr, message_len))
+        }
     };
     // Forward into the host's tracing pipeline at the appropriate level.
     match level {
@@ -426,6 +523,61 @@ unsafe extern "C" fn host_iceoryx_log_emit(
         HostLogLevel::Info => tracing::info!(target: "iceoryx2", origin = %origin, "{message}"),
         HostLogLevel::Warn => tracing::warn!(target: "iceoryx2", origin = %origin, "{message}"),
         HostLogLevel::Error => tracing::error!(target: "iceoryx2", origin = %origin, "{message}"),
+    }
+}
+
+/// Host-side `processor_register` callback. Decodes the descriptor
+/// msgpack and routes to the in-process registry's
+/// `register_via_vtable` path. Returns 0 on success, non-zero on
+/// descriptor decode failure, vtable layout-version mismatch, or
+/// duplicate registration.
+unsafe extern "C" fn host_processor_register(
+    _host: HostHandle,
+    descriptor_msgpack_ptr: *const u8,
+    descriptor_msgpack_len: usize,
+    vtable: *const ProcessorVTable,
+) -> i32 {
+    if vtable.is_null() {
+        tracing::warn!("host_processor_register: null vtable pointer");
+        return -1;
+    }
+
+    let vtable_layout = unsafe { (*vtable).layout_version };
+    if vtable_layout != PROCESSOR_VTABLE_LAYOUT_VERSION {
+        tracing::warn!(
+            "host_processor_register: vtable layout version mismatch (got {}, expected {})",
+            vtable_layout,
+            PROCESSOR_VTABLE_LAYOUT_VERSION
+        );
+        return -2;
+    }
+
+    let descriptor_bytes =
+        unsafe { std::slice::from_raw_parts(descriptor_msgpack_ptr, descriptor_msgpack_len) };
+    let descriptor: crate::core::descriptors::ProcessorDescriptor =
+        match rmp_serde::from_slice(descriptor_bytes) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(
+                    "host_processor_register: failed to decode descriptor msgpack: {e}"
+                );
+                return -3;
+            }
+        };
+
+    // SAFETY: `vtable` is `&'static ProcessorVTable` on the cdylib
+    // side; the cdylib is pinned via `LOADED_PLUGIN_LIBRARIES`, so
+    // the pointer outlives the host's usage.
+    let vtable_ref: &'static ProcessorVTable = unsafe { &*vtable };
+
+    match crate::core::processors::PROCESSOR_REGISTRY
+        .register_via_vtable(descriptor, vtable_ref)
+    {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::warn!("host_processor_register: register_via_vtable failed: {e}");
+            -4
+        }
     }
 }
 
@@ -526,8 +678,9 @@ fn emit_via_host_dispatch(
 /// implementations.
 pub mod runtime_facing {
     use super::{
-        host_iceoryx_log_emit, host_pubsub_publish, host_schema_lookup, host_schema_register,
-        host_tracing_emit, host_tracing_enabled, host_tracing_register_callsite, HostServiceImpls,
+        host_iceoryx_log_emit, host_processor_register, host_pubsub_publish, host_schema_lookup,
+        host_schema_register, host_tracing_emit, host_tracing_enabled,
+        host_tracing_register_callsite, HostServiceImpls,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
@@ -548,11 +701,10 @@ pub mod runtime_facing {
     }
 
     /// Build a [`HostServices`] payload from this process's host
-    /// callback impls and processor registry. Callable repeatedly;
-    /// the underlying [`HostServiceImpls`] is constructed once and
-    /// reused for the process lifetime, matching
-    /// `LOADED_PLUGIN_LIBRARIES`'s pinning lifetime for loaded
-    /// cdylibs.
+    /// callback impls. Callable repeatedly; the underlying
+    /// [`HostServiceImpls`] is constructed once and reused for the
+    /// process lifetime, matching `LOADED_PLUGIN_LIBRARIES`'s pinning
+    /// lifetime for loaded cdylibs.
     pub fn host_services_for_self(node: &crate::iceoryx2::Iceoryx2Node) -> HostServices {
         let host_impls = host_impls_for_self(node);
         let host_handle = host_impls as *const HostServiceImpls as *const c_void;
@@ -568,10 +720,7 @@ pub mod runtime_facing {
             schema_register: host_schema_register,
             schema_lookup: host_schema_lookup,
             iceoryx_log_emit: host_iceoryx_log_emit,
-            processor_registry_typed: &*crate::core::processors::PROCESSOR_REGISTRY
-                as *const crate::core::processors::ProcessorInstanceFactory
-                as *const c_void,
+            processor_register: host_processor_register,
         }
     }
 }
-
