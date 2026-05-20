@@ -40,6 +40,13 @@ streamlib-idents = { path = "../streamlib-idents" }
 # Procedural macros
 streamlib-macros = { path = "../streamlib-macros" }
 
+# Plugin ABI wire-protocol header. Dep direction reversed in #877:
+# streamlib-plugin-abi no longer depends on streamlib (the SDK), so the
+# cyclic dep this dep used to dodge (engine → plugin-abi → sdk → engine)
+# is gone. The engine's dlopen loader uses `PluginDeclaration` and
+# `STREAMLIB_ABI_VERSION` from this crate directly.
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi" }
+
 # Shared iceoryx2 payload types (for cross-process IPC)
 streamlib-ipc-types = { path = "../streamlib-ipc-types" }
 
@@ -62,6 +69,7 @@ inventory = "0.3"
 parking_lot = "0.12"  # Fast mutexes for all synchronization
 crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
 iceoryx2 = "0.8.1"  # Zero-copy IPC pub/sub for cross-process communication
+iceoryx2-log = "0.8.1"  # Bridge iceoryx2's internal log records into streamlib tracing
 rmp-serde = "1.3"  # MessagePack serialization for frame payloads
 signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus
 ctrlc = "3.4"  # Cross-platform Ctrl+C handler (works with GUI apps)

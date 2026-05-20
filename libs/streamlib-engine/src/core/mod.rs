@@ -13,6 +13,7 @@ pub(crate) mod config;
 pub(crate) mod embedded_schemas;
 pub(crate) mod logging;
 pub(crate) mod observability;
+pub mod plugin;
 pub(crate) mod runtime_hooks;
 pub(crate) mod signals;
 pub(crate) mod streamlib_home;

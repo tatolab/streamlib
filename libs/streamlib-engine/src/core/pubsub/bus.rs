@@ -23,11 +23,22 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
-/// Global pub/sub instance for runtime events.
+/// Process-wide pub/sub handle.
 ///
-/// Created as an empty shell via LazyLock. Must be initialized via `init()`
-/// during `Runner::new()` before iceoryx2 services are available.
-/// Before init, publish is a no-op and subscribe is buffered.
+/// **Per-DSO instance.** Each linked copy of streamlib-engine (host
+/// binary + every dlopen'd cdylib plugin) gets its own `LazyLock<PubSub>`
+/// — Rust mangled statics aren't in the dynsym table, the dynamic
+/// linker doesn't dedupe them, and trying to share the same `PubSub`
+/// reference across DSOs would couple the cdylib to byte-identical
+/// internal layouts of `Iceoryx2Node`, parking_lot::Mutex, etc.
+///
+/// Cross-DSO bridging happens **inside the methods**: when
+/// `crate::core::plugin::host_services::host_callbacks()` returns
+/// `Some` (i.e. this DSO is a plugin cdylib whose
+/// `install_host_services` has run), `publish` serializes the event
+/// and forwards it through the host's `pubsub_publish` fn pointer.
+/// The host's installed `PUBSUB` performs the actual iceoryx2 work,
+/// and any host-side subscribers receive the event.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
 /// iceoryx2-backed pub/sub for runtime events.
@@ -190,10 +201,38 @@ impl PubSub {
 
     /// Publish event to topic (serializes and sends via iceoryx2).
     ///
+    /// In a plugin cdylib whose `install_host_services` has run,
+    /// short-circuits to the host's `pubsub_publish` callback —
+    /// the event is serialized once and the host's `PUBSUB`
+    /// performs the actual iceoryx2 work. In the host DSO,
+    /// runs the local iceoryx2 path below.
+    ///
     /// Events are dispatched to:
     /// 1. All subscribers of the specific topic
     /// 2. All subscribers of `topics::ALL` (wildcard)
     pub fn publish(&self, topic: &str, event: &Event) {
+        if let Some(cbs) = crate::core::plugin::host_services::host_callbacks() {
+            // Cdylib path: forward to the host via the callback
+            // table. The host's `PUBSUB` does the iceoryx2 work.
+            let bytes = match rmp_serde::to_vec_named(event) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::warn!("Failed to serialize event for FFI forwarding: {}", e);
+                    return;
+                }
+            };
+            unsafe {
+                (cbs.pubsub_publish)(
+                    cbs.host,
+                    topic.as_ptr(),
+                    topic.len(),
+                    bytes.as_ptr(),
+                    bytes.len(),
+                );
+            }
+            return;
+        }
+
         let Some(runtime_id) = self.runtime_id.get() else {
             tracing::trace!(
                 "PUBSUB not initialized, dropping event: {}",
