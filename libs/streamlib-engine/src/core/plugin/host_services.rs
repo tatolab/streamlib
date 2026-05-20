@@ -336,10 +336,21 @@ pub mod runtime_facing {
     /// tracing-core's current `GLOBAL_DISPATCH`. Captured on first
     /// call so plugins loaded later still see the dispatch active
     /// at the time `Runner::new` wired tracing.
+    ///
+    /// Must not be called before `Runner::new` returns — if no
+    /// `set_global_default` has fired yet, `get_default` returns
+    /// the no-op dispatch and the capture freezes that for the
+    /// process lifetime, silently dropping every plugin emit. The
+    /// debug-build `assert` below makes the ordering violation
+    /// loud; release builds rely on the documented invariant.
     fn host_dispatch_for_self() -> &'static Dispatch {
         HOST_TRACING_DISPATCH.get_or_init(|| {
-            // Capture the current global dispatcher by cloning the
-            // value passed through `tracing::dispatcher::get_default`.
+            debug_assert!(
+                tracing::dispatcher::has_been_set(),
+                "host_dispatch_for_self called before any global tracing dispatch \
+                 was installed — Runner::new must run before plugin loading so \
+                 HostServices captures a configured Dispatch rather than the noop default"
+            );
             let dispatch = tracing::dispatcher::get_default(|d| d.clone());
             Box::leak(Box::new(dispatch))
         })

@@ -13,11 +13,11 @@
 //! subscriber-less iceoryx2 service.
 //!
 //! Runs in its own test binary so `PROCESSOR_REGISTRY` and the
-//! one-shot tracing/logging globals are fresh — the sibling
-//! `load_project_dylib_tracing_bridge.rs` needs the same fresh
-//! state, and registry duplicates from a sibling-test register call
-//! would early-return the `register::<P>()` path without firing
-//! either bridge.
+//! one-shot tracing/logging globals are fresh. The same-binary
+//! `#[serial]`-guarded shape leaves `PROCESSOR_REGISTRY` populated
+//! between tests, and `register::<P>()` early-returns on a
+//! duplicate type-name — silently skipping the PUBSUB publish this
+//! test asserts.
 
 use std::path::Path;
 use std::sync::{
