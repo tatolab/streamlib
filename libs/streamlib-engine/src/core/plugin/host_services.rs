@@ -149,6 +149,19 @@ pub struct HostCallbacks {
         descriptor_msgpack_len: usize,
         vtable: *const ProcessorVTable,
     ) -> i32,
+    /// v3: host-installed [`RuntimeContextVTable`] pointer. Cached so
+    /// the cdylib's shim constructors don't read [`HostServices`] on
+    /// every shim build. The cdylib MUST read this from the cache
+    /// (or `HostServices` direct) rather than reach for its local
+    /// `&HOST_RUNTIME_CONTEXT_VTABLE` static — the local copy's fn
+    /// pointers would dispatch into cdylib code instead of host code,
+    /// which would break the no-shared-type-crossing invariant.
+    pub runtime_context_vtable: *const RuntimeContextVTable,
+    /// v3: host-installed [`AudioClockVTable`] pointer. Same rule as
+    /// `runtime_context_vtable`.
+    pub audio_clock_vtable: *const AudioClockVTable,
+    /// v3: host-installed [`RuntimeOpsVTable`] pointer.
+    pub runtime_ops_vtable: *const RuntimeOpsVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -228,6 +241,9 @@ pub unsafe fn install_host_services(
         schema_lookup: services.schema_lookup,
         iceoryx_log_emit: services.iceoryx_log_emit,
         processor_register: services.processor_register,
+        runtime_context_vtable: services.runtime_context_vtable,
+        audio_clock_vtable: services.audio_clock_vtable,
+        runtime_ops_vtable: services.runtime_ops_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -774,13 +790,22 @@ pub static HOST_RUNTIME_CONTEXT_VTABLE: RuntimeContextVTable = RuntimeContextVTa
     runtime_ops_handle: host_rcv_runtime_ops_handle,
 };
 
-/// Pointer to the host's [`RuntimeContextVTable`]. Engine-side shim
-/// constructors capture this when building a host-flavor
-/// `RuntimeContext{Full,Limited}Access`. The cdylib reads the
-/// equivalent pointer from `HostServices::runtime_context_vtable` at
-/// install time.
+/// Pointer to the [`RuntimeContextVTable`] this DSO should dispatch
+/// through. In the host process this returns the host's local
+/// `&HOST_RUNTIME_CONTEXT_VTABLE` static (the canonical vtable). In
+/// a cdylib `install_host_services` has populated the cached pointer
+/// from `HostServices`, so this returns the HOST'S vtable — meaning
+/// every callback invocation lands in host-resident extern "C"
+/// functions, not in the cdylib's local copy of those functions.
+/// That distinction is load-bearing: the host's functions read
+/// host-owned Rust types (`RuntimeContext`) with the host's compiled
+/// layout, while the cdylib's local copies would re-interpret the
+/// same memory through the cdylib's compiled layout.
 pub fn host_runtime_context_vtable() -> *const RuntimeContextVTable {
-    &HOST_RUNTIME_CONTEXT_VTABLE
+    match host_callbacks() {
+        Some(c) if !c.runtime_context_vtable.is_null() => c.runtime_context_vtable,
+        _ => &HOST_RUNTIME_CONTEXT_VTABLE,
+    }
 }
 
 // ---------------- AudioClock vtable ----------------
@@ -869,8 +894,16 @@ pub static HOST_AUDIO_CLOCK_VTABLE: AudioClockVTable = AudioClockVTable {
     on_tick: host_acv_on_tick,
 };
 
+/// Pointer to the [`AudioClockVTable`] this DSO should dispatch
+/// through. Same DSO-routing rule as
+/// [`host_runtime_context_vtable`]: cdylib reads the host's pointer
+/// from the cache populated by `install_host_services`; host falls
+/// back to its local static.
 pub fn host_audio_clock_vtable() -> *const AudioClockVTable {
-    &HOST_AUDIO_CLOCK_VTABLE
+    match host_callbacks() {
+        Some(c) if !c.audio_clock_vtable.is_null() => c.audio_clock_vtable,
+        _ => &HOST_AUDIO_CLOCK_VTABLE,
+    }
 }
 
 // ---------------- RuntimeOps vtable ----------------
@@ -914,25 +947,86 @@ unsafe fn invoke_completion(
     unsafe { completion(user_data, status, bytes.as_ptr(), bytes.len()) };
 }
 
-unsafe fn completion_with_msgpack_result<T: serde::Serialize>(
+/// RAII guard around the cdylib's submit-with-completion contract.
+/// The ABI promises the host fires `completion(user_data, ...)`
+/// exactly once. Without this guard a panic inside the spawned
+/// `async` body (or a runtime shutdown that drops the future before
+/// it awaits) would leak the cdylib's boxed `oneshot::Sender` and
+/// hang the cdylib's `rx.await` forever. With the guard, the Drop
+/// impl fires an aborted-task error completion if the explicit fire
+/// path didn't run.
+///
+/// Holds `user_data` as a `usize` so the guard is `Send + Sync` (raw
+/// pointers aren't). The completion fn pointer is naturally Send.
+struct CompletionGuard {
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
-    user_data: *mut c_void,
-    result: crate::core::Result<T>,
-) {
-    match result {
-        Ok(value) => match rmp_serde::to_vec_named(&value) {
-            Ok(bytes) => unsafe { invoke_completion(completion, user_data, 0, &bytes) },
+    user_data_addr: usize,
+    fired: bool,
+}
+
+impl CompletionGuard {
+    fn new(
+        completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+        user_data: *mut c_void,
+    ) -> Self {
+        Self {
+            completion,
+            user_data_addr: user_data as usize,
+            fired: false,
+        }
+    }
+
+    fn fire_with_result<T: serde::Serialize>(mut self, result: crate::core::Result<T>) {
+        self.fired = true;
+        let user_data_ptr = self.user_data_addr as *mut c_void;
+        match result {
+            Ok(value) => match rmp_serde::to_vec_named(&value) {
+                Ok(bytes) => unsafe {
+                    invoke_completion(self.completion, user_data_ptr, 0, &bytes)
+                },
+                Err(e) => {
+                    let msg = format!("response msgpack encode failed: {e}");
+                    unsafe {
+                        invoke_completion(self.completion, user_data_ptr, -1, msg.as_bytes())
+                    };
+                }
+            },
             Err(e) => {
-                let msg = format!("response msgpack encode failed: {e}");
-                unsafe { invoke_completion(completion, user_data, -1, msg.as_bytes()) };
+                let msg = e.to_string();
+                unsafe { invoke_completion(self.completion, user_data_ptr, -1, msg.as_bytes()) };
             }
-        },
-        Err(e) => {
-            let msg = e.to_string();
-            unsafe { invoke_completion(completion, user_data, -1, msg.as_bytes()) };
+        }
+    }
+
+    fn fire_err_msg(mut self, msg: &[u8]) {
+        self.fired = true;
+        let user_data_ptr = self.user_data_addr as *mut c_void;
+        unsafe { invoke_completion(self.completion, user_data_ptr, -1, msg) };
+    }
+}
+
+impl Drop for CompletionGuard {
+    fn drop(&mut self) {
+        if !self.fired {
+            // SAFETY: contract promise — completion is always fired
+            // exactly once. A drop without a fire signals the host's
+            // tokio task aborted (panic or runtime shutdown before
+            // the future completed). The cdylib's completion
+            // trampoline reclaims its boxed `Sender` either way.
+            let user_data_ptr = self.user_data_addr as *mut c_void;
+            let msg = b"runtime-ops host task aborted before completion";
+            unsafe {
+                invoke_completion(self.completion, user_data_ptr, -1, msg);
+            }
         }
     }
 }
+
+// SAFETY: completion fn pointer is naturally Send; user_data is held
+// as a `usize` so the guard can cross `.await` boundaries inside
+// tokio task bodies.
+unsafe impl Send for CompletionGuard {}
+unsafe impl Sync for CompletionGuard {}
 
 unsafe extern "C" fn host_rov_add_processor(
     handle: *const c_void,
@@ -942,9 +1036,9 @@ unsafe extern "C" fn host_rov_add_processor(
     user_data: *mut c_void,
 ) {
     let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let guard = CompletionGuard::new(completion, user_data);
     let Some(rt) = host_tokio_handle() else {
-        let msg = b"host tokio handle not installed";
-        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        guard.fire_err_msg(b"host tokio handle not installed");
         return;
     };
     let spec_bytes = if spec_msgpack_len == 0 {
@@ -952,10 +1046,6 @@ unsafe extern "C" fn host_rov_add_processor(
     } else {
         unsafe { std::slice::from_raw_parts(spec_msgpack_ptr, spec_msgpack_len) }.to_vec()
     };
-    // Tunnel `user_data` through to the spawned task — its raw pointer
-    // is Send-safe by the cdylib's ABI promise (the holder must be
-    // safe to invoke from any thread the host chooses).
-    let user_data_addr = user_data as usize;
     rt.spawn(async move {
         let result = match rmp_serde::from_slice::<crate::core::processors::ProcessorSpec>(
             &spec_bytes,
@@ -965,10 +1055,7 @@ unsafe extern "C" fn host_rov_add_processor(
                 "add_processor: spec msgpack decode failed: {e}"
             ))),
         };
-        // Reconstruct the pointer here so `*mut c_void` does not live
-        // across the `.await` above and the future stays Send.
-        let user_data_ptr = user_data_addr as *mut c_void;
-        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+        guard.fire_with_result(result);
     });
 }
 
@@ -980,9 +1067,9 @@ unsafe extern "C" fn host_rov_remove_processor(
     user_data: *mut c_void,
 ) {
     let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let guard = CompletionGuard::new(completion, user_data);
     let Some(rt) = host_tokio_handle() else {
-        let msg = b"host tokio handle not installed";
-        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        guard.fire_err_msg(b"host tokio handle not installed");
         return;
     };
     let id_bytes = if processor_id_msgpack_len == 0 {
@@ -993,7 +1080,6 @@ unsafe extern "C" fn host_rov_remove_processor(
         }
         .to_vec()
     };
-    let user_data_addr = user_data as usize;
     rt.spawn(async move {
         let result =
             match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(&id_bytes) {
@@ -1002,8 +1088,7 @@ unsafe extern "C" fn host_rov_remove_processor(
                     "remove_processor: processor_id msgpack decode failed: {e}"
                 ))),
             };
-        let user_data_ptr = user_data_addr as *mut c_void;
-        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+        guard.fire_with_result(result);
     });
 }
 
@@ -1017,9 +1102,9 @@ unsafe extern "C" fn host_rov_connect(
     user_data: *mut c_void,
 ) {
     let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let guard = CompletionGuard::new(completion, user_data);
     let Some(rt) = host_tokio_handle() else {
-        let msg = b"host tokio handle not installed";
-        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        guard.fire_err_msg(b"host tokio handle not installed");
         return;
     };
     let from_bytes = if from_msgpack_len == 0 {
@@ -1032,7 +1117,6 @@ unsafe extern "C" fn host_rov_connect(
     } else {
         unsafe { std::slice::from_raw_parts(to_msgpack_ptr, to_msgpack_len) }.to_vec()
     };
-    let user_data_addr = user_data as usize;
     rt.spawn(async move {
         let from: crate::core::OutputLinkPortRef = match rmp_serde::from_slice(&from_bytes) {
             Ok(v) => v,
@@ -1041,8 +1125,7 @@ unsafe extern "C" fn host_rov_connect(
                     Err(crate::core::Error::Config(format!(
                         "connect: from-port msgpack decode failed: {e}"
                     )));
-                let user_data_ptr = user_data_addr as *mut c_void;
-                unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+                guard.fire_with_result(result);
                 return;
             }
         };
@@ -1053,14 +1136,12 @@ unsafe extern "C" fn host_rov_connect(
                     Err(crate::core::Error::Config(format!(
                         "connect: to-port msgpack decode failed: {e}"
                     )));
-                let user_data_ptr = user_data_addr as *mut c_void;
-                unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+                guard.fire_with_result(result);
                 return;
             }
         };
         let result = ops.connect_async(from, to).await;
-        let user_data_ptr = user_data_addr as *mut c_void;
-        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+        guard.fire_with_result(result);
     });
 }
 
@@ -1072,9 +1153,9 @@ unsafe extern "C" fn host_rov_disconnect(
     user_data: *mut c_void,
 ) {
     let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let guard = CompletionGuard::new(completion, user_data);
     let Some(rt) = host_tokio_handle() else {
-        let msg = b"host tokio handle not installed";
-        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        guard.fire_err_msg(b"host tokio handle not installed");
         return;
     };
     let bytes = if link_id_msgpack_len == 0 {
@@ -1082,7 +1163,6 @@ unsafe extern "C" fn host_rov_disconnect(
     } else {
         unsafe { std::slice::from_raw_parts(link_id_msgpack_ptr, link_id_msgpack_len) }.to_vec()
     };
-    let user_data_addr = user_data as usize;
     rt.spawn(async move {
         let result = match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes) {
             Ok(link_id) => ops.disconnect_async(link_id).await,
@@ -1090,8 +1170,7 @@ unsafe extern "C" fn host_rov_disconnect(
                 "disconnect: link_id msgpack decode failed: {e}"
             ))),
         };
-        let user_data_ptr = user_data_addr as *mut c_void;
-        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+        guard.fire_with_result(result);
     });
 }
 
@@ -1101,16 +1180,14 @@ unsafe extern "C" fn host_rov_to_json(
     user_data: *mut c_void,
 ) {
     let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+    let guard = CompletionGuard::new(completion, user_data);
     let Some(rt) = host_tokio_handle() else {
-        let msg = b"host tokio handle not installed";
-        unsafe { invoke_completion(completion, user_data, -1, msg) };
+        guard.fire_err_msg(b"host tokio handle not installed");
         return;
     };
-    let user_data_addr = user_data as usize;
     rt.spawn(async move {
         let result = ops.to_json_async().await;
-        let user_data_ptr = user_data_addr as *mut c_void;
-        unsafe { completion_with_msgpack_result(completion, user_data_ptr, result) };
+        guard.fire_with_result(result);
     });
 }
 
@@ -1127,8 +1204,14 @@ pub static HOST_RUNTIME_OPS_VTABLE: RuntimeOpsVTable = RuntimeOpsVTable {
     to_json: host_rov_to_json,
 };
 
+/// Pointer to the [`RuntimeOpsVTable`] this DSO should dispatch
+/// through. Same DSO-routing rule as
+/// [`host_runtime_context_vtable`].
 pub fn host_runtime_ops_vtable() -> *const RuntimeOpsVTable {
-    &HOST_RUNTIME_OPS_VTABLE
+    match host_callbacks() {
+        Some(c) if !c.runtime_ops_vtable.is_null() => c.runtime_ops_vtable,
+        _ => &HOST_RUNTIME_OPS_VTABLE,
+    }
 }
 
 // ---------------- Shared scratch-buffer helper ----------------
