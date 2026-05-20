@@ -9,7 +9,6 @@ edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
-build = "build.rs"
 
 [[bin]]
 name = "streamlib"

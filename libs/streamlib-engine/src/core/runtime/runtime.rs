@@ -511,7 +511,7 @@ impl Runner {
                     // same YAML share one dylib), then validate each processor
                     // was actually registered.
                     if !rust_dylib_loaded {
-                        let host_triple = env!("STREAMLIB_HOST_TARGET");
+                        let host_triple = host_target_triple();
                         let lib_dir = project_path.join("lib");
                         let triple_dir = lib_dir.join(host_triple);
                         let dylib_ext = if cfg!(target_os = "macos") {

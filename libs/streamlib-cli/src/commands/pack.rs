@@ -11,6 +11,7 @@ use zip::write::FileOptions;
 use zip::ZipWriter;
 
 use streamlib::engine_internal::core::ProjectConfig;
+use streamlib::sdk::runtime::host_target_triple;
 use streamlib_idents::Manifest;
 
 /// Pack a processor package into a .slpkg bundle.
@@ -159,7 +160,7 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
         // and the loader picks the right one at runtime. This pack writes
         // only the current host's triple; a future fat-archive workflow
         // can add others without changing the load path.
-        let host_triple = host_triple();
+        let host_triple = host_target_triple();
         let lib_dir = package_dir.join("lib");
         let triple_dir = lib_dir.join(host_triple);
         let dylib_ext = host_dylib_extension();
@@ -254,16 +255,6 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
     }
 
     Ok(())
-}
-
-/// The rustc target triple this binary was compiled for, captured via
-/// `build.rs`. Used to key cdylibs inside the `.slpkg` archive — pack
-/// writes `lib/<triple>/<filename>` so the loader on a matching host can
-/// resolve unambiguously and the loader on a mismatched host can refuse
-/// loudly. Same string Cargo prints for `--target`
-/// (e.g. `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`).
-fn host_triple() -> &'static str {
-    env!("STREAMLIB_HOST_TARGET")
 }
 
 /// The dylib extension for the current host OS, matching Cargo's
@@ -813,7 +804,7 @@ members = ["foo"]
         let dir = tempdir().unwrap();
         write_yaml(dir.path(), RUST_PLUGIN_YAML);
         write_cargo_toml(dir.path(), "test-plugin");
-        std::fs::create_dir_all(dir.path().join("lib").join(host_triple())).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib").join(host_target_triple())).unwrap();
 
         let err = pack(dir.path(), None, /* no_build */ true)
             .expect_err("--no-build with empty lib/<triple>/ must error");
@@ -827,7 +818,7 @@ members = ["foo"]
             "error must suggest the exact cargo command using the Cargo crate name from Cargo.toml, got: {msg}"
         );
         assert!(
-            msg.contains(host_triple()),
+            msg.contains(host_target_triple()),
             "error must surface the host triple so the user knows which lib/<triple>/ to populate, got: {msg}"
         );
     }
@@ -847,7 +838,7 @@ members = ["foo"]
         // Intentionally NO Cargo.toml — auto-build branch would fail
         // before invoking cargo, but the populated-lib branch should
         // skip Cargo.toml entirely.
-        let triple_dir = dir.path().join("lib").join(host_triple());
+        let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         let host_ext = host_dylib_extension();
         let dylib_name = format!("libtest_plugin.{}", host_ext);
@@ -863,7 +854,7 @@ members = ["foo"]
         // triple-keyed layout the loader resolves against.
         let zip_bytes = std::fs::read(&output).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
-        let entry_name = format!("lib/{}/{}", host_triple(), dylib_name);
+        let entry_name = format!("lib/{}/{}", host_target_triple(), dylib_name);
         zip.by_name(&entry_name)
             .unwrap_or_else(|_| panic!("slpkg missing {} entry", entry_name));
         // Negative: the legacy flat `lib/<filename>` layout must NOT
