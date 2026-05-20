@@ -32,11 +32,15 @@ use streamlib::sdk::runtime::Runner;
 fn main() -> Result<()> {
     let runtime = Runner::new()?;
 
-    // 1. Copy built dylib into plugin/lib/ so load_project() can find it
+    // 1. Copy built dylib into plugin/lib/<triple>/ so load_project()
+    //    can find it. The loader resolves the cdylib via the same
+    //    `lib/<triple>/` path produced by `streamlib pack`, so the
+    //    example mirrors that on-disk layout.
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let plugin_dir = manifest_dir.join("plugin");
-    let lib_dir = plugin_dir.join("lib");
-    std::fs::create_dir_all(&lib_dir).map_err(|e| {
+    let host_triple = streamlib::sdk::runtime::host_target_triple();
+    let triple_lib_dir = plugin_dir.join("lib").join(host_triple);
+    std::fs::create_dir_all(&triple_lib_dir).map_err(|e| {
         streamlib::sdk::error::Error::Configuration(format!("Failed to create lib dir: {}", e))
     })?;
 
@@ -76,7 +80,7 @@ fn main() -> Result<()> {
         std::process::exit(1);
     };
 
-    let dest_dylib = lib_dir.join(dylib_name);
+    let dest_dylib = triple_lib_dir.join(dylib_name);
     std::fs::copy(source_dylib, &dest_dylib).map_err(|e| {
         streamlib::sdk::error::Error::Configuration(format!(
             "Failed to copy dylib from {} to {}: {}",

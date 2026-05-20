@@ -10,6 +10,6 @@ mod runtime_unique_id;
 mod status;
 
 pub use operations::{BoxFuture, RuntimeOperations};
-pub use runtime::{extract_slpkg_to_cache, Runner};
+pub use runtime::{extract_slpkg_to_cache, host_target_triple, Runner};
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
