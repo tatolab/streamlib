@@ -511,7 +511,9 @@ impl Runner {
                     // same YAML share one dylib), then validate each processor
                     // was actually registered.
                     if !rust_dylib_loaded {
+                        let host_triple = env!("STREAMLIB_HOST_TARGET");
                         let lib_dir = project_path.join("lib");
+                        let triple_dir = lib_dir.join(host_triple);
                         let dylib_ext = if cfg!(target_os = "macos") {
                             "dylib"
                         } else if cfg!(target_os = "windows") {
@@ -520,22 +522,45 @@ impl Runner {
                             "so"
                         };
 
-                        let dylib_path = std::fs::read_dir(&lib_dir)
+                        let dylib_path = std::fs::read_dir(&triple_dir)
                             .map_err(|e| {
-                                Error::Configuration(format!(
-                                    "Failed to read lib/ directory at {}: {}",
-                                    lib_dir.display(),
-                                    e
-                                ))
+                                // If `lib/` exists but the triple-keyed
+                                // subdir is absent, surface the available
+                                // triples so the user sees exactly which
+                                // platforms this slpkg was packed for.
+                                let available =
+                                    list_available_triples(&lib_dir).unwrap_or_default();
+                                let detail = if available.is_empty() {
+                                    format!(
+                                        "Failed to read {}: {}. \
+                                         The package may be missing a Rust artifact for this host.",
+                                        triple_dir.display(),
+                                        e
+                                    )
+                                } else {
+                                    format!(
+                                        "Failed to read {}: {}. \
+                                         This slpkg was packed for: [{}]. \
+                                         The host triple is `{}` — repack on a matching host \
+                                         or run this pipeline on a host that matches one of the \
+                                         packed triples.",
+                                        triple_dir.display(),
+                                        e,
+                                        available.join(", "),
+                                        host_triple
+                                    )
+                                };
+                                Error::Configuration(detail)
                             })?
                             .filter_map(|entry| entry.ok())
                             .map(|entry| entry.path())
                             .find(|path| path.extension().is_some_and(|ext| ext == dylib_ext))
                             .ok_or_else(|| {
                                 Error::Configuration(format!(
-                                    "No .{} file found in {}",
+                                    "No .{} file found in {} (host triple `{}`)",
                                     dylib_ext,
-                                    lib_dir.display()
+                                    triple_dir.display(),
+                                    host_triple
                                 ))
                             })?;
 
@@ -1718,6 +1743,41 @@ fn strip_legacy_semver_suffix(name: &str) -> &str {
     name
 }
 
+/// The rustc target triple this engine was compiled for, captured at
+/// build time via `build.rs`. Same string Cargo prints for `--target`
+/// (e.g. `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`). Used to
+/// resolve plugin cdylibs inside `lib/<triple>/...` during package
+/// load — and exposed publicly so consumers (examples, application
+/// binaries) can write into the same triple-keyed directory layout
+/// without each running their own `build.rs`.
+pub fn host_target_triple() -> &'static str {
+    env!("STREAMLIB_HOST_TARGET")
+}
+
+/// Enumerate the target triples present as subdirectories of a
+/// package's `lib/` dir. Used in the error path when the host's triple
+/// has no matching artifact, so the user sees which platforms a slpkg
+/// WAS packed for instead of a generic "file not found".
+fn list_available_triples(lib_dir: &std::path::Path) -> Result<Vec<String>> {
+    if !lib_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let entries = std::fs::read_dir(lib_dir).map_err(|e| {
+        Error::Configuration(format!(
+            "Failed to enumerate {}: {}",
+            lib_dir.display(),
+            e
+        ))
+    })?;
+    let mut triples: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .collect();
+    triples.sort();
+    Ok(triples)
+}
+
 /// Extract a .slpkg ZIP archive to the package cache.
 /// Cache key is {name}-{version} from the embedded streamlib.yaml.
 /// Always overwrites on load.
@@ -2373,6 +2433,206 @@ dependencies:
         assert!(
             msg.contains("streamlib pkg install") || msg.contains("workspace"),
             "error must point at the resolution paths the user can act on, got: {msg}"
+        );
+    }
+
+    /// Plugin cdylib resolution: when a project declares Rust runtime
+    /// processors, `load_project` reads from `lib/<host_triple>/...`.
+    /// Mismatched-triple subdirs must produce a clear error naming both
+    /// the host triple and the triples actually present, so the user
+    /// can diagnose immediately ("this slpkg was packed for an
+    /// incompatible host, repack on a matching one"). Mentally
+    /// reverting the `triple_dir = lib_dir.join(host_triple)` line in
+    /// `load_project` would surface a non-existent host's flat-`lib/`
+    /// resolution and the test would not see the host triple in the
+    /// error message.
+    #[test]
+    #[serial]
+    fn test_load_project_rust_dylib_missing_host_triple_surfaces_available_triples() {
+        let runtime = Runner::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+
+        let pkg = tmp.path().join("pkg");
+        std::fs::create_dir(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: triple-mismatch-pkg
+  version: "0.1.0"
+processors:
+  - name: TestProcessor
+    version: 1.0.0
+    description: "Test"
+    runtime: rust
+    execution: manual
+    inputs:
+      - name: video_in
+        schema: any
+    outputs:
+      - name: video_out
+        schema: any
+"#,
+        )
+        .unwrap();
+
+        // Plant a dylib under a deliberately-wrong triple so
+        // `list_available_triples` has something to surface and the
+        // error message can prove the triple-keyed resolution actually
+        // looked at the right subdir.
+        let wrong_triple = "wrong-arch-unknown-elsewhere-gnu";
+        let wrong_dir = pkg.join("lib").join(wrong_triple);
+        std::fs::create_dir_all(&wrong_dir).unwrap();
+        std::fs::write(wrong_dir.join("libfake.so"), b"not-a-real-dylib").unwrap();
+
+        let err = runtime
+            .load_project(&pkg)
+            .expect_err("missing host-triple subdir must error");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains(host_target_triple()),
+            "error must name the host triple so the user sees what was expected, got: {msg}"
+        );
+        assert!(
+            msg.contains(wrong_triple),
+            "error must list the triples that ARE present so the user sees what the slpkg was packed for, got: {msg}"
+        );
+    }
+
+    /// Positive pair to the triple-mismatch test above: when the
+    /// host-triple subdir exists and contains a file with the right
+    /// extension, `load_project` reaches the dlopen step. The dylib is
+    /// junk bytes (not a real cdylib), so dlopen fails — but the error
+    /// proves path resolution succeeded BEFORE dlopen. Mentally
+    /// reverting the triple lookup to flat-`lib/` would surface a
+    /// different error variant ("No .so file found in lib/") and this
+    /// test would not see the dlopen / STREAMLIB_PLUGIN-symbol message.
+    #[test]
+    #[serial]
+    fn test_load_project_rust_dylib_resolves_host_triple_then_dlopens() {
+        let runtime = Runner::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+
+        let pkg = tmp.path().join("pkg");
+        std::fs::create_dir(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: triple-match-pkg
+  version: "0.1.0"
+processors:
+  - name: TestProcessor
+    version: 1.0.0
+    description: "Test"
+    runtime: rust
+    execution: manual
+    inputs:
+      - name: video_in
+        schema: any
+    outputs:
+      - name: video_out
+        schema: any
+"#,
+        )
+        .unwrap();
+
+        let triple_dir = pkg.join("lib").join(host_target_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
+        let dylib_ext = if cfg!(target_os = "macos") {
+            "dylib"
+        } else if cfg!(target_os = "windows") {
+            "dll"
+        } else {
+            "so"
+        };
+        let dylib_path = triple_dir.join(format!("libfake.{}", dylib_ext));
+        std::fs::write(&dylib_path, b"not-a-real-dylib").unwrap();
+
+        let err = runtime
+            .load_project(&pkg)
+            .expect_err("junk dylib must fail at dlopen, not at path resolution");
+        let msg = format!("{}", err);
+        // Surface evidence that path resolution succeeded: the error
+        // must mention the dylib file itself (proving the loader got
+        // past `read_dir` and into `libloading::Library::new`). The
+        // earlier-shape error "No .so file found in lib/" would name
+        // the directory, not the file — so this assertion locks the
+        // resolution-then-dlopen ordering.
+        assert!(
+            msg.contains("libfake"),
+            "error must reference the dylib file (proving path resolution reached dlopen), got: {msg}"
+        );
+        assert!(
+            !msg.contains("No .so file found")
+                && !msg.contains("No .dylib file found")
+                && !msg.contains("No .dll file found"),
+            "error must NOT be the 'no dylib found' variant (path resolution succeeded), got: {msg}"
+        );
+    }
+
+    /// Schemas-only packages have no `lib/` directory at all and must
+    /// load cleanly — the loader's empty-processors short-circuit at
+    /// the top of `load_project` returns before touching the lib path.
+    /// Reverting that short-circuit would make this test surface a
+    /// "Failed to read lib/<triple>" error instead.
+    #[test]
+    #[serial]
+    fn test_load_project_schemas_only_skips_lib_lookup() {
+        let runtime = Runner::new().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+
+        let pkg = tmp.path().join("schemas-only");
+        std::fs::create_dir(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: schemas-only-pkg
+  version: "0.1.0"
+"#,
+        )
+        .unwrap();
+
+        // Deliberately omit `lib/` — a schemas-only package has no
+        // platform-specific content, and the loader must NOT try to
+        // resolve a host-triple subdir.
+        runtime
+            .load_project(&pkg)
+            .expect("schemas-only package must load without touching lib/");
+    }
+
+    /// Unit lock for the `list_available_triples` helper:
+    /// returns directory-name strings sorted, ignores non-directory
+    /// entries, returns empty when `lib/` itself is missing. Reverting
+    /// any of the filters would either surface non-triple noise or
+    /// crash on missing-dir.
+    #[test]
+    fn list_available_triples_filters_to_subdirs_and_sorts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+
+        // Missing lib/ → empty list, no error.
+        assert!(list_available_triples(&lib).unwrap().is_empty());
+
+        std::fs::create_dir(&lib).unwrap();
+        // Two triple-named subdirs + one non-dir file at the same level
+        // (a stray README or similar). The helper must list the two
+        // subdirs sorted, omit the file.
+        std::fs::create_dir(lib.join("aarch64-apple-darwin")).unwrap();
+        std::fs::create_dir(lib.join("x86_64-unknown-linux-gnu")).unwrap();
+        std::fs::write(lib.join("README.md"), b"stray").unwrap();
+
+        let triples = list_available_triples(&lib).unwrap();
+        assert_eq!(
+            triples,
+            vec![
+                "aarch64-apple-darwin".to_string(),
+                "x86_64-unknown-linux-gnu".to_string(),
+            ]
         );
     }
 

@@ -12,6 +12,12 @@
 fn main() {
     streamlib_jtd_codegen::build_rs::run_for_rust_crate();
 
+    // Propagate the host target triple so `Runner::load_project` can
+    // resolve plugin cdylibs by `lib/<triple>/...` at load time.
+    let target = std::env::var("TARGET").expect("TARGET env var set by cargo for build.rs");
+    println!("cargo:rustc-env=STREAMLIB_HOST_TARGET={}", target);
+    println!("cargo:rerun-if-env-changed=TARGET");
+
     // Link Metal framework on macOS for MP4 writer
     #[cfg(target_os = "macos")]
     {

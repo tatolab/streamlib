@@ -154,9 +154,23 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
         )
     });
     if has_rust_processors {
+        // Per-triple layout inside the archive (`lib/<triple>/<filename>`)
+        // so the same .slpkg can carry artifacts for multiple host triples
+        // and the loader picks the right one at runtime. This pack writes
+        // only the current host's triple; a future fat-archive workflow
+        // can add others without changing the load path.
+        let host_triple = host_triple();
         let lib_dir = package_dir.join("lib");
+        let triple_dir = lib_dir.join(host_triple);
         let dylib_ext = host_dylib_extension();
-        let prebuilt = collect_host_dylibs_in_lib(&lib_dir, dylib_ext)?;
+
+        // Populated layout on disk is also triple-keyed
+        // (`lib/<triple>/...`); the archive mirrors that shape so the
+        // load path is symmetric. Authors invoking `cargo build`
+        // themselves write into `lib/<triple>/`; the auto-build branch
+        // below writes the same way.
+        let prebuilt = collect_host_dylibs_in_lib(&triple_dir, dylib_ext)?;
+
         if !prebuilt.is_empty() {
             for path in prebuilt {
                 let filename = path
@@ -164,7 +178,7 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
                     .expect("dylib path must have filename")
                     .to_string_lossy()
                     .into_owned();
-                files_to_bundle.push((format!("lib/{}", filename), path));
+                files_to_bundle.push((format!("lib/{}/{}", host_triple, filename), path));
             }
         } else if no_build {
             let cargo_hint = read_cargo_package_name(package_dir)
@@ -172,13 +186,15 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
                 .unwrap_or_else(|_| "cargo build --release -p <name>".to_string());
             anyhow::bail!(
                 "Package at {} declares Rust runtime processors but {} contains no \
-                 host-OS dylib (`*.{}`) and `--no-build` was specified. \
-                 Either run `{}` to populate lib/ first, \
+                 host-OS dylib (`*.{}`) for triple `{}` and `--no-build` was specified. \
+                 Either run `{}` to populate lib/{}/ first, \
                  or omit `--no-build` to let pack invoke cargo automatically.",
                 package_dir.display(),
-                lib_dir.display(),
+                triple_dir.display(),
                 dylib_ext,
+                host_triple,
                 cargo_hint,
+                host_triple,
             );
         } else {
             let cargo_name = read_cargo_package_name(package_dir).with_context(|| {
@@ -194,7 +210,7 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
                 .expect("cargo-produced dylib must have filename")
                 .to_string_lossy()
                 .into_owned();
-            files_to_bundle.push((format!("lib/{}", filename), built));
+            files_to_bundle.push((format!("lib/{}/{}", host_triple, filename), built));
         }
     }
 
@@ -238,6 +254,16 @@ pub fn pack(package_dir: &Path, output: Option<&Path>, no_build: bool) -> Result
     }
 
     Ok(())
+}
+
+/// The rustc target triple this binary was compiled for, captured via
+/// `build.rs`. Used to key cdylibs inside the `.slpkg` archive — pack
+/// writes `lib/<triple>/<filename>` so the loader on a matching host can
+/// resolve unambiguously and the loader on a mismatched host can refuse
+/// loudly. Same string Cargo prints for `--target`
+/// (e.g. `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`).
+fn host_triple() -> &'static str {
+    env!("STREAMLIB_HOST_TARGET")
 }
 
 /// The dylib extension for the current host OS, matching Cargo's
@@ -778,18 +804,19 @@ members = ["foo"]
 
     #[test]
     fn pack_with_no_build_and_empty_lib_returns_actionable_error() {
-        // Rust runtime processors declared + lib/ empty + --no-build set
-        // must error with a message pointing the user at the cargo
-        // command they'd need to run. Reverting the no_build branch
-        // would silently invoke cargo and fail later (or worse, succeed
-        // with the wrong artifact in CI).
+        // Rust runtime processors declared + lib/<triple>/ empty +
+        // --no-build set must error with a message pointing the user at
+        // the cargo command they'd need to run AND naming the host
+        // triple subdir so the user knows where the artifact must land.
+        // Reverting the no_build branch would silently invoke cargo and
+        // fail later (or worse, succeed with the wrong artifact in CI).
         let dir = tempdir().unwrap();
         write_yaml(dir.path(), RUST_PLUGIN_YAML);
         write_cargo_toml(dir.path(), "test-plugin");
-        std::fs::create_dir(dir.path().join("lib")).unwrap();
+        std::fs::create_dir_all(dir.path().join("lib").join(host_triple())).unwrap();
 
         let err = pack(dir.path(), None, /* no_build */ true)
-            .expect_err("--no-build with empty lib/ must error");
+            .expect_err("--no-build with empty lib/<triple>/ must error");
         let msg = format!("{err}");
         assert!(
             msg.contains("--no-build"),
@@ -799,38 +826,103 @@ members = ["foo"]
             msg.contains("cargo build --release -p test-plugin"),
             "error must suggest the exact cargo command using the Cargo crate name from Cargo.toml, got: {msg}"
         );
+        assert!(
+            msg.contains(host_triple()),
+            "error must surface the host triple so the user knows which lib/<triple>/ to populate, got: {msg}"
+        );
     }
 
     #[test]
     fn pack_with_populated_lib_does_not_invoke_cargo_build() {
-        // Pre-populated lib/ flow is preserved verbatim: pack picks up
-        // the host-OS dylib(s) and never reaches the auto-build branch.
-        // The proof that cargo wasn't invoked: the tempdir is outside
-        // any workspace, so a stray `cargo build -p test-plugin` would
-        // fail to locate the crate and the test would error. Test
-        // passing == cargo never ran.
+        // Pre-populated lib/<triple>/ flow is preserved verbatim: pack
+        // picks up the host-OS dylib(s) and never reaches the auto-build
+        // branch. The proof that cargo wasn't invoked: the tempdir is
+        // outside any workspace, so a stray `cargo build -p test-plugin`
+        // would fail to locate the crate and the test would error. Test
+        // passing == cargo never ran. The dylib lands inside the zip
+        // under `lib/<triple>/<filename>` so the loader on a matching
+        // host can resolve unambiguously.
         let dir = tempdir().unwrap();
         write_yaml(dir.path(), RUST_PLUGIN_YAML);
         // Intentionally NO Cargo.toml — auto-build branch would fail
         // before invoking cargo, but the populated-lib branch should
         // skip Cargo.toml entirely.
-        let lib_dir = dir.path().join("lib");
-        std::fs::create_dir(&lib_dir).unwrap();
+        let triple_dir = dir.path().join("lib").join(host_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
         let host_ext = host_dylib_extension();
         let dylib_name = format!("libtest_plugin.{}", host_ext);
-        std::fs::write(lib_dir.join(&dylib_name), b"fake-dylib-bytes").unwrap();
+        std::fs::write(triple_dir.join(&dylib_name), b"fake-dylib-bytes").unwrap();
 
         let output = dir.path().join("out.slpkg");
         pack(dir.path(), Some(&output), /* no_build */ false)
-            .expect("populated lib/ must pack without invoking cargo");
+            .expect("populated lib/<triple>/ must pack without invoking cargo");
 
         assert!(output.exists(), "expected slpkg at {}", output.display());
-        // Verify the dylib landed inside the zip under lib/<filename>.
+        // Verify the dylib landed inside the zip under
+        // `lib/<triple>/<filename>` — the wire-format contract for the
+        // triple-keyed layout the loader resolves against.
         let zip_bytes = std::fs::read(&output).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
-        let entry_name = format!("lib/{}", dylib_name);
+        let entry_name = format!("lib/{}/{}", host_triple(), dylib_name);
         zip.by_name(&entry_name)
             .unwrap_or_else(|_| panic!("slpkg missing {} entry", entry_name));
+        // Negative: the legacy flat `lib/<filename>` layout must NOT
+        // appear — the new contract is triple-keyed, period.
+        let legacy_entry = format!("lib/{}", dylib_name);
+        assert!(
+            zip.by_name(&legacy_entry).is_err(),
+            "slpkg must not carry legacy flat `{}` entry alongside the triple-keyed one",
+            legacy_entry
+        );
+    }
+
+    #[test]
+    fn pack_schemas_only_emits_no_lib_entries() {
+        // Schemas-only packages (`@tatolab/core`, `@tatolab/escalate`)
+        // have no Rust cdylib and the resulting slpkg must NOT contain a
+        // `lib/` directory — neither flat nor triple-keyed. Mentally
+        // reverting the `has_rust_processors` gate around the lib branch
+        // would either error here (no Cargo.toml present) or silently
+        // ship an empty lib dir; both shapes are wrong and the loader
+        // would mis-resolve the package as a Rust-impl one.
+        let dir = tempdir().unwrap();
+        write_yaml(
+            dir.path(),
+            r#"
+package:
+  org: tatolab
+  name: schemas-only
+  version: 0.1.0
+schemas:
+  TestSchema:
+    file: schemas/test_schema.yaml
+"#,
+        );
+        let schemas_dir = dir.path().join("schemas");
+        std::fs::create_dir(&schemas_dir).unwrap();
+        std::fs::write(
+            schemas_dir.join("test_schema.yaml"),
+            "metadata:\n  type: TestSchema\n  max_payload_bytes: 1024\n",
+        )
+        .unwrap();
+
+        let output = dir.path().join("schemas-only.slpkg");
+        pack(dir.path(), Some(&output), /* no_build */ false)
+            .expect("schemas-only package must pack without lib/ requirement");
+
+        let zip_bytes = std::fs::read(&output).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes)).unwrap();
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            assert!(
+                !entry.name().starts_with("lib/"),
+                "schemas-only slpkg must not contain any lib/ entries, got: {}",
+                entry.name()
+            );
+        }
+        // Sanity: the schema yaml itself is present.
+        zip.by_name("schemas/test_schema.yaml")
+            .expect("schemas-only slpkg must carry its declared schema yaml");
     }
 
     #[test]
