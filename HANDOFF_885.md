@@ -212,49 +212,73 @@ Two follow-up issues — file as blockers on the shim restructure landing.
 
 ## Strategy for the next session
 
-The team-based parallelization the user originally suggested is still the right approach for Bucket A (32-file package migration). Now that the engine compiles, teams can be spawned safely against the current state of `main` + this branch.
+The user's intent (per the issue-splitting conversation) is:
 
-**Recommended order:**
+- **#885 stays open across two sessions** — this session (engine foundation) + next session (Buckets B + C: shim restructure, host vtable wiring, AudioClock FFI, RuntimeOps FFI). All engine work lives inside #885.
+- **#895** is the only legitimate follow-up — covers Bucket A (per-package migrations). It is `Blocked by #885` via a native GitHub dependency edge so `amos next` queues it correctly behind #885.
 
-1. **Land Bucket A as a first follow-up PR (or continue on this branch)** — the package migrations. Spawn 5-6 teams:
-   - `api-server-migrator` — api-server (own runtime + sync lifecycle)
-   - `webrtc-migrator` — webrtc whip + whep (own runtime + sync lifecycle)
-   - `network-migrator` — network udp_source + udp_sink (own runtime + sync lifecycle)
-   - `moq-migrator` — moq subscribe_track + others (own runtime + sync lifecycle where applicable)
-   - `sync-sweeper` — all other packages (~25 trivial sync conversions: audio, camera, display, codecs, mp4, debug-utilities, mavlink, opus, plugin, test-fixtures, vadr-vision)
-   - `integration-tester` — write a dlopen test that exercises sync lifecycle + a processor that owns its own tokio + binds a `tokio::net::TcpListener`
+Issues #896/#897/#898 were filed mid-session as a scope-fragmentation mistake and have been **closed** with consolidation comments. The work they described is folded into #885's continuing scope below.
 
-   Each team gets a focused brief based on the patterns in this doc.
+**Next-session order (all within #885 until exit criteria are fully met):**
 
-2. **Bucket B as second follow-up PR** — shim restructure + host RuntimeContextVTable wiring. Smaller and self-contained.
+1. **Bucket B — shim restructure + host vtable wiring.** Change `RuntimeContextFullAccess` / `LimitedAccess` to `(handle, vtable)` shape. Implement `HOST_RUNTIME_CONTEXT_VTABLE` static in `host_services.rs`. Populate `HostServices::runtime_context_vtable` with `&HOST_RUNTIME_CONTEXT_VTABLE` (replacing the current `std::ptr::null()` checkpoint). Update Phase A wrappers in `processor_vtable.rs` to stack-construct the new shim shape. Drop the dead accessors (`tokio_handle`, `time`, `platform`, `surface_socket_path`, `iceoryx2_node`); reroute the host-internal compiler ops to access the underlying `RuntimeContext` directly. See "Bucket B" section above for the full task list.
 
-3. **Bucket C as two parallel follow-up PRs** — AudioClock FFI + RuntimeOps FFI. Independent and small enough.
+2. **Bucket C1 — AudioClock FFI.** Implement `HOST_AUDIO_CLOCK_VTABLE` + `AudioClockShim` cdylib wrapper. Wire `HostServices::audio_clock_vtable`. Single consumer (`packages/audio/chord_generator.rs`).
+
+3. **Bucket C2 — RuntimeOps FFI.** Implement `HOST_RUNTIME_OPS_VTABLE` + `RuntimeOpsShim` cdylib wrapper with completion-callback-into-oneshot bridging. Wire `HostServices::runtime_ops_vtable`. Single consumer (`packages/api-server/handlers.rs`).
+
+4. **Verify #885's exit criteria all green** — every checkbox in the issue body's exit criteria must be checked off before #885 closes.
+
+5. **Open the PR for #885** — at this point the engine + plugin-abi work is complete; the PR closes #885.
+
+**After #885 closes — pick up #895** (Bucket A, package migrations). The team-based parallelization the user originally suggested is the right approach for this 32-file sweep:
+
+- `api-server-migrator` — api-server (own runtime + sync lifecycle)
+- `webrtc-migrator` — webrtc whip + whep (own runtime + sync lifecycle)
+- `network-migrator` — network udp_source + udp_sink (own runtime + sync lifecycle)
+- `moq-migrator` — moq subscribe_track + others (own runtime + sync lifecycle where applicable)
+- `sync-sweeper` — all other packages (~25 trivial sync conversions: audio, camera, display, codecs, mp4, debug-utilities, mavlink, opus, plugin, test-fixtures, vadr-vision)
+- `integration-tester` — write a dlopen test that exercises sync lifecycle + a processor that owns its own tokio + binds a `tokio::net::TcpListener`
+
+Each team gets a focused brief based on the patterns in this doc.
 
 ## Next-session prompt (for the user to give to a fresh Claude Code agent)
 
 ```
 I'm continuing work on issue #885 (Phase B plugin ABI). The previous session
-landed the engine foundation; read HANDOFF_885.md on this branch
-(feat/runtime-context-callback-table-885) for full context — that file has
-the locked design pointer, what's done, and what's left across three buckets.
+landed the engine foundation on branch
+`feat/runtime-context-callback-table-885`; read HANDOFF_885.md on that
+branch for full context — that file has the locked design pointer, what's
+done, and what's left across the remaining buckets.
 
-We're on Bucket A: per-package migrations. `cargo check --workspace` shows
-32 files in `packages/` and `libs/test-fixtures/` with the lifecycle trait
-signature mismatch (E0053). Engine itself compiles cleanly.
+#885 itself is still OPEN and stays open through THIS session. The
+foundation commit (lifecycle traits sync + ABI types defined + engine
+compiles cleanly) landed last session. This session continues #885 with:
 
-The user wants to use TeamCreate to parallelize this across multiple agents.
-Read HANDOFF_885.md's "Strategy for the next session" section for the
-proposed team breakdown (api-server, webrtc, network, moq, sync-sweeper,
-integration-tester). Each team brief should reference the "Reference
-pattern for the own-runtime migration" in the handoff doc.
+  Bucket B: shim restructure + host RuntimeContextVTable wiring
+  Bucket C1: AudioClockVTable host wiring + cdylib AudioClockShim
+  Bucket C2: RuntimeOpsVTable host wiring + cdylib RuntimeOpsShim
 
-Before spawning teams, briefly verify the engine still compiles on this
-branch (`cargo check --all-targets -p streamlib-engine`), then proceed
-with team spawning.
+These were briefly filed as separate issues (#896/#897/#898) and then
+closed when we realized they're part of #885's existing exit criteria.
+Don't re-file them.
 
-Do NOT change the architectural decisions in the locked design (issue body)
-without explicit user sign-off. The design has converged after extensive
-research; the user has been clear about the trade-offs.
+Verify the engine still compiles before starting
+(`cargo check --all-targets -p streamlib-engine`), then work through
+Buckets B → C1 → C2 in that order (Bucket B unblocks the others — the
+shim shape must be settled before the AudioClock/RuntimeOps shim
+wrappers can be written against it).
+
+When #885's exit criteria are all green, open the PR for it. After it
+merges, the next pickup is #895 (per-package migrations — Bucket A — the
+real TeamCreate parallelization opportunity). #895 has a native
+`blocked by #885` edge so `amos next` will surface it automatically once
+#885 closes.
+
+Do NOT change the architectural decisions in the locked design (issue
+body section "Locked design — 2026-05-20") without explicit user sign-off.
+The design has converged after extensive research; the user has been
+clear about the trade-offs.
 ```
 
 ---
