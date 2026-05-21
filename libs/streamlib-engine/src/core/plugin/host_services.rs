@@ -5164,7 +5164,14 @@ mod gpu_full_access_vtable_tests {
     fn host_services_for_self_wires_full_access_vtable() {
         let node = match crate::iceoryx2::Iceoryx2Node::new() {
             Ok(n) => n,
-            Err(_) => return, // Iceoryx2 not available in this env — skip.
+            Err(e) => {
+                tracing::warn!(
+                    target: "streamlib::tests::gpu_full_access_vtable",
+                    error = %e,
+                    "skipping host_services_for_self wiring assertion: iceoryx2 init unavailable in this env"
+                );
+                return;
+            }
         };
         let services = runtime_facing::host_services_for_self(&node);
         assert!(
