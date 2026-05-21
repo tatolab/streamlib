@@ -749,10 +749,19 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// [`RuntimeOperations`] so existing call sites
     /// (`ctx.runtime().add_processor_async(...).await`) keep working
     /// transparently against a plugin-owned tokio runtime.
+    ///
+    /// The returned `Arc<dyn RuntimeOperations>` owns an Arc refcount
+    /// bump on the host's underlying ops impl via the
+    /// [`RuntimeOpsVTable::clone_handle`](streamlib_plugin_abi::RuntimeOpsVTable)
+    /// callback, so it's sound to stash past `Runner::stop()`.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
-        let handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
+        let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
         let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
-        RuntimeOpsShim::from_ffi(handle, rov) as Arc<dyn RuntimeOperations>
+        // SAFETY: rov + borrowed_handle come from the engine's host
+        // services; clone_handle is contractually required (v2 ABI)
+        // and returns an owned handle the shim's Drop releases.
+        let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
+        RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
     }
 
     // ------------ Engine-internal host accessors ------------
@@ -834,9 +843,10 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     /// Host-owned runtime operations as a typed FFI shim. See
     /// [`RuntimeContextFullAccess::runtime`].
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
-        let handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
+        let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
         let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
-        RuntimeOpsShim::from_ffi(handle, rov) as Arc<dyn RuntimeOperations>
+        let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
+        RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
     }
 
     // ------------ Engine-internal host accessors ------------

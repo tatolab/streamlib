@@ -1191,6 +1191,35 @@ unsafe extern "C" fn host_rov_to_json(
     });
 }
 
+/// Take a (borrowed) handle returned from
+/// [`RuntimeContextVTable::runtime_ops_handle`] (a `*const Arc<dyn
+/// RuntimeOperations>` pointing into `RuntimeContext`-owned storage)
+/// and return a new owned handle: a `Box<Arc<dyn RuntimeOperations>>`
+/// with an Arc refcount bump. The owned handle stays alive even if
+/// the originating `RuntimeContext` is dropped, because the inner Arc
+/// keeps the underlying `dyn RuntimeOperations` impl alive
+/// independently. Cdylib drops it via [`host_rov_drop_handle`].
+unsafe extern "C" fn host_rov_clone_handle(borrowed_handle: *const c_void) -> *const c_void {
+    if borrowed_handle.is_null() {
+        return std::ptr::null();
+    }
+    // SAFETY: `borrowed_handle` came from `host_rcv_runtime_ops_handle`
+    // which cast `&RuntimeContext.runtime_ops` to `*const c_void`.
+    let original = unsafe { &*(borrowed_handle as *const Arc<dyn RuntimeOperations>) };
+    let cloned: Arc<dyn RuntimeOperations> = Arc::clone(original);
+    Box::into_raw(Box::new(cloned)) as *const c_void
+}
+
+unsafe extern "C" fn host_rov_drop_handle(owned_handle: *const c_void) {
+    if owned_handle.is_null() {
+        return;
+    }
+    // SAFETY: paired with `host_rov_clone_handle`'s `Box::into_raw`.
+    unsafe {
+        let _ = Box::from_raw(owned_handle as *mut Arc<dyn RuntimeOperations>);
+    }
+}
+
 /// Static [`RuntimeOpsVTable`] installed once per process. Paired
 /// with the per-RuntimeContext runtime-ops handle returned by
 /// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::runtime_ops_handle`.
@@ -1202,6 +1231,8 @@ pub static HOST_RUNTIME_OPS_VTABLE: RuntimeOpsVTable = RuntimeOpsVTable {
     connect: host_rov_connect,
     disconnect: host_rov_disconnect,
     to_json: host_rov_to_json,
+    clone_handle: host_rov_clone_handle,
+    drop_handle: host_rov_drop_handle,
 };
 
 /// Pointer to the [`RuntimeOpsVTable`] this DSO should dispatch

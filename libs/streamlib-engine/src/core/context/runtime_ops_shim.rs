@@ -31,45 +31,70 @@ use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 
 /// Cdylib-side handle to the host's graph-mutation operations.
 ///
-/// Cheap to construct (clone is just two pointer copies). Implements
-/// [`RuntimeOperations`] so call sites that take an
+/// Implements [`RuntimeOperations`] so call sites that take an
 /// `Arc<dyn RuntimeOperations>` accept the shim transparently.
 ///
 /// # Lifetime contract
 ///
-/// The shim's `handle` field is a `*const c_void` pointer into the
-/// host's `RuntimeContext.runtime_ops` Arc. That borrow is sound for
-/// the lifetime of the host's `RuntimeContext` (process-lifetime
-/// today via `Runner`). The returned `Arc<RuntimeOpsShim>` does NOT
-/// extend the `RuntimeContext`'s lifetime via reference-counting the
-/// way the pre-Phase-B owned `Arc<dyn RuntimeOperations>` did —
-/// stashing the shim past a `Runner::stop()` would dangle the
-/// `handle`. Today no in-tree caller does that (lifecycle methods
-/// drop the shim before the runtime can stop), but the type
-/// signature no longer encodes the constraint. If a future caller
-/// needs to retain runtime ops past lifecycle, switch the shim's
-/// `handle` to an owning Arc clone obtained through a new vtable
-/// callback (`runtime_ops_clone_arc -> *const c_void` plus a
-/// matching `runtime_ops_drop_arc`).
-#[derive(Clone)]
+/// The shim's `handle` field is a `*const c_void` returned from the
+/// `RuntimeOpsVTable::clone_handle` callback (v2). The host's
+/// implementation returns a `Box<Arc<dyn RuntimeOperations>>` with
+/// an Arc refcount bump on the underlying ops implementation; the
+/// inner Arc keeps the impl alive even after the originating
+/// `RuntimeContext` is dropped. The shim's `Drop` releases the
+/// owned handle via the paired `drop_handle` callback exactly once.
+///
+/// This means stashing the returned `Arc<dyn RuntimeOperations>`
+/// past `Runner::stop()` is sound — the inner ops impl outlives the
+/// runtime context that issued the shim.
+///
+/// Deliberately NOT `Clone`: the shim owns a refcount; cloning the
+/// inner struct (rather than the wrapping Arc) would duplicate the
+/// raw `handle` pointer without bumping the host's Arc refcount,
+/// causing a double-`drop_handle` on Drop. Users clone the wrapping
+/// `Arc<RuntimeOpsShim>` instead — cheap, and `Drop` only fires when
+/// the last clone goes out of scope.
 pub struct RuntimeOpsShim {
     handle: *const c_void,
     vtable: *const RuntimeOpsVTable,
 }
 
-// Pointer fields point at host-owned state with stable lifetime — the
-// host pins its `RuntimeContext` and `HostServices` static for the
-// cdylib's process lifetime, so the shim can outlive any per-call
-// borrow within a Runner's lifetime.
+// Pointer fields point at host-owned heap state (a Box<Arc<...>>) that
+// the shim's Drop releases via the vtable's `drop_handle`. Lifetime is
+// bounded by the shim itself, not by the RuntimeContext that minted
+// the borrowed handle from which this owned one was cloned.
 unsafe impl Send for RuntimeOpsShim {}
 unsafe impl Sync for RuntimeOpsShim {}
 
+impl Drop for RuntimeOpsShim {
+    fn drop(&mut self) {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: vtable + handle are paired at construction by
+        // `from_ffi`. `drop_handle` is required by the v2 ABI and
+        // releases the host-side `Box<Arc<dyn RuntimeOperations>>`
+        // that `clone_handle` originally allocated. Single-fire is
+        // guaranteed because Drop runs exactly once per instance.
+        unsafe { ((*self.vtable).drop_handle)(self.handle) };
+    }
+}
+
 impl RuntimeOpsShim {
-    /// Construct a shim from a host-supplied handle + vtable. Crate-
-    /// internal: the runtime-context shim is the only legitimate
-    /// builder.
-    pub(crate) fn from_ffi(handle: *const c_void, vtable: *const RuntimeOpsVTable) -> Arc<Self> {
-        Arc::new(Self { handle, vtable })
+    /// Construct a shim from a host-supplied owned handle + vtable.
+    /// Crate-internal: the runtime-context shim is the only legitimate
+    /// builder, and is responsible for calling
+    /// [`RuntimeOpsVTable::clone_handle`] to obtain the owned handle
+    /// from the borrowed one it received via
+    /// [`RuntimeContextVTable::runtime_ops_handle`](streamlib_plugin_abi::RuntimeContextVTable).
+    pub(crate) fn from_ffi(
+        owned_handle: *const c_void,
+        vtable: *const RuntimeOpsVTable,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            handle: owned_handle,
+            vtable,
+        })
     }
 
     /// Submit a unary msgpack-encoded request and await the

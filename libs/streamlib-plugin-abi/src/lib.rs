@@ -109,7 +109,18 @@ pub const RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION: u32 = 1;
 pub const AUDIO_CLOCK_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Layout version of [`RuntimeOpsVTable`].
-pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 1;
+///
+/// - v1: 5 submit-with-completion ops (`add_processor` /
+///   `remove_processor` / `connect` / `disconnect` / `to_json`). Handle
+///   lifetime was a borrow into RuntimeContext-owned storage; a shim
+///   stashed past `Runner::stop()` would dangle (sound today because
+///   nothing stashes; type signature didn't encode it).
+/// - v2: added `clone_handle` / `drop_handle` for owning-Arc semantics.
+///   The cdylib-side `RuntimeOpsShim` now holds an Arc-bumped owned
+///   handle and releases it via `drop_handle` in its Drop impl,
+///   keeping the host's `Arc<dyn RuntimeOperations>` alive for the
+///   shim's lifetime independently of `RuntimeContext`'s lifetime.
+pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 // =============================================================================
 // Primitive enums
@@ -618,6 +629,22 @@ pub struct RuntimeOpsVTable {
         completion: RuntimeOpCompletionCallback,
         user_data: *mut c_void,
     ),
+
+    // v2 additions: owning-Arc handle lifetime management.
+
+    /// Take a (borrowed) handle returned from
+    /// [`RuntimeContextVTable::runtime_ops_handle`] and return a new
+    /// owned handle with an Arc refcount bump on the underlying
+    /// `Arc<dyn RuntimeOperations>`. The owned handle remains valid
+    /// even after the originating `RuntimeContext` is dropped, and
+    /// MUST be released exactly once via [`Self::drop_handle`].
+    pub clone_handle: unsafe extern "C" fn(borrowed_handle: *const c_void) -> *const c_void,
+
+    /// Release an owned handle previously obtained from
+    /// [`Self::clone_handle`]. Calling on a null pointer is a no-op.
+    /// Calling on the same owned handle twice is undefined behaviour
+    /// (it would double-free the Arc refcount).
+    pub drop_handle: unsafe extern "C" fn(owned_handle: *const c_void),
 }
 
 unsafe impl Send for RuntimeOpsVTable {}
@@ -920,8 +947,8 @@ mod layout_tests {
 
     #[test]
     fn runtime_ops_vtable_layout() {
-        // 4 + 4 + 5 fn pointers = 48 bytes
-        assert_eq!(size_of::<RuntimeOpsVTable>(), 48);
+        // 4 + 4 + 7 fn pointers (v2: 5 submit ops + clone_handle + drop_handle) = 64 bytes
+        assert_eq!(size_of::<RuntimeOpsVTable>(), 64);
         assert_eq!(align_of::<RuntimeOpsVTable>(), 8);
         assert_eq!(offset_of!(RuntimeOpsVTable, layout_version), 0);
         assert_eq!(offset_of!(RuntimeOpsVTable, _reserved_padding), 4);
@@ -930,6 +957,8 @@ mod layout_tests {
         assert_eq!(offset_of!(RuntimeOpsVTable, connect), 24);
         assert_eq!(offset_of!(RuntimeOpsVTable, disconnect), 32);
         assert_eq!(offset_of!(RuntimeOpsVTable, to_json), 40);
+        assert_eq!(offset_of!(RuntimeOpsVTable, clone_handle), 48);
+        assert_eq!(offset_of!(RuntimeOpsVTable, drop_handle), 56);
     }
 
     #[test]
@@ -938,7 +967,9 @@ mod layout_tests {
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
-        assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 1);
+        // v2: added owning-Arc handle lifetime callbacks
+        // (`clone_handle` / `drop_handle`).
+        assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
     }
 
     #[test]
