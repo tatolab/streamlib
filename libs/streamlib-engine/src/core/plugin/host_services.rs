@@ -1736,6 +1736,377 @@ unsafe extern "C" fn host_gpu_lim_plane_size_pixel_buffer(
     )
 }
 
+// -------------------------------------------------------------------------
+// Texture Arc-handle lifecycle (v4 — Phase 2A)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_clone_texture(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_texture",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: `handle` is a `*const c_void` cast of
+            // `Arc::into_raw(Arc<TextureInner>)` produced by host
+            // code (see `Texture::from_arc_into_raw`).
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::rhi::texture::TextureInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_texture(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_texture",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `Texture::from_arc_into_raw` and any prior
+            // `clone_texture` bumps.
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::rhi::texture::TextureInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+// -------------------------------------------------------------------------
+// PooledTextureHandle lifecycle — drop-only (v4)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_drop_pooled_texture_handle(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_pooled_texture_handle",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with `Box::into_raw(Box<...>)` in
+            // `PooledTextureHandle::from_parts`. Reclaiming via
+            // `Box::from_raw` runs `Drop for PooledTextureHandleInner`
+            // which releases the pool slot exactly once.
+            unsafe {
+                let _ = Box::from_raw(
+                    handle as *mut crate::core::context::texture_pool::PooledTextureHandleInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+// -------------------------------------------------------------------------
+// Method dispatch — Texture-related (v4)
+// -------------------------------------------------------------------------
+
+/// Borrow a `&Arc<GpuContext>` from a `*const Arc<GpuContext>`-shaped
+/// host handle. Caller must guarantee `handle` came from
+/// [`crate::core::context::GpuContextLimitedAccess::new`] or
+/// [`host_gpu_lim_clone_handle`]; both produce
+/// `Box::into_raw(Box::new(Arc::new(...))) as *const c_void`.
+unsafe fn handle_as_gpu_context(
+    handle: *const c_void,
+) -> Option<&'static Arc<crate::core::context::GpuContext>> {
+    if handle.is_null() {
+        return None;
+    }
+    // SAFETY: caller-supplied contract; the Box keeps the Arc alive
+    // for the duration of the dispatch through the vtable.
+    unsafe { Some(&*(handle as *const Arc<crate::core::context::GpuContext>)) }
+}
+
+unsafe fn slice_from_raw(ptr: *const u8, len: usize) -> &'static [u8] {
+    if ptr.is_null() || len == 0 {
+        return &[];
+    }
+    // SAFETY: caller-supplied UTF-8 byte slice; the lifetime is
+    // bounded by the dispatch (we never store the slice past return).
+    unsafe { std::slice::from_raw_parts(ptr, len) }
+}
+
+fn write_err(msg: &str, err_buf: *mut u8, err_buf_cap: usize, err_len: *mut usize) {
+    let bytes = msg.as_bytes();
+    let written = bytes.len().min(err_buf_cap);
+    if written > 0 && !err_buf.is_null() {
+        // SAFETY: caller-provided `err_buf` is writable for `err_buf_cap`.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), err_buf, written) };
+    }
+    if !err_len.is_null() {
+        // SAFETY: caller-provided `err_len` is writable.
+        unsafe { *err_len = written };
+    }
+}
+
+unsafe extern "C" fn host_gpu_lim_register_texture(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    texture_handle: *const c_void,
+    initial_layout_raw: i32,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_register_texture",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            if texture_handle.is_null() {
+                return;
+            }
+            // SAFETY: `texture_handle` is `Arc::into_raw(Arc<TextureInner>)`-shaped.
+            // Bump the refcount so we can hand the cache its own owned
+            // Arc; the caller's Texture continues to own its own.
+            unsafe {
+                Arc::increment_strong_count(
+                    texture_handle as *const crate::core::rhi::texture::TextureInner,
+                );
+            }
+            // SAFETY: same shape as above; from_raw + the bump above
+            // gives us a fresh Arc with the right refcount.
+            let texture_arc = unsafe {
+                Arc::from_raw(
+                    texture_handle as *const crate::core::rhi::texture::TextureInner,
+                )
+            };
+            let inner_ref = &*texture_arc;
+            let width = inner_ref.width();
+            let height = inner_ref.height();
+            let format = inner_ref.format();
+            // Re-wrap into a Texture via the host's from_arc_into_raw
+            // helper — leaks the Arc back into the texture cache shape.
+            let texture =
+                crate::core::rhi::texture::Texture::from_arc_into_raw(
+                    texture_arc, width, height, format,
+                );
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            #[cfg(target_os = "linux")]
+            {
+                let layout = streamlib_consumer_rhi::VulkanLayout(initial_layout_raw);
+                gpu.register_texture_with_layout(id_str, texture, layout);
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = initial_layout_raw;
+                gpu.register_texture(id_str, texture);
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_update_texture_registration_layout(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    layout_raw: i32,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_update_texture_registration_layout",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            #[cfg(target_os = "linux")]
+            {
+                let layout = streamlib_consumer_rhi::VulkanLayout(layout_raw);
+                gpu.update_texture_registration_layout(id_str, layout);
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (id_str, layout_raw);
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_acquire_texture(
+    handle: *const c_void,
+    width: u32,
+    height: u32,
+    format_raw: u32,
+    usage_bits: u32,
+    out_pooled_handle: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_acquire_texture",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err("acquire_texture: null gpu handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_pooled_handle.is_null() {
+                write_err("acquire_texture: null out_pooled_handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            }
+            let format = match format_raw {
+                0 => streamlib_consumer_rhi::TextureFormat::Rgba8Unorm,
+                1 => streamlib_consumer_rhi::TextureFormat::Rgba8UnormSrgb,
+                2 => streamlib_consumer_rhi::TextureFormat::Bgra8Unorm,
+                3 => streamlib_consumer_rhi::TextureFormat::Bgra8UnormSrgb,
+                4 => streamlib_consumer_rhi::TextureFormat::Rgba16Float,
+                5 => streamlib_consumer_rhi::TextureFormat::Rgba32Float,
+                6 => streamlib_consumer_rhi::TextureFormat::Nv12,
+                _ => {
+                    let msg = format!("acquire_texture: invalid format_raw {}", format_raw);
+                    write_err(&msg, err_buf, err_buf_cap, err_len);
+                    return 1;
+                }
+            };
+            let usage =
+                streamlib_consumer_rhi::TextureUsages::from_bits_truncate(usage_bits);
+            let desc = crate::core::context::TexturePoolDescriptor {
+                width,
+                height,
+                format,
+                usage,
+                label: None,
+            };
+            match gpu.acquire_texture(&desc) {
+                Ok(pooled) => {
+                    // Move the host-built PooledTextureHandle into the
+                    // caller's out-slot. The caller (cdylib) owns it
+                    // after this — its Drop runs `drop_pooled_texture_handle`.
+                    unsafe {
+                        std::ptr::write(
+                            out_pooled_handle
+                                as *mut crate::core::context::PooledTextureHandle,
+                            pooled,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    let msg = format!("{}", e);
+                    write_err(&msg, err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_resolve_texture_by_surface_id(
+    handle: *const c_void,
+    surface_id_ptr: *const u8,
+    surface_id_len: usize,
+    has_layout: i32,
+    layout_raw: i32,
+    width: u32,
+    height: u32,
+    out_texture: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_resolve_texture_by_surface_id",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err(
+                    "resolve_texture_by_surface_id: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_texture.is_null() {
+                write_err(
+                    "resolve_texture_by_surface_id: null out_texture",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(surface_id_ptr, surface_id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "resolve_texture_by_surface_id: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let texture_layout = if has_layout != 0 {
+                Some(layout_raw)
+            } else {
+                None
+            };
+            match gpu.resolve_texture_by_surface_id(id_str, texture_layout, width, height) {
+                Ok(texture) => {
+                    // Hand the texture to the caller's out-slot. The
+                    // caller (cdylib) owns it after this — its Drop
+                    // runs `drop_texture`.
+                    unsafe {
+                        std::ptr::write(
+                            out_texture as *mut crate::core::rhi::Texture,
+                            texture,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    let msg = format!("{}", e);
+                    write_err(&msg, err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_unregister_texture(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_unregister_texture",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            gpu.unregister_texture(id_str);
+        },
+        (),
+    )
+}
+
 /// Static [`GpuContextLimitedAccessVTable`] installed once per process.
 /// Paired with the per-RuntimeContext gpu-limited handle returned by
 /// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::gpu_limited_access`.
@@ -1750,6 +2121,14 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         strong_count_pixel_buffer: host_gpu_lim_strong_count_pixel_buffer,
         plane_base_address_pixel_buffer: host_gpu_lim_plane_base_address_pixel_buffer,
         plane_size_pixel_buffer: host_gpu_lim_plane_size_pixel_buffer,
+        clone_texture: host_gpu_lim_clone_texture,
+        drop_texture: host_gpu_lim_drop_texture,
+        drop_pooled_texture_handle: host_gpu_lim_drop_pooled_texture_handle,
+        register_texture: host_gpu_lim_register_texture,
+        update_texture_registration_layout: host_gpu_lim_update_texture_registration_layout,
+        acquire_texture: host_gpu_lim_acquire_texture,
+        resolve_texture_by_surface_id: host_gpu_lim_resolve_texture_by_surface_id,
+        unregister_texture: host_gpu_lim_unregister_texture,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should

@@ -277,7 +277,8 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.expect_recording("record_image_barrier")?;
 
-        let image = texture.inner.image().ok_or_else(|| {
+        use crate::host_rhi::HostTextureExt;
+        let image = texture.vulkan_inner().image().ok_or_else(|| {
             Error::GpuError(format!(
                 "RhiCommandRecorder '{}': record_image_barrier: texture has no VkImage",
                 self.label
@@ -362,7 +363,8 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.expect_recording("record_copy_image_to_buffer")?;
 
-        let image = src.inner.image().ok_or_else(|| {
+        use crate::host_rhi::HostTextureExt;
+        let image = src.vulkan_inner().image().ok_or_else(|| {
             Error::GpuError(format!(
                 "RhiCommandRecorder '{}': record_copy_image_to_buffer: source texture has no VkImage",
                 self.label
@@ -395,7 +397,8 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.expect_recording("record_copy_buffer_to_image")?;
 
-        let image = dst.inner.image().ok_or_else(|| {
+        use crate::host_rhi::HostTextureExt;
+        let image = dst.vulkan_inner().image().ok_or_else(|| {
             Error::GpuError(format!(
                 "RhiCommandRecorder '{}': record_copy_buffer_to_image: dest texture has no VkImage",
                 self.label

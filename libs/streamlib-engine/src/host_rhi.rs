@@ -66,6 +66,7 @@ pub use crate::vulkan::rhi::{PresentFrame, VulkanPresentTarget, MAX_FRAMES_IN_FL
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 
+use crate::core::rhi::texture::TextureInner;
 use crate::core::rhi::{GpuDevice, PixelBufferRef, Texture};
 
 /// Privileged engine-side accessors for [`Texture`].
@@ -90,15 +91,16 @@ pub trait HostTextureExt {
 
 impl HostTextureExt for Texture {
     fn from_vulkan(texture: HostVulkanTexture) -> Self {
-        Texture {
+        let inner = TextureInner {
             inner: Arc::new(texture),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
             metal_texture: None,
-        }
+        };
+        Texture::from_inner(inner)
     }
 
     fn vulkan_inner(&self) -> &Arc<HostVulkanTexture> {
-        &self.inner
+        &self.host_inner().inner
     }
 }
 

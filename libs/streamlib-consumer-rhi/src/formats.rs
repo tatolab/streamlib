@@ -65,6 +65,21 @@ impl TextureUsages {
     pub fn contains(&self, other: Self) -> bool {
         (self.0 & other.0) == other.0
     }
+
+    /// Raw bits for ABI crossings (vtable wire payloads). Pair with
+    /// [`Self::from_bits_truncate`] to round-trip across a cdylib
+    /// boundary.
+    pub fn bits(&self) -> u32 {
+        self.0
+    }
+
+    /// Reconstruct from a raw bit pattern. Bits outside the defined
+    /// constants are silently dropped so unknown future flags don't
+    /// trip the receiver.
+    pub fn from_bits_truncate(bits: u32) -> Self {
+        const ALL: u32 = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4);
+        Self(bits & ALL)
+    }
 }
 
 impl std::ops::BitOr for TextureUsages {

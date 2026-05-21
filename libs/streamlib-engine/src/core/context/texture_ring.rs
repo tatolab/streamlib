@@ -179,10 +179,11 @@ impl TextureRing {
                 self.upload_resources.len()
             ))
         })?;
-        let image = slot.texture.inner.image().ok_or_else(|| {
+        use crate::host_rhi::{HostPixelBufferRefExt, HostTextureExt};
+        let image = slot.texture.vulkan_inner().image().ok_or_else(|| {
             Error::GpuError("TextureRing slot texture has no VkImage".into())
         })?;
-        let src_buffer = pixel_buffer.buffer_ref().inner.buffer();
+        let src_buffer = pixel_buffer.buffer_ref().vulkan_inner().buffer();
         unsafe {
             self.gpu.device().inner.upload_buffer_to_image_amortized(
                 resources.command_buffer(),

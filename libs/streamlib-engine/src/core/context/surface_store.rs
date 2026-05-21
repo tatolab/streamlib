@@ -1107,7 +1107,7 @@ impl SurfaceStore {
         timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
         current_image_layout: streamlib_consumer_rhi::VulkanLayout,
     ) -> Result<()> {
-        let is_opaque_fd = texture.inner.is_opaque_fd_export();
+        let is_opaque_fd = texture.vulkan_inner().is_opaque_fd_export();
 
         // Export the memory FD per the texture's underlying memory
         // flavor. OPAQUE_FD textures have no DMA-BUF export path on
@@ -1115,9 +1115,9 @@ impl SurfaceStore {
         // textures have no OPAQUE_FD export path with VMA's
         // per-pool memory configuration.
         let fd = if is_opaque_fd {
-            texture.inner.export_opaque_fd_memory()?
+            texture.vulkan_inner().export_opaque_fd_memory()?
         } else {
-            texture.inner.export_dma_buf_fd()?
+            texture.vulkan_inner().export_dma_buf_fd()?
         };
 
         // Optionally export the timeline-semaphore as an OPAQUE_FD. The host
@@ -1145,7 +1145,7 @@ impl SurfaceStore {
         // hardcodes (2D, mipLevels=1, arrayLayers=1, samples=1,
         // tiling=OPTIMAL, usage=TRANSFER_SRC|TRANSFER_DST|SAMPLED|STORAGE).
         let request = if is_opaque_fd {
-            let allocation_size = texture.inner.vma_allocation_size() as u64;
+            let allocation_size = texture.vulkan_inner().vma_allocation_size() as u64;
             const VK_IMAGE_TYPE_2D: i32 = 1;
             const VK_IMAGE_TILING_OPTIMAL: i32 = 0;
             const VK_SAMPLE_COUNT_1: i32 = 1;
@@ -1191,9 +1191,9 @@ impl SurfaceStore {
             // consumers must refuse such surfaces because LINEAR
             // DMA-BUFs are sampler-only on NVIDIA (see
             // docs/learnings/nvidia-egl-dmabuf-render-target.md).
-            let drm_format_modifier = texture.inner.chosen_drm_format_modifier();
+            let drm_format_modifier = texture.vulkan_inner().chosen_drm_format_modifier();
             let plane_layout = texture
-                .inner
+                .vulkan_inner()
                 .dma_buf_plane_layout()
                 .unwrap_or_else(|_| vec![(0, 0)]);
             let plane_offsets: Vec<u64> = plane_layout.iter().map(|(o, _)| *o).collect();

@@ -419,9 +419,7 @@ mod tests {
             label: Some("color-converter-test-output"),
         };
         let host_tex = HostVulkanTexture::new(device, &desc).expect("host texture");
-        let texture = Texture {
-            inner: Arc::new(host_tex),
-        };
+        let texture = <Texture as crate::host_rhi::HostTextureExt>::from_vulkan(host_tex);
 
         let dev = device.device();
         let queue = device.queue();

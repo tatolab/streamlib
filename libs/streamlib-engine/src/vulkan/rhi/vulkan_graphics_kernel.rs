@@ -351,7 +351,8 @@ impl VulkanGraphicsKernel {
         texture: &Texture,
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::SampledTexture)?;
-        let view = texture.inner.image_view()?;
+        use crate::host_rhi::HostTextureExt;
+        let view = texture.vulkan_inner().image_view()?;
         let sampler = self.default_sampler()?;
         self.with_slot(frame_index, |slot| {
             slot.bindings.insert(
@@ -414,7 +415,8 @@ impl VulkanGraphicsKernel {
         texture: &Texture,
     ) -> Result<()> {
         self.expect_kind(binding, GraphicsBindingKind::StorageImage)?;
-        let view = texture.inner.image_view()?;
+        use crate::host_rhi::HostTextureExt;
+        let view = texture.vulkan_inner().image_view()?;
         self.with_slot(frame_index, |slot| {
             slot.bindings
                 .insert(binding, BindingResource::StorageImage { view });
@@ -621,8 +623,9 @@ impl VulkanGraphicsKernel {
             // post-presented; UNDEFINED with CLEAR/LOAD load_op is the
             // tolerant pattern.
             let mut barriers: Vec<vk::ImageMemoryBarrier2> = Vec::with_capacity(color_targets.len());
+            use crate::host_rhi::HostTextureExt;
             for target in color_targets {
-                let image = target.texture.inner.image().ok_or_else(|| {
+                let image = target.texture.vulkan_inner().image().ok_or_else(|| {
                     Error::GpuError(format!(
                         "Graphics kernel '{}': offscreen color target has no VkImage",
                         self.label
@@ -660,7 +663,7 @@ impl VulkanGraphicsKernel {
             let color_attachments: Vec<vk::RenderingAttachmentInfo> = color_targets
                 .iter()
                 .map(|t| {
-                    let view = t.texture.inner.image_view().unwrap_or(vk::ImageView::null());
+                    let view = t.texture.vulkan_inner().image_view().unwrap_or(vk::ImageView::null());
                     let mut attachment = vk::RenderingAttachmentInfo::builder()
                         .image_view(view)
                         .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)

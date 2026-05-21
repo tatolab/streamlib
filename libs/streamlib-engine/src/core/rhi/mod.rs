@@ -20,7 +20,7 @@ mod pixel_buffer_pool;
 mod pixel_buffer_ref;
 mod ray_tracing_kernel;
 mod storage_buffer;
-mod texture;
+pub(crate) mod texture;
 mod uniform_buffer;
 mod vertex_buffer;
 mod texture_cache;

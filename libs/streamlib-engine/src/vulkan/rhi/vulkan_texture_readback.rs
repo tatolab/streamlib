@@ -759,9 +759,7 @@ mod tests {
             label: Some("readback-test-texture"),
         };
         let host_tex = crate::vulkan::rhi::HostVulkanTexture::new(device, &desc).expect("texture");
-        let texture = Texture {
-            inner: Arc::new(host_tex),
-        };
+        let texture = <Texture as crate::host_rhi::HostTextureExt>::from_vulkan(host_tex);
 
         // Record + submit a one-shot copy from staging → texture.
         let dev = device.device();

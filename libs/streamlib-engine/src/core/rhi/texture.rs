@@ -3,15 +3,30 @@
 
 //! RHI texture abstraction.
 //!
+//! Phase C1 (#901) reshaped `Texture` to `(handle, vtable, cached POD)`
+//! so the type is layout-stable across the cdylib DSO boundary. The
+//! handle is `Arc::into_raw(Arc<TextureInner>)` produced by host code;
+//! the vtable's `clone_texture` / `drop_texture` callbacks manage the
+//! Arc refcount in host-compiled code, so Clone/Drop work correctly
+//! regardless of the cdylib's compiled `Arc` layout.
+//!
+//! Platform-specific Arcs (`HostVulkanTexture` on Linux,
+//! `MetalTexture` on macOS, `DX12Texture` on Windows) live on the
+//! private [`TextureInner`] type behind the opaque handle. Engine code
+//! reaches them via the [`crate::host_rhi::HostTextureExt`] extension
+//! trait; cdylib code never sees them.
+//!
 //! `TextureFormat` and `TextureUsages` are defined in
 //! [`streamlib_consumer_rhi`] so subprocess-shape dep graphs can name
 //! them without pulling streamlib. They're re-exported from
 //! [`crate::core::rhi`] so existing in-tree call sites compile
 //! unchanged.
 
+use std::ffi::c_void;
 use std::sync::Arc;
 
 use streamlib_consumer_rhi::{TextureFormat, TextureUsages};
+use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 
 /// Platform-specific native handle for cross-framework texture sharing.
 ///
@@ -67,16 +82,13 @@ impl<'a> TextureDescriptor<'a> {
     }
 }
 
-/// Platform-agnostic texture wrapper.
+/// Host-only rich data backing a [`Texture`]. Cdylib code never sees
+/// this type; it reaches the public [`Texture`] surface through the
+/// `(handle, vtable, POD)` β-shape.
 ///
-/// This type wraps the platform-specific texture implementation and provides
-/// a unified interface. Use the `as_*` methods to "dip down" to the native
-/// texture type when needed for platform-specific operations.
-///
-/// On macOS/iOS, Metal texture storage is always available for Apple platform
-/// interop (IOSurface, CVPixelBuffer) regardless of which GPU backend is selected.
-#[derive(Clone)]
-pub struct Texture {
+/// Holds the platform-specific Arc(s) the engine RHI and surface
+/// adapters need (raw `VkImage`, `MTLTexture`, IOSurface, etc.).
+pub(crate) struct TextureInner {
     // Metal backend: when vulkan NOT requested AND (explicit metal feature OR macOS/iOS)
     #[cfg(all(
         not(feature = "backend-vulkan"),
@@ -101,9 +113,9 @@ pub struct Texture {
     pub(crate) metal_texture: Option<Arc<crate::metal::rhi::MetalTexture>>,
 }
 
-impl Texture {
+impl TextureInner {
     /// Texture width in pixels.
-    pub fn width(&self) -> u32 {
+    pub(crate) fn width(&self) -> u32 {
         // On macOS, prefer metal_texture if available (for IOSurface-backed textures)
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(ref mt) = self.metal_texture {
@@ -113,8 +125,7 @@ impl Texture {
     }
 
     /// Texture height in pixels.
-    pub fn height(&self) -> u32 {
-        // On macOS, prefer metal_texture if available (for IOSurface-backed textures)
+    pub(crate) fn height(&self) -> u32 {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(ref mt) = self.metal_texture {
             return mt.height();
@@ -123,24 +134,168 @@ impl Texture {
     }
 
     /// Texture format.
-    pub fn format(&self) -> TextureFormat {
-        // On macOS, prefer metal_texture if available (for IOSurface-backed textures)
+    pub(crate) fn format(&self) -> TextureFormat {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         if let Some(ref mt) = self.metal_texture {
             return mt.format();
         }
         self.inner.format()
     }
+}
+
+/// Platform-agnostic texture wrapper.
+///
+/// Layout-stable: every field is either a primitive or an opaque
+/// pointer. The platform-specific [`TextureInner`] is hidden behind
+/// the opaque `handle`; engine-internal callers reach it through the
+/// [`crate::host_rhi::HostTextureExt`] extension trait, cdylib callers
+/// route through the vtable.
+///
+/// Clone bumps the host's `Arc<TextureInner>` strong count via
+/// [`GpuContextLimitedAccessVTable::clone_texture`]; Drop decrements
+/// via [`GpuContextLimitedAccessVTable::drop_texture`]. Both run in
+/// host-compiled code regardless of the calling DSO.
+#[repr(C)]
+pub struct Texture {
+    /// Opaque handle to the host's `Arc<TextureInner>` (produced by
+    /// `Arc::into_raw`).
+    pub(crate) handle: *const c_void,
+    /// Vtable for cross-DSO Clone/Drop dispatch. Resolved through the
+    /// DSO-routed accessor at construction; host mode points at
+    /// `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`, cdylib mode at the
+    /// host-installed pointer from
+    /// `HostServices::gpu_context_limited_access_vtable`.
+    pub(crate) vtable: *const GpuContextLimitedAccessVTable,
+    /// Cached width (queried once at construction).
+    pub(crate) width_cached: u32,
+    /// Cached height (queried once at construction).
+    pub(crate) height_cached: u32,
+    /// Cached pixel format `#[repr(u32)]` discriminant. Read back via
+    /// [`Texture::format`] which round-trips through the well-defined
+    /// `repr(u32)` mapping.
+    pub(crate) format_raw: u32,
+    /// Reserved padding (keeps total size at 32 bytes for a clean
+    /// 8-byte-aligned shape; zero today, never read).
+    pub(crate) _padding: u32,
+}
+
+// SAFETY: `handle` points at an `Arc<TextureInner>` whose interior is
+// Send+Sync (platform-specific texture types — `HostVulkanTexture`,
+// `MetalTexture`, `DX12Texture` — are themselves Send+Sync). Refcount
+// management crosses the cdylib boundary through the vtable, but the
+// underlying Arc bookkeeping runs in host-compiled code regardless.
+unsafe impl Send for Texture {}
+unsafe impl Sync for Texture {}
+
+impl Texture {
+    /// Construct from a fully-populated [`TextureInner`]. Engine-only;
+    /// surface adapters and RHI helpers reach this through
+    /// [`crate::host_rhi::HostTextureExt::from_vulkan`] or the
+    /// equivalent Metal / DX12 entry points.
+    pub(crate) fn from_inner(inner: TextureInner) -> Self {
+        let width = inner.width();
+        let height = inner.height();
+        let format = inner.format();
+        let arc = Arc::new(inner);
+        Self::from_arc_into_raw(arc, width, height, format)
+    }
+
+    /// Internal helper: leak an initial Arc strong count via
+    /// `Arc::into_raw`, capture the host-mode vtable, and build the
+    /// `(handle, vtable, POD)` shape.
+    pub(crate) fn from_arc_into_raw(
+        arc: Arc<TextureInner>,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Self {
+        let handle = Arc::into_raw(arc) as *const c_void;
+        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        Self {
+            handle,
+            vtable,
+            width_cached: width,
+            height_cached: height,
+            format_raw: format as u32,
+            _padding: 0,
+        }
+    }
+
+    /// Engine-internal borrow of the host-owned [`TextureInner`].
+    ///
+    /// **Panics if called from cdylib code.** The `TextureInner` type's
+    /// in-memory layout is host-private; cdylib code that reads it
+    /// would deref host-written bytes under cdylib's view of
+    /// `TextureInner`'s layout, which is UB under the deployment model
+    /// the plugin ABI supports.
+    ///
+    /// The panic is caught by `run_host_extern_c` at the FFI boundary
+    /// (host extern "C" callbacks all route through `catch_unwind`),
+    /// so a misconfigured cdylib reaching this method gets a clean
+    /// "callback panicked" log entry instead of UB.
+    pub(crate) fn host_inner(&self) -> &TextureInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "Texture::host_inner() reached from cdylib code; this method must \
+                 dispatch through the GpuContextLimitedAccessVTable. The panic is \
+                 caught by run_host_extern_c at the FFI boundary."
+            );
+        }
+        // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureInner>)`
+        // (see `from_arc_into_raw`). The leaked strong count keeps the
+        // `TextureInner` alive at least until `Drop` runs.
+        unsafe { &*(self.handle as *const TextureInner) }
+    }
+
+    /// Texture width in pixels. Cached at construction; pure field
+    /// read with no cross-DSO dispatch.
+    pub fn width(&self) -> u32 {
+        self.width_cached
+    }
+
+    /// Texture height in pixels. Cached at construction; pure field
+    /// read with no cross-DSO dispatch.
+    pub fn height(&self) -> u32 {
+        self.height_cached
+    }
+
+    /// Texture format. Cached at construction; pure field read with
+    /// no cross-DSO dispatch.
+    pub fn format(&self) -> TextureFormat {
+        // SAFETY: `format_raw` is the `#[repr(u32)]` discriminant of a
+        // `TextureFormat` value captured at construction. The mapping
+        // is the identity round-trip the `repr(u32)` enum guarantees.
+        match self.format_raw {
+            0 => TextureFormat::Rgba8Unorm,
+            1 => TextureFormat::Rgba8UnormSrgb,
+            2 => TextureFormat::Bgra8Unorm,
+            3 => TextureFormat::Bgra8UnormSrgb,
+            4 => TextureFormat::Rgba16Float,
+            5 => TextureFormat::Rgba32Float,
+            6 => TextureFormat::Nv12,
+            // Fall back to Rgba8Unorm for unknown discriminants
+            // (preserves type safety; never reached because
+            // `format_raw` is always sourced from a valid value).
+            _ => TextureFormat::Rgba8Unorm,
+        }
+    }
 
     /// Get the IOSurface ID for cross-framework sharing.
     ///
     /// Returns `Some(id)` on macOS/iOS if the texture is backed by an IOSurface.
     /// Returns `None` on other platforms or if no IOSurface is available.
+    ///
+    /// Engine-internal: reads the host's `TextureInner` directly; cdylib
+    /// callers reach this through future per-method vtable callbacks
+    /// (not wired today — `host_inner()` panics with `catch_unwind` at
+    /// the FFI boundary).
     pub fn iosurface_id(&self) -> Option<u32> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            // Use metal_texture for IOSurface access
-            self.metal_texture.as_ref().and_then(|mt| mt.iosurface_id())
+            self.host_inner()
+                .metal_texture
+                .as_ref()
+                .and_then(|mt| mt.iosurface_id())
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios")))]
         {
@@ -159,15 +314,16 @@ impl Texture {
     pub fn native_handle(&self) -> Option<NativeTextureHandle> {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            // Use metal_texture for IOSurface access
-            self.metal_texture
+            self.host_inner()
+                .metal_texture
                 .as_ref()
                 .and_then(|mt| mt.iosurface_id())
                 .map(|id| NativeTextureHandle::IOSurface { id })
         }
         #[cfg(target_os = "linux")]
         {
-            self.inner
+            self.host_inner()
+                .inner
                 .export_dma_buf_fd()
                 .ok()
                 .map(|fd| NativeTextureHandle::DmaBuf { fd })
@@ -193,7 +349,8 @@ impl Texture {
     /// Panics if no Metal texture is available.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn as_metal_texture(&self) -> &metal::TextureRef {
-        self.metal_texture
+        self.host_inner()
+            .metal_texture
             .as_ref()
             .expect("No Metal texture available")
             .as_metal_texture()
@@ -202,7 +359,10 @@ impl Texture {
     /// Get the underlying IOSurface if this texture is IOSurface-backed (macOS/iOS only).
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn as_iosurface(&self) -> Option<&objc2_io_surface::IOSurface> {
-        self.metal_texture.as_ref().and_then(|mt| mt.iosurface())
+        self.host_inner()
+            .metal_texture
+            .as_ref()
+            .and_then(|mt| mt.iosurface())
     }
 
     /// Create from a Metal texture.
@@ -214,7 +374,7 @@ impl Texture {
     pub fn from_metal(texture: crate::metal::rhi::MetalTexture) -> Self {
         let arc_texture = Arc::new(texture);
 
-        Self {
+        let inner = TextureInner {
             // When Metal is backend, inner is the MetalTexture
             #[cfg(not(feature = "backend-vulkan"))]
             inner: arc_texture.clone(),
@@ -222,7 +382,8 @@ impl Texture {
             #[cfg(feature = "backend-vulkan")]
             inner: Arc::new(crate::vulkan::rhi::HostVulkanTexture::placeholder()),
             metal_texture: Some(arc_texture),
-        }
+        };
+        Self::from_inner(inner)
     }
 }
 
@@ -232,16 +393,87 @@ impl Texture {
 // impl stays Host-free. Engine RHI helpers and in-tree adapters
 // `use crate::host_rhi::HostTextureExt;` to surface them.
 
+impl Clone for Texture {
+    fn clone(&self) -> Self {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: vtable + handle were paired at construction by
+            // `from_arc_into_raw`; the vtable's `clone_texture` contract
+            // is `Arc::increment_strong_count(handle)` on the host side.
+            // Balanced by the Drop impl below.
+            unsafe {
+                ((*self.vtable).clone_texture)(self.handle);
+            }
+        }
+        Self {
+            handle: self.handle,
+            vtable: self.vtable,
+            width_cached: self.width_cached,
+            height_cached: self.height_cached,
+            format_raw: self.format_raw,
+            _padding: 0,
+        }
+    }
+}
+
+impl Drop for Texture {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `from_arc_into_raw` and any `clone_texture` bumps.
+            // `drop_texture` decrements the host-side Arc; when refcount
+            // hits zero the underlying `TextureInner` is freed in
+            // host-compiled code.
+            unsafe {
+                ((*self.vtable).drop_texture)(self.handle);
+            }
+        }
+    }
+}
+
 impl std::fmt::Debug for Texture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Texture")
-            .field("width", &self.width())
-            .field("height", &self.height())
+            .field("width", &self.width_cached)
+            .field("height", &self.height_cached)
             .field("format", &self.format())
             .finish()
     }
 }
 
-// Ensure Texture is Send + Sync
-unsafe impl Send for Texture {}
-unsafe impl Sync for Texture {}
+// =============================================================================
+// Layout regression tests
+// =============================================================================
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn texture_layout() {
+        // Phase 2A (#901): pin the byte-level shape of the cross-DSO
+        // `Texture`. Fields:
+        //   handle       : *const c_void  → offset 0,  size 8
+        //   vtable       : *const VTable  → offset 8,  size 8
+        //   width_cached : u32            → offset 16, size 4
+        //   height_cached: u32            → offset 20, size 4
+        //   format_raw   : u32            → offset 24, size 4
+        //   _padding     : u32            → offset 28, size 4
+        // Total: 32 bytes, 8-byte alignment (pinned by the pointer fields).
+        assert_eq!(size_of::<Texture>(), 32);
+        assert_eq!(align_of::<Texture>(), 8);
+        assert_eq!(offset_of!(Texture, handle), 0);
+        assert_eq!(offset_of!(Texture, vtable), 8);
+        assert_eq!(offset_of!(Texture, width_cached), 16);
+        assert_eq!(offset_of!(Texture, height_cached), 20);
+        assert_eq!(offset_of!(Texture, format_raw), 24);
+        assert_eq!(offset_of!(Texture, _padding), 28);
+    }
+
+    /// Compile-time witness that `Texture` is Send + Sync.
+    #[test]
+    fn texture_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Texture>();
+    }
+}

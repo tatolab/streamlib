@@ -4,6 +4,8 @@
 //! RHI command buffer abstraction.
 
 use super::texture::Texture;
+#[allow(unused_imports)]
+use crate::host_rhi::HostTextureExt;
 
 /// Platform-agnostic command buffer wrapper.
 ///
@@ -39,7 +41,8 @@ impl CommandBuffer {
             any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
         ))]
         {
-            self.inner.copy_texture(&src.inner, &dst.inner);
+            self.inner
+                .copy_texture(&src.host_inner().inner, &dst.host_inner().inner);
         }
 
         // Vulkan backend
@@ -48,12 +51,14 @@ impl CommandBuffer {
             all(target_os = "linux", not(feature = "backend-metal"))
         ))]
         {
-            self.inner.copy_texture(&src.inner, &dst.inner);
+            self.inner
+                .copy_texture(src.vulkan_inner(), dst.vulkan_inner());
         }
 
         #[cfg(target_os = "windows")]
         {
-            self.inner.copy_texture(&src.inner, &dst.inner);
+            self.inner
+                .copy_texture(&src.host_inner().inner, &dst.host_inner().inner);
         }
     }
 

@@ -797,7 +797,7 @@ impl GpuContext {
                         .map(VulkanLayout)
                         .unwrap_or(ipc_layout);
                     if resolved_layout != VulkanLayout::UNDEFINED {
-                        if let Some(image) = texture.inner.image() {
+                        if let Some(image) = texture.vulkan_inner().image() {
                             self.device
                                 .inner
                                 .acquire_from_foreign(image, resolved_layout.as_vk())?;
@@ -925,7 +925,7 @@ impl GpuContext {
         };
 
         unsafe {
-            let image = texture.inner.image().ok_or_else(|| {
+            let image = texture.vulkan_inner().image().ok_or_else(|| {
                 Error::GpuError("Texture has no VkImage".into())
             })?;
             self.device.inner.upload_buffer_to_image(
@@ -962,7 +962,7 @@ impl GpuContext {
         let texture = self.device.create_texture_local(&desc)?;
 
         unsafe {
-            let image = texture.inner.image().ok_or_else(|| {
+            let image = texture.vulkan_inner().image().ok_or_else(|| {
                 crate::core::Error::GpuError("Texture has no VkImage".into())
             })?;
             self.device.inner.upload_buffer_to_image(
@@ -1012,7 +1012,7 @@ impl GpuContext {
         height: u32,
     ) -> Result<()> {
         unsafe {
-            let image = texture.inner.image().ok_or_else(|| {
+            let image = texture.vulkan_inner().image().ok_or_else(|| {
                 Error::GpuError("Texture has no VkImage".into())
             })?;
             self.device.inner.upload_buffer_to_image(
@@ -2214,12 +2214,35 @@ impl GpuContextLimitedAccess {
     }
 
     /// Register a texture in the same-process texture cache.
+    ///
+    /// Dispatches through the cross-DSO
+    /// [`GpuContextLimitedAccessVTable::register_texture`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::register_texture)
+    /// callback. The host-side impl bumps the
+    /// `Arc<TextureInner>` refcount before stashing a clone in the
+    /// cache, so dropping the caller's `texture` here releases
+    /// exactly the caller's owned ref.
     pub fn register_texture(&self, id: &str, texture: Texture) {
-        self.inner.register_texture(id, texture);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).register_texture)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                texture.handle,
+                0, // VulkanLayout::UNDEFINED.0 == 0
+            );
+        }
+        drop(texture);
     }
 
     /// Register a texture with a declared initial Vulkan image layout.
     /// See [`GpuContext::register_texture_with_layout`].
+    ///
+    /// Dispatches through the cross-DSO vtable's `register_texture`
+    /// callback with the layout's `i32` enumerant.
     #[cfg(target_os = "linux")]
     pub fn register_texture_with_layout(
         &self,
@@ -2227,18 +2250,50 @@ impl GpuContextLimitedAccess {
         texture: Texture,
         initial_layout: VulkanLayout,
     ) {
-        self.inner
-            .register_texture_with_layout(id, texture, initial_layout);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).register_texture)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                texture.handle,
+                initial_layout.0,
+            );
+        }
+        drop(texture);
     }
 
     /// Update a registered texture's tracked layout after a transition.
     /// See [`GpuContext::update_texture_registration_layout`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `update_texture_registration_layout` callback.
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
-        self.inner.update_texture_registration_layout(id, layout);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).update_texture_registration_layout)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                layout.0,
+            );
+        }
     }
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
+    ///
+    /// Not currently routed through the vtable — `TextureRegistration`'s
+    /// β-reshape lands in Phase 2C. Engine-internal access goes through
+    /// `self.inner` directly; cdylib code reaches this method via
+    /// `self.host_inner()`'s panic-guarded accessor (panics caught at
+    /// the FFI boundary).
     pub fn resolve_texture_registration_by_surface_id(
         &self,
         surface_id: &str,
@@ -2246,11 +2301,14 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<Arc<TextureRegistration>> {
-        self.inner
+        self.host_inner()
             .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
     }
 
     /// Resolve a VideoFrame's texture (Split: cache hit).
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `resolve_texture_by_surface_id` callback.
     pub fn resolve_texture_by_surface_id(
         &self,
         surface_id: &str,
@@ -2258,8 +2316,46 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<Texture> {
-        self.inner
-            .resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_texture_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_texture: std::mem::MaybeUninit<Texture> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let (has_layout, layout_raw) = match texture_layout {
+            Some(v) => (1i32, v),
+            None => (0i32, 0i32),
+        };
+        // SAFETY: handle + vtable were paired at construction. `out_texture`
+        // points at uninitialized stack storage that the host writes a
+        // valid `Texture` into on success (return code 0). On failure the
+        // host writes nothing into `out_texture` so we leave it
+        // `MaybeUninit` and never assume_init it.
+        let status = unsafe {
+            ((*self.vtable).resolve_texture_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                has_layout,
+                layout_raw,
+                width,
+                height,
+                out_texture.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid Texture.
+            Ok(unsafe { out_texture.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].
@@ -2292,8 +2388,44 @@ impl GpuContextLimitedAccess {
     /// (Linux) — Sandbox callers don't have a render-target alloc path
     /// because allocating a new RT-capable image is a privileged op
     /// that goes through escalate.
+    ///
+    /// Dispatches through the cross-DSO vtable's `acquire_texture`
+    /// callback. The descriptor's `label` field is currently dropped
+    /// on the wire (debugging-only, never load-bearing).
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
-        self.inner.acquire_texture(desc)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "acquire_texture: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pooled: std::mem::MaybeUninit<PooledTextureHandle> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable were paired at construction. `out_pooled`
+        // points at uninitialized stack storage; the host writes a valid
+        // PooledTextureHandle on success.
+        let status = unsafe {
+            ((*self.vtable).acquire_texture)(
+                self.handle,
+                desc.width,
+                desc.height,
+                desc.format as u32,
+                desc.usage.bits(),
+                out_pooled.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid PooledTextureHandle.
+            Ok(unsafe { out_pooled.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Copy a host-visible pixel buffer's contents into a pre-allocated
@@ -2323,8 +2455,17 @@ impl GpuContextLimitedAccess {
     }
 
     /// See [`GpuContext::unregister_texture`].
+    ///
+    /// Dispatches through the cross-DSO vtable's `unregister_texture`
+    /// callback.
     pub fn unregister_texture(&self, id: &str) {
-        self.inner.unregister_texture(id);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).unregister_texture)(self.handle, id.as_ptr(), id.len());
+        }
     }
 
     /// Get the shared command queue.
