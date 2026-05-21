@@ -135,7 +135,7 @@ impl RhiPixelBufferExport for super::PixelBuffer {
     /// `RhiExternalHandle::DmaBuf` otherwise. Callers dispatch on the
     /// returned variant.
     fn export_handle(&self) -> Result<RhiExternalHandle> {
-        self.ref_.inner.export_external_handle()
+        self.buffer_ref().inner.export_external_handle()
     }
 }
 

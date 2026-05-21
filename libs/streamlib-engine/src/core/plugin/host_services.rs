@@ -60,17 +60,18 @@ use std::ffi::c_void;
 use std::sync::{Arc, OnceLock};
 
 use streamlib_plugin_abi::{
-    AudioClockVTable, HostHandle, HostInterest, HostLogLevel, HostServices, ProcessorVTable,
-    RuntimeContextVTable, RuntimeOpsVTable, AUDIO_CLOCK_VTABLE_LAYOUT_VERSION,
+    AudioClockVTable, GpuContextLimitedAccessVTable, HostHandle, HostInterest, HostLogLevel,
+    HostServices, ProcessorVTable, RuntimeContextVTable, RuntimeOpsVTable, SurfaceStoreVTable,
+    AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
     HOST_SERVICES_LAYOUT_VERSION, PROCESSOR_VTABLE_LAYOUT_VERSION,
     RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
+    SURFACE_STORE_VTABLE_LAYOUT_VERSION,
 };
 
-// Phase B + v3 layout: tokio is no longer exposed across the ABI.
-// Lifecycle methods are synchronous at the trait surface; plugins
-// that need async lifecycle work bring their own runtime. The host's
-// tokio runtime stays invisible to plugins. See
-// `streamlib_plugin_abi`'s `HOST_SERVICES_LAYOUT_VERSION` v3 doc.
+// tokio is not exposed across the ABI. Lifecycle methods are
+// synchronous at the trait surface; plugins that need async
+// lifecycle work bring their own runtime. The host's tokio runtime
+// stays invisible to plugins.
 
 use crate::core::context::{RuntimeContext, SharedAudioClock};
 use crate::core::pubsub::Event;
@@ -162,6 +163,15 @@ pub struct HostCallbacks {
     pub audio_clock_vtable: *const AudioClockVTable,
     /// v3: host-installed [`RuntimeOpsVTable`] pointer.
     pub runtime_ops_vtable: *const RuntimeOpsVTable,
+    /// Host-installed [`GpuContextLimitedAccessVTable`] pointer.
+    /// May be null on hosts that don't ship a GpuContext; cdylib
+    /// must check before dispatching.
+    pub gpu_context_limited_access_vtable: *const GpuContextLimitedAccessVTable,
+    /// Host-installed [`SurfaceStoreVTable`] pointer. May be null
+    /// on hosts that don't ship a `SurfaceStore`; cdylib must check
+    /// before dispatching. Sourced from
+    /// [`HostServices::surface_store_vtable`] at install time.
+    pub surface_store_vtable: *const SurfaceStoreVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -231,6 +241,63 @@ pub unsafe fn install_host_services(
         return None;
     }
 
+    // Validate every inner vtable's layout_version before storing the
+    // pointers. The outer `abi_layout_version` only covers the wire
+    // shape of [`HostServices`] itself; a host that bumped, say, the
+    // GpuContextLimitedAccessVTable to v4 but kept HostServices v4
+    // would otherwise silently call through mismatched offsets from a
+    // v3-built cdylib. Mismatch → refuse the install cleanly; the
+    // host's post-call "processor not registered" check surfaces the
+    // failure. (Inner vtables are validated only when non-null. The
+    // GPU vtable pointer may legitimately be null on hosts that don't
+    // ship a GpuContext, per `HOST_SERVICES_LAYOUT_VERSION` v4 docs.)
+    use streamlib_plugin_abi::{
+        AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
+        RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
+    };
+    if !services.runtime_context_vtable.is_null() {
+        // SAFETY: per the wire contract, when non-null this points at
+        // a `&'static RuntimeContextVTable` owned by the host. The
+        // first u32 in the struct is `layout_version` (pinned at
+        // offset 0 by the layout-regression tests).
+        let v = unsafe { (*services.runtime_context_vtable).layout_version };
+        if v != RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+    if !services.audio_clock_vtable.is_null() {
+        // SAFETY: same shape as runtime_context_vtable.
+        let v = unsafe { (*services.audio_clock_vtable).layout_version };
+        if v != AUDIO_CLOCK_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+    if !services.runtime_ops_vtable.is_null() {
+        // SAFETY: same shape as runtime_context_vtable.
+        let v = unsafe { (*services.runtime_ops_vtable).layout_version };
+        if v != RUNTIME_OPS_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+    if !services.gpu_context_limited_access_vtable.is_null() {
+        // SAFETY: same shape as runtime_context_vtable. Null is
+        // allowed (host has no GpuContext); only non-null pointers
+        // are version-validated.
+        let v = unsafe { (*services.gpu_context_limited_access_vtable).layout_version };
+        if v != GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+    if !services.surface_store_vtable.is_null() {
+        // SAFETY: same shape as the other vtable validations. Null
+        // is allowed (host has no SurfaceStore); only non-null
+        // pointers are version-validated.
+        let v = unsafe { (*services.surface_store_vtable).layout_version };
+        if v != SURFACE_STORE_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+
     let callbacks = HostCallbacks {
         host: services.host,
         tracing_register_callsite: services.tracing_register_callsite,
@@ -244,6 +311,8 @@ pub unsafe fn install_host_services(
         runtime_context_vtable: services.runtime_context_vtable,
         audio_clock_vtable: services.audio_clock_vtable,
         runtime_ops_vtable: services.runtime_ops_vtable,
+        gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
+        surface_store_vtable: services.surface_store_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -373,24 +442,96 @@ pub struct HostServiceImpls {
 unsafe impl Send for HostServiceImpls {}
 unsafe impl Sync for HostServiceImpls {}
 
+// ---------------- Panic safety helpers ----------------
+//
+// Unwinding through an `extern "C"` boundary is undefined behaviour.
+// Every host-side callback below routes its body through
+// [`run_host_extern_c`] so a panic in host code is caught and
+// converted to a logged error plus a sensible default return value
+// at the FFI boundary, instead of corrupting the cdylib's stack.
+//
+// The default-on-panic value per callback type:
+//   - void                  → `()`
+//   - bool                  → `false`
+//   - u32 / usize           → `0`
+//   - isize (used by id_copy with `-1` = None) → `-1`
+//   - i32  (status codes; non-zero = error)   → `1`
+//   - HostInterest          → `HostInterest::Never`
+//   - `*const c_void` / `*mut u8` / `*const ProcessorVTable` → `null` / `null_mut`
+
+/// Run an extern "C" callback body inside [`std::panic::catch_unwind`].
+/// Panics are logged and converted to `default_on_panic` so the FFI
+/// boundary stays sound. `callback_name` is included in the error
+/// log to make the source obvious in mixed-callback traces.
+///
+/// Uses [`std::panic::AssertUnwindSafe`] internally because callback
+/// bodies routinely touch raw pointers and `*mut` outputs that aren't
+/// `UnwindSafe` by default — the pointer dereferences are sound under
+/// the FFI contract regardless of unwinding.
+///
+/// `pub(crate)` so the cdylib-side trampolines in
+/// [`crate::core::context::audio_clock_shim`],
+/// [`crate::core::context::runtime_ops_shim`], and the per-processor
+/// vtable wrappers in [`crate::core::plugin::processor_vtable`] can
+/// route through the same helper. Every extern "C" boundary crossing
+/// in the engine — host-side and cdylib-side — must be wrapped.
+#[inline]
+pub(crate) fn run_host_extern_c<F, T>(
+    callback_name: &'static str,
+    body: F,
+    default_on_panic: T,
+) -> T
+where
+    F: FnOnce() -> T,
+{
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "<non-string panic payload>".to_string()
+            };
+            tracing::error!(
+                target: "streamlib::ffi",
+                callback = callback_name,
+                panic = %msg,
+                "host extern \"C\" callback panicked; FFI boundary converted panic to default return"
+            );
+            default_on_panic
+        }
+    }
+}
+
 unsafe extern "C" fn host_tracing_register_callsite(
     _host: HostHandle,
     _target_ptr: *const u8,
     _target_len: usize,
     _level: HostLogLevel,
 ) -> HostInterest {
-    // The host's `EnvFilter` filters at emit time via `host_tracing_emit`
-    // (it calls `tracing::event!` which fires through the host's
-    // subscriber chain). Returning `Always` here tells the cdylib's
-    // forwarding `Subscriber` to cache "always emit" for the
-    // callsite — every event reaches `host_tracing_emit`, where the
-    // host's filter actually decides.
-    //
-    // Trade-off: cdylib pays for the FFI hop even on filtered-out
-    // events, plus a string copy of the message. A future
-    // refinement could push a (target, level)-keyed pre-filter
-    // here; the current ABI shape doesn't constrain that.
-    HostInterest::Always
+    run_host_extern_c(
+        "host_tracing_register_callsite",
+        || {
+            // The host's `EnvFilter` filters at emit time via
+            // `host_tracing_emit` (it calls `tracing::event!` which
+            // fires through the host's subscriber chain). Returning
+            // `Always` here tells the cdylib's forwarding
+            // `Subscriber` to cache "always emit" for the callsite —
+            // every event reaches `host_tracing_emit`, where the
+            // host's filter actually decides.
+            //
+            // Trade-off: cdylib pays for the FFI hop even on
+            // filtered-out events, plus a string copy of the
+            // message. A future refinement could push a (target,
+            // level)-keyed pre-filter here; the current ABI shape
+            // doesn't constrain that.
+            HostInterest::Always
+        },
+        HostInterest::Never,
+    )
 }
 
 unsafe extern "C" fn host_tracing_enabled(
@@ -399,11 +540,17 @@ unsafe extern "C" fn host_tracing_enabled(
     _target_len: usize,
     _level: HostLogLevel,
 ) -> bool {
-    // Paired with `host_tracing_register_callsite` returning
-    // `Always`: this never fires from the cdylib side. Kept in the
-    // ABI so a future register_callsite that returns `Sometimes`
-    // has the per-event enable hook available.
-    true
+    run_host_extern_c(
+        "host_tracing_enabled",
+        || {
+            // Paired with `host_tracing_register_callsite` returning
+            // `Always`: this never fires from the cdylib side. Kept
+            // in the ABI so a future register_callsite that returns
+            // `Sometimes` has the per-event enable hook available.
+            true
+        },
+        false,
+    )
 }
 
 unsafe extern "C" fn host_tracing_emit(
@@ -416,34 +563,43 @@ unsafe extern "C" fn host_tracing_emit(
     fields_msgpack_ptr: *const u8,
     fields_msgpack_len: usize,
 ) {
-    let target = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(target_ptr, target_len))
-    };
-    let message = if message_len == 0 {
-        ""
-    } else {
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(message_ptr, message_len))
-        }
-    };
-    let level_val = host_log_level_to_tracing(level);
-    let fields_bytes = if fields_msgpack_len == 0 || fields_msgpack_ptr.is_null() {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(fields_msgpack_ptr, fields_msgpack_len) }
-    };
+    run_host_extern_c(
+        "host_tracing_emit",
+        || {
+            let target = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(target_ptr, target_len))
+            };
+            let message = if message_len == 0 {
+                ""
+            } else {
+                unsafe {
+                    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        message_ptr,
+                        message_len,
+                    ))
+                }
+            };
+            let level_val = host_log_level_to_tracing(level);
+            let fields_bytes = if fields_msgpack_len == 0 || fields_msgpack_ptr.is_null() {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(fields_msgpack_ptr, fields_msgpack_len) }
+            };
 
-    // Decode the structured fields (msgpack map) and replay them
-    // through the host's tracing pipeline alongside `message`. The
-    // simplest shape that preserves field fidelity is to log via
-    // the host's own subscriber using `event!`-style emission with
-    // a single `message` field — structured fields go into the
-    // event's value set as serde-derived JSON values, captured by
-    // `JsonlSinkLayer::Capture::record_*`.
-    let fields_map: serde_json::Value =
-        rmp_serde::from_slice(fields_bytes).unwrap_or(serde_json::Value::Null);
+            // Decode the structured fields (msgpack map) and replay them
+            // through the host's tracing pipeline alongside `message`. The
+            // simplest shape that preserves field fidelity is to log via
+            // the host's own subscriber using `event!`-style emission with
+            // a single `message` field — structured fields go into the
+            // event's value set as serde-derived JSON values, captured by
+            // `JsonlSinkLayer::Capture::record_*`.
+            let fields_map: serde_json::Value =
+                rmp_serde::from_slice(fields_bytes).unwrap_or(serde_json::Value::Null);
 
-    emit_via_host_dispatch(target, level_val, message, &fields_map);
+            emit_via_host_dispatch(target, level_val, message, &fields_map);
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_pubsub_publish(
@@ -453,21 +609,28 @@ unsafe extern "C" fn host_pubsub_publish(
     event_msgpack_ptr: *const u8,
     event_msgpack_len: usize,
 ) {
-    let topic = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(topic_ptr, topic_len))
-    };
-    let event_bytes = unsafe { std::slice::from_raw_parts(event_msgpack_ptr, event_msgpack_len) };
-    let event: Event = match rmp_serde::from_slice(event_bytes) {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(
-                target: "streamlib::plugin",
-                "host_pubsub_publish: failed to decode event from cdylib: {e}"
-            );
-            return;
-        }
-    };
-    crate::core::pubsub::PUBSUB.publish(topic, &event);
+    run_host_extern_c(
+        "host_pubsub_publish",
+        || {
+            let topic = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(topic_ptr, topic_len))
+            };
+            let event_bytes =
+                unsafe { std::slice::from_raw_parts(event_msgpack_ptr, event_msgpack_len) };
+            let event: Event = match rmp_serde::from_slice(event_bytes) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "streamlib::plugin",
+                        "host_pubsub_publish: failed to decode event from cdylib: {e}"
+                    );
+                    return;
+                }
+            };
+            crate::core::pubsub::PUBSUB.publish(topic, &event);
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_schema_register(
@@ -477,15 +640,22 @@ unsafe extern "C" fn host_schema_register(
     yaml_ptr: *const u8,
     yaml_len: usize,
 ) {
-    let canonical_id = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            canonical_id_ptr,
-            canonical_id_len,
-        ))
-    };
-    let yaml =
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(yaml_ptr, yaml_len)) };
-    crate::core::embedded_schemas::register_schema(canonical_id.to_string(), yaml);
+    run_host_extern_c(
+        "host_schema_register",
+        || {
+            let canonical_id = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    canonical_id_ptr,
+                    canonical_id_len,
+                ))
+            };
+            let yaml = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(yaml_ptr, yaml_len))
+            };
+            crate::core::embedded_schemas::register_schema(canonical_id.to_string(), yaml);
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_schema_lookup(
@@ -495,21 +665,27 @@ unsafe extern "C" fn host_schema_lookup(
     result_callback: extern "C" fn(*mut c_void, *const u8, usize),
     result_userdata: *mut c_void,
 ) {
-    let canonical_id = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            canonical_id_ptr,
-            canonical_id_len,
-        ))
-    };
-    match crate::core::embedded_schemas::get_embedded_schema_definition(canonical_id) {
-        Some(yaml) => {
-            let bytes = yaml.as_bytes();
-            result_callback(result_userdata, bytes.as_ptr(), bytes.len());
-        }
-        None => {
-            result_callback(result_userdata, std::ptr::null(), 0);
-        }
-    }
+    run_host_extern_c(
+        "host_schema_lookup",
+        || {
+            let canonical_id = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    canonical_id_ptr,
+                    canonical_id_len,
+                ))
+            };
+            match crate::core::embedded_schemas::get_embedded_schema_definition(canonical_id) {
+                Some(yaml) => {
+                    let bytes = yaml.as_bytes();
+                    result_callback(result_userdata, bytes.as_ptr(), bytes.len());
+                }
+                None => {
+                    result_callback(result_userdata, std::ptr::null(), 0);
+                }
+            }
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_iceoryx_log_emit(
@@ -520,28 +696,49 @@ unsafe extern "C" fn host_iceoryx_log_emit(
     message_ptr: *const u8,
     message_len: usize,
 ) {
-    let origin = if origin_len == 0 {
-        ""
-    } else {
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(origin_ptr, origin_len))
-        }
-    };
-    let message = if message_len == 0 {
-        ""
-    } else {
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(message_ptr, message_len))
-        }
-    };
-    // Forward into the host's tracing pipeline at the appropriate level.
-    match level {
-        HostLogLevel::Trace => tracing::trace!(target: "iceoryx2", origin = %origin, "{message}"),
-        HostLogLevel::Debug => tracing::debug!(target: "iceoryx2", origin = %origin, "{message}"),
-        HostLogLevel::Info => tracing::info!(target: "iceoryx2", origin = %origin, "{message}"),
-        HostLogLevel::Warn => tracing::warn!(target: "iceoryx2", origin = %origin, "{message}"),
-        HostLogLevel::Error => tracing::error!(target: "iceoryx2", origin = %origin, "{message}"),
-    }
+    run_host_extern_c(
+        "host_iceoryx_log_emit",
+        || {
+            let origin = if origin_len == 0 {
+                ""
+            } else {
+                unsafe {
+                    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        origin_ptr, origin_len,
+                    ))
+                }
+            };
+            let message = if message_len == 0 {
+                ""
+            } else {
+                unsafe {
+                    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        message_ptr,
+                        message_len,
+                    ))
+                }
+            };
+            // Forward into the host's tracing pipeline at the appropriate level.
+            match level {
+                HostLogLevel::Trace => {
+                    tracing::trace!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+                HostLogLevel::Debug => {
+                    tracing::debug!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+                HostLogLevel::Info => {
+                    tracing::info!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+                HostLogLevel::Warn => {
+                    tracing::warn!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+                HostLogLevel::Error => {
+                    tracing::error!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+            }
+        },
+        (),
+    )
 }
 
 /// Host-side `processor_register` callback. Decodes the descriptor
@@ -555,48 +752,57 @@ unsafe extern "C" fn host_processor_register(
     descriptor_msgpack_len: usize,
     vtable: *const ProcessorVTable,
 ) -> i32 {
-    if vtable.is_null() {
-        tracing::warn!("host_processor_register: null vtable pointer");
-        return -1;
-    }
-
-    let vtable_layout = unsafe { (*vtable).layout_version };
-    if vtable_layout != PROCESSOR_VTABLE_LAYOUT_VERSION {
-        tracing::warn!(
-            "host_processor_register: vtable layout version mismatch (got {}, expected {})",
-            vtable_layout,
-            PROCESSOR_VTABLE_LAYOUT_VERSION
-        );
-        return -2;
-    }
-
-    let descriptor_bytes =
-        unsafe { std::slice::from_raw_parts(descriptor_msgpack_ptr, descriptor_msgpack_len) };
-    let descriptor: crate::core::descriptors::ProcessorDescriptor =
-        match rmp_serde::from_slice(descriptor_bytes) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!(
-                    "host_processor_register: failed to decode descriptor msgpack: {e}"
-                );
-                return -3;
+    run_host_extern_c(
+        "host_processor_register",
+        || {
+            if vtable.is_null() {
+                tracing::warn!("host_processor_register: null vtable pointer");
+                return -1;
             }
-        };
 
-    // SAFETY: `vtable` is `&'static ProcessorVTable` on the cdylib
-    // side; the cdylib is pinned via `LOADED_PLUGIN_LIBRARIES`, so
-    // the pointer outlives the host's usage.
-    let vtable_ref: &'static ProcessorVTable = unsafe { &*vtable };
+            let vtable_layout = unsafe { (*vtable).layout_version };
+            if vtable_layout != PROCESSOR_VTABLE_LAYOUT_VERSION {
+                tracing::warn!(
+                    "host_processor_register: vtable layout version mismatch (got {}, expected {})",
+                    vtable_layout,
+                    PROCESSOR_VTABLE_LAYOUT_VERSION
+                );
+                return -2;
+            }
 
-    match crate::core::processors::PROCESSOR_REGISTRY
-        .register_via_vtable(descriptor, vtable_ref)
-    {
-        Ok(()) => 0,
-        Err(e) => {
-            tracing::warn!("host_processor_register: register_via_vtable failed: {e}");
-            -4
-        }
-    }
+            let descriptor_bytes = unsafe {
+                std::slice::from_raw_parts(descriptor_msgpack_ptr, descriptor_msgpack_len)
+            };
+            let descriptor: crate::core::descriptors::ProcessorDescriptor =
+                match rmp_serde::from_slice(descriptor_bytes) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!(
+                            "host_processor_register: failed to decode descriptor msgpack: {e}"
+                        );
+                        return -3;
+                    }
+                };
+
+            // SAFETY: `vtable` is `&'static ProcessorVTable` on the cdylib
+            // side; the cdylib is pinned via `LOADED_PLUGIN_LIBRARIES`, so
+            // the pointer outlives the host's usage.
+            let vtable_ref: &'static ProcessorVTable = unsafe { &*vtable };
+
+            match crate::core::processors::PROCESSOR_REGISTRY
+                .register_via_vtable(descriptor, vtable_ref)
+            {
+                Ok(()) => 0,
+                Err(e) => {
+                    tracing::warn!("host_processor_register: register_via_vtable failed: {e}");
+                    -4
+                }
+            }
+        },
+        // Non-zero on panic = error. Discriminate from the explicit
+        // failure codes (-1 .. -4) with a fresh value.
+        -5,
+    )
 }
 
 // =============================================================================
@@ -708,10 +914,16 @@ unsafe extern "C" fn host_rcv_runtime_id_copy(
     out_buf_cap: usize,
     out_len: *mut usize,
 ) -> usize {
-    // SAFETY: host-side construction passes &RuntimeContext as ctx.
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    let id_bytes = rc.runtime_id().as_str().as_bytes();
-    write_id_bytes(id_bytes, out_buf, out_buf_cap, out_len)
+    run_host_extern_c(
+        "host_rcv_runtime_id_copy",
+        || {
+            // SAFETY: host-side construction passes &RuntimeContext as ctx.
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            let id_bytes = rc.runtime_id().as_str().as_bytes();
+            write_id_bytes(id_bytes, out_buf, out_buf_cap, out_len)
+        },
+        0,
+    )
 }
 
 unsafe extern "C" fn host_rcv_processor_id_copy(
@@ -720,56 +932,104 @@ unsafe extern "C" fn host_rcv_processor_id_copy(
     out_buf_cap: usize,
     out_len: *mut usize,
 ) -> isize {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    match rc.processor_id() {
-        Some(pid) => {
-            let bytes = pid.as_str().as_bytes();
-            write_id_bytes(bytes, out_buf, out_buf_cap, out_len) as isize
-        }
-        None => -1,
-    }
+    run_host_extern_c(
+        "host_rcv_processor_id_copy",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            match rc.processor_id() {
+                Some(pid) => {
+                    let bytes = pid.as_str().as_bytes();
+                    write_id_bytes(bytes, out_buf, out_buf_cap, out_len) as isize
+                }
+                None => -1,
+            }
+        },
+        -1,
+    )
 }
 
 unsafe extern "C" fn host_rcv_is_paused(ctx: *const c_void) -> bool {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    rc.is_paused()
+    run_host_extern_c(
+        "host_rcv_is_paused",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            rc.is_paused()
+        },
+        // Pause-on-panic is the conservative default: a panicking
+        // is_paused() callback shouldn't keep a runaway processor
+        // running. `true` halts further work until the host clears
+        // the panic state.
+        true,
+    )
 }
 
 unsafe extern "C" fn host_rcv_should_process(ctx: *const c_void) -> bool {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    rc.should_process()
+    run_host_extern_c(
+        "host_rcv_should_process",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            rc.should_process()
+        },
+        // Same conservative default as is_paused — false halts the
+        // processor until the host clears state.
+        false,
+    )
 }
 
 unsafe extern "C" fn host_rcv_gpu_full_access(_ctx: *const c_void) -> *const c_void {
-    // Phase B: the shim still embeds `GpuContextFullAccess` directly
-    // alongside the handle/vtable pair, so the cdylib never reaches
-    // through this callback. Phase C (#886) replaces the embedded
-    // value with `(gpu_full_handle, &HOST_GPU_CONTEXT_VTABLE)` and
-    // wires this callback to return the real handle.
-    std::ptr::null()
+    run_host_extern_c(
+        "host_rcv_gpu_full_access",
+        || {
+            // FullAccess is engine-only today — the cdylib-facing
+            // shim embeds `GpuContextFullAccess` by value alongside
+            // its handle/vtable pair, so the cdylib never reaches
+            // through this callback. Returns null until a future
+            // phase wires cross-DSO FullAccess dispatch.
+            std::ptr::null()
+        },
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_rcv_gpu_limited_access(_ctx: *const c_void) -> *const c_void {
-    std::ptr::null()
+    run_host_extern_c(
+        "host_rcv_gpu_limited_access",
+        || std::ptr::null(),
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_rcv_audio_clock_handle(ctx: *const c_void) -> *const c_void {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    // The shim's audio-clock handle is a `&SharedAudioClock` — the
-    // accompanying [`HOST_AUDIO_CLOCK_VTABLE`] callbacks cast it back
-    // to that type and invoke the Rust trait methods.
-    rc.audio_clock() as *const SharedAudioClock as *const c_void
+    run_host_extern_c(
+        "host_rcv_audio_clock_handle",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            // The shim's audio-clock handle is a `&SharedAudioClock` —
+            // the accompanying [`HOST_AUDIO_CLOCK_VTABLE`] callbacks
+            // cast it back to that type and invoke the Rust trait
+            // methods.
+            rc.audio_clock() as *const SharedAudioClock as *const c_void
+        },
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_rcv_runtime_ops_handle(ctx: *const c_void) -> *const c_void {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    // `rc.runtime()` produces an owned `Arc<dyn RuntimeOperations>`
-    // each call; the per-RuntimeContext handle we hand the cdylib must
-    // outlive the call boundary. We keep the canonical handle as
-    // `&Arc<dyn RuntimeOperations>` borrowed out of the
-    // RuntimeContext's internal storage, which lives as long as the
-    // RuntimeContext itself.
-    rc.runtime_operations_ref() as *const Arc<dyn RuntimeOperations> as *const c_void
+    run_host_extern_c(
+        "host_rcv_runtime_ops_handle",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            // `rc.runtime()` produces an owned `Arc<dyn
+            // RuntimeOperations>` each call; the per-RuntimeContext
+            // handle we hand the cdylib must outlive the call
+            // boundary. We keep the canonical handle as
+            // `&Arc<dyn RuntimeOperations>` borrowed out of the
+            // RuntimeContext's internal storage, which lives as long
+            // as the RuntimeContext itself.
+            rc.runtime_operations_ref() as *const Arc<dyn RuntimeOperations> as *const c_void
+        },
+        std::ptr::null(),
+    )
 }
 
 /// Static [`RuntimeContextVTable`] installed once per process and
@@ -811,13 +1071,25 @@ pub fn host_runtime_context_vtable() -> *const RuntimeContextVTable {
 // ---------------- AudioClock vtable ----------------
 
 unsafe extern "C" fn host_acv_sample_rate(handle: *const c_void) -> u32 {
-    let clock = unsafe { &*(handle as *const SharedAudioClock) };
-    clock.sample_rate()
+    run_host_extern_c(
+        "host_acv_sample_rate",
+        || {
+            let clock = unsafe { &*(handle as *const SharedAudioClock) };
+            clock.sample_rate()
+        },
+        0,
+    )
 }
 
 unsafe extern "C" fn host_acv_buffer_size(handle: *const c_void) -> usize {
-    let clock = unsafe { &*(handle as *const SharedAudioClock) };
-    clock.buffer_size()
+    run_host_extern_c(
+        "host_acv_buffer_size",
+        || {
+            let clock = unsafe { &*(handle as *const SharedAudioClock) };
+            clock.buffer_size()
+        },
+        0,
+    )
 }
 
 unsafe extern "C" fn host_acv_on_tick(
@@ -826,23 +1098,39 @@ unsafe extern "C" fn host_acv_on_tick(
     user_data: *mut c_void,
     drop_user_data: unsafe extern "C" fn(*mut c_void),
 ) {
-    let clock = unsafe { &*(handle as *const SharedAudioClock) };
+    run_host_extern_c(
+        "host_acv_on_tick",
+        || {
+            let clock = unsafe { &*(handle as *const SharedAudioClock) };
 
-    // Wrap the (callback, user_data, drop_user_data) trio in a single
-    // Send + Sync struct that the host's AudioClock holds as its
-    // callback's owned state. The struct's `fire` method takes
-    // `&self`, which forces the dispatching closure to capture the
-    // whole struct (avoiding Rust 2021 disjoint-capture splitting,
-    // which would otherwise lift the inner `*mut c_void` out and
-    // break Send).
-    let bridge = OnTickBridge {
-        callback,
-        user_data,
-        drop_user_data,
-    };
-    let cb: Box<dyn Fn(crate::core::context::AudioTickContext) + Send + Sync> =
-        Box::new(move |ctx_local| bridge.fire(ctx_local));
-    clock.on_tick(cb);
+            // Wrap the (callback, user_data, drop_user_data) trio in a single
+            // Send + Sync struct that the host's AudioClock holds as its
+            // callback's owned state. The struct's `fire` method takes
+            // `&self`, which forces the dispatching closure to capture the
+            // whole struct (avoiding Rust 2021 disjoint-capture splitting,
+            // which would otherwise lift the inner `*mut c_void` out and
+            // break Send).
+            let bridge = OnTickBridge {
+                callback,
+                user_data,
+                drop_user_data,
+            };
+            let cb: Box<dyn Fn(crate::core::context::AudioTickContext) + Send + Sync> =
+                Box::new(move |ctx_local| bridge.fire(ctx_local));
+            clock.on_tick(cb);
+        },
+        // If on_tick registration panics, the cdylib's `drop_user_data`
+        // callback must still fire to reclaim the cdylib-allocated
+        // user_data box. The bridge's `Drop` impl runs only when
+        // the bridge was actually constructed, so a panic before
+        // construction would leak. Mitigate by invoking
+        // `drop_user_data` directly when the protected body
+        // panicked. SAFETY: cdylib's ABI promises this fn is safe
+        // to invoke with the user_data pointer.
+        {
+            unsafe { (drop_user_data)(user_data) };
+        },
+    )
 }
 
 /// Holder for the cdylib's `(callback, user_data, drop_user_data)`
@@ -1035,28 +1323,39 @@ unsafe extern "C" fn host_rov_add_processor(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    let spec_bytes = if spec_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(spec_msgpack_ptr, spec_msgpack_len) }.to_vec()
-    };
-    rt.spawn(async move {
-        let result = match rmp_serde::from_slice::<crate::core::processors::ProcessorSpec>(
-            &spec_bytes,
-        ) {
-            Ok(spec) => ops.add_processor_async(spec).await,
-            Err(e) => Err(crate::core::Error::Config(format!(
-                "add_processor: spec msgpack decode failed: {e}"
-            ))),
-        };
-        guard.fire_with_result(result);
-    });
+    run_host_extern_c(
+        "host_rov_add_processor",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            let spec_bytes = if spec_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(spec_msgpack_ptr, spec_msgpack_len) }.to_vec()
+            };
+            rt.spawn(async move {
+                let result = match rmp_serde::from_slice::<crate::core::processors::ProcessorSpec>(
+                    &spec_bytes,
+                ) {
+                    Ok(spec) => ops.add_processor_async(spec).await,
+                    Err(e) => Err(crate::core::Error::Config(format!(
+                        "add_processor: spec msgpack decode failed: {e}"
+                    ))),
+                };
+                guard.fire_with_result(result);
+            });
+        },
+        // Sync-body panic: CompletionGuard's Drop fires the abort
+        // completion if `guard` was constructed before the panic;
+        // otherwise the cdylib's `rx.await` hangs. The cdylib's
+        // RAII-on-Drop trampoline reclaims its boxed Sender either
+        // way.
+        (),
+    )
 }
 
 unsafe extern "C" fn host_rov_remove_processor(
@@ -1066,30 +1365,37 @@ unsafe extern "C" fn host_rov_remove_processor(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    let id_bytes = if processor_id_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe {
-            std::slice::from_raw_parts(processor_id_msgpack_ptr, processor_id_msgpack_len)
-        }
-        .to_vec()
-    };
-    rt.spawn(async move {
-        let result =
-            match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(&id_bytes) {
-                Ok(pid) => ops.remove_processor_async(pid).await,
-                Err(e) => Err(crate::core::Error::Config(format!(
-                    "remove_processor: processor_id msgpack decode failed: {e}"
-                ))),
+    run_host_extern_c(
+        "host_rov_remove_processor",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
             };
-        guard.fire_with_result(result);
-    });
+            let id_bytes = if processor_id_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe {
+                    std::slice::from_raw_parts(processor_id_msgpack_ptr, processor_id_msgpack_len)
+                }
+                .to_vec()
+            };
+            rt.spawn(async move {
+                let result = match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(
+                    &id_bytes,
+                ) {
+                    Ok(pid) => ops.remove_processor_async(pid).await,
+                    Err(e) => Err(crate::core::Error::Config(format!(
+                        "remove_processor: processor_id msgpack decode failed: {e}"
+                    ))),
+                };
+                guard.fire_with_result(result);
+            });
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_rov_connect(
@@ -1101,48 +1407,55 @@ unsafe extern "C" fn host_rov_connect(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    let from_bytes = if from_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(from_msgpack_ptr, from_msgpack_len) }.to_vec()
-    };
-    let to_bytes = if to_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(to_msgpack_ptr, to_msgpack_len) }.to_vec()
-    };
-    rt.spawn(async move {
-        let from: crate::core::OutputLinkPortRef = match rmp_serde::from_slice(&from_bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
-                    Err(crate::core::Error::Config(format!(
-                        "connect: from-port msgpack decode failed: {e}"
-                    )));
-                guard.fire_with_result(result);
+    run_host_extern_c(
+        "host_rov_connect",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
                 return;
-            }
-        };
-        let to: crate::core::InputLinkPortRef = match rmp_serde::from_slice(&to_bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
-                    Err(crate::core::Error::Config(format!(
-                        "connect: to-port msgpack decode failed: {e}"
-                    )));
+            };
+            let from_bytes = if from_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(from_msgpack_ptr, from_msgpack_len) }.to_vec()
+            };
+            let to_bytes = if to_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(to_msgpack_ptr, to_msgpack_len) }.to_vec()
+            };
+            rt.spawn(async move {
+                let from: crate::core::OutputLinkPortRef =
+                    match rmp_serde::from_slice(&from_bytes) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
+                                Err(crate::core::Error::Config(format!(
+                                    "connect: from-port msgpack decode failed: {e}"
+                                )));
+                            guard.fire_with_result(result);
+                            return;
+                        }
+                    };
+                let to: crate::core::InputLinkPortRef = match rmp_serde::from_slice(&to_bytes) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
+                            Err(crate::core::Error::Config(format!(
+                                "connect: to-port msgpack decode failed: {e}"
+                            )));
+                        guard.fire_with_result(result);
+                        return;
+                    }
+                };
+                let result = ops.connect_async(from, to).await;
                 guard.fire_with_result(result);
-                return;
-            }
-        };
-        let result = ops.connect_async(from, to).await;
-        guard.fire_with_result(result);
-    });
+            });
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_rov_disconnect(
@@ -1152,26 +1465,34 @@ unsafe extern "C" fn host_rov_disconnect(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    let bytes = if link_id_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(link_id_msgpack_ptr, link_id_msgpack_len) }.to_vec()
-    };
-    rt.spawn(async move {
-        let result = match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes) {
-            Ok(link_id) => ops.disconnect_async(link_id).await,
-            Err(e) => Err(crate::core::Error::Config(format!(
-                "disconnect: link_id msgpack decode failed: {e}"
-            ))),
-        };
-        guard.fire_with_result(result);
-    });
+    run_host_extern_c(
+        "host_rov_disconnect",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            let bytes = if link_id_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(link_id_msgpack_ptr, link_id_msgpack_len) }
+                    .to_vec()
+            };
+            rt.spawn(async move {
+                let result =
+                    match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes) {
+                        Ok(link_id) => ops.disconnect_async(link_id).await,
+                        Err(e) => Err(crate::core::Error::Config(format!(
+                            "disconnect: link_id msgpack decode failed: {e}"
+                        ))),
+                    };
+                guard.fire_with_result(result);
+            });
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_rov_to_json(
@@ -1179,16 +1500,22 @@ unsafe extern "C" fn host_rov_to_json(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    rt.spawn(async move {
-        let result = ops.to_json_async().await;
-        guard.fire_with_result(result);
-    });
+    run_host_extern_c(
+        "host_rov_to_json",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            rt.spawn(async move {
+                let result = ops.to_json_async().await;
+                guard.fire_with_result(result);
+            });
+        },
+        (),
+    )
 }
 
 /// Take a (borrowed) handle returned from
@@ -1200,24 +1527,36 @@ unsafe extern "C" fn host_rov_to_json(
 /// keeps the underlying `dyn RuntimeOperations` impl alive
 /// independently. Cdylib drops it via [`host_rov_drop_handle`].
 unsafe extern "C" fn host_rov_clone_handle(borrowed_handle: *const c_void) -> *const c_void {
-    if borrowed_handle.is_null() {
-        return std::ptr::null();
-    }
-    // SAFETY: `borrowed_handle` came from `host_rcv_runtime_ops_handle`
-    // which cast `&RuntimeContext.runtime_ops` to `*const c_void`.
-    let original = unsafe { &*(borrowed_handle as *const Arc<dyn RuntimeOperations>) };
-    let cloned: Arc<dyn RuntimeOperations> = Arc::clone(original);
-    Box::into_raw(Box::new(cloned)) as *const c_void
+    run_host_extern_c(
+        "host_rov_clone_handle",
+        || {
+            if borrowed_handle.is_null() {
+                return std::ptr::null();
+            }
+            // SAFETY: `borrowed_handle` came from `host_rcv_runtime_ops_handle`
+            // which cast `&RuntimeContext.runtime_ops` to `*const c_void`.
+            let original = unsafe { &*(borrowed_handle as *const Arc<dyn RuntimeOperations>) };
+            let cloned: Arc<dyn RuntimeOperations> = Arc::clone(original);
+            Box::into_raw(Box::new(cloned)) as *const c_void
+        },
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_rov_drop_handle(owned_handle: *const c_void) {
-    if owned_handle.is_null() {
-        return;
-    }
-    // SAFETY: paired with `host_rov_clone_handle`'s `Box::into_raw`.
-    unsafe {
-        let _ = Box::from_raw(owned_handle as *mut Arc<dyn RuntimeOperations>);
-    }
+    run_host_extern_c(
+        "host_rov_drop_handle",
+        || {
+            if owned_handle.is_null() {
+                return;
+            }
+            // SAFETY: paired with `host_rov_clone_handle`'s `Box::into_raw`.
+            unsafe {
+                let _ = Box::from_raw(owned_handle as *mut Arc<dyn RuntimeOperations>);
+            }
+        },
+        (),
+    )
 }
 
 /// Static [`RuntimeOpsVTable`] installed once per process. Paired
@@ -1242,6 +1581,2759 @@ pub fn host_runtime_ops_vtable() -> *const RuntimeOpsVTable {
     match host_callbacks() {
         Some(c) if !c.runtime_ops_vtable.is_null() => c.runtime_ops_vtable,
         _ => &HOST_RUNTIME_OPS_VTABLE,
+    }
+}
+
+// ---------------- GpuContextLimitedAccess vtable ----------------
+//
+// Host-side implementations of every callback on the
+// [`GpuContextLimitedAccessVTable`]. The static at the bottom of
+// this block (`HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`) wires them
+// up; the cdylib-side mirror lives in the cdylib's statically-
+// linked engine copy and reads through the host-installed pointer
+// on [`HostServices::gpu_context_limited_access_vtable`].
+
+unsafe extern "C" fn host_gpu_lim_clone_handle(borrowed_handle: *const c_void) -> *const c_void {
+    run_host_extern_c(
+        "host_gpu_lim_clone_handle",
+        || {
+            if borrowed_handle.is_null() {
+                return std::ptr::null();
+            }
+            // SAFETY: `borrowed_handle` was produced by
+            // `GpuContextLimitedAccess::new` (or a prior
+            // `clone_handle`) as
+            // `Box::into_raw(Box::new(Arc::new(GpuContext)))`.
+            // Reading through `&*` and cloning the Arc bumps the
+            // underlying refcount; we re-leak via
+            // `Box::into_raw(Box::new(...))` so the caller gets a
+            // fresh owned handle that matches `drop_handle`'s
+            // expected shape.
+            let original =
+                unsafe { &*(borrowed_handle as *const std::sync::Arc<crate::core::context::GpuContext>) };
+            Box::into_raw(Box::new(original.clone())) as *const c_void
+        },
+        std::ptr::null(),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_handle(owned_handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_handle",
+        || {
+            if owned_handle.is_null() {
+                return;
+            }
+            // SAFETY: paired with `GpuContextLimitedAccess::new` and
+            // `host_gpu_lim_clone_handle` — both produce
+            // `Box::into_raw(Box::new(Arc<GpuContext>))`. Reclaiming
+            // via `Box::from_raw` drops the Arc, which decrements
+            // the host's `Arc<GpuContext>` refcount and frees the
+            // underlying `GpuContext` when the count reaches zero.
+            unsafe {
+                let _ = Box::from_raw(
+                    owned_handle as *mut std::sync::Arc<crate::core::context::GpuContext>,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_clone_pixel_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: `handle` is a `*const c_void` cast of
+            // `Arc::into_raw(Arc<PixelBufferRef>)` produced by
+            // `PixelBuffer::new` (host-side). Re-interpreting it as
+            // `*const PixelBufferRef` and bumping the strong count is the
+            // documented `Arc::increment_strong_count` contract.
+            unsafe {
+                Arc::increment_strong_count(handle as *const crate::core::rhi::PixelBufferRef);
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_pixel_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with `host_gpu_lim_clone_pixel_buffer` and
+            // `PixelBuffer::new`'s `Arc::into_raw` initial bump.
+            // `Arc::decrement_strong_count` decrements; when refcount hits
+            // zero the underlying `PixelBufferRef` is dropped along with
+            // its platform buffer.
+            unsafe {
+                Arc::decrement_strong_count(handle as *const crate::core::rhi::PixelBufferRef);
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_strong_count_pixel_buffer(handle: *const c_void) -> usize {
+    run_host_extern_c(
+        "host_gpu_lim_strong_count_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return 0;
+            }
+            // SAFETY: `handle` is `Arc::into_raw(Arc<PixelBufferRef>)`-shaped
+            // (see `PixelBuffer::new`'s `from_arc_into_raw`). We
+            // reconstruct the `Arc` temporarily, read the strong count, and
+            // immediately re-leak it via `Arc::into_raw` so the strong count
+            // returns to its pre-call value — `Arc::strong_count_from_raw`
+            // is not part of the public stable API. The reconstruction runs
+            // in HOST-COMPILED code regardless of caller DSO, so the cdylib
+            // never has to know `PixelBufferRef`'s in-memory layout.
+            unsafe {
+                let arc =
+                    Arc::from_raw(handle as *const crate::core::rhi::PixelBufferRef);
+                let count = Arc::strong_count(&arc);
+                let _ = Arc::into_raw(arc);
+                count
+            }
+        },
+        0,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_plane_base_address_pixel_buffer(
+    handle: *const c_void,
+    plane_index: u32,
+) -> *mut u8 {
+    run_host_extern_c(
+        "host_gpu_lim_plane_base_address_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return core::ptr::null_mut();
+            }
+            // SAFETY: `handle` is `Arc::into_raw(Arc<PixelBufferRef>)`-shaped;
+            // the leaked strong count keeps the `PixelBufferRef` alive for
+            // the duration of the call. We borrow `&PixelBufferRef` rather
+            // than reconstructing the Arc to avoid touching the refcount.
+            unsafe {
+                let pb_ref = &*(handle as *const crate::core::rhi::PixelBufferRef);
+                pb_ref.plane_base_address(plane_index)
+            }
+        },
+        core::ptr::null_mut(),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_plane_size_pixel_buffer(
+    handle: *const c_void,
+    plane_index: u32,
+) -> u64 {
+    run_host_extern_c(
+        "host_gpu_lim_plane_size_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return 0;
+            }
+            // SAFETY: same as `host_gpu_lim_plane_base_address_pixel_buffer`.
+            unsafe {
+                let pb_ref = &*(handle as *const crate::core::rhi::PixelBufferRef);
+                pb_ref.plane_size(plane_index)
+            }
+        },
+        0,
+    )
+}
+
+// -------------------------------------------------------------------------
+// Texture Arc-handle lifecycle
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_clone_texture(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_texture",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: `handle` is a `*const c_void` cast of
+            // `Arc::into_raw(Arc<TextureInner>)` produced by host
+            // code (see `Texture::from_arc_into_raw`).
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::rhi::texture::TextureInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_texture(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_texture",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `Texture::from_arc_into_raw` and any prior
+            // `clone_texture` bumps.
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::rhi::texture::TextureInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+// -------------------------------------------------------------------------
+// PooledTextureHandle lifecycle — drop-only (v4)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_drop_pooled_texture_handle(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_pooled_texture_handle",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with `Box::into_raw(Box<...>)` in
+            // `PooledTextureHandle::from_parts`. Reclaiming via
+            // `Box::from_raw` runs `Drop for PooledTextureHandleInner`
+            // which releases the pool slot exactly once.
+            unsafe {
+                let _ = Box::from_raw(
+                    handle as *mut crate::core::context::texture_pool::PooledTextureHandleInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+// -------------------------------------------------------------------------
+// Method dispatch — Texture-related (v4)
+// -------------------------------------------------------------------------
+
+/// Borrow a `&Arc<GpuContext>` from a `*const Arc<GpuContext>`-shaped
+/// host handle. Caller must guarantee `handle` came from
+/// [`crate::core::context::GpuContextLimitedAccess::new`] or
+/// [`host_gpu_lim_clone_handle`]; both produce
+/// `Box::into_raw(Box::new(Arc::new(...))) as *const c_void`.
+unsafe fn handle_as_gpu_context(
+    handle: *const c_void,
+) -> Option<&'static Arc<crate::core::context::GpuContext>> {
+    if handle.is_null() {
+        return None;
+    }
+    // SAFETY: caller-supplied contract; the Box keeps the Arc alive
+    // for the duration of the dispatch through the vtable.
+    unsafe { Some(&*(handle as *const Arc<crate::core::context::GpuContext>)) }
+}
+
+unsafe fn slice_from_raw(ptr: *const u8, len: usize) -> &'static [u8] {
+    if ptr.is_null() || len == 0 {
+        return &[];
+    }
+    // SAFETY: caller-supplied UTF-8 byte slice; the lifetime is
+    // bounded by the dispatch (we never store the slice past return).
+    unsafe { std::slice::from_raw_parts(ptr, len) }
+}
+
+fn write_err(msg: &str, err_buf: *mut u8, err_buf_cap: usize, err_len: *mut usize) {
+    let bytes = msg.as_bytes();
+    let written = bytes.len().min(err_buf_cap);
+    if written > 0 && !err_buf.is_null() {
+        // SAFETY: caller-provided `err_buf` is writable for `err_buf_cap`.
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), err_buf, written) };
+    }
+    if !err_len.is_null() {
+        // SAFETY: caller-provided `err_len` is writable.
+        unsafe { *err_len = written };
+    }
+}
+
+unsafe extern "C" fn host_gpu_lim_register_texture(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    texture_handle: *const c_void,
+    initial_layout_raw: i32,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_register_texture",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            if texture_handle.is_null() {
+                return;
+            }
+            // SAFETY: `texture_handle` is `Arc::into_raw(Arc<TextureInner>)`-shaped.
+            // Bump the refcount so we can hand the cache its own owned
+            // Arc; the caller's Texture continues to own its own.
+            unsafe {
+                Arc::increment_strong_count(
+                    texture_handle as *const crate::core::rhi::texture::TextureInner,
+                );
+            }
+            // SAFETY: same shape as above; from_raw + the bump above
+            // gives us a fresh Arc with the right refcount.
+            let texture_arc = unsafe {
+                Arc::from_raw(
+                    texture_handle as *const crate::core::rhi::texture::TextureInner,
+                )
+            };
+            let inner_ref = &*texture_arc;
+            let width = inner_ref.width();
+            let height = inner_ref.height();
+            let format = inner_ref.format();
+            // Re-wrap into a Texture via the host's from_arc_into_raw
+            // helper — leaks the Arc back into the texture cache shape.
+            let texture =
+                crate::core::rhi::texture::Texture::from_arc_into_raw(
+                    texture_arc, width, height, format,
+                );
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            #[cfg(target_os = "linux")]
+            {
+                let layout = streamlib_consumer_rhi::VulkanLayout(initial_layout_raw);
+                gpu.register_texture_with_layout(id_str, texture, layout);
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = initial_layout_raw;
+                gpu.register_texture(id_str, texture);
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_update_texture_registration_layout(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    layout_raw: i32,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_update_texture_registration_layout",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            #[cfg(target_os = "linux")]
+            {
+                let layout = streamlib_consumer_rhi::VulkanLayout(layout_raw);
+                gpu.update_texture_registration_layout(id_str, layout);
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (id_str, layout_raw);
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_acquire_texture(
+    handle: *const c_void,
+    width: u32,
+    height: u32,
+    format_raw: u32,
+    usage_bits: u32,
+    out_pooled_handle: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_acquire_texture",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err("acquire_texture: null gpu handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_pooled_handle.is_null() {
+                write_err("acquire_texture: null out_pooled_handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            }
+            let format = match format_raw {
+                0 => streamlib_consumer_rhi::TextureFormat::Rgba8Unorm,
+                1 => streamlib_consumer_rhi::TextureFormat::Rgba8UnormSrgb,
+                2 => streamlib_consumer_rhi::TextureFormat::Bgra8Unorm,
+                3 => streamlib_consumer_rhi::TextureFormat::Bgra8UnormSrgb,
+                4 => streamlib_consumer_rhi::TextureFormat::Rgba16Float,
+                5 => streamlib_consumer_rhi::TextureFormat::Rgba32Float,
+                6 => streamlib_consumer_rhi::TextureFormat::Nv12,
+                _ => {
+                    let msg = format!("acquire_texture: invalid format_raw {}", format_raw);
+                    write_err(&msg, err_buf, err_buf_cap, err_len);
+                    return 1;
+                }
+            };
+            let usage =
+                streamlib_consumer_rhi::TextureUsages::from_bits_truncate(usage_bits);
+            let desc = crate::core::context::TexturePoolDescriptor {
+                width,
+                height,
+                format,
+                usage,
+                label: None,
+            };
+            match gpu.acquire_texture(&desc) {
+                Ok(pooled) => {
+                    // Move the host-built PooledTextureHandle into the
+                    // caller's out-slot. The caller (cdylib) owns it
+                    // after this — its Drop runs `drop_pooled_texture_handle`.
+                    unsafe {
+                        std::ptr::write(
+                            out_pooled_handle
+                                as *mut crate::core::context::PooledTextureHandle,
+                            pooled,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    let msg = format!("{}", e);
+                    write_err(&msg, err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_resolve_texture_by_surface_id(
+    handle: *const c_void,
+    surface_id_ptr: *const u8,
+    surface_id_len: usize,
+    has_layout: i32,
+    layout_raw: i32,
+    width: u32,
+    height: u32,
+    out_texture: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_resolve_texture_by_surface_id",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err(
+                    "resolve_texture_by_surface_id: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_texture.is_null() {
+                write_err(
+                    "resolve_texture_by_surface_id: null out_texture",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(surface_id_ptr, surface_id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "resolve_texture_by_surface_id: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let texture_layout = if has_layout != 0 {
+                Some(layout_raw)
+            } else {
+                None
+            };
+            match gpu.resolve_texture_by_surface_id(id_str, texture_layout, width, height) {
+                Ok(texture) => {
+                    // Hand the texture to the caller's out-slot. The
+                    // caller (cdylib) owns it after this — its Drop
+                    // runs `drop_texture`.
+                    unsafe {
+                        std::ptr::write(
+                            out_texture as *mut crate::core::rhi::Texture,
+                            texture,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    let msg = format!("{}", e);
+                    write_err(&msg, err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_unregister_texture(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_unregister_texture",
+        || {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                return;
+            };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            gpu.unregister_texture(id_str);
+        },
+        (),
+    )
+}
+
+// -------------------------------------------------------------------------
+// Linux-only buffer Arc-handle lifecycle
+// -------------------------------------------------------------------------
+//
+// All 4 buffer types (`StorageBuffer`, `UniformBuffer`, `VertexBuffer`,
+// `IndexBuffer`) wrap `Arc<HostVulkanBuffer>` under the hood. The per-
+// type callbacks are individually addressable in the vtable (so future
+// per-type divergence doesn't force a re-version) but share the same
+// host-side bookkeeping today. On non-Linux hosts the buffer types
+// don't exist, so the callbacks compile to no-ops / error returns —
+// the vtable slot is unconditional for ABI stability.
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_lim_clone_host_vulkan_buffer_arc(handle: *const c_void) {
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: `handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`-shaped
+    // (see each buffer type's `from_arc_into_raw` constructor).
+    unsafe {
+        Arc::increment_strong_count(handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+    }
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_lim_drop_host_vulkan_buffer_arc(handle: *const c_void) {
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: matched with the `Arc::into_raw` in each buffer type's
+    // `from_arc_into_raw` constructor.
+    unsafe {
+        Arc::decrement_strong_count(handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_lim_clone_host_vulkan_buffer_arc(_handle: *const c_void) {
+    // Buffer types only exist on Linux; this callback is unreachable
+    // on other platforms. Defensive no-op.
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_lim_drop_host_vulkan_buffer_arc(_handle: *const c_void) {
+    // Buffer types only exist on Linux; defensive no-op.
+}
+
+// Per-type wrappers. Each just delegates to the shared
+// `host_vulkan_buffer_arc` pair today but lives in the vtable as a
+// dedicated slot, so a future per-type divergence (e.g. UniformBuffer
+// growing a per-type cached field that needs its own clone semantics)
+// only edits the wrapper without touching the vtable surface.
+
+unsafe extern "C" fn host_gpu_lim_clone_storage_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_storage_buffer",
+        || unsafe { host_gpu_lim_clone_host_vulkan_buffer_arc(handle) },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_storage_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_storage_buffer",
+        || unsafe { host_gpu_lim_drop_host_vulkan_buffer_arc(handle) },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_clone_uniform_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_uniform_buffer",
+        || unsafe { host_gpu_lim_clone_host_vulkan_buffer_arc(handle) },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_uniform_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_uniform_buffer",
+        || unsafe { host_gpu_lim_drop_host_vulkan_buffer_arc(handle) },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_clone_vertex_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_vertex_buffer",
+        || unsafe { host_gpu_lim_clone_host_vulkan_buffer_arc(handle) },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_vertex_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_vertex_buffer",
+        || unsafe { host_gpu_lim_drop_host_vulkan_buffer_arc(handle) },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_clone_index_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_index_buffer",
+        || unsafe { host_gpu_lim_clone_host_vulkan_buffer_arc(handle) },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_index_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_index_buffer",
+        || unsafe { host_gpu_lim_drop_host_vulkan_buffer_arc(handle) },
+        (),
+    )
+}
+
+// -------------------------------------------------------------------------
+// Linux-only acquire_*_buffer method dispatch (v5)
+// -------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_lim_acquire_storage_buffer(
+    handle: *const c_void,
+    byte_size: u64,
+    out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_acquire_storage_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err(
+                    "acquire_storage_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_buffer.is_null() {
+                write_err(
+                    "acquire_storage_buffer: null out_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            match gpu.acquire_storage_buffer(byte_size) {
+                Ok(buf) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_buffer as *mut crate::core::rhi::StorageBuffer,
+                            buf,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_lim_acquire_uniform_buffer(
+    handle: *const c_void,
+    byte_size: u64,
+    out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_acquire_uniform_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err(
+                    "acquire_uniform_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_buffer.is_null() {
+                write_err(
+                    "acquire_uniform_buffer: null out_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            match gpu.acquire_uniform_buffer(byte_size) {
+                Ok(buf) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_buffer as *mut crate::core::rhi::UniformBuffer,
+                            buf,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_lim_acquire_vertex_buffer(
+    handle: *const c_void,
+    byte_size: u64,
+    out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_acquire_vertex_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err(
+                    "acquire_vertex_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_buffer.is_null() {
+                write_err(
+                    "acquire_vertex_buffer: null out_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            match gpu.acquire_vertex_buffer(byte_size) {
+                Ok(buf) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_buffer as *mut crate::core::rhi::VertexBuffer,
+                            buf,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_lim_acquire_index_buffer(
+    handle: *const c_void,
+    byte_size: u64,
+    out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_acquire_index_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err(
+                    "acquire_index_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_buffer.is_null() {
+                write_err(
+                    "acquire_index_buffer: null out_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            match gpu.acquire_index_buffer(byte_size) {
+                Ok(buf) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_buffer as *mut crate::core::rhi::IndexBuffer,
+                            buf,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_lim_acquire_storage_buffer(
+    _handle: *const c_void,
+    _byte_size: u64,
+    _out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "acquire_storage_buffer: StorageBuffer is not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_lim_acquire_uniform_buffer(
+    _handle: *const c_void,
+    _byte_size: u64,
+    _out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "acquire_uniform_buffer: UniformBuffer is not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_lim_acquire_vertex_buffer(
+    _handle: *const c_void,
+    _byte_size: u64,
+    _out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "acquire_vertex_buffer: VertexBuffer is not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_lim_acquire_index_buffer(
+    _handle: *const c_void,
+    _byte_size: u64,
+    _out_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "acquire_index_buffer: IndexBuffer is not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+// -------------------------------------------------------------------------
+// TextureRegistration Arc-handle lifecycle
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_clone_texture_registration(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_texture_registration",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: `handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`-shaped.
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::context::texture_registration::TextureRegistrationInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_texture_registration(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_texture_registration",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `TextureRegistration::from_arc_into_raw`.
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::context::texture_registration::TextureRegistrationInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+// -------------------------------------------------------------------------
+// TextureRegistration method dispatch (v6)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_texture_registration_texture(
+    handle: *const c_void,
+) -> *const c_void {
+    run_host_extern_c(
+        "host_gpu_lim_texture_registration_texture",
+        || {
+            if handle.is_null() {
+                return std::ptr::null();
+            }
+            // SAFETY: `handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`-shaped;
+            // the Arc's strong count keeps the inner alive. We return
+            // a pointer to the inner's `texture` field; the caller
+            // (cdylib) deref's it as `*const Texture`. The pointer is
+            // alive as long as the caller's `TextureRegistration` is.
+            unsafe {
+                let inner = &*(handle
+                    as *const crate::core::context::texture_registration::TextureRegistrationInner);
+                &inner.texture as *const crate::core::rhi::Texture as *const c_void
+            }
+        },
+        std::ptr::null(),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_texture_registration_current_layout(
+    handle: *const c_void,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_texture_registration_current_layout",
+        || {
+            if handle.is_null() {
+                return 0; // VK_IMAGE_LAYOUT_UNDEFINED
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // SAFETY: `handle` is `Arc::into_raw(...)`-shaped.
+                unsafe {
+                    let inner = &*(handle
+                        as *const crate::core::context::texture_registration::TextureRegistrationInner);
+                    inner
+                        .current_layout
+                        .load(std::sync::atomic::Ordering::Acquire)
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = handle;
+                0
+            }
+        },
+        0,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_texture_registration_update_layout(
+    handle: *const c_void,
+    layout_raw: i32,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_texture_registration_update_layout",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            #[cfg(target_os = "linux")]
+            {
+                // SAFETY: same shape as
+                // `host_gpu_lim_texture_registration_current_layout`.
+                unsafe {
+                    let inner = &*(handle
+                        as *const crate::core::context::texture_registration::TextureRegistrationInner);
+                    inner
+                        .current_layout
+                        .store(layout_raw, std::sync::atomic::Ordering::Release);
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (handle, layout_raw);
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_resolve_texture_registration_by_surface_id(
+    handle: *const c_void,
+    surface_id_ptr: *const u8,
+    surface_id_len: usize,
+    has_layout: i32,
+    layout_raw: i32,
+    width: u32,
+    height: u32,
+    out_registration: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_resolve_texture_registration_by_surface_id",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(handle) }) else {
+                write_err(
+                    "resolve_texture_registration_by_surface_id: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_registration.is_null() {
+                write_err(
+                    "resolve_texture_registration_by_surface_id: null out_registration",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(surface_id_ptr, surface_id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "resolve_texture_registration_by_surface_id: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let texture_layout = if has_layout != 0 {
+                Some(layout_raw)
+            } else {
+                None
+            };
+            match gpu.resolve_texture_registration_by_surface_id(id_str, texture_layout, width, height) {
+                Ok(reg) => {
+                    // SAFETY: out_registration points at caller-allocated
+                    // stack storage for a `TextureRegistration` value.
+                    unsafe {
+                        std::ptr::write(
+                            out_registration
+                                as *mut crate::core::context::TextureRegistration,
+                            reg,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// -------------------------------------------------------------------------
+// RhiCommandQueue Arc-handle lifecycle + create_command_buffer
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_clone_rhi_command_queue(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_clone_rhi_command_queue",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: `handle` is `Arc::into_raw(Arc<RhiCommandQueueInner>)`-shaped.
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::rhi::command_queue::RhiCommandQueueInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_rhi_command_queue(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_rhi_command_queue",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `RhiCommandQueue::from_arc_into_raw`.
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::rhi::command_queue::RhiCommandQueueInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_create_command_buffer_from_queue(
+    queue_handle: *const c_void,
+    out_cb: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_create_command_buffer_from_queue",
+        || -> i32 {
+            if queue_handle.is_null() {
+                write_err(
+                    "create_command_buffer_from_queue: null queue handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            if out_cb.is_null() {
+                write_err(
+                    "create_command_buffer_from_queue: null out_cb",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            // SAFETY: `queue_handle` is
+            // `Arc::into_raw(Arc<RhiCommandQueueInner>)`-shaped; the
+            // Arc's strong count keeps the inner alive for the duration.
+            let inner = unsafe {
+                &*(queue_handle
+                    as *const crate::core::rhi::command_queue::RhiCommandQueueInner)
+            };
+            let result = inner.inner.create_command_buffer();
+            match result {
+                Ok(platform_cb) => {
+                    let cb_inner =
+                        crate::core::rhi::command_buffer::CommandBufferInner {
+                            inner: platform_cb,
+                        };
+                    let cb = crate::core::rhi::CommandBuffer::from_inner(cb_inner);
+                    // SAFETY: out_cb points at caller-allocated stack
+                    // storage for a CommandBuffer value.
+                    unsafe {
+                        std::ptr::write(
+                            out_cb as *mut crate::core::rhi::CommandBuffer,
+                            cb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// -------------------------------------------------------------------------
+// CommandBuffer lifecycle: drop + consume-semantics commits (v7)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_drop_command_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_drop_command_buffer",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with `Box::into_raw` in
+            // `CommandBuffer::from_inner`.
+            unsafe {
+                let _ = Box::from_raw(
+                    handle as *mut crate::core::rhi::command_buffer::CommandBufferInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_commit_command_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_commit_command_buffer",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with `Box::into_raw` in
+            // `CommandBuffer::from_inner`; the cdylib's commit(self)
+            // nulls its local fields after this call so Drop won't
+            // double-free. We move-out of the Box so the platform
+            // commit can take ownership of the inner by-value.
+            let cb_box = unsafe {
+                Box::from_raw(
+                    handle as *mut crate::core::rhi::command_buffer::CommandBufferInner,
+                )
+            };
+            let cb_inner = *cb_box;
+            cb_inner.inner.commit();
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_commit_and_wait_command_buffer(handle: *const c_void) {
+    run_host_extern_c(
+        "host_gpu_lim_commit_and_wait_command_buffer",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: see `host_gpu_lim_commit_command_buffer`.
+            let cb_box = unsafe {
+                Box::from_raw(
+                    handle as *mut crate::core::rhi::command_buffer::CommandBufferInner,
+                )
+            };
+            let cb_inner = *cb_box;
+            cb_inner.inner.commit_and_wait();
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_copy_texture_command_buffer(
+    handle: *const c_void,
+    src: *const c_void,
+    dst: *const c_void,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_copy_texture_command_buffer",
+        || {
+            if handle.is_null() || src.is_null() || dst.is_null() {
+                return;
+            }
+            // SAFETY: handle is `Box::into_raw(...)`-shaped; `&mut` is
+            // sound because the cdylib's `&mut self` guarantees no
+            // concurrent reference. src/dst are
+            // `*const Texture` (layout locked by `texture_layout` test).
+            unsafe {
+                let cb_inner = &mut *(handle
+                    as *mut crate::core::rhi::command_buffer::CommandBufferInner);
+                let src_tex = &*(src as *const crate::core::rhi::Texture);
+                let dst_tex = &*(dst as *const crate::core::rhi::Texture);
+                // Re-use the existing platform-specific copy_texture
+                // surface inside CommandBufferInner's `inner`.
+                #[cfg(all(
+                    not(feature = "backend-vulkan"),
+                    any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
+                ))]
+                {
+                    cb_inner.inner.copy_texture(
+                        &src_tex.host_inner().inner,
+                        &dst_tex.host_inner().inner,
+                    );
+                }
+                #[cfg(any(
+                    feature = "backend-vulkan",
+                    all(target_os = "linux", not(feature = "backend-metal"))
+                ))]
+                {
+                    use crate::host_rhi::HostTextureExt;
+                    cb_inner
+                        .inner
+                        .copy_texture(src_tex.vulkan_inner(), dst_tex.vulkan_inner());
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    cb_inner.inner.copy_texture(
+                        &src_tex.host_inner().inner,
+                        &dst_tex.host_inner().inner,
+                    );
+                }
+            }
+        },
+        (),
+    )
+}
+
+// -------------------------------------------------------------------------
+// GpuContextLimitedAccess command-queue / command-buffer / blit methods
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_command_queue(
+    gpu_handle: *const c_void,
+    out_queue: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_command_queue",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err("command_queue: null gpu handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_queue.is_null() {
+                write_err("command_queue: null out_queue", err_buf, err_buf_cap, err_len);
+                return 1;
+            }
+            // `gpu.command_queue()` returns `&RhiCommandQueue` (a borrow
+            // from GpuContext's stored field). Clone into a fresh owned
+            // β-shape for the caller — the Clone impl runs the host's
+            // `clone_rhi_command_queue` callback (Arc refcount bump).
+            let owned = gpu.command_queue().clone();
+            // SAFETY: out_queue points at caller-allocated stack storage.
+            unsafe {
+                std::ptr::write(
+                    out_queue as *mut crate::core::rhi::RhiCommandQueue,
+                    owned,
+                );
+            }
+            0
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_create_command_buffer(
+    gpu_handle: *const c_void,
+    out_cb: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_create_command_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "create_command_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_cb.is_null() {
+                write_err(
+                    "create_command_buffer: null out_cb",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            match gpu.create_command_buffer() {
+                Ok(cb) => {
+                    // SAFETY: out_cb points at caller-allocated storage.
+                    unsafe {
+                        std::ptr::write(
+                            out_cb as *mut crate::core::rhi::CommandBuffer,
+                            cb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_gpu_lim_copy_pixel_buffer_to_texture(
+    gpu_handle: *const c_void,
+    pixel_buffer: *const c_void,
+    texture: *const c_void,
+    surface_id_ptr: *const u8,
+    surface_id_len: usize,
+    width: u32,
+    height: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_copy_pixel_buffer_to_texture",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "copy_pixel_buffer_to_texture: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer.is_null() || texture.is_null() {
+                write_err(
+                    "copy_pixel_buffer_to_texture: null pixel_buffer or texture",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            // SAFETY: pixel_buffer / texture point at β-shape values
+            // whose layouts are locked by per-type regression tests.
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            let tex = unsafe { &*(texture as *const crate::core::rhi::Texture) };
+            let id_bytes = unsafe { slice_from_raw(surface_id_ptr, surface_id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "copy_pixel_buffer_to_texture: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match gpu.copy_pixel_buffer_to_texture(pb, tex, id_str, width, height) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_gpu_lim_copy_pixel_buffer_to_texture(
+    _gpu_handle: *const c_void,
+    _pixel_buffer: *const c_void,
+    _texture: *const c_void,
+    _surface_id_ptr: *const u8,
+    _surface_id_len: usize,
+    _width: u32,
+    _height: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "copy_pixel_buffer_to_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+unsafe extern "C" fn host_gpu_lim_blit_copy(
+    gpu_handle: *const c_void,
+    src: *const c_void,
+    dst: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_blit_copy",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err("blit_copy: null gpu handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if src.is_null() || dst.is_null() {
+                write_err("blit_copy: null src or dst", err_buf, err_buf_cap, err_len);
+                return 1;
+            }
+            // SAFETY: src / dst point at β-shape PixelBuffer values.
+            let src_pb = unsafe { &*(src as *const crate::core::rhi::PixelBuffer) };
+            let dst_pb = unsafe { &*(dst as *const crate::core::rhi::PixelBuffer) };
+            match gpu.blit_copy(src_pb, dst_pb) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn host_gpu_lim_blit_copy_iosurface(
+    gpu_handle: *const c_void,
+    src_iosurface_ref: *const c_void,
+    dst_pixel_buffer: *const c_void,
+    width: u32,
+    height: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_blit_copy_iosurface",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "blit_copy_iosurface: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if dst_pixel_buffer.is_null() {
+                write_err(
+                    "blit_copy_iosurface: null dst_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let dst_pb = unsafe {
+                &*(dst_pixel_buffer as *const crate::core::rhi::PixelBuffer)
+            };
+            let src_io = src_iosurface_ref as crate::apple::corevideo_ffi::IOSurfaceRef;
+            match unsafe { gpu.blit_copy_iosurface(src_io, dst_pb, width, height) } {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+unsafe extern "C" fn host_gpu_lim_blit_copy_iosurface(
+    _gpu_handle: *const c_void,
+    _src_iosurface_ref: *const c_void,
+    _dst_pixel_buffer: *const c_void,
+    _width: u32,
+    _height: u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "blit_copy_iosurface: not available on this platform (macOS-only)",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+// -------------------------------------------------------------------------
+// GpuContextLimitedAccessVTable — surface_store accessors
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_surface_store(
+    gpu_handle: *const c_void,
+    out_store: *mut c_void,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_surface_store",
+        || {
+            // Always-clear: write a null-handle β-shape first so the
+            // caller has a defined state even on error paths.
+            if !out_store.is_null() {
+                unsafe {
+                    std::ptr::write(
+                        out_store as *mut crate::core::context::SurfaceStore,
+                        crate::core::context::SurfaceStore::null(),
+                    );
+                }
+            }
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                return;
+            };
+            if out_store.is_null() {
+                return;
+            }
+            // `gpu.surface_store()` returns `Option<SurfaceStore>` —
+            // a fresh β-shape with Arc refcount already bumped when
+            // Some. We write it into the out-param; the caller (cdylib
+            // or host) takes ownership.
+            if let Some(store) = gpu.surface_store() {
+                unsafe {
+                    std::ptr::write(
+                        out_store as *mut crate::core::context::SurfaceStore,
+                        store,
+                    );
+                }
+            }
+            // else: out_store already holds the null-handle β-shape.
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_check_out_surface(
+    gpu_handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_check_out_surface",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "check_out_surface: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "check_out_surface: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "check_out_surface: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match gpu.check_out_surface(id_str) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// =========================================================================
+// SurfaceStoreVTable — host-side callbacks
+// =========================================================================
+//
+// Every callback derefs `handle` as `&SurfaceStoreInner` and calls
+// the inner method directly. The Arc strong count keeps the inner
+// alive for the duration of the dispatch.
+
+#[inline]
+unsafe fn ss_inner(handle: *const c_void) -> Option<&'static crate::core::context::surface_store::SurfaceStoreInner> {
+    if handle.is_null() {
+        None
+    } else {
+        // SAFETY: caller-supplied contract: `handle` is
+        // `Arc::into_raw(Arc<SurfaceStoreInner>)`-shaped.
+        Some(unsafe {
+            &*(handle as *const crate::core::context::surface_store::SurfaceStoreInner)
+        })
+    }
+}
+
+unsafe extern "C" fn host_ss_clone_handle(handle: *const c_void) {
+    run_host_extern_c(
+        "host_ss_clone_handle",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::context::surface_store::SurfaceStoreInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_ss_drop_handle(handle: *const c_void) {
+    run_host_extern_c(
+        "host_ss_drop_handle",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::context::surface_store::SurfaceStoreInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_ss_connect(
+    handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_connect",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("connect: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            match inner.connect() {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_disconnect(
+    handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_disconnect",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("disconnect: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            match inner.disconnect() {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_check_in(
+    handle: *const c_void,
+    pixel_buffer: *const c_void,
+    out_id_buf: *mut u8,
+    out_id_cap: usize,
+    out_id_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_check_in",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("check_in: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if pixel_buffer.is_null() {
+                write_err("check_in: null pixel_buffer", err_buf, err_buf_cap, err_len);
+                return 1;
+            }
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            match inner.check_in(pb) {
+                Ok(id) => {
+                    let bytes = id.as_bytes();
+                    write_id_bytes(bytes, out_id_buf, out_id_cap, out_id_len);
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_check_out(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_check_out",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("check_out: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "check_out: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "check_out: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.check_out(id_str) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_register_buffer(
+    handle: *const c_void,
+    pool_id_ptr: *const u8,
+    pool_id_len: usize,
+    pixel_buffer: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_register_buffer",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err(
+                    "register_buffer: null handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer.is_null() {
+                write_err(
+                    "register_buffer: null pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            let pool_id_bytes = unsafe { slice_from_raw(pool_id_ptr, pool_id_len) };
+            let pool_id = match std::str::from_utf8(pool_id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "register_buffer: pool_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.register_buffer(pool_id, pb) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_lookup_buffer(
+    handle: *const c_void,
+    pool_id_ptr: *const u8,
+    pool_id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_lookup_buffer",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("lookup_buffer: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "lookup_buffer: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let pool_id_bytes = unsafe { slice_from_raw(pool_id_ptr, pool_id_len) };
+            let pool_id = match std::str::from_utf8(pool_id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "lookup_buffer: pool_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.lookup_buffer(pool_id) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_release(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_release",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("release: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "release: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.release(id_str) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ss_register_texture(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    texture: *const c_void,
+    timeline_handle: *const c_void,
+    layout_raw: i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_register_texture",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err(
+                    "register_texture: null handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if texture.is_null() {
+                write_err(
+                    "register_texture: null texture",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let tex = unsafe { &*(texture as *const crate::core::rhi::Texture) };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "register_texture: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            // SAFETY: timeline_handle, when non-null, points at the
+            // engine-owned `Arc<HostVulkanTimelineSemaphore>` (passed
+            // by `&Arc<...>` from engine code through `&*` cast).
+            let timeline = unsafe {
+                if timeline_handle.is_null() {
+                    None
+                } else {
+                    Some(
+                        &*(timeline_handle
+                            as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore),
+                    )
+                }
+            };
+            let layout = streamlib_consumer_rhi::VulkanLayout(layout_raw);
+            match inner.register_texture(id_str, tex, timeline, layout) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ss_register_texture(
+    _handle: *const c_void,
+    _id_ptr: *const u8,
+    _id_len: usize,
+    _texture: *const c_void,
+    _timeline_handle: *const c_void,
+    _layout_raw: i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "register_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ss_register_pixel_buffer_with_timeline(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    pixel_buffer: *const c_void,
+    timeline_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_register_pixel_buffer_with_timeline",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err(
+                    "register_pixel_buffer_with_timeline: null handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer.is_null() {
+                write_err(
+                    "register_pixel_buffer_with_timeline: null pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "register_pixel_buffer_with_timeline: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let timeline = unsafe {
+                if timeline_handle.is_null() {
+                    None
+                } else {
+                    Some(
+                        &*(timeline_handle
+                            as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore),
+                    )
+                }
+            };
+            match inner.register_pixel_buffer_with_timeline(id_str, pb, timeline) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ss_register_pixel_buffer_with_timeline(
+    _handle: *const c_void,
+    _id_ptr: *const u8,
+    _id_len: usize,
+    _pixel_buffer: *const c_void,
+    _timeline_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "register_pixel_buffer_with_timeline: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ss_lookup_texture(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    out_texture: *mut c_void,
+    out_layout_raw: *mut i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_lookup_texture",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("lookup_texture: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_texture.is_null() || out_layout_raw.is_null() {
+                write_err(
+                    "lookup_texture: null out_texture or out_layout_raw",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "lookup_texture: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.lookup_texture(id_str) {
+                Ok((tex, layout)) => {
+                    unsafe {
+                        std::ptr::write(out_texture as *mut crate::core::rhi::Texture, tex);
+                        *out_layout_raw = layout.0;
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ss_lookup_texture(
+    _handle: *const c_void,
+    _id_ptr: *const u8,
+    _id_len: usize,
+    _out_texture: *mut c_void,
+    _out_layout_raw: *mut i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "lookup_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ss_update_image_layout(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    layout_raw: i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_update_image_layout",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err(
+                    "update_image_layout: null handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "update_image_layout: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let layout = streamlib_consumer_rhi::VulkanLayout(layout_raw);
+            match inner.update_image_layout(id_str, layout) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ss_update_image_layout(
+    _handle: *const c_void,
+    _id_ptr: *const u8,
+    _id_len: usize,
+    _layout_raw: i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "update_image_layout: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+// -------------------------------------------------------------------------
+// PixelBuffer acquire / get / resolve method-dispatch
+// -------------------------------------------------------------------------
+
+#[inline]
+fn pixel_format_from_raw(raw: u32) -> Option<streamlib_consumer_rhi::PixelFormat> {
+    // Mirror of `PixelBuffer::format`'s reverse mapping. Each
+    // `#[repr(u32)]` discriminant maps back to its variant; unknown
+    // values return None (caller surfaces an error).
+    use streamlib_consumer_rhi::PixelFormat;
+    match raw {
+        0x42475241 => Some(PixelFormat::Bgra32),
+        0x52474241 => Some(PixelFormat::Rgba32),
+        0x00000020 => Some(PixelFormat::Argb32),
+        0x52476841 => Some(PixelFormat::Rgba64),
+        0x34323076 => Some(PixelFormat::Nv12VideoRange),
+        0x34323066 => Some(PixelFormat::Nv12FullRange),
+        0x32767579 => Some(PixelFormat::Uyvy422),
+        0x79757673 => Some(PixelFormat::Yuyv422),
+        0x4C303038 => Some(PixelFormat::Gray8),
+        0x00000000 => Some(PixelFormat::Unknown),
+        _ => None,
+    }
+}
+
+unsafe extern "C" fn host_gpu_lim_acquire_pixel_buffer(
+    gpu_handle: *const c_void,
+    width: u32,
+    height: u32,
+    format_raw: u32,
+    out_pool_id_buf: *mut u8,
+    out_pool_id_cap: usize,
+    out_pool_id_len: *mut usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_acquire_pixel_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "acquire_pixel_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "acquire_pixel_buffer: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let format = match pixel_format_from_raw(format_raw) {
+                Some(f) => f,
+                None => {
+                    let msg = format!(
+                        "acquire_pixel_buffer: invalid format_raw 0x{:08x}",
+                        format_raw
+                    );
+                    write_err(&msg, err_buf, err_buf_cap, err_len);
+                    return 1;
+                }
+            };
+            match gpu.acquire_pixel_buffer(width, height, format) {
+                Ok((pool_id, pb)) => {
+                    write_id_bytes(
+                        pool_id.as_str().as_bytes(),
+                        out_pool_id_buf,
+                        out_pool_id_cap,
+                        out_pool_id_len,
+                    );
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_get_pixel_buffer(
+    gpu_handle: *const c_void,
+    pool_id_ptr: *const u8,
+    pool_id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_get_pixel_buffer",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "get_pixel_buffer: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "get_pixel_buffer: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(pool_id_ptr, pool_id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "get_pixel_buffer: pool_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let pool_id = crate::core::rhi::PixelBufferPoolId::from_str(id_str);
+            match gpu.get_pixel_buffer(&pool_id) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_resolve_pixel_buffer_by_surface_id(
+    gpu_handle: *const c_void,
+    surface_id_ptr: *const u8,
+    surface_id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_resolve_pixel_buffer_by_surface_id",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "resolve_pixel_buffer_by_surface_id: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "resolve_pixel_buffer_by_surface_id: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(surface_id_ptr, surface_id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "resolve_pixel_buffer_by_surface_id: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match gpu.resolve_pixel_buffer_by_surface_id(id_str) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+/// Static [`SurfaceStoreVTable`] installed once per process. Paired
+/// with the per-SurfaceStore handle returned by
+/// [`HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`]`::surface_store`.
+pub static HOST_SURFACE_STORE_VTABLE: SurfaceStoreVTable = SurfaceStoreVTable {
+    layout_version: SURFACE_STORE_VTABLE_LAYOUT_VERSION,
+    _reserved_padding: 0,
+    clone_handle: host_ss_clone_handle,
+    drop_handle: host_ss_drop_handle,
+    connect: host_ss_connect,
+    disconnect: host_ss_disconnect,
+    check_in: host_ss_check_in,
+    check_out: host_ss_check_out,
+    register_buffer: host_ss_register_buffer,
+    lookup_buffer: host_ss_lookup_buffer,
+    release: host_ss_release,
+    register_texture: host_ss_register_texture,
+    register_pixel_buffer_with_timeline: host_ss_register_pixel_buffer_with_timeline,
+    lookup_texture: host_ss_lookup_texture,
+    update_image_layout: host_ss_update_image_layout,
+};
+
+/// Pointer to the [`SurfaceStoreVTable`] this DSO should dispatch
+/// through. Same DSO-routing rule as
+/// [`host_gpu_context_limited_access_vtable`].
+pub fn host_surface_store_vtable() -> *const SurfaceStoreVTable {
+    match host_callbacks() {
+        Some(c) if !c.surface_store_vtable.is_null() => c.surface_store_vtable,
+        _ => &HOST_SURFACE_STORE_VTABLE,
+    }
+}
+
+/// Static [`GpuContextLimitedAccessVTable`] installed once per process.
+/// Paired with the per-RuntimeContext gpu-limited handle returned by
+/// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::gpu_limited_access`.
+pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable =
+    GpuContextLimitedAccessVTable {
+        layout_version: GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
+        _reserved_padding: 0,
+        clone_handle: host_gpu_lim_clone_handle,
+        drop_handle: host_gpu_lim_drop_handle,
+        clone_pixel_buffer: host_gpu_lim_clone_pixel_buffer,
+        drop_pixel_buffer: host_gpu_lim_drop_pixel_buffer,
+        strong_count_pixel_buffer: host_gpu_lim_strong_count_pixel_buffer,
+        plane_base_address_pixel_buffer: host_gpu_lim_plane_base_address_pixel_buffer,
+        plane_size_pixel_buffer: host_gpu_lim_plane_size_pixel_buffer,
+        clone_texture: host_gpu_lim_clone_texture,
+        drop_texture: host_gpu_lim_drop_texture,
+        drop_pooled_texture_handle: host_gpu_lim_drop_pooled_texture_handle,
+        register_texture: host_gpu_lim_register_texture,
+        update_texture_registration_layout: host_gpu_lim_update_texture_registration_layout,
+        acquire_texture: host_gpu_lim_acquire_texture,
+        resolve_texture_by_surface_id: host_gpu_lim_resolve_texture_by_surface_id,
+        unregister_texture: host_gpu_lim_unregister_texture,
+        clone_storage_buffer: host_gpu_lim_clone_storage_buffer,
+        drop_storage_buffer: host_gpu_lim_drop_storage_buffer,
+        clone_uniform_buffer: host_gpu_lim_clone_uniform_buffer,
+        drop_uniform_buffer: host_gpu_lim_drop_uniform_buffer,
+        clone_vertex_buffer: host_gpu_lim_clone_vertex_buffer,
+        drop_vertex_buffer: host_gpu_lim_drop_vertex_buffer,
+        clone_index_buffer: host_gpu_lim_clone_index_buffer,
+        drop_index_buffer: host_gpu_lim_drop_index_buffer,
+        acquire_storage_buffer: host_gpu_lim_acquire_storage_buffer,
+        acquire_uniform_buffer: host_gpu_lim_acquire_uniform_buffer,
+        acquire_vertex_buffer: host_gpu_lim_acquire_vertex_buffer,
+        acquire_index_buffer: host_gpu_lim_acquire_index_buffer,
+        clone_texture_registration: host_gpu_lim_clone_texture_registration,
+        drop_texture_registration: host_gpu_lim_drop_texture_registration,
+        texture_registration_texture: host_gpu_lim_texture_registration_texture,
+        texture_registration_current_layout: host_gpu_lim_texture_registration_current_layout,
+        texture_registration_update_layout: host_gpu_lim_texture_registration_update_layout,
+        resolve_texture_registration_by_surface_id:
+            host_gpu_lim_resolve_texture_registration_by_surface_id,
+        clone_rhi_command_queue: host_gpu_lim_clone_rhi_command_queue,
+        drop_rhi_command_queue: host_gpu_lim_drop_rhi_command_queue,
+        create_command_buffer_from_queue: host_gpu_lim_create_command_buffer_from_queue,
+        drop_command_buffer: host_gpu_lim_drop_command_buffer,
+        commit_command_buffer: host_gpu_lim_commit_command_buffer,
+        commit_and_wait_command_buffer: host_gpu_lim_commit_and_wait_command_buffer,
+        copy_texture_command_buffer: host_gpu_lim_copy_texture_command_buffer,
+        command_queue: host_gpu_lim_command_queue,
+        create_command_buffer: host_gpu_lim_create_command_buffer,
+        copy_pixel_buffer_to_texture: host_gpu_lim_copy_pixel_buffer_to_texture,
+        blit_copy: host_gpu_lim_blit_copy,
+        blit_copy_iosurface: host_gpu_lim_blit_copy_iosurface,
+        surface_store: host_gpu_lim_surface_store,
+        check_out_surface: host_gpu_lim_check_out_surface,
+        acquire_pixel_buffer: host_gpu_lim_acquire_pixel_buffer,
+        get_pixel_buffer: host_gpu_lim_get_pixel_buffer,
+        resolve_pixel_buffer_by_surface_id: host_gpu_lim_resolve_pixel_buffer_by_surface_id,
+    };
+
+/// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
+/// dispatch through. Same DSO-routing rule as
+/// [`host_runtime_context_vtable`].
+pub fn host_gpu_context_limited_access_vtable() -> *const GpuContextLimitedAccessVTable {
+    match host_callbacks() {
+        Some(c) if !c.gpu_context_limited_access_vtable.is_null() => {
+            c.gpu_context_limited_access_vtable
+        }
+        _ => &HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
     }
 }
 
@@ -1280,7 +4372,8 @@ pub mod runtime_facing {
         host_iceoryx_log_emit, host_processor_register, host_pubsub_publish, host_schema_lookup,
         host_schema_register, host_tracing_emit, host_tracing_enabled,
         host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
-        HOST_RUNTIME_CONTEXT_VTABLE, HOST_RUNTIME_OPS_VTABLE,
+        HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE, HOST_RUNTIME_CONTEXT_VTABLE,
+        HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
@@ -1324,6 +4417,8 @@ pub mod runtime_facing {
             runtime_context_vtable: &HOST_RUNTIME_CONTEXT_VTABLE,
             audio_clock_vtable: &HOST_AUDIO_CLOCK_VTABLE,
             runtime_ops_vtable: &HOST_RUNTIME_OPS_VTABLE,
+            gpu_context_limited_access_vtable: &HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
+            surface_store_vtable: &HOST_SURFACE_STORE_VTABLE,
         }
     }
 }

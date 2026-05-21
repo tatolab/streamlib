@@ -766,16 +766,17 @@ fn color_info_matches_working_space(input: Option<&ColorInfo>, working: &ColorIn
 }
 
 /// One resolved input layer — texture + the registration its
-/// `current_layout` came from. Holding the `Arc<TextureRegistration>`
-/// lets the compositor update layout state (via
-/// [`TextureRegistration::update_layout`]) after the render submit
+/// `current_layout` came from. Holding the [`TextureRegistration`]
+/// (β-shape, cheap Clone via vtable refcount bump) lets the
+/// compositor update layout state via
+/// [`TextureRegistration::update_layout`] after the render submit
 /// completes.
 ///
 /// `source_color_info` is the frame's declared `ColorInfo` (if any) —
 /// used by `normalize_layer` to detect mismatches against the
 /// working space and engage the tone-mapper.
 struct ResolvedLayer {
-    registration: Arc<streamlib::sdk::context::TextureRegistration>,
+    registration: streamlib::sdk::context::TextureRegistration,
     texture: Texture,
     /// `ColorInfo` declared on the source `VideoFrame`. `None` means
     /// the producer didn't tag the frame; defaults to the working

@@ -595,26 +595,17 @@ impl RuntimeContext {
 // plumbing). They are already exported so compile-fail doc tests can
 // assert the enforcement invariants.
 
-// Phase B shim shape: `(handle, vtable)`-driven dispatch. The shim no
-// longer holds a typed `&'a RuntimeContext`; instead it stores the raw
-// host pointer + the [`RuntimeContextVTable`] reference, and every
+// Shim shape: `(handle, vtable)`-driven dispatch. The shim stores the
+// raw host pointer + the [`RuntimeContextVTable`] reference, and every
 // accessor calls through the vtable. This matches the cross-DSO ABI
-// the cdylib will use once Phase C lands and removes the residual
-// Rust trait-object crossing on the public shim surface.
+// the cdylib uses.
 //
 // Host-internal compiler ops that still need direct access to the
 // underlying `RuntimeContext` (e.g. `surface_socket_path`,
 // `iceoryx2_node`) reach it via the `host_base()` crate-internal
 // accessor. That accessor is host-only by construction: the shim is
 // only ever constructed from a real `&RuntimeContext` today, and
-// nothing outside the engine crate can call it. Phase C will introduce
-// a separate cdylib-side constructor that does NOT initialize the
-// `host_base` pointer, at which point `host_base()` becomes a typestate
-// distinction (or moves behind a host-only marker).
-//
-// Both `gpu_full` and `gpu_limited` are still embedded directly in the
-// shim. Their internals migrate to opaque-handle + vtable in Phase C
-// (#886); for Phase B they ride the existing Phase A shape.
+// nothing outside the engine crate can call it.
 
 /// Privileged-GPU [`RuntimeContext`] view passed to `setup` / `teardown` /
 /// Manual-mode `start` / `stop`. Exposes [`GpuContextFullAccess`] for
@@ -631,7 +622,7 @@ pub struct RuntimeContextFullAccess<'a> {
     /// Opaque pointer to the host-owned [`RuntimeContext`]. Threaded
     /// through every [`RuntimeContextVTable`] callback. The host's
     /// static vtable casts this back to `&RuntimeContext`; the cdylib
-    /// (post Phase C) treats it as opaque.
+    /// treats it as opaque.
     handle: *const c_void,
     /// Pointer to the host's [`RuntimeContextVTable`] (today
     /// `HOST_RUNTIME_CONTEXT_VTABLE`). Every accessor on the shim
@@ -767,11 +758,9 @@ impl<'a> RuntimeContextFullAccess<'a> {
     // ------------ Engine-internal host accessors ------------
 
     /// Direct reference to the underlying [`RuntimeContext`]. **Host-only**:
-    /// the shim is currently always constructed from a real
-    /// `&RuntimeContext`. Phase C introduces a cdylib-side constructor that
-    /// holds only the opaque handle, at which point this accessor either
-    /// gates on a typestate marker or is removed in favor of vtable-routed
-    /// equivalents. Engine compiler ops that still need direct access to
+    /// the shim is constructed from a real `&RuntimeContext`; cdylib
+    /// callers reach functionality through vtable-routed equivalents.
+    /// Engine compiler ops that need direct access to
     /// `surface_socket_path` / `iceoryx2_node` / `tokio_handle` reach
     /// them through here.
     pub(crate) fn host_base(&self) -> &RuntimeContext {

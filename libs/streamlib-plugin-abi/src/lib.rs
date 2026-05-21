@@ -94,7 +94,17 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   not exposed to plugins. Lifecycle methods are synchronous at
 ///   the trait surface; the host's lifecycle wrappers no longer
 ///   `block_on`.
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 3;
+/// - v4: [`GpuContextLimitedAccessVTable`] reference appended.
+///   The cdylib-side `GpuContextLimitedAccess` shim's
+///   `(handle, vtable)` pair sources its vtable pointer from this
+///   field. Non-null for hosts that ship a GpuContext; null
+///   otherwise (cdylib code must check before dispatching).
+/// - v5: [`SurfaceStoreVTable`] reference appended. The cdylib-side
+///   `SurfaceStore` shim's `(handle, vtable)` pair sources its
+///   vtable pointer from this field. Non-null for hosts that ship
+///   a `SurfaceStore`; null otherwise (cdylib code must check
+///   before dispatching).
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 5;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
@@ -121,6 +131,29 @@ pub const AUDIO_CLOCK_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   keeping the host's `Arc<dyn RuntimeOperations>` alive for the
 ///   shim's lifetime independently of `RuntimeContext`'s lifetime.
 pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
+
+/// Layout version of [`SurfaceStoreVTable`].
+pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
+
+/// Layout version of [`GpuContextLimitedAccessVTable`].
+///
+/// Every Arc-holding return type on the cdylib-facing surface
+/// (`PixelBuffer`, `Texture`, `PooledTextureHandle`, 4 Linux-only
+/// buffer types, `TextureRegistration`, `RhiCommandQueue`,
+/// `CommandBuffer`, `SurfaceStore`) carries its own clone/drop
+/// callback pair so refcount accounting runs in host-compiled
+/// code regardless of caller DSO. Method-dispatch callbacks
+/// cover every cdylib-callable inherent method on
+/// `GpuContextLimitedAccess`.
+///
+/// `CommandBuffer` and `PooledTextureHandle` are intentionally
+/// NOT `Clone` — `CommandBuffer` has consume-semantics
+/// `commit(self)` / `commit_and_wait(self)` (the cdylib nulls
+/// the local handle/vtable fields after dispatch so Drop becomes
+/// a no-op); `PooledTextureHandle::Drop` releases the underlying
+/// pool slot. Linux-only callbacks ship platform stubs on other
+/// triples so the vtable layout stays unconditional.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 9;
 
 // =============================================================================
 // Primitive enums
@@ -169,9 +202,10 @@ pub type HostHandle = *const c_void;
 /// lifecycle (setup / teardown / on_pause / on_resume / process /
 /// start / stop / destroy) plus the static-info, iceoryx2-wiring,
 /// and config-IO methods compiler ops invoke on every processor.
-/// Methods bodies still receive `&RuntimeContext*Access` references
-/// crossing via Rust trait-object dispatch; those are Phase B + C
-/// (see `streamlib-plugin-abi`'s parent issue).
+/// Methods bodies receive `&RuntimeContext*Access` shims whose
+/// public method surface is implemented entirely in terms of the
+/// callback tables on [`HostServices`] — no Rust trait-object or
+/// shared-struct-layout crossing at the host/cdylib boundary.
 ///
 /// # Layout discipline
 ///
@@ -313,8 +347,9 @@ pub struct ProcessorVTable {
 
     // -------------------------------------------------------------------------
     // Iceoryx2 wiring (returns Rust types via raw pointer — known
-    // source-coupling for OutputWriter / InputMailboxes; see Phase A
-    // AI Agent Notes for the deferred-flip rationale)
+    // source-coupling for OutputWriter / InputMailboxes; the host
+    // casts back via Arc::from_raw to take ownership of the strong
+    // reference the cdylib leaks)
     // -------------------------------------------------------------------------
 
     pub has_iceoryx2_outputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
@@ -386,9 +421,10 @@ unsafe impl Sync for ProcessorVTable {}
 // =============================================================================
 
 /// Dispatch table the cdylib's `RuntimeContext{Full,Limited}Access`
-/// shim uses to read host-owned runtime context state. Replaces the
-/// Rust trait-object / struct-layout-shared crossings Phase A left in
-/// place at the cdylib's `ctx.<accessor>()` boundary.
+/// shim uses to read host-owned runtime context state. Every accessor
+/// on the shim's public API routes through this table — no Rust
+/// trait-object / shared-struct-layout crossing at the cdylib
+/// boundary.
 ///
 /// # Layout discipline
 ///
@@ -399,10 +435,8 @@ unsafe impl Sync for ProcessorVTable {}
 /// # Opaque-handle returns
 ///
 /// `gpu_full_access` / `gpu_limited_access` return `*const c_void`
-/// opaque handles. Their callable surface is defined by the GpuContext
-/// callback tables (Phase C — see #886). For Phase B the handles
-/// suffice as identity tokens that the cdylib stashes and Phase C
-/// fills in.
+/// opaque handles paired with [`GpuContextLimitedAccessVTable`] for
+/// method dispatch.
 ///
 /// `audio_clock_handle` and `runtime_ops_handle` return opaque per-
 /// instance handles paired with the static vtables on [`HostServices`]
@@ -452,18 +486,20 @@ pub struct RuntimeContextVTable {
     pub should_process: unsafe extern "C" fn(ctx: *const c_void) -> bool,
 
     // -------------------------------------------------------------------------
-    // GPU context handles (Phase C wires their methods)
+    // GPU context handles
     // -------------------------------------------------------------------------
 
     /// Returns an opaque handle to the privileged [`GpuContextFullAccess`].
     /// Pointer is valid for the lifetime of the surrounding
-    /// `RuntimeContextFullAccess` shim. Phase C (#886) defines the
-    /// callback table the cdylib uses to invoke methods on the handle.
+    /// `RuntimeContextFullAccess` shim. Paired with the methods
+    /// reached via [`HostServices::gpu_context_limited_access_vtable`]
+    /// for the limited-access surface (FullAccess is engine-only
+    /// today; cross-DSO FullAccess wiring is future-phase work).
     pub gpu_full_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
 
     /// Returns an opaque handle to the restricted [`GpuContextLimitedAccess`].
-    /// Same lifetime and Phase C contract as
-    /// [`Self::gpu_full_access`].
+    /// Paired with [`HostServices::gpu_context_limited_access_vtable`]
+    /// for method dispatch.
     pub gpu_limited_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
 
     // -------------------------------------------------------------------------
@@ -649,6 +685,850 @@ pub struct RuntimeOpsVTable {
 
 unsafe impl Send for RuntimeOpsVTable {}
 unsafe impl Sync for RuntimeOpsVTable {}
+
+// =============================================================================
+// GpuContextLimitedAccessVTable — extern "C" dispatch for GpuContextLimitedAccess
+// =============================================================================
+
+/// Dispatch table for the host's `GpuContextLimitedAccess`. The
+/// cdylib obtains a handle via
+/// [`RuntimeContextVTable::gpu_limited_access`] and reads the static
+/// vtable from [`HostServices::gpu_context_limited_access_vtable`].
+///
+/// # Handle lifetime
+///
+/// `clone_handle` / `drop_handle` mirror [`RuntimeOpsVTable`] v2:
+/// `clone_handle(borrowed) -> owned` bumps the host's
+/// `Arc<GpuContext>` refcount; `drop_handle(owned)` releases. The
+/// owned handle remains valid even after the originating
+/// `RuntimeContext` is dropped, which matches the existing
+/// `GpuContextLimitedAccess: Clone` contract that lets plugins
+/// stash a clone in `setup()` and hand it to a worker thread that
+/// outlives the lifecycle call.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0 forever. New methods append
+/// to the end and bump
+/// [`GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION`].
+#[repr(C)]
+pub struct GpuContextLimitedAccessVTable {
+    /// Vtable layout version. Must equal
+    /// [`GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps the following pointer naturally
+    /// aligned on 32-bit hosts; zero today, never read).
+    pub _reserved_padding: u32,
+
+    // -------------------------------------------------------------------------
+    // Handle lifetime (mirrors RuntimeOpsVTable v2)
+    // -------------------------------------------------------------------------
+
+    /// Take a borrowed handle returned from
+    /// [`RuntimeContextVTable::gpu_limited_access`] and return a new
+    /// owned handle with an Arc refcount bump on the underlying
+    /// `Arc<GpuContext>`. The owned handle remains valid even after
+    /// the originating `RuntimeContext` is dropped, and MUST be
+    /// released exactly once via [`Self::drop_handle`].
+    pub clone_handle: unsafe extern "C" fn(borrowed_handle: *const c_void) -> *const c_void,
+
+    /// Release an owned handle previously obtained from
+    /// [`Self::clone_handle`]. Calling on a null pointer is a no-op.
+    /// Calling on the same owned handle twice is undefined behaviour
+    /// (it would double-free the Arc refcount).
+    pub drop_handle: unsafe extern "C" fn(owned_handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // PixelBuffer return-type lifetime
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `PixelBuffer` is `(handle, vtable, cached POD)` where
+    // `handle` is `Arc::into_raw(Arc<PixelBufferRef>)` produced by the
+    // host. The cdylib never touches Arc internals directly; both
+    // refcount bumps (Clone) and decrements (Drop) dispatch through
+    // these host-resident callbacks so the Arc accounting is done by
+    // host-compiled code under any rustc-minor / dep-graph drift.
+
+    /// Bump the refcount on a `PixelBuffer` handle. Called by the
+    /// cdylib's `Clone for PixelBuffer`. The handle pointer is
+    /// `Arc::into_raw(Arc<PixelBufferRef>)`-shaped; host
+    /// implementation calls `Arc::increment_strong_count(handle)`.
+    /// Calling on a null pointer is a no-op.
+    pub clone_pixel_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `PixelBuffer` handle. Called by
+    /// the cdylib's `Drop for PixelBuffer`. Host implementation
+    /// calls `Arc::decrement_strong_count(handle)`; when the
+    /// refcount reaches zero the underlying `PixelBufferRef` (and
+    /// its platform buffer) is dropped. Calling on a null pointer
+    /// is a no-op.
+    pub drop_pixel_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // PixelBuffer method-dispatch (eliminates cross-DSO Arc::from_raw)
+    // -------------------------------------------------------------------------
+    //
+    // The remaining non-cached `PixelBuffer` methods dispatch through
+    // host-compiled code so the cdylib never casts the opaque handle
+    // to a concrete `*const PixelBufferRef`. Casting the handle
+    // cdylib-side would require both sides to agree on
+    // `PixelBufferRef`'s in-memory layout — which the cdylib has no
+    // way to guarantee under rustc-minor / dep-graph drift.
+
+    /// Number of `PixelBuffer` references to the same underlying
+    /// `PixelBufferRef`. Engine-internal probe used by the host's
+    /// pool manager to detect "buffer no longer in use" without
+    /// locking. Cdylib callers technically can call it through the
+    /// vtable today, but the engine restricts the cdylib-facing
+    /// `PixelBuffer::strong_count` API to `pub(crate)` so the
+    /// cross-DSO path is host-only by visibility. Calling on a null
+    /// pointer returns `0`.
+    pub strong_count_pixel_buffer: unsafe extern "C" fn(handle: *const c_void) -> usize,
+
+    /// Mapped base address for the given plane, or null if out of
+    /// range. Plane 0 on a VMA-allocated or single-plane-imported
+    /// buffer points at the same bytes as
+    /// `slpn_gpu_surface_plane_base_address` / equivalent. Calling
+    /// on a null handle returns `null`.
+    pub plane_base_address_pixel_buffer:
+        unsafe extern "C" fn(handle: *const c_void, plane_index: u32) -> *mut u8,
+
+    /// Byte size of the given plane, or `0` if out of range. Calling
+    /// on a null handle returns `0`.
+    pub plane_size_pixel_buffer:
+        unsafe extern "C" fn(handle: *const c_void, plane_index: u32) -> u64,
+
+    // -------------------------------------------------------------------------
+    // Texture return-type lifetime
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `Texture` is `(handle, vtable, cached POD)` where
+    // `handle` is `Arc::into_raw(Arc<TextureInner>)` produced by the
+    // host. Identical Arc-lifetime contract as `PixelBuffer` —
+    // refcount accounting runs in host-compiled code so the cdylib
+    // never has to know `TextureInner`'s layout.
+
+    /// Bump the refcount on a `Texture` handle. Called by the
+    /// cdylib's `Clone for Texture`. The handle pointer is
+    /// `Arc::into_raw(Arc<TextureInner>)`-shaped; host implementation
+    /// calls `Arc::increment_strong_count(handle)`. Calling on a null
+    /// pointer is a no-op.
+    pub clone_texture: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `Texture` handle. Called by the
+    /// cdylib's `Drop for Texture`. Host implementation calls
+    /// `Arc::decrement_strong_count(handle)`; when the refcount
+    /// reaches zero the underlying `TextureInner` (and its platform
+    /// texture) is dropped. Calling on a null pointer is a no-op.
+    pub drop_texture: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // PooledTextureHandle return-type lifetime (v4 — drop-only)
+    // -------------------------------------------------------------------------
+    //
+    // `PooledTextureHandle` is deliberately NOT `Clone`: Drop must
+    // release the pool slot exactly once via the underlying
+    // `TexturePoolInner::release(slot_id)` path. The cdylib carries a
+    // `Box::into_raw(Box::new(PooledTextureHandleInner))`-shaped
+    // handle and fires `drop_pooled_texture_handle` from its `Drop`
+    // impl. There is no `clone_pooled_texture_handle` — cloning would
+    // duplicate the raw pointer and double-release the slot.
+
+    /// Release the host-side `PooledTextureHandleInner` backing a
+    /// `PooledTextureHandle`. The host runs `Box::from_raw + drop`,
+    /// which fires the inner's `Drop` impl and releases the pool
+    /// slot. Calling on a null pointer is a no-op; calling twice on
+    /// the same owned handle is undefined behaviour (double-free of
+    /// the Box plus a double-release of the pool slot).
+    pub drop_pooled_texture_handle: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // Method dispatch — Texture-related
+    // -------------------------------------------------------------------------
+    //
+    // The six methods on the cdylib's `GpuContextLimitedAccess` that
+    // touch `Texture` / `PooledTextureHandle` / `TextureRegistration`
+    // now dispatch through these callbacks instead of through the
+    // cdylib's view of `GpuContext`'s layout. Each callback's first
+    // argument is the `*const Arc<GpuContext>`-shaped handle from
+    // `RuntimeContextVTable::gpu_limited_access` (or a clone via
+    // `Self::clone_handle`).
+
+    /// Register a texture in the host's same-process texture cache.
+    /// `texture_handle` is the `*const Arc<TextureInner>` from a
+    /// cdylib-side `Texture`'s `handle` field; the host bumps the Arc
+    /// refcount (`Arc::increment_strong_count`) and inserts a clone
+    /// into the cache. The cdylib's caller still owns its `Texture`
+    /// value and continues to be responsible for its eventual Drop.
+    /// Calling with a null handle or null texture_handle is a no-op.
+    ///
+    /// `initial_layout_raw` is i32-encoded `VulkanLayout` on Linux;
+    /// non-Linux hosts ignore the layout. The "without layout" form
+    /// of the call passes `VulkanLayout::UNDEFINED` (i32 0).
+    pub register_texture: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        texture_handle: *const c_void,
+        initial_layout_raw: i32,
+    ),
+
+    /// Update a registered texture's tracked layout after a
+    /// transition. Linux-only contract on the host side; non-Linux
+    /// hosts treat this as a no-op. Calling on a missing id is a
+    /// no-op.
+    pub update_texture_registration_layout: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        layout_raw: i32,
+    ),
+
+    /// Acquire a pooled texture for the given descriptor. On success
+    /// writes a new `PooledTextureHandle` into `*out_pooled_handle`
+    /// and returns `0`. On failure writes a UTF-8 error message into
+    /// `err_buf` (clamped to `err_buf_cap`), sets `*err_len` to the
+    /// bytes written, and returns non-zero.
+    ///
+    /// The `format_raw` is the `#[repr(u32)]` discriminant of
+    /// [`streamlib_consumer_rhi::TextureFormat`]; `usage_bits` is
+    /// [`streamlib_consumer_rhi::TextureUsages::bits`].
+    pub acquire_texture: unsafe extern "C" fn(
+        handle: *const c_void,
+        width: u32,
+        height: u32,
+        format_raw: u32,
+        usage_bits: u32,
+        out_pooled_handle: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Resolve a VideoFrame's texture from its surface_id. On
+    /// success writes a new `Texture` into `*out_texture` and
+    /// returns `0`. On failure writes a UTF-8 error message into
+    /// `err_buf` and returns non-zero.
+    ///
+    /// `has_layout` is `1` when `layout_raw` carries a per-frame
+    /// `texture_layout` override, `0` for the default-resolution
+    /// path. `width` / `height` are required for the Path 3 fallback.
+    pub resolve_texture_by_surface_id: unsafe extern "C" fn(
+        handle: *const c_void,
+        surface_id_ptr: *const u8,
+        surface_id_len: usize,
+        has_layout: i32,
+        layout_raw: i32,
+        width: u32,
+        height: u32,
+        out_texture: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Remove an id from the host's same-process texture cache.
+    /// Idempotent — missing entries are a no-op.
+    pub unregister_texture: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+    ),
+
+    // -------------------------------------------------------------------------
+    // Linux-only buffer Arc-handle lifecycle
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `StorageBuffer` / `UniformBuffer` / `VertexBuffer` /
+    // `IndexBuffer` are each `(handle, vtable, byte_size, mapped_ptr)`
+    // where `handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`. All
+    // four wrap the same Arc type under the hood but keep separate
+    // Rust newtypes for binding-shape enforcement. Each gets its own
+    // clone/drop pair so the vtable structure mirrors the type
+    // structure — future-proofs against per-type divergence (a
+    // buffer growing extra state) without re-versioning a shared
+    // callback. Stub on non-Linux hosts; callable only from cdylib
+    // code that links the Linux-only buffer types.
+
+    /// Bump the refcount on a `StorageBuffer` handle.
+    /// `Arc::increment_strong_count(handle as *const HostVulkanBuffer)`.
+    pub clone_storage_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `StorageBuffer` handle.
+    pub drop_storage_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Bump the refcount on a `UniformBuffer` handle.
+    pub clone_uniform_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `UniformBuffer` handle.
+    pub drop_uniform_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Bump the refcount on a `VertexBuffer` handle.
+    pub clone_vertex_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `VertexBuffer` handle.
+    pub drop_vertex_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Bump the refcount on an `IndexBuffer` handle.
+    pub clone_index_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on an `IndexBuffer` handle.
+    pub drop_index_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // Linux-only buffer acquire methods
+    // -------------------------------------------------------------------------
+    //
+    // Each acquire callback writes a fresh `{Storage,Uniform,Vertex,
+    // Index}Buffer` into `*out_buffer` on success and returns 0; on
+    // failure writes a UTF-8 message into `err_buf` and returns
+    // non-zero. Non-Linux stubs return non-zero with a
+    // "buffer-type-not-available-on-this-platform" message.
+
+    /// Acquire a `StorageBuffer` of the given byte size.
+    pub acquire_storage_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Acquire a `UniformBuffer` of the given byte size.
+    pub acquire_uniform_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Acquire a `VertexBuffer` of the given byte size.
+    pub acquire_vertex_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Acquire an `IndexBuffer` of the given byte size.
+    pub acquire_index_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // TextureRegistration Arc-handle lifecycle
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `TextureRegistration` is `(handle, vtable)` where
+    // `handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`. Same
+    // shape as `PixelBuffer` / `Texture`'s Arc-handle pattern. Cdylibs
+    // get Arc semantics (cheap Clone via refcount bump) without ever
+    // touching the host's `Arc<T>` implementation.
+
+    /// Bump the refcount on a `TextureRegistration` handle. Host
+    /// implementation runs
+    /// `Arc::increment_strong_count(handle as *const TextureRegistrationInner)`.
+    pub clone_texture_registration: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `TextureRegistration` handle. When
+    /// the strong count reaches zero the underlying
+    /// `TextureRegistrationInner` (and its `Texture` plus
+    /// `current_layout` atomic) is dropped.
+    pub drop_texture_registration: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // TextureRegistration method dispatch
+    // -------------------------------------------------------------------------
+
+    /// Borrow the registration's underlying `Texture`. Returns a
+    /// pointer into the host's heap allocation that is alive for as
+    /// long as the caller holds the originating
+    /// `TextureRegistration` (the Arc's strong count keeps the
+    /// inner alive). The returned `Texture` is itself a layout-stable
+    /// `#[repr(C)]` value (see `core/rhi/texture.rs::Texture::tests::texture_layout`),
+    /// so the cdylib can deref the pointer directly.
+    pub texture_registration_texture:
+        unsafe extern "C" fn(handle: *const c_void) -> *const c_void,
+
+    /// Last-known `VkImageLayout` (raw `i32` enumerant). Atomic
+    /// `Acquire` load on the host side. Linux-only behaviour; non-
+    /// Linux hosts return `0` (VK_IMAGE_LAYOUT_UNDEFINED).
+    pub texture_registration_current_layout:
+        unsafe extern "C" fn(handle: *const c_void) -> i32,
+
+    /// Record a new last-known layout. Atomic `Release` store on the
+    /// host side. Linux-only behaviour; non-Linux hosts treat this
+    /// as a no-op.
+    pub texture_registration_update_layout:
+        unsafe extern "C" fn(handle: *const c_void, layout_raw: i32),
+
+    /// Resolve a VideoFrame's full registration record (texture +
+    /// layout) from its `surface_id`. On success writes a new
+    /// `TextureRegistration` into `*out_registration` and returns
+    /// `0`. On failure writes a UTF-8 error message into `err_buf`
+    /// and returns non-zero.
+    ///
+    /// `has_layout` is `1` when `layout_raw` carries a per-frame
+    /// `texture_layout` override, `0` for the default-resolution
+    /// path. `width` / `height` are required for the Path 3 fallback.
+    pub resolve_texture_registration_by_surface_id: unsafe extern "C" fn(
+        handle: *const c_void,
+        surface_id_ptr: *const u8,
+        surface_id_len: usize,
+        has_layout: i32,
+        layout_raw: i32,
+        width: u32,
+        height: u32,
+        out_registration: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // RhiCommandQueue Arc-handle lifecycle + create_command_buffer
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `RhiCommandQueue` is `(handle, vtable)` where
+    // `handle` is `Arc::into_raw(Arc<RhiCommandQueueInner>)`. Same
+    // shape as every other Arc-handle β-reshape on this vtable.
+
+    /// Bump the refcount on an `RhiCommandQueue` handle.
+    pub clone_rhi_command_queue: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on an `RhiCommandQueue` handle.
+    pub drop_rhi_command_queue: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Create a new `CommandBuffer` from a queue. On success writes a
+    /// fresh `CommandBuffer` (Box-handle β-shape) into `*out_cb` and
+    /// returns 0; on failure writes a UTF-8 error message into
+    /// `err_buf` and returns non-zero.
+    pub create_command_buffer_from_queue: unsafe extern "C" fn(
+        queue_handle: *const c_void,
+        out_cb: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // CommandBuffer lifecycle — drop + consume-semantics commits
+    // -------------------------------------------------------------------------
+    //
+    // `CommandBuffer` is single-use. Box-handle (not Arc) — no Clone.
+    // `commit` and `commit_and_wait` are consume-semantics: the host
+    // runs `Box::from_raw + commit + drop` and the cdylib nulls its
+    // local handle/vtable fields so Drop becomes a no-op afterward.
+
+    /// Release the host-side `Box<CommandBufferInner>` backing a
+    /// `CommandBuffer`. Calling on a null pointer is a no-op.
+    /// Calling twice on the same handle is undefined behaviour
+    /// (double-free of the Box).
+    pub drop_command_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Commit the command buffer for execution (consume-semantics).
+    /// Host runs `Box::from_raw + commit + drop`; the cdylib's Drop
+    /// is then a no-op (handle/vtable are nulled by the cdylib-side
+    /// `commit(self)` wrapper).
+    pub commit_command_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Commit and wait for completion (consume-semantics). Same
+    /// lifetime contract as [`Self::commit_command_buffer`].
+    pub commit_and_wait_command_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Copy one texture to another. `src` / `dst` are
+    /// `*const Texture` pointers — the layout is locked by the
+    /// per-type `texture_layout` regression test so the host's read
+    /// agrees with the cdylib's write.
+    pub copy_texture_command_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        src: *const c_void,
+        dst: *const c_void,
+    ),
+
+    // -------------------------------------------------------------------------
+    // GpuContextLimitedAccess command-queue / command-buffer / blit methods
+    // -------------------------------------------------------------------------
+
+    /// Return an owned `RhiCommandQueue` view of the host's shared
+    /// command queue (refcount bumped on the underlying
+    /// `Arc<RhiCommandQueueInner>`). Cdylib's caller releases via
+    /// `drop_rhi_command_queue`. Writes the β-shape into
+    /// `*out_queue`; returns 0 on success, non-zero on internal
+    /// failure (e.g. null gpu handle).
+    pub command_queue: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_queue: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Create a CPU-side command buffer from the shared queue. Same
+    /// shape as [`Self::create_command_buffer_from_queue`] but takes
+    /// a `GpuContext` handle rather than a queue handle —
+    /// `GpuContextLimitedAccess::create_command_buffer` is a
+    /// convenience that delegates to the engine's shared queue.
+    pub create_command_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_cb: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Copy a host-visible pixel buffer's contents into a
+    /// pre-allocated device-local texture. Linux-only on the host
+    /// side; non-Linux stubs return non-zero. `pixel_buffer` and
+    /// `texture` are `*const PixelBuffer` / `*const Texture` β-shape
+    /// pointers.
+    pub copy_pixel_buffer_to_texture: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        pixel_buffer: *const c_void,
+        texture: *const c_void,
+        surface_id_ptr: *const u8,
+        surface_id_len: usize,
+        width: u32,
+        height: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Copy pixels between same-format, same-size pixel buffers.
+    pub blit_copy: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        src: *const c_void,
+        dst: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Copy from raw IOSurface to a pixel buffer (macOS-only). The
+    /// `src_iosurface_ref` is an `IOSurfaceRef` (raw `*const c_void`).
+    /// Non-macOS hosts return non-zero with a "not available on this
+    /// platform" message.
+    pub blit_copy_iosurface: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        src_iosurface_ref: *const c_void,
+        dst_pixel_buffer: *const c_void,
+        width: u32,
+        height: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // SurfaceStore accessors
+    // -------------------------------------------------------------------------
+    //
+    // The bulk of the SurfaceStore ABI lives on its own
+    // SurfaceStoreVTable; these two callbacks bridge from
+    // GpuContextLimitedAccess to that subsystem.
+
+    /// Return an owned [`SurfaceStore`] β-shape if the host has one,
+    /// or a null-handle β-shape ("None") otherwise. Always returns 0;
+    /// callers branch on whether the written `SurfaceStore`'s handle
+    /// is null. Writes a fresh β-shape (Arc refcount bumped) into
+    /// `*out_store`.
+    pub surface_store: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_store: *mut c_void,
+    ),
+
+    /// Convenience method: check out a surface from the engine's
+    /// `SurfaceStore` by `surface_id` (assumes the store exists).
+    /// Writes a fresh `PixelBuffer` β-shape into `*out_pixel_buffer`
+    /// on success.
+    pub check_out_surface: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // PixelBuffer acquire / get / resolve method-dispatch
+    // -------------------------------------------------------------------------
+
+    /// Acquire a pixel buffer from a pre-reserved pool. The tuple
+    /// return `(PixelBufferPoolId, PixelBuffer)` is encoded via
+    /// paired out-params: `out_pool_id_buf` receives the
+    /// `PixelBufferPoolId`'s string bytes (capped at
+    /// `out_pool_id_cap`; `*out_pool_id_len` receives the actual
+    /// length, truncated to fit). `*out_pixel_buffer` receives a
+    /// fresh `PixelBuffer` β-shape on success.
+    ///
+    /// `format_raw` is the `#[repr(u32)]` discriminant of
+    /// [`streamlib_consumer_rhi::PixelFormat`].
+    pub acquire_pixel_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        width: u32,
+        height: u32,
+        format_raw: u32,
+        out_pool_id_buf: *mut u8,
+        out_pool_id_cap: usize,
+        out_pool_id_len: *mut usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Get a pixel buffer by its pool id (local-cache fast path).
+    /// `pool_id_ptr` / `pool_id_len` is the UTF-8 byte
+    /// representation of the `PixelBufferPoolId`'s inner string.
+    pub get_pixel_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        pool_id_ptr: *const u8,
+        pool_id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Resolve a VideoFrame's buffer from its `surface_id`.
+    pub resolve_pixel_buffer_by_surface_id: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        surface_id_ptr: *const u8,
+        surface_id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+}
+
+unsafe impl Send for GpuContextLimitedAccessVTable {}
+unsafe impl Sync for GpuContextLimitedAccessVTable {}
+
+// =============================================================================
+// SurfaceStoreVTable — extern "C" dispatch for cross-process surface sharing
+// =============================================================================
+
+/// Dispatch table for the host's `SurfaceStore`. The cdylib obtains a
+/// handle via [`GpuContextLimitedAccessVTable::surface_store`] and
+/// reads the static vtable from [`HostServices::surface_store_vtable`].
+///
+/// Lives in its own vtable (not folded into
+/// [`GpuContextLimitedAccessVTable`]) for two reasons:
+/// 1. **Surface-area discipline** — `SurfaceStore`'s public method
+///    surface is large (~10 methods, mixing cross-platform and
+///    Linux-only operations) and conceptually distinct from the GPU
+///    capability surface. Folding it into the parent vtable would
+///    nearly double `GpuContextLimitedAccessVTable`'s size without
+///    adding semantic clarity.
+/// 2. **Separate-vtable-per-subsystem precedent** — `AudioClockVTable`
+///    already lives outside `RuntimeContextVTable` at the
+///    `HostServices` level (via
+///    [`HostServices::audio_clock_vtable`]); the same shape
+///    applies here.
+///
+/// # Handle lifetime
+///
+/// `clone_handle` / `drop_handle` mirror every other Arc-handle β-
+/// reshape: `clone_handle(borrowed) -> owned` bumps the host's
+/// `Arc<SurfaceStoreInner>` refcount; `drop_handle(owned)` releases.
+/// The owned handle remains valid even after the originating
+/// `RuntimeContext` is dropped — matches the existing
+/// `SurfaceStore: Clone` contract.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0. New methods append to the
+/// end and bump [`SURFACE_STORE_VTABLE_LAYOUT_VERSION`].
+#[repr(C)]
+pub struct SurfaceStoreVTable {
+    /// Vtable layout version. Must equal
+    /// [`SURFACE_STORE_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps following pointers naturally aligned;
+    /// zero today, never read).
+    pub _reserved_padding: u32,
+
+    // -------------------------------------------------------------------------
+    // Handle lifetime
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `SurfaceStore` handle.
+    /// `Arc::increment_strong_count(handle as *const SurfaceStoreInner)`.
+    pub clone_handle: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `SurfaceStore` handle. When the
+    /// strong count reaches zero the underlying connection / cache
+    /// state is dropped.
+    pub drop_handle: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // Cross-platform method dispatch
+    // -------------------------------------------------------------------------
+
+    /// Connect to the surface-share service (XPC on macOS, Unix
+    /// socket on Linux). On success returns 0; on failure writes a
+    /// UTF-8 error into `err_buf` and returns non-zero.
+    pub connect: unsafe extern "C" fn(
+        handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Disconnect from the surface-share service.
+    pub disconnect: unsafe extern "C" fn(
+        handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Check in a pixel buffer for cross-process sharing. The
+    /// returned `surface_id` is written into `out_id_buf` (capped at
+    /// `out_id_cap`); the actual length is stored in `*out_id_len`.
+    /// Truncation returns the required length without writing.
+    pub check_in: unsafe extern "C" fn(
+        handle: *const c_void,
+        pixel_buffer: *const c_void,
+        out_id_buf: *mut u8,
+        out_id_cap: usize,
+        out_id_len: *mut usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Check out a surface by its `surface_id`. On success writes a
+    /// `PixelBuffer` β-shape into `*out_pixel_buffer` and returns 0.
+    pub check_out: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Register a pre-allocated buffer under the given pool id.
+    pub register_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        pool_id_ptr: *const u8,
+        pool_id_len: usize,
+        pixel_buffer: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Look up a previously-registered buffer by its pool id. Writes
+    /// a `PixelBuffer` β-shape into `*out_pixel_buffer` on success.
+    pub lookup_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        pool_id_ptr: *const u8,
+        pool_id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Release a checked-out surface by its `surface_id`. Idempotent.
+    pub release: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Linux-only method dispatch (stub on other platforms)
+    // -------------------------------------------------------------------------
+    //
+    // `register_texture` / `register_pixel_buffer_with_timeline` /
+    // `lookup_texture` / `update_image_layout` are Linux-only on the
+    // host side (they wrap DMA-BUF / OPAQUE_FD surface-share IPC).
+    // Non-Linux hosts ship stubs that return non-zero with a clean
+    // error message.
+
+    /// Register a texture for cross-process sharing. `texture` is a
+    /// `*const Texture` β-shape pointer; `timeline_handle` is an
+    /// opaque `Arc<HostVulkanTimelineSemaphore>` pointer (null for
+    /// "no timeline") — engine-only, cdylibs pass null. `layout_raw`
+    /// is the i32 `VkImageLayout` enumerant.
+    pub register_texture: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        texture: *const c_void,
+        timeline_handle: *const c_void,
+        layout_raw: i32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Register a pixel buffer with an optional timeline-semaphore
+    /// sidecar. Same `timeline_handle` shape as
+    /// [`Self::register_texture`].
+    pub register_pixel_buffer_with_timeline: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        pixel_buffer: *const c_void,
+        timeline_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Look up a registered texture by `surface_id`. Writes a
+    /// `Texture` β-shape into `*out_texture` and the producer's
+    /// last-published `VkImageLayout` (raw i32) into `*out_layout_raw`.
+    pub lookup_texture: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        out_texture: *mut c_void,
+        out_layout_raw: *mut i32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Update the published `VkImageLayout` for an already-registered
+    /// texture. Linux-only on the host side.
+    pub update_image_layout: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        layout_raw: i32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+}
+
+unsafe impl Send for SurfaceStoreVTable {}
+unsafe impl Sync for SurfaceStoreVTable {}
 
 // =============================================================================
 // HostServices — the callback table
@@ -845,6 +1725,28 @@ pub struct HostServices {
     /// [`RuntimeContextVTable::runtime_ops_handle`]. Set once at
     /// install time; never null for v3+ HostServices payloads.
     pub runtime_ops_vtable: *const RuntimeOpsVTable,
+
+    // -------------------------------------------------------------------------
+    // GpuContext vtable surface
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for the host's `GpuContextLimitedAccess`.
+    /// Paired with the per-instance handle returned by
+    /// [`RuntimeContextVTable::gpu_limited_access`]. Set once at
+    /// install time; non-null for hosts that ship a GpuContext,
+    /// null otherwise (cdylib must check before dispatching).
+    pub gpu_context_limited_access_vtable: *const GpuContextLimitedAccessVTable,
+
+    // -------------------------------------------------------------------------
+    // SurfaceStore vtable surface
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for the host's `SurfaceStore`. Paired
+    /// with the per-`SurfaceStore` handle returned by
+    /// [`GpuContextLimitedAccessVTable::surface_store`]. Set once at
+    /// install time; non-null for hosts that ship a `SurfaceStore`,
+    /// null otherwise (cdylib must check before dispatching).
+    pub surface_store_vtable: *const SurfaceStoreVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -962,39 +1864,289 @@ mod layout_tests {
     }
 
     #[test]
-    fn host_services_v3_layout_version_is_bumped() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 3);
+    fn host_services_layout_versions_pinned() {
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 5);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 9);
+        assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_v3_tail_carries_three_vtable_pointers() {
-        // The v3 additions live at the tail of HostServices. We don't
-        // pin the absolute offsets (earlier fields are subject to
-        // their own pre-v3 layout audit), but we do pin:
+    fn host_services_tail_carries_five_vtable_pointers() {
+        // Trailing vtable pointers on HostServices. We don't pin the
+        // absolute offsets (earlier fields carry their own layout
+        // audit), but we do pin:
         //   1. Each vtable is a single 8-byte pointer.
-        //   2. They appear in the order RuntimeContext → AudioClock → RuntimeOps.
+        //   2. They appear in the order RuntimeContext → AudioClock →
+        //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore.
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
         assert_eq!(size_of::<*const RuntimeOpsVTable>(), 8);
+        assert_eq!(size_of::<*const GpuContextLimitedAccessVTable>(), 8);
+        assert_eq!(size_of::<*const SurfaceStoreVTable>(), 8);
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
         let runtime_ops_off = offset_of!(HostServices, runtime_ops_vtable);
+        let gpu_lim_off = offset_of!(HostServices, gpu_context_limited_access_vtable);
+        let surface_store_off = offset_of!(HostServices, surface_store_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
+        assert!(runtime_ops_off < gpu_lim_off);
+        assert!(gpu_lim_off < surface_store_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
+        assert_eq!(gpu_lim_off - runtime_ops_off, 8);
+        assert_eq!(surface_store_off - gpu_lim_off, 8);
 
-        // The runtime-ops pointer must end at the end of the struct
-        // (it is the last field added in v3).
-        assert_eq!(runtime_ops_off + 8, size_of::<HostServices>());
+        // The surface-store pointer must end at the end of the
+        // struct (it is the last field added in v5).
+        assert_eq!(surface_store_off + 8, size_of::<HostServices>());
+    }
+
+    #[test]
+    fn gpu_context_limited_access_vtable_layout() {
+        // layout_version (u32) + _reserved_padding (u32) + 50 fn
+        // pointers (8 bytes each) = 4 + 4 + 400 = 408 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 408);
+        assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, _reserved_padding),
+            4
+        );
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, clone_handle), 8);
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, drop_handle), 16);
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_pixel_buffer),
+            24
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_pixel_buffer),
+            32
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, strong_count_pixel_buffer),
+            40
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, plane_base_address_pixel_buffer),
+            48
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, plane_size_pixel_buffer),
+            56
+        );
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, clone_texture), 64);
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, drop_texture), 72);
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_pooled_texture_handle),
+            80
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, register_texture),
+            88
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                update_texture_registration_layout
+            ),
+            96
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_texture),
+            104
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, resolve_texture_by_surface_id),
+            112
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, unregister_texture),
+            120
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_storage_buffer),
+            128
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_storage_buffer),
+            136
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_uniform_buffer),
+            144
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_uniform_buffer),
+            152
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_vertex_buffer),
+            160
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_vertex_buffer),
+            168
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_index_buffer),
+            176
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_index_buffer),
+            184
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_storage_buffer),
+            192
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_uniform_buffer),
+            200
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_vertex_buffer),
+            208
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_index_buffer),
+            216
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_texture_registration),
+            224
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_texture_registration),
+            232
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, texture_registration_texture),
+            240
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                texture_registration_current_layout
+            ),
+            248
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                texture_registration_update_layout
+            ),
+            256
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                resolve_texture_registration_by_surface_id
+            ),
+            264
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_rhi_command_queue),
+            272
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_rhi_command_queue),
+            280
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                create_command_buffer_from_queue
+            ),
+            288
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_command_buffer),
+            296
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, commit_command_buffer),
+            304
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, commit_and_wait_command_buffer),
+            312
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, copy_texture_command_buffer),
+            320
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, command_queue),
+            328
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, create_command_buffer),
+            336
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, copy_pixel_buffer_to_texture),
+            344
+        );
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, blit_copy), 352);
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, blit_copy_iosurface),
+            360
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, surface_store),
+            368
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, check_out_surface),
+            376
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_pixel_buffer),
+            384
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, get_pixel_buffer),
+            392
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, resolve_pixel_buffer_by_surface_id),
+            400
+        );
+    }
+
+    #[test]
+    fn surface_store_vtable_layout() {
+        // layout_version (u32) + _reserved_padding (u32) + 13 fn
+        // pointers (8 bytes each) = 4 + 4 + 104 = 112 bytes.
+        assert_eq!(size_of::<SurfaceStoreVTable>(), 112);
+        assert_eq!(align_of::<SurfaceStoreVTable>(), 8);
+        assert_eq!(offset_of!(SurfaceStoreVTable, layout_version), 0);
+        assert_eq!(offset_of!(SurfaceStoreVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(SurfaceStoreVTable, clone_handle), 8);
+        assert_eq!(offset_of!(SurfaceStoreVTable, drop_handle), 16);
+        assert_eq!(offset_of!(SurfaceStoreVTable, connect), 24);
+        assert_eq!(offset_of!(SurfaceStoreVTable, disconnect), 32);
+        assert_eq!(offset_of!(SurfaceStoreVTable, check_in), 40);
+        assert_eq!(offset_of!(SurfaceStoreVTable, check_out), 48);
+        assert_eq!(offset_of!(SurfaceStoreVTable, register_buffer), 56);
+        assert_eq!(offset_of!(SurfaceStoreVTable, lookup_buffer), 64);
+        assert_eq!(offset_of!(SurfaceStoreVTable, release), 72);
+        assert_eq!(offset_of!(SurfaceStoreVTable, register_texture), 80);
+        assert_eq!(
+            offset_of!(SurfaceStoreVTable, register_pixel_buffer_with_timeline),
+            88
+        );
+        assert_eq!(offset_of!(SurfaceStoreVTable, lookup_texture), 96);
+        assert_eq!(offset_of!(SurfaceStoreVTable, update_image_layout), 104);
     }
 
     /// Compile-time witnesses that the vtable types are Send + Sync.
@@ -1006,6 +2158,8 @@ mod layout_tests {
         assert_send_sync::<RuntimeContextVTable>();
         assert_send_sync::<AudioClockVTable>();
         assert_send_sync::<RuntimeOpsVTable>();
+        assert_send_sync::<GpuContextLimitedAccessVTable>();
+        assert_send_sync::<SurfaceStoreVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
     }

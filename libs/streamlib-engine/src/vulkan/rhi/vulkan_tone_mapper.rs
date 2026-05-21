@@ -259,9 +259,7 @@ mod tests {
             label: Some("tone-mapper-test-input"),
         };
         let host_tex = HostVulkanTexture::new(device, &desc).expect("texture");
-        let texture = Texture {
-            inner: Arc::new(host_tex),
-        };
+        let texture = <Texture as crate::host_rhi::HostTextureExt>::from_vulkan(host_tex);
 
         let dev = device.device();
         let queue = device.queue();
@@ -303,7 +301,10 @@ mod tests {
                 .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
                 .src_queue_family_index(qf)
                 .dst_queue_family_index(qf)
-                .image(texture.inner.image().expect("vk image"))
+                .image({
+                    use crate::host_rhi::HostTextureExt;
+                    texture.vulkan_inner().image().expect("vk image")
+                })
                 .subresource_range(
                     vk::ImageSubresourceRange::builder()
                         .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -333,7 +334,10 @@ mod tests {
             dev.cmd_copy_buffer_to_image(
                 cmd,
                 staging.buffer(),
-                texture.inner.image().expect("vk image"),
+                {
+                    use crate::host_rhi::HostTextureExt;
+                    texture.vulkan_inner().image().expect("vk image")
+                },
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &regions,
             );
@@ -346,7 +350,10 @@ mod tests {
                 .new_layout(vk::ImageLayout::GENERAL)
                 .src_queue_family_index(qf)
                 .dst_queue_family_index(qf)
-                .image(texture.inner.image().expect("vk image"))
+                .image({
+                    use crate::host_rhi::HostTextureExt;
+                    texture.vulkan_inner().image().expect("vk image")
+                })
                 .subresource_range(
                     vk::ImageSubresourceRange::builder()
                         .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -390,9 +397,7 @@ mod tests {
             label: Some("tone-mapper-test-output"),
         };
         let host_tex = HostVulkanTexture::new(device, &desc).expect("texture");
-        Texture {
-            inner: Arc::new(host_tex),
-        }
+        <Texture as crate::host_rhi::HostTextureExt>::from_vulkan(host_tex)
     }
 
     /// Convert a CPU-reference HDR PQ pixel into the BGRA8 byte triple

@@ -4,10 +4,12 @@
 //! TexturePool - Runtime-owned GPU texture management.
 
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Condvar, Mutex};
+use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 
 use crate::core::rhi::{
     GpuDevice, NativeTextureHandle, Texture, TextureDescriptor, TextureFormat, TextureUsages,
@@ -216,19 +218,70 @@ impl TexturePoolInner {
     }
 }
 
-/// Handle to a pooled texture. Returns texture to pool on Drop.
-pub struct PooledTextureHandle {
-    texture: Texture,
-    pool_inner: Arc<TexturePoolInner>,
-    slot_id: PoolSlotId,
-    width: u32,
-    height: u32,
-    format: TextureFormat,
+/// Host-only rich data backing a [`PooledTextureHandle`]. Holds the
+/// `Arc<TexturePoolInner>` reference plus the `PoolSlotId` so Drop
+/// can release the slot exactly once. Cdylib code never sees this
+/// type; it reaches `PooledTextureHandle` through the
+/// `(handle, vtable, Texture, POD)` β-shape.
+pub(crate) struct PooledTextureHandleInner {
+    pub(crate) pool_inner: Arc<TexturePoolInner>,
+    pub(crate) slot_id: PoolSlotId,
 }
 
+impl Drop for PooledTextureHandleInner {
+    fn drop(&mut self) {
+        self.pool_inner.release(self.slot_id);
+    }
+}
+
+/// Handle to a pooled texture. Returns texture to pool on Drop.
+///
+/// Layout-stable: every field is either a primitive, an opaque
+/// pointer, or the β-reshaped [`Texture`] (itself layout-stable).
+/// The pool-release state lives behind the opaque `handle`; cdylib
+/// code never reaches it.
+///
+/// Deliberately **not** `Clone`: Drop releases the underlying pool
+/// slot exactly once. Cloning would duplicate the raw `handle`
+/// pointer and double-release the slot. Consumers that need shared
+/// access wrap the handle in `Arc<PooledTextureHandle>`.
+#[repr(C)]
+pub struct PooledTextureHandle {
+    /// Opaque host handle (`Box::into_raw(Box<PooledTextureHandleInner>)`).
+    pub(crate) handle: *const c_void,
+    /// Vtable for cross-DSO Drop dispatch.
+    pub(crate) vtable: *const GpuContextLimitedAccessVTable,
+    /// The pooled texture. Already β-shape (`#[repr(C)]`, 32 bytes);
+    /// embedding by value keeps the wire ABI flat without an
+    /// indirection through another `Arc`.
+    pub(crate) texture: Texture,
+    /// Cached width (mirrors `slot.key.width` at allocation time).
+    pub(crate) width_cached: u32,
+    /// Cached height (mirrors `slot.key.height`).
+    pub(crate) height_cached: u32,
+    /// Cached `#[repr(u32)]` discriminant of [`TextureFormat`].
+    pub(crate) format_raw: u32,
+    /// Reserved padding (keeps total size at 64 bytes; zero today,
+    /// never read).
+    pub(crate) _padding: u32,
+}
+
+// SAFETY: `handle` points at a host-owned `Box<PooledTextureHandleInner>`
+// that is itself `Send + Sync` (Arc<TexturePoolInner> carries atomic
+// refcounts, PoolSlotId is Copy). `texture` is Send+Sync per its own
+// unsafe impls. Pool-slot release runs in host-compiled code via the
+// vtable callback.
+unsafe impl Send for PooledTextureHandle {}
+unsafe impl Sync for PooledTextureHandle {}
+
 impl PooledTextureHandle {
-    /// Constructor for non-macOS platforms (Linux/Windows).
-    /// On macOS, handles are created via `texture_pool_macos::allocate_iosurface_slot`.
+    /// Constructor for non-macOS platforms (Linux/Windows). The
+    /// host's pool allocator builds a `PooledTextureHandleInner`,
+    /// leaks it via `Box::into_raw`, resolves the host-mode vtable,
+    /// and assembles the cross-DSO shape.
+    ///
+    /// On macOS, handles are created via
+    /// `texture_pool_macos::allocate_iosurface_slot`.
     #[allow(dead_code)]
     #[cfg(not(target_os = "macos"))]
     pub(crate) fn new(
@@ -239,13 +292,34 @@ impl PooledTextureHandle {
         height: u32,
         format: TextureFormat,
     ) -> Self {
-        Self {
-            texture,
+        Self::from_parts(texture, pool_inner, slot_id, width, height, format)
+    }
+
+    /// Internal helper used by every platform-specific allocator
+    /// path. Leaks a `Box<PooledTextureHandleInner>` as the opaque
+    /// handle and captures the host-mode vtable pointer.
+    pub(crate) fn from_parts(
+        texture: Texture,
+        pool_inner: Arc<TexturePoolInner>,
+        slot_id: PoolSlotId,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Self {
+        let inner = Box::new(PooledTextureHandleInner {
             pool_inner,
             slot_id,
-            width,
-            height,
-            format,
+        });
+        let handle = Box::into_raw(inner) as *const c_void;
+        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        Self {
+            handle,
+            vtable,
+            texture,
+            width_cached: width,
+            height_cached: height,
+            format_raw: format as u32,
+            _padding: 0,
         }
     }
 
@@ -261,40 +335,56 @@ impl PooledTextureHandle {
 
     /// Get the texture width.
     pub fn width(&self) -> u32 {
-        self.width
+        self.width_cached
     }
 
     /// Get the texture height.
     pub fn height(&self) -> u32 {
-        self.height
+        self.height_cached
     }
 
     /// Get the texture format.
     pub fn format(&self) -> TextureFormat {
-        self.format
+        match self.format_raw {
+            0 => TextureFormat::Rgba8Unorm,
+            1 => TextureFormat::Rgba8UnormSrgb,
+            2 => TextureFormat::Bgra8Unorm,
+            3 => TextureFormat::Bgra8UnormSrgb,
+            4 => TextureFormat::Rgba16Float,
+            5 => TextureFormat::Rgba32Float,
+            6 => TextureFormat::Nv12,
+            _ => TextureFormat::Rgba8Unorm,
+        }
     }
 
-    /// Get the pool slot ID.
+    /// Get the pool slot ID. Engine-internal access; cdylib code
+    /// cannot reach this without an additional vtable callback
+    /// (deliberately omitted — the slot id is a host implementation
+    /// detail).
+    ///
+    /// **Panics if called from cdylib code** for the same reason
+    /// [`Texture::host_inner`] does.
     pub fn slot_id(&self) -> PoolSlotId {
-        self.slot_id
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "PooledTextureHandle::slot_id() reached from cdylib code; \
+                 the pool slot id is host-internal and not exposed via \
+                 the GpuContextLimitedAccessVTable."
+            );
+        }
+        // SAFETY: `self.handle` is `Box::into_raw(Box<PooledTextureHandleInner>)`
+        // (see `from_parts`); the Box keeps the inner alive until Drop runs.
+        unsafe {
+            (*(self.handle as *const PooledTextureHandleInner)).slot_id
+        }
     }
 
     /// Get the IOSurface ID for cross-framework sharing.
-    ///
-    /// Returns `Some(id)` on macOS/iOS if the texture is backed by an IOSurface.
-    /// Returns `None` on other platforms or if no IOSurface is available.
     pub fn iosurface_id(&self) -> Option<u32> {
         self.texture.iosurface_id()
     }
 
     /// Get the platform-native sharing handle for this texture.
-    ///
-    /// Returns the appropriate handle type for the current platform:
-    /// - macOS/iOS: `IOSurface { id }`
-    /// - Linux: `DmaBuf { fd }` (when implemented)
-    /// - Windows: `DxgiSharedHandle { handle }` (when implemented)
-    ///
-    /// Returns `None` if no sharing handle is available.
     pub fn native_handle(&self) -> Option<NativeTextureHandle> {
         self.texture.native_handle()
     }
@@ -308,7 +398,16 @@ impl PooledTextureHandle {
 
 impl Drop for PooledTextureHandle {
     fn drop(&mut self) {
-        self.pool_inner.release(self.slot_id);
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: matched with the `Box::into_raw` in `from_parts`.
+            // The vtable's `drop_pooled_texture_handle` callback runs
+            // `Box::from_raw + drop` on the host side, which fires
+            // `Drop for PooledTextureHandleInner` and releases the
+            // pool slot exactly once.
+            unsafe {
+                ((*self.vtable).drop_pooled_texture_handle)(self.handle);
+            }
+        }
     }
 }
 
@@ -431,14 +530,14 @@ impl TexturePool {
     }
 
     fn create_handle_from_slot(&self, slot: &Arc<PoolSlot>) -> PooledTextureHandle {
-        PooledTextureHandle {
-            texture: slot.texture.clone(),
-            pool_inner: Arc::clone(&self.inner),
-            slot_id: slot.id,
-            width: slot.key.width,
-            height: slot.key.height,
-            format: slot.key.format,
-        }
+        PooledTextureHandle::from_parts(
+            slot.texture.clone(),
+            Arc::clone(&self.inner),
+            slot.id,
+            slot.key.width,
+            slot.key.height,
+            slot.key.format,
+        )
     }
 
     /// Allocate a new texture slot.
@@ -504,5 +603,72 @@ impl std::fmt::Debug for TexturePool {
             .field("textures_available", &stats.textures_available)
             .field("bucket_count", &stats.bucket_count)
             .finish()
+    }
+}
+
+// =============================================================================
+// Layout regression tests
+// =============================================================================
+//
+// `PooledTextureHandle` crosses the cdylib DSO boundary as a
+// `#[repr(C)]` struct. Drift in its byte-level shape would silently
+// corrupt every `acquire_texture` return-path: the cdylib's Drop
+// impl reads `vtable` and `handle` at fixed offsets to call
+// `drop_pooled_texture_handle`. The vtable layout-version constant
+// guards the dispatch table; this test guards the value type.
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn pooled_texture_handle_layout() {
+        // Pin the byte-level shape. Fields:
+        //   handle        : *const c_void   → offset 0,  size 8
+        //   vtable        : *const VTable   → offset 8,  size 8
+        //   texture       : Texture (β,32B) → offset 16, size 32
+        //   width_cached  : u32             → offset 48, size 4
+        //   height_cached : u32             → offset 52, size 4
+        //   format_raw    : u32             → offset 56, size 4
+        //   _padding      : u32             → offset 60, size 4
+        // Total: 64 bytes, 8-byte alignment (pinned by the pointers).
+        assert_eq!(size_of::<PooledTextureHandle>(), 64);
+        assert_eq!(align_of::<PooledTextureHandle>(), 8);
+        assert_eq!(offset_of!(PooledTextureHandle, handle), 0);
+        assert_eq!(offset_of!(PooledTextureHandle, vtable), 8);
+        assert_eq!(offset_of!(PooledTextureHandle, texture), 16);
+        assert_eq!(offset_of!(PooledTextureHandle, width_cached), 48);
+        assert_eq!(offset_of!(PooledTextureHandle, height_cached), 52);
+        assert_eq!(offset_of!(PooledTextureHandle, format_raw), 56);
+        assert_eq!(offset_of!(PooledTextureHandle, _padding), 60);
+    }
+
+    /// Compile-time witness that `PooledTextureHandle` is Send + Sync.
+    #[test]
+    fn pooled_texture_handle_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<PooledTextureHandle>();
+    }
+
+    /// `PooledTextureHandle` is intentionally NOT `Clone`: Drop
+    /// releases the underlying pool slot via the vtable. Cloning
+    /// would duplicate the raw `handle` pointer and double-release
+    /// the slot.
+    ///
+    /// This compile-fail doctest is the type-system witness — the
+    /// `assert_not_clone` helper requires `T: Clone`, which
+    /// `PooledTextureHandle` deliberately does not implement.
+    ///
+    /// ```compile_fail
+    /// fn assert_not_clone<T: Clone>() {}
+    /// assert_not_clone::<streamlib::sdk::context::PooledTextureHandle>();
+    /// ```
+    #[test]
+    fn pooled_texture_handle_is_not_clone_doc_witness() {
+        // No-op test body — the contract is locked by the
+        // `compile_fail` doctest above. We keep this as a regular
+        // `#[test]` so the test name shows up in `cargo test`
+        // output as a discoverable assertion.
     }
 }

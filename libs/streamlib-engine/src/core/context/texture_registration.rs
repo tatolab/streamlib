@@ -3,13 +3,19 @@
 
 //! Engine-wide per-surface texture registration record.
 //!
+//! Layout-stable `(handle, vtable)` shape so the type crosses the
+//! cdylib DSO boundary. The handle is
+//! `Arc::into_raw(Arc<TextureRegistrationInner>)`; the vtable's
+//! `clone_texture_registration` / `drop_texture_registration`
+//! callbacks manage the Arc refcount in host-compiled code.
+//!
 //! Stored in [`crate::core::context::GpuContext`]'s same-process texture
 //! cache, keyed by `surface_id`. Mirrors the per-surface state pattern
 //! the surface adapters already use (see
 //! `streamlib-adapter-vulkan::SurfaceState::current_layout`) but lifted
 //! to the engine-wide cache so consumers reaching textures via
-//! `resolve_texture_registration_by_surface_id` get the same lifecycle metadata
-//! adapter consumers do.
+//! `resolve_texture_registration_by_surface_id` get the same lifecycle
+//! metadata adapter consumers do.
 //!
 //! On Linux the registration carries the texture's last-known
 //! `VkImageLayout` so consumers can issue a correct
@@ -17,7 +23,10 @@
 //! texture is held — Metal manages texture state automatically and
 //! Vulkan layouts don't apply.
 
+use std::ffi::c_void;
 use std::sync::Arc;
+
+use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 
 use crate::core::rhi::Texture;
 
@@ -26,10 +35,11 @@ use std::sync::atomic::{AtomicI32, Ordering};
 #[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::VulkanLayout;
 
-/// Per-surface registration record held by [`crate::core::context::GpuContext`]'s
-/// texture cache.
-pub struct TextureRegistration {
-    texture: Texture,
+/// Host-only rich data backing a [`TextureRegistration`]. Cdylib code
+/// never sees this type; it reaches the public [`TextureRegistration`]
+/// surface through the `(handle, vtable)` β-shape.
+pub(crate) struct TextureRegistrationInner {
+    pub(crate) texture: Texture,
     /// Last-known Vulkan image layout. Producers update after their
     /// final layout transition; consumers read before issuing their
     /// own barrier and update after.
@@ -40,40 +50,189 @@ pub struct TextureRegistration {
     /// update; the field tracks "best-known stable layout for the
     /// next reader."
     #[cfg(target_os = "linux")]
-    current_layout: AtomicI32,
+    pub(crate) current_layout: AtomicI32,
 }
+
+/// Per-surface registration record held by
+/// [`crate::core::context::GpuContext`]'s texture cache.
+///
+/// Layout-stable: `#[repr(C)] (handle, vtable)`. Clone dispatches
+/// through the vtable's `clone_texture_registration` callback
+/// (`Arc::increment_strong_count` host-side); Drop dispatches
+/// through `drop_texture_registration`. Cheap to clone — the same
+/// shape as `Arc::clone` semantically, just with the refcount
+/// bookkeeping running in host-compiled code regardless of caller
+/// DSO.
+#[repr(C)]
+pub struct TextureRegistration {
+    /// Opaque handle to the host's `Arc<TextureRegistrationInner>`
+    /// (produced by `Arc::into_raw`).
+    pub(crate) handle: *const c_void,
+    /// Vtable for cross-DSO Clone/Drop and method dispatch.
+    pub(crate) vtable: *const GpuContextLimitedAccessVTable,
+}
+
+// SAFETY: `handle` points at an `Arc<TextureRegistrationInner>` whose
+// interior is Send+Sync (Texture is Send+Sync per its own unsafe
+// impls; AtomicI32 is Send+Sync by definition). Refcount management
+// crosses the cdylib boundary through the vtable but runs in
+// host-compiled code regardless.
+unsafe impl Send for TextureRegistration {}
+unsafe impl Sync for TextureRegistration {}
 
 impl TextureRegistration {
     /// Construct a registration with an initial layout.
     #[cfg(target_os = "linux")]
-    pub fn new(texture: Texture, initial_layout: VulkanLayout) -> Arc<Self> {
-        Arc::new(Self {
+    pub fn new(texture: Texture, initial_layout: VulkanLayout) -> Self {
+        let inner = TextureRegistrationInner {
             texture,
             current_layout: AtomicI32::new(initial_layout.0),
-        })
+        };
+        Self::from_arc_into_raw(Arc::new(inner))
     }
 
     /// Construct a registration on platforms without Vulkan layout tracking.
     #[cfg(not(target_os = "linux"))]
-    pub fn new(texture: Texture) -> Arc<Self> {
-        Arc::new(Self { texture })
+    pub fn new(texture: Texture) -> Self {
+        let inner = TextureRegistrationInner { texture };
+        Self::from_arc_into_raw(Arc::new(inner))
+    }
+
+    /// Internal helper: leak an initial Arc strong count via
+    /// `Arc::into_raw`, resolve the host-mode vtable, and assemble
+    /// the cross-DSO shape.
+    pub(crate) fn from_arc_into_raw(arc: Arc<TextureRegistrationInner>) -> Self {
+        let handle = Arc::into_raw(arc) as *const c_void;
+        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        Self { handle, vtable }
+    }
+
+    /// Engine-internal borrow of the host-owned `TextureRegistrationInner`.
+    /// **Panics if called from cdylib code.**
+    pub(crate) fn host_inner(&self) -> &TextureRegistrationInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "TextureRegistration::host_inner() reached from cdylib code; this \
+                 method must dispatch through the GpuContextLimitedAccessVTable. \
+                 The panic is caught by run_host_extern_c at the FFI boundary."
+            );
+        }
+        // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`.
+        // The leaked strong count keeps the inner alive at least until Drop.
+        unsafe { &*(self.handle as *const TextureRegistrationInner) }
     }
 
     /// Borrow the underlying texture.
+    ///
+    /// Dispatches through the vtable's
+    /// [`GpuContextLimitedAccessVTable::texture_registration_texture`]
+    /// callback so cdylib code never touches the host's
+    /// `TextureRegistrationInner` layout. The returned reference is
+    /// valid for the lifetime of `self` — the host's `Arc` keeps the
+    /// inner alive.
     pub fn texture(&self) -> &Texture {
-        &self.texture
+        if self.handle.is_null() || self.vtable.is_null() {
+            panic!(
+                "TextureRegistration::texture() called on a null-handle registration"
+            );
+        }
+        // SAFETY: vtable + handle were paired at construction; the
+        // callback returns a `*const Texture` pointer (typed as
+        // `*const c_void` at the FFI boundary) into the Arc's heap
+        // allocation. The pointer is alive as long as `self` is —
+        // the Arc's strong count keeps the inner alive. `Texture` is
+        // a layout-stable `#[repr(C)]` value (locked by the
+        // `texture_layout` regression test) so cdylib and host see
+        // the same byte shape.
+        unsafe {
+            let ptr = ((*self.vtable).texture_registration_texture)(self.handle);
+            &*(ptr as *const Texture)
+        }
     }
 
     /// Last-known `VkImageLayout` the texture is in.
+    ///
+    /// Dispatches through the vtable's
+    /// [`GpuContextLimitedAccessVTable::texture_registration_current_layout`]
+    /// callback.
     #[cfg(target_os = "linux")]
     pub fn current_layout(&self) -> VulkanLayout {
-        VulkanLayout(self.current_layout.load(Ordering::Acquire))
+        if self.handle.is_null() || self.vtable.is_null() {
+            return VulkanLayout::UNDEFINED;
+        }
+        // SAFETY: vtable + handle were paired at construction.
+        let raw = unsafe { ((*self.vtable).texture_registration_current_layout)(self.handle) };
+        VulkanLayout(raw)
     }
 
     /// Record a new last-known layout.
+    ///
+    /// Dispatches through the vtable's
+    /// [`GpuContextLimitedAccessVTable::texture_registration_update_layout`]
+    /// callback.
     #[cfg(target_os = "linux")]
     pub fn update_layout(&self, new_layout: VulkanLayout) {
-        self.current_layout.store(new_layout.0, Ordering::Release);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: vtable + handle were paired at construction.
+        unsafe {
+            ((*self.vtable).texture_registration_update_layout)(self.handle, new_layout.0);
+        }
+    }
+}
+
+impl Clone for TextureRegistration {
+    fn clone(&self) -> Self {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: vtable + handle were paired at construction; the
+            // vtable's `clone_texture_registration` contract is
+            // `Arc::increment_strong_count(handle)` on the host side.
+            unsafe {
+                ((*self.vtable).clone_texture_registration)(self.handle);
+            }
+        }
+        Self {
+            handle: self.handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for TextureRegistration {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: matched with the `Arc::into_raw` in
+            // `from_arc_into_raw` and any `clone_texture_registration`
+            // bumps.
+            unsafe {
+                ((*self.vtable).drop_texture_registration)(self.handle);
+            }
+        }
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn texture_registration_layout() {
+        // Pin the byte-level shape. Fields:
+        //   handle : *const c_void → offset 0, size 8
+        //   vtable : *const VTable → offset 8, size 8
+        // Total: 16 bytes, 8-byte alignment.
+        assert_eq!(size_of::<TextureRegistration>(), 16);
+        assert_eq!(align_of::<TextureRegistration>(), 8);
+        assert_eq!(offset_of!(TextureRegistration, handle), 0);
+        assert_eq!(offset_of!(TextureRegistration, vtable), 8);
+    }
+
+    #[test]
+    fn texture_registration_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<TextureRegistration>();
     }
 }
 
@@ -123,7 +282,7 @@ mod tests {
         let handles: Vec<_> = layouts
             .iter()
             .map(|&layout| {
-                let reg = Arc::clone(&reg);
+                let reg = reg.clone();
                 thread::spawn(move || {
                     for _ in 0..1000 {
                         reg.update_layout(layout);

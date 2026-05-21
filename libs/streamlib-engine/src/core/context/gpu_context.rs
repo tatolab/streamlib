@@ -263,9 +263,10 @@ impl PixelBufferPoolManager {
             let entry = &ring_pool.buffers[idx];
 
             // Check if buffer is available (only our permanent references exist)
-            // PixelBuffer wraps Arc<PixelBufferRef>, so strong_count > 2 means in use
-            // (2 = one in ring pool buffers Vec + one in buffer_cache HashMap)
-            if Arc::strong_count(&entry.buffer.ref_) <= 2 {
+            // PixelBuffer holds an opaque handle to a host-side
+            // Arc<PixelBufferRef>; strong_count > 2 means in use
+            // (2 = one in ring pool buffers Vec + one in buffer_cache HashMap).
+            if entry.buffer.strong_count() <= 2 {
                 tracing::trace!(
                     "PixelBufferPoolManager: acquired buffer {} (idx {})",
                     entry.pool_id,
@@ -392,7 +393,7 @@ pub struct GpuContext {
     /// lifted to engine-wide scope so consumers reaching textures via
     /// `resolve_texture_registration_by_surface_id` get the same lifecycle metadata
     /// adapter consumers do.
-    texture_cache: Arc<Mutex<HashMap<String, Arc<TextureRegistration>>>>,
+    texture_cache: Arc<Mutex<HashMap<String, TextureRegistration>>>,
     /// Cache of textures backing surface-share-registered pixel buffers
     /// (`escalate_acquire_pixel_buffer` flow). Refreshed on every resolve so
     /// rotating-pool producers don't render stale contents — kept separate
@@ -749,12 +750,12 @@ impl GpuContext {
         width: u32,
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
         height: u32,
-    ) -> Result<Arc<TextureRegistration>> {
+    ) -> Result<TextureRegistration> {
         // Path 1: same-process texture cache (fastest)
         {
             let cache = self.texture_cache.lock().unwrap();
             if let Some(reg) = cache.get(surface_id) {
-                return Ok(Arc::clone(reg));
+                return Ok(reg.clone());
             }
         }
 
@@ -796,7 +797,7 @@ impl GpuContext {
                         .map(VulkanLayout)
                         .unwrap_or(ipc_layout);
                     if resolved_layout != VulkanLayout::UNDEFINED {
-                        if let Some(image) = texture.inner.image() {
+                        if let Some(image) = texture.vulkan_inner().image() {
                             self.device
                                 .inner
                                 .acquire_from_foreign(image, resolved_layout.as_vk())?;
@@ -924,7 +925,7 @@ impl GpuContext {
         };
 
         unsafe {
-            let image = texture.inner.image().ok_or_else(|| {
+            let image = texture.vulkan_inner().image().ok_or_else(|| {
                 Error::GpuError("Texture has no VkImage".into())
             })?;
             self.device.inner.upload_buffer_to_image(
@@ -961,7 +962,7 @@ impl GpuContext {
         let texture = self.device.create_texture_local(&desc)?;
 
         unsafe {
-            let image = texture.inner.image().ok_or_else(|| {
+            let image = texture.vulkan_inner().image().ok_or_else(|| {
                 crate::core::Error::GpuError("Texture has no VkImage".into())
             })?;
             self.device.inner.upload_buffer_to_image(
@@ -1011,7 +1012,7 @@ impl GpuContext {
         height: u32,
     ) -> Result<()> {
         unsafe {
-            let image = texture.inner.image().ok_or_else(|| {
+            let image = texture.vulkan_inner().image().ok_or_else(|| {
                 Error::GpuError("Texture has no VkImage".into())
             })?;
             self.device.inner.upload_buffer_to_image(
@@ -1817,11 +1818,77 @@ impl std::fmt::Debug for GpuContext {
 ///
 /// In the final design this type exposes only cheap, pool-backed, non-allocating
 /// operations; heavier work must go through [`GpuContextLimitedAccess::escalate`].
-/// In #321 it delegates every method to the inner [`GpuContext`] — no surface
-/// is hidden yet.
-#[derive(Clone)]
+///
+/// Restricted GPU capability shim with ABI-stable `(handle, vtable)`
+/// shape. Both fields cross the cdylib DSO boundary unchanged:
+///
+/// - `handle`: opaque `*const c_void` pointing at a host-leaked
+///   `Box<Arc<GpuContext>>`. Cdylib code passes this pointer to
+///   [`GpuContextLimitedAccessVTable`] callbacks; the host's
+///   callbacks (running in host-compiled code) cast it back to
+///   `*const Arc<GpuContext>` and invoke real methods.
+/// - `vtable`: pointer to the `&'static GpuContextLimitedAccessVTable`
+///   installed by the host (resolved via
+///   [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]).
+#[repr(C)]
 pub struct GpuContextLimitedAccess {
-    inner: GpuContext,
+    /// Opaque host handle. Points at a `Box<Arc<GpuContext>>` allocated
+    /// by host-compiled code; cdylib code treats it as opaque and
+    /// passes it through to vtable callbacks unchanged.
+    pub(crate) handle: *const std::ffi::c_void,
+    /// Dispatch table. Set at construction from
+    /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`];
+    /// host mode resolves to the `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`
+    /// static, cdylib mode resolves to the host-installed pointer
+    /// cached on [`HostServices::gpu_context_limited_access_vtable`].
+    pub(crate) vtable:
+        *const streamlib_plugin_abi::GpuContextLimitedAccessVTable,
+}
+
+// SAFETY: `handle` points at a host-owned `Box<Arc<GpuContext>>` that
+// is `Send + Sync` (Arc carries atomic refcounts, GpuContext's
+// fields are themselves Send + Sync via their Arc wrappers). The
+// vtable pointer is `&'static` and pinned for the host's lifetime.
+// Every method (engine and cdylib) reaches the GpuContext through
+// the handle, gated on DSO mode by `host_inner()`'s `host_callbacks()`
+// check.
+unsafe impl Send for GpuContextLimitedAccess {}
+unsafe impl Sync for GpuContextLimitedAccess {}
+
+impl Clone for GpuContextLimitedAccess {
+    /// Cross-DSO-safe Clone. Dispatches through
+    /// [`GpuContextLimitedAccessVTable::clone_handle`] to bump the
+    /// host's `Arc<GpuContext>` refcount.
+    fn clone(&self) -> Self {
+        let new_handle = if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: handle + vtable were paired at construction
+            // and the host's `clone_handle` callback contractually
+            // returns a fresh `Box::into_raw(Box::new(Arc::clone(...)))`-
+            // shaped pointer the matching `drop_handle` releases.
+            unsafe { ((*self.vtable).clone_handle)(self.handle) }
+        } else {
+            std::ptr::null()
+        };
+        Self {
+            handle: new_handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for GpuContextLimitedAccess {
+    /// Releases the host-owned handle via
+    /// [`GpuContextLimitedAccessVTable::drop_handle`].
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: handle was produced by either `new()` (which
+            // calls `Box::into_raw(Box::new(Arc::new(...)))`) or by
+            // `clone_handle` (which produces the same shape). The
+            // matching `drop_handle` callback runs
+            // `Box::from_raw + drop` on the host side.
+            unsafe { ((*self.vtable).drop_handle)(self.handle) };
+        }
+    }
 }
 
 /// Privileged GPU capability handed to `setup()` and inside
@@ -1848,14 +1915,68 @@ pub struct GpuContextFullAccess {
 
 impl GpuContextLimitedAccess {
     /// Wrap a [`GpuContext`] as a limited-access capability.
+    ///
+    /// The handle is the sole owning reference to the
+    /// `Arc<GpuContext>`; every engine method reaches it through
+    /// [`Self::host_inner`] and every cdylib method dispatches
+    /// through the vtable. Allocates a host-side
+    /// `Box<Arc<GpuContext>>` as the opaque handle, then resolves
+    /// the vtable through
+    /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
+    /// (DSO-routed: host static in host mode, cdylib-installed
+    /// pointer in cdylib mode).
     pub(crate) fn new(inner: GpuContext) -> Self {
-        Self { inner }
+        // Leak a fresh `Arc<GpuContext>` to back the opaque handle.
+        // The handle is the sole owner; `host_inner()` derefs it for
+        // engine callers, the vtable callbacks deref it for cdylib
+        // callers.
+        let arc: std::sync::Arc<GpuContext> = std::sync::Arc::new(inner);
+        let boxed: Box<std::sync::Arc<GpuContext>> = Box::new(arc);
+        let handle = Box::into_raw(boxed) as *const std::ffi::c_void;
+        let vtable =
+            crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
+        Self { handle, vtable }
     }
 
-    /// Borrow the inner [`GpuContext`]. Crate-internal — call sites migrate
-    /// to capability-typed methods as #322 lands.
-    pub(crate) fn inner(&self) -> &GpuContext {
-        &self.inner
+    /// Engine-internal borrow of the host's [`GpuContext`] (read
+    /// through the handle's `Box<Arc<GpuContext>>`).
+    ///
+    /// **Panics if called from cdylib code.** The `GpuContext` value
+    /// itself is host-private; cdylib code that reads it would deref
+    /// host-written bytes under cdylib's view of `GpuContext`'s
+    /// layout, which is undefined behaviour under the deployment
+    /// model the plugin ABI supports (different rustc minor versions
+    /// + different dep graphs between host and cdylib). Cdylib code
+    /// dispatches through the
+    /// [`GpuContextLimitedAccessVTable`](streamlib_plugin_abi::GpuContextLimitedAccessVTable)
+    /// instead — every cdylib-callable method on
+    /// [`GpuContextLimitedAccess`] is wired through the vtable.
+    ///
+    /// The panic is caught by `run_host_extern_c` at the FFI
+    /// boundary (host extern "C" callbacks all route through
+    /// `catch_unwind`), so a misconfigured cdylib path gets a clean
+    /// "callback panicked" log entry instead of UB.
+    pub(crate) fn host_inner(&self) -> &GpuContext {
+        // `host_callbacks()` is `Some` in cdylib mode (set by
+        // `install_host_services`) and `None` in host mode.
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "GpuContextLimitedAccess::host_inner() reached from cdylib code; \
+                 this method must dispatch through the GpuContextLimitedAccessVTable. \
+                 The panic is caught by run_host_extern_c at the FFI boundary."
+            );
+        }
+        // SAFETY: `self.handle` was produced by `Self::new` or
+        // `host_gpu_lim_clone_handle` — both produce
+        // `Box::into_raw(Box::new(Arc::new(GpuContext)))`. The
+        // matching `host_gpu_lim_drop_handle` runs on Drop, so the
+        // `Arc<GpuContext>` is alive for the duration of `&self`.
+        // We deref the Box, then the Arc, to borrow the inner
+        // `GpuContext`.
+        unsafe {
+            let arc = &*(self.handle as *const std::sync::Arc<GpuContext>);
+            &**arc
+        }
     }
 
     /// Produce a [`GpuContextFullAccess`] view of the same underlying context.
@@ -1866,7 +1987,7 @@ impl GpuContextLimitedAccess {
     /// compile-time barrier.
     pub(crate) fn to_full_access(&self) -> GpuContextFullAccess {
         GpuContextFullAccess {
-            inner: self.inner.clone(),
+            inner: self.host_inner().clone(),
         }
     }
 
@@ -1888,18 +2009,22 @@ impl GpuContextLimitedAccess {
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>,
     {
+        // Engine-only call surface — cdylib code hitting this path
+        // panics via `host_inner()`'s `host_callbacks()` guard, which
+        // is caught by `run_host_extern_c`.
+        let inner = self.host_inner();
         let lock_start = std::time::Instant::now();
-        let _setup_guard = self.inner.lock_processor_setup();
+        let _setup_guard = inner.lock_processor_setup();
         let mutex_wait_ns = lock_start.elapsed().as_nanos() as u64;
 
         let closure_start = std::time::Instant::now();
-        let full = GpuContextFullAccess::new(self.inner.clone());
+        let full = GpuContextFullAccess::new(inner.clone());
         let closure_result = f(&full);
         drop(full);
         let closure_duration_ns = closure_start.elapsed().as_nanos() as u64;
 
         let wait_start = std::time::Instant::now();
-        let wait_result = self.inner.wait_device_idle();
+        let wait_result = inner.wait_device_idle();
         let wait_idle_ns = wait_start.elapsed().as_nanos() as u64;
 
         tracing::trace!(
@@ -1984,9 +2109,69 @@ impl GpuContextFullAccess {
 
     /// Produce a [`GpuContextLimitedAccess`] view of the same underlying context.
     pub(crate) fn to_limited_access(&self) -> GpuContextLimitedAccess {
-        GpuContextLimitedAccess {
-            inner: self.inner.clone(),
-        }
+        GpuContextLimitedAccess::new(self.inner.clone())
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Vtable-dispatch helper for the 4 acquire_*_buffer methods.
+// Each Linux-only buffer type follows the same out-param + err_buf
+// convention, so a single generic helper covers all 4 callsites
+// without per-call boilerplate.
+// -----------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+type AcquireBufferCallback = unsafe extern "C" fn(
+    handle: *const std::ffi::c_void,
+    byte_size: u64,
+    out_buffer: *mut std::ffi::c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32;
+
+#[cfg(target_os = "linux")]
+fn acquire_buffer_via_vtable<B, F>(
+    lim: &GpuContextLimitedAccess,
+    byte_size: u64,
+    label: &'static str,
+    get_cb: F,
+) -> Result<B>
+where
+    F: FnOnce(
+        &streamlib_plugin_abi::GpuContextLimitedAccessVTable,
+    ) -> AcquireBufferCallback,
+{
+    if lim.handle.is_null() || lim.vtable.is_null() {
+        return Err(Error::GpuError(format!(
+            "{label}: GpuContextLimitedAccess has null handle/vtable"
+        )));
+    }
+    let mut out: std::mem::MaybeUninit<B> = std::mem::MaybeUninit::uninit();
+    let mut err_buf = [0u8; 512];
+    let mut err_len: usize = 0;
+    // SAFETY: vtable + handle were paired at construction; `get_cb`
+    // selects a fn pointer that adheres to the standard
+    // `acquire_*_buffer` shape. `out` points at uninitialized stack
+    // storage the host writes a valid `B` into on success.
+    let cb: AcquireBufferCallback = unsafe { get_cb(&*lim.vtable) };
+    let status = unsafe {
+        cb(
+            lim.handle,
+            byte_size,
+            out.as_mut_ptr() as *mut std::ffi::c_void,
+            err_buf.as_mut_ptr(),
+            err_buf.len(),
+            &mut err_len as *mut usize,
+        )
+    };
+    if status == 0 {
+        // SAFETY: host signaled success and wrote a valid `B`.
+        Ok(unsafe { out.assume_init() })
+    } else {
+        let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+            .into_owned();
+        Err(Error::GpuError(msg))
     }
 }
 
@@ -2011,72 +2196,228 @@ impl GpuContextLimitedAccess {
     /// If the pool has to grow to serve this call, the growth path internally
     /// allocates — nonzero sustained rates will fire the escalation-rate
     /// warning, indicating a pre-reservation gap.
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_pixel_buffer` callback. The tuple return is encoded
+    /// via paired out-params: the pool id's string bytes land in a
+    /// fixed-size stack buffer (1 KiB; UUID strings are well under
+    /// 128 bytes), and the β-shape PixelBuffer goes into a
+    /// MaybeUninit slot.
     pub fn acquire_pixel_buffer(
         &self,
         width: u32,
         height: u32,
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
-        self.inner.acquire_pixel_buffer(width, height, format)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "acquire_pixel_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut pool_id_buf = [0u8; 1024];
+        let mut pool_id_len: usize = 0;
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).acquire_pixel_buffer)(
+                self.handle,
+                width,
+                height,
+                format as u32,
+                pool_id_buf.as_mut_ptr(),
+                pool_id_buf.len(),
+                &mut pool_id_len as *mut usize,
+                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            let id_str = String::from_utf8_lossy(
+                &pool_id_buf[..pool_id_len.min(pool_id_buf.len())],
+            )
+            .into_owned();
+            let pool_id = PixelBufferPoolId::from_string(id_str);
+            let pb = unsafe { out_pb.assume_init() };
+            Ok((pool_id, pb))
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
     /// See [`GpuContext::acquire_storage_buffer`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_storage_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_storage_buffer(
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::StorageBuffer> {
-        self.inner.acquire_storage_buffer(byte_size)
+        acquire_buffer_via_vtable(
+            self,
+            byte_size,
+            "acquire_storage_buffer",
+            |vt| vt.acquire_storage_buffer,
+        )
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
     /// See [`GpuContext::acquire_uniform_buffer`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_uniform_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_uniform_buffer(
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::UniformBuffer> {
-        self.inner.acquire_uniform_buffer(byte_size)
+        acquire_buffer_via_vtable(
+            self,
+            byte_size,
+            "acquire_uniform_buffer",
+            |vt| vt.acquire_uniform_buffer,
+        )
     }
 
     /// Acquire a HOST_VISIBLE vertex buffer.
     /// See [`GpuContext::acquire_vertex_buffer`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_vertex_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_vertex_buffer(
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::VertexBuffer> {
-        self.inner.acquire_vertex_buffer(byte_size)
+        acquire_buffer_via_vtable(
+            self,
+            byte_size,
+            "acquire_vertex_buffer",
+            |vt| vt.acquire_vertex_buffer,
+        )
     }
 
     /// Acquire a HOST_VISIBLE index buffer.
     /// See [`GpuContext::acquire_index_buffer`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_index_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_index_buffer(
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::IndexBuffer> {
-        self.inner.acquire_index_buffer(byte_size)
+        acquire_buffer_via_vtable(
+            self,
+            byte_size,
+            "acquire_index_buffer",
+            |vt| vt.acquire_index_buffer,
+        )
     }
 
     /// Get a pixel buffer by its pool id (Split: local cache).
+    ///
+    /// Dispatches through the cross-DSO vtable's `get_pixel_buffer`
+    /// callback.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
-        self.inner.get_pixel_buffer(pool_id)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "get_pixel_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let id_str = pool_id.as_str();
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).get_pixel_buffer)(
+                self.handle,
+                id_str.as_ptr(),
+                id_str.len(),
+                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `resolve_pixel_buffer_by_surface_id` callback.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.inner.resolve_pixel_buffer_by_surface_id(surface_id)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_pixel_buffer_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).resolve_pixel_buffer_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Register a texture in the same-process texture cache.
+    ///
+    /// Dispatches through the cross-DSO
+    /// [`GpuContextLimitedAccessVTable::register_texture`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::register_texture)
+    /// callback. The host-side impl bumps the
+    /// `Arc<TextureInner>` refcount before stashing a clone in the
+    /// cache, so dropping the caller's `texture` here releases
+    /// exactly the caller's owned ref.
     pub fn register_texture(&self, id: &str, texture: Texture) {
-        self.inner.register_texture(id, texture);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).register_texture)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                texture.handle,
+                0, // VulkanLayout::UNDEFINED.0 == 0
+            );
+        }
+        drop(texture);
     }
 
     /// Register a texture with a declared initial Vulkan image layout.
     /// See [`GpuContext::register_texture_with_layout`].
+    ///
+    /// Dispatches through the cross-DSO vtable's `register_texture`
+    /// callback with the layout's `i32` enumerant.
     #[cfg(target_os = "linux")]
     pub fn register_texture_with_layout(
         &self,
@@ -2084,30 +2425,103 @@ impl GpuContextLimitedAccess {
         texture: Texture,
         initial_layout: VulkanLayout,
     ) {
-        self.inner
-            .register_texture_with_layout(id, texture, initial_layout);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).register_texture)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                texture.handle,
+                initial_layout.0,
+            );
+        }
+        drop(texture);
     }
 
     /// Update a registered texture's tracked layout after a transition.
     /// See [`GpuContext::update_texture_registration_layout`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `update_texture_registration_layout` callback.
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
-        self.inner.update_texture_registration_layout(id, layout);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).update_texture_registration_layout)(
+                self.handle,
+                id.as_ptr(),
+                id.len(),
+                layout.0,
+            );
+        }
     }
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `resolve_texture_registration_by_surface_id` callback. Returns
+    /// a β-reshaped [`TextureRegistration`] value (handle + vtable);
+    /// Clone is cheap (refcount bump via vtable), Drop releases the
+    /// host's `Arc<TextureRegistrationInner>` strong count.
     pub fn resolve_texture_registration_by_surface_id(
         &self,
         surface_id: &str,
         texture_layout: Option<i32>,
         width: u32,
         height: u32,
-    ) -> Result<Arc<TextureRegistration>> {
-        self.inner
-            .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
+    ) -> Result<TextureRegistration> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_texture_registration_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_reg: std::mem::MaybeUninit<TextureRegistration> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let (has_layout, layout_raw) = match texture_layout {
+            Some(v) => (1i32, v),
+            None => (0i32, 0i32),
+        };
+        // SAFETY: handle + vtable were paired at construction.
+        // `out_reg` is uninitialized stack storage; the host writes a
+        // valid TextureRegistration on success (status == 0) and
+        // nothing on failure.
+        let status = unsafe {
+            ((*self.vtable).resolve_texture_registration_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                has_layout,
+                layout_raw,
+                width,
+                height,
+                out_reg.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid TextureRegistration.
+            Ok(unsafe { out_reg.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Resolve a VideoFrame's texture (Split: cache hit).
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `resolve_texture_by_surface_id` callback.
     pub fn resolve_texture_by_surface_id(
         &self,
         surface_id: &str,
@@ -2115,31 +2529,81 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<Texture> {
-        self.inner
-            .resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_texture_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_texture: std::mem::MaybeUninit<Texture> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let (has_layout, layout_raw) = match texture_layout {
+            Some(v) => (1i32, v),
+            None => (0i32, 0i32),
+        };
+        // SAFETY: handle + vtable were paired at construction. `out_texture`
+        // points at uninitialized stack storage that the host writes a
+        // valid `Texture` into on success (return code 0). On failure the
+        // host writes nothing into `out_texture` so we leave it
+        // `MaybeUninit` and never assume_init it.
+        let status = unsafe {
+            ((*self.vtable).resolve_texture_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                has_layout,
+                layout_raw,
+                width,
+                height,
+                out_texture.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid Texture.
+            Ok(unsafe { out_texture.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// See [`GpuContext::set_video_source_timeline_semaphore`].
+    ///
+    /// Engine-only call surface (the
+    /// `&Arc<HostVulkanTimelineSemaphore>` parameter is host-internal
+    /// — cdylib code cannot legitimately construct one), so this
+    /// method reaches the inner GpuContext through `host_inner()`
+    /// rather than the vtable. The `host_inner()` cdylib-mode panic
+    /// guard short-circuits any misconfigured cdylib path.
     #[cfg(target_os = "linux")]
     pub fn set_video_source_timeline_semaphore(
         &self,
         timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) {
-        self.inner.set_video_source_timeline_semaphore(timeline);
+        self.host_inner()
+            .set_video_source_timeline_semaphore(timeline);
     }
 
     /// See [`GpuContext::clear_video_source_timeline_semaphore`].
+    /// Engine-only call surface — see
+    /// [`Self::set_video_source_timeline_semaphore`].
     #[cfg(target_os = "linux")]
     pub fn clear_video_source_timeline_semaphore(&self) {
-        self.inner.clear_video_source_timeline_semaphore();
+        self.host_inner().clear_video_source_timeline_semaphore();
     }
 
     /// See [`GpuContext::video_source_timeline_semaphore`].
+    /// Engine-only call surface — see
+    /// [`Self::set_video_source_timeline_semaphore`].
     #[cfg(target_os = "linux")]
     pub fn video_source_timeline_semaphore(
         &self,
     ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        self.inner.video_source_timeline_semaphore()
+        self.host_inner().video_source_timeline_semaphore()
     }
 
     /// Acquire a pooled texture from a pre-reserved pool (Split: fast path).
@@ -2149,8 +2613,44 @@ impl GpuContextLimitedAccess {
     /// (Linux) — Sandbox callers don't have a render-target alloc path
     /// because allocating a new RT-capable image is a privileged op
     /// that goes through escalate.
+    ///
+    /// Dispatches through the cross-DSO vtable's `acquire_texture`
+    /// callback. The descriptor's `label` field is currently dropped
+    /// on the wire (debugging-only, never load-bearing).
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
-        self.inner.acquire_texture(desc)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "acquire_texture: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pooled: std::mem::MaybeUninit<PooledTextureHandle> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable were paired at construction. `out_pooled`
+        // points at uninitialized stack storage; the host writes a valid
+        // PooledTextureHandle on success.
+        let status = unsafe {
+            ((*self.vtable).acquire_texture)(
+                self.handle,
+                desc.width,
+                desc.height,
+                desc.format as u32,
+                desc.usage.bits(),
+                out_pooled.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid PooledTextureHandle.
+            Ok(unsafe { out_pooled.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Copy a host-visible pixel buffer's contents into a pre-allocated
@@ -2161,6 +2661,9 @@ impl GpuContextLimitedAccess {
     /// just a `vkCmdCopyBufferToImage` queue submit on the shared queue.
     /// See [`GpuContext::copy_pixel_buffer_to_texture`] for the full
     /// contract.
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `copy_pixel_buffer_to_texture` callback.
     #[cfg(target_os = "linux")]
     pub fn copy_pixel_buffer_to_texture(
         &self,
@@ -2170,18 +2673,48 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        self.inner.copy_pixel_buffer_to_texture(
-            pixel_buffer,
-            texture,
-            surface_id,
-            width,
-            height,
-        )
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "copy_pixel_buffer_to_texture: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).copy_pixel_buffer_to_texture)(
+                self.handle,
+                pixel_buffer as *const PixelBuffer as *const std::ffi::c_void,
+                texture as *const Texture as *const std::ffi::c_void,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                width,
+                height,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// See [`GpuContext::unregister_texture`].
+    ///
+    /// Dispatches through the cross-DSO vtable's `unregister_texture`
+    /// callback.
     pub fn unregister_texture(&self, id: &str) {
-        self.inner.unregister_texture(id);
+        if self.handle.is_null() || self.vtable.is_null() {
+            return;
+        }
+        // SAFETY: handle + vtable were paired at construction.
+        unsafe {
+            ((*self.vtable).unregister_texture)(self.handle, id.as_ptr(), id.len());
+        }
     }
 
     /// Get the shared command queue.
@@ -2189,18 +2722,107 @@ impl GpuContextLimitedAccess {
     /// Submitting recorded command buffers from `process()` is safe: the
     /// images/buffers a Sandbox caller can construct are pool-backed and
     /// pre-reserved. See design doc §8 Q5.
-    pub fn command_queue(&self) -> &RhiCommandQueue {
-        self.inner.command_queue()
+    ///
+    /// Dispatches through the cross-DSO vtable's `command_queue`
+    /// callback. Returns an owned [`RhiCommandQueue`] β-shape with the
+    /// host's `Arc<RhiCommandQueueInner>` refcount bumped.
+    pub fn command_queue(&self) -> RhiCommandQueue {
+        if self.handle.is_null() || self.vtable.is_null() {
+            // Construct a null-handle β-shape that's safe to Drop
+            // (Drop short-circuits on null). Caller's subsequent
+            // method calls on the queue will fail cleanly.
+            return RhiCommandQueue {
+                handle: std::ptr::null(),
+                vtable: std::ptr::null(),
+            };
+        }
+        let mut out_q: std::mem::MaybeUninit<RhiCommandQueue> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable were paired at construction. The
+        // host writes a valid RhiCommandQueue into `out_q` on success.
+        // On failure we still produce a null-handle β-shape so the
+        // method's signature stays infallible.
+        let status = unsafe {
+            ((*self.vtable).command_queue)(
+                self.handle,
+                out_q.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            unsafe { out_q.assume_init() }
+        } else {
+            RhiCommandQueue {
+                handle: std::ptr::null(),
+                vtable: std::ptr::null(),
+            }
+        }
     }
 
     /// Create a CPU-side command buffer from the shared queue.
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `create_command_buffer` callback.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
-        self.inner.create_command_buffer()
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_command_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_cb: std::mem::MaybeUninit<CommandBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).create_command_buffer)(
+                self.handle,
+                out_cb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_cb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Copy pixels between same-format, same-size buffers (Split: cache hit).
+    ///
+    /// Dispatches through the cross-DSO vtable's `blit_copy` callback.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
-        self.inner.blit_copy(src, dest)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "blit_copy: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).blit_copy)(
+                self.handle,
+                src as *const PixelBuffer as *const std::ffi::c_void,
+                dest as *const PixelBuffer as *const std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Copy from raw IOSurface to a pixel buffer (Split: cache hit).
@@ -2208,6 +2830,9 @@ impl GpuContextLimitedAccess {
     /// # Safety
     /// - `src` must be a valid IOSurfaceRef pointer
     /// - The IOSurface must remain valid for the duration of the blit
+    ///
+    /// Dispatches through the cross-DSO vtable's `blit_copy_iosurface`
+    /// callback. macOS-only; non-macOS hosts return an error.
     #[cfg(target_os = "macos")]
     pub unsafe fn blit_copy_iosurface(
         &self,
@@ -2216,17 +2841,103 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        unsafe { self.inner.blit_copy_iosurface(src, dest, width, height) }
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "blit_copy_iosurface: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: see the method-level safety note.
+        let status = unsafe {
+            ((*self.vtable).blit_copy_iosurface)(
+                self.handle,
+                src as *const std::ffi::c_void,
+                dest as *const PixelBuffer as *const std::ffi::c_void,
+                width,
+                height,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Get the surface store, if initialized.
+    ///
+    /// Dispatches through the cross-DSO vtable's `surface_store`
+    /// callback. Returns `Some(SurfaceStore)` (β-shape, refcount
+    /// bumped) when the host has one, else `None`. The β-shape's
+    /// own Clone/Drop dispatch through the
+    /// [`streamlib_plugin_abi::SurfaceStoreVTable`] reached via
+    /// [`HostServices::surface_store_vtable`].
     pub fn surface_store(&self) -> Option<SurfaceStore> {
-        self.inner.surface_store()
+        if self.handle.is_null() || self.vtable.is_null() {
+            return None;
+        }
+        let mut out_store: std::mem::MaybeUninit<SurfaceStore> =
+            std::mem::MaybeUninit::uninit();
+        // SAFETY: handle + vtable were paired at construction. The
+        // callback always writes a SurfaceStore — either a real
+        // β-shape (Some) or a null-handle β-shape (None sentinel).
+        unsafe {
+            ((*self.vtable).surface_store)(
+                self.handle,
+                out_store.as_mut_ptr() as *mut std::ffi::c_void,
+            );
+        }
+        // SAFETY: the callback wrote either a real β-shape or a
+        // null-handle β-shape; either way `out_store` is initialized.
+        let store = unsafe { out_store.assume_init() };
+        if store.is_none() {
+            // Null-handle β-shape — Drop is a no-op (short-circuits
+            // on null), so we can safely drop here without affecting
+            // any Arc refcount.
+            drop(store);
+            None
+        } else {
+            Some(store)
+        }
     }
 
     /// Check out a surface by ID (Split: cache hit).
+    ///
+    /// Dispatches through the cross-DSO vtable's `check_out_surface`
+    /// callback.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.inner.check_out_surface(surface_id)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "check_out_surface: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).check_out_surface)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 }
 
@@ -2344,7 +3055,7 @@ impl GpuContextFullAccess {
         texture_layout: Option<i32>,
         width: u32,
         height: u32,
-    ) -> Result<Arc<TextureRegistration>> {
+    ) -> Result<TextureRegistration> {
         self.inner
             .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
     }
@@ -2715,8 +3426,12 @@ impl GpuContextFullAccess {
 
 impl std::fmt::Debug for GpuContextLimitedAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The underlying GpuContext is host-private and not safely
+        // formattable from cdylib code; print the (handle, vtable)
+        // shape instead.
         f.debug_struct("GpuContextLimitedAccess")
-            .field("inner", &self.inner)
+            .field("handle", &self.handle)
+            .field("vtable", &self.vtable)
             .finish()
     }
 }

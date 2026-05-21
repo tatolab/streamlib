@@ -456,7 +456,10 @@ impl VulkanRayTracingKernel {
 
     pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::SampledTexture)?;
-        let view = texture.inner.image_view()?;
+        let view = {
+            use crate::host_rhi::HostTextureExt;
+            texture.vulkan_inner().image_view()?
+        };
         let sampler = self.default_sampler()?;
         self.pending.lock().bindings.insert(
             binding,
@@ -467,7 +470,10 @@ impl VulkanRayTracingKernel {
 
     pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::StorageImage)?;
-        let view = texture.inner.image_view()?;
+        let view = {
+            use crate::host_rhi::HostTextureExt;
+            texture.vulkan_inner().image_view()?
+        };
         self.pending
             .lock()
             .bindings

@@ -1161,7 +1161,8 @@ fn allocate_command_buffer(
 }
 
 fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
-    texture.inner.image_view()
+    use crate::host_rhi::HostTextureExt;
+    texture.vulkan_inner().image_view()
 }
 
 #[cfg(test)]
