@@ -263,9 +263,10 @@ impl PixelBufferPoolManager {
             let entry = &ring_pool.buffers[idx];
 
             // Check if buffer is available (only our permanent references exist)
-            // PixelBuffer wraps Arc<PixelBufferRef>, so strong_count > 2 means in use
-            // (2 = one in ring pool buffers Vec + one in buffer_cache HashMap)
-            if Arc::strong_count(&entry.buffer.ref_) <= 2 {
+            // PixelBuffer holds an opaque handle to a host-side
+            // Arc<PixelBufferRef>; strong_count > 2 means in use
+            // (2 = one in ring pool buffers Vec + one in buffer_cache HashMap).
+            if entry.buffer.strong_count() <= 2 {
                 tracing::trace!(
                     "PixelBufferPoolManager: acquired buffer {} (idx {})",
                     entry.pool_id,

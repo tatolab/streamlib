@@ -129,12 +129,18 @@ pub const AUDIO_CLOCK_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   shim's lifetime independently of `RuntimeContext`'s lifetime.
 pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
-/// Layout version of [`GpuContextLimitedAccessVTable`]. Phase C1 (#901)
-/// scaffold: layout-version + `clone_handle` / `drop_handle` only.
-/// Per-method GPU callbacks (`acquire_pixel_buffer`,
-/// `release_pixel_buffer`, etc.) are appended in later C1 commits
-/// and bump this constant when they land.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 1;
+/// Layout version of [`GpuContextLimitedAccessVTable`].
+///
+/// - v1: scaffold — layout-version + `clone_handle` / `drop_handle`.
+/// - v2: per-type PixelBuffer clone/drop callbacks
+///   (`clone_pixel_buffer` / `drop_pixel_buffer`). The cdylib's
+///   `PixelBuffer` is `(handle, vtable, cached POD)`; Clone/Drop
+///   dispatch through these callbacks so the host's `Arc<PixelBufferRef>`
+///   refcount is managed by host-compiled code regardless of which
+///   DSO holds the `PixelBuffer`. Same rationale as `RuntimeOpsVTable`
+///   v2's `clone_handle`/`drop_handle` but specific to the
+///   `PixelBuffer` return type.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 // =============================================================================
 // Primitive enums
@@ -716,6 +722,32 @@ pub struct GpuContextLimitedAccessVTable {
     /// Calling on the same owned handle twice is undefined behaviour
     /// (it would double-free the Arc refcount).
     pub drop_handle: unsafe extern "C" fn(owned_handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // PixelBuffer return-type lifetime (v2 — Phase C1)
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `PixelBuffer` is `(handle, vtable, cached POD)` where
+    // `handle` is `Arc::into_raw(Arc<PixelBufferRef>)` produced by the
+    // host. The cdylib never touches Arc internals directly; both
+    // refcount bumps (Clone) and decrements (Drop) dispatch through
+    // these host-resident callbacks so the Arc accounting is done by
+    // host-compiled code under any rustc-minor / dep-graph drift.
+
+    /// Bump the refcount on a `PixelBuffer` handle. Called by the
+    /// cdylib's `Clone for PixelBuffer`. The handle pointer is
+    /// `Arc::into_raw(Arc<PixelBufferRef>)`-shaped; host
+    /// implementation calls `Arc::increment_strong_count(handle)`.
+    /// Calling on a null pointer is a no-op.
+    pub clone_pixel_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `PixelBuffer` handle. Called by
+    /// the cdylib's `Drop for PixelBuffer`. Host implementation
+    /// calls `Arc::decrement_strong_count(handle)`; when the
+    /// refcount reaches zero the underlying `PixelBufferRef` (and
+    /// its platform buffer) is dropped. Calling on a null pointer
+    /// is a no-op.
+    pub drop_pixel_buffer: unsafe extern "C" fn(handle: *const c_void),
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -1052,10 +1084,9 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        // v1 scaffold: layout_version + clone_handle + drop_handle
-        // only. Per-method GPU callbacks land in subsequent C1
-        // commits and bump this constant.
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 1);
+        // v2 (Phase C1): added per-type PixelBuffer clone/drop
+        // callbacks (clone_pixel_buffer / drop_pixel_buffer).
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 2);
     }
 
     #[test]
@@ -1090,10 +1121,11 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // v1 scaffold: layout_version (u32) + _reserved_padding (u32)
-        // + 2 fn pointers (clone_handle, drop_handle, 8 bytes each)
-        // = 4 + 4 + 16 = 24 bytes.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 24);
+        // v2 (Phase C1): layout_version (u32) + _reserved_padding (u32)
+        // + 4 fn pointers (clone_handle, drop_handle, clone_pixel_buffer,
+        // drop_pixel_buffer, 8 bytes each)
+        // = 4 + 4 + 32 = 40 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 40);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -1102,6 +1134,14 @@ mod layout_tests {
         );
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, clone_handle), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, drop_handle), 16);
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_pixel_buffer),
+            24
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_pixel_buffer),
+            32
+        );
     }
 
     /// Compile-time witnesses that the vtable types are Send + Sync.

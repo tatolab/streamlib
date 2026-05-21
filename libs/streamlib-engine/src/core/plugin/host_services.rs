@@ -1276,6 +1276,34 @@ unsafe extern "C" fn host_gpu_lim_drop_handle(_owned_handle: *const c_void) {
     // design a no-op.
 }
 
+unsafe extern "C" fn host_gpu_lim_clone_pixel_buffer(handle: *const c_void) {
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: `handle` is a `*const c_void` cast of
+    // `Arc::into_raw(Arc<PixelBufferRef>)` produced by
+    // `PixelBuffer::new` (host-side). Re-interpreting it as
+    // `*const PixelBufferRef` and bumping the strong count is the
+    // documented `Arc::increment_strong_count` contract.
+    unsafe {
+        Arc::increment_strong_count(handle as *const crate::core::rhi::PixelBufferRef);
+    }
+}
+
+unsafe extern "C" fn host_gpu_lim_drop_pixel_buffer(handle: *const c_void) {
+    if handle.is_null() {
+        return;
+    }
+    // SAFETY: matched with `host_gpu_lim_clone_pixel_buffer` and
+    // `PixelBuffer::new`'s `Arc::into_raw` initial bump.
+    // `Arc::decrement_strong_count` decrements; when refcount hits
+    // zero the underlying `PixelBufferRef` is dropped along with
+    // its platform buffer.
+    unsafe {
+        Arc::decrement_strong_count(handle as *const crate::core::rhi::PixelBufferRef);
+    }
+}
+
 /// Static [`GpuContextLimitedAccessVTable`] installed once per process.
 /// Paired with the per-RuntimeContext gpu-limited handle returned by
 /// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::gpu_limited_access`.
@@ -1285,6 +1313,8 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         _reserved_padding: 0,
         clone_handle: host_gpu_lim_clone_handle,
         drop_handle: host_gpu_lim_drop_handle,
+        clone_pixel_buffer: host_gpu_lim_clone_pixel_buffer,
+        drop_pixel_buffer: host_gpu_lim_drop_pixel_buffer,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
