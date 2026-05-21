@@ -72,9 +72,12 @@ impl GpuDevice {
             let metal_device = crate::metal::rhi::MetalDevice::new()?;
             let metal_queue_wrapper = metal_device.create_command_queue_wrapper();
             let metal_queue_arc = std::sync::Arc::new(metal_queue_wrapper);
-            let command_queue = RhiCommandQueue {
-                inner: metal_queue_arc.clone(),
-                metal_queue: metal_queue_arc,
+            let command_queue = {
+                let inner = crate::core::rhi::command_queue::RhiCommandQueueInner {
+                    inner: metal_queue_arc.clone(),
+                    metal_queue: metal_queue_arc,
+                };
+                RhiCommandQueue::from_arc_into_raw(std::sync::Arc::new(inner))
             };
             let metal_device_arc = std::sync::Arc::new(metal_device);
             Ok(Self {
@@ -101,10 +104,13 @@ impl GpuDevice {
                 (std::sync::Arc::new(md), std::sync::Arc::new(mq))
             };
 
-            let command_queue = RhiCommandQueue {
-                inner: std::sync::Arc::new(vulkan_queue),
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                metal_queue,
+            let command_queue = {
+                let inner = crate::core::rhi::command_queue::RhiCommandQueueInner {
+                    inner: std::sync::Arc::new(vulkan_queue),
+                    #[cfg(any(target_os = "macos", target_os = "ios"))]
+                    metal_queue,
+                };
+                RhiCommandQueue::from_arc_into_raw(std::sync::Arc::new(inner))
             };
 
             // Store a global reference for DMA-BUF import (Linux only).
@@ -134,8 +140,11 @@ impl GpuDevice {
         {
             let dx12_device = crate::windows::rhi::DX12Device::new()?;
             let dx12_queue = dx12_device.create_command_queue_wrapper();
-            let command_queue = RhiCommandQueue {
-                inner: std::sync::Arc::new(dx12_queue),
+            let command_queue = {
+                let inner = crate::core::rhi::command_queue::RhiCommandQueueInner {
+                    inner: std::sync::Arc::new(dx12_queue),
+                };
+                RhiCommandQueue::from_arc_into_raw(std::sync::Arc::new(inner))
             };
             Ok(Self {
                 inner: std::sync::Arc::new(dx12_device),

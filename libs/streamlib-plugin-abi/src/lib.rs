@@ -183,7 +183,21 @@ pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   β-reshape collapses the return type to a `(handle, vtable)`
 ///   wrapper that's Arc-semantics-equivalent (cheap Clone via
 ///   vtable refcount bump) with host-compiled refcount accounting.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 6;
+/// - v7: per-type `RhiCommandQueue` clone/drop pair + 1 method
+///   (`create_command_buffer_from_queue`); per-type `CommandBuffer`
+///   drop + 2 consume-semantics commit callbacks
+///   (`commit_command_buffer`, `commit_and_wait_command_buffer`) +
+///   1 mutator (`copy_texture_command_buffer`) — total 5 lifecycle
+///   + per-type-method callbacks. Plus 5 `GpuContextLimitedAccess`
+///   method-dispatch callbacks (`command_queue`,
+///   `create_command_buffer`, `copy_pixel_buffer_to_texture`,
+///   `blit_copy`, `blit_copy_iosurface`). 12 callbacks total.
+///   `CommandBuffer` is deliberately NOT `Clone` (single-use
+///   commit-semantics); the cdylib's `commit(self)` /
+///   `commit_and_wait(self)` impls null the local handle/vtable
+///   fields after the callback so Drop becomes a no-op (the host
+///   already dropped the inner during commit).
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 7;
 
 // =============================================================================
 // Primitive enums
@@ -1122,6 +1136,141 @@ pub struct GpuContextLimitedAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // RhiCommandQueue Arc-handle lifecycle (v7 — Phase C1 Phase 2D)
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `RhiCommandQueue` is `(handle, vtable)` where
+    // `handle` is `Arc::into_raw(Arc<RhiCommandQueueInner>)`. Same
+    // shape as every other Arc-handle β-reshape on this vtable.
+
+    /// Bump the refcount on an `RhiCommandQueue` handle.
+    pub clone_rhi_command_queue: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on an `RhiCommandQueue` handle.
+    pub drop_rhi_command_queue: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Create a new `CommandBuffer` from a queue. On success writes a
+    /// fresh `CommandBuffer` (Box-handle β-shape) into `*out_cb` and
+    /// returns 0; on failure writes a UTF-8 error message into
+    /// `err_buf` and returns non-zero.
+    pub create_command_buffer_from_queue: unsafe extern "C" fn(
+        queue_handle: *const c_void,
+        out_cb: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // CommandBuffer lifecycle — drop + consume-semantics commits (v7)
+    // -------------------------------------------------------------------------
+    //
+    // `CommandBuffer` is single-use. Box-handle (not Arc) — no Clone.
+    // `commit` and `commit_and_wait` are consume-semantics: the host
+    // runs `Box::from_raw + commit + drop` and the cdylib nulls its
+    // local handle/vtable fields so Drop becomes a no-op afterward.
+
+    /// Release the host-side `Box<CommandBufferInner>` backing a
+    /// `CommandBuffer`. Calling on a null pointer is a no-op.
+    /// Calling twice on the same handle is undefined behaviour
+    /// (double-free of the Box).
+    pub drop_command_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Commit the command buffer for execution (consume-semantics).
+    /// Host runs `Box::from_raw + commit + drop`; the cdylib's Drop
+    /// is then a no-op (handle/vtable are nulled by the cdylib-side
+    /// `commit(self)` wrapper).
+    pub commit_command_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Commit and wait for completion (consume-semantics). Same
+    /// lifetime contract as [`Self::commit_command_buffer`].
+    pub commit_and_wait_command_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Copy one texture to another. `src` / `dst` are
+    /// `*const Texture` pointers — the layout is locked by Phase
+    /// 2A's `texture_layout` test so the host's read agrees with the
+    /// cdylib's write.
+    pub copy_texture_command_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        src: *const c_void,
+        dst: *const c_void,
+    ),
+
+    // -------------------------------------------------------------------------
+    // GpuContextLimitedAccess method dispatch — 5 methods (v7)
+    // -------------------------------------------------------------------------
+
+    /// Return an owned `RhiCommandQueue` view of the host's shared
+    /// command queue (refcount bumped on the underlying
+    /// `Arc<RhiCommandQueueInner>`). Cdylib's caller releases via
+    /// `drop_rhi_command_queue`. Writes the β-shape into
+    /// `*out_queue`; returns 0 on success, non-zero on internal
+    /// failure (e.g. null gpu handle).
+    pub command_queue: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_queue: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Create a CPU-side command buffer from the shared queue. Same
+    /// shape as [`Self::create_command_buffer_from_queue`] but takes
+    /// a `GpuContext` handle rather than a queue handle —
+    /// `GpuContextLimitedAccess::create_command_buffer` is a
+    /// convenience that delegates to the engine's shared queue.
+    pub create_command_buffer: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_cb: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Copy a host-visible pixel buffer's contents into a
+    /// pre-allocated device-local texture. Linux-only on the host
+    /// side; non-Linux stubs return non-zero. `pixel_buffer` and
+    /// `texture` are `*const PixelBuffer` / `*const Texture` β-shape
+    /// pointers.
+    pub copy_pixel_buffer_to_texture: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        pixel_buffer: *const c_void,
+        texture: *const c_void,
+        surface_id_ptr: *const u8,
+        surface_id_len: usize,
+        width: u32,
+        height: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Copy pixels between same-format, same-size pixel buffers.
+    pub blit_copy: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        src: *const c_void,
+        dst: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Copy from raw IOSurface to a pixel buffer (macOS-only). The
+    /// `src_iosurface_ref` is an `IOSurfaceRef` (raw `*const c_void`).
+    /// Non-macOS hosts return non-zero with a "not available on this
+    /// platform" message.
+    pub blit_copy_iosurface: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        src_iosurface_ref: *const c_void,
+        dst_pixel_buffer: *const c_void,
+        width: u32,
+        height: u32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -1458,11 +1607,14 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        // v6 (Phase C1 Phase 2C): added TextureRegistration clone/drop
-        // pair, 3 method-dispatch callbacks (texture / current_layout
-        // / update_layout), and resolve_texture_registration_by_surface_id
-        // — 6 new callbacks total.
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 6);
+        // v7 (Phase C1 Phase 2D): added RhiCommandQueue clone/drop +
+        // create_command_buffer_from_queue (3), CommandBuffer drop +
+        // commit + commit_and_wait + copy_texture (4), and the 5
+        // GpuContextLimitedAccess method-dispatch callbacks
+        // (command_queue, create_command_buffer,
+        // copy_pixel_buffer_to_texture, blit_copy, blit_copy_iosurface)
+        // — 12 new callbacks total.
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 7);
     }
 
     #[test]
@@ -1497,8 +1649,8 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // v6 (Phase C1 Phase 2C): layout_version (u32) +
-        // _reserved_padding (u32) + 33 fn pointers (8 bytes each):
+        // v7 (Phase C1 Phase 2D): layout_version (u32) +
+        // _reserved_padding (u32) + 45 fn pointers (8 bytes each):
         //   v2 (4): clone_handle, drop_handle,
         //           clone_pixel_buffer, drop_pixel_buffer,
         //   v3 (3): strong_count_pixel_buffer, plane_base_address_pixel_buffer,
@@ -1517,9 +1669,17 @@ mod layout_tests {
         //           texture_registration_texture,
         //           texture_registration_current_layout,
         //           texture_registration_update_layout,
-        //           resolve_texture_registration_by_surface_id.
-        // = 4 + 4 + 264 = 272 bytes.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 272);
+        //           resolve_texture_registration_by_surface_id,
+        //   v7 (12): clone_rhi_command_queue, drop_rhi_command_queue,
+        //           create_command_buffer_from_queue,
+        //           drop_command_buffer, commit_command_buffer,
+        //           commit_and_wait_command_buffer,
+        //           copy_texture_command_buffer,
+        //           command_queue, create_command_buffer,
+        //           copy_pixel_buffer_to_texture, blit_copy,
+        //           blit_copy_iosurface.
+        // = 4 + 4 + 360 = 368 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 368);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -1666,6 +1826,56 @@ mod layout_tests {
                 resolve_texture_registration_by_surface_id
             ),
             264
+        );
+        // v7 entries (Phase 2D): 12 fn pointers appended. Vtable
+        // grows from 272 to 272 + 12*8 = 368 bytes.
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_rhi_command_queue),
+            272
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_rhi_command_queue),
+            280
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                create_command_buffer_from_queue
+            ),
+            288
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_command_buffer),
+            296
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, commit_command_buffer),
+            304
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, commit_and_wait_command_buffer),
+            312
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, copy_texture_command_buffer),
+            320
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, command_queue),
+            328
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, create_command_buffer),
+            336
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, copy_pixel_buffer_to_texture),
+            344
+        );
+        assert_eq!(offset_of!(GpuContextLimitedAccessVTable, blit_copy), 352);
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, blit_copy_iosurface),
+            360
         );
     }
 

@@ -2568,6 +2568,9 @@ impl GpuContextLimitedAccess {
     /// just a `vkCmdCopyBufferToImage` queue submit on the shared queue.
     /// See [`GpuContext::copy_pixel_buffer_to_texture`] for the full
     /// contract.
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `copy_pixel_buffer_to_texture` callback.
     #[cfg(target_os = "linux")]
     pub fn copy_pixel_buffer_to_texture(
         &self,
@@ -2577,13 +2580,34 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        self.inner.copy_pixel_buffer_to_texture(
-            pixel_buffer,
-            texture,
-            surface_id,
-            width,
-            height,
-        )
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "copy_pixel_buffer_to_texture: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).copy_pixel_buffer_to_texture)(
+                self.handle,
+                pixel_buffer as *const PixelBuffer as *const std::ffi::c_void,
+                texture as *const Texture as *const std::ffi::c_void,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                width,
+                height,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// See [`GpuContext::unregister_texture`].
@@ -2605,18 +2629,108 @@ impl GpuContextLimitedAccess {
     /// Submitting recorded command buffers from `process()` is safe: the
     /// images/buffers a Sandbox caller can construct are pool-backed and
     /// pre-reserved. See design doc §8 Q5.
-    pub fn command_queue(&self) -> &RhiCommandQueue {
-        self.inner.command_queue()
+    ///
+    /// Dispatches through the cross-DSO vtable's `command_queue`
+    /// callback. Returns an owned [`RhiCommandQueue`] β-shape (refcount
+    /// bumped on the host's `Arc<RhiCommandQueueInner>`) — signature
+    /// change from `&RhiCommandQueue` to `RhiCommandQueue` per Phase 2D.
+    pub fn command_queue(&self) -> RhiCommandQueue {
+        if self.handle.is_null() || self.vtable.is_null() {
+            // Construct a null-handle β-shape that's safe to Drop
+            // (Drop short-circuits on null). Caller's subsequent
+            // method calls on the queue will fail cleanly.
+            return RhiCommandQueue {
+                handle: std::ptr::null(),
+                vtable: std::ptr::null(),
+            };
+        }
+        let mut out_q: std::mem::MaybeUninit<RhiCommandQueue> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable were paired at construction. The
+        // host writes a valid RhiCommandQueue into `out_q` on success.
+        // On failure we still produce a null-handle β-shape so the
+        // method's signature stays infallible.
+        let status = unsafe {
+            ((*self.vtable).command_queue)(
+                self.handle,
+                out_q.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            unsafe { out_q.assume_init() }
+        } else {
+            RhiCommandQueue {
+                handle: std::ptr::null(),
+                vtable: std::ptr::null(),
+            }
+        }
     }
 
     /// Create a CPU-side command buffer from the shared queue.
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `create_command_buffer` callback.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
-        self.inner.create_command_buffer()
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "create_command_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_cb: std::mem::MaybeUninit<CommandBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).create_command_buffer)(
+                self.handle,
+                out_cb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_cb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Copy pixels between same-format, same-size buffers (Split: cache hit).
+    ///
+    /// Dispatches through the cross-DSO vtable's `blit_copy` callback.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
-        self.inner.blit_copy(src, dest)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "blit_copy: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).blit_copy)(
+                self.handle,
+                src as *const PixelBuffer as *const std::ffi::c_void,
+                dest as *const PixelBuffer as *const std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Copy from raw IOSurface to a pixel buffer (Split: cache hit).
@@ -2624,6 +2738,9 @@ impl GpuContextLimitedAccess {
     /// # Safety
     /// - `src` must be a valid IOSurfaceRef pointer
     /// - The IOSurface must remain valid for the duration of the blit
+    ///
+    /// Dispatches through the cross-DSO vtable's `blit_copy_iosurface`
+    /// callback. macOS-only; non-macOS hosts return an error.
     #[cfg(target_os = "macos")]
     pub unsafe fn blit_copy_iosurface(
         &self,
@@ -2632,7 +2749,33 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        unsafe { self.inner.blit_copy_iosurface(src, dest, width, height) }
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "blit_copy_iosurface: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: see the method-level safety note.
+        let status = unsafe {
+            ((*self.vtable).blit_copy_iosurface)(
+                self.handle,
+                src as *const std::ffi::c_void,
+                dest as *const PixelBuffer as *const std::ffi::c_void,
+                width,
+                height,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Get the surface store, if initialized.
