@@ -22,6 +22,8 @@ schemas:
     file: schemas/test_configured_processor_config.yaml
   TcpBindTestProcessorConfig:
     file: schemas/tcp_bind_test_processor_config.yaml
+  GpuAcquireTestProcessorConfig:
+    file: schemas/gpu_acquire_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -39,3 +41,11 @@ processors:
     config:
       name: config
       schema: TcpBindTestProcessorConfig
+
+  - name: GpuAcquireTestProcessor
+    version: 1.0.0
+    description: "Phase C1 (#901) dlopen-cdylib GPU vtable integration test fixture — exercises clone_handle/acquire_pixel_buffer/plane_base_address_pixel_buffer/drop_pixel_buffer/drop_handle through the GpuContextLimitedAccessVTable"
+    execution: manual
+    config:
+      name: config
+      schema: GpuAcquireTestProcessorConfig

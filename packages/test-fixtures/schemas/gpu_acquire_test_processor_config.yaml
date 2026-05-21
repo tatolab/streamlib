@@ -1,0 +1,37 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# Test-only config schema for the Phase 2 dlopen-cdylib GPU vtable
+# integration test (Phase 3 of #901). The processor:
+#   1. Clones its `gpu_limited_access` in `setup()` — exercises the
+#      `clone_handle` vtable callback.
+#   2. Acquires a pixel buffer in `start()` — exercises the
+#      `acquire_pixel_buffer` vtable callback (Phase 2F).
+#   3. Writes a sentinel byte through `plane_base_address(0)` —
+#      exercises the `plane_base_address_pixel_buffer` vtable
+#      callback (Phase 0).
+#   4. Drops the pixel buffer — exercises the `drop_pixel_buffer`
+#      vtable callback.
+#   5. Writes "OK" or "ERR:<msg>" to `output_path` so the integration
+#      test can verify the full acquire→release round-trip succeeded
+#      across the cdylib DSO boundary.
+
+metadata:
+  type: GpuAcquireTestProcessorConfig
+  description: "Test config schema for the cdylib GPU vtable integration test."
+
+properties:
+  output_path:
+    metadata:
+      description: "Filesystem path where the processor writes its result. Format: 'OK' on success, 'ERR:<message>' on failure."
+    type: string
+
+  width:
+    metadata:
+      description: "PixelBuffer width to acquire."
+    type: uint32
+
+  height:
+    metadata:
+      description: "PixelBuffer height to acquire."
+    type: uint32
