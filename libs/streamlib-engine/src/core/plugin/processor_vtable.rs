@@ -32,6 +32,7 @@ use std::sync::{Mutex, OnceLock};
 use streamlib_plugin_abi::{ProcessorVTable, PROCESSOR_VTABLE_LAYOUT_VERSION};
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::plugin::host_services::run_host_extern_c;
 use crate::core::processors::{Config, GeneratedProcessor};
 
 /// Map from `TypeId::of::<P>()` to the leaked `&'static
@@ -108,38 +109,56 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> *mut c_void {
-        let config: P::Config = if config_msgpack_len == 0 || config_msgpack_ptr.is_null() {
-            P::Config::default()
-        } else {
-            let bytes = unsafe {
-                std::slice::from_raw_parts(config_msgpack_ptr, config_msgpack_len)
-            };
-            match rmp_serde::from_slice(bytes) {
-                Ok(c) => c,
-                Err(e) => {
-                    write_err(err_buf, err_buf_cap, err_len, &format!("config deser: {e}"));
-                    return std::ptr::null_mut();
-                }
-            }
-        };
+        run_host_extern_c(
+            "ProcessorWrappers::construct",
+            || {
+                let config: P::Config =
+                    if config_msgpack_len == 0 || config_msgpack_ptr.is_null() {
+                        P::Config::default()
+                    } else {
+                        let bytes = unsafe {
+                            std::slice::from_raw_parts(config_msgpack_ptr, config_msgpack_len)
+                        };
+                        match rmp_serde::from_slice(bytes) {
+                            Ok(c) => c,
+                            Err(e) => {
+                                write_err(
+                                    err_buf,
+                                    err_buf_cap,
+                                    err_len,
+                                    &format!("config deser: {e}"),
+                                );
+                                return std::ptr::null_mut();
+                            }
+                        }
+                    };
 
-        match P::from_config(config) {
-            Ok(processor) => Box::into_raw(Box::new(processor)) as *mut c_void,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                std::ptr::null_mut()
-            }
-        }
+                match P::from_config(config) {
+                    Ok(processor) => Box::into_raw(Box::new(processor)) as *mut c_void,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        std::ptr::null_mut()
+                    }
+                }
+            },
+            std::ptr::null_mut(),
+        )
     }
 
     unsafe extern "C" fn destroy(instance: *mut c_void) {
-        if !instance.is_null() {
-            // SAFETY: instance was produced by Box::into_raw above on this
-            // DSO's heap. Box::from_raw + drop releases on the same heap.
-            unsafe {
-                drop(Box::from_raw(instance as *mut P));
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::destroy",
+            || {
+                if !instance.is_null() {
+                    // SAFETY: instance was produced by Box::into_raw above on this
+                    // DSO's heap. Box::from_raw + drop releases on the same heap.
+                    unsafe {
+                        drop(Box::from_raw(instance as *mut P));
+                    }
+                }
+            },
+            (),
+        )
     }
 
     unsafe extern "C" fn setup(
@@ -149,15 +168,21 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32 {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
-        match <P as GeneratedProcessor>::__generated_setup(processor, ctx) {
-            Ok(()) => 0,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                -1
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::setup",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
+                match <P as GeneratedProcessor>::__generated_setup(processor, ctx) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -1
+                    }
+                }
+            },
+            -2,
+        )
     }
 
     unsafe extern "C" fn teardown(
@@ -167,15 +192,21 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32 {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
-        match <P as GeneratedProcessor>::__generated_teardown(processor, ctx) {
-            Ok(()) => 0,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                -1
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::teardown",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
+                match <P as GeneratedProcessor>::__generated_teardown(processor, ctx) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -1
+                    }
+                }
+            },
+            -2,
+        )
     }
 
     unsafe extern "C" fn on_pause(
@@ -185,15 +216,21 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32 {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        let ctx = unsafe { &*(ctx_limited as *const RuntimeContextLimitedAccess<'_>) };
-        match <P as GeneratedProcessor>::__generated_on_pause(processor, ctx) {
-            Ok(()) => 0,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                -1
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::on_pause",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                let ctx = unsafe { &*(ctx_limited as *const RuntimeContextLimitedAccess<'_>) };
+                match <P as GeneratedProcessor>::__generated_on_pause(processor, ctx) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -1
+                    }
+                }
+            },
+            -2,
+        )
     }
 
     unsafe extern "C" fn on_resume(
@@ -203,15 +240,21 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32 {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        let ctx = unsafe { &*(ctx_limited as *const RuntimeContextLimitedAccess<'_>) };
-        match <P as GeneratedProcessor>::__generated_on_resume(processor, ctx) {
-            Ok(()) => 0,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                -1
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::on_resume",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                let ctx = unsafe { &*(ctx_limited as *const RuntimeContextLimitedAccess<'_>) };
+                match <P as GeneratedProcessor>::__generated_on_resume(processor, ctx) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -1
+                    }
+                }
+            },
+            -2,
+        )
     }
 
     unsafe extern "C" fn process(
@@ -221,15 +264,21 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32 {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        let ctx = unsafe { &*(ctx_limited as *const RuntimeContextLimitedAccess<'_>) };
-        match <P as GeneratedProcessor>::process(processor, ctx) {
-            Ok(()) => 0,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                -1
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::process",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                let ctx = unsafe { &*(ctx_limited as *const RuntimeContextLimitedAccess<'_>) };
+                match <P as GeneratedProcessor>::process(processor, ctx) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -1
+                    }
+                }
+            },
+            -2,
+        )
     }
 
     unsafe extern "C" fn start(
@@ -239,15 +288,21 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32 {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
-        match <P as GeneratedProcessor>::start(processor, ctx) {
-            Ok(()) => 0,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                -1
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::start",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
+                match <P as GeneratedProcessor>::start(processor, ctx) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -1
+                    }
+                }
+            },
+            -2,
+        )
     }
 
     unsafe extern "C" fn stop(
@@ -257,15 +312,21 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32 {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
-        match <P as GeneratedProcessor>::stop(processor, ctx) {
-            Ok(()) => 0,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                -1
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::stop",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
+                match <P as GeneratedProcessor>::stop(processor, ctx) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -1
+                    }
+                }
+            },
+            -2,
+        )
     }
 
     unsafe extern "C" fn execution_config_msgpack(
@@ -274,45 +335,75 @@ where
         out_cap: usize,
         out_len: *mut usize,
     ) -> usize {
-        let processor = unsafe { &*(instance as *const P) };
-        let cfg = <P as GeneratedProcessor>::execution_config(processor);
-        let bytes = match rmp_serde::to_vec_named(&cfg) {
-            Ok(b) => b,
-            Err(_) => return 0,
-        };
-        write_out_bytes(&bytes, out_buf, out_cap, out_len)
+        run_host_extern_c(
+            "ProcessorWrappers::execution_config_msgpack",
+            || {
+                let processor = unsafe { &*(instance as *const P) };
+                let cfg = <P as GeneratedProcessor>::execution_config(processor);
+                let bytes = match rmp_serde::to_vec_named(&cfg) {
+                    Ok(b) => b,
+                    Err(_) => return 0,
+                };
+                write_out_bytes(&bytes, out_buf, out_cap, out_len)
+            },
+            0,
+        )
     }
 
     unsafe extern "C" fn has_iceoryx2_outputs(instance: *const c_void) -> bool {
-        let processor = unsafe { &*(instance as *const P) };
-        <P as GeneratedProcessor>::has_iceoryx2_outputs(processor)
+        run_host_extern_c(
+            "ProcessorWrappers::has_iceoryx2_outputs",
+            || {
+                let processor = unsafe { &*(instance as *const P) };
+                <P as GeneratedProcessor>::has_iceoryx2_outputs(processor)
+            },
+            false,
+        )
     }
 
     unsafe extern "C" fn has_iceoryx2_inputs(instance: *const c_void) -> bool {
-        let processor = unsafe { &*(instance as *const P) };
-        <P as GeneratedProcessor>::has_iceoryx2_inputs(processor)
+        run_host_extern_c(
+            "ProcessorWrappers::has_iceoryx2_inputs",
+            || {
+                let processor = unsafe { &*(instance as *const P) };
+                <P as GeneratedProcessor>::has_iceoryx2_inputs(processor)
+            },
+            false,
+        )
     }
 
     unsafe extern "C" fn get_iceoryx2_output_writer_arc(
         instance: *const c_void,
     ) -> *const c_void {
-        let processor = unsafe { &*(instance as *const P) };
-        match <P as GeneratedProcessor>::get_iceoryx2_output_writer(processor) {
-            // SAFETY: into_raw transfers one strong reference to the
-            // caller. Caller must `Arc::from_raw` exactly once.
-            Some(arc) => std::sync::Arc::into_raw(arc) as *const c_void,
-            None => std::ptr::null(),
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::get_iceoryx2_output_writer_arc",
+            || {
+                let processor = unsafe { &*(instance as *const P) };
+                match <P as GeneratedProcessor>::get_iceoryx2_output_writer(processor) {
+                    // SAFETY: into_raw transfers one strong reference to the
+                    // caller. Caller must `Arc::from_raw` exactly once.
+                    Some(arc) => std::sync::Arc::into_raw(arc) as *const c_void,
+                    None => std::ptr::null(),
+                }
+            },
+            std::ptr::null(),
+        )
     }
 
     unsafe extern "C" fn get_iceoryx2_input_mailboxes_mut(
         instance: *mut c_void,
     ) -> *mut c_void {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        match <P as GeneratedProcessor>::get_iceoryx2_input_mailboxes(processor) {
-            Some(mailboxes) => mailboxes as *mut _ as *mut c_void,
-            None => std::ptr::null_mut(),
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::get_iceoryx2_input_mailboxes_mut",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                match <P as GeneratedProcessor>::get_iceoryx2_input_mailboxes(processor) {
+                    Some(mailboxes) => mailboxes as *mut _ as *mut c_void,
+                    None => std::ptr::null_mut(),
+                }
+            },
+            std::ptr::null_mut(),
+        )
     }
 
     unsafe extern "C" fn apply_config_msgpack(
@@ -323,31 +414,39 @@ where
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32 {
-        let processor = unsafe { &mut *(instance as *mut P) };
-        let bytes = if config_msgpack_len == 0 || config_msgpack_ptr.is_null() {
-            &[][..]
-        } else {
-            unsafe { std::slice::from_raw_parts(config_msgpack_ptr, config_msgpack_len) }
-        };
-        let config: P::Config = match rmp_serde::from_slice(bytes) {
-            Ok(c) => c,
-            Err(e) => {
-                write_err(
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                    &format!("apply_config_msgpack deser: {e}"),
-                );
-                return -1;
-            }
-        };
-        match <P as GeneratedProcessor>::update_config(processor, config) {
-            Ok(()) => 0,
-            Err(e) => {
-                write_err(err_buf, err_buf_cap, err_len, &e.to_string());
-                -2
-            }
-        }
+        run_host_extern_c(
+            "ProcessorWrappers::apply_config_msgpack",
+            || {
+                let processor = unsafe { &mut *(instance as *mut P) };
+                let bytes = if config_msgpack_len == 0 || config_msgpack_ptr.is_null() {
+                    &[][..]
+                } else {
+                    unsafe {
+                        std::slice::from_raw_parts(config_msgpack_ptr, config_msgpack_len)
+                    }
+                };
+                let config: P::Config = match rmp_serde::from_slice(bytes) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        write_err(
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                            &format!("apply_config_msgpack deser: {e}"),
+                        );
+                        return -1;
+                    }
+                };
+                match <P as GeneratedProcessor>::update_config(processor, config) {
+                    Ok(()) => 0,
+                    Err(e) => {
+                        write_err(err_buf, err_buf_cap, err_len, &e.to_string());
+                        -2
+                    }
+                }
+            },
+            -3,
+        )
     }
 
     unsafe extern "C" fn to_runtime_msgpack(
@@ -356,13 +455,19 @@ where
         out_cap: usize,
         out_len: *mut usize,
     ) -> usize {
-        let processor = unsafe { &*(instance as *const P) };
-        let value = <P as GeneratedProcessor>::to_runtime_json(processor);
-        let bytes = match rmp_serde::to_vec_named(&value) {
-            Ok(b) => b,
-            Err(_) => return 0,
-        };
-        write_out_bytes(&bytes, out_buf, out_cap, out_len)
+        run_host_extern_c(
+            "ProcessorWrappers::to_runtime_msgpack",
+            || {
+                let processor = unsafe { &*(instance as *const P) };
+                let value = <P as GeneratedProcessor>::to_runtime_json(processor);
+                let bytes = match rmp_serde::to_vec_named(&value) {
+                    Ok(b) => b,
+                    Err(_) => return 0,
+                };
+                write_out_bytes(&bytes, out_buf, out_cap, out_len)
+            },
+            0,
+        )
     }
 
     unsafe extern "C" fn config_msgpack(
@@ -371,13 +476,19 @@ where
         out_cap: usize,
         out_len: *mut usize,
     ) -> usize {
-        let processor = unsafe { &*(instance as *const P) };
-        let value = <P as GeneratedProcessor>::config_json(processor);
-        let bytes = match rmp_serde::to_vec_named(&value) {
-            Ok(b) => b,
-            Err(_) => return 0,
-        };
-        write_out_bytes(&bytes, out_buf, out_cap, out_len)
+        run_host_extern_c(
+            "ProcessorWrappers::config_msgpack",
+            || {
+                let processor = unsafe { &*(instance as *const P) };
+                let value = <P as GeneratedProcessor>::config_json(processor);
+                let bytes = match rmp_serde::to_vec_named(&value) {
+                    Ok(b) => b,
+                    Err(_) => return 0,
+                };
+                write_out_bytes(&bytes, out_buf, out_cap, out_len)
+            },
+            0,
+        )
     }
 }
 

@@ -140,7 +140,14 @@ pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   DSO holds the `PixelBuffer`. Same rationale as `RuntimeOpsVTable`
 ///   v2's `clone_handle`/`drop_handle` but specific to the
 ///   `PixelBuffer` return type.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 2;
+/// - v3: PixelBuffer method-dispatch callbacks (`strong_count_pixel_buffer`,
+///   `plane_base_address_pixel_buffer`, `plane_size_pixel_buffer`).
+///   The remaining non-cached `PixelBuffer` methods now dispatch
+///   through host-compiled code instead of casting the handle to
+///   `*const PixelBufferRef` cdylib-side — eliminates the cross-DSO
+///   `Arc::from_raw` / direct deref UB landmine the v2 scaffold left
+///   in place.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 // =============================================================================
 // Primitive enums
@@ -748,6 +755,40 @@ pub struct GpuContextLimitedAccessVTable {
     /// its platform buffer) is dropped. Calling on a null pointer
     /// is a no-op.
     pub drop_pixel_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // PixelBuffer method-dispatch (v3 — eliminate cross-DSO Arc::from_raw)
+    // -------------------------------------------------------------------------
+    //
+    // The remaining non-cached `PixelBuffer` methods dispatch through
+    // host-compiled code so the cdylib never casts the opaque handle
+    // to a concrete `*const PixelBufferRef`. Casting the handle
+    // cdylib-side would require both sides to agree on
+    // `PixelBufferRef`'s in-memory layout — which the cdylib has no
+    // way to guarantee under rustc-minor / dep-graph drift.
+
+    /// Number of `PixelBuffer` references to the same underlying
+    /// `PixelBufferRef`. Engine-internal probe used by the host's
+    /// pool manager to detect "buffer no longer in use" without
+    /// locking. Cdylib callers technically can call it through the
+    /// vtable today, but the engine restricts the cdylib-facing
+    /// `PixelBuffer::strong_count` API to `pub(crate)` so the
+    /// cross-DSO path is host-only by visibility. Calling on a null
+    /// pointer returns `0`.
+    pub strong_count_pixel_buffer: unsafe extern "C" fn(handle: *const c_void) -> usize,
+
+    /// Mapped base address for the given plane, or null if out of
+    /// range. Plane 0 on a VMA-allocated or single-plane-imported
+    /// buffer points at the same bytes as
+    /// `slpn_gpu_surface_plane_base_address` / equivalent. Calling
+    /// on a null handle returns `null`.
+    pub plane_base_address_pixel_buffer:
+        unsafe extern "C" fn(handle: *const c_void, plane_index: u32) -> *mut u8,
+
+    /// Byte size of the given plane, or `0` if out of range. Calling
+    /// on a null handle returns `0`.
+    pub plane_size_pixel_buffer:
+        unsafe extern "C" fn(handle: *const c_void, plane_index: u32) -> u64,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -1084,9 +1125,10 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        // v2 (Phase C1): added per-type PixelBuffer clone/drop
-        // callbacks (clone_pixel_buffer / drop_pixel_buffer).
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 2);
+        // v3 (Phase C1 hardening): added PixelBuffer method-dispatch
+        // callbacks (strong_count / plane_base_address / plane_size)
+        // on top of v2's clone/drop pair.
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 3);
     }
 
     #[test]
@@ -1121,11 +1163,13 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // v2 (Phase C1): layout_version (u32) + _reserved_padding (u32)
-        // + 4 fn pointers (clone_handle, drop_handle, clone_pixel_buffer,
-        // drop_pixel_buffer, 8 bytes each)
-        // = 4 + 4 + 32 = 40 bytes.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 40);
+        // v3 (Phase C1 hardening): layout_version (u32) +
+        // _reserved_padding (u32) + 7 fn pointers (clone_handle,
+        // drop_handle, clone_pixel_buffer, drop_pixel_buffer,
+        // strong_count_pixel_buffer, plane_base_address_pixel_buffer,
+        // plane_size_pixel_buffer, 8 bytes each)
+        // = 4 + 4 + 56 = 64 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 64);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -1141,6 +1185,18 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, drop_pixel_buffer),
             32
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, strong_count_pixel_buffer),
+            40
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, plane_base_address_pixel_buffer),
+            48
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, plane_size_pixel_buffer),
+            56
         );
     }
 

@@ -104,34 +104,46 @@ unsafe extern "C" fn audio_clock_shim_tick_trampoline(
     user_data: *mut c_void,
     repr: AudioTickContextRepr,
 ) {
-    if user_data.is_null() {
-        return;
-    }
-    // SAFETY: `user_data` was supplied by `AudioClockShim::on_tick`
-    // and is a `*mut Box<dyn Fn(AudioTickContext) + Send + Sync>`. The
-    // pointer is valid until `audio_clock_shim_drop_trampoline` runs.
-    let closure = unsafe {
-        &*(user_data as *const Box<dyn Fn(AudioTickContext) + Send + Sync>)
-    };
-    let ctx = AudioTickContext {
-        timestamp_ns: repr.timestamp_ns,
-        samples_needed: repr.samples_needed as usize,
-        sample_rate: repr.sample_rate,
-        tick_number: repr.tick_number,
-    };
-    closure(ctx);
+    crate::core::plugin::host_services::run_host_extern_c(
+        "audio_clock_shim_tick_trampoline",
+        || {
+            if user_data.is_null() {
+                return;
+            }
+            // SAFETY: `user_data` was supplied by `AudioClockShim::on_tick`
+            // and is a `*mut Box<dyn Fn(AudioTickContext) + Send + Sync>`. The
+            // pointer is valid until `audio_clock_shim_drop_trampoline` runs.
+            let closure = unsafe {
+                &*(user_data as *const Box<dyn Fn(AudioTickContext) + Send + Sync>)
+            };
+            let ctx = AudioTickContext {
+                timestamp_ns: repr.timestamp_ns,
+                samples_needed: repr.samples_needed as usize,
+                sample_rate: repr.sample_rate,
+                tick_number: repr.tick_number,
+            };
+            closure(ctx);
+        },
+        (),
+    )
 }
 
 /// Drop trampoline the host invokes when the on-tick registration is
 /// released. Reclaims the cdylib's boxed closure.
 unsafe extern "C" fn audio_clock_shim_drop_trampoline(user_data: *mut c_void) {
-    if user_data.is_null() {
-        return;
-    }
-    // SAFETY: pair with `Box::into_raw` in `AudioClockShim::on_tick`.
-    unsafe {
-        let _ = Box::from_raw(
-            user_data as *mut Box<dyn Fn(AudioTickContext) + Send + Sync>,
-        );
-    }
+    crate::core::plugin::host_services::run_host_extern_c(
+        "audio_clock_shim_drop_trampoline",
+        || {
+            if user_data.is_null() {
+                return;
+            }
+            // SAFETY: pair with `Box::into_raw` in `AudioClockShim::on_tick`.
+            unsafe {
+                let _ = Box::from_raw(
+                    user_data as *mut Box<dyn Fn(AudioTickContext) + Send + Sync>,
+                );
+            }
+        },
+        (),
+    )
 }

@@ -168,22 +168,28 @@ unsafe extern "C" fn runtime_ops_completion_trampoline(
     result_ptr: *const u8,
     result_len: usize,
 ) {
-    if user_data.is_null() {
-        return;
-    }
-    // SAFETY: paired with `Box::into_raw` in `submit`/`submit_unit`.
-    let sender_box = unsafe {
-        Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<(i32, Vec<u8>)>)
-    };
-    let payload = if result_len == 0 || result_ptr.is_null() {
-        Vec::new()
-    } else {
-        // SAFETY: payload bytes are valid for the duration of the
-        // callback per the ABI contract; we copy out before returning.
-        let slice = unsafe { std::slice::from_raw_parts(result_ptr, result_len) };
-        slice.to_vec()
-    };
-    let _ = sender_box.send((status, payload));
+    crate::core::plugin::host_services::run_host_extern_c(
+        "runtime_ops_completion_trampoline",
+        || {
+            if user_data.is_null() {
+                return;
+            }
+            // SAFETY: paired with `Box::into_raw` in `submit`/`submit_unit`.
+            let sender_box = unsafe {
+                Box::from_raw(user_data as *mut tokio::sync::oneshot::Sender<(i32, Vec<u8>)>)
+            };
+            let payload = if result_len == 0 || result_ptr.is_null() {
+                Vec::new()
+            } else {
+                // SAFETY: payload bytes are valid for the duration of the
+                // callback per the ABI contract; we copy out before returning.
+                let slice = unsafe { std::slice::from_raw_parts(result_ptr, result_len) };
+                slice.to_vec()
+            };
+            let _ = sender_box.send((status, payload));
+        },
+        (),
+    )
 }
 
 impl RuntimeOperations for RuntimeOpsShim {

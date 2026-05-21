@@ -123,7 +123,7 @@ impl PixelTransferSession {
     /// This is the buffer-centric path for VideoFrame encoding. The source buffer
     /// is typically BGRA from camera capture or BGRA from video decoder.
     pub fn convert_buffer_to_nv12(&self, buffer: &PixelBuffer) -> Result<*mut CVPixelBuffer> {
-        let source_ptr = buffer.ref_.as_ptr() as *mut CVPixelBuffer;
+        let source_ptr = buffer.as_ptr() as *mut CVPixelBuffer;
         self.transfer_rgba_to_nv12(source_ptr, buffer.width, buffer.height)
     }
 

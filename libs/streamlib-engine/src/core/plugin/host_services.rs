@@ -237,6 +237,54 @@ pub unsafe fn install_host_services(
         return None;
     }
 
+    // Validate every inner vtable's layout_version before storing the
+    // pointers. The outer `abi_layout_version` only covers the wire
+    // shape of [`HostServices`] itself; a host that bumped, say, the
+    // GpuContextLimitedAccessVTable to v4 but kept HostServices v4
+    // would otherwise silently call through mismatched offsets from a
+    // v3-built cdylib. Mismatch → refuse the install cleanly; the
+    // host's post-call "processor not registered" check surfaces the
+    // failure. (Inner vtables are validated only when non-null. The
+    // GPU vtable pointer may legitimately be null on hosts that don't
+    // ship a GpuContext, per `HOST_SERVICES_LAYOUT_VERSION` v4 docs.)
+    use streamlib_plugin_abi::{
+        AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
+        RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
+    };
+    if !services.runtime_context_vtable.is_null() {
+        // SAFETY: per the wire contract, when non-null this points at
+        // a `&'static RuntimeContextVTable` owned by the host. The
+        // first u32 in the struct is `layout_version` (pinned at
+        // offset 0 by the layout-regression tests).
+        let v = unsafe { (*services.runtime_context_vtable).layout_version };
+        if v != RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+    if !services.audio_clock_vtable.is_null() {
+        // SAFETY: same shape as runtime_context_vtable.
+        let v = unsafe { (*services.audio_clock_vtable).layout_version };
+        if v != AUDIO_CLOCK_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+    if !services.runtime_ops_vtable.is_null() {
+        // SAFETY: same shape as runtime_context_vtable.
+        let v = unsafe { (*services.runtime_ops_vtable).layout_version };
+        if v != RUNTIME_OPS_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+    if !services.gpu_context_limited_access_vtable.is_null() {
+        // SAFETY: same shape as runtime_context_vtable. Null is
+        // allowed (host has no GpuContext); only non-null pointers
+        // are version-validated.
+        let v = unsafe { (*services.gpu_context_limited_access_vtable).layout_version };
+        if v != GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
+
     let callbacks = HostCallbacks {
         host: services.host,
         tracing_register_callsite: services.tracing_register_callsite,
@@ -380,24 +428,96 @@ pub struct HostServiceImpls {
 unsafe impl Send for HostServiceImpls {}
 unsafe impl Sync for HostServiceImpls {}
 
+// ---------------- Panic safety helpers ----------------
+//
+// Unwinding through an `extern "C"` boundary is undefined behaviour.
+// Every host-side callback below routes its body through
+// [`run_host_extern_c`] so a panic in host code is caught and
+// converted to a logged error plus a sensible default return value
+// at the FFI boundary, instead of corrupting the cdylib's stack.
+//
+// The default-on-panic value per callback type:
+//   - void                  → `()`
+//   - bool                  → `false`
+//   - u32 / usize           → `0`
+//   - isize (used by id_copy with `-1` = None) → `-1`
+//   - i32  (status codes; non-zero = error)   → `1`
+//   - HostInterest          → `HostInterest::Never`
+//   - `*const c_void` / `*mut u8` / `*const ProcessorVTable` → `null` / `null_mut`
+
+/// Run an extern "C" callback body inside [`std::panic::catch_unwind`].
+/// Panics are logged and converted to `default_on_panic` so the FFI
+/// boundary stays sound. `callback_name` is included in the error
+/// log to make the source obvious in mixed-callback traces.
+///
+/// Uses [`std::panic::AssertUnwindSafe`] internally because callback
+/// bodies routinely touch raw pointers and `*mut` outputs that aren't
+/// `UnwindSafe` by default — the pointer dereferences are sound under
+/// the FFI contract regardless of unwinding.
+///
+/// `pub(crate)` so the cdylib-side trampolines in
+/// [`crate::core::context::audio_clock_shim`],
+/// [`crate::core::context::runtime_ops_shim`], and the per-processor
+/// vtable wrappers in [`crate::core::plugin::processor_vtable`] can
+/// route through the same helper. Every extern "C" boundary crossing
+/// in the engine — host-side and cdylib-side — must be wrapped.
+#[inline]
+pub(crate) fn run_host_extern_c<F, T>(
+    callback_name: &'static str,
+    body: F,
+    default_on_panic: T,
+) -> T
+where
+    F: FnOnce() -> T,
+{
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    match catch_unwind(AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<&'static str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "<non-string panic payload>".to_string()
+            };
+            tracing::error!(
+                target: "streamlib::ffi",
+                callback = callback_name,
+                panic = %msg,
+                "host extern \"C\" callback panicked; FFI boundary converted panic to default return"
+            );
+            default_on_panic
+        }
+    }
+}
+
 unsafe extern "C" fn host_tracing_register_callsite(
     _host: HostHandle,
     _target_ptr: *const u8,
     _target_len: usize,
     _level: HostLogLevel,
 ) -> HostInterest {
-    // The host's `EnvFilter` filters at emit time via `host_tracing_emit`
-    // (it calls `tracing::event!` which fires through the host's
-    // subscriber chain). Returning `Always` here tells the cdylib's
-    // forwarding `Subscriber` to cache "always emit" for the
-    // callsite — every event reaches `host_tracing_emit`, where the
-    // host's filter actually decides.
-    //
-    // Trade-off: cdylib pays for the FFI hop even on filtered-out
-    // events, plus a string copy of the message. A future
-    // refinement could push a (target, level)-keyed pre-filter
-    // here; the current ABI shape doesn't constrain that.
-    HostInterest::Always
+    run_host_extern_c(
+        "host_tracing_register_callsite",
+        || {
+            // The host's `EnvFilter` filters at emit time via
+            // `host_tracing_emit` (it calls `tracing::event!` which
+            // fires through the host's subscriber chain). Returning
+            // `Always` here tells the cdylib's forwarding
+            // `Subscriber` to cache "always emit" for the callsite —
+            // every event reaches `host_tracing_emit`, where the
+            // host's filter actually decides.
+            //
+            // Trade-off: cdylib pays for the FFI hop even on
+            // filtered-out events, plus a string copy of the
+            // message. A future refinement could push a (target,
+            // level)-keyed pre-filter here; the current ABI shape
+            // doesn't constrain that.
+            HostInterest::Always
+        },
+        HostInterest::Never,
+    )
 }
 
 unsafe extern "C" fn host_tracing_enabled(
@@ -406,11 +526,17 @@ unsafe extern "C" fn host_tracing_enabled(
     _target_len: usize,
     _level: HostLogLevel,
 ) -> bool {
-    // Paired with `host_tracing_register_callsite` returning
-    // `Always`: this never fires from the cdylib side. Kept in the
-    // ABI so a future register_callsite that returns `Sometimes`
-    // has the per-event enable hook available.
-    true
+    run_host_extern_c(
+        "host_tracing_enabled",
+        || {
+            // Paired with `host_tracing_register_callsite` returning
+            // `Always`: this never fires from the cdylib side. Kept
+            // in the ABI so a future register_callsite that returns
+            // `Sometimes` has the per-event enable hook available.
+            true
+        },
+        false,
+    )
 }
 
 unsafe extern "C" fn host_tracing_emit(
@@ -423,34 +549,43 @@ unsafe extern "C" fn host_tracing_emit(
     fields_msgpack_ptr: *const u8,
     fields_msgpack_len: usize,
 ) {
-    let target = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(target_ptr, target_len))
-    };
-    let message = if message_len == 0 {
-        ""
-    } else {
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(message_ptr, message_len))
-        }
-    };
-    let level_val = host_log_level_to_tracing(level);
-    let fields_bytes = if fields_msgpack_len == 0 || fields_msgpack_ptr.is_null() {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(fields_msgpack_ptr, fields_msgpack_len) }
-    };
+    run_host_extern_c(
+        "host_tracing_emit",
+        || {
+            let target = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(target_ptr, target_len))
+            };
+            let message = if message_len == 0 {
+                ""
+            } else {
+                unsafe {
+                    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        message_ptr,
+                        message_len,
+                    ))
+                }
+            };
+            let level_val = host_log_level_to_tracing(level);
+            let fields_bytes = if fields_msgpack_len == 0 || fields_msgpack_ptr.is_null() {
+                &[][..]
+            } else {
+                unsafe { std::slice::from_raw_parts(fields_msgpack_ptr, fields_msgpack_len) }
+            };
 
-    // Decode the structured fields (msgpack map) and replay them
-    // through the host's tracing pipeline alongside `message`. The
-    // simplest shape that preserves field fidelity is to log via
-    // the host's own subscriber using `event!`-style emission with
-    // a single `message` field — structured fields go into the
-    // event's value set as serde-derived JSON values, captured by
-    // `JsonlSinkLayer::Capture::record_*`.
-    let fields_map: serde_json::Value =
-        rmp_serde::from_slice(fields_bytes).unwrap_or(serde_json::Value::Null);
+            // Decode the structured fields (msgpack map) and replay them
+            // through the host's tracing pipeline alongside `message`. The
+            // simplest shape that preserves field fidelity is to log via
+            // the host's own subscriber using `event!`-style emission with
+            // a single `message` field — structured fields go into the
+            // event's value set as serde-derived JSON values, captured by
+            // `JsonlSinkLayer::Capture::record_*`.
+            let fields_map: serde_json::Value =
+                rmp_serde::from_slice(fields_bytes).unwrap_or(serde_json::Value::Null);
 
-    emit_via_host_dispatch(target, level_val, message, &fields_map);
+            emit_via_host_dispatch(target, level_val, message, &fields_map);
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_pubsub_publish(
@@ -460,21 +595,28 @@ unsafe extern "C" fn host_pubsub_publish(
     event_msgpack_ptr: *const u8,
     event_msgpack_len: usize,
 ) {
-    let topic = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(topic_ptr, topic_len))
-    };
-    let event_bytes = unsafe { std::slice::from_raw_parts(event_msgpack_ptr, event_msgpack_len) };
-    let event: Event = match rmp_serde::from_slice(event_bytes) {
-        Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(
-                target: "streamlib::plugin",
-                "host_pubsub_publish: failed to decode event from cdylib: {e}"
-            );
-            return;
-        }
-    };
-    crate::core::pubsub::PUBSUB.publish(topic, &event);
+    run_host_extern_c(
+        "host_pubsub_publish",
+        || {
+            let topic = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(topic_ptr, topic_len))
+            };
+            let event_bytes =
+                unsafe { std::slice::from_raw_parts(event_msgpack_ptr, event_msgpack_len) };
+            let event: Event = match rmp_serde::from_slice(event_bytes) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!(
+                        target: "streamlib::plugin",
+                        "host_pubsub_publish: failed to decode event from cdylib: {e}"
+                    );
+                    return;
+                }
+            };
+            crate::core::pubsub::PUBSUB.publish(topic, &event);
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_schema_register(
@@ -484,15 +626,22 @@ unsafe extern "C" fn host_schema_register(
     yaml_ptr: *const u8,
     yaml_len: usize,
 ) {
-    let canonical_id = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            canonical_id_ptr,
-            canonical_id_len,
-        ))
-    };
-    let yaml =
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(yaml_ptr, yaml_len)) };
-    crate::core::embedded_schemas::register_schema(canonical_id.to_string(), yaml);
+    run_host_extern_c(
+        "host_schema_register",
+        || {
+            let canonical_id = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    canonical_id_ptr,
+                    canonical_id_len,
+                ))
+            };
+            let yaml = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(yaml_ptr, yaml_len))
+            };
+            crate::core::embedded_schemas::register_schema(canonical_id.to_string(), yaml);
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_schema_lookup(
@@ -502,21 +651,27 @@ unsafe extern "C" fn host_schema_lookup(
     result_callback: extern "C" fn(*mut c_void, *const u8, usize),
     result_userdata: *mut c_void,
 ) {
-    let canonical_id = unsafe {
-        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-            canonical_id_ptr,
-            canonical_id_len,
-        ))
-    };
-    match crate::core::embedded_schemas::get_embedded_schema_definition(canonical_id) {
-        Some(yaml) => {
-            let bytes = yaml.as_bytes();
-            result_callback(result_userdata, bytes.as_ptr(), bytes.len());
-        }
-        None => {
-            result_callback(result_userdata, std::ptr::null(), 0);
-        }
-    }
+    run_host_extern_c(
+        "host_schema_lookup",
+        || {
+            let canonical_id = unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    canonical_id_ptr,
+                    canonical_id_len,
+                ))
+            };
+            match crate::core::embedded_schemas::get_embedded_schema_definition(canonical_id) {
+                Some(yaml) => {
+                    let bytes = yaml.as_bytes();
+                    result_callback(result_userdata, bytes.as_ptr(), bytes.len());
+                }
+                None => {
+                    result_callback(result_userdata, std::ptr::null(), 0);
+                }
+            }
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_iceoryx_log_emit(
@@ -527,28 +682,49 @@ unsafe extern "C" fn host_iceoryx_log_emit(
     message_ptr: *const u8,
     message_len: usize,
 ) {
-    let origin = if origin_len == 0 {
-        ""
-    } else {
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(origin_ptr, origin_len))
-        }
-    };
-    let message = if message_len == 0 {
-        ""
-    } else {
-        unsafe {
-            std::str::from_utf8_unchecked(std::slice::from_raw_parts(message_ptr, message_len))
-        }
-    };
-    // Forward into the host's tracing pipeline at the appropriate level.
-    match level {
-        HostLogLevel::Trace => tracing::trace!(target: "iceoryx2", origin = %origin, "{message}"),
-        HostLogLevel::Debug => tracing::debug!(target: "iceoryx2", origin = %origin, "{message}"),
-        HostLogLevel::Info => tracing::info!(target: "iceoryx2", origin = %origin, "{message}"),
-        HostLogLevel::Warn => tracing::warn!(target: "iceoryx2", origin = %origin, "{message}"),
-        HostLogLevel::Error => tracing::error!(target: "iceoryx2", origin = %origin, "{message}"),
-    }
+    run_host_extern_c(
+        "host_iceoryx_log_emit",
+        || {
+            let origin = if origin_len == 0 {
+                ""
+            } else {
+                unsafe {
+                    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        origin_ptr, origin_len,
+                    ))
+                }
+            };
+            let message = if message_len == 0 {
+                ""
+            } else {
+                unsafe {
+                    std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                        message_ptr,
+                        message_len,
+                    ))
+                }
+            };
+            // Forward into the host's tracing pipeline at the appropriate level.
+            match level {
+                HostLogLevel::Trace => {
+                    tracing::trace!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+                HostLogLevel::Debug => {
+                    tracing::debug!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+                HostLogLevel::Info => {
+                    tracing::info!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+                HostLogLevel::Warn => {
+                    tracing::warn!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+                HostLogLevel::Error => {
+                    tracing::error!(target: "iceoryx2", origin = %origin, "{message}")
+                }
+            }
+        },
+        (),
+    )
 }
 
 /// Host-side `processor_register` callback. Decodes the descriptor
@@ -562,48 +738,57 @@ unsafe extern "C" fn host_processor_register(
     descriptor_msgpack_len: usize,
     vtable: *const ProcessorVTable,
 ) -> i32 {
-    if vtable.is_null() {
-        tracing::warn!("host_processor_register: null vtable pointer");
-        return -1;
-    }
-
-    let vtable_layout = unsafe { (*vtable).layout_version };
-    if vtable_layout != PROCESSOR_VTABLE_LAYOUT_VERSION {
-        tracing::warn!(
-            "host_processor_register: vtable layout version mismatch (got {}, expected {})",
-            vtable_layout,
-            PROCESSOR_VTABLE_LAYOUT_VERSION
-        );
-        return -2;
-    }
-
-    let descriptor_bytes =
-        unsafe { std::slice::from_raw_parts(descriptor_msgpack_ptr, descriptor_msgpack_len) };
-    let descriptor: crate::core::descriptors::ProcessorDescriptor =
-        match rmp_serde::from_slice(descriptor_bytes) {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::warn!(
-                    "host_processor_register: failed to decode descriptor msgpack: {e}"
-                );
-                return -3;
+    run_host_extern_c(
+        "host_processor_register",
+        || {
+            if vtable.is_null() {
+                tracing::warn!("host_processor_register: null vtable pointer");
+                return -1;
             }
-        };
 
-    // SAFETY: `vtable` is `&'static ProcessorVTable` on the cdylib
-    // side; the cdylib is pinned via `LOADED_PLUGIN_LIBRARIES`, so
-    // the pointer outlives the host's usage.
-    let vtable_ref: &'static ProcessorVTable = unsafe { &*vtable };
+            let vtable_layout = unsafe { (*vtable).layout_version };
+            if vtable_layout != PROCESSOR_VTABLE_LAYOUT_VERSION {
+                tracing::warn!(
+                    "host_processor_register: vtable layout version mismatch (got {}, expected {})",
+                    vtable_layout,
+                    PROCESSOR_VTABLE_LAYOUT_VERSION
+                );
+                return -2;
+            }
 
-    match crate::core::processors::PROCESSOR_REGISTRY
-        .register_via_vtable(descriptor, vtable_ref)
-    {
-        Ok(()) => 0,
-        Err(e) => {
-            tracing::warn!("host_processor_register: register_via_vtable failed: {e}");
-            -4
-        }
-    }
+            let descriptor_bytes = unsafe {
+                std::slice::from_raw_parts(descriptor_msgpack_ptr, descriptor_msgpack_len)
+            };
+            let descriptor: crate::core::descriptors::ProcessorDescriptor =
+                match rmp_serde::from_slice(descriptor_bytes) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!(
+                            "host_processor_register: failed to decode descriptor msgpack: {e}"
+                        );
+                        return -3;
+                    }
+                };
+
+            // SAFETY: `vtable` is `&'static ProcessorVTable` on the cdylib
+            // side; the cdylib is pinned via `LOADED_PLUGIN_LIBRARIES`, so
+            // the pointer outlives the host's usage.
+            let vtable_ref: &'static ProcessorVTable = unsafe { &*vtable };
+
+            match crate::core::processors::PROCESSOR_REGISTRY
+                .register_via_vtable(descriptor, vtable_ref)
+            {
+                Ok(()) => 0,
+                Err(e) => {
+                    tracing::warn!("host_processor_register: register_via_vtable failed: {e}");
+                    -4
+                }
+            }
+        },
+        // Non-zero on panic = error. Discriminate from the explicit
+        // failure codes (-1 .. -4) with a fresh value.
+        -5,
+    )
 }
 
 // =============================================================================
@@ -715,10 +900,16 @@ unsafe extern "C" fn host_rcv_runtime_id_copy(
     out_buf_cap: usize,
     out_len: *mut usize,
 ) -> usize {
-    // SAFETY: host-side construction passes &RuntimeContext as ctx.
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    let id_bytes = rc.runtime_id().as_str().as_bytes();
-    write_id_bytes(id_bytes, out_buf, out_buf_cap, out_len)
+    run_host_extern_c(
+        "host_rcv_runtime_id_copy",
+        || {
+            // SAFETY: host-side construction passes &RuntimeContext as ctx.
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            let id_bytes = rc.runtime_id().as_str().as_bytes();
+            write_id_bytes(id_bytes, out_buf, out_buf_cap, out_len)
+        },
+        0,
+    )
 }
 
 unsafe extern "C" fn host_rcv_processor_id_copy(
@@ -727,56 +918,105 @@ unsafe extern "C" fn host_rcv_processor_id_copy(
     out_buf_cap: usize,
     out_len: *mut usize,
 ) -> isize {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    match rc.processor_id() {
-        Some(pid) => {
-            let bytes = pid.as_str().as_bytes();
-            write_id_bytes(bytes, out_buf, out_buf_cap, out_len) as isize
-        }
-        None => -1,
-    }
+    run_host_extern_c(
+        "host_rcv_processor_id_copy",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            match rc.processor_id() {
+                Some(pid) => {
+                    let bytes = pid.as_str().as_bytes();
+                    write_id_bytes(bytes, out_buf, out_buf_cap, out_len) as isize
+                }
+                None => -1,
+            }
+        },
+        -1,
+    )
 }
 
 unsafe extern "C" fn host_rcv_is_paused(ctx: *const c_void) -> bool {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    rc.is_paused()
+    run_host_extern_c(
+        "host_rcv_is_paused",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            rc.is_paused()
+        },
+        // Pause-on-panic is the conservative default: a panicking
+        // is_paused() callback shouldn't keep a runaway processor
+        // running. `true` halts further work until the host clears
+        // the panic state.
+        true,
+    )
 }
 
 unsafe extern "C" fn host_rcv_should_process(ctx: *const c_void) -> bool {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    rc.should_process()
+    run_host_extern_c(
+        "host_rcv_should_process",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            rc.should_process()
+        },
+        // Same conservative default as is_paused — false halts the
+        // processor until the host clears state.
+        false,
+    )
 }
 
 unsafe extern "C" fn host_rcv_gpu_full_access(_ctx: *const c_void) -> *const c_void {
-    // Phase B: the shim still embeds `GpuContextFullAccess` directly
-    // alongside the handle/vtable pair, so the cdylib never reaches
-    // through this callback. Phase C (#886) replaces the embedded
-    // value with `(gpu_full_handle, &HOST_GPU_CONTEXT_VTABLE)` and
-    // wires this callback to return the real handle.
-    std::ptr::null()
+    run_host_extern_c(
+        "host_rcv_gpu_full_access",
+        || {
+            // Phase B: the shim still embeds `GpuContextFullAccess`
+            // directly alongside the handle/vtable pair, so the
+            // cdylib never reaches through this callback. Phase C
+            // (#886) replaces the embedded value with
+            // `(gpu_full_handle, &HOST_GPU_CONTEXT_VTABLE)` and
+            // wires this callback to return the real handle.
+            std::ptr::null()
+        },
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_rcv_gpu_limited_access(_ctx: *const c_void) -> *const c_void {
-    std::ptr::null()
+    run_host_extern_c(
+        "host_rcv_gpu_limited_access",
+        || std::ptr::null(),
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_rcv_audio_clock_handle(ctx: *const c_void) -> *const c_void {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    // The shim's audio-clock handle is a `&SharedAudioClock` — the
-    // accompanying [`HOST_AUDIO_CLOCK_VTABLE`] callbacks cast it back
-    // to that type and invoke the Rust trait methods.
-    rc.audio_clock() as *const SharedAudioClock as *const c_void
+    run_host_extern_c(
+        "host_rcv_audio_clock_handle",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            // The shim's audio-clock handle is a `&SharedAudioClock` —
+            // the accompanying [`HOST_AUDIO_CLOCK_VTABLE`] callbacks
+            // cast it back to that type and invoke the Rust trait
+            // methods.
+            rc.audio_clock() as *const SharedAudioClock as *const c_void
+        },
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_rcv_runtime_ops_handle(ctx: *const c_void) -> *const c_void {
-    let rc = unsafe { &*(ctx as *const RuntimeContext) };
-    // `rc.runtime()` produces an owned `Arc<dyn RuntimeOperations>`
-    // each call; the per-RuntimeContext handle we hand the cdylib must
-    // outlive the call boundary. We keep the canonical handle as
-    // `&Arc<dyn RuntimeOperations>` borrowed out of the
-    // RuntimeContext's internal storage, which lives as long as the
-    // RuntimeContext itself.
-    rc.runtime_operations_ref() as *const Arc<dyn RuntimeOperations> as *const c_void
+    run_host_extern_c(
+        "host_rcv_runtime_ops_handle",
+        || {
+            let rc = unsafe { &*(ctx as *const RuntimeContext) };
+            // `rc.runtime()` produces an owned `Arc<dyn
+            // RuntimeOperations>` each call; the per-RuntimeContext
+            // handle we hand the cdylib must outlive the call
+            // boundary. We keep the canonical handle as
+            // `&Arc<dyn RuntimeOperations>` borrowed out of the
+            // RuntimeContext's internal storage, which lives as long
+            // as the RuntimeContext itself.
+            rc.runtime_operations_ref() as *const Arc<dyn RuntimeOperations> as *const c_void
+        },
+        std::ptr::null(),
+    )
 }
 
 /// Static [`RuntimeContextVTable`] installed once per process and
@@ -818,13 +1058,25 @@ pub fn host_runtime_context_vtable() -> *const RuntimeContextVTable {
 // ---------------- AudioClock vtable ----------------
 
 unsafe extern "C" fn host_acv_sample_rate(handle: *const c_void) -> u32 {
-    let clock = unsafe { &*(handle as *const SharedAudioClock) };
-    clock.sample_rate()
+    run_host_extern_c(
+        "host_acv_sample_rate",
+        || {
+            let clock = unsafe { &*(handle as *const SharedAudioClock) };
+            clock.sample_rate()
+        },
+        0,
+    )
 }
 
 unsafe extern "C" fn host_acv_buffer_size(handle: *const c_void) -> usize {
-    let clock = unsafe { &*(handle as *const SharedAudioClock) };
-    clock.buffer_size()
+    run_host_extern_c(
+        "host_acv_buffer_size",
+        || {
+            let clock = unsafe { &*(handle as *const SharedAudioClock) };
+            clock.buffer_size()
+        },
+        0,
+    )
 }
 
 unsafe extern "C" fn host_acv_on_tick(
@@ -833,23 +1085,39 @@ unsafe extern "C" fn host_acv_on_tick(
     user_data: *mut c_void,
     drop_user_data: unsafe extern "C" fn(*mut c_void),
 ) {
-    let clock = unsafe { &*(handle as *const SharedAudioClock) };
+    run_host_extern_c(
+        "host_acv_on_tick",
+        || {
+            let clock = unsafe { &*(handle as *const SharedAudioClock) };
 
-    // Wrap the (callback, user_data, drop_user_data) trio in a single
-    // Send + Sync struct that the host's AudioClock holds as its
-    // callback's owned state. The struct's `fire` method takes
-    // `&self`, which forces the dispatching closure to capture the
-    // whole struct (avoiding Rust 2021 disjoint-capture splitting,
-    // which would otherwise lift the inner `*mut c_void` out and
-    // break Send).
-    let bridge = OnTickBridge {
-        callback,
-        user_data,
-        drop_user_data,
-    };
-    let cb: Box<dyn Fn(crate::core::context::AudioTickContext) + Send + Sync> =
-        Box::new(move |ctx_local| bridge.fire(ctx_local));
-    clock.on_tick(cb);
+            // Wrap the (callback, user_data, drop_user_data) trio in a single
+            // Send + Sync struct that the host's AudioClock holds as its
+            // callback's owned state. The struct's `fire` method takes
+            // `&self`, which forces the dispatching closure to capture the
+            // whole struct (avoiding Rust 2021 disjoint-capture splitting,
+            // which would otherwise lift the inner `*mut c_void` out and
+            // break Send).
+            let bridge = OnTickBridge {
+                callback,
+                user_data,
+                drop_user_data,
+            };
+            let cb: Box<dyn Fn(crate::core::context::AudioTickContext) + Send + Sync> =
+                Box::new(move |ctx_local| bridge.fire(ctx_local));
+            clock.on_tick(cb);
+        },
+        // If on_tick registration panics, the cdylib's `drop_user_data`
+        // callback must still fire to reclaim the cdylib-allocated
+        // user_data box. The bridge's `Drop` impl runs only when
+        // the bridge was actually constructed, so a panic before
+        // construction would leak. Mitigate by invoking
+        // `drop_user_data` directly when the protected body
+        // panicked. SAFETY: cdylib's ABI promises this fn is safe
+        // to invoke with the user_data pointer.
+        {
+            unsafe { (drop_user_data)(user_data) };
+        },
+    )
 }
 
 /// Holder for the cdylib's `(callback, user_data, drop_user_data)`
@@ -1042,28 +1310,39 @@ unsafe extern "C" fn host_rov_add_processor(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    let spec_bytes = if spec_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(spec_msgpack_ptr, spec_msgpack_len) }.to_vec()
-    };
-    rt.spawn(async move {
-        let result = match rmp_serde::from_slice::<crate::core::processors::ProcessorSpec>(
-            &spec_bytes,
-        ) {
-            Ok(spec) => ops.add_processor_async(spec).await,
-            Err(e) => Err(crate::core::Error::Config(format!(
-                "add_processor: spec msgpack decode failed: {e}"
-            ))),
-        };
-        guard.fire_with_result(result);
-    });
+    run_host_extern_c(
+        "host_rov_add_processor",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            let spec_bytes = if spec_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(spec_msgpack_ptr, spec_msgpack_len) }.to_vec()
+            };
+            rt.spawn(async move {
+                let result = match rmp_serde::from_slice::<crate::core::processors::ProcessorSpec>(
+                    &spec_bytes,
+                ) {
+                    Ok(spec) => ops.add_processor_async(spec).await,
+                    Err(e) => Err(crate::core::Error::Config(format!(
+                        "add_processor: spec msgpack decode failed: {e}"
+                    ))),
+                };
+                guard.fire_with_result(result);
+            });
+        },
+        // Sync-body panic: CompletionGuard's Drop fires the abort
+        // completion if `guard` was constructed before the panic;
+        // otherwise the cdylib's `rx.await` hangs. The cdylib's
+        // RAII-on-Drop trampoline reclaims its boxed Sender either
+        // way.
+        (),
+    )
 }
 
 unsafe extern "C" fn host_rov_remove_processor(
@@ -1073,30 +1352,37 @@ unsafe extern "C" fn host_rov_remove_processor(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    let id_bytes = if processor_id_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe {
-            std::slice::from_raw_parts(processor_id_msgpack_ptr, processor_id_msgpack_len)
-        }
-        .to_vec()
-    };
-    rt.spawn(async move {
-        let result =
-            match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(&id_bytes) {
-                Ok(pid) => ops.remove_processor_async(pid).await,
-                Err(e) => Err(crate::core::Error::Config(format!(
-                    "remove_processor: processor_id msgpack decode failed: {e}"
-                ))),
+    run_host_extern_c(
+        "host_rov_remove_processor",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
             };
-        guard.fire_with_result(result);
-    });
+            let id_bytes = if processor_id_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe {
+                    std::slice::from_raw_parts(processor_id_msgpack_ptr, processor_id_msgpack_len)
+                }
+                .to_vec()
+            };
+            rt.spawn(async move {
+                let result = match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(
+                    &id_bytes,
+                ) {
+                    Ok(pid) => ops.remove_processor_async(pid).await,
+                    Err(e) => Err(crate::core::Error::Config(format!(
+                        "remove_processor: processor_id msgpack decode failed: {e}"
+                    ))),
+                };
+                guard.fire_with_result(result);
+            });
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_rov_connect(
@@ -1108,48 +1394,55 @@ unsafe extern "C" fn host_rov_connect(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    let from_bytes = if from_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(from_msgpack_ptr, from_msgpack_len) }.to_vec()
-    };
-    let to_bytes = if to_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(to_msgpack_ptr, to_msgpack_len) }.to_vec()
-    };
-    rt.spawn(async move {
-        let from: crate::core::OutputLinkPortRef = match rmp_serde::from_slice(&from_bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
-                    Err(crate::core::Error::Config(format!(
-                        "connect: from-port msgpack decode failed: {e}"
-                    )));
-                guard.fire_with_result(result);
+    run_host_extern_c(
+        "host_rov_connect",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
                 return;
-            }
-        };
-        let to: crate::core::InputLinkPortRef = match rmp_serde::from_slice(&to_bytes) {
-            Ok(v) => v,
-            Err(e) => {
-                let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
-                    Err(crate::core::Error::Config(format!(
-                        "connect: to-port msgpack decode failed: {e}"
-                    )));
+            };
+            let from_bytes = if from_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(from_msgpack_ptr, from_msgpack_len) }.to_vec()
+            };
+            let to_bytes = if to_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(to_msgpack_ptr, to_msgpack_len) }.to_vec()
+            };
+            rt.spawn(async move {
+                let from: crate::core::OutputLinkPortRef =
+                    match rmp_serde::from_slice(&from_bytes) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
+                                Err(crate::core::Error::Config(format!(
+                                    "connect: from-port msgpack decode failed: {e}"
+                                )));
+                            guard.fire_with_result(result);
+                            return;
+                        }
+                    };
+                let to: crate::core::InputLinkPortRef = match rmp_serde::from_slice(&to_bytes) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let result: crate::core::Result<crate::core::graph::LinkUniqueId> =
+                            Err(crate::core::Error::Config(format!(
+                                "connect: to-port msgpack decode failed: {e}"
+                            )));
+                        guard.fire_with_result(result);
+                        return;
+                    }
+                };
+                let result = ops.connect_async(from, to).await;
                 guard.fire_with_result(result);
-                return;
-            }
-        };
-        let result = ops.connect_async(from, to).await;
-        guard.fire_with_result(result);
-    });
+            });
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_rov_disconnect(
@@ -1159,26 +1452,34 @@ unsafe extern "C" fn host_rov_disconnect(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    let bytes = if link_id_msgpack_len == 0 {
-        Vec::new()
-    } else {
-        unsafe { std::slice::from_raw_parts(link_id_msgpack_ptr, link_id_msgpack_len) }.to_vec()
-    };
-    rt.spawn(async move {
-        let result = match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes) {
-            Ok(link_id) => ops.disconnect_async(link_id).await,
-            Err(e) => Err(crate::core::Error::Config(format!(
-                "disconnect: link_id msgpack decode failed: {e}"
-            ))),
-        };
-        guard.fire_with_result(result);
-    });
+    run_host_extern_c(
+        "host_rov_disconnect",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            let bytes = if link_id_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(link_id_msgpack_ptr, link_id_msgpack_len) }
+                    .to_vec()
+            };
+            rt.spawn(async move {
+                let result =
+                    match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes) {
+                        Ok(link_id) => ops.disconnect_async(link_id).await,
+                        Err(e) => Err(crate::core::Error::Config(format!(
+                            "disconnect: link_id msgpack decode failed: {e}"
+                        ))),
+                    };
+                guard.fire_with_result(result);
+            });
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_rov_to_json(
@@ -1186,16 +1487,22 @@ unsafe extern "C" fn host_rov_to_json(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-    let guard = CompletionGuard::new(completion, user_data);
-    let Some(rt) = host_tokio_handle() else {
-        guard.fire_err_msg(b"host tokio handle not installed");
-        return;
-    };
-    rt.spawn(async move {
-        let result = ops.to_json_async().await;
-        guard.fire_with_result(result);
-    });
+    run_host_extern_c(
+        "host_rov_to_json",
+        || {
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            rt.spawn(async move {
+                let result = ops.to_json_async().await;
+                guard.fire_with_result(result);
+            });
+        },
+        (),
+    )
 }
 
 /// Take a (borrowed) handle returned from
@@ -1207,24 +1514,36 @@ unsafe extern "C" fn host_rov_to_json(
 /// keeps the underlying `dyn RuntimeOperations` impl alive
 /// independently. Cdylib drops it via [`host_rov_drop_handle`].
 unsafe extern "C" fn host_rov_clone_handle(borrowed_handle: *const c_void) -> *const c_void {
-    if borrowed_handle.is_null() {
-        return std::ptr::null();
-    }
-    // SAFETY: `borrowed_handle` came from `host_rcv_runtime_ops_handle`
-    // which cast `&RuntimeContext.runtime_ops` to `*const c_void`.
-    let original = unsafe { &*(borrowed_handle as *const Arc<dyn RuntimeOperations>) };
-    let cloned: Arc<dyn RuntimeOperations> = Arc::clone(original);
-    Box::into_raw(Box::new(cloned)) as *const c_void
+    run_host_extern_c(
+        "host_rov_clone_handle",
+        || {
+            if borrowed_handle.is_null() {
+                return std::ptr::null();
+            }
+            // SAFETY: `borrowed_handle` came from `host_rcv_runtime_ops_handle`
+            // which cast `&RuntimeContext.runtime_ops` to `*const c_void`.
+            let original = unsafe { &*(borrowed_handle as *const Arc<dyn RuntimeOperations>) };
+            let cloned: Arc<dyn RuntimeOperations> = Arc::clone(original);
+            Box::into_raw(Box::new(cloned)) as *const c_void
+        },
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_rov_drop_handle(owned_handle: *const c_void) {
-    if owned_handle.is_null() {
-        return;
-    }
-    // SAFETY: paired with `host_rov_clone_handle`'s `Box::into_raw`.
-    unsafe {
-        let _ = Box::from_raw(owned_handle as *mut Arc<dyn RuntimeOperations>);
-    }
+    run_host_extern_c(
+        "host_rov_drop_handle",
+        || {
+            if owned_handle.is_null() {
+                return;
+            }
+            // SAFETY: paired with `host_rov_clone_handle`'s `Box::into_raw`.
+            unsafe {
+                let _ = Box::from_raw(owned_handle as *mut Arc<dyn RuntimeOperations>);
+            }
+        },
+        (),
+    )
 }
 
 /// Static [`RuntimeOpsVTable`] installed once per process. Paired
@@ -1261,47 +1580,142 @@ pub fn host_runtime_ops_vtable() -> *const RuntimeOpsVTable {
 // [`GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION`].
 
 unsafe extern "C" fn host_gpu_lim_clone_handle(borrowed_handle: *const c_void) -> *const c_void {
-    // Phase C1 scaffold: the cdylib-side shim does not yet stash an
-    // owned handle distinct from the borrowed one (no per-method
-    // wiring exists to read through the table). Returning the
-    // borrowed pointer as-is keeps the shim self-consistent until
-    // the real Arc<GpuContext> refcount-bump path lands in the next
-    // C1 commit alongside the first GPU vtable method.
-    borrowed_handle
+    run_host_extern_c(
+        "host_gpu_lim_clone_handle",
+        || {
+            // Phase C1 scaffold: the cdylib-side shim does not yet
+            // stash an owned handle distinct from the borrowed one
+            // (no per-method wiring exists to read through the
+            // table). Returning the borrowed pointer as-is keeps the
+            // shim self-consistent until the real Arc<GpuContext>
+            // refcount-bump path lands alongside the first
+            // LimitedAccess method.
+            borrowed_handle
+        },
+        std::ptr::null(),
+    )
 }
 
 unsafe extern "C" fn host_gpu_lim_drop_handle(_owned_handle: *const c_void) {
-    // Phase C1 scaffold: no-op until `clone_handle` does a real
-    // Arc refcount bump. Dropping a passthrough pointer is by
-    // design a no-op.
+    run_host_extern_c(
+        "host_gpu_lim_drop_handle",
+        || {
+            // Phase C1 scaffold: no-op until `clone_handle` does a
+            // real Arc refcount bump. Dropping a passthrough pointer
+            // is by design a no-op.
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_gpu_lim_clone_pixel_buffer(handle: *const c_void) {
-    if handle.is_null() {
-        return;
-    }
-    // SAFETY: `handle` is a `*const c_void` cast of
-    // `Arc::into_raw(Arc<PixelBufferRef>)` produced by
-    // `PixelBuffer::new` (host-side). Re-interpreting it as
-    // `*const PixelBufferRef` and bumping the strong count is the
-    // documented `Arc::increment_strong_count` contract.
-    unsafe {
-        Arc::increment_strong_count(handle as *const crate::core::rhi::PixelBufferRef);
-    }
+    run_host_extern_c(
+        "host_gpu_lim_clone_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: `handle` is a `*const c_void` cast of
+            // `Arc::into_raw(Arc<PixelBufferRef>)` produced by
+            // `PixelBuffer::new` (host-side). Re-interpreting it as
+            // `*const PixelBufferRef` and bumping the strong count is the
+            // documented `Arc::increment_strong_count` contract.
+            unsafe {
+                Arc::increment_strong_count(handle as *const crate::core::rhi::PixelBufferRef);
+            }
+        },
+        (),
+    )
 }
 
 unsafe extern "C" fn host_gpu_lim_drop_pixel_buffer(handle: *const c_void) {
-    if handle.is_null() {
-        return;
-    }
-    // SAFETY: matched with `host_gpu_lim_clone_pixel_buffer` and
-    // `PixelBuffer::new`'s `Arc::into_raw` initial bump.
-    // `Arc::decrement_strong_count` decrements; when refcount hits
-    // zero the underlying `PixelBufferRef` is dropped along with
-    // its platform buffer.
-    unsafe {
-        Arc::decrement_strong_count(handle as *const crate::core::rhi::PixelBufferRef);
-    }
+    run_host_extern_c(
+        "host_gpu_lim_drop_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            // SAFETY: matched with `host_gpu_lim_clone_pixel_buffer` and
+            // `PixelBuffer::new`'s `Arc::into_raw` initial bump.
+            // `Arc::decrement_strong_count` decrements; when refcount hits
+            // zero the underlying `PixelBufferRef` is dropped along with
+            // its platform buffer.
+            unsafe {
+                Arc::decrement_strong_count(handle as *const crate::core::rhi::PixelBufferRef);
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_strong_count_pixel_buffer(handle: *const c_void) -> usize {
+    run_host_extern_c(
+        "host_gpu_lim_strong_count_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return 0;
+            }
+            // SAFETY: `handle` is `Arc::into_raw(Arc<PixelBufferRef>)`-shaped
+            // (see `PixelBuffer::new`'s `from_arc_into_raw`). We
+            // reconstruct the `Arc` temporarily, read the strong count, and
+            // immediately re-leak it via `Arc::into_raw` so the strong count
+            // returns to its pre-call value — `Arc::strong_count_from_raw`
+            // is not part of the public stable API. The reconstruction runs
+            // in HOST-COMPILED code regardless of caller DSO, so the cdylib
+            // never has to know `PixelBufferRef`'s in-memory layout.
+            unsafe {
+                let arc =
+                    Arc::from_raw(handle as *const crate::core::rhi::PixelBufferRef);
+                let count = Arc::strong_count(&arc);
+                let _ = Arc::into_raw(arc);
+                count
+            }
+        },
+        0,
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_plane_base_address_pixel_buffer(
+    handle: *const c_void,
+    plane_index: u32,
+) -> *mut u8 {
+    run_host_extern_c(
+        "host_gpu_lim_plane_base_address_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return core::ptr::null_mut();
+            }
+            // SAFETY: `handle` is `Arc::into_raw(Arc<PixelBufferRef>)`-shaped;
+            // the leaked strong count keeps the `PixelBufferRef` alive for
+            // the duration of the call. We borrow `&PixelBufferRef` rather
+            // than reconstructing the Arc to avoid touching the refcount.
+            unsafe {
+                let pb_ref = &*(handle as *const crate::core::rhi::PixelBufferRef);
+                pb_ref.plane_base_address(plane_index)
+            }
+        },
+        core::ptr::null_mut(),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_plane_size_pixel_buffer(
+    handle: *const c_void,
+    plane_index: u32,
+) -> u64 {
+    run_host_extern_c(
+        "host_gpu_lim_plane_size_pixel_buffer",
+        || {
+            if handle.is_null() {
+                return 0;
+            }
+            // SAFETY: same as `host_gpu_lim_plane_base_address_pixel_buffer`.
+            unsafe {
+                let pb_ref = &*(handle as *const crate::core::rhi::PixelBufferRef);
+                pb_ref.plane_size(plane_index)
+            }
+        },
+        0,
+    )
 }
 
 /// Static [`GpuContextLimitedAccessVTable`] installed once per process.
@@ -1315,6 +1729,9 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         drop_handle: host_gpu_lim_drop_handle,
         clone_pixel_buffer: host_gpu_lim_clone_pixel_buffer,
         drop_pixel_buffer: host_gpu_lim_drop_pixel_buffer,
+        strong_count_pixel_buffer: host_gpu_lim_strong_count_pixel_buffer,
+        plane_base_address_pixel_buffer: host_gpu_lim_plane_base_address_pixel_buffer,
+        plane_size_pixel_buffer: host_gpu_lim_plane_size_pixel_buffer,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
