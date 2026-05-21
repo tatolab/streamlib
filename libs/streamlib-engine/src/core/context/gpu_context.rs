@@ -393,7 +393,7 @@ pub struct GpuContext {
     /// lifted to engine-wide scope so consumers reaching textures via
     /// `resolve_texture_registration_by_surface_id` get the same lifecycle metadata
     /// adapter consumers do.
-    texture_cache: Arc<Mutex<HashMap<String, Arc<TextureRegistration>>>>,
+    texture_cache: Arc<Mutex<HashMap<String, TextureRegistration>>>,
     /// Cache of textures backing surface-share-registered pixel buffers
     /// (`escalate_acquire_pixel_buffer` flow). Refreshed on every resolve so
     /// rotating-pool producers don't render stale contents — kept separate
@@ -750,12 +750,12 @@ impl GpuContext {
         width: u32,
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
         height: u32,
-    ) -> Result<Arc<TextureRegistration>> {
+    ) -> Result<TextureRegistration> {
         // Path 1: same-process texture cache (fastest)
         {
             let cache = self.texture_cache.lock().unwrap();
             if let Some(reg) = cache.get(surface_id) {
-                return Ok(Arc::clone(reg));
+                return Ok(reg.clone());
             }
         }
 
@@ -2383,20 +2383,58 @@ impl GpuContextLimitedAccess {
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
     ///
-    /// Not currently routed through the vtable — `TextureRegistration`'s
-    /// β-reshape lands in Phase 2C. Engine-internal access goes through
-    /// `self.inner` directly; cdylib code reaches this method via
-    /// `self.host_inner()`'s panic-guarded accessor (panics caught at
-    /// the FFI boundary).
+    /// Dispatches through the cross-DSO vtable's
+    /// `resolve_texture_registration_by_surface_id` callback. Returns
+    /// a β-reshaped [`TextureRegistration`] value (handle + vtable);
+    /// Clone is cheap (refcount bump via vtable), Drop releases the
+    /// host's `Arc<TextureRegistrationInner>` strong count.
     pub fn resolve_texture_registration_by_surface_id(
         &self,
         surface_id: &str,
         texture_layout: Option<i32>,
         width: u32,
         height: u32,
-    ) -> Result<Arc<TextureRegistration>> {
-        self.host_inner()
-            .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
+    ) -> Result<TextureRegistration> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "resolve_texture_registration_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_reg: std::mem::MaybeUninit<TextureRegistration> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let (has_layout, layout_raw) = match texture_layout {
+            Some(v) => (1i32, v),
+            None => (0i32, 0i32),
+        };
+        // SAFETY: handle + vtable were paired at construction.
+        // `out_reg` is uninitialized stack storage; the host writes a
+        // valid TextureRegistration on success (status == 0) and
+        // nothing on failure.
+        let status = unsafe {
+            ((*self.vtable).resolve_texture_registration_by_surface_id)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                has_layout,
+                layout_raw,
+                width,
+                height,
+                out_reg.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid TextureRegistration.
+            Ok(unsafe { out_reg.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 
     /// Resolve a VideoFrame's texture (Split: cache hit).
@@ -2722,7 +2760,7 @@ impl GpuContextFullAccess {
         texture_layout: Option<i32>,
         width: u32,
         height: u32,
-    ) -> Result<Arc<TextureRegistration>> {
+    ) -> Result<TextureRegistration> {
         self.inner
             .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
     }

@@ -16,7 +16,7 @@ mod runtime_context;
 mod runtime_ops_shim;
 mod surface_store;
 pub mod texture_pool;
-mod texture_registration;
+pub(crate) mod texture_registration;
 mod texture_ring;
 mod time_context;
 

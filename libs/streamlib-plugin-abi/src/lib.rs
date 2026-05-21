@@ -172,7 +172,18 @@ pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   non-Linux hosts (the buffer types only exist on Linux); the
 ///   vtable layout is unconditional so the cdylib-side ABI stays
 ///   stable across triples.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 5;
+/// - v6: per-type `TextureRegistration` clone/drop pair, three
+///   method-dispatch callbacks (`texture_registration_texture`,
+///   `texture_registration_current_layout`,
+///   `texture_registration_update_layout`), and the
+///   `resolve_texture_registration_by_surface_id` method-dispatch
+///   callback. `TextureRegistration` was previously returned as
+///   `Arc<TextureRegistration>` (Arc layout is rustc-version-
+///   dependent — unsafe to cross the cdylib boundary); the
+///   β-reshape collapses the return type to a `(handle, vtable)`
+///   wrapper that's Arc-semantics-equivalent (cheap Clone via
+///   vtable refcount bump) with host-compiled refcount accounting.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 6;
 
 // =============================================================================
 // Primitive enums
@@ -1041,6 +1052,76 @@ pub struct GpuContextLimitedAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // TextureRegistration Arc-handle lifecycle (v6 — Phase C1 Phase 2C)
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `TextureRegistration` is `(handle, vtable)` where
+    // `handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`. Same
+    // shape as `PixelBuffer` / `Texture`'s Arc-handle pattern. Cdylibs
+    // get Arc semantics (cheap Clone via refcount bump) without ever
+    // touching the host's `Arc<T>` implementation.
+
+    /// Bump the refcount on a `TextureRegistration` handle. Host
+    /// implementation runs
+    /// `Arc::increment_strong_count(handle as *const TextureRegistrationInner)`.
+    pub clone_texture_registration: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `TextureRegistration` handle. When
+    /// the strong count reaches zero the underlying
+    /// `TextureRegistrationInner` (and its `Texture` plus
+    /// `current_layout` atomic) is dropped.
+    pub drop_texture_registration: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // TextureRegistration method dispatch (v6)
+    // -------------------------------------------------------------------------
+
+    /// Borrow the registration's underlying `Texture`. Returns a
+    /// pointer into the host's heap allocation that is alive for as
+    /// long as the caller holds the originating
+    /// `TextureRegistration` (the Arc's strong count keeps the
+    /// inner alive). The returned `Texture` is itself a layout-stable
+    /// `#[repr(C)]` value (see `core/rhi/texture.rs::Texture::tests::texture_layout`),
+    /// so the cdylib can deref the pointer directly.
+    pub texture_registration_texture:
+        unsafe extern "C" fn(handle: *const c_void) -> *const c_void,
+
+    /// Last-known `VkImageLayout` (raw `i32` enumerant). Atomic
+    /// `Acquire` load on the host side. Linux-only behaviour; non-
+    /// Linux hosts return `0` (VK_IMAGE_LAYOUT_UNDEFINED).
+    pub texture_registration_current_layout:
+        unsafe extern "C" fn(handle: *const c_void) -> i32,
+
+    /// Record a new last-known layout. Atomic `Release` store on the
+    /// host side. Linux-only behaviour; non-Linux hosts treat this
+    /// as a no-op.
+    pub texture_registration_update_layout:
+        unsafe extern "C" fn(handle: *const c_void, layout_raw: i32),
+
+    /// Resolve a VideoFrame's full registration record (texture +
+    /// layout) from its `surface_id`. On success writes a new
+    /// `TextureRegistration` into `*out_registration` and returns
+    /// `0`. On failure writes a UTF-8 error message into `err_buf`
+    /// and returns non-zero.
+    ///
+    /// `has_layout` is `1` when `layout_raw` carries a per-frame
+    /// `texture_layout` override, `0` for the default-resolution
+    /// path. `width` / `height` are required for the Path 3 fallback.
+    pub resolve_texture_registration_by_surface_id: unsafe extern "C" fn(
+        handle: *const c_void,
+        surface_id_ptr: *const u8,
+        surface_id_len: usize,
+        has_layout: i32,
+        layout_raw: i32,
+        width: u32,
+        height: u32,
+        out_registration: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -1377,13 +1458,11 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        // v5 (Phase C1 Phase 2B): added per-type clone/drop pairs
-        // for each of StorageBuffer / UniformBuffer / VertexBuffer /
-        // IndexBuffer (8 callbacks) plus the 4 acquire_*_buffer
-        // method-dispatch callbacks. Linux-only behaviour, but the
-        // vtable slots are unconditional so the layout stays stable
-        // across triples.
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 5);
+        // v6 (Phase C1 Phase 2C): added TextureRegistration clone/drop
+        // pair, 3 method-dispatch callbacks (texture / current_layout
+        // / update_layout), and resolve_texture_registration_by_surface_id
+        // — 6 new callbacks total.
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 6);
     }
 
     #[test]
@@ -1418,8 +1497,8 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // v5 (Phase C1 Phase 2B): layout_version (u32) +
-        // _reserved_padding (u32) + 27 fn pointers (8 bytes each):
+        // v6 (Phase C1 Phase 2C): layout_version (u32) +
+        // _reserved_padding (u32) + 33 fn pointers (8 bytes each):
         //   v2 (4): clone_handle, drop_handle,
         //           clone_pixel_buffer, drop_pixel_buffer,
         //   v3 (3): strong_count_pixel_buffer, plane_base_address_pixel_buffer,
@@ -1433,9 +1512,14 @@ mod layout_tests {
         //           clone_vertex_buffer, drop_vertex_buffer,
         //           clone_index_buffer, drop_index_buffer,
         //           acquire_storage_buffer, acquire_uniform_buffer,
-        //           acquire_vertex_buffer, acquire_index_buffer.
-        // = 4 + 4 + 216 = 224 bytes.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 224);
+        //           acquire_vertex_buffer, acquire_index_buffer,
+        //   v6 (6): clone_texture_registration, drop_texture_registration,
+        //           texture_registration_texture,
+        //           texture_registration_current_layout,
+        //           texture_registration_update_layout,
+        //           resolve_texture_registration_by_surface_id.
+        // = 4 + 4 + 264 = 272 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 272);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -1546,6 +1630,42 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, acquire_index_buffer),
             216
+        );
+        // v6 entries (Phase 2C): 2 clone/drop + 3 method-dispatch + 1
+        // resolve = 6 fn pointers appended. Vtable grows from 224 to
+        // 224 + 6*8 = 272 bytes.
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_texture_registration),
+            224
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_texture_registration),
+            232
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, texture_registration_texture),
+            240
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                texture_registration_current_layout
+            ),
+            248
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                texture_registration_update_layout
+            ),
+            256
+        );
+        assert_eq!(
+            offset_of!(
+                GpuContextLimitedAccessVTable,
+                resolve_texture_registration_by_surface_id
+            ),
+            264
         );
     }
 
