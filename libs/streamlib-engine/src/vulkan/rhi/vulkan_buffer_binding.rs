@@ -64,40 +64,40 @@ impl VulkanBufferLike for PixelBuffer {
 #[cfg(target_os = "linux")]
 impl VulkanBufferLike for StorageBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        self.inner.buffer()
+        self.host_inner().buffer()
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        self.inner.size()
+        self.host_inner().size()
     }
 }
 
 #[cfg(target_os = "linux")]
 impl VulkanBufferLike for UniformBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        self.inner.buffer()
+        self.host_inner().buffer()
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        self.inner.size()
+        self.host_inner().size()
     }
 }
 
 #[cfg(target_os = "linux")]
 impl VulkanBufferLike for VertexBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        self.inner.buffer()
+        self.host_inner().buffer()
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        self.inner.size()
+        self.host_inner().size()
     }
 }
 
 #[cfg(target_os = "linux")]
 impl VulkanBufferLike for IndexBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        self.inner.buffer()
+        self.host_inner().buffer()
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        self.inner.size()
+        self.host_inner().size()
     }
 }
 

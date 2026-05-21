@@ -160,7 +160,19 @@ pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   rationale as v2 / v3 — keep Arc accounting and the methods that
 ///   touch host-internal RHI types in host-compiled code regardless
 ///   of caller DSO.
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 4;
+/// - v5: per-type Linux-only buffer clone/drop pairs for each of
+///   `StorageBuffer` / `UniformBuffer` / `VertexBuffer` /
+///   `IndexBuffer` (8 callbacks), plus the 4 `acquire_*_buffer`
+///   method-dispatch callbacks. Each buffer type wraps the same
+///   `Arc<HostVulkanBuffer>` under the hood but keeps a distinct
+///   Rust-level type for binding-shape enforcement; the vtable
+///   mirrors that by giving each its own pair so future divergence
+///   (e.g. a buffer type growing per-type state) doesn't require
+///   re-versioning the shared callback. Callbacks are stubs on
+///   non-Linux hosts (the buffer types only exist on Linux); the
+///   vtable layout is unconditional so the cdylib-side ABI stays
+///   stable across triples.
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 5;
 
 // =============================================================================
 // Primitive enums
@@ -939,6 +951,96 @@ pub struct GpuContextLimitedAccessVTable {
         id_ptr: *const u8,
         id_len: usize,
     ),
+
+    // -------------------------------------------------------------------------
+    // Linux-only buffer Arc-handle lifecycle (v5 — Phase C1 Phase 2B)
+    // -------------------------------------------------------------------------
+    //
+    // The cdylib's `StorageBuffer` / `UniformBuffer` / `VertexBuffer` /
+    // `IndexBuffer` are each `(handle, vtable, byte_size, mapped_ptr)`
+    // where `handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`. All
+    // four wrap the same Arc type under the hood but keep separate
+    // Rust newtypes for binding-shape enforcement. Each gets its own
+    // clone/drop pair so the vtable structure mirrors the type
+    // structure — future-proofs against per-type divergence (a
+    // buffer growing extra state) without re-versioning a shared
+    // callback. Stub on non-Linux hosts; callable only from cdylib
+    // code that links the Linux-only buffer types.
+
+    /// Bump the refcount on a `StorageBuffer` handle.
+    /// `Arc::increment_strong_count(handle as *const HostVulkanBuffer)`.
+    pub clone_storage_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `StorageBuffer` handle.
+    pub drop_storage_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Bump the refcount on a `UniformBuffer` handle.
+    pub clone_uniform_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `UniformBuffer` handle.
+    pub drop_uniform_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Bump the refcount on a `VertexBuffer` handle.
+    pub clone_vertex_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `VertexBuffer` handle.
+    pub drop_vertex_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Bump the refcount on an `IndexBuffer` handle.
+    pub clone_index_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on an `IndexBuffer` handle.
+    pub drop_index_buffer: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // Linux-only buffer acquire methods (v5)
+    // -------------------------------------------------------------------------
+    //
+    // Each acquire callback writes a fresh `{Storage,Uniform,Vertex,
+    // Index}Buffer` into `*out_buffer` on success and returns 0; on
+    // failure writes a UTF-8 message into `err_buf` and returns
+    // non-zero. Non-Linux stubs return non-zero with a
+    // "buffer-type-not-available-on-this-platform" message.
+
+    /// Acquire a `StorageBuffer` of the given byte size.
+    pub acquire_storage_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Acquire a `UniformBuffer` of the given byte size.
+    pub acquire_uniform_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Acquire a `VertexBuffer` of the given byte size.
+    pub acquire_vertex_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Acquire an `IndexBuffer` of the given byte size.
+    pub acquire_index_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        byte_size: u64,
+        out_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
@@ -1275,12 +1377,13 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        // v4 (Phase C1 Phase 2A): added Texture clone/drop pair,
-        // PooledTextureHandle drop, and 5 Texture-related method
-        // callbacks (register_texture covers both with/without
-        // layout via `initial_layout_raw`; update layout; acquire;
-        // resolve; unregister) on top of v3's PixelBuffer surface.
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 4);
+        // v5 (Phase C1 Phase 2B): added per-type clone/drop pairs
+        // for each of StorageBuffer / UniformBuffer / VertexBuffer /
+        // IndexBuffer (8 callbacks) plus the 4 acquire_*_buffer
+        // method-dispatch callbacks. Linux-only behaviour, but the
+        // vtable slots are unconditional so the layout stays stable
+        // across triples.
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 5);
     }
 
     #[test]
@@ -1315,8 +1418,8 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // v4 (Phase C1 Phase 2A): layout_version (u32) +
-        // _reserved_padding (u32) + 15 fn pointers (8 bytes each):
+        // v5 (Phase C1 Phase 2B): layout_version (u32) +
+        // _reserved_padding (u32) + 27 fn pointers (8 bytes each):
         //   v2 (4): clone_handle, drop_handle,
         //           clone_pixel_buffer, drop_pixel_buffer,
         //   v3 (3): strong_count_pixel_buffer, plane_base_address_pixel_buffer,
@@ -1324,9 +1427,15 @@ mod layout_tests {
         //   v4 (8): clone_texture, drop_texture, drop_pooled_texture_handle,
         //           register_texture, update_texture_registration_layout,
         //           acquire_texture, resolve_texture_by_surface_id,
-        //           unregister_texture.
-        // = 4 + 4 + 120 = 128 bytes.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 128);
+        //           unregister_texture,
+        //   v5 (12): clone_storage_buffer, drop_storage_buffer,
+        //           clone_uniform_buffer, drop_uniform_buffer,
+        //           clone_vertex_buffer, drop_vertex_buffer,
+        //           clone_index_buffer, drop_index_buffer,
+        //           acquire_storage_buffer, acquire_uniform_buffer,
+        //           acquire_vertex_buffer, acquire_index_buffer.
+        // = 4 + 4 + 216 = 224 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 224);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -1386,6 +1495,57 @@ mod layout_tests {
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, unregister_texture),
             120
+        );
+        // v5 entries (Phase 2B): 8 buffer clone/drop pairs + 4
+        // acquire_*_buffer = 12 fn pointers appended. Total vtable
+        // grows from 128 to 128 + 12*8 = 224 bytes.
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_storage_buffer),
+            128
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_storage_buffer),
+            136
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_uniform_buffer),
+            144
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_uniform_buffer),
+            152
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_vertex_buffer),
+            160
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_vertex_buffer),
+            168
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, clone_index_buffer),
+            176
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, drop_index_buffer),
+            184
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_storage_buffer),
+            192
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_uniform_buffer),
+            200
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_vertex_buffer),
+            208
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, acquire_index_buffer),
+            216
         );
     }
 

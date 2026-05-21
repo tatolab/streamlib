@@ -125,10 +125,10 @@ impl VulkanStorageBindable for PixelBuffer {
 #[cfg(target_os = "linux")]
 impl VulkanStorageBindable for StorageBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        self.inner.buffer()
+        self.host_inner().buffer()
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        self.inner.size()
+        self.host_inner().size()
     }
 }
 
@@ -137,10 +137,10 @@ impl VulkanStorageBindable for StorageBuffer {
 #[cfg(target_os = "linux")]
 impl VulkanUniformBindable for UniformBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        self.inner.buffer()
+        self.host_inner().buffer()
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        self.inner.size()
+        self.host_inner().size()
     }
 }
 
@@ -149,10 +149,10 @@ impl VulkanUniformBindable for UniformBuffer {
 #[cfg(target_os = "linux")]
 impl VulkanVertexBindable for VertexBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        self.inner.buffer()
+        self.host_inner().buffer()
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        self.inner.size()
+        self.host_inner().size()
     }
 }
 
@@ -161,9 +161,9 @@ impl VulkanVertexBindable for VertexBuffer {
 #[cfg(target_os = "linux")]
 impl VulkanIndexBindable for IndexBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        self.inner.buffer()
+        self.host_inner().buffer()
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        self.inner.size()
+        self.host_inner().size()
     }
 }

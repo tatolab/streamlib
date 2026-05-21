@@ -2134,6 +2134,68 @@ impl GpuContextFullAccess {
 }
 
 // -----------------------------------------------------------------------------
+// Phase 2B vtable-dispatch helper for the 4 acquire_*_buffer methods.
+// Each Linux-only buffer type follows the same out-param + err_buf
+// convention, so a single generic helper covers all 4 callsites
+// without per-call boilerplate.
+// -----------------------------------------------------------------------------
+
+#[cfg(target_os = "linux")]
+type AcquireBufferCallback = unsafe extern "C" fn(
+    handle: *const std::ffi::c_void,
+    byte_size: u64,
+    out_buffer: *mut std::ffi::c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32;
+
+#[cfg(target_os = "linux")]
+fn acquire_buffer_via_vtable<B, F>(
+    lim: &GpuContextLimitedAccess,
+    byte_size: u64,
+    label: &'static str,
+    get_cb: F,
+) -> Result<B>
+where
+    F: FnOnce(
+        &streamlib_plugin_abi::GpuContextLimitedAccessVTable,
+    ) -> AcquireBufferCallback,
+{
+    if lim.handle.is_null() || lim.vtable.is_null() {
+        return Err(Error::GpuError(format!(
+            "{label}: GpuContextLimitedAccess has null handle/vtable"
+        )));
+    }
+    let mut out: std::mem::MaybeUninit<B> = std::mem::MaybeUninit::uninit();
+    let mut err_buf = [0u8; 512];
+    let mut err_len: usize = 0;
+    // SAFETY: vtable + handle were paired at construction; `get_cb`
+    // selects a fn pointer that adheres to the standard
+    // `acquire_*_buffer` shape. `out` points at uninitialized stack
+    // storage the host writes a valid `B` into on success.
+    let cb: AcquireBufferCallback = unsafe { get_cb(&*lim.vtable) };
+    let status = unsafe {
+        cb(
+            lim.handle,
+            byte_size,
+            out.as_mut_ptr() as *mut std::ffi::c_void,
+            err_buf.as_mut_ptr(),
+            err_buf.len(),
+            &mut err_len as *mut usize,
+        )
+    };
+    if status == 0 {
+        // SAFETY: host signaled success and wrote a valid `B`.
+        Ok(unsafe { out.assume_init() })
+    } else {
+        let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+            .into_owned();
+        Err(Error::GpuError(msg))
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Capability-split API surface (per the design doc in
 // `docs/design/gpu-capability-sandbox.md` §1).
 //
@@ -2165,42 +2227,74 @@ impl GpuContextLimitedAccess {
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
     /// See [`GpuContext::acquire_storage_buffer`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_storage_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_storage_buffer(
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::StorageBuffer> {
-        self.inner.acquire_storage_buffer(byte_size)
+        acquire_buffer_via_vtable(
+            self,
+            byte_size,
+            "acquire_storage_buffer",
+            |vt| vt.acquire_storage_buffer,
+        )
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
     /// See [`GpuContext::acquire_uniform_buffer`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_uniform_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_uniform_buffer(
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::UniformBuffer> {
-        self.inner.acquire_uniform_buffer(byte_size)
+        acquire_buffer_via_vtable(
+            self,
+            byte_size,
+            "acquire_uniform_buffer",
+            |vt| vt.acquire_uniform_buffer,
+        )
     }
 
     /// Acquire a HOST_VISIBLE vertex buffer.
     /// See [`GpuContext::acquire_vertex_buffer`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_vertex_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_vertex_buffer(
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::VertexBuffer> {
-        self.inner.acquire_vertex_buffer(byte_size)
+        acquire_buffer_via_vtable(
+            self,
+            byte_size,
+            "acquire_vertex_buffer",
+            |vt| vt.acquire_vertex_buffer,
+        )
     }
 
     /// Acquire a HOST_VISIBLE index buffer.
     /// See [`GpuContext::acquire_index_buffer`].
+    ///
+    /// Dispatches through the cross-DSO vtable's
+    /// `acquire_index_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_index_buffer(
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::IndexBuffer> {
-        self.inner.acquire_index_buffer(byte_size)
+        acquire_buffer_via_vtable(
+            self,
+            byte_size,
+            "acquire_index_buffer",
+            |vt| vt.acquire_index_buffer,
+        )
     }
 
     /// Get a pixel buffer by its pool id (Split: local cache).
