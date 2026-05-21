@@ -68,11 +68,10 @@ use streamlib_plugin_abi::{
     SURFACE_STORE_VTABLE_LAYOUT_VERSION,
 };
 
-// Phase B + v3 layout: tokio is no longer exposed across the ABI.
-// Lifecycle methods are synchronous at the trait surface; plugins
-// that need async lifecycle work bring their own runtime. The host's
-// tokio runtime stays invisible to plugins. See
-// `streamlib_plugin_abi`'s `HOST_SERVICES_LAYOUT_VERSION` v3 doc.
+// tokio is not exposed across the ABI. Lifecycle methods are
+// synchronous at the trait surface; plugins that need async
+// lifecycle work bring their own runtime. The host's tokio runtime
+// stays invisible to plugins.
 
 use crate::core::context::{RuntimeContext, SharedAudioClock};
 use crate::core::pubsub::Event;
@@ -164,15 +163,13 @@ pub struct HostCallbacks {
     pub audio_clock_vtable: *const AudioClockVTable,
     /// v3: host-installed [`RuntimeOpsVTable`] pointer.
     pub runtime_ops_vtable: *const RuntimeOpsVTable,
-    /// v4 (Phase C1, #901): host-installed
-    /// [`GpuContextLimitedAccessVTable`] pointer. May be null on
-    /// hosts that don't ship a GpuContext; cdylib must check before
-    /// dispatching.
+    /// Host-installed [`GpuContextLimitedAccessVTable`] pointer.
+    /// May be null on hosts that don't ship a GpuContext; cdylib
+    /// must check before dispatching.
     pub gpu_context_limited_access_vtable: *const GpuContextLimitedAccessVTable,
-    /// v5 (Phase C1 Phase 2E, #901): host-installed
-    /// [`SurfaceStoreVTable`] pointer. May be null on hosts that
-    /// don't ship a `SurfaceStore`; cdylib must check before
-    /// dispatching. Sourced from
+    /// Host-installed [`SurfaceStoreVTable`] pointer. May be null
+    /// on hosts that don't ship a `SurfaceStore`; cdylib must check
+    /// before dispatching. Sourced from
     /// [`HostServices::surface_store_vtable`] at install time.
     pub surface_store_vtable: *const SurfaceStoreVTable,
 }
@@ -983,12 +980,11 @@ unsafe extern "C" fn host_rcv_gpu_full_access(_ctx: *const c_void) -> *const c_v
     run_host_extern_c(
         "host_rcv_gpu_full_access",
         || {
-            // Phase B: the shim still embeds `GpuContextFullAccess`
-            // directly alongside the handle/vtable pair, so the
-            // cdylib never reaches through this callback. Phase C
-            // (#886) replaces the embedded value with
-            // `(gpu_full_handle, &HOST_GPU_CONTEXT_VTABLE)` and
-            // wires this callback to return the real handle.
+            // FullAccess is engine-only today — the cdylib-facing
+            // shim embeds `GpuContextFullAccess` by value alongside
+            // its handle/vtable pair, so the cdylib never reaches
+            // through this callback. Returns null until a future
+            // phase wires cross-DSO FullAccess dispatch.
             std::ptr::null()
         },
         std::ptr::null(),
@@ -1590,11 +1586,12 @@ pub fn host_runtime_ops_vtable() -> *const RuntimeOpsVTable {
 
 // ---------------- GpuContextLimitedAccess vtable ----------------
 //
-// Phase C1 (#901) scaffold: layout-versioned vtable plus passthrough
-// `clone_handle` / `drop_handle` stubs. Per-method GPU callbacks
-// (`acquire_pixel_buffer`, `release_pixel_buffer`, etc.) append to
-// this static in subsequent C1 commits and bump
-// [`GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION`].
+// Host-side implementations of every callback on the
+// [`GpuContextLimitedAccessVTable`]. The static at the bottom of
+// this block (`HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`) wires them
+// up; the cdylib-side mirror lives in the cdylib's statically-
+// linked engine copy and reads through the host-installed pointer
+// on [`HostServices::gpu_context_limited_access_vtable`].
 
 unsafe extern "C" fn host_gpu_lim_clone_handle(borrowed_handle: *const c_void) -> *const c_void {
     run_host_extern_c(
@@ -1754,7 +1751,7 @@ unsafe extern "C" fn host_gpu_lim_plane_size_pixel_buffer(
 }
 
 // -------------------------------------------------------------------------
-// Texture Arc-handle lifecycle (v4 — Phase 2A)
+// Texture Arc-handle lifecycle
 // -------------------------------------------------------------------------
 
 unsafe extern "C" fn host_gpu_lim_clone_texture(handle: *const c_void) {
@@ -2125,7 +2122,7 @@ unsafe extern "C" fn host_gpu_lim_unregister_texture(
 }
 
 // -------------------------------------------------------------------------
-// Linux-only buffer Arc-handle lifecycle (v5 — Phase 2B)
+// Linux-only buffer Arc-handle lifecycle
 // -------------------------------------------------------------------------
 //
 // All 4 buffer types (`StorageBuffer`, `UniformBuffer`, `VertexBuffer`,
@@ -2518,7 +2515,7 @@ unsafe extern "C" fn host_gpu_lim_acquire_index_buffer(
 }
 
 // -------------------------------------------------------------------------
-// TextureRegistration Arc-handle lifecycle (v6 — Phase 2C)
+// TextureRegistration Arc-handle lifecycle
 // -------------------------------------------------------------------------
 
 unsafe extern "C" fn host_gpu_lim_clone_texture_registration(handle: *const c_void) {
@@ -2723,7 +2720,7 @@ unsafe extern "C" fn host_gpu_lim_resolve_texture_registration_by_surface_id(
 }
 
 // -------------------------------------------------------------------------
-// RhiCommandQueue Arc-handle lifecycle + create_command_buffer (v7 — Phase 2D)
+// RhiCommandQueue Arc-handle lifecycle + create_command_buffer
 // -------------------------------------------------------------------------
 
 unsafe extern "C" fn host_gpu_lim_clone_rhi_command_queue(handle: *const c_void) {
@@ -2907,7 +2904,7 @@ unsafe extern "C" fn host_gpu_lim_copy_texture_command_buffer(
             // SAFETY: handle is `Box::into_raw(...)`-shaped; `&mut` is
             // sound because the cdylib's `&mut self` guarantees no
             // concurrent reference. src/dst are
-            // `*const Texture` (layout locked by Phase 2A).
+            // `*const Texture` (layout locked by `texture_layout` test).
             unsafe {
                 let cb_inner = &mut *(handle
                     as *mut crate::core::rhi::command_buffer::CommandBufferInner);
@@ -2949,7 +2946,7 @@ unsafe extern "C" fn host_gpu_lim_copy_texture_command_buffer(
 }
 
 // -------------------------------------------------------------------------
-// GpuContextLimitedAccess method dispatch — 5 Phase 2D methods (v7)
+// GpuContextLimitedAccess command-queue / command-buffer / blit methods
 // -------------------------------------------------------------------------
 
 unsafe extern "C" fn host_gpu_lim_command_queue(
@@ -3072,7 +3069,7 @@ unsafe extern "C" fn host_gpu_lim_copy_pixel_buffer_to_texture(
                 return 1;
             }
             // SAFETY: pixel_buffer / texture point at β-shape values
-            // whose layouts are locked by Phase 0 / Phase 2A tests.
+            // whose layouts are locked by per-type regression tests.
             let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
             let tex = unsafe { &*(texture as *const crate::core::rhi::Texture) };
             let id_bytes = unsafe { slice_from_raw(surface_id_ptr, surface_id_len) };
@@ -3225,7 +3222,7 @@ unsafe extern "C" fn host_gpu_lim_blit_copy_iosurface(
 }
 
 // -------------------------------------------------------------------------
-// GpuContextLimitedAccessVTable — surface_store accessors (v8, Phase 2E)
+// GpuContextLimitedAccessVTable — surface_store accessors
 // -------------------------------------------------------------------------
 
 unsafe extern "C" fn host_gpu_lim_surface_store(
@@ -3333,7 +3330,7 @@ unsafe extern "C" fn host_gpu_lim_check_out_surface(
 }
 
 // =========================================================================
-// SurfaceStoreVTable — host-side callbacks (v1, Phase 2E)
+// SurfaceStoreVTable — host-side callbacks
 // =========================================================================
 //
 // Every callback derefs `handle` as `&SurfaceStoreInner` and calls
@@ -4015,7 +4012,7 @@ unsafe extern "C" fn host_ss_update_image_layout(
 }
 
 // -------------------------------------------------------------------------
-// Remaining PixelBuffer method dispatch (v9 — Phase 2F)
+// PixelBuffer acquire / get / resolve method-dispatch
 // -------------------------------------------------------------------------
 
 #[inline]

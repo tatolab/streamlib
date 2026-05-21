@@ -3,12 +3,9 @@
 
 //! Raw byte-shaped GPU storage buffer (SSBO).
 //!
-//! Phase 2B (#901) reshaped `StorageBuffer` to
-//! `(handle, vtable, cached POD)` so the type is layout-stable across
-//! the cdylib DSO boundary. The handle is
-//! `Arc::into_raw(Arc<HostVulkanBuffer>)`; the vtable's
-//! `clone_storage_buffer` / `drop_storage_buffer` callbacks manage the
-//! Arc refcount in host-compiled code.
+//! Layout-stable `(handle, vtable, cached POD)` shape — Arc refcount
+//! accounting runs in host-compiled code via the vtable's
+//! `clone_storage_buffer` / `drop_storage_buffer` callbacks.
 //!
 //! Sibling of [`PixelBuffer`](super::PixelBuffer) for callers that
 //! have raw bytes rather than formatted pixel data — V4L2-shape capture
@@ -175,7 +172,7 @@ mod layout_tests {
 
     #[test]
     fn storage_buffer_layout() {
-        // Phase 2B (#901): pin the byte-level shape. Fields:
+        // Pin the byte-level shape. Fields:
         //   handle              : *const c_void → offset 0,  size 8
         //   vtable              : *const VTable → offset 8,  size 8
         //   byte_size_cached    : u64           → offset 16, size 8

@@ -3,9 +3,8 @@
 
 //! RHI command queue abstraction.
 //!
-//! Phase 2D (#901) reshaped `RhiCommandQueue` to `(handle, vtable)`
-//! so the type is layout-stable across the cdylib DSO boundary. The
-//! handle is `Arc::into_raw(Arc<RhiCommandQueueInner>)`; the vtable's
+//! Layout-stable `(handle, vtable)` shape. The handle is
+//! `Arc::into_raw(Arc<RhiCommandQueueInner>)`; the vtable's
 //! `clone_rhi_command_queue` / `drop_rhi_command_queue` callbacks
 //! manage the Arc refcount in host-compiled code.
 //!
@@ -194,7 +193,7 @@ mod layout_tests {
 
     #[test]
     fn rhi_command_queue_layout() {
-        // Phase 2D (#901): pin the byte-level shape. Fields:
+        // Pin the byte-level shape. Fields:
         //   handle : *const c_void → offset 0, size 8
         //   vtable : *const VTable → offset 8, size 8
         // Total: 16 bytes, 8-byte alignment.

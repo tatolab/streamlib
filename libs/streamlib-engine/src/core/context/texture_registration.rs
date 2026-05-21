@@ -3,9 +3,8 @@
 
 //! Engine-wide per-surface texture registration record.
 //!
-//! Phase 2C (#901) reshaped `TextureRegistration` to
-//! `(handle, vtable)` so the type is layout-stable across the cdylib
-//! DSO boundary. The handle is
+//! Layout-stable `(handle, vtable)` shape so the type crosses the
+//! cdylib DSO boundary. The handle is
 //! `Arc::into_raw(Arc<TextureRegistrationInner>)`; the vtable's
 //! `clone_texture_registration` / `drop_texture_registration`
 //! callbacks manage the Arc refcount in host-compiled code.
@@ -142,7 +141,7 @@ impl TextureRegistration {
         // `*const c_void` at the FFI boundary) into the Arc's heap
         // allocation. The pointer is alive as long as `self` is —
         // the Arc's strong count keeps the inner alive. `Texture` is
-        // a layout-stable `#[repr(C)]` value (locked by Phase 2A's
+        // a layout-stable `#[repr(C)]` value (locked by the
         // `texture_layout` regression test) so cdylib and host see
         // the same byte shape.
         unsafe {
@@ -220,7 +219,7 @@ mod layout_tests {
 
     #[test]
     fn texture_registration_layout() {
-        // Phase 2C (#901): pin the byte-level shape. Fields:
+        // Pin the byte-level shape. Fields:
         //   handle : *const c_void → offset 0, size 8
         //   vtable : *const VTable → offset 8, size 8
         // Total: 16 bytes, 8-byte alignment.

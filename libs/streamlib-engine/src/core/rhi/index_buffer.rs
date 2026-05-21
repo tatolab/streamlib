@@ -3,9 +3,8 @@
 
 //! Index buffer for graphics pipeline indexed draws.
 //!
-//! Phase 2B (#901) reshaped `IndexBuffer` to
-//! `(handle, vtable, cached POD)` so the type is layout-stable across
-//! the cdylib DSO boundary.
+//! Layout-stable `(handle, vtable, cached POD)` shape; see
+//! [`StorageBuffer`](super::StorageBuffer) for the shared rationale.
 
 #[cfg(target_os = "linux")]
 use std::ffi::c_void;
@@ -147,7 +146,7 @@ mod layout_tests {
 
     #[test]
     fn index_buffer_layout() {
-        // Phase 2B (#901): 32 bytes, same shape as StorageBuffer.
+        // 32 bytes, same shape as StorageBuffer.
         assert_eq!(size_of::<IndexBuffer>(), 32);
         assert_eq!(align_of::<IndexBuffer>(), 8);
         assert_eq!(offset_of!(IndexBuffer, handle), 0);

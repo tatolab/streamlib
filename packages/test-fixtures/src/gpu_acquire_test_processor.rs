@@ -1,29 +1,28 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Integration-test fixture for Phase 2 of #901: a dlopen'd processor
-//! that exercises the new `GpuContextLimitedAccessVTable` callbacks
-//! end-to-end from cdylib code.
+//! Integration-test fixture: a dlopen'd processor that exercises the
+//! `GpuContextLimitedAccessVTable` callbacks end-to-end from cdylib
+//! code.
 //!
 //! Lifecycle:
 //!   1. `setup()` — clones `ctx.gpu_limited_access()` and stashes it.
-//!      Exercises the v2 `clone_handle` vtable callback (the Arc
-//!      refcount bump on `Arc<GpuContext>`).
+//!      Exercises `clone_handle` (Arc refcount bump on
+//!      `Arc<GpuContext>`).
 //!   2. `start()` — acquires a `PixelBuffer` via the stashed
-//!      `GpuContextLimitedAccess::acquire_pixel_buffer`. Exercises the
-//!      v9 `acquire_pixel_buffer` vtable callback (paired-out-param
-//!      tuple return). Reads the cached `width`/`height` (POD; no
-//!      cross-DSO dispatch). Calls `plane_base_address(0)` —
-//!      exercises the v3 `plane_base_address_pixel_buffer` vtable
-//!      callback. Writes a sentinel byte through the returned
-//!      pointer to prove the host-allocated mapped memory is
-//!      reachable from cdylib code. Drops the `PixelBuffer` —
-//!      exercises the v2 `drop_pixel_buffer` callback.
+//!      `GpuContextLimitedAccess::acquire_pixel_buffer`. Exercises
+//!      `acquire_pixel_buffer` (paired-out-param tuple return). Reads
+//!      the cached `width`/`height` (POD; no cross-DSO dispatch).
+//!      Calls `plane_base_address(0)` — exercises
+//!      `plane_base_address_pixel_buffer`. Writes a sentinel byte
+//!      through the returned pointer to prove the host-allocated
+//!      mapped memory is reachable from cdylib code. Drops the
+//!      `PixelBuffer` — exercises `drop_pixel_buffer`.
 //!   3. Writes "OK\n<width>x<height>\nsentinel_addr=0x<hex>" or
 //!      "ERR:<message>" to the configured `output_path` so the
 //!      integration test can verify the round-trip.
 //!   4. `teardown()` — drops the stashed `GpuContextLimitedAccess`,
-//!      exercising the v2 `drop_handle` vtable callback.
+//!      exercising `drop_handle`.
 
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
@@ -40,7 +39,7 @@ pub struct GpuAcquireTest {
 impl ManualProcessor for GpuAcquireTest::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Clone the GpuContextLimitedAccess across the cdylib DSO
-        // boundary. The `Clone` impl dispatches through the v2
+        // boundary. The `Clone` impl dispatches through the
         // `clone_handle` vtable callback (Arc refcount bump on
         // `Arc<GpuContext>`); dropping the clone in `teardown()`
         // fires `drop_handle`. Both refcount ops run in host-compiled
@@ -59,8 +58,8 @@ impl ManualProcessor for GpuAcquireTest::Processor {
                 Error::Runtime("GpuAcquireTest: setup() didn't stash gpu".into())
             })?;
 
-            // Exercise `acquire_pixel_buffer` (v9 callback) — paired
-            // out-param tuple return.
+            // Exercise `acquire_pixel_buffer` — paired out-param
+            // tuple return.
             let (_pool_id, pixel_buffer) =
                 gpu.acquire_pixel_buffer(width, height, PixelFormat::Bgra32)?;
 
@@ -69,10 +68,9 @@ impl ManualProcessor for GpuAcquireTest::Processor {
             let observed_w = pixel_buffer.width;
             let observed_h = pixel_buffer.height;
 
-            // Exercise `plane_base_address_pixel_buffer` (v3
-            // callback). Host returns a host-allocated mapped
-            // pointer — same process address space, so the cdylib
-            // can deref it.
+            // Exercise `plane_base_address_pixel_buffer`. Host
+            // returns a host-allocated mapped pointer — same process
+            // address space, so the cdylib can deref it.
             let plane_ptr = pixel_buffer.plane_base_address(0);
 
             // If the mapping is HOST_VISIBLE, write a sentinel byte
@@ -89,9 +87,8 @@ impl ManualProcessor for GpuAcquireTest::Processor {
                 }
             }
 
-            // Drop the PixelBuffer — exercises the v2
-            // `drop_pixel_buffer` callback. The pool slot returns to
-            // the pool host-side.
+            // Drop the PixelBuffer — exercises `drop_pixel_buffer`.
+            // The pool slot returns to the pool host-side.
             drop(pixel_buffer);
 
             Ok((observed_w, observed_h, plane_ptr))
@@ -112,8 +109,8 @@ impl ManualProcessor for GpuAcquireTest::Processor {
     }
 
     fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Drop the stashed GpuContextLimitedAccess — exercises the
-        // v2 `drop_handle` vtable callback (Arc refcount decrement).
+        // Drop the stashed GpuContextLimitedAccess — exercises
+        // `drop_handle` (Arc refcount decrement).
         self.gpu.take();
         Ok(())
     }

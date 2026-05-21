@@ -1814,7 +1814,7 @@ impl std::fmt::Debug for SurfaceStoreInner {
 }
 
 // =============================================================================
-// β-shape `SurfaceStore` — Phase C1 Phase 2E (#901)
+// β-shape `SurfaceStore`
 // =============================================================================
 //
 // Cdylib-facing layout-stable wrapper around
@@ -2299,7 +2299,7 @@ mod layout_tests_ss {
 
     #[test]
     fn surface_store_layout() {
-        // Phase 2E (#901): 16 bytes — handle + vtable.
+        // 16 bytes — handle + vtable.
         assert_eq!(size_of::<SurfaceStore>(), 16);
         assert_eq!(align_of::<SurfaceStore>(), 8);
         assert_eq!(offset_of!(SurfaceStore, handle), 0);

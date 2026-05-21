@@ -3,12 +3,13 @@
 
 //! RHI texture abstraction.
 //!
-//! Phase C1 (#901) reshaped `Texture` to `(handle, vtable, cached POD)`
-//! so the type is layout-stable across the cdylib DSO boundary. The
-//! handle is `Arc::into_raw(Arc<TextureInner>)` produced by host code;
-//! the vtable's `clone_texture` / `drop_texture` callbacks manage the
-//! Arc refcount in host-compiled code, so Clone/Drop work correctly
-//! regardless of the cdylib's compiled `Arc` layout.
+//! Layout-stable `(handle, vtable, cached POD)` shape: every field
+//! is either a primitive or an opaque pointer, so the type
+//! round-trips across the cdylib DSO boundary unchanged. The
+//! handle is `Arc::into_raw(Arc<TextureInner>)` produced by host
+//! code; the vtable's `clone_texture` / `drop_texture` callbacks
+//! manage the Arc refcount in host-compiled code, so Clone/Drop
+//! work correctly regardless of the cdylib's compiled `Arc` layout.
 //!
 //! Platform-specific Arcs (`HostVulkanTexture` on Linux,
 //! `MetalTexture` on macOS, `DX12Texture` on Windows) live on the
@@ -451,7 +452,7 @@ mod layout_tests {
 
     #[test]
     fn texture_layout() {
-        // Phase 2A (#901): pin the byte-level shape of the cross-DSO
+        // Pin the byte-level shape of the cross-DSO
         // `Texture`. Fields:
         //   handle       : *const c_void  → offset 0,  size 8
         //   vtable       : *const VTable  → offset 8,  size 8

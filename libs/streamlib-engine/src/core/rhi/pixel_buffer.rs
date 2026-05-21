@@ -3,13 +3,14 @@
 
 //! Pixel buffer with cached dimensions.
 //!
-//! Phase C1 (#901) reshaped `PixelBuffer` to `(handle, vtable,
-//! cached POD)` so the type is layout-stable across the cdylib DSO
-//! boundary. The handle is `Arc::into_raw(Arc<PixelBufferRef>)`
-//! produced by host code; the vtable's `clone_pixel_buffer` /
-//! `drop_pixel_buffer` callbacks manage the Arc refcount in
-//! host-compiled code, so Clone/Drop work correctly regardless of
-//! the cdylib's compiled `Arc` layout.
+//! Layout-stable `(handle, vtable, cached POD)` shape: every field
+//! is either a primitive or an opaque pointer, so the type
+//! round-trips across the cdylib DSO boundary unchanged. The
+//! handle is `Arc::into_raw(Arc<PixelBufferRef>)` produced by host
+//! code; the vtable's `clone_pixel_buffer` / `drop_pixel_buffer`
+//! callbacks manage the Arc refcount in host-compiled code, so
+//! Clone/Drop work correctly regardless of the cdylib's compiled
+//! `Arc` layout.
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -322,8 +323,7 @@ mod layout_tests {
 
     #[test]
     fn pixel_buffer_layout() {
-        // Phase 0 hardening (#901): pin the byte-level shape of the
-        // cross-DSO `PixelBuffer`. Fields:
+        // Pin the byte-level shape of the cross-DSO `PixelBuffer`. Fields:
         //   handle              : *const c_void  → offset 0,  size 8
         //   vtable              : *const VTable  → offset 8,  size 8
         //   width               : u32            → offset 16, size 4

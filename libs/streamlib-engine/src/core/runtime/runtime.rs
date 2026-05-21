@@ -864,9 +864,9 @@ impl Runner {
                 "[start] Initializing SurfaceStore against runtime-internal Unix socket '{}'...",
                 socket_path
             );
-            // Phase 2E (#901): `SurfaceStore::new` constructs the
-            // β-shape from a fresh `Arc<SurfaceStoreInner>`. Method
-            // dispatch goes through the host's `SurfaceStoreVTable`.
+            // `SurfaceStore::new` constructs the β-shape from a fresh
+            // `Arc<SurfaceStoreInner>`. Method dispatch goes through
+            // the host's `SurfaceStoreVTable`.
             let surface_store = SurfaceStore::new(
                 socket_path.clone(),
                 self.runtime_id.to_string(),

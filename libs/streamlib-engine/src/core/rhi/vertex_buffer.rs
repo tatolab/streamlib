@@ -3,9 +3,8 @@
 
 //! Vertex buffer for graphics pipeline vertex input.
 //!
-//! Phase 2B (#901) reshaped `VertexBuffer` to
-//! `(handle, vtable, cached POD)` so the type is layout-stable across
-//! the cdylib DSO boundary.
+//! Layout-stable `(handle, vtable, cached POD)` shape; see
+//! [`StorageBuffer`](super::StorageBuffer) for the shared rationale.
 
 #[cfg(target_os = "linux")]
 use std::ffi::c_void;
@@ -147,7 +146,7 @@ mod layout_tests {
 
     #[test]
     fn vertex_buffer_layout() {
-        // Phase 2B (#901): 32 bytes, same shape as StorageBuffer.
+        // 32 bytes, same shape as StorageBuffer.
         assert_eq!(size_of::<VertexBuffer>(), 32);
         assert_eq!(align_of::<VertexBuffer>(), 8);
         assert_eq!(offset_of!(VertexBuffer, handle), 0);

@@ -3,9 +3,8 @@
 
 //! RHI command buffer abstraction.
 //!
-//! Phase 2D (#901) reshaped `CommandBuffer` to `(handle, vtable)` so
-//! the type is layout-stable across the cdylib DSO boundary. The
-//! handle is `Box::into_raw(Box<CommandBufferInner>)`; the vtable's
+//! Layout-stable `(handle, vtable)` shape. The handle is
+//! `Box::into_raw(Box<CommandBufferInner>)`; the vtable's
 //! `drop_command_buffer` callback runs `Box::from_raw + drop` on the
 //! host side. `commit` / `commit_and_wait` consume the handle
 //! similarly (host runs the platform-native commit, then drops the
@@ -113,7 +112,7 @@ impl CommandBuffer {
         }
         // SAFETY: handle + vtable were paired at construction. We pass
         // typed `*const Texture` pointers; the layout is locked by
-        // Phase 2A's `texture_layout` test so the host's read agrees
+        // per-type `texture_layout` regression test so the host's read agrees
         // with the cdylib's write.
         unsafe {
             ((*self.vtable).copy_texture_command_buffer)(
@@ -214,7 +213,7 @@ mod layout_tests {
 
     #[test]
     fn command_buffer_layout() {
-        // Phase 2D (#901): pin the byte-level shape. Fields:
+        // Pin the byte-level shape. Fields:
         //   handle : *const c_void → offset 0, size 8
         //   vtable : *const VTable → offset 8, size 8
         // Total: 16 bytes, 8-byte alignment.

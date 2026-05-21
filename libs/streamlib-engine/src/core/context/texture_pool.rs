@@ -624,7 +624,7 @@ mod layout_tests {
 
     #[test]
     fn pooled_texture_handle_layout() {
-        // Phase 2A (#901): pin the byte-level shape. Fields:
+        // Pin the byte-level shape. Fields:
         //   handle        : *const c_void   → offset 0,  size 8
         //   vtable        : *const VTable   → offset 8,  size 8
         //   texture       : Texture (β,32B) → offset 16, size 32

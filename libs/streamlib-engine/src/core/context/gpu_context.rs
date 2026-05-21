@@ -1818,15 +1818,11 @@ impl std::fmt::Debug for GpuContext {
 ///
 /// In the final design this type exposes only cheap, pool-backed, non-allocating
 /// operations; heavier work must go through [`GpuContextLimitedAccess::escalate`].
-/// In #321 it delegates every method to the inner [`GpuContext`] — no surface
-/// is hidden yet.
+///
 /// Restricted GPU capability shim with ABI-stable `(handle, vtable)`
-/// prefix.
+/// shape. Both fields cross the cdylib DSO boundary unchanged:
 ///
-/// Phase C1 of #886 reshapes this struct to a `#[repr(C)]` layout
-/// whose first two fields cross the cdylib DSO boundary unchanged:
-///
-/// - `handle`: an opaque `*const c_void` pointing at a host-leaked
+/// - `handle`: opaque `*const c_void` pointing at a host-leaked
 ///   `Box<Arc<GpuContext>>`. Cdylib code passes this pointer to
 ///   [`GpuContextLimitedAccessVTable`] callbacks; the host's
 ///   callbacks (running in host-compiled code) cast it back to
@@ -1834,14 +1830,6 @@ impl std::fmt::Debug for GpuContext {
 /// - `vtable`: pointer to the `&'static GpuContextLimitedAccessVTable`
 ///   installed by the host (resolved via
 ///   [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]).
-/// - `inner`: the host's `GpuContext`. **Engine-internal only** —
-///   reachable through [`Self::host_inner`], which panics if reached
-///   from cdylib code (the panic is caught by `run_host_extern_c` at
-///   the FFI boundary). Cdylib code never reads this field;
-///   per-method vtable callbacks land progressively in Phase C1 follow-on
-///   commits to migrate every inherent method from `host_inner()`
-///   dispatch to vtable dispatch.
-#[repr(C)]
 #[repr(C)]
 pub struct GpuContextLimitedAccess {
     /// Opaque host handle. Points at a `Box<Arc<GpuContext>>` allocated
@@ -1861,19 +1849,16 @@ pub struct GpuContextLimitedAccess {
 // is `Send + Sync` (Arc carries atomic refcounts, GpuContext's
 // fields are themselves Send + Sync via their Arc wrappers). The
 // vtable pointer is `&'static` and pinned for the host's lifetime.
-// Phase 2 terminal cleanup (post-2F): the prior `inner: GpuContext`
-// field has been removed — every method (engine and cdylib) reaches
-// the GpuContext through the handle, gated on the DSO mode by
-// `host_inner()`'s `host_callbacks()` check.
+// Every method (engine and cdylib) reaches the GpuContext through
+// the handle, gated on DSO mode by `host_inner()`'s `host_callbacks()`
+// check.
 unsafe impl Send for GpuContextLimitedAccess {}
 unsafe impl Sync for GpuContextLimitedAccess {}
 
 impl Clone for GpuContextLimitedAccess {
     /// Cross-DSO-safe Clone. Dispatches through
     /// [`GpuContextLimitedAccessVTable::clone_handle`] to bump the
-    /// host's `Arc<GpuContext>` refcount. Matches the
-    /// [`RuntimeOpsShim`](crate::core::context::runtime_ops_shim::RuntimeOpsShim)
-    /// owning-handle pattern from Phase B.
+    /// host's `Arc<GpuContext>` refcount.
     fn clone(&self) -> Self {
         let new_handle = if !self.handle.is_null() && !self.vtable.is_null() {
             // SAFETY: handle + vtable were paired at construction
@@ -1931,17 +1916,12 @@ pub struct GpuContextFullAccess {
 impl GpuContextLimitedAccess {
     /// Wrap a [`GpuContext`] as a limited-access capability.
     ///
-    /// Phase 2 terminal cleanup (post-2F): the `(handle, vtable)`
-    /// pair fully replaces the previously-embedded `inner: GpuContext`
-    /// field. The handle is the only owning reference to the
+    /// The handle is the sole owning reference to the
     /// `Arc<GpuContext>`; every engine method reaches it through
     /// [`Self::host_inner`] and every cdylib method dispatches
-    /// through the vtable.
-    ///
-    /// Allocates a host-side `Box<Arc<GpuContext>>` as the opaque
-    /// handle (matches the
-    /// [`crate::core::plugin::host_services::host_rov_clone_handle`]
-    /// pattern from Phase B), then resolves the vtable through
+    /// through the vtable. Allocates a host-side
+    /// `Box<Arc<GpuContext>>` as the opaque handle, then resolves
+    /// the vtable through
     /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
     /// (DSO-routed: host static in host mode, cdylib-installed
     /// pointer in cdylib mode).
@@ -1970,8 +1950,7 @@ impl GpuContextLimitedAccess {
     /// dispatches through the
     /// [`GpuContextLimitedAccessVTable`](streamlib_plugin_abi::GpuContextLimitedAccessVTable)
     /// instead — every cdylib-callable method on
-    /// [`GpuContextLimitedAccess`] is wired through the vtable as of
-    /// Phase 2F.
+    /// [`GpuContextLimitedAccess`] is wired through the vtable.
     ///
     /// The panic is caught by `run_host_extern_c` at the FFI
     /// boundary (host extern "C" callbacks all route through
@@ -2030,9 +2009,6 @@ impl GpuContextLimitedAccess {
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>,
     {
-        // Reach the GpuContext through `host_inner()` (Phase 2
-        // terminal cleanup: the previously-embedded `inner` field is
-        // gone; access goes through the Box<Arc<GpuContext>> handle).
         // Engine-only call surface — cdylib code hitting this path
         // panics via `host_inner()`'s `host_callbacks()` guard, which
         // is caught by `run_host_extern_c`.
@@ -2138,7 +2114,7 @@ impl GpuContextFullAccess {
 }
 
 // -----------------------------------------------------------------------------
-// Phase 2B vtable-dispatch helper for the 4 acquire_*_buffer methods.
+// Vtable-dispatch helper for the 4 acquire_*_buffer methods.
 // Each Linux-only buffer type follows the same out-param + err_buf
 // convention, so a single generic helper covers all 4 callsites
 // without per-call boilerplate.
@@ -2748,9 +2724,8 @@ impl GpuContextLimitedAccess {
     /// pre-reserved. See design doc §8 Q5.
     ///
     /// Dispatches through the cross-DSO vtable's `command_queue`
-    /// callback. Returns an owned [`RhiCommandQueue`] β-shape (refcount
-    /// bumped on the host's `Arc<RhiCommandQueueInner>`) — signature
-    /// change from `&RhiCommandQueue` to `RhiCommandQueue` per Phase 2D.
+    /// callback. Returns an owned [`RhiCommandQueue`] β-shape with the
+    /// host's `Arc<RhiCommandQueueInner>` refcount bumped.
     pub fn command_queue(&self) -> RhiCommandQueue {
         if self.handle.is_null() || self.vtable.is_null() {
             // Construct a null-handle β-shape that's safe to Drop
@@ -3451,10 +3426,9 @@ impl GpuContextFullAccess {
 
 impl std::fmt::Debug for GpuContextLimitedAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Phase 2 terminal cleanup (post-2F): the embedded
-        // `inner: GpuContext` field is gone. Debug-print the
-        // (handle, vtable) shape; the underlying GpuContext is
-        // host-private and not safely formattable from cdylib code.
+        // The underlying GpuContext is host-private and not safely
+        // formattable from cdylib code; print the (handle, vtable)
+        // shape instead.
         f.debug_struct("GpuContextLimitedAccess")
             .field("handle", &self.handle)
             .field("vtable", &self.vtable)

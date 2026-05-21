@@ -3,9 +3,8 @@
 
 //! Uniform buffer (UBO).
 //!
-//! Phase 2B (#901) reshaped `UniformBuffer` to
-//! `(handle, vtable, cached POD)` so the type is layout-stable across
-//! the cdylib DSO boundary.
+//! Layout-stable `(handle, vtable, cached POD)` shape; see
+//! [`StorageBuffer`](super::StorageBuffer) for the shared rationale.
 
 #[cfg(target_os = "linux")]
 use std::ffi::c_void;
@@ -149,8 +148,7 @@ mod layout_tests {
 
     #[test]
     fn uniform_buffer_layout() {
-        // Phase 2B (#901): pin the byte-level shape. Same as
-        // StorageBuffer: 32 bytes, 4 fields.
+        // Pin the byte-level shape. Same as StorageBuffer: 32 bytes, 4 fields.
         assert_eq!(size_of::<UniformBuffer>(), 32);
         assert_eq!(align_of::<UniformBuffer>(), 8);
         assert_eq!(offset_of!(UniformBuffer, handle), 0);

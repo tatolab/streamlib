@@ -97,16 +97,13 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 /// - v4: [`GpuContextLimitedAccessVTable`] reference appended.
 ///   The cdylib-side `GpuContextLimitedAccess` shim's
 ///   `(handle, vtable)` pair sources its vtable pointer from this
-///   field. Phase C1 (#901) populates the static; for hosts that
-///   ship a GpuContext, the pointer is non-null. Hosts without GPU
-///   support set it to `null` and cdylib code must check before
-///   dispatching.
-/// - v5: [`SurfaceStoreVTable`] reference appended (Phase C1 Phase
-///   2E). The cdylib-side `SurfaceStore` shim's `(handle, vtable)`
-///   pair sources its vtable pointer from this field. Hosts that
-///   ship a `SurfaceStore` set it non-null; hosts that don't (or
-///   where `gpu.surface_store()` returns `None`) leave it null and
-///   cdylib code must check before dispatching.
+///   field. Non-null for hosts that ship a GpuContext; null
+///   otherwise (cdylib code must check before dispatching).
+/// - v5: [`SurfaceStoreVTable`] reference appended. The cdylib-side
+///   `SurfaceStore` shim's `(handle, vtable)` pair sources its
+///   vtable pointer from this field. Non-null for hosts that ship
+///   a `SurfaceStore`; null otherwise (cdylib code must check
+///   before dispatching).
 pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 5;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
@@ -136,101 +133,26 @@ pub const AUDIO_CLOCK_VTABLE_LAYOUT_VERSION: u32 = 1;
 pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
 
 /// Layout version of [`SurfaceStoreVTable`].
-///
-/// - v1: scaffold for Phase C1 Phase 2E. `clone_handle` / `drop_handle`
-///   for owning-Arc lifecycle on `Arc<SurfaceStoreInner>`, plus the 11
-///   method-dispatch callbacks for the cross-platform and Linux-only
-///   surface-share operations: `connect`, `disconnect`, `check_in`,
-///   `check_out`, `register_buffer`, `lookup_buffer`, `release`,
-///   `register_texture`, `register_pixel_buffer_with_timeline`,
-///   `lookup_texture`, `update_image_layout`.
 pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Layout version of [`GpuContextLimitedAccessVTable`].
 ///
-/// - v1: scaffold — layout-version + `clone_handle` / `drop_handle`.
-/// - v2: per-type PixelBuffer clone/drop callbacks
-///   (`clone_pixel_buffer` / `drop_pixel_buffer`). The cdylib's
-///   `PixelBuffer` is `(handle, vtable, cached POD)`; Clone/Drop
-///   dispatch through these callbacks so the host's `Arc<PixelBufferRef>`
-///   refcount is managed by host-compiled code regardless of which
-///   DSO holds the `PixelBuffer`. Same rationale as `RuntimeOpsVTable`
-///   v2's `clone_handle`/`drop_handle` but specific to the
-///   `PixelBuffer` return type.
-/// - v3: PixelBuffer method-dispatch callbacks (`strong_count_pixel_buffer`,
-///   `plane_base_address_pixel_buffer`, `plane_size_pixel_buffer`).
-///   The remaining non-cached `PixelBuffer` methods now dispatch
-///   through host-compiled code instead of casting the handle to
-///   `*const PixelBufferRef` cdylib-side — eliminates the cross-DSO
-///   `Arc::from_raw` / direct deref UB landmine the v2 scaffold left
-///   in place.
-/// - v4: per-type `Texture` clone/drop pair (`clone_texture` /
-///   `drop_texture`) for the new β-reshape that lifted `Texture`'s
-///   `Arc<HostVulkanTexture>` field behind a `(handle, vtable, POD)`
-///   wrapper; per-type `PooledTextureHandle` drop callback
-///   (`drop_pooled_texture_handle`) — the type is intentionally NOT
-///   `Clone` because Drop releases a pool slot, so no clone callback;
-///   and six `Texture`-related method-dispatch callbacks
-///   (`register_texture`, `register_texture_with_layout`,
-///   `update_texture_registration_layout`, `acquire_texture`,
-///   `resolve_texture_by_surface_id`, `unregister_texture`). Same
-///   rationale as v2 / v3 — keep Arc accounting and the methods that
-///   touch host-internal RHI types in host-compiled code regardless
-///   of caller DSO.
-/// - v5: per-type Linux-only buffer clone/drop pairs for each of
-///   `StorageBuffer` / `UniformBuffer` / `VertexBuffer` /
-///   `IndexBuffer` (8 callbacks), plus the 4 `acquire_*_buffer`
-///   method-dispatch callbacks. Each buffer type wraps the same
-///   `Arc<HostVulkanBuffer>` under the hood but keeps a distinct
-///   Rust-level type for binding-shape enforcement; the vtable
-///   mirrors that by giving each its own pair so future divergence
-///   (e.g. a buffer type growing per-type state) doesn't require
-///   re-versioning the shared callback. Callbacks are stubs on
-///   non-Linux hosts (the buffer types only exist on Linux); the
-///   vtable layout is unconditional so the cdylib-side ABI stays
-///   stable across triples.
-/// - v6: per-type `TextureRegistration` clone/drop pair, three
-///   method-dispatch callbacks (`texture_registration_texture`,
-///   `texture_registration_current_layout`,
-///   `texture_registration_update_layout`), and the
-///   `resolve_texture_registration_by_surface_id` method-dispatch
-///   callback. `TextureRegistration` was previously returned as
-///   `Arc<TextureRegistration>` (Arc layout is rustc-version-
-///   dependent — unsafe to cross the cdylib boundary); the
-///   β-reshape collapses the return type to a `(handle, vtable)`
-///   wrapper that's Arc-semantics-equivalent (cheap Clone via
-///   vtable refcount bump) with host-compiled refcount accounting.
-/// - v7: per-type `RhiCommandQueue` clone/drop pair + 1 method
-///   (`create_command_buffer_from_queue`); per-type `CommandBuffer`
-///   drop + 2 consume-semantics commit callbacks
-///   (`commit_command_buffer`, `commit_and_wait_command_buffer`) +
-///   1 mutator (`copy_texture_command_buffer`) — total 5 lifecycle
-///   + per-type-method callbacks. Plus 5 `GpuContextLimitedAccess`
-///   method-dispatch callbacks (`command_queue`,
-///   `create_command_buffer`, `copy_pixel_buffer_to_texture`,
-///   `blit_copy`, `blit_copy_iosurface`). 12 callbacks total.
-///   `CommandBuffer` is deliberately NOT `Clone` (single-use
-///   commit-semantics); the cdylib's `commit(self)` /
-///   `commit_and_wait(self)` impls null the local handle/vtable
-///   fields after the callback so Drop becomes a no-op (the host
-///   already dropped the inner during commit).
-/// - v8: two `SurfaceStore`-related method-dispatch callbacks on
-///   the parent vtable: `surface_store` (returns an owned
-///   `SurfaceStore` β-shape into an out-param; null handle ↔ None)
-///   and `check_out_surface` (convenience method that delegates to
-///   the engine's `SurfaceStore::check_out` while keeping the
-///   surface-share lookup hidden behind the GpuContext capability
-///   surface). The bulk of the `SurfaceStore` ABI lives on its own
-///   [`SurfaceStoreVTable`], reached via
-///   [`HostServices::surface_store_vtable`].
-/// - v9: three remaining PixelBuffer method-dispatch callbacks
-///   (`acquire_pixel_buffer` returning a `(PixelBufferPoolId,
-///   PixelBuffer)` tuple via paired out-params; `get_pixel_buffer`
-///   keyed by `PixelBufferPoolId`-as-bytes;
-///   `resolve_pixel_buffer_by_surface_id`). Closes the cross-DSO
-///   loop for the PixelBuffer surface — every public method on
-///   `GpuContextLimitedAccess` that touches a PixelBuffer is now
-///   layout-stable.
+/// Every Arc-holding return type on the cdylib-facing surface
+/// (`PixelBuffer`, `Texture`, `PooledTextureHandle`, 4 Linux-only
+/// buffer types, `TextureRegistration`, `RhiCommandQueue`,
+/// `CommandBuffer`, `SurfaceStore`) carries its own clone/drop
+/// callback pair so refcount accounting runs in host-compiled
+/// code regardless of caller DSO. Method-dispatch callbacks
+/// cover every cdylib-callable inherent method on
+/// `GpuContextLimitedAccess`.
+///
+/// `CommandBuffer` and `PooledTextureHandle` are intentionally
+/// NOT `Clone` — `CommandBuffer` has consume-semantics
+/// `commit(self)` / `commit_and_wait(self)` (the cdylib nulls
+/// the local handle/vtable fields after dispatch so Drop becomes
+/// a no-op); `PooledTextureHandle::Drop` releases the underlying
+/// pool slot. Linux-only callbacks ship platform stubs on other
+/// triples so the vtable layout stays unconditional.
 pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 9;
 
 // =============================================================================
@@ -280,9 +202,10 @@ pub type HostHandle = *const c_void;
 /// lifecycle (setup / teardown / on_pause / on_resume / process /
 /// start / stop / destroy) plus the static-info, iceoryx2-wiring,
 /// and config-IO methods compiler ops invoke on every processor.
-/// Methods bodies still receive `&RuntimeContext*Access` references
-/// crossing via Rust trait-object dispatch; those are Phase B + C
-/// (see `streamlib-plugin-abi`'s parent issue).
+/// Methods bodies receive `&RuntimeContext*Access` shims whose
+/// public method surface is implemented entirely in terms of the
+/// callback tables on [`HostServices`] — no Rust trait-object or
+/// shared-struct-layout crossing at the host/cdylib boundary.
 ///
 /// # Layout discipline
 ///
@@ -424,8 +347,9 @@ pub struct ProcessorVTable {
 
     // -------------------------------------------------------------------------
     // Iceoryx2 wiring (returns Rust types via raw pointer — known
-    // source-coupling for OutputWriter / InputMailboxes; see Phase A
-    // AI Agent Notes for the deferred-flip rationale)
+    // source-coupling for OutputWriter / InputMailboxes; the host
+    // casts back via Arc::from_raw to take ownership of the strong
+    // reference the cdylib leaks)
     // -------------------------------------------------------------------------
 
     pub has_iceoryx2_outputs: unsafe extern "C" fn(instance: *const c_void) -> bool,
@@ -497,9 +421,10 @@ unsafe impl Sync for ProcessorVTable {}
 // =============================================================================
 
 /// Dispatch table the cdylib's `RuntimeContext{Full,Limited}Access`
-/// shim uses to read host-owned runtime context state. Replaces the
-/// Rust trait-object / struct-layout-shared crossings Phase A left in
-/// place at the cdylib's `ctx.<accessor>()` boundary.
+/// shim uses to read host-owned runtime context state. Every accessor
+/// on the shim's public API routes through this table — no Rust
+/// trait-object / shared-struct-layout crossing at the cdylib
+/// boundary.
 ///
 /// # Layout discipline
 ///
@@ -510,10 +435,8 @@ unsafe impl Sync for ProcessorVTable {}
 /// # Opaque-handle returns
 ///
 /// `gpu_full_access` / `gpu_limited_access` return `*const c_void`
-/// opaque handles. Their callable surface is defined by the GpuContext
-/// callback tables (Phase C — see #886). For Phase B the handles
-/// suffice as identity tokens that the cdylib stashes and Phase C
-/// fills in.
+/// opaque handles paired with [`GpuContextLimitedAccessVTable`] for
+/// method dispatch.
 ///
 /// `audio_clock_handle` and `runtime_ops_handle` return opaque per-
 /// instance handles paired with the static vtables on [`HostServices`]
@@ -563,18 +486,20 @@ pub struct RuntimeContextVTable {
     pub should_process: unsafe extern "C" fn(ctx: *const c_void) -> bool,
 
     // -------------------------------------------------------------------------
-    // GPU context handles (Phase C wires their methods)
+    // GPU context handles
     // -------------------------------------------------------------------------
 
     /// Returns an opaque handle to the privileged [`GpuContextFullAccess`].
     /// Pointer is valid for the lifetime of the surrounding
-    /// `RuntimeContextFullAccess` shim. Phase C (#886) defines the
-    /// callback table the cdylib uses to invoke methods on the handle.
+    /// `RuntimeContextFullAccess` shim. Paired with the methods
+    /// reached via [`HostServices::gpu_context_limited_access_vtable`]
+    /// for the limited-access surface (FullAccess is engine-only
+    /// today; cross-DSO FullAccess wiring is future-phase work).
     pub gpu_full_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
 
     /// Returns an opaque handle to the restricted [`GpuContextLimitedAccess`].
-    /// Same lifetime and Phase C contract as
-    /// [`Self::gpu_full_access`].
+    /// Paired with [`HostServices::gpu_context_limited_access_vtable`]
+    /// for method dispatch.
     pub gpu_limited_access: unsafe extern "C" fn(ctx: *const c_void) -> *const c_void,
 
     // -------------------------------------------------------------------------
@@ -815,7 +740,7 @@ pub struct GpuContextLimitedAccessVTable {
     pub drop_handle: unsafe extern "C" fn(owned_handle: *const c_void),
 
     // -------------------------------------------------------------------------
-    // PixelBuffer return-type lifetime (v2 — Phase C1)
+    // PixelBuffer return-type lifetime
     // -------------------------------------------------------------------------
     //
     // The cdylib's `PixelBuffer` is `(handle, vtable, cached POD)` where
@@ -841,7 +766,7 @@ pub struct GpuContextLimitedAccessVTable {
     pub drop_pixel_buffer: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
-    // PixelBuffer method-dispatch (v3 — eliminate cross-DSO Arc::from_raw)
+    // PixelBuffer method-dispatch (eliminates cross-DSO Arc::from_raw)
     // -------------------------------------------------------------------------
     //
     // The remaining non-cached `PixelBuffer` methods dispatch through
@@ -875,7 +800,7 @@ pub struct GpuContextLimitedAccessVTable {
         unsafe extern "C" fn(handle: *const c_void, plane_index: u32) -> u64,
 
     // -------------------------------------------------------------------------
-    // Texture return-type lifetime (v4 — Phase C1 Phase 2A)
+    // Texture return-type lifetime
     // -------------------------------------------------------------------------
     //
     // The cdylib's `Texture` is `(handle, vtable, cached POD)` where
@@ -919,7 +844,7 @@ pub struct GpuContextLimitedAccessVTable {
     pub drop_pooled_texture_handle: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
-    // Method dispatch — Texture-related (v4)
+    // Method dispatch — Texture-related
     // -------------------------------------------------------------------------
     //
     // The six methods on the cdylib's `GpuContextLimitedAccess` that
@@ -1012,7 +937,7 @@ pub struct GpuContextLimitedAccessVTable {
     ),
 
     // -------------------------------------------------------------------------
-    // Linux-only buffer Arc-handle lifecycle (v5 — Phase C1 Phase 2B)
+    // Linux-only buffer Arc-handle lifecycle
     // -------------------------------------------------------------------------
     //
     // The cdylib's `StorageBuffer` / `UniformBuffer` / `VertexBuffer` /
@@ -1052,7 +977,7 @@ pub struct GpuContextLimitedAccessVTable {
     pub drop_index_buffer: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
-    // Linux-only buffer acquire methods (v5)
+    // Linux-only buffer acquire methods
     // -------------------------------------------------------------------------
     //
     // Each acquire callback writes a fresh `{Storage,Uniform,Vertex,
@@ -1102,7 +1027,7 @@ pub struct GpuContextLimitedAccessVTable {
     ) -> i32,
 
     // -------------------------------------------------------------------------
-    // TextureRegistration Arc-handle lifecycle (v6 — Phase C1 Phase 2C)
+    // TextureRegistration Arc-handle lifecycle
     // -------------------------------------------------------------------------
     //
     // The cdylib's `TextureRegistration` is `(handle, vtable)` where
@@ -1123,7 +1048,7 @@ pub struct GpuContextLimitedAccessVTable {
     pub drop_texture_registration: unsafe extern "C" fn(handle: *const c_void),
 
     // -------------------------------------------------------------------------
-    // TextureRegistration method dispatch (v6)
+    // TextureRegistration method dispatch
     // -------------------------------------------------------------------------
 
     /// Borrow the registration's underlying `Texture`. Returns a
@@ -1172,7 +1097,7 @@ pub struct GpuContextLimitedAccessVTable {
     ) -> i32,
 
     // -------------------------------------------------------------------------
-    // RhiCommandQueue Arc-handle lifecycle (v7 — Phase C1 Phase 2D)
+    // RhiCommandQueue Arc-handle lifecycle + create_command_buffer
     // -------------------------------------------------------------------------
     //
     // The cdylib's `RhiCommandQueue` is `(handle, vtable)` where
@@ -1198,7 +1123,7 @@ pub struct GpuContextLimitedAccessVTable {
     ) -> i32,
 
     // -------------------------------------------------------------------------
-    // CommandBuffer lifecycle — drop + consume-semantics commits (v7)
+    // CommandBuffer lifecycle — drop + consume-semantics commits
     // -------------------------------------------------------------------------
     //
     // `CommandBuffer` is single-use. Box-handle (not Arc) — no Clone.
@@ -1223,9 +1148,9 @@ pub struct GpuContextLimitedAccessVTable {
     pub commit_and_wait_command_buffer: unsafe extern "C" fn(handle: *const c_void),
 
     /// Copy one texture to another. `src` / `dst` are
-    /// `*const Texture` pointers — the layout is locked by Phase
-    /// 2A's `texture_layout` test so the host's read agrees with the
-    /// cdylib's write.
+    /// `*const Texture` pointers — the layout is locked by the
+    /// per-type `texture_layout` regression test so the host's read
+    /// agrees with the cdylib's write.
     pub copy_texture_command_buffer: unsafe extern "C" fn(
         handle: *const c_void,
         src: *const c_void,
@@ -1233,7 +1158,7 @@ pub struct GpuContextLimitedAccessVTable {
     ),
 
     // -------------------------------------------------------------------------
-    // GpuContextLimitedAccess method dispatch — 5 methods (v7)
+    // GpuContextLimitedAccess command-queue / command-buffer / blit methods
     // -------------------------------------------------------------------------
 
     /// Return an owned `RhiCommandQueue` view of the host's shared
@@ -1307,7 +1232,7 @@ pub struct GpuContextLimitedAccessVTable {
     ) -> i32,
 
     // -------------------------------------------------------------------------
-    // SurfaceStore accessors (v8 — Phase C1 Phase 2E)
+    // SurfaceStore accessors
     // -------------------------------------------------------------------------
     //
     // The bulk of the SurfaceStore ABI lives on its own
@@ -1339,13 +1264,8 @@ pub struct GpuContextLimitedAccessVTable {
     ) -> i32,
 
     // -------------------------------------------------------------------------
-    // Remaining PixelBuffer methods (v9 — Phase C1 Phase 2F)
+    // PixelBuffer acquire / get / resolve method-dispatch
     // -------------------------------------------------------------------------
-    //
-    // Last three methods on `GpuContextLimitedAccess` that touch
-    // `PixelBuffer`. Closes the cross-DSO loop for the PixelBuffer
-    // surface (Phase 0 already β-reshaped the type; Phase 2F wires
-    // the remaining acquire / lookup methods through the vtable).
 
     /// Acquire a pixel buffer from a pre-reserved pool. The tuple
     /// return `(PixelBufferPoolId, PixelBuffer)` is encoded via
@@ -1415,10 +1335,11 @@ unsafe impl Sync for GpuContextLimitedAccessVTable {}
 ///    capability surface. Folding it into the parent vtable would
 ///    nearly double `GpuContextLimitedAccessVTable`'s size without
 ///    adding semantic clarity.
-/// 2. **Phase B precedent** — `AudioClockVTable` already established
-///    the "separate vtable per significant subsystem" pattern (held
-///    at the `RuntimeContext` level via
-///    [`HostServices::audio_clock_vtable`]).
+/// 2. **Separate-vtable-per-subsystem precedent** — `AudioClockVTable`
+///    already lives outside `RuntimeContextVTable` at the
+///    `HostServices` level (via
+///    [`HostServices::audio_clock_vtable`]); the same shape
+///    applies here.
 ///
 /// # Handle lifetime
 ///
@@ -1806,7 +1727,7 @@ pub struct HostServices {
     pub runtime_ops_vtable: *const RuntimeOpsVTable,
 
     // -------------------------------------------------------------------------
-    // GpuContext vtable surface (v4 — Phase C1, #901)
+    // GpuContext vtable surface
     // -------------------------------------------------------------------------
 
     /// Static dispatch table for the host's `GpuContextLimitedAccess`.
@@ -1817,7 +1738,7 @@ pub struct HostServices {
     pub gpu_context_limited_access_vtable: *const GpuContextLimitedAccessVTable,
 
     // -------------------------------------------------------------------------
-    // SurfaceStore vtable surface (v5 — Phase C1 Phase 2E, #901)
+    // SurfaceStore vtable surface
     // -------------------------------------------------------------------------
 
     /// Static dispatch table for the host's `SurfaceStore`. Paired
@@ -1951,20 +1872,15 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        // v9 (Phase C1 Phase 2F): added the 3 remaining PixelBuffer
-        // method-dispatch callbacks (acquire_pixel_buffer,
-        // get_pixel_buffer, resolve_pixel_buffer_by_surface_id) —
-        // closes the cross-DSO loop for the PixelBuffer surface.
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 9);
-        // v1: scaffold for the SurfaceStore subsystem.
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
     fn host_services_tail_carries_five_vtable_pointers() {
-        // The v3-v5 additions live at the tail of HostServices. We
-        // don't pin the absolute offsets (earlier fields are subject
-        // to their own pre-v3 layout audit), but we do pin:
+        // Trailing vtable pointers on HostServices. We don't pin the
+        // absolute offsets (earlier fields carry their own layout
+        // audit), but we do pin:
         //   1. Each vtable is a single 8-byte pointer.
         //   2. They appear in the order RuntimeContext → AudioClock →
         //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore.
@@ -1996,39 +1912,8 @@ mod layout_tests {
 
     #[test]
     fn gpu_context_limited_access_vtable_layout() {
-        // v7 (Phase C1 Phase 2D): layout_version (u32) +
-        // _reserved_padding (u32) + 45 fn pointers (8 bytes each):
-        //   v2 (4): clone_handle, drop_handle,
-        //           clone_pixel_buffer, drop_pixel_buffer,
-        //   v3 (3): strong_count_pixel_buffer, plane_base_address_pixel_buffer,
-        //           plane_size_pixel_buffer,
-        //   v4 (8): clone_texture, drop_texture, drop_pooled_texture_handle,
-        //           register_texture, update_texture_registration_layout,
-        //           acquire_texture, resolve_texture_by_surface_id,
-        //           unregister_texture,
-        //   v5 (12): clone_storage_buffer, drop_storage_buffer,
-        //           clone_uniform_buffer, drop_uniform_buffer,
-        //           clone_vertex_buffer, drop_vertex_buffer,
-        //           clone_index_buffer, drop_index_buffer,
-        //           acquire_storage_buffer, acquire_uniform_buffer,
-        //           acquire_vertex_buffer, acquire_index_buffer,
-        //   v6 (6): clone_texture_registration, drop_texture_registration,
-        //           texture_registration_texture,
-        //           texture_registration_current_layout,
-        //           texture_registration_update_layout,
-        //           resolve_texture_registration_by_surface_id,
-        //   v7 (12): clone_rhi_command_queue, drop_rhi_command_queue,
-        //           create_command_buffer_from_queue,
-        //           drop_command_buffer, commit_command_buffer,
-        //           commit_and_wait_command_buffer,
-        //           copy_texture_command_buffer,
-        //           command_queue, create_command_buffer,
-        //           copy_pixel_buffer_to_texture, blit_copy,
-        //           blit_copy_iosurface,
-        //   v8 (2): surface_store, check_out_surface,
-        //   v9 (3): acquire_pixel_buffer, get_pixel_buffer,
-        //           resolve_pixel_buffer_by_surface_id.
-        // = 4 + 4 + 400 = 408 bytes.
+        // layout_version (u32) + _reserved_padding (u32) + 50 fn
+        // pointers (8 bytes each) = 4 + 4 + 400 = 408 bytes.
         assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 408);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
@@ -2036,7 +1921,6 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, _reserved_padding),
             4
         );
-        // v2 entries
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, clone_handle), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, drop_handle), 16);
         assert_eq!(
@@ -2047,7 +1931,6 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, drop_pixel_buffer),
             32
         );
-        // v3 entries
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, strong_count_pixel_buffer),
             40
@@ -2060,7 +1943,6 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, plane_size_pixel_buffer),
             56
         );
-        // v4 entries
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, clone_texture), 64);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, drop_texture), 72);
         assert_eq!(
@@ -2090,9 +1972,6 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, unregister_texture),
             120
         );
-        // v5 entries (Phase 2B): 8 buffer clone/drop pairs + 4
-        // acquire_*_buffer = 12 fn pointers appended. Total vtable
-        // grows from 128 to 128 + 12*8 = 224 bytes.
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, clone_storage_buffer),
             128
@@ -2141,9 +2020,6 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, acquire_index_buffer),
             216
         );
-        // v6 entries (Phase 2C): 2 clone/drop + 3 method-dispatch + 1
-        // resolve = 6 fn pointers appended. Vtable grows from 224 to
-        // 224 + 6*8 = 272 bytes.
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, clone_texture_registration),
             224
@@ -2177,8 +2053,6 @@ mod layout_tests {
             ),
             264
         );
-        // v7 entries (Phase 2D): 12 fn pointers appended. Vtable
-        // grows from 272 to 272 + 12*8 = 368 bytes.
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, clone_rhi_command_queue),
             272
@@ -2227,7 +2101,6 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, blit_copy_iosurface),
             360
         );
-        // v8 entries (Phase 2E): 2 fn pointers appended.
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, surface_store),
             368
@@ -2236,7 +2109,6 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, check_out_surface),
             376
         );
-        // v9 entries (Phase 2F): 3 fn pointers appended.
         assert_eq!(
             offset_of!(GpuContextLimitedAccessVTable, acquire_pixel_buffer),
             384
@@ -2253,15 +2125,8 @@ mod layout_tests {
 
     #[test]
     fn surface_store_vtable_layout() {
-        // SurfaceStoreVTable v1 (Phase C1 Phase 2E):
-        //   layout_version (u32) + _reserved_padding (u32) +
-        //   13 fn pointers (8 bytes each):
-        //     clone_handle, drop_handle (2),
-        //     connect, disconnect, check_in, check_out,
-        //     register_buffer, lookup_buffer, release (7),
-        //     register_texture, register_pixel_buffer_with_timeline,
-        //     lookup_texture, update_image_layout (4).
-        // = 4 + 4 + 104 = 112 bytes.
+        // layout_version (u32) + _reserved_padding (u32) + 13 fn
+        // pointers (8 bytes each) = 4 + 4 + 104 = 112 bytes.
         assert_eq!(size_of::<SurfaceStoreVTable>(), 112);
         assert_eq!(align_of::<SurfaceStoreVTable>(), 8);
         assert_eq!(offset_of!(SurfaceStoreVTable, layout_version), 0);

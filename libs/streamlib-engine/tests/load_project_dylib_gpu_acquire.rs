@@ -1,32 +1,29 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Phase C1 (#901) Phase 3: cdylib-resident GPU vtable round-trip
-//! integration test.
+//! Cdylib-resident GPU vtable round-trip integration test.
 //!
 //! Loads a dlopen'd `GpuAcquireTestProcessor` from test-fixtures and
 //! drives it through a full lifecycle (setup → start → stop →
 //! teardown). The processor's `start()` body:
-//!   1. Clones `ctx.gpu_limited_access()` — exercises the v2
-//!      `clone_handle` vtable callback.
-//!   2. Acquires a `PixelBuffer` — exercises the v9
-//!      `acquire_pixel_buffer` callback (paired-out-param tuple).
+//!   1. Clones `ctx.gpu_limited_access()` — exercises `clone_handle`.
+//!   2. Acquires a `PixelBuffer` — exercises `acquire_pixel_buffer`
+//!      (paired-out-param tuple).
 //!   3. Reads `pixel_buffer.width` / `.height` — cached POD reads,
 //!      no cross-DSO dispatch.
-//!   4. Reads `plane_base_address(0)` — exercises the v3
-//!      `plane_base_address_pixel_buffer` callback.
+//!   4. Reads `plane_base_address(0)` — exercises
+//!      `plane_base_address_pixel_buffer`.
 //!   5. Writes a sentinel byte through the returned pointer — proves
 //!      cdylib→host mapped-memory access is sound.
-//!   6. Drops the `PixelBuffer` — exercises the v2
-//!      `drop_pixel_buffer` callback.
+//!   6. Drops the `PixelBuffer` — exercises `drop_pixel_buffer`.
 //!   7. Writes "OK\n<w>x<h>\nsentinel_addr=0x<hex>" to the configured
 //!      `output_path`.
 //!   8. `teardown()` drops the stashed `GpuContextLimitedAccess` —
-//!      exercises the v2 `drop_handle` callback.
+//!      exercises `drop_handle`.
 //!
-//! What this locks: a regression that breaks any of the v2/v3/v9
-//! callbacks (Arc lifecycle, plane-base address, pixel-buffer
-//! acquire) at the cdylib boundary surfaces here as either:
+//! What this locks: a regression that breaks any of the Arc-lifecycle,
+//! plane-base-address, or pixel-buffer-acquire callbacks at the
+//! cdylib boundary surfaces here as either:
 //!   - A missing output file (cdylib's `start()` didn't fire / panicked
 //!     at the FFI boundary and `run_host_extern_c` swallowed the
 //!     panic).
