@@ -151,10 +151,7 @@ where
     ) -> i32 {
         let processor = unsafe { &mut *(instance as *mut P) };
         let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
-        let result = ctx
-            .tokio_handle()
-            .block_on(<P as GeneratedProcessor>::__generated_setup(processor, ctx));
-        match result {
+        match <P as GeneratedProcessor>::__generated_setup(processor, ctx) {
             Ok(()) => 0,
             Err(e) => {
                 write_err(err_buf, err_buf_cap, err_len, &e.to_string());
@@ -172,12 +169,7 @@ where
     ) -> i32 {
         let processor = unsafe { &mut *(instance as *mut P) };
         let ctx = unsafe { &*(ctx_full as *const RuntimeContextFullAccess<'_>) };
-        let result = ctx
-            .tokio_handle()
-            .block_on(<P as GeneratedProcessor>::__generated_teardown(
-                processor, ctx,
-            ));
-        match result {
+        match <P as GeneratedProcessor>::__generated_teardown(processor, ctx) {
             Ok(()) => 0,
             Err(e) => {
                 write_err(err_buf, err_buf_cap, err_len, &e.to_string());
@@ -195,12 +187,7 @@ where
     ) -> i32 {
         let processor = unsafe { &mut *(instance as *mut P) };
         let ctx = unsafe { &*(ctx_limited as *const RuntimeContextLimitedAccess<'_>) };
-        let result = ctx
-            .tokio_handle()
-            .block_on(<P as GeneratedProcessor>::__generated_on_pause(
-                processor, ctx,
-            ));
-        match result {
+        match <P as GeneratedProcessor>::__generated_on_pause(processor, ctx) {
             Ok(()) => 0,
             Err(e) => {
                 write_err(err_buf, err_buf_cap, err_len, &e.to_string());
@@ -218,12 +205,7 @@ where
     ) -> i32 {
         let processor = unsafe { &mut *(instance as *mut P) };
         let ctx = unsafe { &*(ctx_limited as *const RuntimeContextLimitedAccess<'_>) };
-        let result = ctx
-            .tokio_handle()
-            .block_on(<P as GeneratedProcessor>::__generated_on_resume(
-                processor, ctx,
-            ));
-        match result {
+        match <P as GeneratedProcessor>::__generated_on_resume(processor, ctx) {
             Ok(()) => 0,
             Err(e) => {
                 write_err(err_buf, err_buf_cap, err_len, &e.to_string());

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod audio_clock;
+mod audio_clock_shim;
 #[cfg(target_os = "linux")]
 mod compute_kernel_bridge;
 #[cfg(target_os = "linux")]
@@ -12,6 +13,7 @@ mod graphics_kernel_bridge;
 #[cfg(target_os = "linux")]
 mod ray_tracing_kernel_bridge;
 mod runtime_context;
+mod runtime_ops_shim;
 mod surface_store;
 pub mod texture_pool;
 mod texture_registration;
@@ -22,6 +24,8 @@ pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
     SoftwareAudioClock,
 };
+pub use audio_clock_shim::AudioClockShim;
+pub use runtime_ops_shim::RuntimeOpsShim;
 #[cfg(target_os = "linux")]
 pub use compute_kernel_bridge::ComputeKernelBridge;
 #[cfg(target_os = "linux")]

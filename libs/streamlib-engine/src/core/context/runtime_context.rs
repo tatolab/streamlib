@@ -1,11 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::ffi::c_void;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use streamlib_plugin_abi::RuntimeContextVTable;
+
 use super::{
-    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
+    AudioClockShim, GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, RuntimeOpsShim,
+    SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
@@ -125,6 +130,18 @@ impl RuntimeContext {
     /// processors and connections dynamically.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
         Arc::clone(&self.runtime_ops)
+    }
+
+    /// Borrow the runtime-operations `Arc` directly. Engine-internal:
+    /// the [`RuntimeContextVTable`](streamlib_plugin_abi::RuntimeContextVTable)
+    /// `runtime_ops_handle` callback returns a pointer to this field
+    /// so the cdylib-paired [`HOST_RUNTIME_OPS_VTABLE`](crate::core::plugin::host_services::HOST_RUNTIME_OPS_VTABLE)
+    /// callbacks can clone a fresh `Arc<dyn RuntimeOperations>` per
+    /// invocation. The Arc itself lives for the lifetime of the
+    /// `RuntimeContext`, so the borrow is sound for any caller that
+    /// holds an `&RuntimeContext`.
+    pub(crate) fn runtime_operations_ref(&self) -> &Arc<dyn RuntimeOperations> {
+        &self.runtime_ops
     }
 
     /// Get the shared tokio runtime handle.
@@ -578,6 +595,27 @@ impl RuntimeContext {
 // plumbing). They are already exported so compile-fail doc tests can
 // assert the enforcement invariants.
 
+// Phase B shim shape: `(handle, vtable)`-driven dispatch. The shim no
+// longer holds a typed `&'a RuntimeContext`; instead it stores the raw
+// host pointer + the [`RuntimeContextVTable`] reference, and every
+// accessor calls through the vtable. This matches the cross-DSO ABI
+// the cdylib will use once Phase C lands and removes the residual
+// Rust trait-object crossing on the public shim surface.
+//
+// Host-internal compiler ops that still need direct access to the
+// underlying `RuntimeContext` (e.g. `surface_socket_path`,
+// `iceoryx2_node`) reach it via the `host_base()` crate-internal
+// accessor. That accessor is host-only by construction: the shim is
+// only ever constructed from a real `&RuntimeContext` today, and
+// nothing outside the engine crate can call it. Phase C will introduce
+// a separate cdylib-side constructor that does NOT initialize the
+// `host_base` pointer, at which point `host_base()` becomes a typestate
+// distinction (or moves behind a host-only marker).
+//
+// Both `gpu_full` and `gpu_limited` are still embedded directly in the
+// shim. Their internals migrate to opaque-handle + vtable in Phase C
+// (#886); for Phase B they ride the existing Phase A shape.
+
 /// Privileged-GPU [`RuntimeContext`] view passed to `setup` / `teardown` /
 /// Manual-mode `start` / `stop`. Exposes [`GpuContextFullAccess`] for
 /// resource allocation and device-wide operations.
@@ -590,13 +628,22 @@ impl RuntimeContext {
 /// assert_not_clone::<streamlib::sdk::context::RuntimeContextFullAccess<'static>>();
 /// ```
 pub struct RuntimeContextFullAccess<'a> {
-    base: &'a RuntimeContext,
+    /// Opaque pointer to the host-owned [`RuntimeContext`]. Threaded
+    /// through every [`RuntimeContextVTable`] callback. The host's
+    /// static vtable casts this back to `&RuntimeContext`; the cdylib
+    /// (post Phase C) treats it as opaque.
+    handle: *const c_void,
+    /// Pointer to the host's [`RuntimeContextVTable`] (today
+    /// `HOST_RUNTIME_CONTEXT_VTABLE`). Every accessor on the shim
+    /// dispatches through here.
+    vtable: *const RuntimeContextVTable,
     gpu_full: GpuContextFullAccess,
     /// Limited-access handle held alongside the full-access one so privileged
     /// lifecycle methods (e.g. Manual-mode `start()` spawning a worker thread)
     /// can hand a stashable `GpuContextLimitedAccess` to downstream code
     /// without having to re-wrap the base `GpuContext`.
     gpu_limited: GpuContextLimitedAccess,
+    _marker: PhantomData<&'a RuntimeContext>,
 }
 
 /// Restricted-GPU [`RuntimeContext`] view passed to `process` / `on_pause` /
@@ -621,8 +668,10 @@ pub struct RuntimeContextFullAccess<'a> {
 /// }
 /// ```
 pub struct RuntimeContextLimitedAccess<'a> {
-    base: &'a RuntimeContext,
+    handle: *const c_void,
+    vtable: *const RuntimeContextVTable,
     gpu_limited: GpuContextLimitedAccess,
+    _marker: PhantomData<&'a RuntimeContext>,
 }
 
 impl<'a> RuntimeContextFullAccess<'a> {
@@ -631,9 +680,11 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// is permitted to create these.
     pub(crate) fn new(base: &'a RuntimeContext) -> Self {
         Self {
-            base,
+            handle: base as *const RuntimeContext as *const c_void,
+            vtable: crate::core::plugin::host_services::host_runtime_context_vtable(),
             gpu_full: GpuContextFullAccess::new(base.gpu.clone()),
             gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
+            _marker: PhantomData,
         }
     }
 
@@ -649,41 +700,94 @@ impl<'a> RuntimeContextFullAccess<'a> {
         &self.gpu_limited
     }
 
-    // ------------ forwarded RuntimeContext accessors ------------
+    // ------------ ABI-mediated accessors ------------
 
-    pub fn time(&self) -> &Arc<TimeContext> {
-        &self.base.time
+    /// Runtime unique id as an owned [`String`]. Routed through the
+    /// [`RuntimeContextVTable::runtime_id_copy`] callback.
+    pub fn runtime_id(&self) -> String {
+        unsafe { vtable_copy_runtime_id(self.handle, self.vtable) }
     }
-    pub fn platform(&self) -> &'static str {
-        self.base.platform()
+
+    /// Processor unique id as an owned [`String`], or `None` for the
+    /// shared/global context. Routed through
+    /// [`RuntimeContextVTable::processor_id_copy`].
+    pub fn processor_id(&self) -> Option<String> {
+        unsafe { vtable_copy_processor_id(self.handle, self.vtable) }
     }
-    pub fn runtime_id(&self) -> &RuntimeUniqueId {
-        self.base.runtime_id()
-    }
-    #[cfg(target_os = "linux")]
-    pub fn surface_socket_path(&self) -> &std::path::Path {
-        self.base.surface_socket_path()
-    }
-    pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
-        self.base.processor_id()
-    }
-    pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
-        self.base.runtime()
-    }
-    pub fn tokio_handle(&self) -> &tokio::runtime::Handle {
-        self.base.tokio_handle()
-    }
-    pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
-        self.base.iceoryx2_node()
-    }
-    pub fn audio_clock(&self) -> &SharedAudioClock {
-        self.base.audio_clock()
-    }
+
+    /// Whether this processor is currently paused. Routed through
+    /// [`RuntimeContextVTable::is_paused`].
     pub fn is_paused(&self) -> bool {
-        self.base.is_paused()
+        unsafe { ((*self.vtable).is_paused)(self.handle) }
     }
+
+    /// Whether processing should proceed (not paused). Routed through
+    /// [`RuntimeContextVTable::should_process`].
     pub fn should_process(&self) -> bool {
-        self.base.should_process()
+        unsafe { ((*self.vtable).should_process)(self.handle) }
+    }
+
+    /// Host-owned audio clock as a typed FFI shim. Backed by the
+    /// per-RuntimeContext audio-clock handle returned from
+    /// [`RuntimeContextVTable::audio_clock_handle`] paired with the
+    /// host's [`AudioClockVTable`](streamlib_plugin_abi::AudioClockVTable)
+    /// from `HostServices`. Borrow-scoped to the ctx; cannot outlive
+    /// the lifecycle call.
+    pub fn audio_clock(&self) -> AudioClockShim<'a> {
+        let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
+        // SAFETY: in the host-engine build path the shim was
+        // constructed with a vtable produced by
+        // `host_runtime_context_vtable()`; the audio-clock vtable is
+        // accessed via the side-channel below. In a cdylib build the
+        // analogous vtable pointer comes from `HostServices`. Both
+        // sides receive the same pointer the host installed.
+        let acv = crate::core::plugin::host_services::host_audio_clock_vtable();
+        AudioClockShim::from_ffi(handle, acv)
+    }
+
+    /// Host-owned runtime operations as a typed FFI shim. Implements
+    /// [`RuntimeOperations`] so existing call sites
+    /// (`ctx.runtime().add_processor_async(...).await`) keep working
+    /// transparently against a plugin-owned tokio runtime.
+    ///
+    /// The returned `Arc<dyn RuntimeOperations>` owns an Arc refcount
+    /// bump on the host's underlying ops impl via the
+    /// [`RuntimeOpsVTable::clone_handle`](streamlib_plugin_abi::RuntimeOpsVTable)
+    /// callback, so it's sound to stash past `Runner::stop()`.
+    pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
+        let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
+        let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
+        // SAFETY: rov + borrowed_handle come from the engine's host
+        // services; clone_handle is contractually required (v2 ABI)
+        // and returns an owned handle the shim's Drop releases.
+        let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
+        RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
+    }
+
+    // ------------ Engine-internal host accessors ------------
+
+    /// Direct reference to the underlying [`RuntimeContext`]. **Host-only**:
+    /// the shim is currently always constructed from a real
+    /// `&RuntimeContext`. Phase C introduces a cdylib-side constructor that
+    /// holds only the opaque handle, at which point this accessor either
+    /// gates on a typestate marker or is removed in favor of vtable-routed
+    /// equivalents. Engine compiler ops that still need direct access to
+    /// `surface_socket_path` / `iceoryx2_node` / `tokio_handle` reach
+    /// them through here.
+    pub(crate) fn host_base(&self) -> &RuntimeContext {
+        // SAFETY: shim is constructed from a real `&'a RuntimeContext`;
+        // the borrow's lifetime is encoded in `'a`. Cdylib code never
+        // calls this — it is `pub(crate)` and only invoked by engine
+        // compiler ops on the host side.
+        unsafe { &*(self.handle as *const RuntimeContext) }
+    }
+
+    /// Engine-internal: direct borrow of the host's `SharedAudioClock`.
+    /// Same data the public [`Self::audio_clock`] reaches via the
+    /// vtable; the direct borrow avoids the trip through the
+    /// callback when the call site is already in host code.
+    pub(crate) fn host_audio_clock(&self) -> &SharedAudioClock {
+        self.host_base().audio_clock()
     }
 }
 
@@ -692,8 +796,10 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     /// runtime's lifecycle dispatch is permitted to create these.
     pub(crate) fn new(base: &'a RuntimeContext) -> Self {
         Self {
-            base,
+            handle: base as *const RuntimeContext as *const c_void,
+            vtable: crate::core::plugin::host_services::host_runtime_context_vtable(),
             gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
+            _marker: PhantomData,
         }
     }
 
@@ -708,39 +814,132 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         &self.gpu_limited
     }
 
-    // ------------ forwarded RuntimeContext accessors ------------
+    // ------------ ABI-mediated accessors ------------
 
-    pub fn time(&self) -> &Arc<TimeContext> {
-        &self.base.time
+    pub fn runtime_id(&self) -> String {
+        unsafe { vtable_copy_runtime_id(self.handle, self.vtable) }
     }
-    pub fn platform(&self) -> &'static str {
-        self.base.platform()
+
+    pub fn processor_id(&self) -> Option<String> {
+        unsafe { vtable_copy_processor_id(self.handle, self.vtable) }
     }
-    pub fn runtime_id(&self) -> &RuntimeUniqueId {
-        self.base.runtime_id()
-    }
-    pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
-        self.base.processor_id()
-    }
-    pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
-        self.base.runtime()
-    }
-    pub fn tokio_handle(&self) -> &tokio::runtime::Handle {
-        self.base.tokio_handle()
-    }
-    pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
-        self.base.iceoryx2_node()
-    }
-    pub fn audio_clock(&self) -> &SharedAudioClock {
-        self.base.audio_clock()
-    }
+
     pub fn is_paused(&self) -> bool {
-        self.base.is_paused()
+        unsafe { ((*self.vtable).is_paused)(self.handle) }
     }
+
     pub fn should_process(&self) -> bool {
-        self.base.should_process()
+        unsafe { ((*self.vtable).should_process)(self.handle) }
+    }
+
+    /// Host-owned audio clock as a typed FFI shim. See
+    /// [`RuntimeContextFullAccess::audio_clock`].
+    pub fn audio_clock(&self) -> AudioClockShim<'a> {
+        let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
+        let acv = crate::core::plugin::host_services::host_audio_clock_vtable();
+        AudioClockShim::from_ffi(handle, acv)
+    }
+
+    /// Host-owned runtime operations as a typed FFI shim. See
+    /// [`RuntimeContextFullAccess::runtime`].
+    pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
+        let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
+        let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
+        let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
+        RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
+    }
+
+    // ------------ Engine-internal host accessors ------------
+
+    /// See [`RuntimeContextFullAccess::host_base`].
+    pub(crate) fn host_base(&self) -> &RuntimeContext {
+        unsafe { &*(self.handle as *const RuntimeContext) }
+    }
+
+    /// Engine-internal: direct borrow of the host's `SharedAudioClock`.
+    pub(crate) fn host_audio_clock(&self) -> &SharedAudioClock {
+        self.host_base().audio_clock()
     }
 }
+
+// =============================================================================
+// vtable helper trampolines (shared by both shim flavors)
+// =============================================================================
+
+/// Adapter that turns the ABI's `(out_buf, cap, out_len) -> usize` byte-copy
+/// callback into an owned `String`. Calls the callback twice when the
+/// initial scratch buffer is too small.
+///
+/// # Safety
+///
+/// `vtable` must point at a valid [`RuntimeContextVTable`] whose
+/// `runtime_id_copy` callback writes UTF-8 bytes.
+unsafe fn vtable_copy_runtime_id(
+    handle: *const c_void,
+    vtable: *const RuntimeContextVTable,
+) -> String {
+    // Most runtime ids are short (~26 bytes for cuid2 plus the "R" prefix).
+    // 64 bytes covers every reasonable id without a retry.
+    let mut scratch = [0u8; 64];
+    let mut written: usize = 0;
+    let required = unsafe {
+        ((*vtable).runtime_id_copy)(handle, scratch.as_mut_ptr(), scratch.len(), &mut written)
+    };
+    if required <= scratch.len() {
+        // SAFETY: callback documents UTF-8 bytes.
+        unsafe { String::from_utf8_unchecked(scratch[..written].to_vec()) }
+    } else {
+        let mut buf = vec![0u8; required];
+        let mut written2: usize = 0;
+        unsafe {
+            ((*vtable).runtime_id_copy)(handle, buf.as_mut_ptr(), buf.len(), &mut written2);
+        }
+        buf.truncate(written2);
+        unsafe { String::from_utf8_unchecked(buf) }
+    }
+}
+
+unsafe fn vtable_copy_processor_id(
+    handle: *const c_void,
+    vtable: *const RuntimeContextVTable,
+) -> Option<String> {
+    let mut scratch = [0u8; 64];
+    let mut written: usize = 0;
+    let required = unsafe {
+        ((*vtable).processor_id_copy)(
+            handle,
+            scratch.as_mut_ptr(),
+            scratch.len(),
+            &mut written,
+        )
+    };
+    if required < 0 {
+        return None;
+    }
+    let required = required as usize;
+    if required <= scratch.len() {
+        Some(unsafe { String::from_utf8_unchecked(scratch[..written].to_vec()) })
+    } else {
+        let mut buf = vec![0u8; required];
+        let mut written2: usize = 0;
+        unsafe {
+            ((*vtable).processor_id_copy)(handle, buf.as_mut_ptr(), buf.len(), &mut written2);
+        }
+        buf.truncate(written2);
+        Some(unsafe { String::from_utf8_unchecked(buf) })
+    }
+}
+
+// Mark the raw pointers as Send + Sync. The shim itself is `!Send` /
+// `!Sync` via its `PhantomData<&'a RuntimeContext>` borrow — the
+// unsafe impls below cover the inner field requirements that the
+// borrow-checker enforces at the type level. The shim never outlives
+// the `'a` borrow.
+unsafe impl<'a> Send for RuntimeContextFullAccess<'a> {}
+unsafe impl<'a> Sync for RuntimeContextFullAccess<'a> {}
+unsafe impl<'a> Send for RuntimeContextLimitedAccess<'a> {}
+unsafe impl<'a> Sync for RuntimeContextLimitedAccess<'a> {}
+
 
 #[cfg(test)]
 mod capability_view_tests {

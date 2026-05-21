@@ -666,28 +666,28 @@ fn generate_processor_impl_from_schema(
             fn __generated_setup(
                 &mut self,
                 ctx: &::streamlib::sdk::context::RuntimeContextFullAccess<'_>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::sdk::error::Result<()>> + Send {
+            ) -> ::streamlib::sdk::error::Result<()> {
                 <Self as #processor_trait>::setup(self, ctx)
             }
 
             fn __generated_teardown(
                 &mut self,
                 ctx: &::streamlib::sdk::context::RuntimeContextFullAccess<'_>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::sdk::error::Result<()>> + Send {
+            ) -> ::streamlib::sdk::error::Result<()> {
                 <Self as #processor_trait>::teardown(self, ctx)
             }
 
             fn __generated_on_pause(
                 &mut self,
                 ctx: &::streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::sdk::error::Result<()>> + Send {
+            ) -> ::streamlib::sdk::error::Result<()> {
                 <Self as #processor_trait>::on_pause(self, ctx)
             }
 
             fn __generated_on_resume(
                 &mut self,
                 ctx: &::streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
-            ) -> impl ::std::future::Future<Output = ::streamlib::sdk::error::Result<()>> + Send {
+            ) -> ::streamlib::sdk::error::Result<()> {
                 <Self as #processor_trait>::on_resume(self, ctx)
             }
         }

@@ -18,18 +18,12 @@ pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
 impl streamlib_engine::ManualProcessor for TestProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

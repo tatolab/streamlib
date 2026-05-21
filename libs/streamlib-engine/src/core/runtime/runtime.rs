@@ -150,6 +150,16 @@ impl Runner {
             }
         };
 
+        // Make the host's tokio handle available to the
+        // `HOST_RUNTIME_OPS_VTABLE` callbacks. Cdylib-side
+        // `RuntimeOpsShim` methods post submit-with-completion calls
+        // that the host's vtable spawns onto this handle; the cdylib
+        // awaits the completion through its own tokio runtime via a
+        // `oneshot` bridge. Plugins never see this handle directly.
+        crate::core::plugin::host_services::install_host_runtime_tokio_handle(
+            tokio_runtime_variant.handle(),
+        );
+
         // Load .env file (dev-setup.sh-style overrides: RUST_LOG, etc.)
         let _ = dotenvy::dotenv();
 

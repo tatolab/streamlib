@@ -10,7 +10,6 @@ use crate::core::error::{Result, Error};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::DynamicProcessorConstructorFn;
-use crate::core::runtime::BoxFuture;
 use crate::core::{
     ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
@@ -69,11 +68,11 @@ pub(crate) struct PythonNativeSubprocessHostProcessor {
 // ============================================================================
 
 impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHostProcessor {
-    fn __generated_setup<'a>(
-        &'a mut self,
-        ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
+    fn __generated_setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Result<()> {
+        (|| -> Result<()> {
             let project_path = PathBuf::from(&self.project_path);
 
             tracing::info!(
@@ -138,7 +137,7 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 .env("STREAMLIB_RUNTIME_ID", &runtime_id);
 
             #[cfg(target_os = "linux")]
-            command.env("STREAMLIB_SURFACE_SOCKET", ctx.surface_socket_path());
+            command.env("STREAMLIB_SURFACE_SOCKET", ctx.host_base().surface_socket_path());
 
             // Escalate IPC rides a dedicated `AF_UNIX` socketpair, not
             // fd1/fd2, so the subprocess's stdout/stderr can be captured
@@ -241,14 +240,14 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
             );
 
             Ok(())
-        })
+        })()
     }
 
-    fn __generated_teardown<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextFullAccess<'a>,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
+    fn __generated_teardown(
+        &mut self,
+        _ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Result<()> {
+        (|| -> Result<()> {
             tracing::info!(
                 "[{}] Tearing down Python native subprocess",
                 self.processor_id
@@ -313,67 +312,63 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
             }
 
             Ok(())
-        })
+        })()
     }
 
-    fn __generated_on_pause<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async {
-            if self.subprocess_dead {
-                return Ok(());
-            }
-            if let Err(e) = self.bridge_send(
-                &serde_json::json!({"cmd": "on_pause", "capability": "limited"}),
-            ) {
-                tracing::warn!("[{}] Failed to send on_pause: {}", self.processor_id, e);
+    fn __generated_on_pause(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
+        if self.subprocess_dead {
+            return Ok(());
+        }
+        if let Err(e) = self.bridge_send(
+            &serde_json::json!({"cmd": "on_pause", "capability": "limited"}),
+        ) {
+            tracing::warn!("[{}] Failed to send on_pause: {}", self.processor_id, e);
+            self.subprocess_dead = true;
+            return Ok(());
+        }
+        match self.bridge_recv() {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "[{}] Failed to read on_pause response: {}",
+                    self.processor_id,
+                    e
+                );
                 self.subprocess_dead = true;
-                return Ok(());
             }
-            match self.bridge_recv() {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        "[{}] Failed to read on_pause response: {}",
-                        self.processor_id,
-                        e
-                    );
-                    self.subprocess_dead = true;
-                }
-            }
-            Ok(())
-        })
+        }
+        Ok(())
     }
 
-    fn __generated_on_resume<'a>(
-        &'a mut self,
-        _ctx: &'a RuntimeContextLimitedAccess<'a>,
-    ) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async {
-            if self.subprocess_dead {
-                return Ok(());
-            }
-            if let Err(e) = self.bridge_send(
-                &serde_json::json!({"cmd": "on_resume", "capability": "limited"}),
-            ) {
-                tracing::warn!("[{}] Failed to send on_resume: {}", self.processor_id, e);
+    fn __generated_on_resume(
+        &mut self,
+        _ctx: &RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
+        if self.subprocess_dead {
+            return Ok(());
+        }
+        if let Err(e) = self.bridge_send(
+            &serde_json::json!({"cmd": "on_resume", "capability": "limited"}),
+        ) {
+            tracing::warn!("[{}] Failed to send on_resume: {}", self.processor_id, e);
+            self.subprocess_dead = true;
+            return Ok(());
+        }
+        match self.bridge_recv() {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "[{}] Failed to read on_resume response: {}",
+                    self.processor_id,
+                    e
+                );
                 self.subprocess_dead = true;
-                return Ok(());
             }
-            match self.bridge_recv() {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        "[{}] Failed to read on_resume response: {}",
-                        self.processor_id,
-                        e
-                    );
-                    self.subprocess_dead = true;
-                }
-            }
-            Ok(())
-        })
+        }
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {

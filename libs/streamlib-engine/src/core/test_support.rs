@@ -21,14 +21,14 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
+    ) -> crate::core::error::Result<()> {
+        Ok(())
     }
     fn teardown(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
+    ) -> crate::core::error::Result<()> {
+        Ok(())
     }
     fn start(
         &mut self,
@@ -46,14 +46,14 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
+    ) -> crate::core::error::Result<()> {
+        Ok(())
     }
     fn teardown(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
+    ) -> crate::core::error::Result<()> {
+        Ok(())
     }
     fn start(
         &mut self,
@@ -71,14 +71,14 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     fn setup(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
+    ) -> crate::core::error::Result<()> {
+        Ok(())
     }
     fn teardown(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = crate::core::error::Result<()>> + Send {
-        std::future::ready(Ok(()))
+    ) -> crate::core::error::Result<()> {
+        Ok(())
     }
     fn start(
         &mut self,
