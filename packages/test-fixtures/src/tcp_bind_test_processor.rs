@@ -4,8 +4,10 @@
 //! Integration-test fixture for the dlopen-owns-tokio claim from #885.
 //!
 //! In its `start()` lifecycle method this processor:
-//!   1. Builds its own `tokio::runtime::Runtime` (`new_current_thread`,
-//!      single worker).
+//!   1. Builds its own `tokio::runtime::Runtime` (multi-thread,
+//!      single worker — matches the shape every in-tree own-runtime
+//!      migration uses so the regression lock exercises the real
+//!      production shape).
 //!   2. Calls `tokio::net::TcpListener::bind("127.0.0.1:0")` on that
 //!      runtime via `block_on`.
 //!   3. Writes the bound port (or an error string) to the configured
@@ -30,7 +32,8 @@ pub struct TcpBindTest {
 
 impl ManualProcessor for TcpBindTest::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
             .enable_all()
             .build()
             .map_err(|e| Error::Runtime(format!("TcpBindTest: build runtime: {e}")))?;

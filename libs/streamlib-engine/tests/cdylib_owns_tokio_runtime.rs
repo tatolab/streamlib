@@ -12,11 +12,12 @@
 //! from `TcpBindTestProcessor`, or one that breaks the cdylib's
 //! `start` lifecycle so the bind never fires, makes this test fail
 //! by either not writing the output file at all or writing an
-//! `ERR:<message>` line. Mentally revert the
-//! `tokio::runtime::Builder::new_current_thread().enable_all().build()`
-//! call in `tcp_bind_test_processor.rs` to a `tokio::runtime::Handle`
-//! borrow from the engine and the bind future fails to find its TLS
-//! and panics — this test catches that regression.
+//! `ERR:<message>` line. The dlopened plugin has no way to reach the
+//! host's tokio handle (it was removed from the cdylib-visible
+//! context by #885), so the only way `tokio::net::TcpListener::bind`
+//! finds its TLS slots is the plugin building its own runtime and
+//! driving the future on that runtime's worker threads — this test
+//! exercises that path end-to-end.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
