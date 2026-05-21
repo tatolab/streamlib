@@ -14,7 +14,7 @@ mod graphics_kernel_bridge;
 mod ray_tracing_kernel_bridge;
 mod runtime_context;
 mod runtime_ops_shim;
-mod surface_store;
+pub(crate) mod surface_store;
 pub mod texture_pool;
 pub(crate) mod texture_registration;
 mod texture_ring;

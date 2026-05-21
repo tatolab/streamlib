@@ -2779,13 +2779,73 @@ impl GpuContextLimitedAccess {
     }
 
     /// Get the surface store, if initialized.
+    ///
+    /// Dispatches through the cross-DSO vtable's `surface_store`
+    /// callback. Returns `Some(SurfaceStore)` (β-shape, refcount
+    /// bumped) when the host has one, else `None`. The β-shape's
+    /// own Clone/Drop dispatch through the
+    /// [`streamlib_plugin_abi::SurfaceStoreVTable`] reached via
+    /// [`HostServices::surface_store_vtable`].
     pub fn surface_store(&self) -> Option<SurfaceStore> {
-        self.inner.surface_store()
+        if self.handle.is_null() || self.vtable.is_null() {
+            return None;
+        }
+        let mut out_store: std::mem::MaybeUninit<SurfaceStore> =
+            std::mem::MaybeUninit::uninit();
+        // SAFETY: handle + vtable were paired at construction. The
+        // callback always writes a SurfaceStore — either a real
+        // β-shape (Some) or a null-handle β-shape (None sentinel).
+        unsafe {
+            ((*self.vtable).surface_store)(
+                self.handle,
+                out_store.as_mut_ptr() as *mut std::ffi::c_void,
+            );
+        }
+        // SAFETY: the callback wrote either a real β-shape or a
+        // null-handle β-shape; either way `out_store` is initialized.
+        let store = unsafe { out_store.assume_init() };
+        if store.is_none() {
+            // Null-handle β-shape — Drop is a no-op (short-circuits
+            // on null), so we can safely drop here without affecting
+            // any Arc refcount.
+            drop(store);
+            None
+        } else {
+            Some(store)
+        }
     }
 
     /// Check out a surface by ID (Split: cache hit).
+    ///
+    /// Dispatches through the cross-DSO vtable's `check_out_surface`
+    /// callback.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.inner.check_out_surface(surface_id)
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "check_out_surface: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).check_out_surface)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                .into_owned();
+            Err(Error::GpuError(msg))
+        }
     }
 }
 

@@ -101,7 +101,13 @@ pub const STREAMLIB_ABI_VERSION: u32 = 4;
 ///   ship a GpuContext, the pointer is non-null. Hosts without GPU
 ///   support set it to `null` and cdylib code must check before
 ///   dispatching.
-pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 4;
+/// - v5: [`SurfaceStoreVTable`] reference appended (Phase C1 Phase
+///   2E). The cdylib-side `SurfaceStore` shim's `(handle, vtable)`
+///   pair sources its vtable pointer from this field. Hosts that
+///   ship a `SurfaceStore` set it non-null; hosts that don't (or
+///   where `gpu.surface_store()` returns `None`) leave it null and
+///   cdylib code must check before dispatching.
+pub const HOST_SERVICES_LAYOUT_VERSION: u32 = 5;
 
 /// Layout version of the [`ProcessorVTable`] struct. Read by the
 /// host's `processor_register` impl before dereferencing any vtable
@@ -128,6 +134,17 @@ pub const AUDIO_CLOCK_VTABLE_LAYOUT_VERSION: u32 = 1;
 ///   keeping the host's `Arc<dyn RuntimeOperations>` alive for the
 ///   shim's lifetime independently of `RuntimeContext`'s lifetime.
 pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
+
+/// Layout version of [`SurfaceStoreVTable`].
+///
+/// - v1: scaffold for Phase C1 Phase 2E. `clone_handle` / `drop_handle`
+///   for owning-Arc lifecycle on `Arc<SurfaceStoreInner>`, plus the 11
+///   method-dispatch callbacks for the cross-platform and Linux-only
+///   surface-share operations: `connect`, `disconnect`, `check_in`,
+///   `check_out`, `register_buffer`, `lookup_buffer`, `release`,
+///   `register_texture`, `register_pixel_buffer_with_timeline`,
+///   `lookup_texture`, `update_image_layout`.
+pub const SURFACE_STORE_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Layout version of [`GpuContextLimitedAccessVTable`].
 ///
@@ -197,7 +214,16 @@ pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
 ///   `commit_and_wait(self)` impls null the local handle/vtable
 ///   fields after the callback so Drop becomes a no-op (the host
 ///   already dropped the inner during commit).
-pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 7;
+/// - v8: two `SurfaceStore`-related method-dispatch callbacks on
+///   the parent vtable: `surface_store` (returns an owned
+///   `SurfaceStore` β-shape into an out-param; null handle ↔ None)
+///   and `check_out_surface` (convenience method that delegates to
+///   the engine's `SurfaceStore::check_out` while keeping the
+///   surface-share lookup hidden behind the GpuContext capability
+///   surface). The bulk of the `SurfaceStore` ABI lives on its own
+///   [`SurfaceStoreVTable`], reached via
+///   [`HostServices::surface_store_vtable`].
+pub const GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 8;
 
 // =============================================================================
 // Primitive enums
@@ -1271,10 +1297,252 @@ pub struct GpuContextLimitedAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // SurfaceStore accessors (v8 — Phase C1 Phase 2E)
+    // -------------------------------------------------------------------------
+    //
+    // The bulk of the SurfaceStore ABI lives on its own
+    // SurfaceStoreVTable; these two callbacks bridge from
+    // GpuContextLimitedAccess to that subsystem.
+
+    /// Return an owned [`SurfaceStore`] β-shape if the host has one,
+    /// or a null-handle β-shape ("None") otherwise. Always returns 0;
+    /// callers branch on whether the written `SurfaceStore`'s handle
+    /// is null. Writes a fresh β-shape (Arc refcount bumped) into
+    /// `*out_store`.
+    pub surface_store: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        out_store: *mut c_void,
+    ),
+
+    /// Convenience method: check out a surface from the engine's
+    /// `SurfaceStore` by `surface_id` (assumes the store exists).
+    /// Writes a fresh `PixelBuffer` β-shape into `*out_pixel_buffer`
+    /// on success.
+    pub check_out_surface: unsafe extern "C" fn(
+        gpu_handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
 }
 
 unsafe impl Send for GpuContextLimitedAccessVTable {}
 unsafe impl Sync for GpuContextLimitedAccessVTable {}
+
+// =============================================================================
+// SurfaceStoreVTable — extern "C" dispatch for cross-process surface sharing
+// =============================================================================
+
+/// Dispatch table for the host's `SurfaceStore`. The cdylib obtains a
+/// handle via [`GpuContextLimitedAccessVTable::surface_store`] and
+/// reads the static vtable from [`HostServices::surface_store_vtable`].
+///
+/// Lives in its own vtable (not folded into
+/// [`GpuContextLimitedAccessVTable`]) for two reasons:
+/// 1. **Surface-area discipline** — `SurfaceStore`'s public method
+///    surface is large (~10 methods, mixing cross-platform and
+///    Linux-only operations) and conceptually distinct from the GPU
+///    capability surface. Folding it into the parent vtable would
+///    nearly double `GpuContextLimitedAccessVTable`'s size without
+///    adding semantic clarity.
+/// 2. **Phase B precedent** — `AudioClockVTable` already established
+///    the "separate vtable per significant subsystem" pattern (held
+///    at the `RuntimeContext` level via
+///    [`HostServices::audio_clock_vtable`]).
+///
+/// # Handle lifetime
+///
+/// `clone_handle` / `drop_handle` mirror every other Arc-handle β-
+/// reshape: `clone_handle(borrowed) -> owned` bumps the host's
+/// `Arc<SurfaceStoreInner>` refcount; `drop_handle(owned)` releases.
+/// The owned handle remains valid even after the originating
+/// `RuntimeContext` is dropped — matches the existing
+/// `SurfaceStore: Clone` contract.
+///
+/// # Layout discipline
+///
+/// `layout_version` is pinned at offset 0. New methods append to the
+/// end and bump [`SURFACE_STORE_VTABLE_LAYOUT_VERSION`].
+#[repr(C)]
+pub struct SurfaceStoreVTable {
+    /// Vtable layout version. Must equal
+    /// [`SURFACE_STORE_VTABLE_LAYOUT_VERSION`].
+    pub layout_version: u32,
+
+    /// Reserved padding (keeps following pointers naturally aligned;
+    /// zero today, never read).
+    pub _reserved_padding: u32,
+
+    // -------------------------------------------------------------------------
+    // Handle lifetime
+    // -------------------------------------------------------------------------
+
+    /// Bump the refcount on a `SurfaceStore` handle.
+    /// `Arc::increment_strong_count(handle as *const SurfaceStoreInner)`.
+    pub clone_handle: unsafe extern "C" fn(handle: *const c_void),
+
+    /// Decrement the refcount on a `SurfaceStore` handle. When the
+    /// strong count reaches zero the underlying connection / cache
+    /// state is dropped.
+    pub drop_handle: unsafe extern "C" fn(handle: *const c_void),
+
+    // -------------------------------------------------------------------------
+    // Cross-platform method dispatch
+    // -------------------------------------------------------------------------
+
+    /// Connect to the surface-share service (XPC on macOS, Unix
+    /// socket on Linux). On success returns 0; on failure writes a
+    /// UTF-8 error into `err_buf` and returns non-zero.
+    pub connect: unsafe extern "C" fn(
+        handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Disconnect from the surface-share service.
+    pub disconnect: unsafe extern "C" fn(
+        handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Check in a pixel buffer for cross-process sharing. The
+    /// returned `surface_id` is written into `out_id_buf` (capped at
+    /// `out_id_cap`); the actual length is stored in `*out_id_len`.
+    /// Truncation returns the required length without writing.
+    pub check_in: unsafe extern "C" fn(
+        handle: *const c_void,
+        pixel_buffer: *const c_void,
+        out_id_buf: *mut u8,
+        out_id_cap: usize,
+        out_id_len: *mut usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Check out a surface by its `surface_id`. On success writes a
+    /// `PixelBuffer` β-shape into `*out_pixel_buffer` and returns 0.
+    pub check_out: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Register a pre-allocated buffer under the given pool id.
+    pub register_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        pool_id_ptr: *const u8,
+        pool_id_len: usize,
+        pixel_buffer: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Look up a previously-registered buffer by its pool id. Writes
+    /// a `PixelBuffer` β-shape into `*out_pixel_buffer` on success.
+    pub lookup_buffer: unsafe extern "C" fn(
+        handle: *const c_void,
+        pool_id_ptr: *const u8,
+        pool_id_len: usize,
+        out_pixel_buffer: *mut c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Release a checked-out surface by its `surface_id`. Idempotent.
+    pub release: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    // -------------------------------------------------------------------------
+    // Linux-only method dispatch (stub on other platforms)
+    // -------------------------------------------------------------------------
+    //
+    // `register_texture` / `register_pixel_buffer_with_timeline` /
+    // `lookup_texture` / `update_image_layout` are Linux-only on the
+    // host side (they wrap DMA-BUF / OPAQUE_FD surface-share IPC).
+    // Non-Linux hosts ship stubs that return non-zero with a clean
+    // error message.
+
+    /// Register a texture for cross-process sharing. `texture` is a
+    /// `*const Texture` β-shape pointer; `timeline_handle` is an
+    /// opaque `Arc<HostVulkanTimelineSemaphore>` pointer (null for
+    /// "no timeline") — engine-only, cdylibs pass null. `layout_raw`
+    /// is the i32 `VkImageLayout` enumerant.
+    pub register_texture: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        texture: *const c_void,
+        timeline_handle: *const c_void,
+        layout_raw: i32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Register a pixel buffer with an optional timeline-semaphore
+    /// sidecar. Same `timeline_handle` shape as
+    /// [`Self::register_texture`].
+    pub register_pixel_buffer_with_timeline: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        pixel_buffer: *const c_void,
+        timeline_handle: *const c_void,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Look up a registered texture by `surface_id`. Writes a
+    /// `Texture` β-shape into `*out_texture` and the producer's
+    /// last-published `VkImageLayout` (raw i32) into `*out_layout_raw`.
+    pub lookup_texture: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        out_texture: *mut c_void,
+        out_layout_raw: *mut i32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+
+    /// Update the published `VkImageLayout` for an already-registered
+    /// texture. Linux-only on the host side.
+    pub update_image_layout: unsafe extern "C" fn(
+        handle: *const c_void,
+        id_ptr: *const u8,
+        id_len: usize,
+        layout_raw: i32,
+        err_buf: *mut u8,
+        err_buf_cap: usize,
+        err_len: *mut usize,
+    ) -> i32,
+}
+
+unsafe impl Send for SurfaceStoreVTable {}
+unsafe impl Sync for SurfaceStoreVTable {}
 
 // =============================================================================
 // HostServices — the callback table
@@ -1482,6 +1750,17 @@ pub struct HostServices {
     /// install time; non-null for hosts that ship a GpuContext,
     /// null otherwise (cdylib must check before dispatching).
     pub gpu_context_limited_access_vtable: *const GpuContextLimitedAccessVTable,
+
+    // -------------------------------------------------------------------------
+    // SurfaceStore vtable surface (v5 — Phase C1 Phase 2E, #901)
+    // -------------------------------------------------------------------------
+
+    /// Static dispatch table for the host's `SurfaceStore`. Paired
+    /// with the per-`SurfaceStore` handle returned by
+    /// [`GpuContextLimitedAccessVTable::surface_store`]. Set once at
+    /// install time; non-null for hosts that ship a `SurfaceStore`,
+    /// null otherwise (cdylib must check before dispatching).
+    pub surface_store_vtable: *const SurfaceStoreVTable,
 }
 
 // Note: under v3 the ABI eliminates the tokio shared-type crossing
@@ -1600,51 +1879,54 @@ mod layout_tests {
 
     #[test]
     fn host_services_layout_versions_pinned() {
-        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 4);
+        assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 5);
         assert_eq!(STREAMLIB_ABI_VERSION, 4);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        // v7 (Phase C1 Phase 2D): added RhiCommandQueue clone/drop +
-        // create_command_buffer_from_queue (3), CommandBuffer drop +
-        // commit + commit_and_wait + copy_texture (4), and the 5
-        // GpuContextLimitedAccess method-dispatch callbacks
-        // (command_queue, create_command_buffer,
-        // copy_pixel_buffer_to_texture, blit_copy, blit_copy_iosurface)
-        // — 12 new callbacks total.
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 7);
+        // v8 (Phase C1 Phase 2E): added the 2 SurfaceStore accessor
+        // callbacks (surface_store / check_out_surface) on the
+        // GpuContextLimitedAccessVTable; the bulk of the SurfaceStore
+        // ABI lives on its own SurfaceStoreVTable.
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 8);
+        // v1: scaffold for the SurfaceStore subsystem.
+        assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
     }
 
     #[test]
-    fn host_services_tail_carries_four_vtable_pointers() {
-        // The v3/v4 additions live at the tail of HostServices. We don't
-        // pin the absolute offsets (earlier fields are subject to
-        // their own pre-v3 layout audit), but we do pin:
+    fn host_services_tail_carries_five_vtable_pointers() {
+        // The v3-v5 additions live at the tail of HostServices. We
+        // don't pin the absolute offsets (earlier fields are subject
+        // to their own pre-v3 layout audit), but we do pin:
         //   1. Each vtable is a single 8-byte pointer.
         //   2. They appear in the order RuntimeContext → AudioClock →
-        //      RuntimeOps → GpuContextLimitedAccess (v4 tail).
+        //      RuntimeOps → GpuContextLimitedAccess → SurfaceStore.
         //   3. They are contiguous (no padding inserted between them).
         assert_eq!(size_of::<*const RuntimeContextVTable>(), 8);
         assert_eq!(size_of::<*const AudioClockVTable>(), 8);
         assert_eq!(size_of::<*const RuntimeOpsVTable>(), 8);
         assert_eq!(size_of::<*const GpuContextLimitedAccessVTable>(), 8);
+        assert_eq!(size_of::<*const SurfaceStoreVTable>(), 8);
 
         let runtime_ctx_off = offset_of!(HostServices, runtime_context_vtable);
         let audio_clock_off = offset_of!(HostServices, audio_clock_vtable);
         let runtime_ops_off = offset_of!(HostServices, runtime_ops_vtable);
         let gpu_lim_off = offset_of!(HostServices, gpu_context_limited_access_vtable);
+        let surface_store_off = offset_of!(HostServices, surface_store_vtable);
         assert!(runtime_ctx_off < audio_clock_off);
         assert!(audio_clock_off < runtime_ops_off);
         assert!(runtime_ops_off < gpu_lim_off);
+        assert!(gpu_lim_off < surface_store_off);
         assert_eq!(audio_clock_off - runtime_ctx_off, 8);
         assert_eq!(runtime_ops_off - audio_clock_off, 8);
         assert_eq!(gpu_lim_off - runtime_ops_off, 8);
+        assert_eq!(surface_store_off - gpu_lim_off, 8);
 
-        // The gpu-context pointer must end at the end of the struct
-        // (it is the last field added in v4).
-        assert_eq!(gpu_lim_off + 8, size_of::<HostServices>());
+        // The surface-store pointer must end at the end of the
+        // struct (it is the last field added in v5).
+        assert_eq!(surface_store_off + 8, size_of::<HostServices>());
     }
 
     #[test]
@@ -1677,9 +1959,10 @@ mod layout_tests {
         //           copy_texture_command_buffer,
         //           command_queue, create_command_buffer,
         //           copy_pixel_buffer_to_texture, blit_copy,
-        //           blit_copy_iosurface.
-        // = 4 + 4 + 360 = 368 bytes.
-        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 368);
+        //           blit_copy_iosurface,
+        //   v8 (2): surface_store, check_out_surface.
+        // = 4 + 4 + 376 = 384 bytes.
+        assert_eq!(size_of::<GpuContextLimitedAccessVTable>(), 384);
         assert_eq!(align_of::<GpuContextLimitedAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextLimitedAccessVTable, layout_version), 0);
         assert_eq!(
@@ -1877,6 +2160,48 @@ mod layout_tests {
             offset_of!(GpuContextLimitedAccessVTable, blit_copy_iosurface),
             360
         );
+        // v8 entries (Phase 2E): 2 fn pointers appended.
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, surface_store),
+            368
+        );
+        assert_eq!(
+            offset_of!(GpuContextLimitedAccessVTable, check_out_surface),
+            376
+        );
+    }
+
+    #[test]
+    fn surface_store_vtable_layout() {
+        // SurfaceStoreVTable v1 (Phase C1 Phase 2E):
+        //   layout_version (u32) + _reserved_padding (u32) +
+        //   13 fn pointers (8 bytes each):
+        //     clone_handle, drop_handle (2),
+        //     connect, disconnect, check_in, check_out,
+        //     register_buffer, lookup_buffer, release (7),
+        //     register_texture, register_pixel_buffer_with_timeline,
+        //     lookup_texture, update_image_layout (4).
+        // = 4 + 4 + 104 = 112 bytes.
+        assert_eq!(size_of::<SurfaceStoreVTable>(), 112);
+        assert_eq!(align_of::<SurfaceStoreVTable>(), 8);
+        assert_eq!(offset_of!(SurfaceStoreVTable, layout_version), 0);
+        assert_eq!(offset_of!(SurfaceStoreVTable, _reserved_padding), 4);
+        assert_eq!(offset_of!(SurfaceStoreVTable, clone_handle), 8);
+        assert_eq!(offset_of!(SurfaceStoreVTable, drop_handle), 16);
+        assert_eq!(offset_of!(SurfaceStoreVTable, connect), 24);
+        assert_eq!(offset_of!(SurfaceStoreVTable, disconnect), 32);
+        assert_eq!(offset_of!(SurfaceStoreVTable, check_in), 40);
+        assert_eq!(offset_of!(SurfaceStoreVTable, check_out), 48);
+        assert_eq!(offset_of!(SurfaceStoreVTable, register_buffer), 56);
+        assert_eq!(offset_of!(SurfaceStoreVTable, lookup_buffer), 64);
+        assert_eq!(offset_of!(SurfaceStoreVTable, release), 72);
+        assert_eq!(offset_of!(SurfaceStoreVTable, register_texture), 80);
+        assert_eq!(
+            offset_of!(SurfaceStoreVTable, register_pixel_buffer_with_timeline),
+            88
+        );
+        assert_eq!(offset_of!(SurfaceStoreVTable, lookup_texture), 96);
+        assert_eq!(offset_of!(SurfaceStoreVTable, update_image_layout), 104);
     }
 
     /// Compile-time witnesses that the vtable types are Send + Sync.
@@ -1889,6 +2214,7 @@ mod layout_tests {
         assert_send_sync::<AudioClockVTable>();
         assert_send_sync::<RuntimeOpsVTable>();
         assert_send_sync::<GpuContextLimitedAccessVTable>();
+        assert_send_sync::<SurfaceStoreVTable>();
         assert_send_sync::<HostServices>();
         assert_send_sync::<ProcessorVTable>();
     }

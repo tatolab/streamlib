@@ -864,8 +864,13 @@ impl Runner {
                 "[start] Initializing SurfaceStore against runtime-internal Unix socket '{}'...",
                 socket_path
             );
-            let surface_store =
-                SurfaceStore::new(socket_path.clone(), self.runtime_id.to_string());
+            // Phase 2E (#901): `SurfaceStore::new` constructs the
+            // β-shape from a fresh `Arc<SurfaceStoreInner>`. Method
+            // dispatch goes through the host's `SurfaceStoreVTable`.
+            let surface_store = SurfaceStore::new(
+                socket_path.clone(),
+                self.runtime_id.to_string(),
+            );
             surface_store.connect().map_err(|e| {
                 Error::Runtime(format!(
                     "Failed to connect to runtime-internal surface-sharing service at {}: {}",

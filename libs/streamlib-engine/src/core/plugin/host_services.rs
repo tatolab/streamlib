@@ -61,10 +61,11 @@ use std::sync::{Arc, OnceLock};
 
 use streamlib_plugin_abi::{
     AudioClockVTable, GpuContextLimitedAccessVTable, HostHandle, HostInterest, HostLogLevel,
-    HostServices, ProcessorVTable, RuntimeContextVTable, RuntimeOpsVTable,
+    HostServices, ProcessorVTable, RuntimeContextVTable, RuntimeOpsVTable, SurfaceStoreVTable,
     AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION,
     HOST_SERVICES_LAYOUT_VERSION, PROCESSOR_VTABLE_LAYOUT_VERSION,
     RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, RUNTIME_OPS_VTABLE_LAYOUT_VERSION,
+    SURFACE_STORE_VTABLE_LAYOUT_VERSION,
 };
 
 // Phase B + v3 layout: tokio is no longer exposed across the ABI.
@@ -168,6 +169,12 @@ pub struct HostCallbacks {
     /// hosts that don't ship a GpuContext; cdylib must check before
     /// dispatching.
     pub gpu_context_limited_access_vtable: *const GpuContextLimitedAccessVTable,
+    /// v5 (Phase C1 Phase 2E, #901): host-installed
+    /// [`SurfaceStoreVTable`] pointer. May be null on hosts that
+    /// don't ship a `SurfaceStore`; cdylib must check before
+    /// dispatching. Sourced from
+    /// [`HostServices::surface_store_vtable`] at install time.
+    pub surface_store_vtable: *const SurfaceStoreVTable,
 }
 
 // Safety: every field is a fn pointer or a raw pointer the host
@@ -284,6 +291,15 @@ pub unsafe fn install_host_services(
             return None;
         }
     }
+    if !services.surface_store_vtable.is_null() {
+        // SAFETY: same shape as the other vtable validations. Null
+        // is allowed (host has no SurfaceStore); only non-null
+        // pointers are version-validated.
+        let v = unsafe { (*services.surface_store_vtable).layout_version };
+        if v != SURFACE_STORE_VTABLE_LAYOUT_VERSION {
+            return None;
+        }
+    }
 
     let callbacks = HostCallbacks {
         host: services.host,
@@ -299,6 +315,7 @@ pub unsafe fn install_host_services(
         audio_clock_vtable: services.audio_clock_vtable,
         runtime_ops_vtable: services.runtime_ops_vtable,
         gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
+        surface_store_vtable: services.surface_store_vtable,
     };
 
     // Cache the callbacks BEFORE installing tracing — the
@@ -3207,6 +3224,827 @@ unsafe extern "C" fn host_gpu_lim_blit_copy_iosurface(
     1
 }
 
+// -------------------------------------------------------------------------
+// GpuContextLimitedAccessVTable — surface_store accessors (v8, Phase 2E)
+// -------------------------------------------------------------------------
+
+unsafe extern "C" fn host_gpu_lim_surface_store(
+    gpu_handle: *const c_void,
+    out_store: *mut c_void,
+) {
+    run_host_extern_c(
+        "host_gpu_lim_surface_store",
+        || {
+            // Always-clear: write a null-handle β-shape first so the
+            // caller has a defined state even on error paths.
+            if !out_store.is_null() {
+                unsafe {
+                    std::ptr::write(
+                        out_store as *mut crate::core::context::SurfaceStore,
+                        crate::core::context::SurfaceStore::null(),
+                    );
+                }
+            }
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                return;
+            };
+            if out_store.is_null() {
+                return;
+            }
+            // `gpu.surface_store()` returns `Option<SurfaceStore>` —
+            // a fresh β-shape with Arc refcount already bumped when
+            // Some. We write it into the out-param; the caller (cdylib
+            // or host) takes ownership.
+            if let Some(store) = gpu.surface_store() {
+                unsafe {
+                    std::ptr::write(
+                        out_store as *mut crate::core::context::SurfaceStore,
+                        store,
+                    );
+                }
+            }
+            // else: out_store already holds the null-handle β-shape.
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_gpu_lim_check_out_surface(
+    gpu_handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_lim_check_out_surface",
+        || -> i32 {
+            let Some(gpu) = (unsafe { handle_as_gpu_context(gpu_handle) }) else {
+                write_err(
+                    "check_out_surface: null gpu handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "check_out_surface: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "check_out_surface: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match gpu.check_out_surface(id_str) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+// =========================================================================
+// SurfaceStoreVTable — host-side callbacks (v1, Phase 2E)
+// =========================================================================
+//
+// Every callback derefs `handle` as `&SurfaceStoreInner` and calls
+// the inner method directly. The Arc strong count keeps the inner
+// alive for the duration of the dispatch.
+
+#[inline]
+unsafe fn ss_inner(handle: *const c_void) -> Option<&'static crate::core::context::surface_store::SurfaceStoreInner> {
+    if handle.is_null() {
+        None
+    } else {
+        // SAFETY: caller-supplied contract: `handle` is
+        // `Arc::into_raw(Arc<SurfaceStoreInner>)`-shaped.
+        Some(unsafe {
+            &*(handle as *const crate::core::context::surface_store::SurfaceStoreInner)
+        })
+    }
+}
+
+unsafe extern "C" fn host_ss_clone_handle(handle: *const c_void) {
+    run_host_extern_c(
+        "host_ss_clone_handle",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::increment_strong_count(
+                    handle as *const crate::core::context::surface_store::SurfaceStoreInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_ss_drop_handle(handle: *const c_void) {
+    run_host_extern_c(
+        "host_ss_drop_handle",
+        || {
+            if handle.is_null() {
+                return;
+            }
+            unsafe {
+                Arc::decrement_strong_count(
+                    handle as *const crate::core::context::surface_store::SurfaceStoreInner,
+                );
+            }
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_ss_connect(
+    handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_connect",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("connect: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            match inner.connect() {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_disconnect(
+    handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_disconnect",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("disconnect: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            match inner.disconnect() {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_check_in(
+    handle: *const c_void,
+    pixel_buffer: *const c_void,
+    out_id_buf: *mut u8,
+    out_id_cap: usize,
+    out_id_len: *mut usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_check_in",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("check_in: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if pixel_buffer.is_null() {
+                write_err("check_in: null pixel_buffer", err_buf, err_buf_cap, err_len);
+                return 1;
+            }
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            match inner.check_in(pb) {
+                Ok(id) => {
+                    let bytes = id.as_bytes();
+                    write_id_bytes(bytes, out_id_buf, out_id_cap, out_id_len);
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_check_out(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_check_out",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("check_out: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "check_out: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "check_out: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.check_out(id_str) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_register_buffer(
+    handle: *const c_void,
+    pool_id_ptr: *const u8,
+    pool_id_len: usize,
+    pixel_buffer: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_register_buffer",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err(
+                    "register_buffer: null handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer.is_null() {
+                write_err(
+                    "register_buffer: null pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            let pool_id_bytes = unsafe { slice_from_raw(pool_id_ptr, pool_id_len) };
+            let pool_id = match std::str::from_utf8(pool_id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "register_buffer: pool_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.register_buffer(pool_id, pb) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_lookup_buffer(
+    handle: *const c_void,
+    pool_id_ptr: *const u8,
+    pool_id_len: usize,
+    out_pixel_buffer: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_lookup_buffer",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("lookup_buffer: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_pixel_buffer.is_null() {
+                write_err(
+                    "lookup_buffer: null out_pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let pool_id_bytes = unsafe { slice_from_raw(pool_id_ptr, pool_id_len) };
+            let pool_id = match std::str::from_utf8(pool_id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "lookup_buffer: pool_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.lookup_buffer(pool_id) {
+                Ok(pb) => {
+                    unsafe {
+                        std::ptr::write(
+                            out_pixel_buffer as *mut crate::core::rhi::PixelBuffer,
+                            pb,
+                        );
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+unsafe extern "C" fn host_ss_release(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_release",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("release: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "release: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.release(id_str) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ss_register_texture(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    texture: *const c_void,
+    timeline_handle: *const c_void,
+    layout_raw: i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_register_texture",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err(
+                    "register_texture: null handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if texture.is_null() {
+                write_err(
+                    "register_texture: null texture",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let tex = unsafe { &*(texture as *const crate::core::rhi::Texture) };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "register_texture: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            // SAFETY: timeline_handle, when non-null, points at the
+            // engine-owned `Arc<HostVulkanTimelineSemaphore>` (passed
+            // by `&Arc<...>` from engine code through `&*` cast).
+            let timeline = unsafe {
+                if timeline_handle.is_null() {
+                    None
+                } else {
+                    Some(
+                        &*(timeline_handle
+                            as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore),
+                    )
+                }
+            };
+            let layout = streamlib_consumer_rhi::VulkanLayout(layout_raw);
+            match inner.register_texture(id_str, tex, timeline, layout) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ss_register_texture(
+    _handle: *const c_void,
+    _id_ptr: *const u8,
+    _id_len: usize,
+    _texture: *const c_void,
+    _timeline_handle: *const c_void,
+    _layout_raw: i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "register_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ss_register_pixel_buffer_with_timeline(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    pixel_buffer: *const c_void,
+    timeline_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_register_pixel_buffer_with_timeline",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err(
+                    "register_pixel_buffer_with_timeline: null handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            if pixel_buffer.is_null() {
+                write_err(
+                    "register_pixel_buffer_with_timeline: null pixel_buffer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let pb = unsafe { &*(pixel_buffer as *const crate::core::rhi::PixelBuffer) };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "register_pixel_buffer_with_timeline: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let timeline = unsafe {
+                if timeline_handle.is_null() {
+                    None
+                } else {
+                    Some(
+                        &*(timeline_handle
+                            as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore),
+                    )
+                }
+            };
+            match inner.register_pixel_buffer_with_timeline(id_str, pb, timeline) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ss_register_pixel_buffer_with_timeline(
+    _handle: *const c_void,
+    _id_ptr: *const u8,
+    _id_len: usize,
+    _pixel_buffer: *const c_void,
+    _timeline_handle: *const c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "register_pixel_buffer_with_timeline: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ss_lookup_texture(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    out_texture: *mut c_void,
+    out_layout_raw: *mut i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_lookup_texture",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err("lookup_texture: null handle", err_buf, err_buf_cap, err_len);
+                return 1;
+            };
+            if out_texture.is_null() || out_layout_raw.is_null() {
+                write_err(
+                    "lookup_texture: null out_texture or out_layout_raw",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "lookup_texture: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            match inner.lookup_texture(id_str) {
+                Ok((tex, layout)) => {
+                    unsafe {
+                        std::ptr::write(out_texture as *mut crate::core::rhi::Texture, tex);
+                        *out_layout_raw = layout.0;
+                    }
+                    0
+                }
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ss_lookup_texture(
+    _handle: *const c_void,
+    _id_ptr: *const u8,
+    _id_len: usize,
+    _out_texture: *mut c_void,
+    _out_layout_raw: *mut i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "lookup_texture: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" fn host_ss_update_image_layout(
+    handle: *const c_void,
+    id_ptr: *const u8,
+    id_len: usize,
+    layout_raw: i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_ss_update_image_layout",
+        || -> i32 {
+            let Some(inner) = (unsafe { ss_inner(handle) }) else {
+                write_err(
+                    "update_image_layout: null handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            };
+            let id_bytes = unsafe { slice_from_raw(id_ptr, id_len) };
+            let id_str = match std::str::from_utf8(id_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    write_err(
+                        "update_image_layout: surface_id not valid UTF-8",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let layout = streamlib_consumer_rhi::VulkanLayout(layout_raw);
+            match inner.update_image_layout(id_str, layout) {
+                Ok(()) => 0,
+                Err(e) => {
+                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
+                    1
+                }
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe extern "C" fn host_ss_update_image_layout(
+    _handle: *const c_void,
+    _id_ptr: *const u8,
+    _id_len: usize,
+    _layout_raw: i32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    write_err(
+        "update_image_layout: not available on this platform",
+        err_buf,
+        err_buf_cap,
+        err_len,
+    );
+    1
+}
+
+/// Static [`SurfaceStoreVTable`] installed once per process. Paired
+/// with the per-SurfaceStore handle returned by
+/// [`HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`]`::surface_store`.
+pub static HOST_SURFACE_STORE_VTABLE: SurfaceStoreVTable = SurfaceStoreVTable {
+    layout_version: SURFACE_STORE_VTABLE_LAYOUT_VERSION,
+    _reserved_padding: 0,
+    clone_handle: host_ss_clone_handle,
+    drop_handle: host_ss_drop_handle,
+    connect: host_ss_connect,
+    disconnect: host_ss_disconnect,
+    check_in: host_ss_check_in,
+    check_out: host_ss_check_out,
+    register_buffer: host_ss_register_buffer,
+    lookup_buffer: host_ss_lookup_buffer,
+    release: host_ss_release,
+    register_texture: host_ss_register_texture,
+    register_pixel_buffer_with_timeline: host_ss_register_pixel_buffer_with_timeline,
+    lookup_texture: host_ss_lookup_texture,
+    update_image_layout: host_ss_update_image_layout,
+};
+
+/// Pointer to the [`SurfaceStoreVTable`] this DSO should dispatch
+/// through. Same DSO-routing rule as
+/// [`host_gpu_context_limited_access_vtable`].
+pub fn host_surface_store_vtable() -> *const SurfaceStoreVTable {
+    match host_callbacks() {
+        Some(c) if !c.surface_store_vtable.is_null() => c.surface_store_vtable,
+        _ => &HOST_SURFACE_STORE_VTABLE,
+    }
+}
+
 /// Static [`GpuContextLimitedAccessVTable`] installed once per process.
 /// Paired with the per-RuntimeContext gpu-limited handle returned by
 /// [`HOST_RUNTIME_CONTEXT_VTABLE`]`::gpu_limited_access`.
@@ -3260,6 +4098,8 @@ pub static HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE: GpuContextLimitedAccessVTable
         copy_pixel_buffer_to_texture: host_gpu_lim_copy_pixel_buffer_to_texture,
         blit_copy: host_gpu_lim_blit_copy,
         blit_copy_iosurface: host_gpu_lim_blit_copy_iosurface,
+        surface_store: host_gpu_lim_surface_store,
+        check_out_surface: host_gpu_lim_check_out_surface,
     };
 
 /// Pointer to the [`GpuContextLimitedAccessVTable`] this DSO should
@@ -3310,7 +4150,7 @@ pub mod runtime_facing {
         host_schema_register, host_tracing_emit, host_tracing_enabled,
         host_tracing_register_callsite, HostServiceImpls, HOST_AUDIO_CLOCK_VTABLE,
         HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE, HOST_RUNTIME_CONTEXT_VTABLE,
-        HOST_RUNTIME_OPS_VTABLE,
+        HOST_RUNTIME_OPS_VTABLE, HOST_SURFACE_STORE_VTABLE,
     };
     use std::ffi::c_void;
     use std::sync::OnceLock;
@@ -3355,6 +4195,7 @@ pub mod runtime_facing {
             audio_clock_vtable: &HOST_AUDIO_CLOCK_VTABLE,
             runtime_ops_vtable: &HOST_RUNTIME_OPS_VTABLE,
             gpu_context_limited_access_vtable: &HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE,
+            surface_store_vtable: &HOST_SURFACE_STORE_VTABLE,
         }
     }
 }

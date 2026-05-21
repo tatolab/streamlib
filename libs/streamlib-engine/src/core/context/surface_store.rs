@@ -115,12 +115,15 @@ impl CheckedInSurfaces {
 ///
 /// Connects to the macOS XPC surface-share service to exchange mach ports for surface IDs.
 /// Caches resolved surfaces locally to minimize XPC round-trips.
-#[derive(Clone)]
-pub struct SurfaceStore {
-    inner: Arc<SurfaceStoreInner>,
-}
-
-struct SurfaceStoreInner {
+/// Host-only rich data backing a [`SurfaceStore`]. Cdylib code never
+/// sees this type; it reaches the public [`SurfaceStore`] surface
+/// through the `(handle, vtable)` β-shape.
+///
+/// All cross-platform and Linux-specific surface-share IPC methods
+/// (`connect`, `check_in`, `check_out`, `register_texture`, etc.)
+/// live on this type. The β-shape `SurfaceStore` dispatches each
+/// method through the [`streamlib_plugin_abi::SurfaceStoreVTable`].
+pub(crate) struct SurfaceStoreInner {
     /// XPC connection to the surface-share service (macOS only).
     #[cfg(target_os = "macos")]
     connection: Mutex<Option<xpc_connection_t>>,
@@ -142,19 +145,20 @@ struct SurfaceStoreInner {
     runtime_id: String,
 }
 
-impl SurfaceStore {
-    /// Create a new surface store (not yet connected).
-    pub fn new(service_name: String, runtime_id: String) -> Self {
-        Self {
-            inner: Arc::new(SurfaceStoreInner {
-                #[cfg(any(target_os = "macos", target_os = "linux"))]
-                connection: Mutex::new(None),
-                cache: Mutex::new(SurfaceCache::new()),
-                checked_in: Mutex::new(CheckedInSurfaces::new()),
-                service_name,
-                runtime_id,
-            }),
-        }
+impl SurfaceStoreInner {
+    /// Create a new surface store (not yet connected). Returns an
+    /// `Arc<SurfaceStoreInner>` so the engine can store it directly
+    /// and hand β-shape [`SurfaceStore`] wrappers to consumers on
+    /// demand.
+    pub fn new(service_name: String, runtime_id: String) -> Arc<Self> {
+        Arc::new(SurfaceStoreInner {
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            connection: Mutex::new(None),
+            cache: Mutex::new(SurfaceCache::new()),
+            checked_in: Mutex::new(CheckedInSurfaces::new()),
+            service_name,
+            runtime_id,
+        })
     }
 
     /// Connect to the macOS XPC surface-share service.
@@ -162,7 +166,7 @@ impl SurfaceStore {
     /// This should be called during runtime.start().
     #[cfg(target_os = "macos")]
     pub fn connect(&self) -> Result<()> {
-        let service_name = CString::new(self.inner.service_name.as_str())
+        let service_name = CString::new(self.service_name.as_str())
             .map_err(|e| Error::Configuration(format!("Invalid XPC service name: {}", e)))?;
 
         let connection = unsafe {
@@ -176,7 +180,7 @@ impl SurfaceStore {
         if connection.is_null() {
             return Err(Error::Configuration(format!(
                 "Failed to create XPC connection to '{}'",
-                self.inner.service_name
+                self.service_name
             )));
         }
 
@@ -188,11 +192,11 @@ impl SurfaceStore {
             xpc_connection_resume(connection);
         }
 
-        *self.inner.connection.lock() = Some(connection);
+        *self.connection.lock() = Some(connection);
 
         tracing::info!(
             "SurfaceStore: Connected to XPC service '{}'",
-            self.inner.service_name
+            self.service_name
         );
 
         Ok(())
@@ -204,7 +208,7 @@ impl SurfaceStore {
     #[cfg(target_os = "macos")]
     pub fn disconnect(&self) -> Result<()> {
         // Release all checked-in surfaces from the surface-share service
-        let surface_ids = self.inner.checked_in.lock().surface_ids();
+        let surface_ids = self.checked_in.lock().surface_ids();
         for surface_id in surface_ids {
             if let Err(e) = self.release_from_surface_share(&surface_id) {
                 tracing::warn!(
@@ -216,11 +220,11 @@ impl SurfaceStore {
         }
 
         // Clear local state
-        self.inner.cache.lock().clear();
-        self.inner.checked_in.lock().clear();
+        self.cache.lock().clear();
+        self.checked_in.lock().clear();
 
         // Cancel the XPC connection
-        if let Some(connection) = self.inner.connection.lock().take() {
+        if let Some(connection) = self.connection.lock().take() {
             unsafe {
                 xpc_connection_cancel(connection);
             }
@@ -247,7 +251,7 @@ impl SurfaceStore {
 
         // Check if already checked in
         {
-            let checked_in = self.inner.checked_in.lock();
+            let checked_in = self.checked_in.lock();
             if let Some(existing_id) = checked_in.get_surface_id(iosurface_id) {
                 tracing::trace!(
                     "SurfaceStore: Reusing existing surface ID '{}' for IOSurface {}",
@@ -286,8 +290,7 @@ impl SurfaceStore {
             .insert(iosurface_id, surface_id.clone());
 
         // Also cache locally for fast checkout
-        self.inner
-            .cache
+        self.cache
             .lock()
             .insert(surface_id.clone(), pixel_buffer.clone());
 
@@ -307,7 +310,7 @@ impl SurfaceStore {
     pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
         // Check cache first
         {
-            let mut cache = self.inner.cache.lock();
+            let mut cache = self.cache.lock();
             if let Some(cached) = cache.surfaces.get_mut(surface_id) {
                 cached.checkout_count += 1;
                 tracing::trace!(
@@ -339,8 +342,7 @@ impl SurfaceStore {
         let pixel_buffer = PixelBuffer::new(pixel_buffer_ref);
 
         // Cache for future use
-        self.inner
-            .cache
+        self.cache
             .lock()
             .insert(surface_id.to_string(), pixel_buffer.clone());
 
@@ -350,7 +352,7 @@ impl SurfaceStore {
     /// Send check-in request to surface-share service via XPC.
     #[cfg(target_os = "macos")]
     fn check_in_to_surface_share(&self, mach_port: u32) -> Result<String> {
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -372,7 +374,7 @@ impl SurfaceStore {
 
         // Set runtime ID
         let runtime_id_key = CString::new("runtime_id").unwrap();
-        let runtime_id_value = CString::new(self.inner.runtime_id.as_str()).unwrap();
+        let runtime_id_value = CString::new(self.runtime_id.as_str()).unwrap();
         unsafe {
             xpc_dictionary_set_string(request, runtime_id_key.as_ptr(), runtime_id_value.as_ptr());
         }
@@ -434,7 +436,7 @@ impl SurfaceStore {
     /// Send check-out request to surface-share service via XPC.
     #[cfg(target_os = "macos")]
     fn check_out_from_surface_share(&self, surface_id: &str) -> Result<u32> {
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -536,7 +538,7 @@ impl SurfaceStore {
     /// Send register request to surface-share service via XPC (new protocol).
     #[cfg(target_os = "macos")]
     fn register_with_surface_share(&self, pool_id: &str, mach_port: u32) -> Result<()> {
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -565,7 +567,7 @@ impl SurfaceStore {
 
         // Set runtime ID
         let runtime_id_key = CString::new("runtime_id").unwrap();
-        let runtime_id_value = CString::new(self.inner.runtime_id.as_str()).unwrap();
+        let runtime_id_value = CString::new(self.runtime_id.as_str()).unwrap();
         unsafe {
             xpc_dictionary_set_string(request, runtime_id_key.as_ptr(), runtime_id_value.as_ptr());
         }
@@ -645,7 +647,7 @@ impl SurfaceStore {
     /// Send lookup request to surface-share service via XPC (new protocol).
     #[cfg(target_os = "macos")]
     fn lookup_from_surface_share(&self, pool_id: &str) -> Result<u32> {
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -758,7 +760,7 @@ impl SurfaceStore {
     /// Send release request to surface-share service via XPC.
     #[cfg(target_os = "macos")]
     fn release_from_surface_share(&self, surface_id: &str) -> Result<()> {
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let connection = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -787,7 +789,7 @@ impl SurfaceStore {
 
         // Set runtime ID
         let runtime_id_key = CString::new("runtime_id").unwrap();
-        let runtime_id_value = CString::new(self.inner.runtime_id.as_str()).unwrap();
+        let runtime_id_value = CString::new(self.runtime_id.as_str()).unwrap();
         unsafe {
             xpc_dictionary_set_string(request, runtime_id_key.as_ptr(), runtime_id_value.as_ptr());
         }
@@ -808,19 +810,19 @@ impl SurfaceStore {
     /// Connect to the surface-share Unix socket.
     #[cfg(target_os = "linux")]
     pub fn connect(&self) -> Result<()> {
-        let stream = std::os::unix::net::UnixStream::connect(&self.inner.service_name)
+        let stream = std::os::unix::net::UnixStream::connect(&self.service_name)
             .map_err(|e| {
                 Error::Configuration(format!(
                     "Failed to connect to surface-share socket '{}': {}",
-                    self.inner.service_name, e
+                    self.service_name, e
                 ))
             })?;
 
-        *self.inner.connection.lock() = Some(stream);
+        *self.connection.lock() = Some(stream);
 
         tracing::info!(
             "SurfaceStore: Connected to surface-share service socket '{}'",
-            self.inner.service_name
+            self.service_name
         );
 
         Ok(())
@@ -830,7 +832,7 @@ impl SurfaceStore {
     #[cfg(target_os = "linux")]
     pub fn disconnect(&self) -> Result<()> {
         // Release all checked-in surfaces
-        let surface_ids = self.inner.checked_in.lock().surface_ids();
+        let surface_ids = self.checked_in.lock().surface_ids();
         for surface_id in surface_ids {
             if let Err(e) = self.release_from_surface_share_unix(&surface_id) {
                 tracing::warn!(
@@ -842,11 +844,11 @@ impl SurfaceStore {
         }
 
         // Clear local state
-        self.inner.cache.lock().clear();
-        self.inner.checked_in.lock().clear();
+        self.cache.lock().clear();
+        self.checked_in.lock().clear();
 
         // Drop the connection
-        self.inner.connection.lock().take();
+        self.connection.lock().take();
 
         tracing::info!("SurfaceStore: Disconnected from surface-share socket");
         Ok(())
@@ -882,7 +884,7 @@ impl SurfaceStore {
 
         let request = serde_json::json!({
             "op": "check_in",
-            "runtime_id": self.inner.runtime_id,
+            "runtime_id": self.runtime_id,
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
             "format": format!("{:?}", pixel_buffer.format()),
@@ -891,7 +893,7 @@ impl SurfaceStore {
             "plane_offsets": plane_offsets,
         });
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -923,8 +925,7 @@ impl SurfaceStore {
             })?
             .to_string();
 
-        self.inner
-            .cache
+        self.cache
             .lock()
             .insert(surface_id.clone(), pixel_buffer.clone());
 
@@ -938,7 +939,7 @@ impl SurfaceStore {
     pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
         // Check cache first
         {
-            let mut cache = self.inner.cache.lock();
+            let mut cache = self.cache.lock();
             if let Some(cached) = cache.surfaces.get_mut(surface_id) {
                 cached.checkout_count += 1;
                 tracing::trace!(
@@ -961,7 +962,7 @@ impl SurfaceStore {
             "surface_id": surface_id,
         });
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -1016,8 +1017,7 @@ impl SurfaceStore {
             PixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())?;
 
         // Cache for future use
-        self.inner
-            .cache
+        self.cache
             .lock()
             .insert(surface_id.to_string(), pixel_buffer.clone());
 
@@ -1041,7 +1041,7 @@ impl SurfaceStore {
         let request = serde_json::json!({
             "op": "register",
             "surface_id": pool_id,
-            "runtime_id": self.inner.runtime_id,
+            "runtime_id": self.runtime_id,
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
             "format": format!("{:?}", pixel_buffer.format()),
@@ -1049,7 +1049,7 @@ impl SurfaceStore {
             "handle_type": handle_type,
         });
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -1161,7 +1161,7 @@ impl SurfaceStore {
             serde_json::json!({
                 "op": "register",
                 "surface_id": surface_id,
-                "runtime_id": self.inner.runtime_id,
+                "runtime_id": self.runtime_id,
                 "width": texture.width(),
                 "height": texture.height(),
                 "format": format!("{:?}", texture.format()),
@@ -1202,7 +1202,7 @@ impl SurfaceStore {
             serde_json::json!({
                 "op": "register",
                 "surface_id": surface_id,
-                "runtime_id": self.inner.runtime_id,
+                "runtime_id": self.runtime_id,
                 "width": texture.width(),
                 "height": texture.height(),
                 "format": format!("{:?}", texture.format()),
@@ -1220,7 +1220,7 @@ impl SurfaceStore {
             })
         };
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -1328,7 +1328,7 @@ impl SurfaceStore {
         let request = serde_json::json!({
             "op": "register",
             "surface_id": surface_id,
-            "runtime_id": self.inner.runtime_id,
+            "runtime_id": self.runtime_id,
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
             "format": format!("{:?}", pixel_buffer.format()),
@@ -1339,7 +1339,7 @@ impl SurfaceStore {
             "has_sync_fd": sync_fd.is_some(),
         });
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -1387,7 +1387,7 @@ impl SurfaceStore {
     #[cfg(target_os = "linux")]
     pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
         {
-            let cache = self.inner.cache.lock();
+            let cache = self.cache.lock();
             if let Some(cached) = cache.surfaces.get(pool_id) {
                 return Ok(cached.pixel_buffer.clone());
             }
@@ -1398,7 +1398,7 @@ impl SurfaceStore {
             "surface_id": pool_id,
         });
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -1492,7 +1492,7 @@ impl SurfaceStore {
             "current_image_layout": layout.as_vk().as_raw(),
         });
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration(
                 "SurfaceStore not connected to surface-share service".into(),
@@ -1545,7 +1545,7 @@ impl SurfaceStore {
             "surface_id": surface_id,
         });
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
@@ -1662,10 +1662,10 @@ impl SurfaceStore {
         let request = serde_json::json!({
             "op": "release",
             "surface_id": surface_id,
-            "runtime_id": self.inner.runtime_id,
+            "runtime_id": self.runtime_id,
         });
 
-        let connection = self.inner.connection.lock();
+        let connection = self.connection.lock();
         let stream = match connection.as_ref() {
             Some(s) => s,
             None => return Ok(()), // Already disconnected
@@ -1804,11 +1804,511 @@ unsafe fn create_xpc_event_handler() -> *mut c_void {
     Box::into_raw(block) as *mut c_void
 }
 
+impl std::fmt::Debug for SurfaceStoreInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SurfaceStoreInner")
+            .field("service_name", &self.service_name)
+            .field("runtime_id", &self.runtime_id)
+            .finish()
+    }
+}
+
+// =============================================================================
+// β-shape `SurfaceStore` — Phase C1 Phase 2E (#901)
+// =============================================================================
+//
+// Cdylib-facing layout-stable wrapper around
+// `Arc<SurfaceStoreInner>`. Every public method dispatches through the
+// `SurfaceStoreVTable` callback table; host-side callbacks deref the
+// handle as `&SurfaceStoreInner` and invoke the inner method directly.
+
+use std::ffi::c_void as ss_c_void;
+use streamlib_plugin_abi::SurfaceStoreVTable;
+
+/// Cross-process surface sharing handle.
+///
+/// Layout-stable: `#[repr(C)] (handle, vtable)`. Cheap to clone — the
+/// vtable's `clone_handle` callback runs `Arc::increment_strong_count`
+/// on the host's `Arc<SurfaceStoreInner>`. Both XPC (macOS) and Unix
+/// socket (Linux) variants are exposed through the same public method
+/// surface; platform-specific behaviour lives behind the vtable.
+#[repr(C)]
+pub struct SurfaceStore {
+    /// Opaque handle to the host's `Arc<SurfaceStoreInner>`.
+    pub(crate) handle: *const ss_c_void,
+    /// Vtable for cross-DSO Clone/Drop and method dispatch.
+    pub(crate) vtable: *const SurfaceStoreVTable,
+}
+
+// SAFETY: `handle` points at an `Arc<SurfaceStoreInner>` whose
+// interior is Send+Sync (Mutex-protected state, plus String fields).
+// Refcount management crosses the cdylib boundary through the vtable
+// but runs in host-compiled code regardless.
+unsafe impl Send for SurfaceStore {}
+unsafe impl Sync for SurfaceStore {}
+
+impl SurfaceStore {
+    /// Create a new SurfaceStore β-shape (not yet connected). The
+    /// underlying [`SurfaceStoreInner`] is allocated as an
+    /// `Arc<SurfaceStoreInner>` and wrapped in the β-shape with a
+    /// freshly-resolved host-mode vtable. Engine and integration
+    /// tests use this; the runtime's `start()` path uses the
+    /// `from_arc_into_raw` helper directly so it can share the Arc
+    /// with `GpuContext::set_surface_store`.
+    pub fn new(service_name: String, runtime_id: String) -> Self {
+        Self::from_arc_into_raw(SurfaceStoreInner::new(service_name, runtime_id))
+    }
+
+    /// Internal helper: leak an initial Arc strong count via
+    /// `Arc::into_raw`, resolve the host-mode vtable, and assemble
+    /// the cross-DSO shape.
+    pub(crate) fn from_arc_into_raw(arc: Arc<SurfaceStoreInner>) -> Self {
+        let handle = Arc::into_raw(arc) as *const ss_c_void;
+        let vtable = crate::core::plugin::host_services::host_surface_store_vtable();
+        Self { handle, vtable }
+    }
+
+    /// Build a null-handle β-shape ("None" sentinel) for the
+    /// `GpuContext::surface_store()` API's `Option<SurfaceStore>`
+    /// shape. The cdylib's `SurfaceStore::is_none()` returns `true`
+    /// for such a value and `Drop` short-circuits on null handle.
+    pub(crate) fn null() -> Self {
+        Self {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+        }
+    }
+
+    /// Whether this is a null-handle β-shape (the "None" branch of
+    /// the `Option<SurfaceStore>` return shape).
+    pub(crate) fn is_none(&self) -> bool {
+        self.handle.is_null() || self.vtable.is_null()
+    }
+
+    /// Engine-internal borrow of the host-owned `SurfaceStoreInner`.
+    /// **Panics if called from cdylib code.**
+    pub(crate) fn host_inner(&self) -> &SurfaceStoreInner {
+        if crate::core::plugin::host_services::host_callbacks().is_some() {
+            panic!(
+                "SurfaceStore::host_inner() reached from cdylib code; this method \
+                 must dispatch through the SurfaceStoreVTable."
+            );
+        }
+        // SAFETY: `self.handle` is `Arc::into_raw(Arc<SurfaceStoreInner>)`.
+        unsafe { &*(self.handle as *const SurfaceStoreInner) }
+    }
+
+    /// Connect to the surface-share service (XPC on macOS, Unix
+    /// socket on Linux).
+    pub fn connect(&self) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::connect: null handle".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable were paired at construction.
+        let status = unsafe {
+            ((*self.vtable).connect)(
+                self.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Disconnect from the surface-share service.
+    pub fn disconnect(&self) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::disconnect: null handle".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).disconnect)(
+                self.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Check in a pixel buffer for cross-process sharing.
+    pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::check_in: null handle".into(),
+            ));
+        }
+        let mut id_buf = [0u8; 256];
+        let mut id_len: usize = 0;
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).check_in)(
+                self.handle,
+                pixel_buffer as *const PixelBuffer as *const ss_c_void,
+                id_buf.as_mut_ptr(),
+                id_buf.len(),
+                &mut id_len as *mut usize,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(String::from_utf8_lossy(&id_buf[..id_len.min(id_buf.len())]).into_owned())
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Check out a surface by its surface_id.
+    pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::check_out: null handle".into(),
+            ));
+        }
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).check_out)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                out_pb.as_mut_ptr() as *mut ss_c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Register a pre-allocated buffer under the given pool id.
+    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::register_buffer: null handle".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).register_buffer)(
+                self.handle,
+                pool_id.as_ptr(),
+                pool_id.len(),
+                pixel_buffer as *const PixelBuffer as *const ss_c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Look up a previously-registered buffer by its pool id.
+    pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::lookup_buffer: null handle".into(),
+            ));
+        }
+        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).lookup_buffer)(
+                self.handle,
+                pool_id.as_ptr(),
+                pool_id.len(),
+                out_pb.as_mut_ptr() as *mut ss_c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(unsafe { out_pb.assume_init() })
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Release a checked-out surface by its surface_id.
+    pub fn release(&self, surface_id: &str) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::release: null handle".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).release)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Register a texture for cross-process sharing (Linux).
+    #[cfg(target_os = "linux")]
+    pub fn register_texture(
+        &self,
+        surface_id: &str,
+        texture: &crate::core::rhi::Texture,
+        timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+        current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::register_texture: null handle".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // timeline is an engine-only Arc; we pass the raw pointer to
+        // the underlying type. The host-side callback re-borrows it
+        // as `Option<&Arc<HostVulkanTimelineSemaphore>>`.
+        let timeline_ptr: *const ss_c_void = timeline
+            .map(|t| t as *const _ as *const ss_c_void)
+            .unwrap_or(std::ptr::null());
+        let status = unsafe {
+            ((*self.vtable).register_texture)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                texture as *const crate::core::rhi::Texture as *const ss_c_void,
+                timeline_ptr,
+                current_image_layout.0,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Register a pixel buffer with an optional timeline-semaphore (Linux).
+    #[cfg(target_os = "linux")]
+    pub fn register_pixel_buffer_with_timeline(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &PixelBuffer,
+        timeline: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
+    ) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::register_pixel_buffer_with_timeline: null handle".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let timeline_ptr: *const ss_c_void = timeline
+            .map(|t| t as *const _ as *const ss_c_void)
+            .unwrap_or(std::ptr::null());
+        let status = unsafe {
+            ((*self.vtable).register_pixel_buffer_with_timeline)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                pixel_buffer as *const PixelBuffer as *const ss_c_void,
+                timeline_ptr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Look up a registered texture by surface_id (Linux).
+    #[cfg(target_os = "linux")]
+    pub fn lookup_texture(
+        &self,
+        surface_id: &str,
+    ) -> Result<(crate::core::rhi::Texture, streamlib_consumer_rhi::VulkanLayout)> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::lookup_texture: null handle".into(),
+            ));
+        }
+        let mut out_tex: std::mem::MaybeUninit<crate::core::rhi::Texture> =
+            std::mem::MaybeUninit::uninit();
+        let mut out_layout: i32 = 0;
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).lookup_texture)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                out_tex.as_mut_ptr() as *mut ss_c_void,
+                &mut out_layout as *mut i32,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            let texture = unsafe { out_tex.assume_init() };
+            Ok((texture, streamlib_consumer_rhi::VulkanLayout(out_layout)))
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+
+    /// Update the published `VkImageLayout` for a registered texture (Linux).
+    #[cfg(target_os = "linux")]
+    pub fn update_image_layout(
+        &self,
+        surface_id: &str,
+        layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::update_image_layout: null handle".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        let status = unsafe {
+            ((*self.vtable).update_image_layout)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                layout.0,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(Error::Configuration(
+                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
+            ))
+        }
+    }
+}
+
+impl Clone for SurfaceStore {
+    fn clone(&self) -> Self {
+        if !self.is_none() {
+            // SAFETY: vtable + handle paired at construction.
+            unsafe {
+                ((*self.vtable).clone_handle)(self.handle);
+            }
+        }
+        Self {
+            handle: self.handle,
+            vtable: self.vtable,
+        }
+    }
+}
+
+impl Drop for SurfaceStore {
+    fn drop(&mut self) {
+        if !self.is_none() {
+            // SAFETY: matched with `Arc::into_raw` in `from_arc_into_raw`.
+            unsafe {
+                ((*self.vtable).drop_handle)(self.handle);
+            }
+        }
+    }
+}
+
 impl std::fmt::Debug for SurfaceStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SurfaceStore")
-            .field("service_name", &self.inner.service_name)
-            .field("runtime_id", &self.inner.runtime_id)
+            .field("handle", &self.handle)
+            .field("vtable", &self.vtable)
             .finish()
+    }
+}
+
+#[cfg(all(test, target_pointer_width = "64"))]
+mod layout_tests_ss {
+    use super::*;
+    use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn surface_store_layout() {
+        // Phase 2E (#901): 16 bytes — handle + vtable.
+        assert_eq!(size_of::<SurfaceStore>(), 16);
+        assert_eq!(align_of::<SurfaceStore>(), 8);
+        assert_eq!(offset_of!(SurfaceStore, handle), 0);
+        assert_eq!(offset_of!(SurfaceStore, vtable), 8);
+    }
+
+    #[test]
+    fn surface_store_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<SurfaceStore>();
     }
 }
