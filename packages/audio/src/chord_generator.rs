@@ -68,10 +68,7 @@ impl ChordGeneratorProcessor::Processor {
 }
 
 impl streamlib::sdk::processors::ManualProcessor for ChordGeneratorProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let audio_clock = ctx.audio_clock();
         self.sample_rate = audio_clock.sample_rate();
 
@@ -90,16 +87,13 @@ impl streamlib::sdk::processors::ManualProcessor for ChordGeneratorProcessor::Pr
             audio_clock.buffer_size()
         );
 
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.is_active.store(false, Ordering::SeqCst);
         tracing::info!("ChordGenerator: teardown complete");
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

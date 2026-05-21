@@ -39,10 +39,7 @@ pub struct VadrVisionDepayloaderProcessor {
 }
 
 impl ReactiveProcessor for VadrVisionDepayloaderProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let timeout = self
             .config
             .reassembly_timeout_ms
@@ -62,7 +59,7 @@ impl ReactiveProcessor for VadrVisionDepayloaderProcessor::Processor {
             warn_on_drop = self.config.warn_on_drop.unwrap_or(true),
             "VadrVisionDepayloader: setup",
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
@@ -104,10 +101,7 @@ impl ReactiveProcessor for VadrVisionDepayloaderProcessor::Processor {
         Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let metrics = self
             .state
             .as_ref()
@@ -122,7 +116,7 @@ impl ReactiveProcessor for VadrVisionDepayloaderProcessor::Processor {
             frames_dropped_metadata_conflict = metrics.frames_dropped_metadata_conflict,
             "VadrVisionDepayloader: teardown",
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 }
 

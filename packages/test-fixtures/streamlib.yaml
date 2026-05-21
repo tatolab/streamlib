@@ -20,6 +20,8 @@ schemas:
   # Local config schema this package owns.
   TestConfiguredProcessorConfig:
     file: schemas/test_configured_processor_config.yaml
+  TcpBindTestProcessorConfig:
+    file: schemas/tcp_bind_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -29,3 +31,11 @@ processors:
     config:
       name: config
       schema: TestConfiguredProcessorConfig
+
+  - name: TcpBindTestProcessor
+    version: 1.0.0
+    description: "dlopen-owns-tokio integration test fixture from #885 — binds a tokio::net::TcpListener on the plugin's own runtime"
+    execution: manual
+    config:
+      name: config
+      schema: TcpBindTestProcessorConfig

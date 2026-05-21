@@ -4,7 +4,6 @@
 //! The `ApiServer` processor — owns the HTTP listener lifecycle and binds the
 //! shared [`crate::state::AppState`] to per-request handlers.
 
-use std::future::Future;
 use std::sync::Arc;
 
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -13,6 +12,9 @@ use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::runtime::RuntimeOperations;
 
 /// Handles cloned from the setup-time context for use in start().
+/// The `tokio_handle` points at the plugin's own runtime (constructed in
+/// `setup()`); the host's tokio runtime is not reachable from cdylib code
+/// across the plugin ABI by design.
 struct StashedHandles {
     runtime: Arc<dyn RuntimeOperations>,
     tokio_handle: tokio::runtime::Handle,
@@ -103,6 +105,12 @@ fn generate_runtime_name() -> String {
 #[streamlib::sdk::processor("ApiServer")]
 pub struct ApiServerProcessor {
     handles: Option<StashedHandles>,
+    /// Plugin-owned tokio runtime. Constructed in `setup()`, dropped in
+    /// `teardown()`. axum / hyper / tokio::net all run inside this runtime
+    /// — their thread-local state is set when the runtime's worker
+    /// threads enter the runtime, which only works because the cdylib
+    /// statically links its own tokio crate.
+    tokio_runtime: Option<tokio::runtime::Runtime>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     runtime_id: Option<String>,
     resolved_name: Option<String>,
@@ -110,39 +118,47 @@ pub struct ApiServerProcessor {
 }
 
 impl ManualProcessor for ApiServerProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        // Construct this plugin's own tokio runtime — the host's runtime
+        // is not reachable across the plugin ABI (see #885). axum::serve
+        // and tokio::net::TcpListener::bind need their thread-local state
+        // set by this runtime's worker threads, which only works because
+        // the cdylib statically links its own tokio crate.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                Error::Runtime(format!("ApiServer: failed to build tokio runtime: {e}"))
+            })?;
+        let tokio_handle = runtime.handle().clone();
+        self.tokio_runtime = Some(runtime);
+
         // Capture just the narrow handles the HTTP server task needs;
         // the long-lived task never holds a `RuntimeContext`.
         self.handles = Some(StashedHandles {
             runtime: ctx.runtime(),
-            tokio_handle: ctx.tokio_handle().clone(),
+            tokio_handle,
             runtime_id: ctx.runtime_id().to_string(),
         });
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        // Drop the runtime — shuts down worker threads and waits for any
+        // outstanding spawned tasks to finish. `stop()` already signalled
+        // the HTTP server to exit, so this is the cleanup step.
+        self.tokio_runtime.take();
+        self.handles.take();
+        Ok(())
     }
 
-    fn on_pause(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
-    fn on_resume(
-        &mut self,
-        _ctx: &RuntimeContextLimitedAccess<'_>,
-    ) -> impl Future<Output = Result<()>> + Send {
-        std::future::ready(Ok(()))
+    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

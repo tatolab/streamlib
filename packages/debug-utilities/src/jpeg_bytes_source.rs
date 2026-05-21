@@ -33,34 +33,23 @@ pub struct JpegBytesSourceProcessor {
 }
 
 impl ManualProcessor for JpegBytesSourceProcessor::Processor {
-    fn setup(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        let result = std::fs::read(&self.config.file_path).map_err(|e| {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        let bytes = std::fs::read(&self.config.file_path).map_err(|e| {
             Error::Configuration(format!(
                 "JpegBytesSource: failed to read {}: {e}",
                 self.config.file_path
             ))
-        });
-        match result {
-            Ok(bytes) => {
-                tracing::info!(
-                    path = %self.config.file_path,
-                    bytes = bytes.len(),
-                    "[JpegBytesSource] Loaded fixture JPEG"
-                );
-                self.jpeg_bytes = Some(Arc::new(bytes));
-                std::future::ready(Ok(()))
-            }
-            Err(e) => std::future::ready(Err(e)),
-        }
+        })?;
+        tracing::info!(
+            path = %self.config.file_path,
+            bytes = bytes.len(),
+            "[JpegBytesSource] Loaded fixture JPEG"
+        );
+        self.jpeg_bytes = Some(Arc::new(bytes));
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let frames = self.frame_counter.load(Ordering::Relaxed);
         tracing::info!("[JpegBytesSource] Teardown ({frames} frames emitted)");
         self.is_running.store(false, Ordering::Release);
@@ -68,7 +57,7 @@ impl ManualProcessor for JpegBytesSourceProcessor::Processor {
             let _ = handle.join();
         }
         self.jpeg_bytes.take();
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

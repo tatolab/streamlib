@@ -113,23 +113,16 @@ pub struct CrtFilmGrainProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        let result = self.setup_inner(ctx);
-        std::future::ready(result)
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.setup_inner(ctx)
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             "CrtFilmGrain: Shutdown ({} frames)",
             self.frame_count.load(Ordering::Relaxed)
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {

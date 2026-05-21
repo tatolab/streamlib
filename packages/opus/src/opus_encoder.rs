@@ -207,7 +207,7 @@ pub struct OpusEncoderProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for OpusEncoderProcessor::Processor {
-    async fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let encoder_config = AudioEncoderConfig {
             sample_rate: 48000,
             channels: 2,
@@ -225,7 +225,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for OpusEncoderProcessor::Pro
         Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_encoded = self.frames_encoded,
             "[OpusEncoder] Shutting down"

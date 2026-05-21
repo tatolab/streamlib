@@ -63,44 +63,35 @@ pub struct LinuxDisplayProcessor {
 }
 
 impl streamlib::sdk::processors::ManualProcessor for LinuxDisplayProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        let result = (|| {
-            tracing::trace!("Display: setup() called");
-            self.gpu_context = Some(ctx.gpu_limited_access().clone());
-            self.window_id = LinuxWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
-            self.width = self.config.width;
-            self.height = self.config.height;
-            self.window_title = self
-                .config
-                .title
-                .clone()
-                .unwrap_or_else(|| "streamlib Display".to_string());
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        tracing::trace!("Display: setup() called");
+        self.gpu_context = Some(ctx.gpu_limited_access().clone());
+        self.window_id = LinuxWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
+        self.width = self.config.width;
+        self.height = self.config.height;
+        self.window_title = self
+            .config
+            .title
+            .clone()
+            .unwrap_or_else(|| "streamlib Display".to_string());
 
-            self.running = Arc::new(AtomicBool::new(false));
-            self.event_loop_proxy = Arc::new(OnceLock::new());
-            self.stop_called = Arc::new(AtomicBool::new(false));
+        self.running = Arc::new(AtomicBool::new(false));
+        self.event_loop_proxy = Arc::new(OnceLock::new());
+        self.stop_called = Arc::new(AtomicBool::new(false));
 
-            tracing::info!(
-                "Display {}: Setup complete ({}x{})",
-                self.window_title,
-                self.width,
-                self.height
-            );
+        tracing::info!(
+            "Display {}: Setup complete ({}x{})",
+            self.window_title,
+            self.width,
+            self.height
+        );
 
-            Ok(())
-        })();
-        std::future::ready(result)
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("Display {}: Teardown", self.window_title);
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

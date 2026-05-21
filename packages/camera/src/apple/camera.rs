@@ -337,20 +337,14 @@ pub struct AppleCameraProcessor {
 }
 
 impl streamlib::sdk::processors::ManualProcessor for AppleCameraProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Store GPU context for surface store access in start()
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("Camera: setup() complete");
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let frame_count = CAMERA_CALLBACK_CONTEXT
             .get()
             .map(|ctx| ctx.frame_count.load(Ordering::Relaxed))
@@ -360,7 +354,7 @@ impl streamlib::sdk::processors::ManualProcessor for AppleCameraProcessor::Proce
             self.camera_name,
             frame_count
         );
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     // Callback-driven start - initializes AVFoundation, returns immediately

@@ -47,7 +47,7 @@ pub struct H264EncoderProcessor {
 }
 
 impl streamlib::sdk::processors::ReactiveProcessor for H264EncoderProcessor::Processor {
-    async fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
             "[H264Encoder] Setup complete (encoder construction deferred to first frame)"
@@ -55,7 +55,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264EncoderProcessor::Pro
         Ok(())
     }
 
-    async fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_encoded = self.frames_encoded,
             "[H264Encoder] Shutting down"

@@ -51,19 +51,13 @@ pub struct LinuxCameraProcessor {
 }
 
 impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("Camera: setup() complete");
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let frame_count = self.frame_counter.load(Ordering::Relaxed);
         tracing::info!(
             "Camera {}: Teardown (generated {} frames)",
@@ -74,7 +68,7 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
         if let Some(handle) = self.capture_thread_handle.take() {
             let _ = handle.join();
         }
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

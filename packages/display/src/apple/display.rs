@@ -54,11 +54,8 @@ pub struct AppleDisplayProcessor {
 }
 
 impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        let result = (|| {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        (|| {
             tracing::trace!("Display: setup() called");
             self.gpu_context = Some(ctx.gpu_limited_access().clone());
             self.window_id = AppleWindowId(NEXT_WINDOW_ID.fetch_add(1, Ordering::SeqCst));
@@ -166,16 +163,12 @@ impl crate::core::ManualProcessor for AppleDisplayProcessor::Processor {
             self.initialize_window()?;
 
             Ok(())
-        })();
-        std::future::ready(result)
+        })()
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("Display {}: Teardown", self.window_title);
-        std::future::ready(Ok(()))
+        Ok(())
     }
 
     // Game loop start - spawns a dedicated render thread that runs at native display refresh rate

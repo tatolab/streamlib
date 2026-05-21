@@ -82,11 +82,8 @@ pub struct AppleMp4WriterProcessor {
 }
 
 impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
-    fn setup(
-        &mut self,
-        ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        let result = (|| {
+    fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        (|| {
             info!("Setting up MP4 writer processor");
 
             // Store RuntimeContext for main thread dispatch
@@ -107,8 +104,7 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             // so run_on_runtime_thread_blocking() would deadlock
             info!("MP4 writer setup complete, will initialize AVAssetWriter in process()");
             Ok(())
-        })();
-        std::future::ready(result)
+        })()
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
@@ -337,22 +333,16 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
         Ok(())
     }
 
-    fn teardown(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        let result = (|| {
-            info!("Tearing down MP4 writer processor");
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        info!("Tearing down MP4 writer processor");
 
-            // No buffering, so nothing to flush - just finalize
-            self.finalize_writer()?;
+        // No buffering, so nothing to flush - just finalize
+        self.finalize_writer()?;
 
-            // Cleanup: AVFoundation objects will be dropped on main thread
-            // when self.asset_writer is dropped (happens automatically)
+        // Cleanup: AVFoundation objects will be dropped on main thread
+        // when self.asset_writer is dropped (happens automatically)
 
-            Ok(())
-        })();
-        std::future::ready(result)
+        Ok(())
     }
 }
 
